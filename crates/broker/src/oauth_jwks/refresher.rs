@@ -11,13 +11,14 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use krabka_security::JwksHandle;
 use krabka_units::{Time, convert::TimeExt};
+use krabka_verified::{JwksOnDemandDecision, jwks_on_demand_refresh_decision};
 use qubit_clock::Timer;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -75,6 +76,9 @@ pub(crate) struct JwksRefresher {
     /// successful fetch, and validators read it for the cache-expiry check.
     /// It is an `Arc<AtomicI64>` shared with the paired `JwksHandle`.
     pub last_successful_fetch_ms: Arc<AtomicI64>,
+    /// Even generations are stable. An odd generation fences validators while
+    /// a successful refresh publishes its keys and timestamp.
+    pub cache_generation: Arc<AtomicU64>,
     /// Holds the last on-demand-refresh epoch ms, for rate limiting. It is
     /// independent of the periodic refresh.
     pub last_on_demand_refresh_ms: Arc<AtomicI64>,
@@ -177,21 +181,25 @@ impl JwksRefresher {
                 // Signals coalesce via mpsc capacity 1 + `try_send`.
                 Some(()) = self.signal_rx.recv() => {
                     let now_ms = time_util::now_ms();
-                    let last = self.last_on_demand_refresh_ms.load(Ordering::Relaxed);
-                    let elapsed_ms = now_ms.saturating_sub(last);
+                    let last = self.last_on_demand_refresh_ms.load(Ordering::Acquire);
                     let pause_ms = self.min_on_demand_pause.millis_i64();
-                    if elapsed_ms >= pause_ms {
-                        self.last_on_demand_refresh_ms.store(now_ms, Ordering::Relaxed);
+                    if let JwksOnDemandDecision::Refresh { next_refresh_ms } =
+                        jwks_on_demand_refresh_decision(now_ms, last, pause_ms)
+                    {
+                        self.last_on_demand_refresh_ms
+                            .store(next_refresh_ms, Ordering::Release);
                         tracing::debug!(
                             endpoint = %self.endpoint,
-                            elapsed_ms,
+                            now_ms,
+                            last_refresh_ms = last,
                             "on-demand JWKS refresh triggered by validator signal",
                         );
                         self.refresh_and_swap(&client).await;
                     } else {
                         tracing::debug!(
                             endpoint = %self.endpoint,
-                            elapsed_ms,
+                            now_ms,
+                            last_refresh_ms = last,
                             pause_ms,
                             "on-demand JWKS refresh rate-limited; signal dropped",
                         );
@@ -209,14 +217,43 @@ impl JwksRefresher {
     async fn refresh_and_swap(&self, client: &reqwest::Client) {
         match fetch_jwks(client, &self.endpoint, self.ignore_key_use).await {
             Ok(jwks) => {
-                tracing::debug!(
-                    endpoint = %self.endpoint,
-                    keys = jwks.len(),
-                    "refreshed OAUTHBEARER JWKS",
-                );
+                let key_count = jwks.len();
+                let generation = self.cache_generation.load(Ordering::Acquire);
+                let Some(writing_generation) = generation.checked_add(1) else {
+                    tracing::error!("JWKS cache generation exhausted; fetched keys not installed");
+                    return;
+                };
+                let Some(committed_generation) = writing_generation.checked_add(1) else {
+                    tracing::error!("JWKS cache generation exhausted; fetched keys not installed");
+                    return;
+                };
+                if !generation.is_multiple_of(2)
+                    || self
+                        .cache_generation
+                        .compare_exchange(
+                            generation,
+                            writing_generation,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_err()
+                {
+                    tracing::error!(
+                        "JWKS cache already has an in-flight writer; fetched keys not installed"
+                    );
+                    return;
+                }
                 self.handle.store(jwks);
                 self.last_successful_fetch_ms
-                    .store(time_util::now_ms(), Ordering::Relaxed);
+                    .store(time_util::now_ms(), Ordering::Release);
+                self.cache_generation
+                    .store(committed_generation, Ordering::Release);
+                tracing::debug!(
+                    endpoint = %self.endpoint,
+                    keys = key_count,
+                    generation = committed_generation,
+                    "refreshed OAUTHBEARER JWKS",
+                );
             }
             Err(e) => tracing::warn!(
                 endpoint = %self.endpoint,

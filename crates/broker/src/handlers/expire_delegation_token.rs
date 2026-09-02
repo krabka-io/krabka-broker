@@ -19,13 +19,12 @@
 
 use std::{collections::HashSet, hash::BuildHasher};
 
-use krabka_metadata::{
-    DelegationToken, DelegationTokenRecord, DeleteDelegationTokenRecord, MetadataRecord,
-};
+use krabka_metadata::{DelegationToken, DelegationTokenRecord};
 use krabka_protocol::owned::{
     expire_delegation_token_request::ExpireDelegationTokenRequest,
     expire_delegation_token_response::ExpireDelegationTokenResponse,
 };
+use krabka_raft::DelegationTokenMutation;
 use krabka_security::SecretBytes;
 use krabka_verified::{
     TokenExpireDecision,
@@ -96,11 +95,9 @@ pub(crate) async fn handle<S: BuildHasher>(
             // KIP-48: negative period deletes the token immediately. The
             // response carries a past-sentinel timestamp.
             if let Err(e) = controller
-                .submit_change(vec![MetadataRecord::V1DeleteDelegationToken(
-                    DeleteDelegationTokenRecord {
-                        token_id: token.token_id.clone(),
-                    },
-                )])
+                .submit_delegation_token_mutations(vec![DelegationTokenMutation::Delete {
+                    expected: token_to_record(&token),
+                }])
                 .await
             {
                 tracing::warn!(error = %e, "ExpireDelegationToken: tombstone submit_change failed");
@@ -109,12 +106,16 @@ pub(crate) async fn handle<S: BuildHasher>(
             now.saturating_sub(1)
         }
         TokenExpireDecision::Update(new_expiry) => {
+            let expected = token_to_record(&token);
             let record = DelegationTokenRecord {
                 expiry_timestamp_ms: new_expiry,
-                ..token_to_record(&token)
+                ..expected.clone()
             };
             if let Err(e) = controller
-                .submit_change(vec![MetadataRecord::V1DelegationToken(record)])
+                .submit_delegation_token_mutations(vec![DelegationTokenMutation::Expire {
+                    expected,
+                    replacement: record,
+                }])
                 .await
             {
                 tracing::warn!(error = %e, "ExpireDelegationToken: update submit_change failed");
@@ -158,6 +159,7 @@ mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use assert2::assert;
+    use krabka_metadata::MetadataRecord;
     use krabka_raft::ControllerHandle;
     use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
     use tempfile::TempDir;

@@ -34,15 +34,14 @@ pub(crate) fn is_gated(config: &BreakGlassConfig) -> bool {
 /// Find the approved proposal that authorizes `action` on `target`, and return
 /// the record that spends it.
 ///
-/// # The caller must append the record in the same `submit_change` call
+/// # The caller must persist the consume with or before the action
 ///
-/// The returned record is the stored proposal with `consumed_at_ms` stamped.
-/// **The caller prepends it to its own records and submits one raft append.**
-/// That single append is the whole reason a proposal lives in the metadata log:
-/// the consume of the approval and the transition it authorizes commit
-/// together. A caller that submits the two separately spends the approval twice
-/// after a crash between them, or loses it. Nothing in the type system enforces
-/// this, so a caller that ignores the rule breaks the guarantee silently.
+/// The returned record is the stored proposal with `consumed_at_ms` stamped. A
+/// metadata-backed caller prepends it to its action records and submits one
+/// raft append. A local action calls
+/// [`crate::break_glass::persistence::spend_before_local_action`] and starts
+/// only after the consume commits. These are the only safe orders: the action
+/// must never become durable or start while the proposal remains reusable.
 ///
 /// # What makes a proposal usable
 ///
@@ -55,8 +54,9 @@ pub(crate) fn is_gated(config: &BreakGlassConfig) -> bool {
 /// Two concurrent approvals cannot overwrite each other, because
 /// [`MetadataImage::validate`] refuses a record whose approval list is not a
 /// strict extension of the stored list, and refuses any change to a consumed or
-/// a withdrawn proposal. That is the concurrency guard for the approval list,
-/// and this function relies on it rather than repeating it.
+/// a withdrawn proposal. The controller also admits a consume only when its
+/// committed image covers the full metadata log. A concurrent consume or an
+/// uncommitted tail therefore fails before append and must retry.
 ///
 /// # Target matching
 ///
@@ -137,5 +137,25 @@ pub(crate) fn authorize(
             target: target.to_owned(),
             reason: denial.unwrap_or(DenialReason::NoProposal),
         }),
+    }
+}
+
+/// Whether a consumed record is valid for the action about to start.
+///
+/// Local actions cannot share a raft append with their consume. They call this
+/// at the persistence boundary so a malformed or misrouted record cannot be
+/// committed and then treated as authorization for a different action.
+pub(crate) fn consumed_record_matches(
+    record: &MetadataRecord,
+    action: BreakGlassAction,
+    target: &str,
+) -> bool {
+    match record {
+        MetadataRecord::V1BreakGlassProposal(proposal) => {
+            proposal.consumed_at_ms > 0
+                && proposal.action == action
+                && covers(&proposal.target, target, action)
+        }
+        _ => false,
     }
 }

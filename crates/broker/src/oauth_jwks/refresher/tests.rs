@@ -139,8 +139,15 @@ async fn refresher_https_fetch_fails_when_custom_trust_doesnt_match_server_cert(
 async fn refresher_signal_triggers_on_demand_refresh_when_pause_elapsed() {
     let (addr, srv_shutdown, count) = serve_jwks_counting(JWKS_BODY).await;
     let endpoint = format!("http://{addr}/jwks");
-    let (refresher, signal_tx, _last_successful, last_on_demand, shutdown, handle) =
-        make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
+    let (
+        refresher,
+        signal_tx,
+        _last_successful,
+        last_on_demand,
+        _cache_generation,
+        shutdown,
+        handle,
+    ) = make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
     let task = tokio::spawn(refresher.run());
 
     // Drive at least one signal refresh.
@@ -175,8 +182,15 @@ async fn refresher_signal_dropped_when_within_min_pause_window() {
     let (addr, srv_shutdown, count) = serve_jwks_counting(JWKS_BODY).await;
     let endpoint = format!("http://{addr}/jwks");
     // 60s pause — second signal MUST be rate-limited.
-    let (refresher, signal_tx, _last_successful, last_on_demand, shutdown, _handle) =
-        make_signal_refresher(endpoint, minutes(1));
+    let (
+        refresher,
+        signal_tx,
+        _last_successful,
+        last_on_demand,
+        _cache_generation,
+        shutdown,
+        _handle,
+    ) = make_signal_refresher(endpoint, minutes(1));
     let task = tokio::spawn(refresher.run());
 
     // First signal: fires. Wait on the HTTP counter (the strict
@@ -225,8 +239,15 @@ async fn refresher_signal_dropped_when_within_min_pause_window() {
 async fn refresher_successful_refresh_updates_last_successful_fetch_timestamp() {
     let (addr, srv_shutdown, _count) = serve_jwks_counting(JWKS_BODY).await;
     let endpoint = format!("http://{addr}/jwks");
-    let (refresher, signal_tx, last_successful, _last_on_demand, shutdown, _handle) =
-        make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
+    let (
+        refresher,
+        signal_tx,
+        last_successful,
+        _last_on_demand,
+        cache_generation,
+        shutdown,
+        _handle,
+    ) = make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
 
     // Read the sentinel before the loop starts: the t=0 tick is a successful
     // refresh of its own, and it advances the timestamp as soon as the task
@@ -242,6 +263,10 @@ async fn refresher_successful_refresh_updates_last_successful_fetch_timestamp() 
     assert!(
         last_successful.load(Ordering::Relaxed) > 0,
         "last_successful_fetch_ms must advance after a successful fetch",
+    );
+    assert!(
+        cache_generation.load(Ordering::Acquire) == 2,
+        "successful fetch must publish one stable even generation",
     );
 
     shutdown.cancel();
@@ -269,8 +294,15 @@ async fn refresher_failed_refresh_does_not_advance_last_successful_fetch() {
     });
 
     let endpoint = format!("http://{addr}/jwks");
-    let (refresher, signal_tx, last_successful, last_on_demand, shutdown, _handle) =
-        make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
+    let (
+        refresher,
+        signal_tx,
+        last_successful,
+        last_on_demand,
+        cache_generation,
+        shutdown,
+        _handle,
+    ) = make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
     let task = tokio::spawn(refresher.run());
 
     signal_tx.send(()).await.unwrap();
@@ -291,9 +323,45 @@ async fn refresher_failed_refresh_does_not_advance_last_successful_fetch() {
         last_successful.load(Ordering::Relaxed) == 0,
         "failed fetch must leave last_successful_fetch_ms at sentinel 0"
     );
+    assert!(
+        cache_generation.load(Ordering::Acquire) == 0,
+        "failed fetch must not publish a cache generation",
+    );
 
     shutdown.cancel();
     let _ = task.await;
+    srv_shutdown.cancel();
+}
+
+#[tokio::test]
+async fn refresher_generation_exhaustion_preserves_the_prior_cache() {
+    let (addr, srv_shutdown) = serve_jwks(JWKS_BODY).await;
+    let endpoint = format!("http://{addr}/jwks");
+    let (
+        refresher,
+        _signal_tx,
+        last_successful,
+        _last_on_demand,
+        cache_generation,
+        _shutdown,
+        handle,
+    ) = make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
+    cache_generation.store(u64::MAX - 1, Ordering::Release);
+
+    refresher.refresh_and_swap(&reqwest::Client::new()).await;
+
+    assert!(
+        handle.load().is_empty(),
+        "exhausted cache must keep its prior keys"
+    );
+    assert!(
+        last_successful.load(Ordering::Acquire) == 0,
+        "exhausted cache must keep its prior success timestamp",
+    );
+    assert!(
+        cache_generation.load(Ordering::Acquire) == u64::MAX - 1,
+        "generation exhaustion must not enter the write phase",
+    );
     srv_shutdown.cancel();
 }
 
@@ -306,8 +374,15 @@ async fn refresher_passes_ignore_key_use_through_to_jwks_parser() {
         r#"{"keys":[{"kty":"RSA","kid":"enc-kid","use":"enc","n":"AQAB","e":"AQAB"}]}"#;
     let (addr, srv_shutdown, _count) = serve_jwks_counting(ENC_KEY_BODY).await;
     let endpoint = format!("http://{addr}/jwks");
-    let (mut refresher, signal_tx, _last_successful, _last_on_demand, shutdown, handle) =
-        make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
+    let (
+        mut refresher,
+        signal_tx,
+        _last_successful,
+        _last_on_demand,
+        _cache_generation,
+        shutdown,
+        handle,
+    ) = make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
     refresher.ignore_key_use = true;
     let task = tokio::spawn(refresher.run());
 

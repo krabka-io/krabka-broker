@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/group_migration.rs" 8 27 8 32 *)
+
+(* <group_migration::GroupMigrationDirection as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_GroupMigrationDirection = Upgrade | Downgrade
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_GroupMigrationDirection [#"/workspace/crates/verified/src/group_migration.rs" 8 27 8 32]
+  (self: t_GroupMigrationDirection) (return (x: t_GroupMigrationDirection)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_GroupMigrationDirection = Any.any_l () | & self: t_GroupMigrationDirection = self ])
+  [ return (result: t_GroupMigrationDirection) -> (! return {result}) ]

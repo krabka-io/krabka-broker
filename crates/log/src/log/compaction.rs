@@ -98,11 +98,15 @@ impl Log {
         self.segments.clear();
         crate::compact::atomic_swap(&self.dir, &consumed_bases, &rewrite)?;
 
-        // open_active(validate=true) tail-scans the new .log to populate
-        // last_offset + max_timestamp; then seal() flips the flag. The rewrite
-        // leaves the index sidecars empty, so that scan starts at position 0
-        // and sees every batch: the segment's maximum is exact.
-        let mut new_seg = Segment::open_active(&self.dir, rewrite.new_base_offset, true)?;
+        // Validation scans the new log from byte zero, rebuilds both sparse
+        // indexes, and derives exact offset and timestamp frontiers before the
+        // segment is sealed.
+        let mut new_seg = Segment::open_active_with_index_interval(
+            &self.dir,
+            rewrite.new_base_offset,
+            true,
+            index_interval,
+        )?;
         new_seg.set_io(self.io.clone());
         new_seg.seal();
         let txn_index = TxnIndex::open(new_seg.txn_index_path())?;

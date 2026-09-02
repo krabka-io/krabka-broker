@@ -40,6 +40,110 @@ pub struct FetchWatermarks {
     pub deliverable: i64,
 }
 
+/// The only direct mutation class selected from one follower Fetch response.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum ReplicaFetchMutation {
+    /// The response is not for the exact live request target.
+    Reject,
+    /// The response is fenced or otherwise unsuccessful; error handling may
+    /// retry or enter a separately guarded recovery path.
+    Retry,
+    /// Apply the KIP-320 divergence boundary and return without appending.
+    Truncate,
+    /// Apply the successful response batches, then its high watermark.
+    Append,
+}
+
+/// Fence one follower Fetch response against its topic, partition, in-flight
+/// request epoch, current metadata target, and any reported leader identity;
+/// then select one exclusive response action.
+#[ensures((result == ReplicaFetchMutation::Reject) == (
+    !identity.0
+        || !identity.1
+        || epochs.0@ != epochs.1@
+        || !target.0
+        || !target.1
+))]
+#[ensures((result == ReplicaFetchMutation::Retry) == (
+    identity.0
+        && identity.1
+        && epochs.0@ == epochs.1@
+        && target.0
+        && target.1
+        && !outcome.0
+))]
+#[ensures((result == ReplicaFetchMutation::Truncate) == (
+    identity.0
+        && identity.1
+        && epochs.0@ == epochs.1@
+        && target.0
+        && target.1
+        && outcome.0
+        && outcome.1
+))]
+#[ensures((result == ReplicaFetchMutation::Append) == (
+    identity.0
+        && identity.1
+        && epochs.0@ == epochs.1@
+        && target.0
+        && target.1
+        && outcome.0
+        && !outcome.1
+))]
+#[must_use]
+pub fn replica_fetch_mutation(
+    identity: (bool, bool),
+    epochs: (i32, i32),
+    target: (bool, bool),
+    outcome: (bool, bool),
+) -> ReplicaFetchMutation {
+    let (topic_matches, partition_matches) = identity;
+    let (request_leader_epoch, current_leader_epoch) = epochs;
+    let (target_matches, reported_target_matches) = target;
+    let (response_success, has_divergence) = outcome;
+    if !topic_matches
+        || !partition_matches
+        || request_leader_epoch != current_leader_epoch
+        || !target_matches
+        || !reported_target_matches
+    {
+        ReplicaFetchMutation::Reject
+    } else if !response_success {
+        ReplicaFetchMutation::Retry
+    } else if has_divergence {
+        ReplicaFetchMutation::Truncate
+    } else {
+        ReplicaFetchMutation::Append
+    }
+}
+
+/// Admit one preferred-leader rebalance batch only when the scan is
+/// nonempty, internally consistent, and at the exact configured threshold.
+#[ensures(result == (
+    total_partitions@ > 0
+        && selected_changes@ > 0
+        && selected_changes@ <= total_partitions@
+        && changes_unique
+        && all_preferred_eligible
+        && threshold_met
+))]
+#[must_use]
+pub fn preferred_rebalance_admission(
+    total_partitions: u64,
+    selected_changes: u64,
+    changes_unique: bool,
+    all_preferred_eligible: bool,
+    threshold_met: bool,
+) -> bool {
+    total_partitions > 0
+        && selected_changes > 0
+        && selected_changes <= total_partitions
+        && changes_unique
+        && all_preferred_eligible
+        && threshold_met
+}
+
 /// Compute Kafka's consumer/follower Fetch visibility window.
 ///
 /// [`FetchWatermarks::deliverable`] is KFC-1's delivery watermark: the first
@@ -126,22 +230,190 @@ pub fn fetch_visibility(
     }
 }
 
-/// Resolve `DeleteRecords`' `-1` sentinel to the current high watermark.
-#[ensures(result@ == if requested_offset@ == -1 { high_watermark@ } else { requested_offset@ })]
+/// Offset facts used to admit one `DeleteRecords` trim.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct DeleteRecordsTrimFacts {
+    pub requested: i64,
+    pub high_watermark: i64,
+    pub log_end: i64,
+    pub current_start: i64,
+    pub has_delivery_watermark: bool,
+    pub delivery_watermark: i64,
+}
+
+/// The complete boundary decision for one `DeleteRecords` trim.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum DeleteRecordsTrimDecision {
+    RejectMalformed,
+    RejectOutOfRange,
+    Noop { frontier: i64 },
+    Apply { frontier: i64 },
+}
+
+/// Admit a trim and cap it at every logical deletion frontier.
+///
+/// `-1` means the current high watermark. Explicit requests may name the
+/// uncommitted tail, so the committed high watermark still caps them. A
+/// scheduled topic adds its delivery watermark as a second cap. Stale and
+/// repeated requests return the current start and never move it backwards.
 #[must_use]
-pub const fn delete_records_target(requested_offset: i64, high_watermark: i64) -> i64 {
-    if requested_offset == -1 {
-        high_watermark
+#[ensures({
+    let malformed = facts.requested@ < -1
+        || facts.current_start@ < 0
+        || facts.high_watermark@ < facts.current_start@
+        || facts.log_end@ < facts.high_watermark@
+        || (facts.has_delivery_watermark
+            && facts.delivery_watermark@ < facts.current_start@);
+    let out_of_range = !malformed && facts.requested@ > facts.log_end@;
+    let resolved = if facts.requested@ == -1 {
+        facts.high_watermark@
     } else {
-        requested_offset
+        facts.requested@
+    };
+    let committed = if resolved < facts.high_watermark@ {
+        resolved
+    } else {
+        facts.high_watermark@
+    };
+    let bounded = if facts.has_delivery_watermark
+        && facts.delivery_watermark@ < committed
+    {
+        facts.delivery_watermark@
+    } else {
+        committed
+    };
+    match result {
+        DeleteRecordsTrimDecision::RejectMalformed => malformed,
+        DeleteRecordsTrimDecision::RejectOutOfRange => out_of_range,
+        DeleteRecordsTrimDecision::Noop { frontier } => {
+            !malformed && !out_of_range
+                && bounded <= facts.current_start@
+                && frontier@ == facts.current_start@
+        }
+        DeleteRecordsTrimDecision::Apply { frontier } => {
+            !malformed && !out_of_range
+                && bounded > facts.current_start@
+                && frontier@ == bounded
+                && frontier@ <= facts.high_watermark@
+                && frontier@ <= facts.log_end@
+                && (!facts.has_delivery_watermark
+                    || frontier@ <= facts.delivery_watermark@)
+        }
+    }
+})]
+pub const fn delete_records_trim_decision(
+    facts: DeleteRecordsTrimFacts,
+) -> DeleteRecordsTrimDecision {
+    if facts.requested < -1
+        || facts.current_start < 0
+        || facts.high_watermark < facts.current_start
+        || facts.log_end < facts.high_watermark
+        || (facts.has_delivery_watermark && facts.delivery_watermark < facts.current_start)
+    {
+        return DeleteRecordsTrimDecision::RejectMalformed;
+    }
+    if facts.requested > facts.log_end {
+        return DeleteRecordsTrimDecision::RejectOutOfRange;
+    }
+    let resolved = if facts.requested == -1 {
+        facts.high_watermark
+    } else {
+        facts.requested
+    };
+    let committed = if resolved < facts.high_watermark {
+        resolved
+    } else {
+        facts.high_watermark
+    };
+    let bounded = if facts.has_delivery_watermark {
+        if committed < facts.delivery_watermark {
+            committed
+        } else {
+            facts.delivery_watermark
+        }
+    } else {
+        committed
+    };
+    if bounded <= facts.current_start {
+        DeleteRecordsTrimDecision::Noop {
+            frontier: facts.current_start,
+        }
+    } else {
+        DeleteRecordsTrimDecision::Apply { frontier: bounded }
     }
 }
 
-/// Whether a resolved `DeleteRecords` target is outside the local log.
-#[ensures(result == (target@ < 0 || target@ > log_end_offset@))]
+/// The next idempotent step while reconciling WAL and local trim frontiers.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum DeleteRecordsTrimApplication {
+    RejectMalformed,
+    TrimWal { frontier: i64 },
+    TrimLocal { frontier: i64 },
+    Complete { frontier: i64 },
+}
+
+/// Choose one monotonic trim step, with WAL ordered before the local log.
+///
+/// Re-evaluating this function after a failed step is retry-safe: the chosen
+/// frontier is the maximum of the request and both observed frontiers, so no
+/// retry can regress either store. Completion requires exact equality.
 #[must_use]
-pub const fn delete_records_offset_out_of_range(target: i64, log_end_offset: i64) -> bool {
-    target < 0 || target > log_end_offset
+#[ensures({
+    let frontier = if requested@ > wal_start@ {
+        if requested@ > local_start@ { requested@ } else { local_start@ }
+    } else if wal_start@ > local_start@ {
+        wal_start@
+    } else {
+        local_start@
+    };
+    match result {
+        DeleteRecordsTrimApplication::RejectMalformed => {
+            requested@ < 0 || wal_start@ < 0 || local_start@ < 0
+        }
+        DeleteRecordsTrimApplication::TrimWal { frontier: next } => {
+            requested@ >= 0 && wal_start@ >= 0 && local_start@ >= 0
+                && wal_start@ < frontier && next@ == frontier
+        }
+        DeleteRecordsTrimApplication::TrimLocal { frontier: next } => {
+            requested@ >= 0 && wal_start@ >= 0 && local_start@ >= 0
+                && wal_start@ == frontier && local_start@ < frontier
+                && next@ == frontier
+        }
+        DeleteRecordsTrimApplication::Complete { frontier: done } => {
+            requested@ >= 0 && wal_start@ >= 0 && local_start@ >= 0
+                && wal_start@ == frontier && local_start@ == frontier
+                && done@ == frontier
+        }
+    }
+})]
+pub const fn delete_records_trim_application(
+    requested: i64,
+    wal_start: i64,
+    local_start: i64,
+) -> DeleteRecordsTrimApplication {
+    if requested < 0 || wal_start < 0 || local_start < 0 {
+        return DeleteRecordsTrimApplication::RejectMalformed;
+    }
+    let request_or_wal = if requested > wal_start {
+        requested
+    } else {
+        wal_start
+    };
+    let frontier = if request_or_wal > local_start {
+        request_or_wal
+    } else {
+        local_start
+    };
+    if wal_start < frontier {
+        DeleteRecordsTrimApplication::TrimWal { frontier }
+    } else if local_start < frontier {
+        DeleteRecordsTrimApplication::TrimLocal { frontier }
+    } else {
+        DeleteRecordsTrimApplication::Complete { frontier }
+    }
 }
 
 /// Non-negative KIP-932 backlog above the effective share start offset.
@@ -236,6 +508,50 @@ pub fn find_coordinator_admission(
     }
 }
 
+/// Admit an unclean-election commit only against the exact partition snapshot
+/// used to select its winner.
+#[ensures(result == (selected_partition_epoch@ == current_partition_epoch@
+    && !current_leader_alive
+    && selected_replicas@ == current_replicas@
+    && (exists<i: Int> 0 <= i && i < current_replicas@.len()
+        && current_replicas@[i] == winner)))]
+#[must_use]
+pub fn unclean_recovery_commit_admission(
+    selected_partition_epoch: i32,
+    current_partition_epoch: i32,
+    selected_replicas: &[u64],
+    current_replicas: &[u64],
+    winner: u64,
+    current_leader_alive: bool,
+) -> bool {
+    if selected_partition_epoch != current_partition_epoch
+        || current_leader_alive
+        || selected_replicas.len() != current_replicas.len()
+    {
+        return false;
+    }
+
+    let mut winner_assigned = false;
+    let mut i = 0usize;
+    #[cfg_attr(creusot, invariant(i@ <= selected_replicas@.len()))]
+    #[cfg_attr(creusot, invariant(selected_replicas@.len() == current_replicas@.len()))]
+    #[cfg_attr(creusot, invariant(forall<k: Int> 0 <= k && k < i@
+        ==> selected_replicas@[k] == current_replicas@[k]))]
+    #[cfg_attr(creusot, invariant(winner_assigned == (exists<k: Int>
+        0 <= k && k < i@ && current_replicas@[k] == winner)))]
+    #[cfg_attr(creusot, variant(selected_replicas@.len() - i@))]
+    while i < selected_replicas.len() {
+        if selected_replicas[i] != current_replicas[i] {
+            return false;
+        }
+        if current_replicas[i] == winner {
+            winner_assigned = true;
+        }
+        i += 1;
+    }
+    winner_assigned
+}
+
 /// Java `String.hashCode` over the first `limit` UTF-16 code units.
 #[cfg(creusot)]
 #[logic]
@@ -321,6 +637,61 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+
+    #[test]
+    fn replica_fetch_mutation_fences_every_input_and_selects_one_action() {
+        use ReplicaFetchMutation::{Append, Reject, Retry, Truncate};
+
+        assert!(
+            replica_fetch_mutation(
+                (true, true),
+                (i32::MIN, i32::MIN),
+                (true, true),
+                (true, true),
+            ) == Truncate
+        );
+        assert!(
+            replica_fetch_mutation(
+                (true, true),
+                (i32::MAX, i32::MAX),
+                (true, true),
+                (true, false),
+            ) == Append
+        );
+        assert!(
+            replica_fetch_mutation((true, true), (4, 4), (true, true), (false, false)) == Retry
+        );
+
+        for rejected in [
+            replica_fetch_mutation((false, true), (4, 4), (true, true), (true, false)),
+            replica_fetch_mutation((true, false), (4, 4), (true, true), (true, false)),
+            replica_fetch_mutation(
+                (true, true),
+                (i32::MIN, i32::MAX),
+                (true, true),
+                (true, false),
+            ),
+            replica_fetch_mutation((true, true), (4, 4), (false, true), (true, false)),
+            replica_fetch_mutation((true, true), (4, 4), (true, false), (true, false)),
+        ] {
+            assert!(rejected == Reject);
+        }
+    }
+
+    #[test]
+    fn preferred_rebalance_admission_requires_every_batch_fact() {
+        assert!(preferred_rebalance_admission(10, 1, true, true, true));
+        for denied in [
+            preferred_rebalance_admission(0, 0, true, true, true),
+            preferred_rebalance_admission(10, 0, true, true, true),
+            preferred_rebalance_admission(10, 11, true, true, true),
+            preferred_rebalance_admission(10, 1, false, true, true),
+            preferred_rebalance_admission(10, 1, true, false, true),
+            preferred_rebalance_admission(10, 1, true, true, false),
+        ] {
+            assert!(!denied);
+        }
+    }
 
     #[test]
     fn fetch_visibility_covers_consumer_and_follower_bounds() {
@@ -496,11 +867,34 @@ mod tests {
 
     #[test]
     fn broker_arithmetic_edges_are_explicit() {
-        assert!(delete_records_target(-1, 7) == 7);
-        assert!(delete_records_offset_out_of_range(-1, 7));
+        assert!(
+            delete_records_trim_decision(DeleteRecordsTrimFacts {
+                requested: -1,
+                high_watermark: 7,
+                log_end: 9,
+                current_start: 2,
+                has_delivery_watermark: false,
+                delivery_watermark: 0,
+            }) == DeleteRecordsTrimDecision::Apply { frontier: 7 }
+        );
         assert!(effective_share_backlog(12, -1, 4) == 8);
         assert!(effective_share_backlog(5, 9, 4) == 0);
         assert!(effective_share_backlog(i64::MAX, i64::MIN, i64::MIN) == i64::MAX);
+    }
+
+    #[test]
+    fn delete_records_application_orders_retries_wal_first() {
+        use DeleteRecordsTrimApplication::{Complete, RejectMalformed, TrimLocal, TrimWal};
+
+        assert!(delete_records_trim_application(-1, 0, 0) == RejectMalformed);
+        assert!(delete_records_trim_application(8, 2, 2) == TrimWal { frontier: 8 });
+        assert!(delete_records_trim_application(8, 8, 2) == TrimLocal { frontier: 8 });
+        assert!(delete_records_trim_application(8, 8, 8) == Complete { frontier: 8 });
+        // A retry repairs either side at the highest frontier and never
+        // regresses a partially applied trim.
+        assert!(delete_records_trim_application(5, 8, 3) == TrimLocal { frontier: 8 });
+        assert!(delete_records_trim_application(5, 3, 8) == TrimWal { frontier: 8 });
+        assert!(delete_records_trim_application(i64::MAX, 0, 0) == TrimWal { frontier: i64::MAX });
     }
 
     #[test]
@@ -535,6 +929,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unclean_recovery_commit_requires_the_selection_snapshot() {
+        assert!(unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            8,
+            &[1, 2],
+            &[1, 2],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[2, 1],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2, 3],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2],
+            3,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2],
+            2,
+            true
+        ));
     }
 
     #[test]
@@ -630,23 +1076,6 @@ mod tests {
     #[test]
     fn broker_arithmetic_matches_wide_integer_oracles() {
         let values = [i64::MIN, -2, -1, 0, 1, 2, i64::MAX];
-        for requested in values {
-            for high_watermark in values {
-                assert!(
-                    delete_records_target(requested, high_watermark)
-                        == if requested == -1 {
-                            high_watermark
-                        } else {
-                            requested
-                        }
-                );
-                assert!(
-                    delete_records_offset_out_of_range(requested, high_watermark)
-                        == (requested < 0 || requested > high_watermark)
-                );
-            }
-        }
-
         for hwm in values {
             for spso in values {
                 for log_start in values {

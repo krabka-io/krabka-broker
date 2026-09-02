@@ -16,6 +16,8 @@
 
 use std::collections::HashMap;
 
+use krabka_verified::select_uniform_member;
+
 use super::{Assignment, Assignor, MemberSubscription, TopicMetadata};
 
 #[derive(Debug)]
@@ -31,42 +33,42 @@ impl Assignor for UniformAssignor {
         for m in members {
             out.insert(m.member_id.clone(), HashMap::new());
         }
-        // Per-member rack lookup table; one entry per subscribed member.
-        let rack_by_member: HashMap<&str, Option<&str>> = members
-            .iter()
-            .map(|m| (m.member_id.as_str(), m.rack_id.as_deref()))
-            .collect();
-
         for (topic_id, partition_count) in &topics.partitions_per_topic {
-            let mut subscribers: Vec<&str> = members
+            let mut subscribers: Vec<&MemberSubscription> = members
                 .iter()
                 .filter(|m| m.subscribed_topic_ids.contains(topic_id))
-                .map(|m| m.member_id.as_str())
                 .collect();
-            subscribers.sort_unstable();
+            subscribers.sort_unstable_by_key(|member| member.member_id.as_str());
             if subscribers.is_empty() {
                 continue;
             }
             // Per-member partition count for THIS topic, used to choose
             // the least-loaded member from the eligible pool. Reset per
             // topic — KIP-848 balances within-topic, not across topics.
-            let mut count_by_member: HashMap<&str, usize> =
-                subscribers.iter().map(|&s| (s, 0)).collect();
+            let mut count_by_member = vec![0usize; subscribers.len()];
 
             for p in 0..*partition_count {
-                let eligible = eligible_subscribers_for_partition(
-                    &subscribers,
-                    &rack_by_member,
-                    topics.partition_racks.get(&(*topic_id, p)),
-                );
-                let chosen = eligible
+                let partition_racks = topics.partition_racks.get(&(*topic_id, p));
+                let candidates: Vec<(usize, bool)> = subscribers
                     .iter()
-                    .min_by_key(|&&sid| (count_by_member[sid], sid))
-                    .copied()
-                    .expect("eligible is non-empty: falls back to all subscribers");
-                *count_by_member.get_mut(chosen).expect("subscriber tracked") += 1;
-                let mid = chosen.to_string();
-                out.get_mut(&mid)
+                    .zip(&count_by_member)
+                    .map(|(member, &count)| {
+                        (
+                            count,
+                            partition_racks.is_some_and(|racks| {
+                                member
+                                    .rack_id
+                                    .as_ref()
+                                    .is_some_and(|rack| racks.iter().any(|r| r == rack))
+                            }),
+                        )
+                    })
+                    .collect();
+                let chosen = select_uniform_member(&candidates)
+                    .expect("subscribers are non-empty, so candidates are non-empty");
+                count_by_member[chosen] += 1;
+                let member_id = &subscribers[chosen].member_id;
+                out.get_mut(member_id)
                     .expect("inserted above")
                     .entry(*topic_id)
                     .or_default()
@@ -77,42 +79,12 @@ impl Assignor for UniformAssignor {
     }
 }
 
-/// Computes the pool of subscribers eligible for a partition.
-///
-/// When the partition has rack info AND at least one subscriber rack
-/// matches, the pool holds only those rack-collocated subscribers. If not,
-/// the pool holds all subscribers. This is the non-rack-aware fallback.
-fn eligible_subscribers_for_partition<'a>(
-    subscribers: &[&'a str],
-    rack_by_member: &HashMap<&str, Option<&str>>,
-    partition_racks: Option<&Vec<String>>,
-) -> Vec<&'a str> {
-    let Some(racks) = partition_racks.filter(|r| !r.is_empty()) else {
-        return subscribers.to_vec();
-    };
-    let preferred: Vec<&str> = subscribers
-        .iter()
-        .copied()
-        .filter(|sid| {
-            rack_by_member
-                .get(sid)
-                .and_then(|r| r.as_deref())
-                .is_some_and(|r| racks.iter().any(|s| s == r))
-        })
-        .collect();
-    if preferred.is_empty() {
-        subscribers.to_vec()
-    } else {
-        preferred
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
     use krabka_protocol::primitives::uuid::Uuid;
 
-    use super::*;
+    use super::{Assignor, MemberSubscription, TopicMetadata, UniformAssignor};
 
     fn tid(b: u8) -> Uuid {
         Uuid([b; 16])
@@ -199,6 +171,45 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_retry_is_complete_unique_and_balanced() {
+        let t = tid(1);
+        let members = [member("m3", &[t]), member("m1", &[t]), member("m2", &[t])];
+        let topics = TopicMetadata {
+            partitions_per_topic: [(t, 7)].into(),
+            ..Default::default()
+        };
+
+        let first = UniformAssignor.assign(&members, &topics);
+        let retry = UniformAssignor.assign(&members, &topics);
+        assert!(first == retry, "an exact retry must be deterministic");
+
+        let mut partitions: Vec<i32> = first
+            .values()
+            .flat_map(|topics| topics.get(&t).into_iter().flatten().copied())
+            .collect();
+        partitions.sort_unstable();
+        assert!(partitions == (0..7).collect::<Vec<_>>());
+
+        let mut loads: Vec<usize> = first
+            .values()
+            .map(|topics| topics.get(&t).map_or(0, Vec::len))
+            .collect();
+        loads.sort_unstable();
+        assert!(loads == vec![2, 2, 3]);
+    }
+
+    #[test]
+    fn negative_partition_count_is_fail_closed() {
+        let t = tid(1);
+        let topics = TopicMetadata {
+            partitions_per_topic: [(t, -1)].into(),
+            ..Default::default()
+        };
+        let assignment = UniformAssignor.assign(&[member("m1", &[t])], &topics);
+        assert!(assignment["m1"].is_empty());
+    }
+
+    #[test]
     fn empty_members_no_panic() {
         let t = tid(1);
         let topics = TopicMetadata {
@@ -245,6 +256,51 @@ mod tests {
         );
         assert!(a["m1"][&t] == vec![0], "m1 in us-east-1a takes partition 0");
         assert!(a["m2"][&t] == vec![1], "m2 in us-east-1b takes partition 1");
+    }
+
+    #[test]
+    fn rack_match_wins_even_when_an_unmatched_member_has_less_load() {
+        let t = tid(1);
+        let topics = topics_with_racks(t, 2, vec![vec![], vec!["rack-a"]]);
+        let assignment = UniformAssignor.assign(
+            &[
+                member_in_rack("m1", "rack-a", &[t]),
+                member_in_rack("m2", "rack-b", &[t]),
+            ],
+            &topics,
+        );
+
+        assert!(assignment["m1"][&t] == vec![0, 1]);
+        assert!(!assignment["m2"].contains_key(&t));
+    }
+
+    #[test]
+    fn mixed_topics_assign_only_subscribed_rack_eligible_members() {
+        let t1 = tid(1);
+        let t2 = tid(2);
+        let members = [
+            member_in_rack("m1", "rack-a", &[t1, t2]),
+            member_in_rack("m2", "rack-b", &[t1]),
+            member_in_rack("m3", "rack-c", &[t2]),
+            member_in_rack("m4", "rack-a", &[]),
+        ];
+        let topics = TopicMetadata {
+            partitions_per_topic: [(t1, 2), (t2, 2)].into(),
+            partition_racks: [
+                ((t1, 0), vec!["rack-a".into()]),
+                ((t1, 1), vec!["rack-b".into()]),
+                ((t2, 0), vec!["rack-c".into()]),
+                ((t2, 1), vec!["rack-a".into()]),
+            ]
+            .into(),
+        };
+
+        let assignment = UniformAssignor.assign(&members, &topics);
+        assert!(assignment["m1"][&t1] == vec![0]);
+        assert!(assignment["m2"][&t1] == vec![1]);
+        assert!(assignment["m3"][&t2] == vec![0]);
+        assert!(assignment["m1"][&t2] == vec![1]);
+        assert!(assignment["m4"].is_empty());
     }
 
     #[test]

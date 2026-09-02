@@ -30,7 +30,7 @@ fn remote_batch_is_deliverable(
     max_timestamp: i64,
     now_ms: i64,
 ) -> bool {
-    policy != DeliveryPolicy::Scheduled || max_timestamp <= now_ms.saturating_sub(uncertainty_ms)
+    krabka_log::batch_is_deliverable(policy, uncertainty_ms, max_timestamp, now_ms)
 }
 
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
@@ -217,7 +217,8 @@ pub(super) async fn try_remote_read(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_log::DeliveryPolicy;
+    use krabka_log::{DeliveryPolicy, Log, LogConfig};
+    use krabka_units::prelude::millis;
 
     #[test]
     fn a_remote_batch_is_held_back_until_its_activation_time_plus_the_bound() {
@@ -257,5 +258,30 @@ mod tests {
             10_000,
             i64::MIN
         ));
+    }
+
+    #[test]
+    fn local_and_remote_paths_agree_for_the_same_batch_and_clock() {
+        for (activation_ms, now_ms) in [(10_000, 10_249), (10_000, 10_250), (i64::MAX, i64::MAX)] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let config = LogConfig {
+                delivery_policy: DeliveryPolicy::Scheduled,
+                delivery_clock_uncertainty: millis(250),
+                ..LogConfig::default()
+            };
+            let mut log = Log::open(dir.path(), config).expect("open log");
+            let mut batch = crate::delivery::test_support::batch_at(activation_ms);
+            log.append(&mut batch).expect("append scheduled batch");
+            let local_visible =
+                log.advance_delivery_watermark(now_ms).watermark == log.log_end_offset();
+            let remote_visible = super::remote_batch_is_deliverable(
+                DeliveryPolicy::Scheduled,
+                250,
+                activation_ms,
+                now_ms,
+            );
+
+            assert!(local_visible == remote_visible);
+        }
     }
 }

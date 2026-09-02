@@ -195,6 +195,9 @@ impl Default for BrokerConfig {
             oauthbearer_max_session_lifetime: None,
             oauthbearer_jwks_signal_rx: std::sync::Arc::new(std::sync::Mutex::new(None)),
             oauthbearer_jwks_last_successful_fetch_ms: shared_epoch_ms(),
+            oauthbearer_jwks_cache_generation: std::sync::Arc::new(
+                std::sync::atomic::AtomicU64::new(0),
+            ),
             oauthbearer_jwks_last_on_demand_refresh_ms: shared_epoch_ms(),
             oauthbearer_jwks_min_on_demand_pause: DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
             features: default_feature_flags(),

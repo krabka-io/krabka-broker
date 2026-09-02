@@ -28,12 +28,16 @@ mod member_helpers;
 mod offset_batch;
 mod registry;
 mod replay_next_gen;
+mod replay_policy;
 mod replay_share;
 mod replay_streams;
 mod seed_cache;
 mod seeds;
 mod streams_conversion;
 mod type_lock;
+
+#[cfg(test)]
+mod coordinator_replay_model;
 
 #[cfg(test)]
 pub(crate) mod test_support;

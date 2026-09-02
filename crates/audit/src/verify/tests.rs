@@ -221,6 +221,49 @@ fn persisted_records_lost_marker_shape_is_reported() {
 }
 
 #[test]
+fn persisted_loss_generation_must_advance() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    let mut chain = ChainState::new();
+    for (offset, generation) in [2_u64, 2].into_iter().enumerate() {
+        let mut marker = AuditRecord::records_lost_with_generation(4, generation);
+        let (seq, previous) = chain.extend(&marker.value);
+        marker.push_chain_headers(seq, &previous);
+        log.append(&mut audit_record_to_batch(
+            &marker,
+            i64::try_from(offset).unwrap(),
+        ))
+        .unwrap();
+    }
+
+    let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
+    check!(!report.ok);
+    check!(report.records == RecordCount(1));
+    check!(report.losses.len() == 1);
+    check!(
+        report
+            .first_break
+            .expect("stale loss generation")
+            .reason
+            .contains("records-lost")
+    );
+}
+
+#[test]
+fn malformed_reserved_loss_body_cannot_hide_behind_another_header() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    let mut marker = AuditRecord::records_lost(0);
+    marker.headers[0].1 = b"application_lifecycle".to_vec();
+    marker.push_chain_headers(0, &GENESIS_HEAD);
+    log.append(&mut audit_record_to_batch(&marker, 0)).unwrap();
+
+    let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
+    check!(!report.ok);
+    check!(report.records == RecordCount(0));
+}
+
+#[test]
 fn records_lost_marker_does_not_excuse_a_sequence_gap() {
     let tmp = tempfile::tempdir().unwrap();
     let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
@@ -273,6 +316,27 @@ fn wrong_trusted_key_fails_at_checkpoint() {
     check!(!report.ok);
     let b = report.first_break.unwrap();
     check!(b.reason.contains("signature"));
+}
+
+#[test]
+fn signed_checkpoint_cannot_claim_an_empty_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (signer, public_key) = signer();
+    let checkpoint = Checkpoint::signed(signer.as_ref(), Seq(0), &GENESIS_HEAD, EpochMs(123));
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    log.append(&mut audit_record_to_batch(&checkpoint.to_record(), 0))
+        .unwrap();
+
+    let report =
+        verify_partition_dir(tmp.path(), &TrustedKeys::single("k1".into(), public_key)).unwrap();
+    check!(!report.ok);
+    check!(
+        report
+            .first_break
+            .expect("empty checkpoint")
+            .reason
+            .contains("seq_high")
+    );
 }
 
 // ── Fix 1 tests: unanchored_records field ─────────────────────────────────

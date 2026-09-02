@@ -9,6 +9,10 @@ use std::collections::BTreeMap;
 
 use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
+use krabka_verified::{
+    BarrierCutClassification, BarrierTargetCountDecision, barrier_cut_classification,
+    barrier_target_count_decision,
+};
 
 use crate::barrier::persistence::{
     CutStatus, CutValue, MissingPartition, PartitionOffset, TopicOffsets, TopicTarget,
@@ -30,8 +34,16 @@ pub(crate) struct TargetPartition {
 /// A topic with a partition count of zero or below contributes nothing.
 pub(crate) fn expand_targets(targets: &[TopicTarget]) -> Vec<TargetPartition> {
     let mut out = Vec::new();
+    let mut total = 0;
     for target in targets {
-        for partition in 0..target.partition_count.max(0) {
+        let count = match barrier_target_count_decision(total, target.partition_count) {
+            BarrierTargetCountDecision::Expand { next } => {
+                total = next;
+                target.partition_count
+            }
+            BarrierTargetCountDecision::Malformed | BarrierTargetCountDecision::Overflow => 0,
+        };
+        for partition in 0..count {
             out.push(TargetPartition {
                 topic: target.topic.clone(),
                 partition: PartitionIndex(partition),
@@ -54,10 +66,18 @@ pub(crate) fn build_cut(
 ) -> CutValue {
     let mut topics = Vec::with_capacity(targets.len());
     let mut missing = Vec::new();
+    let mut malformed_target = false;
 
     for target in targets {
         let mut partitions = Vec::new();
-        for partition in 0..target.partition_count.max(0) {
+        let count = match barrier_target_count_decision(0, target.partition_count) {
+            BarrierTargetCountDecision::Expand { .. } => target.partition_count,
+            BarrierTargetCountDecision::Malformed | BarrierTargetCountDecision::Overflow => {
+                malformed_target = true;
+                0
+            }
+        };
+        for partition in 0..count {
             let key = TargetPartition {
                 topic: target.topic.clone(),
                 partition: PartitionIndex(partition),
@@ -79,10 +99,9 @@ pub(crate) fn build_cut(
         });
     }
 
-    let status = if missing.is_empty() {
-        CutStatus::Complete
-    } else {
-        CutStatus::Partial
+    let status = match barrier_cut_classification(malformed_target || !missing.is_empty()) {
+        BarrierCutClassification::Complete => CutStatus::Complete,
+        BarrierCutClassification::Partial => CutStatus::Partial,
     };
     CutValue {
         triggered_at,
@@ -95,10 +114,17 @@ pub(crate) fn build_cut(
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use std::collections::BTreeMap;
 
-    use super::*;
-    use crate::barrier::state::test_support::{at, target};
+    use assert2::{assert, check};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::Offset;
+
+    use super::{build_cut, expand_targets};
+    use crate::barrier::{
+        persistence::{CutStatus, CutValue, MissingPartition, PartitionOffset, TopicOffsets},
+        state::test_support::{at, target},
+    };
 
     #[test]
     fn a_target_set_expands_to_one_entry_per_partition() {
@@ -121,6 +147,14 @@ mod tests {
                 expand_targets(&[target("orders", count)]).is_empty(),
                 "{count}"
             );
+        }
+    }
+
+    #[test]
+    fn a_malformed_target_cannot_produce_a_complete_cut() {
+        for count in [0, -1] {
+            let cut = build_cut(1, 2, &[target("orders", count)], &BTreeMap::new());
+            check!(cut.status == CutStatus::Partial, "{count}");
         }
     }
 

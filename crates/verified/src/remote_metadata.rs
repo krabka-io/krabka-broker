@@ -174,6 +174,29 @@ pub fn remote_metadata_partition(
     Some(kafka_to_positive(murmur2) % metadata_partition_count)
 }
 
+/// Select the inclusive metadata-log cursor immediately after a snapshot's
+/// committed offset.
+///
+/// `-1` is the only no-event sentinel and maps to a full replay from zero.
+/// Every real committed offset advances by exactly one. Values below the
+/// sentinel and a committed `i64::MAX` fail closed instead of producing a
+/// negative or wrapped cursor.
+#[cfg_attr(
+    creusot,
+    ensures(match result {
+        Some(cursor) => -1 <= committed@ && committed@ < i64::MAX@ && cursor@ == committed@ + 1,
+        None => committed@ < -1 || committed@ == i64::MAX@,
+    })
+)]
+#[ensures(forall<cursor: i64> result == Some(cursor) ==> 0 <= cursor@)]
+#[must_use]
+pub const fn remote_metadata_resume_cursor(committed: i64) -> Option<i64> {
+    if committed < -1 {
+        return None;
+    }
+    committed.checked_add(1)
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::check;
@@ -203,5 +226,20 @@ mod tests {
     fn rejects_nonpositive_metadata_partition_counts() {
         check!(remote_metadata_partition(0, 0, 0) == None);
         check!(remote_metadata_partition(0, 0, -1) == None);
+    }
+
+    #[test]
+    fn resume_cursor_maps_none_to_zero_and_advances_exactly() {
+        check!(remote_metadata_resume_cursor(-1) == Some(0));
+        check!(remote_metadata_resume_cursor(0) == Some(1));
+        check!(remote_metadata_resume_cursor(41) == Some(42));
+        check!(remote_metadata_resume_cursor(i64::MAX - 1) == Some(i64::MAX));
+    }
+
+    #[test]
+    fn resume_cursor_rejects_malformed_and_overflowing_offsets() {
+        check!(remote_metadata_resume_cursor(-2) == None);
+        check!(remote_metadata_resume_cursor(i64::MIN) == None);
+        check!(remote_metadata_resume_cursor(i64::MAX) == None);
     }
 }

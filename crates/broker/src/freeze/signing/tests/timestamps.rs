@@ -7,7 +7,7 @@
 
 use assert2::check;
 use krabka_metadata::TopicFreezeRecord;
-use krabka_units::{minutes, secs};
+use krabka_units::{Time, convert::TimeExt as _, minutes, secs};
 
 use super::{ALICE, CLUSTER_ID, NOW_MS, check_against, record, signed, trust};
 use crate::freeze::signing::{FreezeSignatureCheck, verify_freeze_signature};
@@ -85,4 +85,32 @@ fn a_newer_timestamp_replaces_a_live_entry() {
     };
 
     check!(verify_freeze_signature(&check, &record) == Ok(()));
+}
+
+#[test]
+fn opposite_machine_extremes_never_wrap_into_the_skew_window() {
+    let trust = trust();
+    for (label, now_ms, set_at_ms) in [
+        ("past extreme", i64::MAX, i64::MIN),
+        ("future extreme", i64::MIN, i64::MAX),
+    ] {
+        let record = signed(
+            &trust.alice,
+            CLUSTER_ID,
+            &TopicFreezeRecord {
+                set_at_ms,
+                ..record()
+            },
+        );
+        let check = FreezeSignatureCheck {
+            now_ms,
+            max_skew: Time::from_millis(i64::MAX),
+            ..check_against(&trust, ALICE)
+        };
+        check!(
+            verify_freeze_signature(&check, &record)
+                == Err(crate::freeze::signing::SignatureRefusal::TimestampOutsideSkewWindow),
+            "{label}"
+        );
+    }
 }

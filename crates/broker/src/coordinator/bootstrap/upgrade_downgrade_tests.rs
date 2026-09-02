@@ -176,14 +176,12 @@ async fn compacted_downgrade_residue_replays_as_classic() {
     );
 }
 
-/// Counterpoint to `compacted_downgrade_residue_replays_as_classic`.
+/// A child record without live k3 group metadata cannot claim the group.
 ///
-/// WITHOUT the k6 tombstone, a surviving k6 WRITE re-creates a next-gen
-/// seed, and the group wrongly comes back as next-gen. That is the bug
-/// this work fixes. The test pins the hazard, so it catches a regression
-/// that drops the k6 tombstone.
+/// The downgrade batch still tombstones k6 for compaction hygiene. Replay also
+/// fails closed when a malformed or partially retained log leaves only k6.
 #[tokio::test]
-async fn surviving_k6_write_resurrects_as_next_gen_without_fix() {
+async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
     use crate::coordinator::unified::persistence_next_gen as ng;
 
     let coord = bare_coordinator();
@@ -215,24 +213,15 @@ async fn surviving_k6_write_resurrects_as_next_gen_without_fix() {
         }
     }
 
-    // The lone k6 write re-created a next-gen seed via the
-    // `seeds.entry(..).or_default()` in `replay_target_assignment_metadata`
-    // — the exact hazard the k6 tombstone prevents. `finalize` derives its
-    // next-gen id set from `coordinator.seeds`, so this stray seed is what
-    // makes it suppress the classic k2 reconstruction.
-    assert!(coord.seeds.contains_key("g"));
+    assert!(!coord.seeds.contains_key("g"));
 
     finalize(&coord, acc).await;
 
-    // Resurrection: `finalize` spawned a CONSUMER (next-gen) actor for "g"
-    // off that stray seed instead of the classic actor the k2 should have
-    // produced. (Asserting the spawned actor's kind, set synchronously at
-    // spawn, avoids the async `group_types` mark the actor records only as
-    // it processes its seed.)
+    // The authoritative k2 snapshot therefore reconstructs a classic group.
     assert!(
         coord
             .find("g")
-            .is_some_and(|h| h.kind == crate::coordinator::unified::actor::GroupKindTag::Consumer)
+            .is_some_and(|h| h.kind == crate::coordinator::unified::actor::GroupKindTag::Classic)
     );
 }
 

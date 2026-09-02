@@ -1,0 +1,17 @@
+(* #"/proof-work-225b/crates/verified/src/quorum_state.rs" 10 27 10 32 *)
+
+(* <quorum_state::QuorumStateWriteDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_QuorumStateWriteDecision = Reject | Accept
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_QuorumStateWriteDecision [#"/proof-work-225b/crates/verified/src/quorum_state.rs" 10 27 10 32]
+  (self: t_QuorumStateWriteDecision) (return (x: t_QuorumStateWriteDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_QuorumStateWriteDecision = Any.any_l () | & self: t_QuorumStateWriteDecision = self ])
+  [ return (result: t_QuorumStateWriteDecision) -> (! return {result}) ]

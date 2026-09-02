@@ -2,6 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
+      "vc_max_i64": { "prover": "alt-ergo", "time": 0.01 },
       "vc_min_i64": { "prover": "alt-ergo", "time": 0.004 },
       "vc_renew_token_expiry": { "prover": "alt-ergo", "time": 0.078 }
     }

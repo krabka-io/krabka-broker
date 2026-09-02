@@ -16,11 +16,12 @@
 
 use std::{collections::HashSet, hash::BuildHasher};
 
-use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+use krabka_metadata::{DelegationToken, DelegationTokenRecord};
 use krabka_protocol::owned::{
     renew_delegation_token_request::RenewDelegationTokenRequest,
     renew_delegation_token_response::RenewDelegationTokenResponse,
 };
+use krabka_raft::DelegationTokenMutation;
 use krabka_security::SecretBytes;
 use krabka_verified::{
     TokenRenewDecision,
@@ -95,17 +96,16 @@ pub(crate) async fn handle<S: BuildHasher>(
         TokenRenewDecision::Invalid => return err_response(crate::codes::INVALID_REQUEST),
     };
 
-    let record = DelegationTokenRecord {
-        token_id: token.token_id.clone(),
-        owner: token.owner.clone(),
-        hmac: token.hmac.clone(),
-        issue_timestamp_ms: token.issue_timestamp_ms,
+    let expected = token_to_record(&token);
+    let replacement = DelegationTokenRecord {
         expiry_timestamp_ms: new_expiry,
-        max_timestamp_ms: token.max_timestamp_ms,
-        renewers: token.renewers.clone(),
+        ..expected.clone()
     };
     if let Err(e) = controller
-        .submit_change(vec![MetadataRecord::V1DelegationToken(record)])
+        .submit_delegation_token_mutations(vec![DelegationTokenMutation::Renew {
+            expected,
+            replacement,
+        }])
         .await
     {
         tracing::warn!(error = %e, "RenewDelegationToken: submit_change failed");
@@ -116,6 +116,18 @@ pub(crate) async fn handle<S: BuildHasher>(
         error_code: 0,
         expiry_timestamp_ms: new_expiry,
         ..Default::default()
+    }
+}
+
+fn token_to_record(token: &DelegationToken) -> DelegationTokenRecord {
+    DelegationTokenRecord {
+        token_id: token.token_id.clone(),
+        owner: token.owner.clone(),
+        hmac: token.hmac.clone(),
+        issue_timestamp_ms: token.issue_timestamp_ms,
+        expiry_timestamp_ms: token.expiry_timestamp_ms,
+        max_timestamp_ms: token.max_timestamp_ms,
+        renewers: token.renewers.clone(),
     }
 }
 
@@ -131,6 +143,7 @@ mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use assert2::assert;
+    use krabka_metadata::MetadataRecord;
     use krabka_raft::ControllerHandle;
     use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
     use tempfile::TempDir;

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_transaction_partition_registration": {
+        "prover": "alt-ergo",
+        "time": 0.009
+      }
+    }
+  }
+}

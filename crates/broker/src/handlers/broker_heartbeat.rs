@@ -91,7 +91,7 @@ pub(crate) async fn handle(
         }
 
         let image = controller.current_image();
-        let (broker_id_u64, is_caught_up) = match validate_registration(&image, &req) {
+        let (broker_id_u64, decision) = match validate_registration(&image, &req) {
             Ok(validated) => validated,
             Err(error_code) => return encode_response(version, &error_response(error_code)),
         };
@@ -102,15 +102,15 @@ pub(crate) async fn handle(
         // explicit on-revival handling.
         let _transition = liveness.record_fenced_heartbeat(broker_id_u64).await;
         let is_fenced = liveness
-            .apply_fencing(broker_id_u64, req.want_fence, is_caught_up)
+            .apply_fencing(broker_id_u64, decision.fenced, decision.caught_up)
             .await;
 
         // Track want_shut_down state and drive leader transfer.
         liveness
-            .set_wants_shutdown(broker_id_u64, req.want_shut_down)
+            .set_wants_shutdown(broker_id_u64, decision.should_shut_down)
             .await;
 
-        let should_shut_down = if req.want_shut_down {
+        let should_shut_down = if decision.should_shut_down {
             drain_leaderships_for_shutdown(&controller, &liveness, NodeId(broker_id_u64)).await?
         } else {
             false
@@ -165,7 +165,7 @@ pub(crate) async fn handle(
 
         encode_response(
             version,
-            &success_response(is_caught_up, is_fenced, should_shut_down),
+            &success_response(decision.caught_up, is_fenced, should_shut_down),
         )
     }
 }

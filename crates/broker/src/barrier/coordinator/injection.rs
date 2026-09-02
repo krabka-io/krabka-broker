@@ -128,7 +128,9 @@ impl BarrierCoordinator {
                     group: group.to_owned(),
                 })?;
 
-        let epoch = next_epoch(entry.last_epoch());
+        let epoch = next_epoch(entry.last_epoch()).ok_or_else(|| BarrierError::EpochExhausted {
+            group: group.to_owned(),
+        })?;
         let triggered_at = now_ms();
         let targets = freeze_targets(&entry.definition.topics, &image);
         let start = InjectionStartValue {

@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/delegation_token.rs" 175 27 175 32 *)
+
+(* <delegation_token::TokenMutationDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_TokenMutationDecision = Append | Retry | Reject
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TokenMutationDecision [#"/workspace/crates/verified/src/delegation_token.rs" 175 27 175 32]
+  (self: t_TokenMutationDecision) (return (x: t_TokenMutationDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenMutationDecision = Any.any_l () | & self: t_TokenMutationDecision = self ])
+  [ return (result: t_TokenMutationDecision) -> (! return {result}) ]

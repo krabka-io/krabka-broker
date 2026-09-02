@@ -109,6 +109,33 @@ async fn cache_hit_returns_cached_decision_without_http_call() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cache_hit_preserves_a_deny_decision() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": false})),
+        )
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let auth = OpaAuthorizer::new(
+        HashSet::new(),
+        opa_url(&mock),
+        false,
+        100,
+        minutes(1),
+        secs(5),
+    )
+    .unwrap();
+    let image = img();
+    let p = test_principal("alice");
+    let h = host();
+    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
+    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cache_miss_calls_opa_and_caches_result() {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
@@ -165,12 +192,28 @@ async fn cache_entry_expires_after_ttl() {
     let h = host();
     // Cache miss -> HTTP call #1; caches the decision with expires_at = now+10ms.
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
-    // Advance the manual clock past the TTL so the cached entry is now stale.
+    // The exact deadline is stale: freshness is a strict comparison.
     timeline
-        .advance(Duration::from_millis(50))
+        .advance(Duration::from_millis(10))
         .expect("manual time moves forward");
     // Cache entry expired -> HTTP call #2 (verified by the mock's expect(2)).
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nonpositive_cache_ttl_is_rejected() {
+    for ttl in [millis(0), krabka_units::Time::from_millis(-1)] {
+        let result = OpaAuthorizer::with_clock(
+            HashSet::new(),
+            "http://opa.invalid/v1/data/kafka/authz/allow".to_string(),
+            false,
+            1,
+            ttl,
+            secs(1),
+            ManualMonotonicClock::new_shared().new_wall_clock(SystemTime::now()),
+        );
+        assert!(matches!(result, Err(OpaConfigError::InvalidCacheTtl)));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

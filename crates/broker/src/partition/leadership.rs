@@ -9,10 +9,6 @@ use krabka_log::Log;
 
 use crate::{error::BrokerError, partition::Partition};
 
-/// Kafka's `RecordBatch.NO_PARTITION_LEADER_EPOCH`: the wire value a request
-/// carries when it holds no leader epoch for the partition.
-const NO_PARTITION_LEADER_EPOCH: i32 = -1;
-
 /// Immutable topic identity plus the leader generation allowed to mutate a
 /// follower log. A read guard over this value linearizes replication writes
 /// with [`Partition::install_leader_change`].
@@ -221,10 +217,17 @@ impl Partition {
     /// `current_leader_epoch = -2` with `FENCED_LEADER_EPOCH` while Fetch v11
     /// serves that same request its records.
     pub(crate) fn list_offsets_leader_epoch_fence(&self, request_epoch: i32) -> Option<(i16, i32)> {
-        if request_epoch == NO_PARTITION_LEADER_EPOCH {
-            return None;
+        let current = self.current_leader_epoch.load(Ordering::Acquire);
+        match krabka_verified::list_offsets_epoch_decision(request_epoch, current) {
+            krabka_verified::ListOffsetsEpochDecision::Proceed => None,
+            krabka_verified::ListOffsetsEpochDecision::Fenced => {
+                Some((crate::codes::FENCED_LEADER_EPOCH, current))
+            }
+            krabka_verified::ListOffsetsEpochDecision::RejectMalformed
+            | krabka_verified::ListOffsetsEpochDecision::Unknown => {
+                Some((crate::codes::UNKNOWN_LEADER_EPOCH, current))
+            }
         }
-        self.check_leader_epoch(request_epoch)
     }
 
     /// Test-only: directly set the partition's `current_leader_epoch`

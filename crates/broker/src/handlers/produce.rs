@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse};
+use krabka_verified::FreezeMutationKind;
 
 use self::{
     authorization::authorize_produce,
@@ -30,7 +31,7 @@ use crate::{
     codes,
     config_keys::{resolve_max_message_bytes, resolve_schema_validation},
     error::BrokerError,
-    freeze::resolve::resolve_topic_freeze,
+    freeze::resolve::resolve_freeze_mutation,
 };
 
 mod append;
@@ -54,6 +55,13 @@ mod test_support;
 /// hold the response until the high watermark covers the append, that is,
 /// until every in-sync replica has it.
 const ACKS_ALL: i16 = -1;
+
+/// Map one admitted batch to the exact exclusive frontier used by both fresh
+/// append and duplicate `acks=all` waits.
+fn durability_frontier(base_offset: i64, last_offset_delta: i32) -> Option<krabka_log::Offset> {
+    krabka_verified::produce_durability_frontier(base_offset, last_offset_delta)
+        .map(krabka_log::Offset)
+}
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
 /// and throttle histograms carry. The dispatcher labels the total latency from
@@ -247,7 +255,12 @@ pub(crate) async fn handle(
         // partition of an unfrozen topic then pays one test of an `Option` and
         // nothing else. The borrow allocates nothing, and only a refused row
         // turns the entry into a `FreezeVerdict` and a message.
-        let freeze = resolve_topic_freeze(&image, &topic_name);
+        let freeze = resolve_freeze_mutation(
+            &image,
+            &topic_name,
+            !topic_denied,
+            FreezeMutationKind::Produce,
+        );
 
         for part_data in topic.partition_data {
             let idx = part_data.index;
@@ -266,7 +279,6 @@ pub(crate) async fn handle(
                         delivery,
                         schema,
                         topic_name: topic_name.clone(),
-                        topic_denied,
                         freeze,
                         txn_id_denied,
                         acks: req.acks,
@@ -344,4 +356,16 @@ pub(crate) fn response_required(
     version: i16,
 ) -> Result<bool, BrokerError> {
     Ok(decode_produce_request(request_bytes, body_bytes, version)?.acks != 0)
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::durability_frontier;
+
+    #[test]
+    fn adapter_rejects_malformed_and_overflowing_frontiers() {
+        assert2::assert!(durability_frontier(10, 2) == Some(krabka_log::Offset(13)));
+        assert2::assert!(durability_frontier(10, -1).is_none());
+        assert2::assert!(durability_frontier(i64::MAX, 0).is_none());
+    }
 }

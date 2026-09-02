@@ -14,6 +14,7 @@ use std::{
 use krabka_ids::PartitionIndex;
 use krabka_protocol::records::RecordBatch;
 use krabka_units::{ByteSize, mebibytes};
+use krabka_verified::{ReplayCursorDecision, replay_batch_cursor_decision};
 
 use super::{
     OFFSETS_TOPIC,
@@ -143,6 +144,16 @@ pub(super) fn replay_records(
         }
         let mut advanced_to = next;
         for batch in &out.batches {
+            let ReplayCursorDecision::Advance(batch_end) = replay_batch_cursor_decision(
+                advanced_to.0,
+                end.0,
+                Some((batch.base_offset, batch.last_offset_delta)),
+            ) else {
+                return Err(BrokerError::Startup(format!(
+                    "malformed {OFFSETS_TOPIC} replay batch at offset {}",
+                    batch.base_offset
+                )));
+            };
             if batch.attributes.is_control_batch() {
                 let committed = batch
                     .records
@@ -165,8 +176,7 @@ pub(super) fn replay_records(
                         }
                     }
                 }
-                advanced_to =
-                    krabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+                advanced_to = krabka_log::Offset(batch_end);
                 continue;
             }
             for record in &batch.records {
@@ -195,13 +205,7 @@ pub(super) fn replay_records(
                     }
                 }
             }
-            // The loop threads the log's `Offset` cursor (`next`/`end` feed
-            // `Log::read`); wrap the batch-derived next offset back into `Offset`.
-            advanced_to =
-                krabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
-        }
-        if advanced_to <= next {
-            break;
+            advanced_to = krabka_log::Offset(batch_end);
         }
         next = advanced_to;
     }

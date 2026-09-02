@@ -33,7 +33,7 @@ impl Log {
         // `partition_leader_epoch` is the raw KIP-320 wire `int32`; wrap it into
         // the domain newtype at this boundary.
         let leader_epoch = LeaderEpoch(batch.partition_leader_epoch);
-        let assigned_base = self.log_end_offset();
+        let assigned_base = self.append_at_expected_offset();
         tracing::Span::current().record("assigned_base", assigned_base.0);
         batch.base_offset = assigned_base.0;
         self.append_preserving_offset(batch, None)?;
@@ -44,8 +44,10 @@ impl Log {
                 .epoch_checkpoint
                 .latest_epoch()
                 .is_none_or(|e| leader_epoch > e)
+            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, assigned_base)
         {
-            self.epoch_checkpoint.append(leader_epoch, assigned_base)?;
+            self.rollback_failed_append(assigned_base)?;
+            return Err(error);
         }
         Ok(assigned_base)
     }
@@ -66,10 +68,10 @@ impl Log {
         stamp: u64,
     ) -> Result<Offset, LogError> {
         self.validate_commit_stamp_batch(batch)?;
-        let assigned_base = self.log_end_offset();
+        let assigned_base = self.append_at_expected_offset();
         batch.base_offset = assigned_base.0;
-        self.observe_stamp(stamp);
         self.append_preserving_offset(batch, Some(stamp))?;
+        self.observe_stamp(stamp);
         Ok(assigned_base)
     }
 
@@ -115,8 +117,10 @@ impl Log {
                 .epoch_checkpoint
                 .latest_epoch()
                 .is_none_or(|e| leader_epoch > e)
+            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, offset)
         {
-            self.epoch_checkpoint.append(leader_epoch, offset)?;
+            self.rollback_failed_append(offset)?;
+            return Err(error);
         }
         Ok(())
     }
@@ -143,8 +147,9 @@ impl Log {
         }
         self.validate_commit_stamp_batch(batch)?;
         batch.base_offset = offset.0;
+        self.append_preserving_offset(batch, Some(stamp))?;
         self.observe_stamp(stamp);
-        self.append_preserving_offset(batch, Some(stamp))
+        Ok(())
     }
 
     /// Internal helper shared by [`Log::append`] and [`Log::append_at`].
@@ -158,6 +163,17 @@ impl Log {
         batch: &mut RecordBatch,
         transaction_stamp: Option<u64>,
     ) -> Result<(), LogError> {
+        let base_offset = Offset(batch.base_offset);
+        let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
+            self.append_at_expected_offset().0,
+            batch.base_offset,
+            batch.last_offset_delta,
+        ) else {
+            return Err(LogError::InvalidArgument(
+                "batch does not form a valid interval at the append frontier".into(),
+            ));
+        };
+        let last_offset = Offset(last_offset);
         Self::data_producer_tail(
             ProducerId(batch.producer_id),
             batch.base_sequence,
@@ -177,68 +193,64 @@ impl Log {
             self.roll_active_segment()?;
         }
 
-        let active = self
-            .active
-            .as_mut()
-            .expect("active segment must exist after Log::open");
-        active.append(batch, index_interval)?;
+        let result = (|| {
+            let active = self
+                .active
+                .as_mut()
+                .expect("active segment must exist after Log::open");
+            active.append(batch, index_interval)?;
 
-        if flush_on_append && let Err(error) = self.active_segment_flush() {
-            self.rollback_failed_append(Offset(batch.base_offset))?;
+            let pid = ProducerId(batch.producer_id);
+            let is_transactional = batch.attributes.is_transactional() && pid.get() >= 0;
+            let control_kind = control_batch_kind(batch);
+            let writes_durable_sidecar =
+                matches!(control_kind, Some(ControlBatchKind::Transaction))
+                    || (self.stamp_source.is_some() && control_kind.is_none() && !is_transactional);
+            if flush_on_append || writes_durable_sidecar {
+                self.active_segment_flush()?;
+            }
+
+            // Sidecars are written only after the batch bytes. Any failure in
+            // this block takes the full-log rollback path below.
+            if !batch.attributes.is_control_batch() && !is_transactional {
+                self.record_stamp(base_offset, last_offset)?;
+            }
+
+            let is_barrier = match control_kind {
+                Some(ControlBatchKind::Barrier) => {
+                    self.refresh_lso()?;
+                    true
+                }
+                Some(ControlBatchKind::Transaction) => {
+                    self.apply_transaction_marker(batch, pid, last_offset, transaction_stamp)?;
+                    self.refresh_lso()?;
+                    false
+                }
+                None if is_transactional => {
+                    self.pending.entry(pid).or_insert(base_offset);
+                    self.pending_stamp_ranges
+                        .entry(pid)
+                        .or_default()
+                        .push((base_offset, last_offset));
+                    self.refresh_lso()?;
+                    false
+                }
+                None => {
+                    self.refresh_lso()?;
+                    false
+                }
+            };
+
+            if !is_barrier {
+                self.update_owned_producer_entry(batch)?;
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = result {
+            self.rollback_failed_append(base_offset)?;
             return Err(error);
         }
-
-        // --- .stampindex write (internal sidecar) ---
-        // Ordinary data is stamped after the batch is durable. Transactional
-        // data stays unstamped until its COMMIT marker lands; an ABORT leaves
-        // it unstamped. Control records themselves never receive a stamp.
-        let pid = ProducerId(batch.producer_id);
-        let is_transactional = batch.attributes.is_transactional() && pid.get() >= 0;
-        if !batch.attributes.is_control_batch() && !is_transactional {
-            let last = Offset(batch.base_offset + i64::from(batch.last_offset_delta));
-            self.record_stamp(Offset(batch.base_offset), last)?;
-        }
-
-        // --- LSO tracking + .txnindex writes ---
-        match control_batch_kind(batch) {
-            Some(ControlBatchKind::Barrier) => {
-                // A barrier marker holds no producer id and it clears the
-                // transactional bit. It opens no transaction and it closes
-                // none, so `pending`, `pending_stamp_ranges`,
-                // `coordinator_epochs`, the active `.txnindex`, and the
-                // producer state all stay as they are. The offset that the
-                // marker takes is its only effect on the log, so the LSO
-                // moves exactly as it moves for an ordinary
-                // non-transactional batch. The early return keeps it that
-                // way. No statement after this match can reach a barrier.
-                self.advance_lso_when_no_open_transaction();
-                return Ok(());
-            }
-            Some(ControlBatchKind::Transaction) => {
-                self.apply_transaction_marker(batch, pid, transaction_stamp)?;
-                // LSO can advance only when no pending txns remain.
-                self.advance_lso_when_no_open_transaction();
-            }
-            None if is_transactional => {
-                // Record the first offset of this txn on this partition.
-                let base = Offset(batch.base_offset);
-                let last = Offset(batch.base_offset + i64::from(batch.last_offset_delta));
-                self.pending.entry(pid).or_insert(base);
-                self.pending_stamp_ranges
-                    .entry(pid)
-                    .or_default()
-                    .push((base, last));
-                // LSO stays where it is until commit/abort.
-            }
-            None => {
-                // Non-transactional batch. LSO advances only when no
-                // in-flight txns.
-                self.advance_lso_when_no_open_transaction();
-            }
-        }
-
-        self.update_owned_producer_entry(batch)?;
-
         Ok(())
     }
 

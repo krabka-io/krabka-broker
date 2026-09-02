@@ -27,7 +27,7 @@ use crate::{
     txn::marker::MarkerType,
 };
 
-pub(super) type CommittedOffsets = HashMap<String, Vec<((String, i32), OffsetEntry)>>;
+pub(crate) type CommittedOffsets = HashMap<String, Vec<((String, i32), OffsetEntry)>>;
 
 pub(super) fn pending_offset_entries(
     partition: &crate::partition::Partition,
@@ -76,8 +76,12 @@ pub(super) fn pending_offset_entries(
                     }
                 }
             }
-            advanced_to =
-                krabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+            advanced_to = checked_batch_advance(
+                advanced_to,
+                end,
+                batch.base_offset,
+                batch.last_offset_delta,
+            )?;
         }
         if advanced_to <= next {
             break;
@@ -85,6 +89,24 @@ pub(super) fn pending_offset_entries(
         next = advanced_to;
     }
     Ok(offsets)
+}
+
+fn checked_batch_advance(
+    cursor: krabka_log::Offset,
+    end: krabka_log::Offset,
+    base_offset: i64,
+    last_offset_delta: i32,
+) -> Result<krabka_log::Offset, BrokerError> {
+    match krabka_verified::replay_batch_cursor_decision(
+        cursor.0,
+        end.0,
+        Some((base_offset, last_offset_delta)),
+    ) {
+        krabka_verified::ReplayCursorDecision::Advance(next) => Ok(krabka_log::Offset(next)),
+        krabka_verified::ReplayCursorDecision::Stop => Err(BrokerError::Txn(format!(
+            "transactional offset scan rejected batch {base_offset}+{last_offset_delta} at cursor {cursor} before {end}"
+        ))),
+    }
 }
 
 /// Resolve a transaction's offset commits against the local group actors.
@@ -161,4 +183,23 @@ pub(super) async fn resolve_pending_offsets(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_log::Offset;
+
+    use super::checked_batch_advance;
+
+    #[test]
+    fn transactional_offset_scan_rejects_overlap_bounds_and_overflow() {
+        assert!(checked_batch_advance(Offset(5), Offset(10), 5, 1).ok() == Some(Offset(7)));
+        assert!(checked_batch_advance(Offset(5), Offset(10), 4, 1).is_err());
+        assert!(checked_batch_advance(Offset(5), Offset(10), 9, 1).is_err());
+        assert!(
+            checked_batch_advance(Offset(i64::MAX - 1), Offset(i64::MAX), i64::MAX - 1, 1).is_err()
+        );
+        assert!(checked_batch_advance(Offset(5), Offset(10), 5, -1).is_err());
+    }
 }

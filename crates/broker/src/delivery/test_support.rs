@@ -119,6 +119,9 @@ pub(crate) fn scheduled_partition(
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log,
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(replica_state)),
         hw_advance_notify: Arc::new(Notify::new()),

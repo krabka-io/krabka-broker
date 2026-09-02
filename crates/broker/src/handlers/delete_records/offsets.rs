@@ -1,72 +1,81 @@
-//! The offset boundary decisions a `DeleteRecords` trim makes before it
-//! touches a log: resolving the requested target, rejecting one that is out of
-//! range, and capping the resolved target at the delivery watermark.
-//!
-//! The first two delegate to the verified `krabka_verified` rules, so this
-//! module is the seam between the handler's raw `i64` wire offsets and those
-//! proofs. The KFC-1 cap lives beside them because it is the last step of the
-//! same decision.
+//! The verified offset boundary decision a `DeleteRecords` trim makes before
+//! it touches a log.
 
 use krabka_log::Offset;
+use krabka_verified::{
+    DeleteRecordsTrimDecision, DeleteRecordsTrimFacts, delete_records_trim_decision,
+};
 
-pub(super) fn target_offset(requested_offset: i64, high_watermark: i64) -> i64 {
-    krabka_verified::delete_records_target(requested_offset, high_watermark)
-}
-
-pub(super) fn offset_out_of_range(target: i64, log_end_offset: i64) -> bool {
-    krabka_verified::delete_records_offset_out_of_range(target, log_end_offset)
-}
-
-/// KFC-1: the offset a trim may actually reach.
-///
-/// `watermark` is the partition's delivery watermark, and `None` on a topic
-/// that delivers immediately. Such a topic has every durable record visible
-/// already, so the resolved target stands and this is the identity.
-///
-/// A topic that schedules delivery stops the trim at the watermark. The `-1`
-/// sentinel resolves to the high watermark, and on a scheduled partition that
-/// sits above every record that has not come due, so a routine trim would
-/// delete records the broker promised to deliver and no consumer was allowed
-/// to read. An explicit target is capped for the same reason: what the cap
-/// removes is exactly the undelivered tail, and the response reports the log
-/// start offset the trim reached.
-pub(super) fn delivery_capped(target: Offset, watermark: Option<Offset>) -> Offset {
-    watermark.map_or(target, |visible| target.min(visible))
+pub(super) fn trim_decision(
+    requested: i64,
+    high_watermark: Offset,
+    log_end: Offset,
+    current_start: Offset,
+    delivery_watermark: Option<Offset>,
+) -> DeleteRecordsTrimDecision {
+    delete_records_trim_decision(DeleteRecordsTrimFacts {
+        requested,
+        high_watermark: high_watermark.0,
+        log_end: log_end.0,
+        current_start: current_start.0,
+        has_delivery_watermark: delivery_watermark.is_some(),
+        delivery_watermark: delivery_watermark.unwrap_or(Offset(0)).0,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
+    use DeleteRecordsTrimDecision::{Apply, Noop, RejectMalformed, RejectOutOfRange};
+    use assert2::assert;
 
     use super::*;
 
     #[test]
-    fn offset_helpers_cover_delete_records_boundaries() {
-        check!(target_offset(-1, 42) == 42);
-        check!(target_offset(-2, 42) == -2);
-        check!(target_offset(7, 42) == 7);
-
-        check!(!offset_out_of_range(0, 10));
-        check!(!offset_out_of_range(10, 10));
-        check!(offset_out_of_range(-1, 10));
-        check!(offset_out_of_range(11, 10));
+    fn trim_decision_covers_bounds_stale_requests_and_retries() {
+        let cases = [
+            (-1, 8, 10, 2, None, Apply { frontier: 8 }),
+            // Explicit requests cannot enter the uncommitted tail.
+            (9, 8, 10, 2, None, Apply { frontier: 8 }),
+            // Scheduled delivery adds a second deletion frontier.
+            (8, 8, 10, 2, Some(5), Apply { frontier: 5 }),
+            // A stale request and an exact retry preserve the current start.
+            (3, 8, 10, 5, None, Noop { frontier: 5 }),
+            (5, 8, 10, 5, None, Noop { frontier: 5 }),
+        ];
+        for (requested, hw, leo, start, delivery, expected) in cases {
+            assert!(
+                trim_decision(
+                    requested,
+                    Offset(hw),
+                    Offset(leo),
+                    Offset(start),
+                    delivery.map(Offset),
+                ) == expected,
+                "requested={requested}"
+            );
+        }
     }
 
     #[test]
-    fn the_delivery_cap_only_lowers_a_target_above_the_watermark() {
-        let cases = [
-            // A topic that delivers immediately has no watermark to cap with.
-            (Offset(9), None, Offset(9)),
-            (Offset(9), Some(Offset(4)), Offset(4)),
-            (Offset(4), Some(Offset(4)), Offset(4)),
-            (Offset(2), Some(Offset(4)), Offset(2)),
-            // Nothing is visible yet, so nothing may be deleted.
-            (Offset(9), Some(Offset(0)), Offset(0)),
-        ];
-        for (target, watermark, expected) in cases {
-            check!(
-                delivery_capped(target, watermark) == expected,
-                "{target:?} {watermark:?}"
+    fn trim_decision_fails_closed_on_malformed_and_overflow_edges() {
+        for (requested, hw, leo, start, delivery, expected) in [
+            (-2, 8, 10, 2, None, RejectMalformed),
+            (1, 1, 0, 0, None, RejectMalformed),
+            (1, 3, 10, 4, None, RejectMalformed),
+            (1, 8, 10, 2, Some(1), RejectMalformed),
+            (8, 8, 10, 2, Some(9), Apply { frontier: 8 }),
+            (11, 8, 10, 2, None, RejectOutOfRange),
+            (i64::MAX, 8, 10, 2, None, RejectOutOfRange),
+        ] {
+            assert!(
+                trim_decision(
+                    requested,
+                    Offset(hw),
+                    Offset(leo),
+                    Offset(start),
+                    delivery.map(Offset),
+                ) == expected,
+                "requested={requested}"
             );
         }
     }

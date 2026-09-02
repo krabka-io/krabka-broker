@@ -36,9 +36,13 @@ impl GroupState {
         }
     }
 
-    pub fn bump_epoch(&mut self) {
-        self.group_epoch += 1;
+    pub fn bump_epoch(&mut self) -> bool {
+        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
+            return false;
+        };
+        self.group_epoch = group_epoch;
         self.dirty = true;
+        true
     }
 
     /// The KIP-848 `OffsetCommit` fencing decision: a member may commit only
@@ -191,9 +195,18 @@ mod tests {
     fn bump_epoch_increments_and_dirties() {
         let mut g = GroupState::new("g");
         g.dirty = false;
-        g.bump_epoch();
+        assert!(g.bump_epoch());
         assert!(g.group_epoch == 1);
         assert!(g.dirty);
+    }
+
+    #[test]
+    fn bump_epoch_rejects_exhaustion() {
+        let mut group = GroupState::new("g");
+        group.group_epoch = i32::MAX;
+
+        assert!(!group.bump_epoch());
+        assert!(group.group_epoch == i32::MAX);
     }
 
     #[test]

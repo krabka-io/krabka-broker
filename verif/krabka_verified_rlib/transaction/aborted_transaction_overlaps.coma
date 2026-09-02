@@ -1,0 +1,45 @@
+(* #"/proof-work-240/crates/verified/src/transaction.rs" 97 0 102 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span stransaction = "/proof-work-240/crates/verified/src/transaction.rs" 103 4 106 36
+let%span stransaction'0 = "/proof-work-240/crates/verified/src/transaction.rs" 92 10 95 35
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let aborted_transaction_overlaps [#"/proof-work-240/crates/verified/src/transaction.rs" 97 0 102 9]
+  (entry_start: Int64.t) (entry_last: Int64.t) (query_start: Int64.t) (query_end: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- Int64.le entry_start entry_last ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb7) | br1 -> {_10} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_13 <- Int64.lt query_start query_end ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb7) | br1 -> {_13} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_16 <- Int64.lt entry_start query_end ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb7) | br1 -> {_16} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- Int64.ge entry_last query_start ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#stransaction] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & entry_start: Int64.t = entry_start
+  | & entry_last: Int64.t = entry_last
+  | & query_start: Int64.t = query_start
+  | & query_end: Int64.t = query_end
+  | & _10: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _16: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:aborted_transaction_overlaps ensures] [%#stransaction'0] result
+    = (Int64.to_int entry_start <= Int64.to_int entry_last
+    /\ Int64.to_int query_start < Int64.to_int query_end
+    /\ Int64.to_int entry_start < Int64.to_int query_end
+    /\ ge_log_Int (Int64.to_int entry_last) (Int64.to_int query_start))}
+    (! return {result}) ]

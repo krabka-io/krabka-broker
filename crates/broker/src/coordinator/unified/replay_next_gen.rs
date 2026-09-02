@@ -4,7 +4,14 @@
 //! last-known-good cache, so a group that finishes replay is ready to hydrate
 //! an actor and to survive a later actor respawn.
 
-use super::{group_coordinator::GroupCoordinator, persistence_next_gen, seeds::GroupSeed};
+use super::{
+    group_coordinator::GroupCoordinator,
+    persistence_next_gen,
+    replay_policy::{
+        ReplayMutation, ReplayRecordKind, replay_epoch_is_admissible, replay_mutation,
+    },
+    seeds::GroupSeed,
+};
 
 impl GroupCoordinator {
     pub fn replay_group_metadata(
@@ -12,12 +19,28 @@ impl GroupCoordinator {
         group_id: &str,
         v: persistence_next_gen::GroupMetadataValue,
     ) {
+        if replay_mutation(
+            ReplayRecordKind::GroupMetadata,
+            Some(ReplayRecordKind::GroupMetadata),
+            self.seeds.contains_key(group_id) || self.seeds_cache.contains_key(group_id),
+            false,
+        ) != ReplayMutation::Apply
+            || v.epoch < 0
+        {
+            return;
+        }
         {
             let mut seed = self.seeds.entry(group_id.into()).or_default();
-            seed.group_epoch = v.epoch;
+            if replay_epoch_is_admissible(seed.group_epoch, v.epoch) {
+                seed.group_epoch = v.epoch;
+            }
         }
-        let mut cached = self.seeds_cache.entry(group_id.into()).or_default();
-        cached.group_epoch = v.epoch;
+        {
+            let mut cached = self.seeds_cache.entry(group_id.into()).or_default();
+            if replay_epoch_is_admissible(cached.group_epoch, v.epoch) {
+                cached.group_epoch = v.epoch;
+            }
+        }
     }
     pub fn replay_member_metadata(
         &self,
@@ -26,23 +49,60 @@ impl GroupCoordinator {
         v: persistence_next_gen::MemberMetadataValue,
     ) {
         {
-            let mut seed = self.seeds.entry(group_id.into()).or_default();
-            seed.members.insert(member_id.into(), v.clone());
+            if let Some(mut seed) = self.seeds.get_mut(group_id)
+                && replay_mutation(
+                    ReplayRecordKind::MemberMetadata,
+                    Some(ReplayRecordKind::MemberMetadata),
+                    true,
+                    seed.members.contains_key(member_id),
+                ) == ReplayMutation::Apply
+            {
+                seed.members.insert(member_id.into(), v.clone());
+            }
         }
-        let mut cached = self.seeds_cache.entry(group_id.into()).or_default();
-        cached.members.insert(member_id.into(), v);
+        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
+            && replay_mutation(
+                ReplayRecordKind::MemberMetadata,
+                Some(ReplayRecordKind::MemberMetadata),
+                true,
+                cached.members.contains_key(member_id),
+            ) == ReplayMutation::Apply
+        {
+            cached.members.insert(member_id.into(), v);
+        }
     }
     pub fn replay_target_assignment_metadata(
         &self,
         group_id: &str,
         v: persistence_next_gen::TargetAssignmentMetadataValue,
     ) {
-        {
-            let mut seed = self.seeds.entry(group_id.into()).or_default();
-            seed.target_epoch = v.assignment_epoch;
+        if v.assignment_epoch < 0 {
+            return;
         }
-        let mut cached = self.seeds_cache.entry(group_id.into()).or_default();
-        cached.target_epoch = v.assignment_epoch;
+        {
+            if let Some(mut seed) = self.seeds.get_mut(group_id)
+                && replay_mutation(
+                    ReplayRecordKind::TargetAssignmentMetadata,
+                    Some(ReplayRecordKind::TargetAssignmentMetadata),
+                    true,
+                    false,
+                ) == ReplayMutation::Apply
+                && replay_epoch_is_admissible(seed.target_epoch, v.assignment_epoch)
+            {
+                seed.target_epoch = v.assignment_epoch;
+            }
+        }
+        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
+            && replay_mutation(
+                ReplayRecordKind::TargetAssignmentMetadata,
+                Some(ReplayRecordKind::TargetAssignmentMetadata),
+                true,
+                false,
+            ) == ReplayMutation::Apply
+            && replay_epoch_is_admissible(cached.target_epoch, v.assignment_epoch)
+        {
+            cached.target_epoch = v.assignment_epoch;
+        }
     }
     pub fn replay_target_assignment_member(
         &self,
@@ -51,11 +111,27 @@ impl GroupCoordinator {
         v: persistence_next_gen::TargetAssignmentMemberValue,
     ) {
         {
-            let mut seed = self.seeds.entry(group_id.into()).or_default();
-            seed.target_per_member.insert(member_id.into(), v.clone());
+            if let Some(mut seed) = self.seeds.get_mut(group_id)
+                && replay_mutation(
+                    ReplayRecordKind::TargetAssignmentMember,
+                    Some(ReplayRecordKind::TargetAssignmentMember),
+                    true,
+                    seed.members.contains_key(member_id),
+                ) == ReplayMutation::Apply
+            {
+                seed.target_per_member.insert(member_id.into(), v.clone());
+            }
         }
-        let mut cached = self.seeds_cache.entry(group_id.into()).or_default();
-        cached.target_per_member.insert(member_id.into(), v);
+        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
+            && replay_mutation(
+                ReplayRecordKind::TargetAssignmentMember,
+                Some(ReplayRecordKind::TargetAssignmentMember),
+                true,
+                cached.members.contains_key(member_id),
+            ) == ReplayMutation::Apply
+        {
+            cached.target_per_member.insert(member_id.into(), v);
+        }
     }
     pub fn replay_current_member_assignment(
         &self,
@@ -64,11 +140,39 @@ impl GroupCoordinator {
         v: persistence_next_gen::CurrentMemberAssignmentValue,
     ) {
         {
-            let mut seed = self.seeds.entry(group_id.into()).or_default();
-            seed.current_per_member.insert(member_id.into(), v.clone());
+            if let Some(mut seed) = self.seeds.get_mut(group_id)
+                && replay_mutation(
+                    ReplayRecordKind::CurrentMemberAssignment,
+                    Some(ReplayRecordKind::CurrentMemberAssignment),
+                    true,
+                    seed.members.contains_key(member_id),
+                ) == ReplayMutation::Apply
+                && seed
+                    .current_per_member
+                    .get(member_id)
+                    .is_none_or(|current| {
+                        replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
+                    })
+            {
+                seed.current_per_member.insert(member_id.into(), v.clone());
+            }
         }
-        let mut cached = self.seeds_cache.entry(group_id.into()).or_default();
-        cached.current_per_member.insert(member_id.into(), v);
+        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
+            && replay_mutation(
+                ReplayRecordKind::CurrentMemberAssignment,
+                Some(ReplayRecordKind::CurrentMemberAssignment),
+                true,
+                cached.members.contains_key(member_id),
+            ) == ReplayMutation::Apply
+            && cached
+                .current_per_member
+                .get(member_id)
+                .is_none_or(|current| {
+                    replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
+                })
+        {
+            cached.current_per_member.insert(member_id.into(), v);
+        }
     }
 
     /// Apply a tombstone for a next-gen key.
@@ -87,8 +191,13 @@ impl GroupCoordinator {
     pub fn replay_next_gen_tombstone(&self, key: &persistence_next_gen::NextGenKey) {
         use persistence_next_gen::NextGenKey as K;
         if let K::GroupMetadata { group_id } = key {
+            assert2::debug_assert!(
+                replay_mutation(ReplayRecordKind::GroupMetadata, None, true, false)
+                    == ReplayMutation::RemoveGroup
+            );
             self.seeds.remove(group_id);
             self.seeds_cache.remove(group_id);
+            self.group_types.remove(group_id);
             return;
         }
         let group_id = match key {
@@ -106,9 +215,12 @@ impl GroupCoordinator {
             }
             K::MemberMetadata { member_id, .. } => {
                 seed.members.remove(member_id);
+                seed.target_per_member.remove(member_id);
+                seed.current_per_member.remove(member_id);
             }
             K::TargetAssignmentMetadata { .. } => {
                 seed.target_epoch = 0;
+                seed.target_per_member.clear();
             }
             K::TargetAssignmentMember { member_id, .. } => {
                 seed.target_per_member.remove(member_id);
@@ -130,9 +242,9 @@ impl GroupCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
 
-    use super::*;
+    use super::{GroupSeed, persistence_next_gen};
     use crate::coordinator::unified::test_support::{
         make_coord, next_current, next_member, proto_uuid,
     };
@@ -169,5 +281,31 @@ mod tests {
         };
         assert!(*coord.seeds.get("g").unwrap() == expected);
         assert!(coord.cached_seed("g") == Some(expected));
+    }
+
+    #[test]
+    fn group_tombstone_blocks_orphans_and_epoch_regression() {
+        let coord = make_coord();
+        coord.mark_next_gen("g");
+        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: 4 });
+        coord.replay_member_metadata("g", "m", next_member("m"));
+        coord.replay_current_member_assignment("g", "m", next_current(4));
+
+        coord.replay_next_gen_tombstone(&persistence_next_gen::NextGenKey::GroupMetadata {
+            group_id: "g".into(),
+        });
+        coord.replay_member_metadata("g", "m", next_member("m"));
+        coord.replay_current_member_assignment("g", "m", next_current(i32::MAX));
+        check!(coord.cached_seed("g").is_none());
+        check!(coord.group_type("g").is_none());
+
+        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: 0 });
+        coord.replay_member_metadata("g", "m", next_member("m"));
+        coord.replay_current_member_assignment("g", "m", next_current(i32::MAX));
+        coord.replay_current_member_assignment("g", "m", next_current(3));
+        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: -1 });
+        let seed = coord.cached_seed("g").unwrap();
+        check!(seed.group_epoch == 0);
+        assert!(seed.current_per_member["m"].member_epoch == i32::MAX);
     }
 }

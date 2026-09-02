@@ -1,0 +1,33 @@
+(* #"/proof-work-223/crates/verified/src/snapshot.rs" 62 0 62 78 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span ssnapshot = "/proof-work-223/crates/verified/src/snapshot.rs" 63 20 63 21
+let%span ssnapshot'0 = "/proof-work-223/crates/verified/src/snapshot.rs" 63 4 63 54
+let%span ssnapshot'1 = "/proof-work-223/crates/verified/src/snapshot.rs" 60 10 60 75
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let snapshot_prune_admission [#"/proof-work-223/crates/verified/src/snapshot.rs" 62 0 62 78] (snapshot_end: Int64.t)
+  (committed_end: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- Int64.ge snapshot_end ([%#ssnapshot] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Int64.le snapshot_end committed_end ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#ssnapshot'0] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & snapshot_end: Int64.t = snapshot_end
+  | & committed_end: Int64.t = committed_end
+  | & _6: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:snapshot_prune_admission ensures] [%#ssnapshot'1] result
+    = (ge_log_Int (Int64.to_int snapshot_end) 0 /\ Int64.to_int snapshot_end <= Int64.to_int committed_end)}
+    (! return {result}) ]

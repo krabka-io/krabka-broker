@@ -53,6 +53,10 @@ pub(super) async fn append_txn_batch(
         max_timestamp: now_ms,
         producer_id: req.producer_id,
         producer_epoch: req.producer_epoch,
+        // TxnOffsetCommit records are broker-generated, so the request has no
+        // client sequence. Use the stable first sequence so the log retains
+        // the producer epoch needed to fence the completion marker.
+        base_sequence: 0,
         ..RecordBatch::default()
     };
     let mut delta: i32 = 0;
@@ -182,7 +186,9 @@ mod tests {
         check!(batch.max_timestamp == 12_345);
         check!(batch.producer_id == 47);
         check!(batch.producer_epoch == 5);
+        check!(batch.base_sequence == 0);
         check!(batch.last_offset_delta == 1);
+        check!(log.transaction_marker_state(krabka_log::ProducerId(47)) == (5, -1, true));
         let record_rows: Vec<_> = batch
             .records
             .iter()

@@ -211,6 +211,7 @@ pub mod leader_rebalance;
 mod log_dir;
 pub mod log_dir_id;
 mod log_dir_status;
+pub(crate) mod metadata_epoch;
 pub mod metadata_observer;
 pub mod metadata_source;
 pub mod metrics;

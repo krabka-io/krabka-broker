@@ -18,7 +18,7 @@ const DEFAULT_RETENTION: Time = days(7);
 
 /// Kafka's `index.interval.bytes` default: one sparse `.index`/`.timeindex`
 /// entry per 4 KiB of `.log`.
-const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
+pub(crate) const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
 
 /// Kafka's `max.message.bytes` default: 1 MiB of records plus the 12-byte
 /// `Records.LOG_OVERHEAD` that prefixes every batch on the wire. Kafka's
@@ -117,7 +117,7 @@ pub struct LogConfig {
     /// separately.
     pub flush_on_append: bool,
 
-    /// On open, CRC every batch in the active segment from the last index entry to EOF.
+    /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
     pub validate_on_open: bool,
 
     /// Cleanup policy. Defaults to `Delete`. See [`CleanupPolicy`].

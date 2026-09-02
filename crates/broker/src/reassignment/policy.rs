@@ -7,9 +7,15 @@
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
-use krabka_verified::reassignment::{ReassignmentAction, reassignment_action};
+use krabka_verified::{
+    FreezeMutationKind,
+    reassignment::{ReassignmentAction, reassignment_action},
+};
 
-use crate::heartbeat::controller_state::ControllerLivenessState;
+use crate::{
+    freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
+    heartbeat::controller_state::ControllerLivenessState,
+};
 
 /// Remaps a partition's `directories` vector onto a new `replicas` order. A
 /// KIP-455 reassignment changes both the replica membership and the order.
@@ -64,17 +70,19 @@ pub(crate) fn reassign_one(
     if let ReassignmentAction::Handoff(index) = action {
         // The verified index maps to target ∩ ISR ∩ alive.
         let new_leader = target[index];
+        let leader_epoch = crate::metadata_epoch::next_leader(pr.leader_epoch)?;
+        let partition_epoch = crate::metadata_epoch::next_i32(pr.partition_epoch)?;
         return Some(PartitionRecord {
             topic: pr.topic.clone(),
             partition: pr.partition,
             leader: new_leader,
-            leader_epoch: pr.leader_epoch.next(),
+            leader_epoch,
             replicas: pr.replicas.clone(),
             isr: pr.isr.clone(),
             adding_replicas: pr.adding_replicas.clone(),
             removing_replicas: pr.removing_replicas.clone(),
             directories: pr.directories.clone(),
-            partition_epoch: pr.partition_epoch + 1,
+            partition_epoch,
         });
     }
     if action != ReassignmentAction::Complete {
@@ -88,6 +96,7 @@ pub(crate) fn reassign_one(
         .copied()
         .collect();
     let new_directories = remap_directories(&pr.replicas, &pr.directories, &target);
+    let partition_epoch = crate::metadata_epoch::next_i32(pr.partition_epoch)?;
     Some(PartitionRecord {
         topic: pr.topic.clone(),
         partition: pr.partition,
@@ -98,7 +107,7 @@ pub(crate) fn reassign_one(
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: new_directories,
-        partition_epoch: pr.partition_epoch + 1,
+        partition_epoch,
     })
 }
 
@@ -126,6 +135,17 @@ pub(crate) async fn compute_reassignment_progress(
         .map(NodeId)
         .collect();
     for pr in image.reassignments_in_flight() {
+        if matches!(
+            resolve_freeze_mutation(
+                image,
+                &pr.topic,
+                true,
+                FreezeMutationKind::ReassignmentCompletion,
+            ),
+            FreezeMutationResolution::Frozen(_)
+        ) {
+            continue;
+        }
         if let Some(next) = reassign_one(pr, &alive) {
             updates.push(MetadataRecord::V1Partition(next));
         }
@@ -139,7 +159,10 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_metadata::{
+        BrokerRegistrationRecord, MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord,
+        TopicRecord,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -273,6 +296,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn freeze_allows_completion_of_an_already_accepted_reassignment() {
+        let mut image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
+        Arc::make_mut(&mut image).apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+            scope: "foo".into(),
+            pattern_type: PatternType::Literal,
+            frozen: true,
+            reason: "DR cutover".into(),
+            set_by: "User:alice".into(),
+            set_at_ms: 10,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }));
+        let l = liveness(&[1, 2, 3]).await;
+
+        let completed = compute_reassignment_progress(&image, &l).await;
+        assert!(completed.len() == 1);
+        check!(first_partition(&completed[0]).replicas == vec![NodeId(1), NodeId(3)]);
+    }
+
+    #[tokio::test]
     async fn no_update_emitted_when_waiting_idle_or_no_alive_target() {
         // (case, replicas, isr, adding, removing, leader, alive) — every case
         // should wait / stay idle: compute_reassignment_progress emits nothing.
@@ -339,6 +383,20 @@ mod tests {
         check!(pr.partition_epoch == 1);
         check!(pr.adding_replicas == vec![NodeId(3)]);
         check!(pr.removing_replicas == vec![NodeId(2)]);
+    }
+
+    #[test]
+    fn exhausted_epochs_block_reassignment_transitions() {
+        let image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 2);
+        let mut record = image.partition("foo", 0).expect("seeded partition").clone();
+        let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
+
+        record.partition_epoch = i32::MAX;
+        assert!(reassign_one(&record, &alive).is_none());
+
+        record.partition_epoch = 0;
+        record.leader_epoch = krabka_metadata::LeaderEpoch(i32::MAX);
+        assert!(reassign_one(&record, &alive).is_none());
     }
 
     #[tokio::test]

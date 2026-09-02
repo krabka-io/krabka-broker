@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_preferred_rebalance_admission": {
+        "prover": "alt-ergo",
+        "time": 0.013
+      }
+    }
+  }
+}

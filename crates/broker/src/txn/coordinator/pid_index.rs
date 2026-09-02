@@ -6,13 +6,110 @@
 //! eviction that keeps only the live identities lives here, with the tests that
 //! pin it.
 
+use std::collections::HashMap;
+
 use dashmap::DashMap;
 use krabka_log::ProducerId;
+use krabka_verified::transaction::{
+    TransactionPidInstallDecision, transaction_pid_install_decision,
+};
 
 use super::TxnCoordinator;
-use crate::txn::state::TxnEntry;
+use crate::{error::BrokerError, txn::state::TxnEntry};
+
+#[derive(Default)]
+pub(super) struct RecoveredTransactions {
+    pub(super) state: HashMap<String, TxnEntry>,
+    pub(super) pid_to_tid: HashMap<ProducerId, String>,
+}
+
+impl RecoveredTransactions {
+    pub(super) fn apply_value(
+        &mut self,
+        entry: TxnEntry,
+        partition_matches: bool,
+    ) -> Result<(), BrokerError> {
+        let tid = entry.transactional_id.clone();
+        let current_owner_matches = self
+            .pid_to_tid
+            .get(&entry.producer_id)
+            .is_none_or(|owner| owner == &tid);
+        let next_owner_matches = self
+            .pid_to_tid
+            .get(&entry.next_producer_id)
+            .is_none_or(|owner| owner == &tid);
+        validate_install(
+            &entry,
+            partition_matches,
+            current_owner_matches,
+            next_owner_matches,
+        )?;
+
+        self.pid_to_tid.retain(|_, owner| owner != &tid);
+        self.pid_to_tid.insert(entry.producer_id, tid.clone());
+        if !entry.next_producer_id.is_none() {
+            self.pid_to_tid.insert(entry.next_producer_id, tid.clone());
+        }
+        self.state.insert(tid, entry);
+        Ok(())
+    }
+
+    pub(super) fn apply_tombstone(&mut self, tid: &str) {
+        self.state.remove(tid);
+        self.pid_to_tid.retain(|_, owner| owner != tid);
+    }
+}
+
+fn validate_install(
+    entry: &TxnEntry,
+    partition_matches: bool,
+    current_owner_matches: bool,
+    next_owner_matches: bool,
+) -> Result<(), BrokerError> {
+    let decision = transaction_pid_install_decision(
+        partition_matches,
+        entry.producer_id.0,
+        entry.producer_epoch,
+        entry.next_producer_id.0,
+        entry.next_producer_epoch,
+        current_owner_matches,
+        next_owner_matches,
+    );
+    match decision {
+        TransactionPidInstallDecision::Apply => Ok(()),
+        TransactionPidInstallDecision::RejectWrongPartition => Err(BrokerError::Txn(format!(
+            "transaction {} is in the wrong state partition",
+            entry.transactional_id
+        ))),
+        TransactionPidInstallDecision::RejectCurrentIdentity => Err(BrokerError::Txn(format!(
+            "transaction {} has an invalid current producer identity",
+            entry.transactional_id
+        ))),
+        TransactionPidInstallDecision::RejectStagedIdentity => Err(BrokerError::Txn(format!(
+            "transaction {} has an invalid staged producer identity",
+            entry.transactional_id
+        ))),
+        TransactionPidInstallDecision::RejectCollision => Err(BrokerError::Txn(format!(
+            "transaction {} reuses a producer ID owned by another transaction",
+            entry.transactional_id
+        ))),
+    }
+}
 
 impl TxnCoordinator {
+    pub(super) fn validate_pid_install(&self, entry: &TxnEntry) -> Result<(), BrokerError> {
+        let tid = &entry.transactional_id;
+        let current_owner_matches = self
+            .pid_to_tid
+            .get(&entry.producer_id)
+            .is_none_or(|owner| owner.value() == tid);
+        let next_owner_matches = self
+            .pid_to_tid
+            .get(&entry.next_producer_id)
+            .is_none_or(|owner| owner.value() == tid);
+        validate_install(entry, true, current_owner_matches, next_owner_matches)
+    }
+
     /// Keep only the current transaction and staged recovery producer IDs for
     /// this transactional ID. Repeated KIP-939 recovery calls can rotate the
     /// staged ID before the transaction completes; retaining the superseded
@@ -60,6 +157,14 @@ mod tests {
 
     use super::*;
     use crate::txn::coordinator::test_support::entry;
+
+    fn entry_for(tid: &str, pid: i64, next_pid: i64, next_epoch: i16) -> TxnEntry {
+        let mut entry = entry(pid, -1);
+        entry.transactional_id = tid.into();
+        entry.next_producer_id = ProducerId(next_pid);
+        entry.next_producer_epoch = next_epoch;
+        entry
+    }
 
     #[test]
     fn evict_rolled_pid_drops_only_the_prior_id_on_a_roll() {
@@ -114,5 +219,111 @@ mod tests {
 
         assert!(map.get(&ProducerId(1000)).is_some());
         assert!(map.get(&ProducerId(2000)).is_none());
+    }
+
+    #[test]
+    fn recovery_replay_evicts_superseded_ids_and_tombstone_dominates() {
+        let mut recovered = RecoveredTransactions::default();
+        recovered
+            .apply_value(entry_for("tid-a", 1000, -1, -1), true)
+            .unwrap();
+        recovered
+            .apply_value(entry_for("tid-a", 2000, 3000, 0), true)
+            .unwrap();
+
+        assert!(!recovered.pid_to_tid.contains_key(&ProducerId(1000)));
+        assert!(
+            recovered
+                .pid_to_tid
+                .get(&ProducerId(2000))
+                .map(String::as_str)
+                == Some("tid-a")
+        );
+        assert!(
+            recovered
+                .pid_to_tid
+                .get(&ProducerId(3000))
+                .map(String::as_str)
+                == Some("tid-a")
+        );
+
+        recovered.apply_tombstone("tid-a");
+        recovered.apply_tombstone("tid-a");
+        assert!(!recovered.state.contains_key("tid-a"));
+        assert!(recovered.pid_to_tid.is_empty());
+    }
+
+    #[test]
+    fn recovery_retry_is_idempotent_and_pid_collision_is_atomic() {
+        let mut recovered = RecoveredTransactions::default();
+        let first = entry_for("tid-a", 1000, -1, -1);
+        recovered.apply_value(first.clone(), true).unwrap();
+        recovered.apply_value(first, true).unwrap();
+
+        let error = recovered
+            .apply_value(entry_for("tid-b", 1000, -1, -1), true)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("owned by another transaction"));
+        assert!(recovered.state.len() == 1);
+        assert!(recovered.state.contains_key("tid-a"));
+        assert!(
+            recovered
+                .pid_to_tid
+                .get(&ProducerId(1000))
+                .map(String::as_str)
+                == Some("tid-a")
+        );
+    }
+
+    #[test]
+    fn recovery_accepts_a_staged_epoch_on_the_current_pid() {
+        let mut recovered = RecoveredTransactions::default();
+
+        recovered
+            .apply_value(entry_for("tid-a", 1000, 1000, 1), true)
+            .unwrap();
+
+        assert!(recovered.state.contains_key("tid-a"));
+        assert!(recovered.pid_to_tid.len() == 1);
+        assert!(
+            recovered
+                .pid_to_tid
+                .get(&ProducerId(1000))
+                .map(String::as_str)
+                == Some("tid-a")
+        );
+    }
+
+    #[test]
+    fn recovery_rejects_malformed_or_misplaced_identities_without_mutation() {
+        for (entry, partition_matches, message) in [
+            (
+                entry_for("tid-a", -1, -1, -1),
+                true,
+                "invalid current producer identity",
+            ),
+            (
+                entry_for("tid-a", 1, 2, -1),
+                true,
+                "invalid staged producer identity",
+            ),
+            (
+                entry_for("tid-a", 1, -1, 0),
+                true,
+                "invalid staged producer identity",
+            ),
+            (
+                entry_for("tid-a", 1, -1, -1),
+                false,
+                "wrong state partition",
+            ),
+        ] {
+            let mut recovered = RecoveredTransactions::default();
+            let error = recovered.apply_value(entry, partition_matches).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+            assert!(recovered.state.is_empty());
+            assert!(recovered.pid_to_tid.is_empty());
+        }
     }
 }

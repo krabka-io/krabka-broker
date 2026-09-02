@@ -172,8 +172,28 @@ pub async fn verify_segment(
     if let Some((key, bytes)) = &transaction_index {
         validate_txn_index(key, bytes, segment.base_offset, walked.end_offset)?;
     }
-    validate_producer_snapshot(&producer_snapshot.key, &producer_snapshot_bytes)?;
-    let leader_epochs = parse_leader_epoch_checkpoint(&leader_epoch.key, &leader_epoch_bytes)?;
+    let snapshot_offset =
+        walked
+            .end_offset
+            .0
+            .checked_add(1)
+            .ok_or_else(|| RestoreError::TruncatedSegment {
+                key: producer_snapshot.key.to_string(),
+                position: 0,
+                declared: u64::MAX,
+                available: u64::MAX,
+            })?;
+    validate_producer_snapshot(
+        &producer_snapshot.key,
+        &producer_snapshot_bytes,
+        snapshot_offset,
+    )?;
+    let leader_epochs = parse_leader_epoch_checkpoint(
+        &leader_epoch.key,
+        &leader_epoch_bytes,
+        segment.base_offset,
+        walked.end_offset,
+    )?;
 
     Ok(VerifiedSegment {
         facts: SegmentFacts {

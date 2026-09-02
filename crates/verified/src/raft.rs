@@ -1,7 +1,102 @@
 //! Pure `KRaft` offset-frontier and half-open-window kernels.
 
 #[cfg(creusot)]
+use std::clone::Clone;
+
+#[cfg(creusot)]
 use creusot_std::prelude::*;
+
+/// The only response-derived mutation an admitted `KRaft` Fetch may perform.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FetchResponseMutation {
+    Reject,
+    Discover,
+    Snapshot,
+    Truncate,
+    Append,
+    HighWatermark,
+}
+
+/// Fence a Fetch response against the live role, leader, and epoch, then
+/// select exactly one mutation path.
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Discover) ==
+    (current.0
+        && current.1 == None
+        && current.2 == None
+        && response.2 >= current.3)))]
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Reject) ==
+    (!(current.0
+        && current.1 == None
+        && current.2 == None
+        && response.2 >= current.3)
+        && (current.1 != Some(response.0)
+        || current.2 != Some(response.0)
+        || response.1 != response.0
+        || response.2 != current.3))))]
+#[cfg_attr(creusot, ensures(match result {
+    FetchResponseMutation::Discover => current.0
+        && current.1 == None
+        && current.2 == None
+        && response.2 >= current.3,
+    FetchResponseMutation::Snapshot => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.3
+        && content.0,
+    FetchResponseMutation::Truncate => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.3
+        && !content.0
+        && content.1,
+    FetchResponseMutation::Append => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.3
+        && !content.0
+        && !content.1
+        && content.2,
+    FetchResponseMutation::HighWatermark => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.3
+        && !content.0
+        && !content.1
+        && !content.2,
+    FetchResponseMutation::Reject => true,
+}))]
+#[must_use]
+pub fn fetch_response_mutation(
+    current: (bool, Option<u64>, Option<u64>, u32),
+    response: (u64, u64, u32),
+    content: (bool, bool, bool),
+) -> FetchResponseMutation {
+    let (discovering, role_leader, current_leader, current_epoch) = current;
+    let (from, response_leader, response_epoch) = response;
+    let (has_snapshot, has_divergence, has_records) = content;
+    if discovering
+        && role_leader.is_none()
+        && current_leader.is_none()
+        && response_epoch >= current_epoch
+    {
+        FetchResponseMutation::Discover
+    } else if role_leader != Some(from)
+        || current_leader != Some(from)
+        || response_leader != from
+        || response_epoch != current_epoch
+    {
+        FetchResponseMutation::Reject
+    } else if has_snapshot {
+        FetchResponseMutation::Snapshot
+    } else if has_divergence {
+        FetchResponseMutation::Truncate
+    } else if has_records {
+        FetchResponseMutation::Append
+    } else {
+        FetchResponseMutation::HighWatermark
+    }
+}
 
 /// Advance a high watermark monotonically without passing the log end.
 #[must_use]
@@ -36,6 +131,36 @@ pub const fn in_half_open_window(value: i64, start: i64, end: i64) -> bool {
 #[cfg_attr(creusot, ensures(result == (frontier@ >= target@)))]
 pub const fn frontier_reaches(frontier: i64, target: i64) -> bool {
     frontier >= target
+}
+
+/// Return the length of the strictly ordered control-record prefix below a
+/// half-open frontier.
+#[cfg_attr(creusot, requires(forall<i: Int, j: Int>
+    0 <= i && i < j && j < offsets@.len() ==> offsets@[i]@ < offsets@[j]@))]
+#[cfg_attr(creusot, ensures(result@ <= offsets@.len()))]
+#[cfg_attr(creusot, ensures(forall<i: Int>
+    0 <= i && i < result@ ==> offsets@[i]@ < frontier@))]
+#[cfg_attr(creusot, ensures(forall<i: Int>
+    result@ <= i && i < offsets@.len() ==> frontier@ <= offsets@[i]@))]
+#[must_use]
+pub fn control_history_frontier(offsets: &[i64], frontier: i64) -> usize {
+    let mut lo = 0usize;
+    let mut hi = offsets.len();
+    #[cfg_attr(creusot, invariant(lo@ <= hi@ && hi@ <= offsets@.len()))]
+    #[cfg_attr(creusot, invariant(forall<i: Int>
+        0 <= i && i < lo@ ==> offsets@[i]@ < frontier@))]
+    #[cfg_attr(creusot, invariant(forall<i: Int>
+        hi@ <= i && i < offsets@.len() ==> frontier@ <= offsets@[i]@))]
+    #[cfg_attr(creusot, variant(hi - lo))]
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if offsets[mid] < frontier {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 /// Compute one record's contiguous offset delta and its batch's final delta.
@@ -94,6 +219,15 @@ mod tests {
     }
 
     #[test]
+    fn control_history_frontier_is_strictly_half_open() {
+        let offsets = [-1, 2, 5, 9];
+        for (frontier, expected) in [(-1, 0), (0, 1), (2, 1), (5, 2), (9, 3), (10, 4)] {
+            assert!(control_history_frontier(&offsets, frontier) == expected);
+        }
+        assert!(control_history_frontier(&[], 5) == 0);
+    }
+
+    #[test]
     fn metadata_coordinates_are_contiguous_and_fail_closed() {
         assert!(metadata_record_coordinates(1, 0) == Some((0, 0)));
         assert!(metadata_record_coordinates(3, 0) == Some((0, 2)));
@@ -102,5 +236,40 @@ mod tests {
         assert!(metadata_record_coordinates(0, 0) == None);
         assert!(metadata_record_coordinates(3, 3) == None);
         assert!(metadata_record_coordinates(i32::MAX as usize + 2, 0) == None);
+    }
+
+    #[test]
+    fn fetch_response_is_fenced_before_one_exclusive_mutation() {
+        use FetchResponseMutation::{Append, Discover, HighWatermark, Reject, Snapshot, Truncate};
+
+        let decide = |discovering,
+                      role_leader,
+                      current_leader,
+                      current_epoch,
+                      from,
+                      leader,
+                      epoch,
+                      s,
+                      d,
+                      r| {
+            fetch_response_mutation(
+                (discovering, role_leader, current_leader, current_epoch),
+                (from, leader, epoch),
+                (s, d, r),
+            )
+        };
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, true, true, true) == Snapshot);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, true, true) == Truncate);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, false, true) == Append);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, false, false) == HighWatermark);
+        assert!(decide(true, None, None, 3, 2, 4, 3, false, false, true) == Discover);
+        assert!(decide(true, None, None, 3, 2, 4, 4, true, true, true) == Discover);
+        assert!(decide(true, None, None, 3, 2, 4, 2, false, false, true) == Reject);
+        assert!(decide(false, None, None, 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, None, Some(2), 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(3), 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(2), 3, 3, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 3, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 4, false, false, true) == Reject);
     }
 }

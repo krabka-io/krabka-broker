@@ -27,7 +27,12 @@ use qubit_clock::{TimeError, Timer, TimerFuture};
 pub(crate) fn epoch_millis(instant: SystemTime) -> i64 {
     instant
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .map_or(0, duration_millis)
+}
+
+#[inline]
+fn duration_millis(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 /// Returns the current wall-clock time in milliseconds since the Unix epoch.
@@ -94,13 +99,16 @@ mod tests {
             // Before the epoch: a backwards clock reads as the epoch itself
             // rather than as a negative timestamp.
             (UNIX_EPOCH - Duration::from_millis(1), 0),
-            // Past `i64::MAX` milliseconds: saturates instead of wrapping.
-            (UNIX_EPOCH + Duration::from_secs(1 << 60), i64::MAX),
         ];
 
         for (instant, want) in cases {
             check!(epoch_millis(instant) == want, "{instant:?}");
         }
+
+        // Some platforms cannot construct a `SystemTime` far enough from the
+        // epoch to exceed `i64::MAX` milliseconds. Exercise the narrowing step
+        // directly so the saturation check stays portable.
+        check!(duration_millis(Duration::from_secs(1 << 60)) == i64::MAX);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/raft.rs" 10 27 10 32 *)
+
+(* <raft::FetchResponseMutation as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FetchResponseMutation = Reject | Discover | Snapshot | Truncate | Append | HighWatermark
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FetchResponseMutation [#"/workspace/crates/verified/src/raft.rs" 10 27 10 32] (self: t_FetchResponseMutation)
+  (return (x: t_FetchResponseMutation)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FetchResponseMutation = Any.any_l () | & self: t_FetchResponseMutation = self ])
+  [ return (result: t_FetchResponseMutation) -> (! return {result}) ]

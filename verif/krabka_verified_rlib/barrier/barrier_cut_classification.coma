@@ -1,0 +1,21 @@
+(* #"/workspace/crates/verified/src/barrier.rs" 125 0 125 80 *)
+
+let%span sbarrier = "/workspace/crates/verified/src/barrier.rs" 123 10 123 72
+
+use creusot.prelude.Any
+
+type t_BarrierCutClassification = Complete | Partial
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let barrier_cut_classification [#"/workspace/crates/verified/src/barrier.rs" 125 0 125 80] (has_missing: bool)
+  (return (x: t_BarrierCutClassification)) = (! bb0
+  [ bb0 = any [ br0 -> {has_missing = false} (! bb2) | br1 -> {has_missing} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Partial ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- Complete ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierCutClassification = Any.any_l () | & has_missing: bool = has_missing ])
+  [ return (result: t_BarrierCutClassification) ->
+  {[@stop_split] [@expl:barrier_cut_classification ensures] [%#sbarrier] (result = Complete) = (not has_missing)}
+    (! return {result}) ]

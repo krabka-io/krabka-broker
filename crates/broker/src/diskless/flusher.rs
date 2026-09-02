@@ -200,7 +200,17 @@ impl Reclaimer {
             }
             unreferenced.insert(object_key.clone());
             let first_seen = *self.first_seen.entry(object_key.clone()).or_insert(now);
-            if now.duration_since(first_seen) < self.grace {
+            let grace_elapsed = now.duration_since(first_seen) >= self.grace;
+            if !krabka_verified::diskless_object_reclaimable(false, grace_elapsed) {
+                continue;
+            }
+            let cache = context.index_log.cache();
+            let cache = cache.lock().await;
+            if !krabka_verified::diskless_object_reclaimable(
+                cache.references_object(&object_key),
+                true,
+            ) {
+                self.first_seen.remove(&object_key);
                 continue;
             }
             match context.object_store.delete(&object.location).await {

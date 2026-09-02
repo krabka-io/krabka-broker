@@ -5,7 +5,13 @@
 //! state change as a record in the matching `__transaction_state` partition.
 //! On `Broker::start` it recovers the state by replaying those partitions.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
@@ -42,11 +48,21 @@ pub(crate) struct TxnCoordinator {
     recovery_read_max: ByteSize,
     /// Live in-memory state: `transactional_id` → locked `TxnEntry`.
     state: DashMap<String, Arc<Mutex<TxnEntry>>>,
+    /// Serializes durable state writes by `__transaction_state` partition.
+    /// The reaper holds the matching lock across its post-marker recheck and
+    /// completion append so no staged writer can slip between them.
+    state_partition_writes: Vec<Mutex<()>>,
     /// Set of `__transaction_state` partition indices this broker leads.
     leader_partitions: RwLock<HashSet<PartitionIndex>>,
     /// Reverse lookup: `producer_id` → `transactional_id`. The Produce
     /// handler reads it to verify transactional batches (KIP-1319 v2).
     pid_to_tid: DashMap<ProducerId, String>,
+    /// Serializes the multi-key PID ownership check and publication after a
+    /// durable transaction-state append.
+    pid_install: StdMutex<()>,
+    /// Latches a recovery failure so later metadata refreshes cannot restore
+    /// coordinator ownership over a partial or rejected replay image.
+    recovery_valid: AtomicBool,
     marker_transport: Option<MarkerTransport>,
     group_coordinator: Option<Arc<crate::coordinator::GroupCoordinator>>,
 }
@@ -67,6 +83,8 @@ impl TxnCoordinator {
         num_partitions: i32,
         recovery_read_max: ByteSize,
     ) -> Self {
+        let state_partition_count = usize::try_from(num_partitions)
+            .expect("transaction state partition count must be nonnegative");
         Self {
             node_id,
             partitions,
@@ -74,8 +92,11 @@ impl TxnCoordinator {
             num_partitions,
             recovery_read_max,
             state: DashMap::new(),
+            state_partition_writes: (0..state_partition_count).map(|_| Mutex::new(())).collect(),
             leader_partitions: RwLock::new(HashSet::new()),
             pid_to_tid: DashMap::new(),
+            pid_install: StdMutex::new(()),
+            recovery_valid: AtomicBool::new(true),
             marker_transport: None,
             group_coordinator: None,
         }
@@ -104,6 +125,14 @@ impl TxnCoordinator {
     /// from the current `MetadataImage`. `recover` calls it, and so does
     /// every metadata change.
     pub(crate) async fn refresh_leader_partitions(&self, image: &MetadataImage) {
+        if !self.recovery_valid.load(Ordering::Acquire) {
+            self.leader_partitions.write().await.clear();
+            return;
+        }
+        self.install_leader_partitions(image).await;
+    }
+
+    async fn install_leader_partitions(&self, image: &MetadataImage) {
         let mut set = HashSet::new();
         for p in image.partitions_of(bootstrap::TOPIC) {
             if p.leader == self.node_id {
@@ -168,15 +197,15 @@ mod tests {
     };
 
     #[test]
-    fn partition_for_maps_tid_via_murmur2_over_num_partitions() {
-        // Canonical JVM murmur2 vectors (see `partitioner` tests) with N=50.
+    fn partition_for_maps_tid_via_java_hash_over_num_partitions() {
+        // Canonical JVM String.hashCode vectors (see `partitioner` tests) with N=50.
         // Pins the real mapping so a
         // constant `PartitionIndex(0)` (the Default) is caught: none of these
         // hash to 0.
         let coordinator = test_coordinator();
-        check!(coordinator.partition_for("my-tid") == PartitionIndex(43));
-        check!(coordinator.partition_for("producer-1") == PartitionIndex(45));
-        check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(26));
+        check!(coordinator.partition_for("my-tid") == PartitionIndex(20));
+        check!(coordinator.partition_for("producer-1") == PartitionIndex(30));
+        check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(16));
     }
 
     #[test]

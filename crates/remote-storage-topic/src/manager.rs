@@ -121,9 +121,10 @@ impl TopicBasedRemoteLogMetadataManager {
         let inner = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let shutdown = CancellationToken::new();
 
-        // Load the snapshot (if any) ONCE and seed the cache from its
-        // dump. `resume_from_snapshot` is the single canonical place that
-        // turns a loaded snapshot into the per-partition committed offsets.
+        // Load the snapshot (if any) ONCE. Validate its resume cursors before
+        // seeding the cache from its dump; `resume_from_snapshot` turns the
+        // loaded snapshot into the per-partition committed offsets through
+        // the same proved adapter that dynamic assignment calls.
         // On absence/corruption, committed[] is all -1 (full replay) and the
         // cache stays empty — never fatal.
         let snapshot = match crate::snapshot::Snapshot::load(
@@ -135,16 +136,26 @@ impl TopicBasedRemoteLogMetadataManager {
                 None
             }
         };
-        if let Some(snap) = &snapshot {
-            inner.import(snap.dump.clone());
-        }
         // A freshly-started manager consumes NOTHING. The broker drives
         // the consumed set via [`Self::reconcile_assignment`], adding only the
         // metadata partitions covering user-partitions this broker leads or
         // follows (each resumed at its snapshot `committed + 1`). This is what
         // makes an unassigned partition a genuine `Ok(None)` rather than a
         // false hit from globally-replayed state.
-        let (committed, _assignment) = Self::resume_from_snapshot(snapshot.as_ref(), n);
+        let committed = match Self::resume_from_snapshot(snapshot.as_ref(), n) {
+            Ok((committed, _assignment)) => {
+                if let Some(snap) = &snapshot {
+                    inner.import(snap.dump.clone());
+                }
+                committed
+            }
+            Err(e) => {
+                warn!(error = ?e, "topic-based RLMM: snapshot cursor invalid; starting from empty cache");
+                Self::resume_from_snapshot(None, n)
+                    .expect("missing snapshot always yields full-replay cursors")
+                    .0
+            }
+        };
 
         // Pre-seed `applied` to the committed offsets so readiness checks for
         // a later-added partition only block on the delta from committed+1 to

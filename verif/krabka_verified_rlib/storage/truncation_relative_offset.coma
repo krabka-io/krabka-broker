@@ -1,0 +1,73 @@
+(* #"/proof-work-235/crates/verified/src/storage.rs" 65 0 65 77 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sstorage = "/proof-work-235/crates/verified/src/storage.rs" 66 22 66 23
+let%span sstorage'0 = "/proof-work-235/crates/verified/src/storage.rs" 69 19 69 37
+let%span sstorage'1 = "/proof-work-235/crates/verified/src/storage.rs" 70 28 70 36
+let%span sstorage'2 = "/proof-work-235/crates/verified/src/storage.rs" 70 18 70 37
+let%span sstorage'3 = "/proof-work-235/crates/verified/src/storage.rs" 54 10 62 1
+
+use creusot.int.Int64
+use creusot.int.UInt32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_u32 = None | Some UInt32.t
+
+constant const_MAX: UInt32.t = (4294967295: UInt32.t)
+
+let from_i64 (small: UInt32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (UInt32.t'int small)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let truncation_relative_offset [#"/proof-work-235/crates/verified/src/storage.rs" 65 0 65 77] (segment_base: Int64.t)
+  (cut: Int64.t) (return (x: t_Option_u32)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_7 <- Int64.lt segment_base ([%#sstorage] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_7 = false} (! bb2) | br1 -> {_7} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_9 <- Int64.lt cut segment_base ] s1 | s1 = any [ br0 -> {_9 = false} (! bb5) | br1 -> {_9} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = Int64.sub [%#sstorage'0] {cut} {segment_base} (fun (_x: Int64.t) -> [ &relative <- _x ] s1)
+    | s1 = from_i64 [%#sstorage'2] {[%#sstorage'1] const_MAX} (fun (_x: Int64.t) -> [ &_18 <- _x ] s2)
+    | s2 = [ &_16 <- Int64.gt relative _18 ] s3
+    | s3 = any [ br0 -> {_16 = false} (! bb8) | br1 -> {_16} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = [ &_19 <- UInt32.of_int (Int64.to_int relative) ] s1 | s1 = [ &_ret <- Some _19 ] s2 | s2 = return {_ret} ] ]
+  [ & _ret: t_Option_u32 = Any.any_l ()
+  | & segment_base: Int64.t = segment_base
+  | & cut: Int64.t = cut
+  | & _7: bool = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & relative: Int64.t = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _18: Int64.t = Any.any_l ()
+  | & _19: UInt32.t = Any.any_l () ])
+  [ return (result: t_Option_u32) ->
+  {[@stop_split] [@expl:truncation_relative_offset ensures] [%#sstorage'3] match result with
+      | Some relative -> ge_log_Int (Int64.to_int segment_base) 0
+      /\ ge_log_Int (Int64.to_int cut) (Int64.to_int segment_base)
+      /\ UInt32.t'int relative = Int64.to_int cut - Int64.to_int segment_base
+      /\ UInt32.t'int relative <= UInt32.t'int const_MAX
+      | None -> Int64.to_int segment_base < 0
+      \/ Int64.to_int cut < Int64.to_int segment_base
+      \/ gt_log_Int (Int64.to_int cut - Int64.to_int segment_base) (UInt32.t'int const_MAX)
+      end}
+    (! return {result}) ]

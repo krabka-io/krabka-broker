@@ -85,7 +85,10 @@ pub use handshake::{RaftConnection, RaftHandshakeError, RaftListenerHandshake};
 pub use kraft::MetadataFetchSlice;
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};
-pub use types::{AppData, AppDataResponse, Node, NodeId, OffsetReservation, SubmitChangeResult};
+pub use types::{
+    AppData, AppDataResponse, DelegationTokenMutation, Node, NodeId, OffsetReservation,
+    SubmitChangeResult,
+};
 
 /// Serialize a Kafka metadata snapshot, including KIP-853 control state.
 ///
@@ -112,6 +115,7 @@ pub fn deserialize_metadata_snapshot(
     Ok(snapshot::SnapshotReader::read(bytes)?.metadata_records)
 }
 pub use wire::{
-    API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE, KrabkaMetadataFetchRequest,
-    KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse,
+    API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
+    KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
+    KrabkaSubmitChangeResponse,
 };

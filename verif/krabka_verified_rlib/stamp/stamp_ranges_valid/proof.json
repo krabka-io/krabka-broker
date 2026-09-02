@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.0 },
+      "vc_stamp_ranges_valid": { "prover": "alt-ergo", "time": 0.027 }
+    }
+  }
+}

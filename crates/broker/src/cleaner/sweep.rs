@@ -8,10 +8,13 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use krabka_metadata::{MetadataImage, NodeId};
+use krabka_verified::FreezeMutationKind;
 use tracing::warn;
 
 use crate::{
-    freeze::resolve::resolve_topic_freeze, metrics::BrokerMetrics, partition::Partition,
+    freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
+    metrics::BrokerMetrics,
+    partition::Partition,
     partition_registry::PartitionRegistry,
 };
 
@@ -28,7 +31,12 @@ mod tests;
 /// `image` is `None` for a sweep with no metadata authority to ask, which
 /// resolves no freeze.
 fn freeze_stops_compaction(image: Option<&MetadataImage>, topic: &str) -> bool {
-    image.is_some_and(|image| resolve_topic_freeze(image, topic).is_some())
+    image.is_some_and(|image| {
+        matches!(
+            resolve_freeze_mutation(image, topic, true, FreezeMutationKind::Compaction),
+            FreezeMutationResolution::Frozen(_)
+        )
+    })
 }
 
 pub(crate) async fn tick_all(

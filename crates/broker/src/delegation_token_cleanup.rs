@@ -15,7 +15,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use krabka_metadata::{DeleteDelegationTokenRecord, MetadataImage, MetadataRecord};
+use krabka_metadata::{DelegationToken, DelegationTokenRecord, MetadataImage};
+use krabka_raft::DelegationTokenMutation;
 use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -25,7 +26,8 @@ use tracing::{debug, info, warn};
 #[async_trait]
 pub(crate) trait DelegationTokenController: Send + Sync {
     fn current_image(&self) -> Arc<MetadataImage>;
-    async fn submit_change(&self, records: Vec<MetadataRecord>) -> Result<(), String>;
+    async fn submit_mutations(&self, mutations: Vec<DelegationTokenMutation>)
+    -> Result<(), String>;
 }
 
 /// Spawned task entry point. Returns when `shutdown` is cancelled.
@@ -49,34 +51,43 @@ pub(crate) async fn run(
 
 pub(crate) async fn sweep(controller: &dyn DelegationTokenController) {
     let now = crate::time_util::now_ms();
-    let expired: Vec<String> = controller
+    let expired: Vec<DelegationTokenRecord> = controller
         .current_image()
         .all_delegation_tokens()
         .filter(|t| t.expiry_timestamp_ms <= now)
-        .map(|t| t.token_id.clone())
+        .map(token_to_record)
         .collect();
     if expired.is_empty() {
         return;
     }
-    let records: Vec<MetadataRecord> = expired
+    let mutations: Vec<DelegationTokenMutation> = expired
         .iter()
-        .map(|id| {
-            MetadataRecord::V1DeleteDelegationToken(DeleteDelegationTokenRecord {
-                token_id: id.clone(),
-            })
-        })
+        .cloned()
+        .map(|expected| DelegationTokenMutation::Delete { expected })
         .collect();
     let count = expired.len();
-    if let Err(e) = controller.submit_change(records).await {
+    if let Err(e) = controller.submit_mutations(mutations).await {
         warn!(
             error = %e,
             count,
             "failed to submit delegation-token tombstone batch"
         );
     } else {
-        for id in &expired {
-            debug!(token_id = %id, "delegation token expired and tombstoned");
+        for token in &expired {
+            debug!(token_id = %token.token_id, "delegation token expired and tombstoned");
         }
+    }
+}
+
+fn token_to_record(token: &DelegationToken) -> DelegationTokenRecord {
+    DelegationTokenRecord {
+        token_id: token.token_id.clone(),
+        owner: token.owner.clone(),
+        hmac: token.hmac.clone(),
+        issue_timestamp_ms: token.issue_timestamp_ms,
+        expiry_timestamp_ms: token.expiry_timestamp_ms,
+        max_timestamp_ms: token.max_timestamp_ms,
+        renewers: token.renewers.clone(),
     }
 }
 
@@ -94,7 +105,7 @@ mod tests {
 
     struct MockController {
         image: Mutex<Arc<MetadataImage>>,
-        submitted: Mutex<Vec<MetadataRecord>>,
+        submitted: Mutex<Vec<DelegationTokenMutation>>,
     }
 
     #[async_trait]
@@ -102,15 +113,24 @@ mod tests {
         fn current_image(&self) -> Arc<MetadataImage> {
             self.image.lock().unwrap().clone()
         }
-        async fn submit_change(&self, records: Vec<MetadataRecord>) -> Result<(), String> {
+        async fn submit_mutations(
+            &self,
+            mutations: Vec<DelegationTokenMutation>,
+        ) -> Result<(), String> {
             // Apply the records to the local image so the test observes
             // the post-tombstone state via `current_image()`.
             let mut img: MetadataImage = (**self.image.lock().unwrap()).clone();
-            for r in &records {
-                img.apply(r);
+            for mutation in &mutations {
+                if let DelegationTokenMutation::Delete { expected } = mutation {
+                    img.apply(&MetadataRecord::V1DeleteDelegationToken(
+                        krabka_metadata::DeleteDelegationTokenRecord {
+                            token_id: expected.token_id.clone(),
+                        },
+                    ));
+                }
             }
             *self.image.lock().unwrap() = Arc::new(img);
-            self.submitted.lock().unwrap().extend(records);
+            self.submitted.lock().unwrap().extend(mutations);
             Ok(())
         }
     }
@@ -157,9 +177,9 @@ mod tests {
         assert!(submitted.len() == 2);
         let mut tombstone_ids: Vec<String> = submitted
             .iter()
-            .map(|r| match r {
-                MetadataRecord::V1DeleteDelegationToken(d) => d.token_id.clone(),
-                other => panic!("unexpected record type: {other:?}"),
+            .map(|mutation| match mutation {
+                DelegationTokenMutation::Delete { expected } => expected.token_id.clone(),
+                other => panic!("unexpected mutation type: {other:?}"),
             })
             .collect();
         tombstone_ids.sort();

@@ -4,11 +4,10 @@
 
 use std::time::Duration;
 
-use krabka_log::Offset;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
-use super::{ACKS_ALL, INVALID_OFFSET, prepare::PreparedBatch};
-use crate::{codes, error::BrokerError};
+use super::{ACKS_ALL, INVALID_OFFSET, durability_frontier, prepare::PreparedBatch};
+use crate::codes;
 
 pub(super) async fn validate_transactional_produce(
     batch: &PreparedBatch,
@@ -16,52 +15,38 @@ pub(super) async fn validate_transactional_produce(
     image: &krabka_metadata::MetadataImage,
     topic_name: &str,
     partition: i32,
-) -> Result<Option<i16>, BrokerError> {
-    if !batch.attributes.is_transactional() || batch.producer_id < 0 {
-        return Ok(None);
+) -> Option<i16> {
+    if !batch.attributes.is_transactional() {
+        return None;
+    }
+    if batch.producer_id < 0 {
+        return Some(codes::INVALID_PRODUCER_ID_MAPPING);
     }
     let transactional_id = coordinator.tid_for_pid(krabka_log::ProducerId(batch.producer_id));
-    let Some(entry_mutex) = transactional_id
-        .as_ref()
-        .and_then(|transactional_id| coordinator.get(transactional_id))
-    else {
-        return Ok(None);
+    let Some(transactional_id) = transactional_id else {
+        // Produce carries no transactional ID. This broker can lead the data
+        // partition while another broker coordinates the transaction, so a
+        // missing local PID mapping is not evidence of an invalid producer.
+        return None;
     };
-    let mut entry = entry_mutex.lock().await;
-    if entry.has_staged_producer_identity() {
-        return Ok(Some(codes::INVALID_TXN_STATE));
-    }
-    if entry.producer_epoch != batch.producer_epoch {
-        return Ok(Some(codes::INVALID_PRODUCER_EPOCH));
-    }
     let topic_partition = crate::txn::state::TopicPartition {
         topic: topic_name.to_string(),
         partition: krabka_ids::PartitionIndex(partition),
     };
-    let completed = matches!(
-        entry.state,
-        crate::txn::state::TxnState::CompleteCommit | crate::txn::state::TxnState::CompleteAbort
-    );
-    if entry.partitions.contains(&topic_partition) && !completed {
-        return Ok(None);
-    }
-    if !entry
-        .state
-        .can_transition_to(crate::txn::state::TxnState::Ongoing)
-    {
-        return Ok(Some(codes::INVALID_TXN_STATE));
-    }
-    if completed {
-        entry.partitions.clear();
-    }
-    entry.state = crate::txn::state::TxnState::Ongoing;
-    entry.partitions.insert(topic_partition);
-    entry.last_update_ms = crate::txn::util::now_millis();
-    let snapshot = entry.clone();
-    drop(entry);
     let version = crate::txn::version::resolve_txn_version(image);
-    coordinator.put(snapshot, version).await?;
-    Ok(None)
+    let code = coordinator
+        .register_partitions(
+            &transactional_id,
+            krabka_log::ProducerId(batch.producer_id),
+            batch.producer_epoch,
+            vec![topic_partition],
+            version,
+        )
+        .await;
+    if code == codes::NONE {
+        return None;
+    }
+    Some(code)
 }
 
 pub(super) async fn handle_duplicate(
@@ -95,14 +80,17 @@ pub(super) async fn handle_duplicate(
     // with the sentinel.
     let (error_code, base_offset, log_start_offset) = match decision {
         crate::producer_state::Decision::Duplicate { base_offset } => {
+            let Some(target) = durability_frontier(base_offset, batch.last_offset_delta) else {
+                return Some(PartitionProduceResponse {
+                    index: partition_index,
+                    error_code: codes::INVALID_RECORD,
+                    base_offset: -1,
+                    ..Default::default()
+                });
+            };
             let error_code = if acks == ACKS_ALL {
-                let target = base_offset + i64::from(batch.last_offset_delta) + 1;
                 let deadline = std::time::Instant::now() + timeout;
-                if partition
-                    .await_hw_at_least(Offset(target), deadline)
-                    .await
-                    .is_ok()
-                {
+                if partition.await_hw_at_least(target, deadline).await.is_ok() {
                     codes::NONE
                 } else {
                     codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND
@@ -135,7 +123,7 @@ pub(super) async fn handle_duplicate(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use assert2::{assert, check};
     use bytes::Bytes;
@@ -143,13 +131,165 @@ mod tests {
     use krabka_protocol::records::{Record, RecordBatch};
     use uuid::Uuid;
 
-    use super::*;
-    use crate::handlers::produce::{
-        framing::{FramedPartition, PartitionPayload},
-        leadership::BrokerProducePolicy,
-        pipeline::{PartitionInput, PartitionServices, process_partition},
-        test_support::{encode_batch, image_with_topic},
+    use super::{PreparedBatch, validate_transactional_produce};
+    use crate::{
+        codes,
+        handlers::produce::{
+            framing::{FramedPartition, PartitionPayload},
+            leadership::BrokerProducePolicy,
+            pipeline::{PartitionInput, PartitionServices, process_partition},
+            test_support::{encode_batch, image_with_topic},
+        },
     };
+
+    fn transactional_batch(producer_id: i64, producer_epoch: i16) -> PreparedBatch {
+        PreparedBatch {
+            attributes: krabka_protocol::records::Attributes::default().with_transactional(true),
+            last_offset_delta: 0,
+            max_timestamp: 0,
+            producer_id,
+            producer_epoch,
+            base_sequence: 0,
+            source: crate::handlers::produce::prepare::PreparedSource::Owned(RecordBatch::default()),
+        }
+    }
+
+    #[tokio::test]
+    async fn transactional_produce_rejects_malformed_producers() {
+        let coordinator = crate::txn::coordinator::TxnCoordinator::new(
+            krabka_audit::NodeId(1),
+            Arc::new(crate::partition_registry::PartitionRegistry::new()),
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            1,
+            krabka_units::mebibytes(1),
+        );
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+
+        for producer_id in [-1, i64::MIN] {
+            let code = validate_transactional_produce(
+                &transactional_batch(producer_id, 0),
+                &coordinator,
+                &image,
+                "orders",
+                0,
+            )
+            .await;
+            check!(code == Some(codes::INVALID_PRODUCER_ID_MAPPING));
+        }
+    }
+
+    #[tokio::test]
+    async fn transactional_produce_allows_a_remote_coordinator() {
+        let coordinator = crate::txn::coordinator::TxnCoordinator::new(
+            krabka_audit::NodeId(1),
+            Arc::new(crate::partition_registry::PartitionRegistry::new()),
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            1,
+            krabka_units::mebibytes(1),
+        );
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+
+        let code = validate_transactional_produce(
+            &transactional_batch(7, 0),
+            &coordinator,
+            &image,
+            "orders",
+            0,
+        )
+        .await;
+
+        check!(code.is_none());
+    }
+
+    #[tokio::test]
+    async fn transactional_produce_persists_the_exact_partition_on_every_retry() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let image = image_with_topic(crate::txn::bootstrap::TOPIC, &[1]);
+        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let coordinator = crate::txn::coordinator::TxnCoordinator::new(
+            krabka_audit::NodeId(1),
+            Arc::clone(&partitions),
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            1,
+            krabka_units::mebibytes(1),
+        );
+        let partition_dir =
+            crate::log_dir::partition_dir(directory.path(), crate::txn::bootstrap::TOPIC, 0);
+        std::fs::create_dir_all(&partition_dir).expect("create transaction-state directory");
+        let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
+            .expect("open transaction-state log");
+        let transaction_partition = crate::broker::spawn_partition(
+            crate::txn::bootstrap::TOPIC.to_string(),
+            krabka_ids::PartitionIndex(0),
+            directory.path().to_path_buf(),
+            log,
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        );
+        partitions.insert(
+            crate::txn::bootstrap::TOPIC.to_string(),
+            krabka_ids::PartitionIndex(0),
+            Arc::clone(&transaction_partition),
+        );
+        coordinator.refresh_leader_partitions(&image).await;
+        coordinator
+            .put(
+                crate::txn::state::TxnEntry::new_empty(
+                    "tid-a".into(),
+                    krabka_log::ProducerId(7),
+                    i16::MAX,
+                    60_000,
+                    0,
+                ),
+                crate::txn::version::TxnVersion::Classic,
+            )
+            .await
+            .expect("seed transaction");
+
+        for expected_end in [2, 3] {
+            let code = validate_transactional_produce(
+                &transactional_batch(7, i16::MAX),
+                &coordinator,
+                &image,
+                "orders",
+                i32::MAX,
+            )
+            .await;
+            check!(code.is_none());
+            check!(transaction_partition.log_end_offset().0 == expected_end);
+        }
+        let stored = coordinator.get("tid-a").expect("transaction entry");
+        let stored = stored.lock().await;
+        assert!(
+            stored
+                .partitions
+                .contains(&crate::txn::state::TopicPartition {
+                    topic: "orders".into(),
+                    partition: krabka_ids::PartitionIndex(i32::MAX),
+                })
+        );
+        assert!(
+            !stored
+                .partitions
+                .contains(&crate::txn::state::TopicPartition {
+                    topic: "orders".into(),
+                    partition: krabka_ids::PartitionIndex(0),
+                })
+        );
+        drop(stored);
+
+        let stale = validate_transactional_produce(
+            &transactional_batch(7, i16::MAX - 1),
+            &coordinator,
+            &image,
+            "payments",
+            0,
+        )
+        .await;
+        check!(stale == Some(codes::INVALID_PRODUCER_EPOCH));
+        check!(transaction_partition.log_end_offset().0 == 3);
+    }
 
     /// An idempotent retry, `Decision::Duplicate`, under `acks=all` waits
     /// again for the HW to reach the duplicate's *last offset + 1* before it
@@ -260,8 +400,7 @@ mod tests {
                 max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 topic_name: "orders".into(),
-                topic_denied: false,
-                freeze: None,
+                freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
                 txn_id_denied: false,
                 acks: -1,
                 timeout: Duration::from_millis(50),

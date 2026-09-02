@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 72 27 72 32 *)
+
+(* <break_glass_persistence::BreakGlassLocalSpendState as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BreakGlassLocalSpendState = Ungated | MissingOrMismatched | Pending | Committed
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BreakGlassLocalSpendState [#"/workspace/crates/verified/src/break_glass_persistence.rs" 72 27 72 32]
+  (self: t_BreakGlassLocalSpendState) (return (x: t_BreakGlassLocalSpendState)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassLocalSpendState = Any.any_l () | & self: t_BreakGlassLocalSpendState = self ])
+  [ return (result: t_BreakGlassLocalSpendState) -> (! return {result}) ]

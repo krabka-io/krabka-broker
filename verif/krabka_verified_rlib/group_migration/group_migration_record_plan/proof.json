@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_group_migration_record_plan": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      }
+    }
+  }
+}

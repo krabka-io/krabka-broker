@@ -1,0 +1,63 @@
+(* #"/proof-work-231/crates/verified/src/features.rs" 60 0 70 26 *)
+
+let%span sfeatures = "/proof-work-231/crates/verified/src/features.rs" 23 10 32 1
+let%span sfeatures'0 = "/proof-work-231/crates/verified/src/features.rs" 33 10 42 1
+let%span sfeatures'1 = "/proof-work-231/crates/verified/src/features.rs" 43 10 53 1
+
+use creusot.prelude.Any
+
+type t_FeatureUpdateDecision = Reject | EmitFeature | EmitCleanupThenFeature
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let feature_update_decision [#"/proof-work-231/crates/verified/src/features.rs" 60 0 70 26] (update_type_valid: bool)
+  (target_supported: bool) (direction_valid: bool) (all_registered_nodes_support: bool) (state_representable: bool)
+  (dependencies_met: bool) (delete_semantics_valid: bool) (cleanup_required: bool) (unsafe_downgrade: bool)
+  (return (x: t_FeatureUpdateDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {update_type_valid = false} (! bb9) | br1 -> {update_type_valid} (! bb1) ]
+  | bb1 = any [ br0 -> {target_supported = false} (! bb9) | br1 -> {target_supported} (! bb2) ]
+  | bb2 = any [ br0 -> {direction_valid = false} (! bb9) | br1 -> {direction_valid} (! bb3) ]
+  | bb3 = any [ br0 -> {all_registered_nodes_support = false} (! bb9) | br1 -> {all_registered_nodes_support} (! bb4) ]
+  | bb4 = any [ br0 -> {state_representable = false} (! bb9) | br1 -> {state_representable} (! bb5) ]
+  | bb5 = any [ br0 -> {dependencies_met = false} (! bb9) | br1 -> {dependencies_met} (! bb6) ]
+  | bb6 = any [ br0 -> {delete_semantics_valid = false} (! bb9) | br1 -> {delete_semantics_valid} (! bb7) ]
+  | bb7 = any [ br0 -> {cleanup_required = false} (! bb10) | br1 -> {cleanup_required} (! bb8) ]
+  | bb8 = any [ br0 -> {unsafe_downgrade = false} (! bb9) | br1 -> {unsafe_downgrade} (! bb10) ]
+  | bb10 = any [ br0 -> {cleanup_required = false} (! bb12) | br1 -> {cleanup_required} (! bb11) ]
+  | bb11 = s0 [ s0 = [ &_ret <- EmitCleanupThenFeature ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- EmitFeature ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FeatureUpdateDecision = Any.any_l ()
+  | & update_type_valid: bool = update_type_valid
+  | & target_supported: bool = target_supported
+  | & direction_valid: bool = direction_valid
+  | & all_registered_nodes_support: bool = all_registered_nodes_support
+  | & state_representable: bool = state_representable
+  | & dependencies_met: bool = dependencies_met
+  | & delete_semantics_valid: bool = delete_semantics_valid
+  | & cleanup_required: bool = cleanup_required
+  | & unsafe_downgrade: bool = unsafe_downgrade ])
+  [ return (result: t_FeatureUpdateDecision) ->
+  {[@stop_split] [@expl:feature_update_decision ensures] ([@stop_split] [@expl:feature_update_decision ensures #0] [%#sfeatures] (result
+        = Reject)
+      = (not update_type_valid
+      \/ not target_supported
+      \/ not direction_valid
+      \/ not all_registered_nodes_support
+      \/ not state_representable
+      \/ not dependencies_met \/ not delete_semantics_valid \/ cleanup_required /\ not unsafe_downgrade))
+    /\ ([@stop_split] [@expl:feature_update_decision ensures #1] [%#sfeatures'0] (result = EmitFeature)
+      = (update_type_valid
+      /\ target_supported
+      /\ direction_valid
+      /\ all_registered_nodes_support
+      /\ state_representable /\ dependencies_met /\ delete_semantics_valid /\ not cleanup_required))
+    /\ ([@stop_split] [@expl:feature_update_decision ensures #2] [%#sfeatures'1] (result = EmitCleanupThenFeature)
+    = (update_type_valid
+    /\ target_supported
+    /\ direction_valid
+    /\ all_registered_nodes_support
+    /\ state_representable /\ dependencies_met /\ delete_semantics_valid /\ cleanup_required /\ unsafe_downgrade))}
+    (! return {result}) ]

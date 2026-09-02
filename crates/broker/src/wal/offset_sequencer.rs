@@ -37,6 +37,7 @@ impl OffsetSequencer for ControllerSequencer {
         partition: PartitionIndex,
         count: u32,
     ) -> Result<Offset, BrokerError> {
+        let request_epoch = controller_epoch_coordinate(self.metadata.current_controller_epoch());
         let result = self
             .metadata
             .submit_change(vec![MetadataRecord::V1PartitionOffsetAdvance(
@@ -55,15 +56,36 @@ impl OffsetSequencer for ControllerSequencer {
                 result.offset_reservations.len()
             )));
         };
-        if reservation.topic != topic
-            || reservation.partition != partition.0
-            || reservation.count != i64::from(count)
-        {
-            return Err(BrokerError::Replication(
-                "offset sequencer: reservation does not match request".to_string(),
-            ));
-        }
-        Ok(Offset(reservation.base_offset))
+        let request_matches = reservation.topic == topic
+            && reservation.partition == partition.0
+            && reservation.count == i64::from(count);
+        let observed_epoch = controller_epoch_coordinate(self.metadata.current_controller_epoch());
+        let response_epoch = i64::try_from(reservation.leader_epoch).unwrap_or(-2);
+        let Some(base_offset) = krabka_verified::wal_reservation_response(
+            request_matches,
+            request_epoch,
+            observed_epoch,
+            response_epoch,
+            reservation.base_offset,
+            reservation.count,
+        ) else {
+            let detail = if request_matches {
+                "reservation epoch or range is stale or invalid"
+            } else {
+                "reservation does not match request"
+            };
+            return Err(BrokerError::Replication(format!(
+                "offset sequencer: {detail}"
+            )));
+        };
+        Ok(Offset(base_offset))
+    }
+}
+
+fn controller_epoch_coordinate(epoch: Option<u64>) -> i64 {
+    match epoch {
+        None => -1,
+        Some(epoch) => i64::try_from(epoch).unwrap_or(-2),
     }
 }
 
@@ -82,6 +104,9 @@ mod tests {
 
     struct FakeMetadataSource {
         result: SubmitChangeResult,
+        term: u64,
+        known_term: bool,
+        fail: bool,
     }
 
     #[async_trait]
@@ -102,13 +127,17 @@ mod tests {
 
         fn quorum_state(&self) -> QuorumState {
             QuorumState {
-                current_term: 0,
+                current_term: self.term,
                 last_applied_index: 0,
                 current_leader: None,
                 voters: Vec::new(),
                 voter_nodes: std::collections::BTreeMap::new(),
                 per_voter_matched_index: std::collections::BTreeMap::new(),
             }
+        }
+
+        fn current_controller_epoch(&self) -> Option<u64> {
+            self.known_term.then_some(self.term)
         }
 
         async fn submit_change(
@@ -120,7 +149,11 @@ mod tests {
                 [MetadataRecord::V1PartitionOffsetAdvance(record)]
                     if record.topic == "topic" && record.partition == 0 && record.count == 3
             ));
-            Ok(self.result.clone())
+            if self.fail {
+                Err(RaftError::Shutdown)
+            } else {
+                Ok(self.result.clone())
+            }
         }
 
         async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
@@ -167,8 +200,12 @@ mod tests {
                     partition: 0,
                     base_offset: 11,
                     count: 3,
+                    leader_epoch: 7,
                 }],
             },
+            term: 7,
+            known_term: true,
+            fail: false,
         }));
 
         let base = sequencer
@@ -177,5 +214,95 @@ mod tests {
             .unwrap();
 
         assert2::assert!((base) == (Offset(11)));
+    }
+
+    fn reservation(
+        topic: &str,
+        partition: i32,
+        base_offset: i64,
+        count: i64,
+        leader_epoch: u64,
+    ) -> OffsetReservation {
+        OffsetReservation {
+            topic: topic.to_string(),
+            partition,
+            base_offset,
+            count,
+            leader_epoch,
+        }
+    }
+
+    #[tokio::test]
+    async fn controller_sequencer_rejects_stale_malformed_and_failed_responses() {
+        let cases = [
+            SubmitChangeResult::default(),
+            SubmitChangeResult {
+                offset_reservations: vec![
+                    reservation("topic", 0, 11, 3, 7),
+                    reservation("topic", 0, 14, 3, 7),
+                ],
+            },
+            SubmitChangeResult {
+                offset_reservations: vec![reservation("wrong", 0, 11, 3, 7)],
+            },
+            SubmitChangeResult {
+                offset_reservations: vec![reservation("topic", 1, 11, 3, 7)],
+            },
+            SubmitChangeResult {
+                offset_reservations: vec![reservation("topic", 0, 11, 4, 7)],
+            },
+            SubmitChangeResult {
+                offset_reservations: vec![reservation("topic", 0, 11, 3, 6)],
+            },
+            SubmitChangeResult {
+                offset_reservations: vec![reservation("topic", 0, -1, 3, 7)],
+            },
+            SubmitChangeResult {
+                offset_reservations: vec![reservation("topic", 0, i64::MAX, 3, 7)],
+            },
+        ];
+
+        for result in cases {
+            let sequencer = ControllerSequencer::new(Arc::new(FakeMetadataSource {
+                result,
+                term: 7,
+                known_term: true,
+                fail: false,
+            }));
+            assert2::assert!(
+                sequencer
+                    .assign("topic", PartitionIndex(0), 3)
+                    .await
+                    .is_err()
+            );
+        }
+
+        let failing = ControllerSequencer::new(Arc::new(FakeMetadataSource {
+            result: SubmitChangeResult::default(),
+            term: 7,
+            known_term: true,
+            fail: true,
+        }));
+        assert2::assert!(failing.assign("topic", PartitionIndex(0), 3).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn broker_only_sequencer_accepts_a_committed_response_epoch() {
+        let sequencer = ControllerSequencer::new(Arc::new(FakeMetadataSource {
+            result: SubmitChangeResult {
+                offset_reservations: vec![reservation("topic", 0, 11, 3, 7)],
+            },
+            term: 0,
+            known_term: false,
+            fail: false,
+        }));
+
+        assert2::assert!(
+            sequencer
+                .assign("topic", PartitionIndex(0), 3)
+                .await
+                .unwrap()
+                == Offset(11)
+        );
     }
 }

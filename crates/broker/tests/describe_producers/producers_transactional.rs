@@ -12,7 +12,9 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    producers_harness::{create_topic, init_producer, topic_id_for, transactional_batch},
+    producers_harness::{
+        create_topic, init_transactional_producer, topic_id_for, transactional_batch,
+    },
     support,
 };
 
@@ -21,7 +23,7 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
     let p = support::start().await;
     create_topic(&p.client, "transactions", 1).await;
     let topic_id = topic_id_for(&p, "transactions").await;
-    let (pid, epoch) = init_producer(&p).await;
+    let (pid, epoch) = init_transactional_producer(&p, "describe-producers-tid").await;
 
     let produce_response = p
         .client

@@ -44,6 +44,32 @@ fn to_offset_bound_is_inclusive_at_the_named_offset() {
     check!(predicates.offset_bound(&partition("orders", 0)) == Some(Offset(42)));
     check!(predicates.offset_bound(&partition("orders", 1)).is_none());
     check!(predicates.offset_bound(&partition("other", 0)).is_none());
+    check!(!predicates.batch_past_offset_bound(&partition("orders", 0), Offset(42)));
+    check!(predicates.batch_past_offset_bound(&partition("orders", 0), Offset(43)));
+    check!(!predicates.batch_past_offset_bound(&partition("orders", 1), Offset(i64::MAX)));
+}
+
+#[test]
+fn to_offset_filters_a_batch_that_straddles_the_inclusive_bound() {
+    let predicates = predicates(&["--to-offset", "orders:0=1001"]);
+    let orders_0 = partition("orders", 0);
+    let owned = batch(1, vec![record(0), record(1), record(2)]);
+
+    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
+
+    check!(batch_decision == BatchDecision::Filter);
+    check!(
+        records
+            == [
+                RecordDecision::Keep,
+                RecordDecision::Keep,
+                RecordDecision::Drop,
+            ]
+    );
+
+    let (other_decision, other_records) = decide(&predicates, &partition("orders", 1), &owned);
+    check!(other_decision == BatchDecision::Keep);
+    check!(other_records == [RecordDecision::Keep; 3]);
 }
 
 #[test]

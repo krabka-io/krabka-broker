@@ -78,6 +78,10 @@ impl Walk {
             .first_break
             .take()
             .or_else(|| self.tip_break(dir, request));
+        let ok = first_break.is_none()
+            && self.unsigned == 0
+            && self.untrusted == 0
+            && orphan_objects.is_empty();
         PartitionVerifyReport {
             partition_dir: dir.to_string(),
             manifests: self.manifests,
@@ -91,7 +95,7 @@ impl Walk {
             orphan_objects,
             offset_gaps: offset_gaps(&mut self.segments),
             head: self.head,
-            ok: first_break.is_none(),
+            ok,
             first_break,
         }
     }
@@ -155,11 +159,15 @@ pub(super) async fn walk_partition(
             expected_seq = next_seq;
 
             match signature_state(manifest, trusted) {
-                SignatureState::Unsigned => walk.unsigned = walk.unsigned.saturating_add(1),
-                SignatureState::Untrusted => walk.untrusted = walk.untrusted.saturating_add(1),
+                SignatureState::Unsigned => {
+                    walk.unsigned = walk.unsigned.saturating_add(1);
+                }
+                SignatureState::Untrusted => {
+                    walk.untrusted = walk.untrusted.saturating_add(1);
+                }
                 SignatureState::Valid => {}
                 SignatureState::Invalid(reason) => {
-                    walk.first_break = Some(VerifyBreak {
+                    walk.first_break.get_or_insert(VerifyBreak {
                         manifest_key: key.clone(),
                         seq: Some(body.chain.seq),
                         reason,

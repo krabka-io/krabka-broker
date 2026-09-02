@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use krabka_protocol::records::{RecordBatch, RecordsPayload};
+use krabka_verified::{DisklessBatchStep, diskless_batch_step};
 use object_store::{GetOptions, GetRange, ObjectStore, path::Path};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
@@ -156,17 +157,30 @@ fn first_batch_bytes_at_or_after(
             ))
         })?;
         let encoded_len = slice.len() - cur.len();
-        let last_offset = batch.base_offset + i64::from(batch.last_offset_delta);
-        if selected.is_none() && last_offset >= floor {
-            selected = Some(offset);
-        } else if let Some(start) = selected
-            && offset + encoded_len - start > max_bytes
-        {
-            return Ok(Some(run.slice(start..offset)));
+        match diskless_batch_step(
+            selected,
+            offset,
+            encoded_len,
+            batch.base_offset,
+            batch.last_offset_delta,
+            floor,
+            max_bytes,
+        ) {
+            DisklessBatchStep::Invalid => {
+                return Err(crate::error::BrokerError::Txn(
+                    "diskless WAL batch coordinates are invalid".into(),
+                ));
+            }
+            DisklessBatchStep::Skip(next) | DisklessBatchStep::Continue(next) => offset = next,
+            DisklessBatchStep::Start(next) => {
+                selected = Some(offset);
+                offset = next;
+            }
+            DisklessBatchStep::Stop => {
+                let start = selected.expect("proved selected batch start");
+                return Ok(Some(run.slice(start..offset)));
+            }
         }
-        offset = offset.checked_add(encoded_len).ok_or_else(|| {
-            crate::error::BrokerError::Txn("diskless WAL batch offset overflow".into())
-        })?;
     }
     Ok(selected.map(|start| run.slice(start..offset)))
 }
@@ -332,6 +346,26 @@ mod tests {
             first_batch_bytes_at_or_after(&Bytes::from_static(b"bad"), 0, usize::MAX).unwrap_err();
 
         assert!(error.to_string().contains("invalid batch"));
+    }
+
+    #[test]
+    fn truncated_indexed_batch_is_an_error() {
+        let run = encode_batches(&[batch(0, b"value")]);
+        let error =
+            first_batch_bytes_at_or_after(&run.slice(..run.len() - 1), 0, usize::MAX).unwrap_err();
+
+        assert!(error.to_string().contains("invalid batch"));
+    }
+
+    #[test]
+    fn logical_batch_offset_overflow_is_an_error() {
+        let mut overflowing = batch(i64::MAX, b"a");
+        overflowing.last_offset_delta = 1;
+        let run = encode_batches(&[overflowing]);
+
+        let error = first_batch_bytes_at_or_after(&run, i64::MAX, usize::MAX).unwrap_err();
+
+        assert!(error.to_string().contains("coordinates are invalid"));
     }
 
     #[tokio::test]

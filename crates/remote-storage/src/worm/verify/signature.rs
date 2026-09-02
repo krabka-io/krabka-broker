@@ -2,8 +2,11 @@
 //!
 //! The check is separate from the chain walk because it grades three outcomes
 //! the walk treats differently: a manifest with no signature and a manifest
-//! signed by an untrusted `key_id` are counted and the walk continues, while a
-//! signature that fails against a trusted key stops the walk.
+//! signed by an untrusted `key_id` are counted and the diagnostic walk
+//! continues, but its report cannot be `ok`; a signature that fails against a
+//! trusted key stops the walk.
+
+use krabka_verified::{WormSignatureDecision, worm_signature_decision};
 
 use super::TrustedManifestKeys;
 use crate::worm::manifest::{SegmentManifest, verify_manifest_signature};
@@ -25,18 +28,21 @@ pub(super) fn signature_state(
     manifest: &SegmentManifest,
     trusted: &TrustedManifestKeys,
 ) -> SignatureState {
-    let Some(signature) = manifest.signature.as_ref() else {
-        return SignatureState::Unsigned;
-    };
-    let Some(public_key) = trusted.get(&signature.key_id) else {
-        return SignatureState::Untrusted;
-    };
-    if verify_manifest_signature(manifest, public_key) {
-        SignatureState::Valid
-    } else {
-        SignatureState::Invalid(format!(
-            "signature does not verify against the trusted key `{}`",
-            signature.key_id
-        ))
+    let signature = manifest.signature.as_ref();
+    let public_key = signature.and_then(|signature| trusted.get(&signature.key_id));
+    let canonical_valid = signature
+        .zip(public_key)
+        .is_some_and(|(signature, public_key)| {
+            signature.public_key.0.as_slice() == public_key
+                && verify_manifest_signature(manifest, public_key)
+        });
+    match worm_signature_decision(signature.is_some(), public_key.is_some(), canonical_valid) {
+        WormSignatureDecision::Unsigned => SignatureState::Unsigned,
+        WormSignatureDecision::Untrusted => SignatureState::Untrusted,
+        WormSignatureDecision::Invalid => SignatureState::Invalid(format!(
+            "signature envelope or canonical binding does not verify against the trusted key `{}`",
+            signature.map_or("", |signature| signature.key_id.as_str())
+        )),
+        WormSignatureDecision::Admit => SignatureState::Valid,
     }
 }

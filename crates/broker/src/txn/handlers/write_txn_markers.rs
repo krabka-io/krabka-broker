@@ -36,7 +36,10 @@ mod offsets;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::materialize::{MarkerAppend, append_marker_and_materialize};
+pub(crate) use self::{
+    materialize::{MarkerAppend, append_marker_and_materialize},
+    offsets::CommittedOffsets,
+};
 use crate::{broker::Broker, codes, error::BrokerError, txn::marker::MarkerType};
 
 pub(crate) fn handle(
@@ -103,7 +106,7 @@ pub(crate) fn handle(
                                         error = %e,
                                         "WriteTxnMarkers: produce_batch failed"
                                     );
-                                    codes::UNKNOWN_SERVER_ERROR
+                                    codes::from_broker_error(&e)
                                 }
                             }
                         }
@@ -248,6 +251,7 @@ mod tests {
         part.produce_batch(RecordBatch {
             producer_id: 91,
             producer_epoch: 4,
+            base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             records: vec![Record {
                 key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2)),
@@ -326,6 +330,7 @@ mod tests {
         part.produce_batch(RecordBatch {
             producer_id: 91,
             producer_epoch: 4,
+            base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             records: vec![Record {
                 key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2)),
@@ -465,6 +470,7 @@ mod tests {
         part.produce_batch(RecordBatch {
             producer_id: 91,
             producer_epoch: 4,
+            base_sequence: 0,
             attributes: Attributes::default().with_transactional(true),
             last_offset_delta: 1,
             records: vec![
