@@ -88,7 +88,7 @@ impl BrokerMetrics {
     /// with each of [`RejectReason::LABELS`].
     pub(crate) fn evict_topic_series(&self, topic: &str) {
         let label = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::from(topic),
         };
         for family in [
             &self.topic_bytes_in,
@@ -170,13 +170,13 @@ impl MetricSeriesEvictor {
             .all_partitions()
             .filter(|partition| partition.replicas.contains(&self.node_id))
             .map(|partition| PartitionLabel {
-                topic: partition.topic.clone(),
+                topic: Arc::from(partition.topic.as_str()),
                 partition: partition.partition,
             })
             .collect();
         for label in self.hosted.difference(&hosted) {
             tracing::debug!(
-                topic = label.topic,
+                topic = %label.topic,
                 partition = label.partition,
                 "evicting partition metric series",
             );
@@ -211,7 +211,7 @@ impl MetricSeriesEvictor {
             self.metrics.evict_topic_series(name);
             for partition in &gone.partitions {
                 self.metrics.evict_partition_series(&PartitionLabel {
-                    topic: name.clone(),
+                    topic: Arc::from(name.as_str()),
                     partition: *partition,
                 });
             }
@@ -310,7 +310,7 @@ mod tests {
     /// Touch every family that carries a [`PartitionLabel`], the way the
     /// produce, fetch, replication, compaction, disk-scan and delivery paths
     /// each do.
-    fn create_partition_series(metrics: &BrokerMetrics, topic: &str, partition: i32) {
+    fn create_partition_series(metrics: &BrokerMetrics, topic: &Arc<str>, partition: i32) {
         metrics.record_partition_produce(topic, partition, 512);
         metrics.record_partition_fetch(topic, partition, 256);
         metrics.record_replication_in(topic, partition, 128);
@@ -321,7 +321,7 @@ mod tests {
         metrics
             .partition_disk_bytes
             .get_or_create(&PartitionLabel {
-                topic: topic.to_string(),
+                topic: Arc::clone(topic),
                 partition,
             })
             .set(4_096);
@@ -329,7 +329,7 @@ mod tests {
 
     /// Touch every family that carries a [`TopicLabel`], plus the
     /// topic-and-reason schema-rejection family.
-    fn create_topic_series(metrics: &BrokerMetrics, topic: &str) {
+    fn create_topic_series(metrics: &BrokerMetrics, topic: &Arc<str>) {
         metrics.record_produce(topic, 512);
         metrics.record_produce_messages(topic, 4);
         metrics.record_fetch(topic, 256);
@@ -341,7 +341,7 @@ mod tests {
         metrics
             .barrier_markers_written_total
             .get_or_create(&TopicLabel {
-                topic: topic.to_string(),
+                topic: Arc::clone(topic),
             })
             .inc();
         for reason in RejectReason::LABELS {
@@ -391,8 +391,8 @@ mod tests {
         let shutdown = CancellationToken::new();
         let source = evicting_source(&metrics, &topic_records(&[&[THIS_BROKER]]), &shutdown);
 
-        create_partition_series(&metrics, TOPIC, 0);
-        create_topic_series(&metrics, TOPIC);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        create_topic_series(&metrics, &Arc::from(TOPIC));
         let pair = partition_pair(TOPIC, 0);
         let topic_label = format!("topic=\"{TOPIC}\"}}");
         let before = scrape(&metrics);
@@ -418,8 +418,8 @@ mod tests {
         let live = topic_records(&[&[THIS_BROKER]]);
         let source = evicting_source(&metrics, &live, &shutdown);
 
-        create_partition_series(&metrics, TOPIC, 0);
-        create_topic_series(&metrics, TOPIC);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        create_topic_series(&metrics, &Arc::from(TOPIC));
         let before = scrape(&metrics);
         assert!(before.contains(&partition_pair(TOPIC, 0)));
         assert!(before.contains(&format!("topic=\"{TOPIC}\"")));
@@ -448,8 +448,8 @@ mod tests {
             &shutdown,
         );
 
-        create_partition_series(&metrics, TOPIC, 0);
-        create_partition_series(&metrics, TOPIC, 1);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 1);
 
         source.set_records(&topic_records(&[&[THIS_BROKER], &[OTHER_BROKER]]));
 
@@ -474,8 +474,8 @@ mod tests {
         let live = topic_records(&[&[THIS_BROKER], &[OTHER_BROKER]]);
         let source = evicting_source(&metrics, &live, &shutdown);
 
-        create_partition_series(&metrics, TOPIC, 0);
-        create_partition_series(&metrics, TOPIC, 1);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 1);
         let unhosted = partition_pair(TOPIC, 1);
         assert!(scrape(&metrics).contains(&unhosted));
 
@@ -505,8 +505,8 @@ mod tests {
             Uuid::nil(),
             &topic_records_with_id(first, &[&[THIS_BROKER]]),
         ));
-        create_partition_series(&metrics, TOPIC, 0);
-        create_topic_series(&metrics, TOPIC);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        create_topic_series(&metrics, &Arc::from(TOPIC));
         assert!(scrape(&metrics).contains(&partition_pair(TOPIC, 0)));
 
         // Same name, same partition, different topic id: a different topic.
@@ -522,7 +522,7 @@ mod tests {
 
         // The new incarnation is now tracked in its own right: series it
         // creates survive an image that repeats it, and go when it goes.
-        create_topic_series(&metrics, TOPIC);
+        create_topic_series(&metrics, &Arc::from(TOPIC));
         evictor.apply(&MetadataImage::from_records(
             Uuid::nil(),
             &topic_records_with_id(second, &[&[THIS_BROKER]]),
@@ -536,8 +536,8 @@ mod tests {
     #[test]
     fn the_first_image_seeds_the_baseline_and_evicts_nothing() {
         let metrics = BrokerMetrics::new();
-        create_partition_series(&metrics, TOPIC, 0);
-        create_topic_series(&metrics, TOPIC);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        create_topic_series(&metrics, &Arc::from(TOPIC));
 
         let mut evictor = MetricSeriesEvictor::new(THIS_BROKER, metrics.clone());
         // An image that names neither the topic nor the partition.
@@ -551,8 +551,8 @@ mod tests {
     #[test]
     fn the_eviction_entry_points_clear_every_family_they_own() {
         let metrics = BrokerMetrics::new();
-        create_partition_series(&metrics, TOPIC, 0);
-        create_topic_series(&metrics, TOPIC);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        create_topic_series(&metrics, &Arc::from(TOPIC));
         assert!(scrape(&metrics).contains(TOPIC));
 
         metrics.evict_partition_series(&PartitionLabel {
