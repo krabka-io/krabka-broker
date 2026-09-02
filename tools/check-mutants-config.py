@@ -12,9 +12,23 @@ has no survivor baseline, so a single one of these fails its shard.
 
 This script extracts the literal path fragment from each `exclude_re` entry
 -- the run of identifier characters and `/` immediately before a `.rs` -- and
-fails when no file under `crates/` ends with it. An entry with no such
-fragment (matched purely on a function or type name) has nothing to check and
-always passes.
+fails when no file under `crates/` ends with it. When the fragment is
+immediately followed by `:<line>`, it also fails when every file that matches
+the fragment is shorter than that line: a module split that leaves a thin
+facade file behind (`segment.rs` declaring `mod io;` alongside
+`segment/io.rs`) passes the bare path check while the pinned line has long
+since moved out from under it, so the two checks together catch more of the
+same rot than either alone.
+
+What this does NOT check: that the specific mutation the entry's prose
+describes (an operator, a match guard, a whole-function replacement) is still
+generated at the resolved location. A path that still exists, at a still-long
+line, but whose content changed underneath it -- the referenced function
+renamed, or moved to a different line within the same file -- passes this
+script and would need `cargo-mutants --list` against the real crate to catch.
+That check needs a Rust toolchain this script's callers do not all have; a
+dead path or a pinned line past the end of the file is the rot this repository
+has actually hit, and is what this catches.
 
     tools/check-mutants-config.py
 """
@@ -29,28 +43,52 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".cargo" / "mutants.toml"
 CRATES = ROOT / "crates"
 
-# A path fragment inside an `exclude_re` entry: identifier characters and `/`
-# ending in a (possibly regex-escaped) `.rs`.
-FRAGMENT = re.compile(r"[A-Za-z0-9_/]+\\?\.rs")
+# A path fragment inside an `exclude_re` entry -- identifier characters and
+# `/` ending in a (possibly regex-escaped) `.rs` -- with the line number
+# pinned directly after it via `:<line>`, if any.
+FRAGMENT = re.compile(r"([A-Za-z0-9_/]+\\?\.rs)(?::(\d+))?")
 
 
-def path_fragments(pattern: str) -> list[str]:
-    """Every literal `.rs` path fragment `pattern` names."""
-    return [match.replace("\\.rs", ".rs") for match in FRAGMENT.findall(pattern)]
+def path_fragments(pattern: str) -> list[tuple[str, int | None]]:
+    """Every `(fragment, pinned_line)` pair `pattern` names, in order."""
+    found = []
+    for match in FRAGMENT.finditer(pattern):
+        fragment = match.group(1).replace("\\.rs", ".rs")
+        line = int(match.group(2)) if match.group(2) else None
+        found.append((fragment, line))
+    return found
 
 
-def crate_paths(crates: Path) -> set[str]:
-    """Every `.rs` file under `crates`, as a path relative to the repo root."""
-    return {path.relative_to(crates.parent).as_posix() for path in crates.rglob("*.rs")}
+def crate_line_counts(crates: Path) -> dict[str, int]:
+    """Every `.rs` file under `crates`, as a repo-root-relative path to its line count."""
+    return {
+        path.relative_to(crates.parent).as_posix(): len(path.read_text().splitlines())
+        for path in crates.rglob("*.rs")
+    }
 
 
-def dead_fragments(patterns: list[str], files: set[str]) -> list[tuple[str, str]]:
-    """`(pattern, fragment)` pairs whose fragment matches no file in `files`."""
+def matching_files(fragment: str, line_counts: dict[str, int]) -> list[str]:
+    """Every file in `line_counts` that `fragment` names, as a path suffix."""
+    return [f for f in line_counts if f == fragment or f.endswith(f"/{fragment}")]
+
+
+def dead_fragments(patterns: list[str], line_counts: dict[str, int]) -> list[tuple[str, str, str]]:
+    """`(pattern, fragment, reason)` triples for a fragment this repository no longer supports."""
     dead = []
     for pattern in patterns:
-        for fragment in path_fragments(pattern):
-            if not any(f == fragment or f.endswith(f"/{fragment}") for f in files):
-                dead.append((pattern, fragment))
+        for fragment, line in path_fragments(pattern):
+            matches = matching_files(fragment, line_counts)
+            if not matches:
+                dead.append((pattern, fragment, "no file under crates/ matches this path"))
+            elif line is not None and line > max(line_counts[f] for f in matches):
+                longest = max(line_counts[f] for f in matches)
+                dead.append(
+                    (
+                        pattern,
+                        fragment,
+                        f"pinned to line {line}, but the longest matching file has only {longest} lines",
+                    )
+                )
     return dead
 
 
@@ -67,10 +105,10 @@ def main() -> int:
         return 1
 
     failed = False
-    for pattern, fragment in dead_fragments(patterns, crate_paths(args.crates)):
+    for pattern, fragment, reason in dead_fragments(patterns, crate_line_counts(args.crates)):
         print(
-            f"{args.config}: exclude_re entry names a path with no match "
-            f"under {args.crates.name}/: {fragment!r} (from {pattern!r})",
+            f"{args.config}: exclude_re entry names a path this repository no longer "
+            f"supports: {fragment!r} -- {reason} (from {pattern!r})",
             file=sys.stderr,
         )
         failed = True
