@@ -17,10 +17,11 @@ use crate::{
         config::BarrierConfig,
         metrics::NoBarrierMetrics,
         state::GroupSpec,
-        test_support::{StaticSource, open_partition, topic_records},
+        test_support::{metadata_source, open_partition, topic_records},
     },
     metadata_source::MetadataSource,
     partition_registry::PartitionRegistry,
+    test_support::FakeMetadataSource,
 };
 
 pub(super) const GROUP: &str = "orders-cut";
@@ -56,7 +57,7 @@ fn cluster_records() -> Vec<MetadataRecord> {
 pub(super) struct Fixture {
     _dir: TempDir,
     pub(super) registry: Arc<PartitionRegistry>,
-    pub(super) source: Arc<StaticSource>,
+    pub(super) source: Arc<FakeMetadataSource>,
     config: BarrierConfig,
 }
 
@@ -82,7 +83,7 @@ impl Fixture {
         Self {
             _dir: dir,
             registry,
-            source: Arc::new(StaticSource::new(&cluster_records())),
+            source: Arc::new(metadata_source(&cluster_records())),
             config: config(),
         }
     }

@@ -13,16 +13,34 @@ use tracing::{debug, warn};
 
 use super::ObserverConfig;
 
+/// What one successful observer fetch round trip learned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FetchOutcome {
+    /// Offset to fetch from next: one past the last batch applied.
+    pub(super) next_fetch_offset: u64,
+    /// The quorum's committed offset, as the controller that answered last
+    /// heard it. The observer trails it by whatever the response did not
+    /// carry, so it is the only value that says how far behind this node is.
+    ///
+    /// This is the response's `quorum_high_watermark` and not its
+    /// `high_watermark`: every controller serves this fetch, so the responder
+    /// may be a follower whose own watermark is clamped to a log end far below
+    /// what the quorum has committed. Reading that one would let an observer
+    /// that had drawn level with a lagging follower call itself caught up.
+    pub(super) quorum_high_watermark: i64,
+}
+
 /// Runs one iteration: it fetches from `addr` at `fetch_offset`, decodes and
-/// applies the records, and returns the new fetch offset. It returns `None` on
-/// a transport error, so that the caller fails over.
+/// applies the records, and returns the new fetch offset together with the
+/// quorum's committed offset. It returns `None` on a transport error, so
+/// that the caller fails over.
 pub(super) async fn fetch_once(
     config: &ObserverConfig,
     addr: &str,
     target: NodeId,
     fetch_offset: u64,
     image_tx: &watch::Sender<Arc<MetadataImage>>,
-) -> Option<u64> {
+) -> Option<FetchOutcome> {
     let req = krabka_raft::KrabkaMetadataFetchRequest {
         fetch_offset: i64::try_from(fetch_offset).unwrap_or(i64::MAX),
         max_bytes: config.max_bytes.bytes_i32(),
@@ -72,7 +90,10 @@ pub(super) async fn fetch_once(
         return None;
     }
 
-    Some(apply_fetch_records(fetch_offset, &resp.records, image_tx))
+    Some(FetchOutcome {
+        next_fetch_offset: apply_fetch_records(fetch_offset, &resp.records, image_tx),
+        quorum_high_watermark: resp.quorum_high_watermark,
+    })
 }
 
 fn apply_fetch_records(

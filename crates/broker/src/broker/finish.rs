@@ -108,6 +108,11 @@ pub(super) async fn finish_broker_startup(
         audit_writer_handle: tokio::sync::Mutex::new(runtime.audit_writer_handle),
         handlers: crate::handlers::registry::build_registry(),
     });
+    // Publish the startup kTLS probe. It is a constant of the running process,
+    // so this is the one place it is ever set, and an operator can read
+    // "kTLS is available here" beside the drain counter that says whether the
+    // offload is carrying fetches.
+    broker.metrics.set_ktls_enabled(broker.ktls_enabled);
     if let Some(router) = admin_router {
         router.bind(&broker).map_err(|error| {
             broker.supervisor_shutdown.cancel();

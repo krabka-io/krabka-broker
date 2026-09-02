@@ -246,36 +246,36 @@ async fn worm_manifest_lists_every_object_with_its_digest() {
         // The digests are computed here from the fixture bodies, never
         // from what the store reported.
         let expected = vec![
-            expected_entry(".log", &store.log_key(&md), b"0123456789", "0"),
+            expected_entry(".log", &store.log_key(&md), b"0123456789", "\"0\""),
             expected_entry(
                 ".index",
                 &store.index_key(&md, IndexType::Offset),
                 b"OFFSET-IDX",
-                "1",
+                "\"1\"",
             ),
             expected_entry(
                 ".timeindex",
                 &store.index_key(&md, IndexType::Timestamp),
                 b"TIME-IDX",
-                "2",
+                "\"2\"",
             ),
             expected_entry(
                 ".snapshot",
                 &store.index_key(&md, IndexType::ProducerSnapshot),
                 b"SNAP",
-                "3",
+                "\"3\"",
             ),
             expected_entry(
                 ".leader_epoch_checkpoint",
                 &store.index_key(&md, IndexType::LeaderEpoch),
                 b"EPOCH-BYTES",
-                "4",
+                "\"4\"",
             ),
             expected_entry(
                 ".txnindex",
                 &store.index_key(&md, IndexType::Transaction),
                 b"TXN-IDX",
-                "5",
+                "\"5\"",
             ),
         ];
         check!(read_manifest(&store, &md).body.objects == expected);

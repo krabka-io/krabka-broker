@@ -76,7 +76,7 @@ mod tests {
 
     use super::*;
     use crate::handlers::broker_heartbeat::test_support::{
-        MockSource, image_with_dir_partition, liveness_with,
+        fake_source, image_with_dir_partition, liveness_with,
     };
 
     #[tokio::test]
@@ -90,8 +90,8 @@ mod tests {
             &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[bad, good],
         );
-        let (source, captured) = MockSource::new(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
+        let source = fake_source(img);
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
         let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
@@ -108,7 +108,7 @@ mod tests {
         // Exactly one change must have been submitted (the new leader record):
         // broker 2 is elected (broker 1's dir is offline), the offline replica
         // is dropped from the ISR, and both epochs are bumped.
-        let changes = captured.lock().unwrap();
+        let changes = source.submitted_records();
         let expected_changes = vec![MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
@@ -121,7 +121,7 @@ mod tests {
             directories: vec![bad, good],
             partition_epoch: 1,
         })];
-        assert!(*changes == expected_changes);
+        assert!(changes == expected_changes);
         // No unclean recovery needed (broker 2 is alive and in ISR).
         assert!(recoveries == vec![]);
     }
@@ -137,8 +137,8 @@ mod tests {
             &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[good, good],
         );
-        let (source, captured) = MockSource::new(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
+        let source = fake_source(img);
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
         let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
@@ -153,8 +153,7 @@ mod tests {
         .await;
 
         // No change submitted and no recovery needed.
-        let changes = captured.lock().unwrap();
-        assert!(changes.is_empty());
+        assert!(source.submitted_records().is_empty());
         assert!(recoveries.is_empty());
     }
 
@@ -189,8 +188,8 @@ mod tests {
             1,
             &[good, bad],
         )));
-        let (source, captured) = MockSource::new(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
+        let source = fake_source(img);
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
         let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
@@ -206,12 +205,11 @@ mod tests {
 
         // The surviving dir is all that is left, and the KIP-903 epoch and the
         // incarnation are carried over so the rewrite is not a re-registration.
-        let changes = captured.lock().unwrap();
         let expected = vec![MetadataRecord::V1BrokerRegistration(registration(
             1,
             &[good],
         ))];
-        assert!(*changes == expected);
+        assert!(source.submitted_records() == expected);
     }
 
     #[tokio::test]
@@ -230,8 +228,8 @@ mod tests {
             1,
             &[good],
         )));
-        let (source, captured) = MockSource::new(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
+        let source = fake_source(img);
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
         let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
@@ -245,7 +243,6 @@ mod tests {
         )
         .await;
 
-        let changes = captured.lock().unwrap();
-        assert!(changes.is_empty());
+        assert!(source.submitted_records().is_empty());
     }
 }

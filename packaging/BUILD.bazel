@@ -5,6 +5,15 @@ owns both local loading and registry delivery.
 
     bazel run //packaging:image_load     # load into the local daemon
     bazel run //packaging:push -- --tag dev
+
+The operator tools ride in the same image rather than a sibling one. The base
+has no shell, so nothing can be fetched, unpacked or run inside a running
+container that the image did not already carry -- and the one mandatory pre-boot
+step, `krabka-format`, has to write the very log directory the broker then opens.
+A separate `krabka-tools` image would leave that step to an init container with a
+matching image tag, a shared volume mount and a second artifact to keep in
+lockstep with the broker, all to save a few tens of megabytes on an image that
+already carries a broker.
 """
 
 load("@rules_apko//apko:defs.bzl", "apko_image")
@@ -14,8 +23,21 @@ load("@rules_img//img:layer.bzl", "file_metadata", "image_layer")
 load("@rules_img//img:load.bzl", "image_load")
 load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
 load("@rules_img//img:push.bzl", "image_push")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
+
+# What `image_load` tags the image with locally, and what the Docker-driven test
+# then runs. A push supplies its own tags; see `push` below.
+IMAGE_TAG = "docker.io/krabka-io/krabka-broker:dev"
+
+# Owned by `nonroot` in the apko base. The broker needs no privilege: it binds
+# 9092/9093, both above 1024, and writes only its data directory.
+NONROOT = file_metadata(
+    gid = 65532,
+    mode = "0755",
+    uid = 65532,
+)
 
 apko_image(
     name = "base_oci",
@@ -37,11 +59,24 @@ image_layer(
     srcs = {
         "/usr/bin/krabka-broker": "//crates/broker:krabka-broker",
     },
-    default_metadata = file_metadata(
-        gid = 65532,
-        mode = "0755",
-        uid = 65532,
-    ),
+    default_metadata = NONROOT,
+    include_runfiles = False,
+)
+
+# Every operator-facing tool the repository ships, in a layer of its own: the
+# broker binary changes on nearly every commit and these rarely do, so keeping
+# them apart is a registry push and a `docker pull` that reuse the tools blob.
+image_layer(
+    name = "tools_layer",
+    srcs = {
+        "/usr/bin/krabka-audit": "//crates/audit:krabka-audit",
+        "/usr/bin/krabka-barrier": "//crates/barrier-cli:krabka-barrier",
+        "/usr/bin/krabka-format": "//crates/format:krabka-format",
+        "/usr/bin/krabka-guard": "//crates/guard-cli:krabka-guard",
+        "/usr/bin/krabka-restore": "//crates/restore:krabka-restore",
+        "/usr/bin/krabka-worm-verify": "//crates/remote-storage:krabka-worm-verify",
+    },
+    default_metadata = NONROOT,
     include_runfiles = False,
 )
 
@@ -49,15 +84,77 @@ image_manifest(
     name = "image",
     base = ":base",
     entrypoint = ["/usr/bin/krabka-broker"],
-    layers = [":broker_layer"],
+    layers = [
+        ":broker_layer",
+        ":tools_layer",
+    ],
     user = "65532:65532",
     working_dir = "/var/lib/krabka",
+)
+
+# `image` puts both the manifest and the config in its default outputs, and
+# `$(rootpath)` needs exactly one file. `root_blob` is the manifest alone, which
+# is the half that names the layer digests.
+filegroup(
+    name = "image_manifest_blob",
+    srcs = [":image"],
+    output_group = "root_blob",
+)
+
+# What the image carries under /usr/bin, asserted against the built layers and
+# against the manifest that references them. The equivalent by hand is
+# `bazel run //packaging:image_load` and a `docker run --entrypoint` per binary;
+# this needs no daemon, so it runs in `bazel test //...` on every commit.
+sh_test(
+    name = "image_binaries_test",
+    size = "small",
+    srcs = ["image_binaries_test.sh"],
+    args = [
+        "$(rootpath :image_manifest_blob)",
+        "$(rootpath :broker_layer)",
+        "$(rootpath :tools_layer)",
+    ],
+    data = [
+        ":broker_layer",
+        ":image_manifest_blob",
+        ":tools_layer",
+    ],
 )
 
 image_load(
     name = "image_load",
     image = ":image",
-    tag = "docker.io/krabka-io/krabka-broker:dev",
+    tag = IMAGE_TAG,
+)
+
+# The same binaries, run through a Docker daemon under the base image's own
+# loader and libc. Tagged `docker`, like every other suite that needs one, so
+# `bazel test //...` skips it and `bazel test --config=docker //packaging:all`
+# runs it; it also materializes the image as one several-hundred-megabyte
+# tarball, which is the other reason the everyday check is `image_binaries_test`.
+sh_test(
+    name = "image_docker_test",
+    size = "medium",
+    srcs = ["image_docker_test.sh"],
+    args = [
+        "$(rootpath :image_load)",
+        IMAGE_TAG,
+        "$(rootpath :broker_layer)",
+        "$(rootpath :tools_layer)",
+    ],
+    data = [
+        ":broker_layer",
+        ":image_load",
+        ":tools_layer",
+    ],
+    # The daemon is the one input Bazel cannot own: `no-sandbox` for its socket,
+    # `external` so a pass is never cached against inputs that do not describe
+    # the daemon's state.
+    tags = [
+        "docker",
+        "external",
+        "no-sandbox",
+    ],
 )
 
 # CI supplies tags on the command line, so a main build can push an immutable

@@ -373,3 +373,106 @@ async fn a_standalone_format_writes_what_a_boot_reads() {
     let len = std::fs::metadata(&checkpoint).map_or(0, |m| m.len());
     check!(len > 0, "offset-zero checkpoint should carry the voter set");
 }
+
+/// `--ignore-formatted` is what lets a Kubernetes init container run the
+/// formatter unconditionally: the second run is a no-op that exits 0 and
+/// leaves the first run's identity in place, while the same directory without
+/// the flag is still refused.
+#[tokio::test]
+async fn ignore_formatted_makes_a_second_format_a_no_op() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let log_dir = tmp.path().join("data");
+    let dir = log_dir.display().to_string();
+    let argv = |extra: &[&str]| {
+        let mut argv = vec![
+            "krabka-format".to_string(),
+            "--log-dir".to_string(),
+            dir.clone(),
+            "--standalone".to_string(),
+            "--node-id".to_string(),
+            "1".to_string(),
+            "--controller-listener".to_string(),
+            "controller-1:9093".to_string(),
+        ];
+        argv.extend(extra.iter().map(|s| (*s).to_string()));
+        argv
+    };
+
+    check!(crate::run_from_args(argv(&[])).await == EXIT_OK);
+    let formatted = std::fs::read(log_dir.join(super::META_PROPERTIES)).expect("meta properties");
+
+    // Without the flag the same directory is still a dirty log dir.
+    check!(crate::run_from_args(argv(&[])).await == EXIT_DIRTY_LOG_DIR);
+
+    // With it the run succeeds and rewrites nothing: a regenerated cluster or
+    // directory id would strand the node's replicated identity.
+    check!(crate::run_from_args(argv(&["--ignore-formatted"])).await == EXIT_OK);
+    let after = std::fs::read(log_dir.join(super::META_PROPERTIES)).expect("meta properties");
+    check!(after == formatted);
+}
+
+/// An unformatted directory is formatted normally under the flag: it means
+/// "ignore an existing format", not "skip formatting".
+#[tokio::test]
+async fn ignore_formatted_still_formats_a_fresh_directory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let log_dir = tmp.path().join("data");
+
+    let code = crate::run_from_args([
+        "krabka-format",
+        "--log-dir",
+        &log_dir.display().to_string(),
+        "--standalone",
+        "--node-id",
+        "1",
+        "--controller-listener",
+        "controller-1:9093",
+        "--ignore-formatted",
+    ])
+    .await;
+    check!(code == EXIT_OK);
+    check!(log_dir.join(super::META_PROPERTIES).is_file());
+}
+
+/// A format that fails partway leaves no marker, so the next run redoes it
+/// rather than treating the half-written directory as formatted.
+///
+/// `--ignore-formatted` is what makes the formatter safe to run
+/// unconditionally, and the price of that is that whatever it recognises as
+/// "already formatted" has to mean the whole format landed. A rejected
+/// `--add-scram` fails after the point the identity is resolved and before
+/// any output is written, which is exactly the window that would otherwise
+/// strand a directory carrying an identity and no seed records: the next
+/// init-container attempt would exit 0 on it and the broker would boot with
+/// no offset-zero checkpoint and no voter set.
+#[tokio::test]
+async fn a_failed_format_is_not_mistaken_for_a_finished_one() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let log_dir = tmp.path().join("data");
+    let dir = log_dir.display().to_string();
+    let argv = |extra: &[&str]| {
+        let mut argv = vec![
+            "krabka-format".to_string(),
+            "--log-dir".to_string(),
+            dir.clone(),
+            "--standalone".to_string(),
+            "--node-id".to_string(),
+            "1".to_string(),
+            "--controller-listener".to_string(),
+            "controller-1:9093".to_string(),
+        ];
+        argv.extend(extra.iter().map(|s| (*s).to_string()));
+        argv
+    };
+
+    let weak = "SCRAM-SHA-256=[name=alice,password=hunter2,iterations=1]";
+    check!(crate::run_from_args(argv(&["--add-scram", weak])).await == EXIT_LOW_ITERATIONS);
+    check!(!log_dir.join(super::META_PROPERTIES).exists());
+
+    // The retry an init container makes formats the directory for real.
+    check!(crate::run_from_args(argv(&["--ignore-formatted"])).await == EXIT_OK);
+    check!(log_dir.join(super::META_PROPERTIES).is_file());
+    check!(log_dir.join("bootstrap.json").is_file());
+    check!(log_dir.join("bootstrap.records.bin").is_file());
+    check!(checkpoint_len(&log_dir) > 0, "the voter set must be seeded");
+}

@@ -293,6 +293,7 @@ impl ObjectStore for VersionedStore {
             ))),
             meta,
             attributes: object_store::Attributes::default(),
+            extensions: object_store::Extensions::default(),
         })
     }
 
