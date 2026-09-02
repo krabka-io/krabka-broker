@@ -63,7 +63,9 @@ mod tests {
 
     use assert2::{assert, check};
 
-    use super::*;
+    use super::{
+        MetadataProvider, ReconcileInput, ShareGroupState, ShareMemberState, Uuid, reconcile,
+    };
 
     #[derive(Debug)]
     struct Metadata {

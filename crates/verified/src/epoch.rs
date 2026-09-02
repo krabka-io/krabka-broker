@@ -1,7 +1,7 @@
 //! Exact, overflow-safe advancement for signed metadata epochs.
 
 #[cfg(creusot)]
-use creusot_std::prelude::*;
+use creusot_std::prelude::ensures;
 
 /// Return the exact successor of `current` when it fits below `maximum`.
 ///
@@ -27,7 +27,7 @@ pub const fn exact_epoch_successor(current: i64, maximum: i64) -> Option<i64> {
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::exact_epoch_successor;
 
     #[test]
     fn returns_the_exact_successor() {

@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -91,7 +93,9 @@ pub fn producer_id_block_allocation(
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::{
+        ProducerIdBlockAllocationDecision, ProducerIdBlockPlan, producer_id_block_allocation,
+    };
 
     #[test]
     fn allocation_fences_broker_and_builds_only_exact_positive_blocks() {

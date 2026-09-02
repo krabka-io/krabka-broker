@@ -147,8 +147,11 @@ fn cancel_path(pr: &PartitionRecord, approved: bool) -> Result<Option<PartitionR
         INVALID_REQUEST,
         "partition metadata epoch is exhausted".into(),
     ))?;
-    if !krabka_verified::reassignment_plan_admission(true, false, false, approved, true, true, true)
-    {
+    if !krabka_verified::reassignment_plan_admission(
+        (true, approved, true),
+        (false, false),
+        (true, true),
+    ) {
         return Err((
             INVALID_REQUEST,
             "reassignment cancel admission failed".into(),
@@ -224,7 +227,11 @@ fn start_path(pr: &PartitionRecord, target: &[i32]) -> Result<Option<PartitionRe
         INVALID_REQUEST,
         "partition metadata epoch is exhausted".into(),
     ))?;
-    if !krabka_verified::reassignment_plan_admission(false, true, true, false, false, true, true) {
+    if !krabka_verified::reassignment_plan_admission(
+        (false, false, false),
+        (true, true),
+        (true, true),
+    ) {
         return Err((
             INVALID_REQUEST,
             "reassignment start admission failed".into(),

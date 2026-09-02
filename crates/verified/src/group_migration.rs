@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]

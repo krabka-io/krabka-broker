@@ -42,14 +42,13 @@ fn exact_wal_batch_suffix(
     } else {
         exact_wal_batch_suffix(bases@, lasts@, 0, start@, target@)
     })))]
-#[allow(clippy::len_zero, reason = "Creusot models slice length, not is_empty")]
 #[must_use]
 pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i64) -> bool {
     if bases.len() != lasts.len() {
         return false;
     }
     if start == target {
-        return bases.len() == 0;
+        return matches!(bases.len(), 0);
     }
 
     let mut expected = start;

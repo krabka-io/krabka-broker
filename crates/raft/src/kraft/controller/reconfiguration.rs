@@ -205,18 +205,14 @@ impl Engine {
         };
 
         let decision = voter_reconfiguration_decision(
-            is_leader,
-            single_flight_clear,
-            epoch_committed,
-            kind,
-            current.len(),
-            current_version,
-            requested_version,
-            target_present,
-            directory_matches,
-            target_version_compatible,
-            target_caught_up,
-            all_voters_support_v1,
+            (is_leader, single_flight_clear, epoch_committed),
+            (current.len(), current_version, all_voters_support_v1),
+            (kind, requested_version, target_present),
+            (
+                directory_matches,
+                target_version_compatible,
+                target_caught_up,
+            ),
         );
         let plan = match decision {
             VoterReconfigurationDecision::Admit(plan) => plan,

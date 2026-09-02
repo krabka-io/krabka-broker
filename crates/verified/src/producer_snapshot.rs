@@ -1,6 +1,8 @@
 //! Producer-snapshot selection, validation, replay, and invalidation decisions.
 
-use creusot_std::prelude::*;
+use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{Int, invariant};
 
 /// Return the index of the greatest nonnegative snapshot offset at or below
 /// the captured log end. Input order is irrelevant.
@@ -49,31 +51,29 @@ pub fn producer_snapshot_latest_index(offsets: &[i64], log_end: i64) -> Option<u
 /// Validate one decoded producer entry against its snapshot's exclusive
 /// offset boundary.
 #[ensures(result == (snapshot_offset@ >= 0
-    && producer_id@ >= 0
-    && producer_epoch@ >= 0
-    && coordinator_epoch@ >= -1
-    && ((last_offset@ == -1 && last_sequence@ == -1 && offset_delta@ == 0)
-        || (last_offset@ >= 0
-            && last_sequence@ >= 0
-            && offset_delta@ >= 0
-            && last_offset@ >= offset_delta@
-            && last_offset@ < snapshot_offset@))
-    && (transaction_first_offset@ == -1
-        || (transaction_first_offset@ >= 0
-            && transaction_first_offset@ < snapshot_offset@
-            && transaction_first_offset@ <= last_offset@))))]
+    && identity.0@ >= 0
+    && identity.1@ >= 0
+    && transaction.0@ >= -1
+    && ((last_record.1@ == -1 && last_record.0@ == -1 && last_record.2@ == 0)
+        || (last_record.1@ >= 0
+            && last_record.0@ >= 0
+            && last_record.2@ >= 0
+            && last_record.1@ >= last_record.2@
+            && last_record.1@ < snapshot_offset@))
+    && (transaction.1@ == -1
+        || (transaction.1@ >= 0
+            && transaction.1@ < snapshot_offset@
+            && transaction.1@ <= last_record.1@))))]
 #[must_use]
-#[allow(clippy::too_many_arguments)]
 pub fn producer_snapshot_entry_valid(
     snapshot_offset: i64,
-    producer_id: i64,
-    producer_epoch: i16,
-    last_sequence: i32,
-    last_offset: i64,
-    offset_delta: i32,
-    coordinator_epoch: i32,
-    transaction_first_offset: i64,
+    identity: (i64, i16),
+    last_record: (i32, i64, i32),
+    transaction: (i32, i64),
 ) -> bool {
+    let (producer_id, producer_epoch) = identity;
+    let (last_sequence, last_offset, offset_delta) = last_record;
+    let (coordinator_epoch, transaction_first_offset) = transaction;
     snapshot_offset >= 0
         && producer_id >= 0
         && producer_epoch >= 0
@@ -134,7 +134,10 @@ pub const fn producer_snapshot_retained(snapshot_offset: i64, cut: i64) -> bool 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        producer_snapshot_entry_valid, producer_snapshot_latest_index,
+        producer_snapshot_replay_start, producer_snapshot_retained,
+    };
 
     #[test]
     fn latest_snapshot_ignores_order_future_and_negative_offsets() {
@@ -147,22 +150,48 @@ mod tests {
 
     #[test]
     fn entry_validation_is_exact_and_snapshot_bounded() {
-        assert2::check!(producer_snapshot_entry_valid(10, 0, 0, -1, -1, 0, -1, -1));
-        assert2::check!(producer_snapshot_entry_valid(10, 7, 2, 4, 9, 3, 0, 5));
-        assert2::check!(!producer_snapshot_entry_valid(10, 7, 2, 4, 10, 3, 0, 5));
-        assert2::check!(!producer_snapshot_entry_valid(10, 7, 2, 4, 9, 3, 0, 10));
-        assert2::check!(!producer_snapshot_entry_valid(10, 7, 2, -1, -1, 1, -1, -1));
-        assert2::check!(!producer_snapshot_entry_valid(10, 7, 2, 0, 0, 1, -1, -1));
-        assert2::check!(!producer_snapshot_entry_valid(10, 7, 2, 4, 9, 3, -2, -1));
+        assert2::check!(producer_snapshot_entry_valid(
+            10,
+            (0, 0),
+            (-1, -1, 0),
+            (-1, -1)
+        ));
+        assert2::check!(producer_snapshot_entry_valid(10, (7, 2), (4, 9, 3), (0, 5)));
+        assert2::check!(!producer_snapshot_entry_valid(
+            10,
+            (7, 2),
+            (4, 10, 3),
+            (0, 5)
+        ));
+        assert2::check!(!producer_snapshot_entry_valid(
+            10,
+            (7, 2),
+            (4, 9, 3),
+            (0, 10)
+        ));
+        assert2::check!(!producer_snapshot_entry_valid(
+            10,
+            (7, 2),
+            (-1, -1, 1),
+            (-1, -1)
+        ));
+        assert2::check!(!producer_snapshot_entry_valid(
+            10,
+            (7, 2),
+            (0, 0, 1),
+            (-1, -1)
+        ));
+        assert2::check!(!producer_snapshot_entry_valid(
+            10,
+            (7, 2),
+            (4, 9, 3),
+            (-2, -1)
+        ));
         assert2::check!(producer_snapshot_entry_valid(
             i64::MAX,
-            i64::MAX,
-            i16::MAX,
-            i32::MAX,
-            i64::MAX - 1,
-            i32::MAX,
-            i32::MAX,
-            i64::MAX - 2,
+            (i64::MAX, i16::MAX),
+            (i32::MAX, i64::MAX - 1, i32::MAX),
+            (i32::MAX, i64::MAX - 2),
         ));
     }
 

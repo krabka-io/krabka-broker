@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 /// Pure decision for one snapshot response chunk.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -64,10 +66,6 @@ pub fn snapshot_prune_admission(snapshot_end: i64, committed_end: i64) -> bool {
 }
 
 /// Admit exactly the next bounded chunk for one fixed snapshot identity and size.
-#[allow(
-    clippy::comparison_chain,
-    reason = "the explicit branches mirror the proved overshoot, exact, and incomplete cases"
-)]
 #[ensures(match result {
     SnapshotChunkDecision::Restart => !identity_matches
         || received@ < 0
@@ -135,12 +133,10 @@ pub fn snapshot_chunk_admission(
     let Some(next_position) = received.checked_add(chunk_len) else {
         return SnapshotChunkDecision::Restart;
     };
-    if next_position > declared_size {
-        SnapshotChunkDecision::Restart
-    } else if next_position == declared_size {
-        SnapshotChunkDecision::Complete
-    } else {
-        SnapshotChunkDecision::Continue { next_position }
+    match next_position.cmp(&declared_size) {
+        std::cmp::Ordering::Greater => SnapshotChunkDecision::Restart,
+        std::cmp::Ordering::Equal => SnapshotChunkDecision::Complete,
+        std::cmp::Ordering::Less => SnapshotChunkDecision::Continue { next_position },
     }
 }
 
@@ -148,7 +144,10 @@ pub fn snapshot_chunk_admission(
 mod tests {
     use assert2::check;
 
-    use super::*;
+    use super::{
+        SnapshotChunkDecision, SnapshotInstallDecision, snapshot_chunk_admission,
+        snapshot_install_decision, snapshot_prune_admission,
+    };
 
     #[test]
     fn install_admission_rejects_malformed_and_separates_stale_from_future() {

@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{DeepModel, Int, invariant};
 
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -144,7 +146,6 @@ pub fn local_recovery_batch_step(
         || last_offset@ == i64::MAX@
         || last_offset@ + 1 - segment_base@ > u32::MAX@,
 })]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn local_recovery_index_frontier(segment_base: i64, last_offset: i64) -> Option<u32> {
     if segment_base < 0 || last_offset < segment_base - 1 {
@@ -155,13 +156,21 @@ pub fn local_recovery_index_frontier(segment_base: i64, last_offset: i64) -> Opt
     if relative > i64::from(u32::MAX) {
         None
     } else {
-        Some(relative as u32)
+        #[cfg(creusot)]
+        {
+            Some(relative as u32)
+        }
+        #[cfg(not(creusot))]
+        u32::try_from(relative).ok()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        LocalRecoverySwapAction, local_recovery_batch_step, local_recovery_index_frontier,
+        local_recovery_sealed_last, local_recovery_segment_chain, local_recovery_swap_action,
+    };
 
     #[test]
     fn segment_chain_and_sealed_boundary_are_exact() {

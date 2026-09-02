@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 /// Record plan selected after all feature-finalization facts are established.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -21,53 +23,45 @@ pub enum FeatureUpdateDecision {
 /// The distinct accepted result forces the host to emit every cleanup record
 /// before the feature-level record that makes the older format authoritative.
 #[ensures((result == FeatureUpdateDecision::Reject) == (
-    !update_type_valid
-        || !target_supported
-        || !direction_valid
-        || !all_registered_nodes_support
-        || !state_representable
-        || !dependencies_met
-        || !delete_semantics_valid
-        || (cleanup_required && !unsafe_downgrade)
+    !request.0
+        || !request.1
+        || !request.2
+        || !compatibility.0
+        || !compatibility.1
+        || !compatibility.2
+        || !transition.0
+        || (transition.1 && !transition.2)
 ))]
 #[ensures((result == FeatureUpdateDecision::EmitFeature) == (
-    update_type_valid
-        && target_supported
-        && direction_valid
-        && all_registered_nodes_support
-        && state_representable
-        && dependencies_met
-        && delete_semantics_valid
-        && !cleanup_required
+    request.0
+        && request.1
+        && request.2
+        && compatibility.0
+        && compatibility.1
+        && compatibility.2
+        && transition.0
+        && !transition.1
 ))]
 #[ensures((result == FeatureUpdateDecision::EmitCleanupThenFeature) == (
-    update_type_valid
-        && target_supported
-        && direction_valid
-        && all_registered_nodes_support
-        && state_representable
-        && dependencies_met
-        && delete_semantics_valid
-        && cleanup_required
-        && unsafe_downgrade
+    request.0
+        && request.1
+        && request.2
+        && compatibility.0
+        && compatibility.1
+        && compatibility.2
+        && transition.0
+        && transition.1
+        && transition.2
 ))]
-#[allow(
-    clippy::too_many_arguments,
-    clippy::fn_params_excessive_bools,
-    reason = "each boolean is one independently established finalization obligation"
-)]
 #[must_use]
 pub fn feature_update_decision(
-    update_type_valid: bool,
-    target_supported: bool,
-    direction_valid: bool,
-    all_registered_nodes_support: bool,
-    state_representable: bool,
-    dependencies_met: bool,
-    delete_semantics_valid: bool,
-    cleanup_required: bool,
-    unsafe_downgrade: bool,
+    request: (bool, bool, bool),
+    compatibility: (bool, bool, bool),
+    transition: (bool, bool, bool),
 ) -> FeatureUpdateDecision {
+    let (update_type_valid, target_supported, direction_valid) = request;
+    let (all_registered_nodes_support, state_representable, dependencies_met) = compatibility;
+    let (delete_semantics_valid, cleanup_required, unsafe_downgrade) = transition;
     if !update_type_valid
         || !target_supported
         || !direction_valid
@@ -89,33 +83,61 @@ pub fn feature_update_decision(
 mod tests {
     use assert2::check;
 
-    use super::*;
+    use super::{FeatureUpdateDecision, feature_update_decision};
 
     #[test]
     fn finalization_fails_closed_and_requires_unsafe_cleanup() {
         use FeatureUpdateDecision::{EmitCleanupThenFeature, EmitFeature, Reject};
 
         check!(
-            feature_update_decision(true, true, true, true, true, true, true, false, false)
+            feature_update_decision((true, true, true), (true, true, true), (true, false, false))
                 == EmitFeature
         );
         check!(
-            feature_update_decision(true, true, true, true, true, true, true, true, true)
+            feature_update_decision((true, true, true), (true, true, true), (true, true, true))
                 == EmitCleanupThenFeature
         );
         check!(
-            feature_update_decision(true, true, true, true, true, true, true, true, false)
+            feature_update_decision((true, true, true), (true, true, true), (true, true, false))
                 == Reject
         );
 
         for rejected in [
-            feature_update_decision(false, true, true, true, true, true, true, false, false),
-            feature_update_decision(true, false, true, true, true, true, true, false, false),
-            feature_update_decision(true, true, false, true, true, true, true, false, false),
-            feature_update_decision(true, true, true, false, true, true, true, false, false),
-            feature_update_decision(true, true, true, true, false, true, true, false, false),
-            feature_update_decision(true, true, true, true, true, false, true, false, false),
-            feature_update_decision(true, true, true, true, true, true, false, false, false),
+            feature_update_decision(
+                (false, true, true),
+                (true, true, true),
+                (true, false, false),
+            ),
+            feature_update_decision(
+                (true, false, true),
+                (true, true, true),
+                (true, false, false),
+            ),
+            feature_update_decision(
+                (true, true, false),
+                (true, true, true),
+                (true, false, false),
+            ),
+            feature_update_decision(
+                (true, true, true),
+                (false, true, true),
+                (true, false, false),
+            ),
+            feature_update_decision(
+                (true, true, true),
+                (true, false, true),
+                (true, false, false),
+            ),
+            feature_update_decision(
+                (true, true, true),
+                (true, true, false),
+                (true, false, false),
+            ),
+            feature_update_decision(
+                (true, true, true),
+                (true, true, true),
+                (false, false, false),
+            ),
         ] {
             check!(rejected == Reject);
         }

@@ -38,7 +38,7 @@ pub(crate) fn next_i64(current: i64) -> Option<i64> {
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::{LeaderEpoch, next_i32, next_i64, next_leader, next_partition_change};
 
     #[test]
     fn int32_adapter_preserves_the_exact_boundary() {

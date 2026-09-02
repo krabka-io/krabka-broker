@@ -23,34 +23,29 @@ pub enum RestoreFilterDecision {
 /// predicate matches. Offset bounds are inclusive; timestamp bounds are
 /// exclusive.
 #[ensures(result == (
-    (!offset_bound_applies || offset@ <= offset_bound@)
-        && (!timestamp_bound_applies || timestamp@ < timestamp_bound@)
-        && !producer_excluded
-        && !offset_excluded
-        && !key_excluded
-        && !header_excluded
+    match offset_bound { Some(bound) => offset@ <= bound@, None => true }
+        && match timestamp_bound { Some(bound) => timestamp@ < bound@, None => true }
+        && !exclusions.0
+        && !exclusions.1
+        && !exclusions.2
+        && !exclusions.3
 ))]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    clippy::too_many_arguments,
-    reason = "each boolean is one independently computed restore predicate"
-)]
 #[must_use]
 pub fn restore_record_selected(
     offset: i64,
-    offset_bound_applies: bool,
-    offset_bound: i64,
+    offset_bound: Option<i64>,
     timestamp: i64,
-    timestamp_bound_applies: bool,
-    timestamp_bound: i64,
-    producer_excluded: bool,
-    offset_excluded: bool,
-    key_excluded: bool,
-    header_excluded: bool,
+    timestamp_bound: Option<i64>,
+    exclusions: (bool, bool, bool, bool),
 ) -> bool {
-    (!offset_bound_applies || offset <= offset_bound)
-        && (!timestamp_bound_applies || timestamp < timestamp_bound)
-        && !producer_excluded
+    let (producer_excluded, offset_excluded, key_excluded, header_excluded) = exclusions;
+    (match offset_bound {
+        Some(bound) => offset <= bound,
+        None => true,
+    }) && (match timestamp_bound {
+        Some(bound) => timestamp < bound,
+        None => true,
+    }) && !producer_excluded
         && !offset_excluded
         && !key_excluded
         && !header_excluded
@@ -213,67 +208,58 @@ pub fn restore_record_coordinates(
 /// retained record count is nonnegative and the archived offset span remains
 /// representable.
 #[ensures(match result {
-    Some(frontier) => records_count@ >= 0
-        && base_offset@ >= 0
-        && last_offset_delta@ >= 0
-        && (!control_batch || (last_offset_delta@ == 0 && records_count@ <= 1))
-        && frontier@ == base_offset@ + last_offset_delta@ + 1
-        && frontier@ > base_offset@
+    Some(frontier) => layout.2@ >= 0
+        && layout.0@ >= 0
+        && layout.1@ >= 0
+        && (!producer.0 || (layout.1@ == 0 && layout.2@ <= 1))
+        && frontier@ == layout.0@ + layout.1@ + 1
+        && frontier@ > layout.0@
         && frontier@ <= i64::MAX@
-        && (if control_batch {
-            (transactional
-                    && producer_id@ >= 0
-                    && producer_epoch@ >= 0
-                    && base_sequence@ == -1)
-                || (!transactional
-                    && producer_id@ == -1
-                    && producer_epoch@ == -1
-                    && base_sequence@ == -1)
+        && (if producer.0 {
+            (producer.1
+                    && producer.2@ >= 0
+                    && producer.3@ >= 0
+                    && producer.4@ == -1)
+                || (!producer.1
+                    && producer.2@ == -1
+                    && producer.3@ == -1
+                    && producer.4@ == -1)
         } else {
-            (!transactional
-                    && producer_id@ == -1
-                    && producer_epoch@ == -1
-                    && base_sequence@ == -1)
-                || (producer_id@ >= 0 && producer_epoch@ >= 0 && base_sequence@ >= 0)
+            (!producer.1
+                    && producer.2@ == -1
+                    && producer.3@ == -1
+                    && producer.4@ == -1)
+                || (producer.2@ >= 0 && producer.3@ >= 0 && producer.4@ >= 0)
         }),
-    None => records_count@ < 0
-        || base_offset@ < 0
-        || last_offset_delta@ < 0
-        || (control_batch && (last_offset_delta@ != 0 || records_count@ > 1))
-        || base_offset@ + last_offset_delta@ + 1 > i64::MAX@
-        || !(if control_batch {
-            (transactional
-                    && producer_id@ >= 0
-                    && producer_epoch@ >= 0
-                    && base_sequence@ == -1)
-                || (!transactional
-                    && producer_id@ == -1
-                    && producer_epoch@ == -1
-                    && base_sequence@ == -1)
+    None => layout.2@ < 0
+        || layout.0@ < 0
+        || layout.1@ < 0
+        || (producer.0 && (layout.1@ != 0 || layout.2@ > 1))
+        || layout.0@ + layout.1@ + 1 > i64::MAX@
+        || !(if producer.0 {
+            (producer.1
+                    && producer.2@ >= 0
+                    && producer.3@ >= 0
+                    && producer.4@ == -1)
+                || (!producer.1
+                    && producer.2@ == -1
+                    && producer.3@ == -1
+                    && producer.4@ == -1)
         } else {
-            (!transactional
-                    && producer_id@ == -1
-                    && producer_epoch@ == -1
-                    && base_sequence@ == -1)
-                || (producer_id@ >= 0 && producer_epoch@ >= 0 && base_sequence@ >= 0)
+            (!producer.1
+                    && producer.2@ == -1
+                    && producer.3@ == -1
+                    && producer.4@ == -1)
+                || (producer.2@ >= 0 && producer.3@ >= 0 && producer.4@ >= 0)
         }),
 })]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    clippy::too_many_arguments,
-    reason = "the proof classifies the independent CRC-covered rewrite header fields"
-)]
 #[must_use]
 pub fn restore_rewritten_batch_header(
-    base_offset: i64,
-    last_offset_delta: i32,
-    records_count: i32,
-    control_batch: bool,
-    transactional: bool,
-    producer_id: i64,
-    producer_epoch: i16,
-    base_sequence: i32,
+    layout: (i64, i32, i32),
+    producer: (bool, bool, i64, i16, i32),
 ) -> Option<i64> {
+    let (base_offset, last_offset_delta, records_count) = layout;
+    let (control_batch, transactional, producer_id, producer_epoch, base_sequence) = producer;
     let producer_valid = if control_batch {
         (transactional && producer_id >= 0 && producer_epoch >= 0 && base_sequence == -1)
             || (!transactional && producer_id == -1 && producer_epoch == -1 && base_sequence == -1)
@@ -327,7 +313,6 @@ pub fn restore_rewritten_batch_header(
         || base_timestamp@ + timestamp_delta@ > i64::MAX@
         || base_timestamp@ + timestamp_delta@ > max_timestamp@,
 })]
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn restore_rewritten_record(
     previous_offset_delta: Option<i32>,
@@ -410,17 +395,19 @@ mod tests {
 
     #[test]
     fn rewritten_headers_are_checked_and_have_legal_producer_semantics() {
-        check!(restore_rewritten_batch_header(10, 2, 2, false, false, -1, -1, -1) == Some(13));
-        check!(restore_rewritten_batch_header(10, 2, 0, false, true, 7, 2, 4) == Some(13));
-        check!(restore_rewritten_batch_header(10, 0, 1, true, true, 7, 2, -1) == Some(11));
-        check!(restore_rewritten_batch_header(10, 0, 1, true, false, -1, -1, -1) == Some(11));
-        check!(restore_rewritten_batch_header(10, 0, 1, true, true, 7, 2, 4) == None);
-        check!(restore_rewritten_batch_header(10, 0, 1, true, true, -1, -1, -1) == None);
-        check!(restore_rewritten_batch_header(10, 2, -1, false, false, -1, -1, -1) == None);
-        check!(restore_rewritten_batch_header(10, 2, 2, false, true, -1, -1, -1) == None);
-        check!(restore_rewritten_batch_header(10, 2, 2, false, false, -1, 0, -1) == None);
-        check!(restore_rewritten_batch_header(10, 2, 2, false, false, 7, -1, 0) == None);
-        check!(restore_rewritten_batch_header(i64::MAX, 0, 0, false, false, -1, -1, -1) == None);
+        check!(restore_rewritten_batch_header((10, 2, 2), (false, false, -1, -1, -1)) == Some(13));
+        check!(restore_rewritten_batch_header((10, 2, 0), (false, true, 7, 2, 4)) == Some(13));
+        check!(restore_rewritten_batch_header((10, 0, 1), (true, true, 7, 2, -1)) == Some(11));
+        check!(restore_rewritten_batch_header((10, 0, 1), (true, false, -1, -1, -1)) == Some(11));
+        check!(restore_rewritten_batch_header((10, 0, 1), (true, true, 7, 2, 4)) == None);
+        check!(restore_rewritten_batch_header((10, 0, 1), (true, true, -1, -1, -1)) == None);
+        check!(restore_rewritten_batch_header((10, 2, -1), (false, false, -1, -1, -1)) == None);
+        check!(restore_rewritten_batch_header((10, 2, 2), (false, true, -1, -1, -1)) == None);
+        check!(restore_rewritten_batch_header((10, 2, 2), (false, false, -1, 0, -1)) == None);
+        check!(restore_rewritten_batch_header((10, 2, 2), (false, false, 7, -1, 0)) == None);
+        check!(
+            restore_rewritten_batch_header((i64::MAX, 0, 0), (false, false, -1, -1, -1)) == None
+        );
     }
 
     #[test]
@@ -438,26 +425,29 @@ mod tests {
     fn record_selection_uses_inclusive_offset_and_exclusive_time_bounds() {
         let selected = |offset, timestamp| {
             restore_record_selected(
-                offset, true, 10, timestamp, true, 100, false, false, false, false,
+                offset,
+                Some(10),
+                timestamp,
+                Some(100),
+                (false, false, false, false),
             )
         };
         check!(selected(10, 99));
         check!(!selected(11, 99));
         check!(!selected(10, 100));
         check!(!restore_record_selected(
-            10, true, 10, 99, true, 100, true, false, false, false
+            10,
+            Some(10),
+            99,
+            Some(100),
+            (true, false, false, false),
         ));
         check!(restore_record_selected(
             i64::MIN,
-            false,
-            i64::MIN,
+            None,
             i64::MAX,
-            false,
-            i64::MAX,
-            false,
-            false,
-            false,
-            false,
+            None,
+            (false, false, false, false),
         ));
     }
 

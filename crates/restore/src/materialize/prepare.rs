@@ -169,14 +169,14 @@ fn prepare_owned_batch(batch: RecordBatch) -> Result<PreparedBatch, RestoreError
     let records_count = i32::try_from(batch.records.len())
         .map_err(|_| invalid_rewrite("retained record count exceeds i32"))?;
     krabka_verified::restore_rewritten_batch_header(
-        batch.base_offset,
-        batch.last_offset_delta,
-        records_count,
-        batch.attributes.is_control_batch(),
-        batch.attributes.is_transactional(),
-        batch.producer_id,
-        batch.producer_epoch,
-        batch.base_sequence,
+        (batch.base_offset, batch.last_offset_delta, records_count),
+        (
+            batch.attributes.is_control_batch(),
+            batch.attributes.is_transactional(),
+            batch.producer_id,
+            batch.producer_epoch,
+            batch.base_sequence,
+        ),
     )
     .ok_or_else(|| invalid_rewrite("header or producer fields are inconsistent"))?;
 
@@ -262,11 +262,14 @@ fn bare_header_batch(header: &RecordBatchHeader) -> RecordBatch {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_ids::Offset;
+    use krabka_ids::{Offset, ProducerId};
     use krabka_log::{Log, LogConfig};
     use krabka_protocol::records::{Attributes, Record};
 
-    use super::*;
+    use super::{
+        BatchTally, Bytes, BytesMut, PartitionRef, Predicates, PreparedBatch, RecordBatch,
+        RecordBatchBorrowed, prepare_batch, prepare_owned_batch, validate_one_v2_batch,
+    };
     use crate::materialize::test_support::args_from;
 
     fn rewrite(records: Vec<Record>) -> RecordBatch {

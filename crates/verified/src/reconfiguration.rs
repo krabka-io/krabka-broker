@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -48,56 +50,47 @@ pub enum VoterReconfigurationDecision {
         plan.next_voter_count@ > 0 && plan.next_kraft_version@ <= 1,
     _ => true,
 })]
-#[ensures(match (kind, result) {
+#[ensures(match (request.0, result) {
     (VoterChangeKind::Add, VoterReconfigurationDecision::Admit(plan)) =>
-        !target_present && target_version_compatible && target_caught_up
-            && current_kraft_version@ == 1
-            && plan.next_voter_count@ == current_voter_count@ + 1
-            && plan.next_kraft_version@ == current_kraft_version@
+        !request.2 && target.1 && target.2
+            && current.1@ == 1
+            && plan.next_voter_count@ == current.0@ + 1
+            && plan.next_kraft_version@ == current.1@
             && plan.write_voters && !plan.write_kraft_version && !plan.preflight_only,
     (VoterChangeKind::Remove, VoterReconfigurationDecision::Admit(plan)) =>
-        target_present && directory_matches && current_voter_count@ > 1
-            && current_kraft_version@ == 1
-            && plan.next_voter_count@ + 1 == current_voter_count@
-            && plan.next_kraft_version@ == current_kraft_version@
+        request.2 && target.0 && current.0@ > 1
+            && current.1@ == 1
+            && plan.next_voter_count@ + 1 == current.0@
+            && plan.next_kraft_version@ == current.1@
             && plan.write_voters && !plan.write_kraft_version && !plan.preflight_only,
     (VoterChangeKind::Update, VoterReconfigurationDecision::Admit(plan)) =>
-        target_present && directory_matches && target_version_compatible
-            && plan.next_voter_count@ == current_voter_count@
-            && plan.next_kraft_version@ == current_kraft_version@
-            && (if current_kraft_version@ == 0 {
+        request.2 && target.0 && target.1
+            && plan.next_voter_count@ == current.0@
+            && plan.next_kraft_version@ == current.1@
+            && (if current.1@ == 0 {
                 !plan.write_voters && !plan.write_kraft_version && plan.preflight_only
             } else {
                 plan.write_voters && !plan.write_kraft_version && !plan.preflight_only
             }),
     (VoterChangeKind::FinalizeKraftVersion, VoterReconfigurationDecision::Admit(plan)) =>
-        current_kraft_version@ == 0 && requested_kraft_version@ == 1
-            && all_voters_support_v1
-            && plan.next_voter_count@ == current_voter_count@
+        current.1@ == 0 && request.1@ == 1
+            && current.2
+            && plan.next_voter_count@ == current.0@
             && plan.next_kraft_version@ == 1
             && plan.write_voters && plan.write_kraft_version && !plan.preflight_only,
     _ => true,
 })]
 #[must_use]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    clippy::too_many_arguments,
-    reason = "each argument is one proved admission fact"
-)]
 pub fn voter_reconfiguration_decision(
-    is_leader: bool,
-    single_flight_clear: bool,
-    epoch_committed: bool,
-    kind: VoterChangeKind,
-    current_voter_count: usize,
-    current_kraft_version: u16,
-    requested_kraft_version: u16,
-    target_present: bool,
-    directory_matches: bool,
-    target_version_compatible: bool,
-    target_caught_up: bool,
-    all_voters_support_v1: bool,
+    controller: (bool, bool, bool),
+    current: (usize, u16, bool),
+    request: (VoterChangeKind, u16, bool),
+    target: (bool, bool, bool),
 ) -> VoterReconfigurationDecision {
+    let (is_leader, single_flight_clear, epoch_committed) = controller;
+    let (current_voter_count, current_kraft_version, all_voters_support_v1) = current;
+    let (kind, requested_kraft_version, target_present) = request;
+    let (directory_matches, target_version_compatible, target_caught_up) = target;
     if !is_leader {
         return VoterReconfigurationDecision::NotLeader;
     }
@@ -201,222 +194,128 @@ pub fn voter_reconfiguration_decision(
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::{
+        VoterChangeKind, VoterReconfigurationDecision, VoterReconfigurationPlan,
+        voter_reconfiguration_decision,
+    };
 
     fn decide(kind: VoterChangeKind) -> VoterReconfigurationDecision {
         voter_reconfiguration_decision(
-            true, true, true, kind, 3, 1, 1, false, true, true, true, true,
+            (true, true, true),
+            (3, 1, true),
+            (kind, 1, false),
+            (true, true, true),
         )
     }
 
     #[test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one table enumerates every distinct rejection outcome"
-    )]
     fn every_rejection_reason_is_ordered_and_specific() {
         let cases = [
             (
                 voter_reconfiguration_decision(
-                    false,
-                    true,
-                    true,
-                    VoterChangeKind::Add,
-                    3,
-                    1,
-                    1,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (false, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Add, 1, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::NotLeader,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    false,
-                    true,
-                    VoterChangeKind::Add,
-                    3,
-                    1,
-                    1,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, false, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Add, 1, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::InProgress,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    false,
-                    VoterChangeKind::Add,
-                    3,
-                    1,
-                    1,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, false),
+                    (3, 1, true),
+                    (VoterChangeKind::Add, 1, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::EpochUncommitted,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Add,
-                    0,
-                    1,
-                    1,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (0, 1, true),
+                    (VoterChangeKind::Add, 1, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::EmptyCurrentVoterSet,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Add,
-                    3,
-                    0,
-                    1,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 0, true),
+                    (VoterChangeKind::Add, 1, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::UnsupportedKraftVersion,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Add,
-                    3,
-                    1,
-                    1,
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Add, 1, true),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::DuplicateVoter,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Add,
-                    3,
-                    1,
-                    1,
-                    false,
-                    true,
-                    false,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Add, 1, false),
+                    (true, false, true),
                 ),
                 VoterReconfigurationDecision::IncompatibleVoter,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Add,
-                    3,
-                    1,
-                    1,
-                    false,
-                    true,
-                    true,
-                    false,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Add, 1, false),
+                    (true, true, false),
                 ),
                 VoterReconfigurationDecision::VoterNotCaughtUp,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Remove,
-                    3,
-                    1,
-                    1,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Remove, 1, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::VoterNotFound,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Remove,
-                    3,
-                    1,
-                    1,
-                    true,
-                    false,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Remove, 1, true),
+                    (false, true, true),
                 ),
                 VoterReconfigurationDecision::DirectoryMismatch,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Remove,
-                    1,
-                    1,
-                    1,
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (1, 1, true),
+                    (VoterChangeKind::Remove, 1, true),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::LastVoter,
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::FinalizeKraftVersion,
-                    3,
-                    1,
-                    0,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::FinalizeKraftVersion, 0, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::InvalidVersionTransition,
             ),
@@ -441,18 +340,10 @@ mod tests {
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Remove,
-                    3,
-                    1,
-                    1,
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Remove, 1, true),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::Admit(VoterReconfigurationPlan {
                     next_voter_count: 2,
@@ -464,18 +355,10 @@ mod tests {
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Update,
-                    3,
-                    1,
-                    1,
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 1, true),
+                    (VoterChangeKind::Update, 1, true),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::Admit(VoterReconfigurationPlan {
                     next_voter_count: 3,
@@ -487,18 +370,10 @@ mod tests {
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::Update,
-                    3,
-                    0,
-                    0,
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 0, true),
+                    (VoterChangeKind::Update, 0, true),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::Admit(VoterReconfigurationPlan {
                     next_voter_count: 3,
@@ -510,18 +385,10 @@ mod tests {
             ),
             (
                 voter_reconfiguration_decision(
-                    true,
-                    true,
-                    true,
-                    VoterChangeKind::FinalizeKraftVersion,
-                    3,
-                    0,
-                    1,
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,
+                    (true, true, true),
+                    (3, 0, true),
+                    (VoterChangeKind::FinalizeKraftVersion, 1, false),
+                    (true, true, true),
                 ),
                 VoterReconfigurationDecision::Admit(VoterReconfigurationPlan {
                     next_voter_count: 3,

@@ -117,15 +117,21 @@ fn apply_complete_abort(entry: &mut TxnEntry, new_pid: ProducerId, new_epoch: i1
 fn complete_abort_decision(entry: &TxnEntry, prepared: &TxnEntry) -> CompletionDecision {
     let (completion_pid, completion_epoch) = completion_producer_identity(prepared);
     krabka_verified::transaction_reaper_completion_decision(
-        entry.producer_id.get(),
-        entry.producer_epoch,
-        entry.state.to_kafka_status(),
-        prepared.producer_id.get(),
-        prepared.producer_epoch,
-        completion_pid.get(),
-        completion_epoch,
-        TxnState::PrepareAbort.to_kafka_status(),
-        TxnState::CompleteAbort.to_kafka_status(),
+        (
+            entry.producer_id.get(),
+            entry.producer_epoch,
+            entry.state.to_kafka_status(),
+        ),
+        (
+            prepared.producer_id.get(),
+            prepared.producer_epoch,
+            TxnState::PrepareAbort.to_kafka_status(),
+        ),
+        (
+            completion_pid.get(),
+            completion_epoch,
+            TxnState::CompleteAbort.to_kafka_status(),
+        ),
         entry == prepared,
     )
 }

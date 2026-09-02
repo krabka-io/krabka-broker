@@ -197,15 +197,13 @@ pub(super) fn validate_updates(
 
         let cleanup_required = !downgrade_records.is_empty();
         let decision = krabka_verified::feature_update_decision(
-            true,
-            true,
-            true,
-            true,
-            true,
-            true,
-            true,
-            cleanup_required,
-            update_type == UpdateType::UnsafeDowngrade,
+            (true, true, true),
+            (true, true, true),
+            (
+                true,
+                cleanup_required,
+                update_type == UpdateType::UnsafeDowngrade,
+            ),
         );
         let planned_cleanup = match decision {
             krabka_verified::FeatureUpdateDecision::Reject => {

@@ -20,54 +20,47 @@ pub enum FetchResponseMutation {
 /// Fence a Fetch response against the live role, leader, and epoch, then
 /// select exactly one mutation path.
 #[cfg_attr(creusot, ensures((result == FetchResponseMutation::Reject) ==
-    (role_leader != Some(from)
-        || current_leader != Some(from)
-        || response_leader != from
-        || response_epoch != current_epoch)))]
+    (current.0 != Some(response.0)
+        || current.1 != Some(response.0)
+        || response.1 != response.0
+        || response.2 != current.2)))]
 #[cfg_attr(creusot, ensures(match result {
-    FetchResponseMutation::Snapshot => role_leader == Some(from)
-        && current_leader == Some(from)
-        && response_leader == from
-        && response_epoch == current_epoch
-        && has_snapshot,
-    FetchResponseMutation::Truncate => role_leader == Some(from)
-        && current_leader == Some(from)
-        && response_leader == from
-        && response_epoch == current_epoch
-        && !has_snapshot
-        && has_divergence,
-    FetchResponseMutation::Append => role_leader == Some(from)
-        && current_leader == Some(from)
-        && response_leader == from
-        && response_epoch == current_epoch
-        && !has_snapshot
-        && !has_divergence
-        && has_records,
-    FetchResponseMutation::HighWatermark => role_leader == Some(from)
-        && current_leader == Some(from)
-        && response_leader == from
-        && response_epoch == current_epoch
-        && !has_snapshot
-        && !has_divergence
-        && !has_records,
+    FetchResponseMutation::Snapshot => current.0 == Some(response.0)
+        && current.1 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.2
+        && content.0,
+    FetchResponseMutation::Truncate => current.0 == Some(response.0)
+        && current.1 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.2
+        && !content.0
+        && content.1,
+    FetchResponseMutation::Append => current.0 == Some(response.0)
+        && current.1 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.2
+        && !content.0
+        && !content.1
+        && content.2,
+    FetchResponseMutation::HighWatermark => current.0 == Some(response.0)
+        && current.1 == Some(response.0)
+        && response.1 == response.0
+        && response.2 == current.2
+        && !content.0
+        && !content.1
+        && !content.2,
     FetchResponseMutation::Reject => true,
 }))]
 #[must_use]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the safety boundary takes the exact role, leader, epoch, and mutation fields"
-)]
 pub fn fetch_response_mutation(
-    role_leader: Option<u64>,
-    current_leader: Option<u64>,
-    current_epoch: u32,
-    from: u64,
-    response_leader: u64,
-    response_epoch: u32,
-    has_snapshot: bool,
-    has_divergence: bool,
-    has_records: bool,
+    current: (Option<u64>, Option<u64>, u32),
+    response: (u64, u64, u32),
+    content: (bool, bool, bool),
 ) -> FetchResponseMutation {
+    let (role_leader, current_leader, current_epoch) = current;
+    let (from, response_leader, response_epoch) = response;
+    let (has_snapshot, has_divergence, has_records) = content;
     if role_leader != Some(from)
         || current_leader != Some(from)
         || response_leader != from
@@ -231,15 +224,9 @@ mod tests {
 
         let decide = |role_leader, current_leader, current_epoch, from, leader, epoch, s, d, r| {
             fetch_response_mutation(
-                role_leader,
-                current_leader,
-                current_epoch,
-                from,
-                leader,
-                epoch,
-                s,
-                d,
-                r,
+                (role_leader, current_leader, current_epoch),
+                (from, leader, epoch),
+                (s, d, r),
             )
         };
         assert!(decide(Some(2), Some(2), 3, 2, 2, 3, true, true, true) == Snapshot);

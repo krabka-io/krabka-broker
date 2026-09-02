@@ -1,6 +1,8 @@
 //! Timestamp-scan selection and progress kernels.
 
-use creusot_std::prelude::*;
+use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{Int, invariant};
 
 /// Select the first timestamp at or after `target`.
 #[ensures(match result {
@@ -34,12 +36,8 @@ pub fn first_timestamp_index(timestamps: &[i64], target: i64) -> Option<usize> {
     None => timestamps@.len() == 0,
 })]
 #[must_use]
-#[allow(
-    clippy::len_zero,
-    reason = "the explicit length comparison is supported by Creusot v0.13"
-)]
 pub fn earliest_max_timestamp_index(timestamps: &[i64]) -> Option<usize> {
-    if timestamps.len() == 0 {
+    if matches!(timestamps.len(), 0) {
         return None;
     }
     let mut best = 0usize;
@@ -117,7 +115,10 @@ pub fn timestamp_scan_window(window: u32) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        earliest_max_timestamp_index, first_timestamp_index, timestamp_record_coordinates,
+        timestamp_scan_next, timestamp_scan_window,
+    };
 
     #[test]
     fn selection_progress_and_overflow_are_fail_closed() {

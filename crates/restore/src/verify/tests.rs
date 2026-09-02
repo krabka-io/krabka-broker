@@ -107,8 +107,9 @@ fn txn_index_bytes(entries: &[(i64, i64, i64)]) -> Bytes {
     buf.freeze()
 }
 
-#[allow(clippy::type_complexity)]
-fn snapshot_bytes(entries: &[(i64, i16, i32, i64, i32, i64, i32, i64)]) -> Bytes {
+type SnapshotEntry = (i64, i16, i32, i64, i32, i64, i32, i64);
+
+fn snapshot_bytes(entries: &[SnapshotEntry]) -> Bytes {
     let mut buf = BytesMut::new();
     buf.put_i16(SNAPSHOT_VERSION);
     buf.put_u32(0); // CRC placeholder, patched below.

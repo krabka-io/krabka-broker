@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{DeepModel, Int, invariant};
 
 /// Admission result for an administrative share-offset mutation.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -104,12 +106,8 @@ pub const fn share_offset_mutation_decision(
     None => offsets@.len() == 0,
 })]
 #[must_use]
-#[allow(
-    clippy::len_zero,
-    reason = "the explicit length comparison is supported by Creusot v0.13"
-)]
 pub fn share_prune_frontier(offsets: &[i64]) -> Option<i64> {
-    if offsets.len() == 0 {
+    if matches!(offsets.len(), 0) {
         return None;
     }
     let mut frontier = offsets[0];

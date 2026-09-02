@@ -215,13 +215,9 @@ fn read(
         let txn_offset = take_i64(&bytes, &mut cursor);
         if !krabka_verified::producer_snapshot_entry_valid(
             snapshot_offset.0,
-            producer_id.get(),
-            producer_epoch,
-            last_sequence,
-            last_offset.0,
-            offset_delta,
-            coordinator_epoch,
-            txn_offset,
+            (producer_id.get(), producer_epoch),
+            (last_sequence, last_offset.0, offset_delta),
+            (coordinator_epoch, txn_offset),
         ) {
             return Err(corrupt(path, "entry contains an invalid producer state"));
         }

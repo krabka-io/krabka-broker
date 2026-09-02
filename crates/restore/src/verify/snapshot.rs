@@ -112,13 +112,9 @@ pub(super) fn validate_producer_snapshot(
 
         if !krabka_verified::producer_snapshot_entry_valid(
             snapshot_offset,
-            producer_id,
-            producer_epoch,
-            last_sequence,
-            last_offset,
-            offset_delta,
-            coordinator_epoch,
-            transaction_first_offset,
+            (producer_id, producer_epoch),
+            (last_sequence, last_offset, offset_delta),
+            (coordinator_epoch, transaction_first_offset),
         ) {
             return Err(snapshot_entry_error(
                 key,

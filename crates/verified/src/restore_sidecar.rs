@@ -1,6 +1,8 @@
 //! Restore-side validation of archived sparse indexes and state sidecars.
 
-use creusot_std::prelude::*;
+use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{Int, invariant};
 
 /// Compute the largest relative offset an archived sidecar may reference.
 #[ensures(match result {
@@ -12,7 +14,6 @@ use creusot_std::prelude::*;
         || segment_end@ < segment_base@
         || segment_end@ - segment_base@ > u32::MAX@,
 })]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn restore_index_frontier(segment_base: i64, segment_end: i64) -> Option<u32> {
     if segment_base < 0 || segment_end < segment_base {
@@ -22,7 +23,12 @@ pub fn restore_index_frontier(segment_base: i64, segment_end: i64) -> Option<u32
     if relative > i64::from(u32::MAX) {
         None
     } else {
-        Some(relative as u32)
+        #[cfg(creusot)]
+        {
+            Some(relative as u32)
+        }
+        #[cfg(not(creusot))]
+        u32::try_from(relative).ok()
     }
 }
 
@@ -159,7 +165,10 @@ pub fn restore_producer_ids_strict(producer_ids: &[i64]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        restore_index_frontier, restore_leader_epoch_entry_valid, restore_offset_index_entry_valid,
+        restore_producer_ids_strict, restore_time_index_entry_valid, restore_txn_index_entry_valid,
+    };
 
     #[test]
     fn index_frontier_and_entries_cover_boundaries() {

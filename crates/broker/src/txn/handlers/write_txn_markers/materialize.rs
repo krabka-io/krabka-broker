@@ -78,14 +78,13 @@ pub(crate) async fn append_marker_and_materialize(
         .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?
         .transaction_marker_state(producer_id);
     let decision = krabka_verified::transaction_marker_materialization_decision(
-        producer_id.get(),
-        producer_epoch,
-        coordinator_epoch,
-        current_producer_epoch,
-        current_coordinator_epoch,
-        has_pending_transaction,
-        marker_type == MarkerType::Commit,
-        topic == OFFSETS_TOPIC,
+        (producer_id.get(), producer_epoch, coordinator_epoch),
+        (
+            current_producer_epoch,
+            current_coordinator_epoch,
+            has_pending_transaction,
+        ),
+        (marker_type == MarkerType::Commit, topic == OFFSETS_TOPIC),
     );
     match decision {
         Decision::RejectMalformed => {
@@ -525,9 +524,23 @@ mod tests {
             OFFSETS_TOPIC,
             marker,
         )
-            .await
-            .expect("append marker generation");
+        .await
+        .expect("append marker generation");
         let after_marker = part.log_end_offset();
+        let marker_count = || {
+            part.log
+                .lock()
+                .expect("offsets log")
+                .read(Offset(0), krabka_units::mebibytes(1))
+                .expect("read offsets log")
+                .batches
+                .into_iter()
+                .filter(|batch| {
+                    batch.producer_id == producer_id.get() && batch.attributes.is_control_batch()
+                })
+                .count()
+        };
+        let markers_before_retry = marker_count();
 
         let mut retained = CommittedOffsets::new();
         retained.insert(
@@ -538,7 +551,7 @@ mod tests {
                     offset: Offset(88),
                     leader_epoch: 2,
                     metadata: "retained".into(),
-                    commit_timestamp_ms: 9,
+                    commit_timestamp_ms: i64::MAX,
                     expire_timestamp_ms: None,
                 },
             )],
@@ -556,7 +569,7 @@ mod tests {
         )
         .await
         .expect("retry retained publication");
-        assert!(part.log_end_offset() == after_marker);
+        assert!(marker_count() == markers_before_retry);
         assert!(
             !part
                 .marker_materialization

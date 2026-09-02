@@ -1,6 +1,8 @@
 //! Admission decisions for signed WORM manifests and their object sets.
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 /// Why a manifest signature is not an accepted attestation.
 #[cfg_attr(creusot, derive(DeepModel))]
@@ -54,55 +56,77 @@ pub enum WormObjectSetDecision {
 /// Host observations about the objects belonging to one signed segment.
 #[cfg_attr(creusot, derive(DeepModel))]
 #[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-#[allow(clippy::struct_excessive_bools)] // Each field is an independently proved host fact.
+pub struct WormObjectIdentityFacts {
+    pub unique_keys: bool,
+    pub coordinates_match: bool,
+}
+
+#[cfg_attr(creusot, derive(DeepModel))]
+#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
+pub struct WormObjectAvailabilityFacts {
+    pub all_present: bool,
+    pub sizes_match: bool,
+}
+
+#[cfg_attr(creusot, derive(DeepModel))]
+#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
+pub struct WormDigestFacts {
+    pub require_digests: bool,
+    pub digests_match: bool,
+}
+
+#[cfg_attr(creusot, derive(DeepModel))]
+#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
 pub struct WormObjectSetFacts {
     pub object_count: u64,
     pub listed_count: u64,
-    pub unique_keys: bool,
-    pub coordinates_match: bool,
-    pub all_present: bool,
-    pub sizes_match: bool,
-    pub require_digests: bool,
-    pub digests_match: bool,
+    pub identity: WormObjectIdentityFacts,
+    pub availability: WormObjectAvailabilityFacts,
+    pub digests: WormDigestFacts,
 }
 
 /// Requires a nonempty, one-to-one object set with exact coordinates, sizes,
 /// and, when requested, digests.
 #[ensures(facts.object_count@ == 0 ==> result == WormObjectSetDecision::Empty)]
-#[ensures(facts.object_count@ > 0 && !facts.unique_keys
+#[ensures(facts.object_count@ > 0 && !facts.identity.unique_keys
     ==> result == WormObjectSetDecision::DuplicateKey)]
-#[ensures(facts.object_count@ > 0 && facts.unique_keys && !facts.coordinates_match
+#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys && !facts.identity.coordinates_match
     ==> result == WormObjectSetDecision::CoordinateMismatch)]
-#[ensures(facts.object_count@ > 0 && facts.unique_keys && facts.coordinates_match && !facts.all_present
+#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
+    && facts.identity.coordinates_match && !facts.availability.all_present
     ==> result == WormObjectSetDecision::MissingObject)]
-#[ensures(facts.object_count@ > 0 && facts.unique_keys && facts.coordinates_match && facts.all_present
+#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
+    && facts.identity.coordinates_match && facts.availability.all_present
     && facts.object_count@ != facts.listed_count@ ==> result == WormObjectSetDecision::CountMismatch)]
-#[ensures(facts.object_count@ > 0 && facts.unique_keys && facts.coordinates_match && facts.all_present
-    && facts.object_count@ == facts.listed_count@ && !facts.sizes_match
+#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
+    && facts.identity.coordinates_match && facts.availability.all_present
+    && facts.object_count@ == facts.listed_count@ && !facts.availability.sizes_match
     ==> result == WormObjectSetDecision::SizeMismatch)]
-#[ensures(facts.object_count@ > 0 && facts.unique_keys && facts.coordinates_match && facts.all_present
-    && facts.object_count@ == facts.listed_count@ && facts.sizes_match
-    && facts.require_digests && !facts.digests_match
+#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
+    && facts.identity.coordinates_match && facts.availability.all_present
+    && facts.object_count@ == facts.listed_count@ && facts.availability.sizes_match
+    && facts.digests.require_digests && !facts.digests.digests_match
     ==> result == WormObjectSetDecision::DigestMismatch)]
 #[ensures(result == WormObjectSetDecision::Admit ==> facts.object_count@ > 0
-    && facts.unique_keys && facts.coordinates_match && facts.all_present
-    && facts.object_count@ == facts.listed_count@ && facts.sizes_match
-    && (!facts.require_digests || facts.digests_match))]
+    && facts.identity.unique_keys && facts.identity.coordinates_match
+    && facts.availability.all_present
+    && facts.object_count@ == facts.listed_count@ && facts.availability.sizes_match
+    && (!facts.digests.require_digests || facts.digests.digests_match))]
 #[must_use]
 pub fn worm_object_set_decision(facts: WormObjectSetFacts) -> WormObjectSetDecision {
     if facts.object_count == 0 {
         WormObjectSetDecision::Empty
-    } else if !facts.unique_keys {
+    } else if !facts.identity.unique_keys {
         WormObjectSetDecision::DuplicateKey
-    } else if !facts.coordinates_match {
+    } else if !facts.identity.coordinates_match {
         WormObjectSetDecision::CoordinateMismatch
-    } else if !facts.all_present {
+    } else if !facts.availability.all_present {
         WormObjectSetDecision::MissingObject
     } else if facts.object_count != facts.listed_count {
         WormObjectSetDecision::CountMismatch
-    } else if !facts.sizes_match {
+    } else if !facts.availability.sizes_match {
         WormObjectSetDecision::SizeMismatch
-    } else if facts.require_digests && !facts.digests_match {
+    } else if facts.digests.require_digests && !facts.digests.digests_match {
         WormObjectSetDecision::DigestMismatch
     } else {
         WormObjectSetDecision::Admit
@@ -113,7 +137,11 @@ pub fn worm_object_set_decision(facts: WormObjectSetFacts) -> WormObjectSetDecis
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::{
+        WormDigestFacts, WormObjectAvailabilityFacts, WormObjectIdentityFacts,
+        WormObjectSetDecision, WormObjectSetFacts, WormSignatureDecision, worm_object_set_decision,
+        worm_signature_decision,
+    };
 
     #[test]
     fn signatures_require_every_attestation_fact() {
@@ -180,12 +208,18 @@ mod tests {
             let facts = WormObjectSetFacts {
                 object_count,
                 listed_count,
-                unique_keys,
-                coordinates_match,
-                all_present,
-                sizes_match,
-                require_digests,
-                digests_match,
+                identity: WormObjectIdentityFacts {
+                    unique_keys,
+                    coordinates_match,
+                },
+                availability: WormObjectAvailabilityFacts {
+                    all_present,
+                    sizes_match,
+                },
+                digests: WormDigestFacts {
+                    require_digests,
+                    digests_match,
+                },
             };
             assert!(worm_object_set_decision(facts) == expected);
         }

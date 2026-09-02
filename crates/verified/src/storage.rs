@@ -90,7 +90,6 @@ pub fn local_truncation_plan(
         || cut@ < segment_base@
         || cut@ - segment_base@ > u32::MAX@,
 })]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn truncation_relative_offset(segment_base: i64, cut: i64) -> Option<u32> {
     if segment_base < 0 || cut < segment_base {
@@ -100,7 +99,12 @@ pub fn truncation_relative_offset(segment_base: i64, cut: i64) -> Option<u32> {
     if relative > i64::from(u32::MAX) {
         None
     } else {
-        Some(relative as u32)
+        #[cfg(creusot)]
+        {
+            Some(relative as u32)
+        }
+        #[cfg(not(creusot))]
+        u32::try_from(relative).ok()
     }
 }
 

@@ -114,11 +114,7 @@ fn incarnation_decision(
 ) -> krabka_verified::BrokerRegistrationDecision {
     let existing = image.broker(node_id);
     krabka_verified::broker_registration_decision(
-        true,
-        true,
-        true,
-        true,
-        true,
+        (true, true, true, true, true),
         existing.map(|registration| registration.broker_epoch),
         existing.is_some_and(|registration| registration.incarnation_id == incarnation_id),
     )

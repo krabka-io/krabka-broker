@@ -10,7 +10,10 @@
 use std::{collections::HashSet, sync::Arc};
 
 use futures_util::TryStreamExt as _;
-use krabka_verified::{WormObjectSetDecision, WormObjectSetFacts, worm_object_set_decision};
+use krabka_verified::{
+    WormDigestFacts, WormObjectAvailabilityFacts, WormObjectIdentityFacts, WormObjectSetDecision,
+    WormObjectSetFacts, worm_object_set_decision,
+};
 use object_store::{GetOptions, ObjectStore, path::Path};
 use sha2::{Digest as _, Sha256};
 
@@ -117,12 +120,18 @@ pub(super) async fn check_objects(
     let reason = match worm_object_set_decision(WormObjectSetFacts {
         object_count,
         listed_count,
-        unique_keys,
-        coordinates_match,
-        all_present,
-        sizes_match,
-        require_digests: depth == VerifyDepth::Deep,
-        digests_match,
+        identity: WormObjectIdentityFacts {
+            unique_keys,
+            coordinates_match,
+        },
+        availability: WormObjectAvailabilityFacts {
+            all_present,
+            sizes_match,
+        },
+        digests: WormDigestFacts {
+            require_digests: depth == VerifyDepth::Deep,
+            digests_match,
+        },
     }) {
         WormObjectSetDecision::Empty => Some("manifest names no segment objects".to_string()),
         WormObjectSetDecision::DuplicateKey => Some(format!(

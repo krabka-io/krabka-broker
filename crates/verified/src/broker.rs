@@ -59,54 +59,49 @@ pub enum ReplicaFetchMutation {
 /// request epoch, current metadata target, and any reported leader identity;
 /// then select one exclusive response action.
 #[ensures((result == ReplicaFetchMutation::Reject) == (
-    !topic_matches
-        || !partition_matches
-        || request_leader_epoch@ != current_leader_epoch@
-        || !target_matches
-        || !reported_target_matches
+    !identity.0
+        || !identity.1
+        || epochs.0@ != epochs.1@
+        || !target.0
+        || !target.1
 ))]
 #[ensures((result == ReplicaFetchMutation::Retry) == (
-    topic_matches
-        && partition_matches
-        && request_leader_epoch@ == current_leader_epoch@
-        && target_matches
-        && reported_target_matches
-        && !response_success
+    identity.0
+        && identity.1
+        && epochs.0@ == epochs.1@
+        && target.0
+        && target.1
+        && !outcome.0
 ))]
 #[ensures((result == ReplicaFetchMutation::Truncate) == (
-    topic_matches
-        && partition_matches
-        && request_leader_epoch@ == current_leader_epoch@
-        && target_matches
-        && reported_target_matches
-        && response_success
-        && has_divergence
+    identity.0
+        && identity.1
+        && epochs.0@ == epochs.1@
+        && target.0
+        && target.1
+        && outcome.0
+        && outcome.1
 ))]
 #[ensures((result == ReplicaFetchMutation::Append) == (
-    topic_matches
-        && partition_matches
-        && request_leader_epoch@ == current_leader_epoch@
-        && target_matches
-        && reported_target_matches
-        && response_success
-        && !has_divergence
+    identity.0
+        && identity.1
+        && epochs.0@ == epochs.1@
+        && target.0
+        && target.1
+        && outcome.0
+        && !outcome.1
 ))]
 #[must_use]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    clippy::too_many_arguments,
-    reason = "each boolean is one independently established response-fence fact"
-)]
 pub fn replica_fetch_mutation(
-    topic_matches: bool,
-    partition_matches: bool,
-    request_leader_epoch: i32,
-    current_leader_epoch: i32,
-    target_matches: bool,
-    reported_target_matches: bool,
-    response_success: bool,
-    has_divergence: bool,
+    identity: (bool, bool),
+    epochs: (i32, i32),
+    target: (bool, bool),
+    outcome: (bool, bool),
 ) -> ReplicaFetchMutation {
+    let (topic_matches, partition_matches) = identity;
+    let (request_leader_epoch, current_leader_epoch) = epochs;
+    let (target_matches, reported_target_matches) = target;
+    let (response_success, has_divergence) = outcome;
     if !topic_matches
         || !partition_matches
         || request_leader_epoch != current_leader_epoch
@@ -648,21 +643,36 @@ mod tests {
         use ReplicaFetchMutation::{Append, Reject, Retry, Truncate};
 
         assert!(
-            replica_fetch_mutation(true, true, i32::MIN, i32::MIN, true, true, true, true)
-                == Truncate
+            replica_fetch_mutation(
+                (true, true),
+                (i32::MIN, i32::MIN),
+                (true, true),
+                (true, true),
+            ) == Truncate
         );
         assert!(
-            replica_fetch_mutation(true, true, i32::MAX, i32::MAX, true, true, true, false)
-                == Append
+            replica_fetch_mutation(
+                (true, true),
+                (i32::MAX, i32::MAX),
+                (true, true),
+                (true, false),
+            ) == Append
         );
-        assert!(replica_fetch_mutation(true, true, 4, 4, true, true, false, false) == Retry);
+        assert!(
+            replica_fetch_mutation((true, true), (4, 4), (true, true), (false, false)) == Retry
+        );
 
         for rejected in [
-            replica_fetch_mutation(false, true, 4, 4, true, true, true, false),
-            replica_fetch_mutation(true, false, 4, 4, true, true, true, false),
-            replica_fetch_mutation(true, true, i32::MIN, i32::MAX, true, true, true, false),
-            replica_fetch_mutation(true, true, 4, 4, false, true, true, false),
-            replica_fetch_mutation(true, true, 4, 4, true, false, true, false),
+            replica_fetch_mutation((false, true), (4, 4), (true, true), (true, false)),
+            replica_fetch_mutation((true, false), (4, 4), (true, true), (true, false)),
+            replica_fetch_mutation(
+                (true, true),
+                (i32::MIN, i32::MAX),
+                (true, true),
+                (true, false),
+            ),
+            replica_fetch_mutation((true, true), (4, 4), (false, true), (true, false)),
+            replica_fetch_mutation((true, true), (4, 4), (true, false), (true, false)),
         ] {
             assert!(rejected == Reject);
         }

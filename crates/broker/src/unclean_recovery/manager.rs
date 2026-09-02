@@ -223,9 +223,11 @@ impl UncleanRecoveryManager {
             &image,
             pr,
             election,
-            selected_partition_epoch,
-            &selected_replicas,
-            current_leader_alive,
+            (
+                selected_partition_epoch,
+                &selected_replicas,
+                current_leader_alive,
+            ),
         )
         .await
     }
@@ -283,10 +285,9 @@ impl UncleanRecoveryManager {
         image: &MetadataImage,
         pr: &PartitionRecord,
         election: Election,
-        selected_partition_epoch: i32,
-        selected_replicas: &[u64],
-        current_leader_alive: bool,
+        selected: (i32, &[u64], bool),
     ) -> RecoveryOutcome {
+        let (selected_partition_epoch, selected_replicas, current_leader_alive) = selected;
         let winner = election.leader;
         let current_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
         if !unclean_recovery_commit_admission(

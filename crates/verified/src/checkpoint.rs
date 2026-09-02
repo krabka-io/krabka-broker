@@ -1,6 +1,8 @@
 //! `KRaft` checkpoint selection and retention decisions.
 
-use creusot_std::prelude::*;
+use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{Int, invariant};
 
 /// Whether `candidate` is lexicographically newer than `current`.
 #[ensures(result == (candidate_end@ > current_end@
@@ -25,12 +27,8 @@ pub fn checkpoint_id_newer(
     None => ids@.len() == 0,
 })]
 #[must_use]
-#[allow(
-    clippy::len_zero,
-    reason = "the explicit length comparison is supported by Creusot v0.13"
-)]
 pub fn latest_checkpoint_index(ids: &[(i64, i32)]) -> Option<usize> {
-    if ids.len() == 0 {
+    if matches!(ids.len(), 0) {
         return None;
     }
     let mut selected = 0usize;
@@ -66,7 +64,7 @@ pub fn checkpoint_id_retained(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{checkpoint_id_retained, latest_checkpoint_index};
 
     #[test]
     fn latest_index_covers_empty_ties_and_lexicographic_order() {

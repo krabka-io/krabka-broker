@@ -195,8 +195,8 @@ pub use recovery::{
     replay_record_decision, should_capture_first_downgrade,
 };
 pub use registration::{
-    BrokerHeartbeatDecision, BrokerRegistrationDecision, broker_heartbeat_decision,
-    broker_registration_decision,
+    BrokerHeartbeatDecision, BrokerHeartbeatRegistration, BrokerRegistrationDecision,
+    broker_heartbeat_decision, broker_registration_decision,
 };
 pub use remote_metadata::{remote_metadata_partition, remote_metadata_resume_cursor};
 pub use remote_read::{
@@ -274,6 +274,6 @@ pub use wal::{
     WalFetchAdmission, exact_wal_batch_range, select_wal_voter_index, wal_fetch_admission,
 };
 pub use worm::{
-    WormObjectSetDecision, WormObjectSetFacts, WormSignatureDecision, worm_object_set_decision,
-    worm_signature_decision,
+    WormDigestFacts, WormObjectAvailabilityFacts, WormObjectIdentityFacts, WormObjectSetDecision,
+    WormObjectSetFacts, WormSignatureDecision, worm_object_set_decision, worm_signature_decision,
 };

@@ -282,7 +282,7 @@ mod tests {
     use krabka_log::{Log, LogConfig, ProducerId};
     use tokio::sync::Mutex;
 
-    use super::*;
+    use super::{TxnCoordinator, TxnState, TxnVersion, bootstrap};
     use crate::txn::{coordinator::test_support::test_coordinator, state::TxnEntry};
 
     fn partition(topic: &str, index: i32) -> crate::txn::state::TopicPartition {

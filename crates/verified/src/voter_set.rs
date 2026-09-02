@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 /// Admission outcome for one voter carried by a `VotersRecord`.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -104,7 +106,9 @@ pub fn voter_set_wire_decision(
 mod tests {
     use assert2::check;
 
-    use super::*;
+    use super::{
+        VoterSetWireDecision, VoterWireDecision, voter_set_wire_decision, voter_wire_decision,
+    };
 
     #[test]
     fn voter_admission_classifies_every_invalid_boundary() {

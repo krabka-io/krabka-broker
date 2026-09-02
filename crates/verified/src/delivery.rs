@@ -1,7 +1,7 @@
 //! Scheduled-delivery visibility kernels.
 
 #[cfg(creusot)]
-use creusot_std::prelude::*;
+use creusot_std::prelude::{ensures, requires};
 
 /// Decide whether a record batch may be exposed at the supplied clock reading.
 ///
@@ -91,7 +91,7 @@ pub fn coalesce_delivery_range(last_high: i64, low: i64, high: i64) -> (bool, i6
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::{coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible};
 
     #[test]
     fn visibility_never_ignores_deadline_or_overflow() {

@@ -288,7 +288,7 @@ fn recovery_next_offset(base: i64, last_delta: i32) -> Result<Offset, BrokerErro
 mod tests {
     use assert2::assert;
 
-    use super::*;
+    use super::{Offset, recovery_next_offset};
 
     #[test]
     fn recovery_offset_advance_is_checked_and_monotonic() {

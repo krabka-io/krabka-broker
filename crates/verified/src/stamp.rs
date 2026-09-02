@@ -1,6 +1,8 @@
 //! Commit-stamp range-index decisions.
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::{Int, invariant};
+use creusot_std::prelude::{ensures, requires};
 
 /// Validate sorted inclusive ranges as individually ordered and pairwise
 /// nonoverlapping.
@@ -131,7 +133,10 @@ pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        covering_stamp_range_index, exact_stamp_range_index, stamp_range_insertion_index,
+        stamp_ranges_valid,
+    };
 
     #[test]
     fn range_decisions_cover_boundaries_retries_and_malformed_inputs() {

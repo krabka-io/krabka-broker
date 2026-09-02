@@ -49,22 +49,13 @@ pub fn acl_identity_match(wildcard: bool, exact: bool) -> bool {
 }
 
 /// Match an ACL resource type and literal or prefixed name pattern.
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies four independent host matching facts"
-)]
-#[ensures(result == (same_type && match pattern {
-    AclPatternKind::Literal => exact || wildcard,
-    AclPatternKind::Prefixed => prefix,
+#[ensures(result == (facts.0 && match pattern {
+    AclPatternKind::Literal => facts.1 || facts.2,
+    AclPatternKind::Prefixed => facts.3,
 }))]
 #[must_use]
-pub fn acl_resource_match(
-    same_type: bool,
-    pattern: AclPatternKind,
-    exact: bool,
-    wildcard: bool,
-    prefix: bool,
-) -> bool {
+pub fn acl_resource_match(pattern: AclPatternKind, facts: (bool, bool, bool, bool)) -> bool {
+    let (same_type, exact, wildcard, prefix) = facts;
     same_type
         && match pattern {
             AclPatternKind::Literal => exact || wildcard,
@@ -205,7 +196,7 @@ mod tests {
                                     AclPatternKind::Prefixed => prefix,
                                 };
                             check!(
-                                acl_resource_match(same_type, pattern, exact, wildcard, prefix)
+                                acl_resource_match(pattern, (same_type, exact, wildcard, prefix))
                                     == expected
                             );
                         }

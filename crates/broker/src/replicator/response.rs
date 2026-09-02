@@ -56,14 +56,13 @@ pub(super) async fn handle_response(
         && reported_leader.leader_epoch == cfg.leader_epoch.0;
     let reported_target_matches = reported_leader_absent || reported_leader_exact;
     let mutation = krabka_verified::replica_fetch_mutation(
-        true,
-        true,
-        request_leader_epoch,
-        cfg.leader_epoch.0,
-        target_matches,
-        reported_target_matches,
-        part_resp.error_code == codes::NONE,
-        part_resp.diverging_epoch.end_offset >= 0,
+        (true, true),
+        (request_leader_epoch, cfg.leader_epoch.0),
+        (target_matches, reported_target_matches),
+        (
+            part_resp.error_code == codes::NONE,
+            part_resp.diverging_epoch.end_offset >= 0,
+        ),
     );
 
     if mutation == ReplicaFetchMutation::Reject {

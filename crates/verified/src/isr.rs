@@ -46,23 +46,14 @@ pub fn isr_admission(
 }
 
 /// Decide whether one unique assigned replica belongs in an ISR proposal.
-#[ensures(result == (assigned && (
-    is_leader
-        || (in_isr && fetch_recent)
-        || (!in_isr && fetch_recent && caught_up_recent)
+#[ensures(result == (facts.0 && (
+    facts.1
+        || (facts.2 && facts.3)
+        || (!facts.2 && facts.3 && facts.4)
 )))]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies independent assignment, role, membership, and recency facts"
-)]
 #[must_use]
-pub fn isr_maintenance_selected(
-    assigned: bool,
-    is_leader: bool,
-    in_isr: bool,
-    fetch_recent: bool,
-    caught_up_recent: bool,
-) -> bool {
+pub fn isr_maintenance_selected(facts: (bool, bool, bool, bool, bool)) -> bool {
+    let (assigned, is_leader, in_isr, fetch_recent, caught_up_recent) = facts;
     assigned && (is_leader || fetch_recent && (in_isr || caught_up_recent))
 }
 
@@ -144,13 +135,13 @@ mod tests {
                             let expected = assigned
                                 && (leader || fetch_recent && (current || caught_up_recent));
                             assert2::check!(
-                                isr_maintenance_selected(
+                                isr_maintenance_selected((
                                     assigned,
                                     leader,
                                     current,
                                     fetch_recent,
-                                    caught_up_recent
-                                ) == expected
+                                    caught_up_recent,
+                                )) == expected
                             );
                         }
                     }

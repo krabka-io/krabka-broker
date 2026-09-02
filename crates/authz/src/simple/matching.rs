@@ -26,11 +26,13 @@ pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, na
         PatternType::Prefixed => AclPatternKind::Prefixed,
     };
     acl_resource_match(
-        entry.resource_type == resource_type,
         pattern,
-        entry.resource_name == name,
-        entry.resource_name == "*",
-        name.starts_with(entry.resource_name.as_str()),
+        (
+            entry.resource_type == resource_type,
+            entry.resource_name == name,
+            entry.resource_name == "*",
+            name.starts_with(entry.resource_name.as_str()),
+        ),
     )
 }
 

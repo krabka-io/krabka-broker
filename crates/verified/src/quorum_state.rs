@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 /// Whether an in-memory quorum state can be represented exactly by Kafka's
 /// signed, versioned JSON fields.
@@ -114,7 +116,10 @@ pub fn quorum_state_load_decision(
 mod tests {
     use assert2::check;
 
-    use super::*;
+    use super::{
+        QuorumStateLoadDecision, QuorumStateWriteDecision, quorum_state_load_decision,
+        quorum_state_write_decision,
+    };
 
     #[test]
     fn writes_reject_every_lossy_boundary() {

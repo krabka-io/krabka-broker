@@ -440,9 +440,7 @@ async fn audit_only_elects_and_records_the_bypass() {
             &image,
             pr,
             fallback_to(2),
-            pr.partition_epoch,
-            &selected_replicas,
-            false,
+            (pr.partition_epoch, &selected_replicas, false),
         )
         .await;
 
@@ -502,9 +500,7 @@ async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
             &image,
             pr,
             election,
-            pr.partition_epoch,
-            &selected_replicas,
-            false,
+            (pr.partition_epoch, &selected_replicas, false),
         )
         .await;
 
@@ -550,9 +546,7 @@ async fn commit_rejects_exhausted_metadata_epochs() {
                 &current,
                 partition,
                 fallback_to(2),
-                partition.partition_epoch,
-                &replicas,
-                false,
+                (partition.partition_epoch, &replicas, false),
             )
             .await;
 
@@ -624,9 +618,7 @@ async fn commit_fences_every_change_since_replica_selection() {
                 &image,
                 pr,
                 fallback_to(winner),
-                selected_epoch,
-                &selected_replicas,
-                leader_alive,
+                (selected_epoch, &selected_replicas, leader_alive),
             )
             .await;
 
@@ -689,9 +681,7 @@ async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
                 &image,
                 pr,
                 fallback_to(2),
-                pr.partition_epoch,
-                &selected_replicas,
-                false,
+                (pr.partition_epoch, &selected_replicas, false),
             )
             .await;
 
@@ -971,9 +961,7 @@ async fn an_applied_election_names_the_proposal_that_authorized_it() {
                 &image,
                 pr,
                 election,
-                pr.partition_epoch,
-                &selected_replicas,
-                false,
+                (pr.partition_epoch, &selected_replicas, false),
             )
             .await;
 

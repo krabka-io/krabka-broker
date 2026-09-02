@@ -54,13 +54,13 @@ pub(super) async fn compute_proposal(part: &Partition, lag_max: Duration) -> Opt
             stats.is_some_and(|stats| now.saturating_duration_since(stats.last_fetch) <= lag_max);
         let caught_up_recent = stats
             .is_some_and(|stats| now.saturating_duration_since(stats.last_caught_up) <= lag_max);
-        if krabka_verified::isr::isr_maintenance_selected(
+        if krabka_verified::isr::isr_maintenance_selected((
             replicas.contains(&node),
             node == leader,
             st.isr.contains(&node),
             fetch_recent,
             caught_up_recent,
-        ) {
+        )) {
             new_isr.push(node);
         }
     }

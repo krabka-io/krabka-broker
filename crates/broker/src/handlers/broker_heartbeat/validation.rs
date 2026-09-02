@@ -33,11 +33,14 @@ pub(super) fn validate_registration(
         req.want_fence,
         req.want_shut_down,
     );
-    if !decision.registered {
-        return Err(codes::BROKER_ID_NOT_REGISTERED);
-    }
-    if !decision.epoch_matches {
-        return Err(codes::STALE_BROKER_EPOCH);
+    match decision.registration {
+        krabka_verified::BrokerHeartbeatRegistration::Missing => {
+            return Err(codes::BROKER_ID_NOT_REGISTERED);
+        }
+        krabka_verified::BrokerHeartbeatRegistration::Stale => {
+            return Err(codes::STALE_BROKER_EPOCH);
+        }
+        krabka_verified::BrokerHeartbeatRegistration::Current => {}
     }
     Ok((broker_id, decision))
 }

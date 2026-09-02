@@ -244,15 +244,15 @@ impl Predicates {
         });
         if krabka_verified::restore_record_selected(
             offset.0,
-            offset_bound_applies,
-            offset_bound,
+            offset_bound_applies.then_some(offset_bound),
             timestamp_ms,
-            timestamp_bound_applies,
-            timestamp_bound,
-            producer_excluded,
-            offset_excluded,
-            key_excluded,
-            header_excluded,
+            timestamp_bound_applies.then_some(timestamp_bound),
+            (
+                producer_excluded,
+                offset_excluded,
+                key_excluded,
+                header_excluded,
+            ),
         ) {
             RecordDecision::Keep
         } else {

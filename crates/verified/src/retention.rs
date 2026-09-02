@@ -51,11 +51,6 @@ pub struct RetentionPrefix {
     ==> result.len@ > 0)]
 #[ensures(result.len@ > 0 && initial_size_debt@ > 0 && sizes@[0]@ > 0 ==>
     result.remaining_size_debt@ < initial_size_debt@)]
-#[allow(
-    clippy::implicit_saturating_sub,
-    clippy::len_zero,
-    reason = "Creusot needs explicit length and subtraction branches for the progress proof"
-)]
 #[must_use]
 pub fn local_retention_prefix(
     time_expired: &[bool],
@@ -64,7 +59,7 @@ pub fn local_retention_prefix(
     initial_size_debt: u64,
     has_active: bool,
 ) -> RetentionPrefix {
-    if time_expired.len() == 0 {
+    if matches!(time_expired.len(), 0) {
         return RetentionPrefix {
             len: 0,
             remaining_size_debt: initial_size_debt,
@@ -84,11 +79,7 @@ pub fn local_retention_prefix(
     let mut len = 1usize;
     let mut remaining_size_debt = initial_size_debt;
     if remaining_size_debt > 0 {
-        remaining_size_debt = if sizes[0] >= remaining_size_debt {
-            0
-        } else {
-            remaining_size_debt - sizes[0]
-        };
+        remaining_size_debt = remaining_size_debt.saturating_sub(sizes[0]);
     }
     #[invariant(0 < len@ && len@ <= max_delete@)]
     #[invariant(max_delete@ <= time_expired@.len())]
@@ -104,11 +95,7 @@ pub fn local_retention_prefix(
             break;
         }
         if remaining_size_debt > 0 {
-            remaining_size_debt = if sizes[len] >= remaining_size_debt {
-                0
-            } else {
-                remaining_size_debt - sizes[len]
-            };
+            remaining_size_debt = remaining_size_debt.saturating_sub(sizes[len]);
         }
         len += 1;
     }

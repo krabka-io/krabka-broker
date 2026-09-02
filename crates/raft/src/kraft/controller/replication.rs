@@ -144,15 +144,17 @@ impl Engine {
         };
         let state = self.core.quorum_state();
         let mutation = fetch_response_mutation(
-            role_leader,
-            state.leader_id.map(|id| id.0),
-            state.leader_epoch,
-            from.0,
-            leader_id.0,
-            leader_epoch,
-            snapshot_id.is_some(),
-            diverging.is_some(),
-            !records.is_empty(),
+            (
+                role_leader,
+                state.leader_id.map(|id| id.0),
+                state.leader_epoch,
+            ),
+            (from.0, leader_id.0, leader_epoch),
+            (
+                snapshot_id.is_some(),
+                diverging.is_some(),
+                !records.is_empty(),
+            ),
         );
         if mutation == FetchResponseMutation::Reject {
             return;

@@ -40,28 +40,23 @@ pub fn reassignment_set_membership(in_current: bool, in_target: bool) -> Reassig
 
 /// Final mutation admission for either a reassignment start or cancel.
 #[ensures(result == (
-    leader_eligible
-        && epoch_available
-        && if is_cancel {
-            cancel_approved && cancel_in_progress
+    readiness.0
+        && readiness.1
+        && if mode.0 {
+            mode.1 && mode.2
         } else {
-            target_nonempty_unique_registered && rf_policy_satisfied
+            start.0 && start.1
         }
 ))]
 #[must_use]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "each boolean is one independently established planner obligation"
-)]
 pub fn reassignment_plan_admission(
-    is_cancel: bool,
-    target_nonempty_unique_registered: bool,
-    rf_policy_satisfied: bool,
-    cancel_approved: bool,
-    cancel_in_progress: bool,
-    leader_eligible: bool,
-    epoch_available: bool,
+    mode: (bool, bool, bool),
+    start: (bool, bool),
+    readiness: (bool, bool),
 ) -> bool {
+    let (is_cancel, cancel_approved, cancel_in_progress) = mode;
+    let (target_nonempty_unique_registered, rf_policy_satisfied) = start;
+    let (leader_eligible, epoch_available) = readiness;
     leader_eligible
         && epoch_available
         && if is_cancel {
@@ -142,18 +137,22 @@ mod tests {
         assert2::assert!(reassignment_set_membership(true, true).in_union);
 
         assert2::assert!(reassignment_plan_admission(
-            false, true, true, false, false, true, true
+            (false, false, false),
+            (true, true),
+            (true, true),
         ));
         assert2::assert!(reassignment_plan_admission(
-            true, false, false, true, true, true, true
+            (true, true, true),
+            (false, false),
+            (true, true),
         ));
         for denied in [
-            reassignment_plan_admission(false, false, true, false, false, true, true),
-            reassignment_plan_admission(false, true, false, false, false, true, true),
-            reassignment_plan_admission(true, false, false, false, true, true, true),
-            reassignment_plan_admission(true, false, false, true, false, true, true),
-            reassignment_plan_admission(false, true, true, false, false, false, true),
-            reassignment_plan_admission(false, true, true, false, false, true, false),
+            reassignment_plan_admission((false, false, false), (false, true), (true, true)),
+            reassignment_plan_admission((false, false, false), (true, false), (true, true)),
+            reassignment_plan_admission((true, false, true), (false, false), (true, true)),
+            reassignment_plan_admission((true, true, false), (false, false), (true, true)),
+            reassignment_plan_admission((false, false, false), (true, true), (false, true)),
+            reassignment_plan_admission((false, false, false), (true, true), (true, false)),
         ] {
             assert2::assert!(!denied);
         }

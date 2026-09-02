@@ -3,7 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
 /// Change selected for one reported topic-partition replica.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -68,7 +70,10 @@ pub fn directory_response_decision(
 mod tests {
     use assert2::check;
 
-    use super::*;
+    use super::{
+        DirectoryAssignmentDecision, DirectoryResponseDecision, directory_assignment_decision,
+        directory_response_decision,
+    };
 
     #[test]
     fn planning_is_exact_idempotent_and_response_fenced() {

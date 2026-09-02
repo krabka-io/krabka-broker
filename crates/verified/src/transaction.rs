@@ -44,57 +44,50 @@ pub enum TransactionReaperCompletionDecision {
 /// `exact_prepared_snapshot` is supplied by the host from equality over the
 /// complete persisted transaction entry, including its staged identity,
 /// partition set, timeout, and timestamps.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the proof compares current, prepared, and completion identities"
-)]
 #[ensures((result == TransactionReaperCompletionDecision::RejectMalformed)
-    == (current_pid@ < 0
-        || current_epoch@ < 0
-        || prepared_pid@ < 0
-        || prepared_epoch@ < 0
-        || completion_pid@ < 0
-        || completion_epoch@ < 0
-        || prepare_state == complete_state))]
+    == (current.0@ < 0
+        || current.1@ < 0
+        || prepared.0@ < 0
+        || prepared.1@ < 0
+        || completion.0@ < 0
+        || completion.1@ < 0
+        || prepared.2 == completion.2))]
 #[ensures((result == TransactionReaperCompletionDecision::AlreadyComplete)
-    == (current_pid@ >= 0
-        && current_epoch@ >= 0
-        && prepared_pid@ >= 0
-        && prepared_epoch@ >= 0
-        && completion_pid@ >= 0
-        && completion_epoch@ >= 0
-        && prepare_state != complete_state
-        && current_pid@ == completion_pid@
-        && current_epoch@ == completion_epoch@
-        && current_state == complete_state))]
+    == (current.0@ >= 0
+        && current.1@ >= 0
+        && prepared.0@ >= 0
+        && prepared.1@ >= 0
+        && completion.0@ >= 0
+        && completion.1@ >= 0
+        && prepared.2 != completion.2
+        && current.0@ == completion.0@
+        && current.1@ == completion.1@
+        && current.2 == completion.2))]
 #[ensures((result == TransactionReaperCompletionDecision::Proceed)
-    == (current_pid@ >= 0
-        && current_epoch@ >= 0
-        && prepared_pid@ >= 0
-        && prepared_epoch@ >= 0
-        && completion_pid@ >= 0
-        && completion_epoch@ >= 0
-        && prepare_state != complete_state
-        && !(current_pid@ == completion_pid@
-            && current_epoch@ == completion_epoch@
-            && current_state == complete_state)
-        && current_pid@ == prepared_pid@
-        && current_epoch@ == prepared_epoch@
-        && current_state == prepare_state
+    == (current.0@ >= 0
+        && current.1@ >= 0
+        && prepared.0@ >= 0
+        && prepared.1@ >= 0
+        && completion.0@ >= 0
+        && completion.1@ >= 0
+        && prepared.2 != completion.2
+        && !(current.0@ == completion.0@
+            && current.1@ == completion.1@
+            && current.2 == completion.2)
+        && current.0@ == prepared.0@
+        && current.1@ == prepared.1@
+        && current.2 == prepared.2
         && exact_prepared_snapshot))]
 #[must_use]
 pub fn transaction_reaper_completion_decision(
-    current_pid: i64,
-    current_epoch: i16,
-    current_state: i8,
-    prepared_pid: i64,
-    prepared_epoch: i16,
-    completion_pid: i64,
-    completion_epoch: i16,
-    prepare_state: i8,
-    complete_state: i8,
+    current: (i64, i16, i8),
+    prepared: (i64, i16, i8),
+    completion: (i64, i16, i8),
     exact_prepared_snapshot: bool,
 ) -> TransactionReaperCompletionDecision {
+    let (current_pid, current_epoch, current_state) = current;
+    let (prepared_pid, prepared_epoch, prepare_state) = prepared;
+    let (completion_pid, completion_epoch, complete_state) = completion;
     if current_pid < 0
         || current_epoch < 0
         || prepared_pid < 0
@@ -121,85 +114,78 @@ pub fn transaction_reaper_completion_decision(
 /// Fence a transaction marker against the partition's latest producer and
 /// coordinator generations, suppress an exact completed retry, and publish
 /// offsets only for a pending commit on `__consumer_offsets`.
-#[allow(
-    clippy::fn_params_excessive_bools,
-    clippy::too_many_arguments,
-    reason = "the proof classifies independent marker and partition facts"
-)]
 #[ensures((result == TransactionMarkerMaterializationDecision::RejectMalformed)
-    == (producer_id@ < 0
-        || producer_epoch@ < 0
-        || coordinator_epoch@ < 0
-        || current_producer_epoch@ < -1
-        || current_coordinator_epoch@ < -1
-        || (has_pending_transaction && current_producer_epoch@ == -1)))]
+    == (request.0@ < 0
+        || request.1@ < 0
+        || request.2@ < -1
+        || current.0@ < -1
+        || current.1@ < -1
+        || (current.2 && current.0@ == -1)))]
 #[ensures((result == TransactionMarkerMaterializationDecision::RejectProducerEpoch)
-    == (producer_id@ >= 0
-        && producer_epoch@ >= 0
-        && coordinator_epoch@ >= 0
-        && current_producer_epoch@ >= -1
-        && current_coordinator_epoch@ >= -1
-        && (!has_pending_transaction || current_producer_epoch@ >= 0)
-        && producer_epoch@ < current_producer_epoch@))]
+    == (request.0@ >= 0
+        && request.1@ >= 0
+        && request.2@ >= -1
+        && current.0@ >= -1
+        && current.1@ >= -1
+        && (!current.2 || current.0@ >= 0)
+        && request.1@ < current.0@))]
 #[ensures((result == TransactionMarkerMaterializationDecision::RejectCoordinatorEpoch)
-    == (producer_id@ >= 0
-        && producer_epoch@ >= 0
-        && coordinator_epoch@ >= 0
-        && current_producer_epoch@ >= -1
-        && current_coordinator_epoch@ >= -1
-        && (!has_pending_transaction || current_producer_epoch@ >= 0)
-        && producer_epoch@ >= current_producer_epoch@
-        && coordinator_epoch@ < current_coordinator_epoch@))]
+    == (request.0@ >= 0
+        && request.1@ >= 0
+        && request.2@ >= -1
+        && current.0@ >= -1
+        && current.1@ >= -1
+        && (!current.2 || current.0@ >= 0)
+        && request.1@ >= current.0@
+        && request.2@ < current.1@))]
 #[ensures((result == TransactionMarkerMaterializationDecision::Retry)
-    == (producer_id@ >= 0
-        && producer_epoch@ >= 0
-        && coordinator_epoch@ >= 0
-        && producer_epoch@ >= current_producer_epoch@
-        && coordinator_epoch@ >= current_coordinator_epoch@
-        && current_producer_epoch@ >= -1
-        && current_coordinator_epoch@ >= -1
-        && !has_pending_transaction
-        && producer_epoch@ == current_producer_epoch@
-        && coordinator_epoch@ == current_coordinator_epoch@))]
+    == (request.0@ >= 0
+        && request.1@ >= 0
+        && request.2@ >= -1
+        && request.1@ >= current.0@
+        && request.2@ >= current.1@
+        && current.0@ >= -1
+        && current.1@ >= -1
+        && !current.2
+        && request.1@ == current.0@
+        && request.2@ == current.1@))]
 #[ensures((result == TransactionMarkerMaterializationDecision::AppendAndPublishOffsets)
-    == (producer_id@ >= 0
-        && producer_epoch@ >= 0
-        && coordinator_epoch@ >= 0
-        && current_producer_epoch@ >= -1
-        && current_coordinator_epoch@ >= -1
-        && (!has_pending_transaction || current_producer_epoch@ >= 0)
-        && producer_epoch@ >= current_producer_epoch@
-        && coordinator_epoch@ >= current_coordinator_epoch@
-        && has_pending_transaction
-        && is_commit
-        && is_offsets_partition))]
+    == (request.0@ >= 0
+        && request.1@ >= 0
+        && request.2@ >= -1
+        && current.0@ >= -1
+        && current.1@ >= -1
+        && (!current.2 || current.0@ >= 0)
+        && request.1@ >= current.0@
+        && request.2@ >= current.1@
+        && current.2
+        && marker.0
+        && marker.1))]
 #[ensures((result == TransactionMarkerMaterializationDecision::AppendWithoutOffsetPublication)
-    == (producer_id@ >= 0
-        && producer_epoch@ >= 0
-        && coordinator_epoch@ >= 0
-        && current_producer_epoch@ >= -1
-        && current_coordinator_epoch@ >= -1
-        && (!has_pending_transaction || current_producer_epoch@ >= 0)
-        && producer_epoch@ >= current_producer_epoch@
-        && coordinator_epoch@ >= current_coordinator_epoch@
-        && !(!has_pending_transaction
-            && producer_epoch@ == current_producer_epoch@
-            && coordinator_epoch@ == current_coordinator_epoch@)
-        && !(has_pending_transaction && is_commit && is_offsets_partition)))]
+    == (request.0@ >= 0
+        && request.1@ >= 0
+        && request.2@ >= -1
+        && current.0@ >= -1
+        && current.1@ >= -1
+        && (!current.2 || current.0@ >= 0)
+        && request.1@ >= current.0@
+        && request.2@ >= current.1@
+        && !(!current.2
+            && request.1@ == current.0@
+            && request.2@ == current.1@)
+        && !(current.2 && marker.0 && marker.1)))]
 #[must_use]
 pub fn transaction_marker_materialization_decision(
-    producer_id: i64,
-    producer_epoch: i16,
-    coordinator_epoch: i32,
-    current_producer_epoch: i16,
-    current_coordinator_epoch: i32,
-    has_pending_transaction: bool,
-    is_commit: bool,
-    is_offsets_partition: bool,
+    request: (i64, i16, i32),
+    current: (i16, i32, bool),
+    marker: (bool, bool),
 ) -> TransactionMarkerMaterializationDecision {
+    let (producer_id, producer_epoch, coordinator_epoch) = request;
+    let (current_producer_epoch, current_coordinator_epoch, has_pending_transaction) = current;
+    let (is_commit, is_offsets_partition) = marker;
     if producer_id < 0
         || producer_epoch < 0
-        || coordinator_epoch < 0
+        || coordinator_epoch < -1
         || current_producer_epoch < -1
         || current_coordinator_epoch < -1
         || (has_pending_transaction && current_producer_epoch == -1)
@@ -223,10 +209,6 @@ pub fn transaction_marker_materialization_decision(
 
 /// Admit only a well-formed, uniquely owned producer-ID pair from the
 /// transaction log partition selected by its transactional ID.
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies independent PID ownership facts"
-)]
 #[ensures((result == TransactionPidInstallDecision::RejectWrongPartition)
     == !partition_matches)]
 #[ensures((result == TransactionPidInstallDecision::RejectCurrentIdentity)
@@ -799,34 +781,43 @@ mod tests {
         };
 
         assert!(
-            transaction_marker_materialization_decision(-1, 0, 0, -1, -1, true, true, true)
+            transaction_marker_materialization_decision((-1, 0, 0), (-1, -1, true), (true, true))
                 == RejectMalformed
         );
         assert!(
-            transaction_marker_materialization_decision(1, 0, 0, -2, -1, true, true, true)
+            transaction_marker_materialization_decision((1, 0, 0), (-2, -1, true), (true, true))
                 == RejectMalformed
         );
         assert!(
-            transaction_marker_materialization_decision(1, 2, 9, 3, 8, true, true, true)
-                == RejectProducerEpoch
+            transaction_marker_materialization_decision((1, 0, -2), (0, -1, true), (false, false))
+                == RejectMalformed
         );
         assert!(
-            transaction_marker_materialization_decision(1, 3, 7, 3, 8, true, true, true)
-                == RejectCoordinatorEpoch
-        );
-        assert!(
-            transaction_marker_materialization_decision(1, 3, 8, 3, 8, false, true, true) == Retry
-        );
-        assert!(
-            transaction_marker_materialization_decision(1, 3, 8, 3, 7, true, true, true)
-                == AppendAndPublishOffsets
-        );
-        assert!(
-            transaction_marker_materialization_decision(1, 3, 8, 3, 7, true, false, true)
+            transaction_marker_materialization_decision((1, 0, -1), (0, -1, true), (false, false))
                 == AppendWithoutOffsetPublication
         );
         assert!(
-            transaction_marker_materialization_decision(1, 4, 9, 3, 8, false, true, true)
+            transaction_marker_materialization_decision((1, 2, 9), (3, 8, true), (true, true))
+                == RejectProducerEpoch
+        );
+        assert!(
+            transaction_marker_materialization_decision((1, 3, 7), (3, 8, true), (true, true))
+                == RejectCoordinatorEpoch
+        );
+        assert!(
+            transaction_marker_materialization_decision((1, 3, 8), (3, 8, false), (true, true))
+                == Retry
+        );
+        assert!(
+            transaction_marker_materialization_decision((1, 3, 8), (3, 7, true), (true, true))
+                == AppendAndPublishOffsets
+        );
+        assert!(
+            transaction_marker_materialization_decision((1, 3, 8), (3, 7, true), (false, true))
+                == AppendWithoutOffsetPublication
+        );
+        assert!(
+            transaction_marker_materialization_decision((1, 4, 9), (3, 8, false), (true, true))
                 == AppendWithoutOffsetPublication
         );
     }
@@ -838,21 +829,24 @@ mod tests {
             RejectStaleIdentity,
         };
 
-        assert!(transaction_reaper_completion_decision(7, 3, 3, 7, 3, 7, 4, 3, 5, true) == Proceed);
         assert!(
-            transaction_reaper_completion_decision(7, 3, 3, 7, 3, 7, 4, 3, 5, false)
+            transaction_reaper_completion_decision((7, 3, 3), (7, 3, 3), (7, 4, 5), true)
+                == Proceed
+        );
+        assert!(
+            transaction_reaper_completion_decision((7, 3, 3), (7, 3, 3), (7, 4, 5), false)
                 == RejectChangedPreparedState
         );
         assert!(
-            transaction_reaper_completion_decision(7, 4, 3, 7, 3, 7, 4, 3, 5, false)
+            transaction_reaper_completion_decision((7, 4, 3), (7, 3, 3), (7, 4, 5), false)
                 == RejectStaleIdentity
         );
         assert!(
-            transaction_reaper_completion_decision(7, 4, 5, 7, 3, 7, 4, 3, 5, false)
+            transaction_reaper_completion_decision((7, 4, 5), (7, 3, 3), (7, 4, 5), false)
                 == AlreadyComplete
         );
         assert!(
-            transaction_reaper_completion_decision(-1, 0, 3, 7, 3, 7, 4, 3, 5, false)
+            transaction_reaper_completion_decision((-1, 0, 3), (7, 3, 3), (7, 4, 5), false)
                 == RejectMalformed
         );
     }
