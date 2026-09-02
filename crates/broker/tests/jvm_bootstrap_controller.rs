@@ -307,6 +307,21 @@ async fn kafka_topics_has_no_bootstrap_controller_option() {
     );
 }
 
+/// Extract `FinalizedVersionLevel` for `feature` from `kafka-features describe`
+/// output. Matching the feature's own line matters: several features report a
+/// finalized level, so two independent `contains` checks can match different
+/// lines and pass while the feature under test never moved.
+fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
+    for line in describe_stdout.lines() {
+        if line.contains(&format!("Feature: {feature}")) {
+            let idx = line.find("FinalizedVersionLevel:")?;
+            let rest = &line[idx + "FinalizedVersionLevel:".len()..];
+            return rest.split_whitespace().next()?.parse().ok();
+        }
+    }
+    None
+}
+
 /// `kafka-features --bootstrap-controller`: `describe`, then `downgrade`, then
 /// `describe` again. That is `ApiVersions` (18) and `UpdateFeatures` (57)
 /// routed over the controller listener.
@@ -322,9 +337,10 @@ async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
     let (broker, _dir) = start_host_broker_with(|_| {}).await;
 
     let described = kafka_tool("kafka-features", &["describe"]);
+    let before = finalized_level(&described, "transaction.version");
     check!(
-        described.contains("transaction.version"),
-        "describe over the controller listener named no transaction.version: {described}"
+        before == Some(2),
+        "expected transaction.version finalized at 2 before the downgrade, got {before:?}: {described}"
     );
 
     kafka_tool(
@@ -337,10 +353,11 @@ async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
         ],
     );
 
-    let after = kafka_tool("kafka-features", &["describe"]);
+    let after_out = kafka_tool("kafka-features", &["describe"]);
+    let after = finalized_level(&after_out, "transaction.version");
     check!(
-        after.contains("transaction.version") && after.contains("FinalizedVersionLevel: 1"),
-        "downgrade did not take over the controller listener: {after}"
+        after == Some(1),
+        "downgrade did not move transaction.version over the controller listener, got {after:?}: {after_out}"
     );
     broker.shutdown().await;
 }
