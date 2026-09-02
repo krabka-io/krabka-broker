@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_remote_txn_overlap_decision": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      }
+    }
+  }
+}

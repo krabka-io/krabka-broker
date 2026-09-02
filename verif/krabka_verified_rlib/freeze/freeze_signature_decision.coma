@@ -1,0 +1,103 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 118 0 118 88 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 126 16 126 92
+let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 70 10 116 1
+let%span sfreeze'1 = "/workspace/crates/verified/src/freeze.rs" 58 10 58 84
+let%span sfreeze'2 = "/workspace/crates/verified/src/freeze.rs" 51 8 53 51
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_FreezeIdentityState = UnknownKey | WrongKeyPrincipal | WrongConnectionPrincipal | Bound
+
+type t_FreezeSignatureFacts = {
+  identity: t_FreezeIdentityState;
+  set_at_ms: Int64.t;
+  now_ms: Int64.t;
+  max_skew_ms: Int64.t;
+  replaces: bool;
+  replaced_set_at_ms: Int64.t;
+  signature_valid: bool }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate freeze_timestamp_in_window_model [#"/workspace/crates/verified/src/freeze.rs" 49 0 49 94] (set_at_ms'0: Int64.t) (now_ms'0: Int64.t) (max_skew_ms'0: Int64.t) =
+  [%#sfreeze'2] ge_log_Int (Int64.to_int max_skew_ms'0) 0
+  /\ ge_log_Int (Int64.to_int set_at_ms'0) (Int64.to_int now_ms'0 - Int64.to_int max_skew_ms'0)
+  /\ Int64.to_int set_at_ms'0 <= Int64.to_int now_ms'0 + Int64.to_int max_skew_ms'0
+
+let freeze_timestamp_in_window (set_at_ms'0: Int64.t) (now_ms'0: Int64.t) (max_skew_ms'0: Int64.t) (return (x: bool)) =
+any
+  [ return (result: bool) -> {[@stop_split] [@expl:freeze_timestamp_in_window ensures] [%#sfreeze'1] result
+    = freeze_timestamp_in_window_model set_at_ms'0 now_ms'0 max_skew_ms'0}
+    (! return {result}) ]
+
+type t_FreezeSignatureDecision =
+  | UnknownKey'0
+  | AuthorIsNotKeyPrincipal'0
+  | AuthorIsNotConnectionPrincipal'0
+  | TimestampOutsideSkewWindow'0
+  | TimestampNotNewer'0
+  | SignatureInvalid'0
+  | Admit'0
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let freeze_signature_decision [#"/workspace/crates/verified/src/freeze.rs" 118 0 118 88] (facts: t_FreezeSignatureFacts)
+  (return (x: t_FreezeSignatureDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {facts.identity = UnknownKey} (! bb8)
+    | br1 -> {facts.identity = WrongKeyPrincipal} (! bb7)
+    | br2 -> {facts.identity = WrongConnectionPrincipal} (! bb6)
+    | br3 -> {facts.identity = Bound} (! bb5) ]
+  | bb5 = s0
+    [ s0 = freeze_timestamp_in_window [%#sfreeze] {facts.set_at_ms} {facts.now_ms} {facts.max_skew_ms}
+        (fun (_x: bool) -> [ &_11 <- _x ] s1)
+    | s1 = any [ br0 -> {_11 = false} (! bb11) | br1 -> {_11} (! bb10) ] ]
+  | bb10 = any [ br0 -> {facts.replaces = false} (! bb15) | br1 -> {facts.replaces} (! bb12) ]
+  | bb12 = s0
+    [ s0 = [ &_16 <- Int64.le facts.set_at_ms facts.replaced_set_at_ms ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb15) | br1 -> {_16} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- TimestampNotNewer'0 ] s1 | s1 = return {_ret} ]
+  | bb15 = any [ br0 -> {facts.signature_valid = false} (! bb16) | br1 -> {facts.signature_valid} (! bb17) ]
+  | bb17 = s0 [ s0 = [ &_ret <- Admit'0 ] s1 | s1 = return {_ret} ]
+  | bb16 = s0 [ s0 = [ &_ret <- SignatureInvalid'0 ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- TimestampOutsideSkewWindow'0 ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- AuthorIsNotConnectionPrincipal'0 ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- AuthorIsNotKeyPrincipal'0 ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- UnknownKey'0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeSignatureDecision = Any.any_l ()
+  | & facts: t_FreezeSignatureFacts = facts
+  | & _11: bool = Any.any_l ()
+  | & _16: bool = Any.any_l () ])
+  [ return (result: t_FreezeSignatureDecision) ->
+  {[@stop_split] [@expl:freeze_signature_decision ensures] [%#sfreeze'0] match result with
+      | UnknownKey'0 -> facts.identity = UnknownKey
+      | AuthorIsNotKeyPrincipal'0 -> facts.identity = WrongKeyPrincipal
+      | AuthorIsNotConnectionPrincipal'0 -> facts.identity = WrongConnectionPrincipal
+      | TimestampOutsideSkewWindow'0 -> facts.identity = Bound
+      /\ not freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
+      | TimestampNotNewer'0 -> facts.identity = Bound
+      /\ freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
+      /\ facts.replaces /\ Int64.to_int facts.set_at_ms <= Int64.to_int facts.replaced_set_at_ms
+      | SignatureInvalid'0 -> facts.identity = Bound
+      /\ freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
+      /\ (not facts.replaces \/ gt_log_Int (Int64.to_int facts.set_at_ms) (Int64.to_int facts.replaced_set_at_ms))
+      /\ not facts.signature_valid
+      | Admit'0 -> facts.identity = Bound
+      /\ freeze_timestamp_in_window_model facts.set_at_ms facts.now_ms facts.max_skew_ms
+      /\ (not facts.replaces \/ gt_log_Int (Int64.to_int facts.set_at_ms) (Int64.to_int facts.replaced_set_at_ms))
+      /\ facts.signature_valid
+      end}
+    (! return {result}) ]

@@ -1,0 +1,119 @@
+(* #"/proof-work-240/crates/verified/src/transaction.rs" 32 0 32 73 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span stransaction = "/proof-work-240/crates/verified/src/transaction.rs" 34 20 34 26
+let%span stransaction'0 = "/proof-work-240/crates/verified/src/transaction.rs" 41 14 41 36
+let%span stransaction'1 = "/proof-work-240/crates/verified/src/transaction.rs" 42 18 42 30
+let%span stransaction'2 = "/proof-work-240/crates/verified/src/transaction.rs" 40 16 40 75
+let%span stransaction'3 = "/proof-work-240/crates/verified/src/transaction.rs" 39 16 39 89
+let%span stransaction'4 = "/proof-work-240/crates/verified/src/transaction.rs" 38 16 38 48
+let%span stransaction'5 = "/proof-work-240/crates/verified/src/transaction.rs" 37 16 37 79
+let%span stransaction'6 = "/proof-work-240/crates/verified/src/transaction.rs" 36 16 36 32
+let%span stransaction'7 = "/proof-work-240/crates/verified/src/transaction.rs" 35 16 35 39
+let%span stransaction'8 = "/proof-work-240/crates/verified/src/transaction.rs" 43 20 43 33
+let%span stransaction'9 = "/proof-work-240/crates/verified/src/transaction.rs" 50 17 50 18
+let%span stransaction'10 = "/proof-work-240/crates/verified/src/transaction.rs" 50 8 50 18
+let%span stransaction'11 = "/proof-work-240/crates/verified/src/transaction.rs" 23 10 30 1
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let first_unstable_offset [#"/proof-work-240/crates/verified/src/transaction.rs" 32 0 32 73]
+  (starts: Slice64.slice Int64.t) (log_end: Int64.t) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &lso <- log_end ] s1 | s1 = [ &index <- [%#stransaction] (0: UInt64.t) ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#stransaction'0] Seq.length (Slice64.view starts)
+      - UInt64.t'int index)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#stransaction'7] UInt64.t'int index
+      <= Seq.length (Slice64.view starts)}
+      {[@expl:loop invariant #1] [%#stransaction'6] Int64.to_int lso <= Int64.to_int log_end}
+      {[@expl:loop invariant #2] [%#stransaction'5] forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int log_end}
+      {[@expl:loop invariant #3] [%#stransaction'4] UInt64.t'int index = 0 -> Int64.to_int lso = Int64.to_int log_end}
+      {[@expl:loop invariant #4] [%#stransaction'3] gt_log_Int (UInt64.t'int index) 0
+      -> (exists i: int. 0 <= i
+        /\ i < UInt64.t'int index /\ Int64.to_int lso = Int64.to_int (Seq.get (Slice64.view starts) i))}
+      {[@expl:loop invariant #5] [%#stransaction'2] forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int lso <= Int64.to_int (Seq.get (Slice64.view starts) i)}
+      (! [ &variant_old_bb1 <- [%#stransaction'0] Seq.length (Slice64.view starts) - UInt64.t'int index ] s0)
+      [ s0 = len_i64 [%#stransaction'1] {starts} (fun (_x: UInt64.t) -> [ &_38 <- _x ] s1)
+      | s1 = [ &_36 <- UInt64.lt index _38 ] s2
+      | s2 = any [ br0 -> {_36 = false} (! bb11) | br1 -> {_36} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_41 <- index ] s1
+        | s1 = [ &_42 <- Slice64.length starts ] s2
+        | s2 = [ &_43 <- UInt64.lt _41 _42 ] s3
+        | s3 = {[@expl:index in bounds] [%#stransaction'8] _43} s4
+        | s4 = Slice64.get [%#stransaction'8] <Int64.t> {starts} {_41} (fun (r: Int64.t) -> [ &start <- r ] s5)
+        | s5 = [ &_45 <- Int64.gt start log_end ] s6
+        | s6 = any [ br0 -> {_45 = false} (! bb7) | br1 -> {_45} (! bb6) ] ]
+      | bb7 = s0
+        [ s0 = [ &_50 <- Int64.lt start lso ] s1 | s1 = any [ br0 -> {_50 = false} (! bb10) | br1 -> {_50} (! bb8) ] ]
+      | bb8 = s0 [ s0 = [ &lso <- start ] s1 | s1 = bb10 ]
+      | bb10 = s0
+        [ s0 = UInt64.add [%#stransaction'10] {index} {[%#stransaction'9] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &index <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Some lso ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & starts: Slice64.slice Int64.t = starts
+  | & log_end: Int64.t = log_end
+  | & lso: Int64.t = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & start: Int64.t = Any.any_l ()
+  | & _41: UInt64.t = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:first_unstable_offset ensures] [%#stransaction'11] match result with
+      | Some lso -> Int64.to_int lso <= Int64.to_int log_end
+      /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso = Int64.to_int log_end
+      \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
+      /\ (exists i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view starts) /\ Int64.to_int lso = Int64.to_int (Seq.get (Slice64.view starts) i))
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+        -> Int64.to_int lso <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+      | None -> exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view starts)
+        /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int log_end)
+      end}
+    (! return {result}) ]

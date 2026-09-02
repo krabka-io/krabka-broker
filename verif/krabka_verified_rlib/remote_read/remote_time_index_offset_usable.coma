@@ -1,0 +1,43 @@
+(* #"/proof-work-220c/crates/verified/src/remote_read.rs" 14 0 17 9 *)
+
+let%span sremote_read = "/proof-work-220c/crates/verified/src/remote_read.rs" 20 16 20 20
+let%span sremote_read'0 = "/proof-work-220c/crates/verified/src/remote_read.rs" 9 10 12 1
+
+use creusot.int.UInt32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_u32 = None | Some UInt32.t
+
+let elim_Some (_x: t_Option_u32) (return (f0: UInt32.t)) = any
+  [ _k (f0: UInt32.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_time_index_offset_usable [#"/proof-work-220c/crates/verified/src/remote_read.rs" 14 0 17 9]
+  (previous_relative_offset: t_Option_u32) (relative_offset: UInt32.t) (return (x: bool)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {previous_relative_offset = None} (! bb3)
+    | br1 (x0: UInt32.t) -> {previous_relative_offset = Some x0} (! bb4) ]
+  | bb4 = s0
+    [ s0 = elim_Some {previous_relative_offset} (fun (r0: UInt32.t) -> [ &previous <- r0 ] s1)
+    | s1 = [ &_ret <- UInt32.lt previous relative_offset ] s2
+    | s2 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#sremote_read] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & previous_relative_offset: t_Option_u32 = previous_relative_offset
+  | & relative_offset: UInt32.t = relative_offset
+  | & previous: UInt32.t = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:remote_time_index_offset_usable ensures] [%#sremote_read'0] result
+    = match previous_relative_offset with
+      | Some previous -> UInt32.t'int previous < UInt32.t'int relative_offset
+      | None -> true
+      end}
+    (! return {result}) ]

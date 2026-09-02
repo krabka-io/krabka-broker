@@ -115,6 +115,27 @@ async fn every_injection_takes_the_next_epoch() {
 }
 
 #[tokio::test]
+async fn an_exhausted_group_epoch_rejects_injection() {
+    let fixture = Fixture::new();
+    let coordinator = fixture.coordinator().await;
+    coordinator
+        .create_group(GROUP, spec(&["orders"], None, 4))
+        .await
+        .expect("the group is created");
+    let entry = coordinator
+        .groups
+        .get(GROUP)
+        .expect("the group is live")
+        .clone();
+    entry.lock().await.definition.last_epoch = i64::MAX;
+
+    let result = coordinator.trigger_injection(GROUP, None).await;
+
+    assert!(let Err(BarrierError::EpochExhausted { group }) = result);
+    assert!(group == GROUP);
+}
+
+#[tokio::test]
 async fn a_partition_that_carries_no_marker_makes_the_cut_partial() {
     // Only partition 0 of `orders` is open here, so partition 1 stays
     // unmarked until the deadline runs out.

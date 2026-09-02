@@ -43,7 +43,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use object_store::{ObjectStoreExt as _, PutPayload, path::Path};
+    use object_store::{PutPayload, path::Path};
 
     use super::*;
 

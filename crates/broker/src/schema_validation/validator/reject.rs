@@ -26,9 +26,13 @@ pub enum RejectReason {
     /// [`ValidationMode::Full`][crate::schema_validation::ValidationMode::Full]
     /// can produce this.
     BodyMismatch { id: u32, detail: String },
-    /// The registry could not be reached or did not answer usefully, and
-    /// `fail_open` is off.
+    /// The registry could not provide an authoritative answer yet.
     RegistryUnavailable(String),
+    /// The registry provided a permanent or malformed response.
+    RegistryRejected {
+        kind: krabka_verified::SchemaFailureKind,
+        detail: String,
+    },
 }
 
 impl RejectReason {
@@ -41,7 +45,7 @@ impl RejectReason {
             Self::UnknownId(_) => "unknown_id",
             Self::WrongSubject { .. } => "wrong_subject",
             Self::BodyMismatch { .. } => "body_mismatch",
-            Self::RegistryUnavailable(_) => "registry_unavailable",
+            Self::RegistryUnavailable(_) | Self::RegistryRejected { .. } => "registry_unavailable",
         }
     }
 }
@@ -62,7 +66,7 @@ impl std::fmt::Display for RejectReason {
             Self::BodyMismatch { id, detail } => {
                 write!(f, "body does not match schema id {id}: {detail}")
             }
-            Self::RegistryUnavailable(detail) => {
+            Self::RegistryUnavailable(detail) | Self::RegistryRejected { detail, .. } => {
                 write!(f, "schema registry unavailable: {detail}")
             }
         }

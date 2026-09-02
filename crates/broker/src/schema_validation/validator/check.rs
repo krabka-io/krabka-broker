@@ -45,7 +45,16 @@ impl SchemaValidator {
             return Ok(());
         }
 
-        let (id, _) = wire::decode(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
+        let [magic, id_0, id_1, id_2, id_3, ..] = field else {
+            return Err(RejectReason::Unframed(
+                "Confluent frame is shorter than its five-byte prefix".to_owned(),
+            ));
+        };
+        let Some(id) = krabka_verified::schema_frame_id(*magic, *id_0, *id_1, *id_2, *id_3) else {
+            return Err(RejectReason::Unframed(format!(
+                "unsupported Confluent magic byte {magic}"
+            )));
+        };
         let subject = TopicNameStrategy.subject(topic, role);
 
         let entry = match self.entry(id, mode, metrics).await {
@@ -67,21 +76,25 @@ impl SchemaValidator {
             // `entry` was fetched for `Full`, so the text is there unless the
             // registry answered without one. Treat that as unavailable rather
             // than as a passing record.
-            return self.on_unavailable(RejectReason::RegistryUnavailable(format!(
-                "registry returned no schema text for id {id}"
-            )));
+            return self.on_unavailable(RejectReason::RegistryRejected {
+                kind: krabka_verified::SchemaFailureKind::Malformed,
+                detail: format!("registry returned no schema text for id {id}"),
+            });
         };
 
         // Protobuf carries a message-index between the id and the body, so the
         // body offset depends on the format the id resolved to.
         let (message_index, body) = if *kind == SchemaKind::Protobuf {
-            let (_, index, body) =
+            let (decoded_id, index, body) =
                 wire::decode_protobuf(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
+            if decoded_id != id {
+                return Err(RejectReason::Unframed(
+                    "Protobuf decoder selected a different schema id".to_owned(),
+                ));
+            }
             (index, body)
         } else {
-            let (_, body) =
-                wire::decode(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
-            (Vec::new(), body)
+            (Vec::new(), &field[5..])
         };
 
         validate_body(*kind, text, &message_index, body).map_err(|e| RejectReason::BodyMismatch {
@@ -96,10 +109,15 @@ impl SchemaValidator {
     /// answer. "Not registered" is an answer, and it rejects under either
     /// setting.
     fn on_unavailable(&self, reason: RejectReason) -> Result<(), RejectReason> {
-        if self.fail_open && matches!(reason, RejectReason::RegistryUnavailable(_)) {
-            Ok(())
-        } else {
-            Err(reason)
+        let failure = match &reason {
+            RejectReason::UnknownId(_) => krabka_verified::SchemaFailureKind::Unknown,
+            RejectReason::RegistryUnavailable(_) => krabka_verified::SchemaFailureKind::Transient,
+            RejectReason::RegistryRejected { kind, .. } => *kind,
+            _ => return Err(reason),
+        };
+        match krabka_verified::schema_failure_decision(self.fail_open, failure) {
+            krabka_verified::SchemaFailureDecision::AllowUnvalidated => Ok(()),
+            krabka_verified::SchemaFailureDecision::Reject => Err(reason),
         }
     }
 }
@@ -108,7 +126,10 @@ impl SchemaValidator {
 mod tests {
     use assert2::{assert, check};
     use krabka_units::{minutes, secs};
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
 
     use super::*;
     use crate::schema_validation::validator::test_support::{
@@ -137,6 +158,30 @@ mod tests {
             assert!(let Err(reason) = got, "case {name}");
             check!(reason.label() == "unframed", "case {name}: {reason}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_frame_selects_all_four_big_endian_id_bytes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/schemas/ids/16909060/versions"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let v = validator(server.uri());
+        let got = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &[0, 1, 2, 3, 4, b'x'],
+                &no_metrics(),
+            )
+            .await;
+
+        assert!(let Err(RejectReason::UnknownId(id)) = got);
+        check!(id == 0x0102_0304);
     }
 
     #[tokio::test]
@@ -343,5 +388,79 @@ mod tests {
             .await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "unknown_id", "{reason}");
+    }
+
+    #[tokio::test]
+    async fn fail_open_rejects_permanent_registry_errors() {
+        for status in [400, 401, 403, 600] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+            let got = v
+                .check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &framed(KNOWN_ID, b"x"),
+                    &no_metrics(),
+                )
+                .await;
+            assert!(let Err(reason) = got, "status {status}");
+            check!(
+                reason.label() == "registry_unavailable",
+                "status {status}: {reason}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fail_open_rejects_a_malformed_success_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+        let got = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &framed(KNOWN_ID, b"x"),
+                &no_metrics(),
+            )
+            .await;
+        assert!(let Err(reason) = got);
+        check!(reason.label() == "registry_unavailable", "{reason}");
+    }
+
+    #[tokio::test]
+    async fn fail_open_admits_retryable_registry_statuses() {
+        for status in [408, 429] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+            check!(
+                v.check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &framed(KNOWN_ID, b"x"),
+                    &no_metrics(),
+                )
+                .await
+                .is_ok(),
+                "status {status}"
+            );
+        }
     }
 }

@@ -9,6 +9,23 @@ use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
 use super::{MetadataObserver, ObserverConfig, fetch::fetch_once};
+use crate::time_util;
+
+/// Names this loop in the timer-failure logs that [`time_util::arm`] and
+/// [`time_util::fired`] emit.
+const TASK: &str = "metadata observer";
+
+/// Parks for the configured poll interval on the injected timer.
+///
+/// Reports whether the timer held: `false` means the observer's only pacing
+/// mechanism is gone, and the loop must stop rather than spin at full speed
+/// through a poll that no longer waits.
+async fn park(config: &ObserverConfig) -> bool {
+    let Some(tick) = time_util::arm(&*config.timer, config.poll_interval.to_std(), TASK) else {
+        return false;
+    };
+    time_util::fired(tick.await, TASK)
+}
 
 /// Round-robin pick into a non-empty voter list: the index `idx` wrapped by
 /// the list length.
@@ -33,10 +50,9 @@ pub(super) async fn run_loop(
             return;
         }
         if config.voters.is_empty() {
-            config
-                .sleeper
-                .sleep_for_async(config.poll_interval.to_std())
-                .await;
+            if !park(&config).await {
+                return;
+            }
             continue;
         }
         let (target, addr) = voter_at(&config.voters, target_idx).clone();
@@ -53,7 +69,7 @@ pub(super) async fn run_loop(
             if new_offset == fetch_offset {
                 tokio::select! {
                     () = shutdown.cancelled() => return,
-                    () = config.sleeper.sleep_for_async(config.poll_interval.to_std()) => {}
+                    held = park(&config) => if !held { return; },
                 }
             } else {
                 fetch_offset = new_offset;
@@ -62,7 +78,7 @@ pub(super) async fn run_loop(
             target_idx = target_idx.wrapping_add(1);
             tokio::select! {
                 () = shutdown.cancelled() => return,
-                () = config.sleeper.sleep_for_async(config.poll_interval.to_std()) => {}
+                held = park(&config) => if !held { return; },
             }
         }
     }
@@ -83,11 +99,14 @@ mod tests {
     };
     use krabka_raft::OutboundDialer;
     use krabka_units::millis;
-    use qubit_clock::{MockWaiterKind, sleep::MockSleeper};
+    use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
     use uuid::Uuid;
 
     use super::*;
-    use crate::metadata_observer::test_support::TEST_MAX_FETCH_BYTES;
+    use crate::{
+        metadata_observer::test_support::TEST_MAX_FETCH_BYTES,
+        test_support::{BrokenTimer, TimerFailure},
+    };
 
     #[derive(Clone)]
     struct CountingDialer {
@@ -180,8 +199,7 @@ mod tests {
             })
             .await;
         let dial_count = Arc::new(AtomicUsize::new(0));
-        let sleeper = MockSleeper::new();
-        let timeline = sleeper.timeline();
+        let clock = ManualMonotonicClock::new_shared();
         let observer = MetadataObserver::start(ObserverConfig {
             client_dispatch_queue_capacity:
                 krabka_client_core::ConnectionDispatchQueueCapacity::default(),
@@ -194,7 +212,7 @@ mod tests {
             cluster_id: Uuid::nil(),
             max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: millis(250),
-            sleeper: Arc::new(sleeper),
+            timer: clock.new_timer(),
         });
 
         // Await (not sleep) for the first fetch to land. The fetch is real
@@ -212,26 +230,136 @@ mod tests {
         let after_first_fetch = fetches.load(Ordering::SeqCst);
 
         // The empty fetch left the observer caught up, so it must now be parked
-        // on `sleep_for_async(poll_interval)`. Confirm the sleep waiter is
-        // registered (blocking thread — never stalls the current-thread runtime
-        // that drives the observer to its park). Parked on a mock timeline that
-        // we never advance, the observer cannot re-fetch, so the counts are
+        // on a timer armed for `poll_interval`. That park is the loop's only
+        // registration on this clock, so confirming one waiter confirms the
+        // park (blocking thread — never stalls the current-thread runtime that
+        // drives the observer to its park). Parked on a manual timeline that we
+        // never advance, the observer cannot re-fetch, so the counts are
         // deterministically frozen at their first-fetch values.
-        let tl = timeline.clone();
+        let waiters = clock.clone();
         let parked = tokio::task::spawn_blocking(move || {
-            tl.wait_for_blocked_waiters(MockWaiterKind::Sleep, 1, Duration::from_secs(5))
+            waiters.wait_for_waiters(1, Duration::from_secs(5))
         })
         .await
         .unwrap();
         assert!(
             parked,
-            "observer should park on the poll-interval sleep after an empty fetch",
+            "observer should park on the poll-interval timer after an empty fetch",
         );
 
         assert!(fetches.load(Ordering::SeqCst) == after_first_fetch);
         assert!(dial_count.load(Ordering::SeqCst) == after_first_fetch);
 
         observer.cancel().await;
+        mock.stop();
+    }
+
+    /// Runs the serve loop over `config` until it returns on its own, and
+    /// hands back the observer it wrote to.
+    ///
+    /// The shutdown token is never cancelled, so a loop that returns here
+    /// returned because it gave up on its timer. A hang-guard keeps a loop
+    /// that does not give up from wedging the whole suite.
+    async fn run_until_it_stops(config: ObserverConfig) -> Arc<MetadataObserver> {
+        let shutdown = CancellationToken::new();
+        let observer = MetadataObserver::new(config.cluster_id, shutdown.clone());
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            run_loop(config, Arc::clone(&observer), shutdown),
+        )
+        .await
+        .expect("the serve loop stops once its timer is gone");
+        observer
+    }
+
+    /// An `ObserverConfig` over `voters`, driven by `timer`.
+    fn config_on(voters: Vec<(NodeId, String)>, timer: Arc<dyn Timer>) -> ObserverConfig {
+        ObserverConfig {
+            client_dispatch_queue_capacity:
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
+            voters,
+            dialer: Arc::new(krabka_raft::PlaintextDialer),
+            client_id: "dead-timer-test".into(),
+            cluster_id: Uuid::nil(),
+            max_bytes: TEST_MAX_FETCH_BYTES,
+            poll_interval: millis(250),
+            timer,
+        }
+    }
+
+    /// The loopback port nothing listens on, so a dial fails at once rather
+    /// than on a connect timeout.
+    const UNREACHABLE: &str = "127.0.0.1:1";
+
+    #[tokio::test]
+    async fn the_loop_stops_when_a_voterless_park_cannot_be_armed() {
+        // No voters: the loop's only move is to park, and the park cannot be
+        // armed, so it stops instead of spinning through a poll that no longer
+        // waits.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable())).await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(observer.watch_leader().borrow().is_none());
+        assert!(timer.registrations() == 1);
+    }
+
+    #[tokio::test]
+    async fn the_loop_stops_when_a_voterless_park_is_armed_but_never_completes() {
+        // The other half of the park: the deadline registers and then fails,
+        // which ends the loop the same way a refused registration does.
+        let timer = BrokenTimer::dead(TimerFailure::Completion);
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable())).await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(timer.registrations() == 1);
+    }
+
+    #[tokio::test]
+    async fn the_loop_stops_when_the_back_off_after_an_unreachable_voter_cannot_be_armed() {
+        // The fetch fails, so the loop rotates to the next voter and backs off
+        // — and the back-off is the park that cannot be armed. It leaves no
+        // leader hint, because no voter answered.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(
+            vec![(NodeId(1), UNREACHABLE.to_string())],
+            timer.injectable(),
+        ))
+        .await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(observer.watch_leader().borrow().is_none());
+        assert!(timer.registrations() == 1);
+    }
+
+    #[tokio::test]
+    async fn the_loop_stops_when_the_caught_up_park_cannot_be_armed() {
+        // A fetch that returns no records leaves the observer caught up, which
+        // is the third place the loop parks. The record of that answered fetch
+        // — the applied offset and the leader hint — survives the shutdown,
+        // which is what separates this exit from the unreachable-voter one.
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    return Some(metadata_fetch_response_body(Bytes::new()));
+                }
+                None
+            })
+            .await;
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(
+            vec![(NodeId(1), mock.addr.to_string())],
+            timer.injectable(),
+        ))
+        .await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(*observer.watch_leader().borrow() == Some(NodeId(1)));
+        assert!(timer.registrations() == 1);
         mock.stop();
     }
 }

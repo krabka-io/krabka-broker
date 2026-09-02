@@ -54,7 +54,8 @@ pub(crate) fn handle(
                         codes::BROKER_ID_NOT_REGISTERED
                     }
                     ProducerIdAllocationError::StaleBrokerEpoch { .. } => codes::STALE_BROKER_EPOCH,
-                    ProducerIdAllocationError::Exhausted
+                    ProducerIdAllocationError::InvalidFrontier { .. }
+                    | ProducerIdAllocationError::Exhausted
                     | ProducerIdAllocationError::Controller(_) => codes::UNKNOWN_SERVER_ERROR,
                 };
                 tracing::warn!(%error, "AllocateProducerIds failed");
@@ -115,14 +116,68 @@ mod tests {
         assert!(first.producer_id_start == 0);
         assert!(first.producer_id_len == 1_000);
         assert!(second.producer_id_start == 1_000);
+        assert!(broker.controller.current_image().next_producer_id() == 2_000);
+
+        // Both calls may observe the same candidate frontier. The controller
+        // accepts one exact record, and the loser retries from the committed
+        // boundary instead of returning an overlapping block.
+        let (third_bytes, fourth_bytes) = tokio::join!(
+            handle(&broker, 0, 3, &encode_request(&request(broker_epoch))),
+            handle(&broker, 0, 4, &encode_request(&request(broker_epoch))),
+        );
+        let third = decode_response(&third_bytes.unwrap());
+        let fourth = decode_response(&fourth_bytes.unwrap());
+        let mut concurrent_starts = [third.producer_id_start, fourth.producer_id_start];
+        concurrent_starts.sort_unstable();
+        assert!(concurrent_starts == [2_000, 3_000]);
+        assert!(third.producer_id_len == 1_000);
+        assert!(fourth.producer_id_len == 1_000);
+        assert!(broker.controller.current_image().next_producer_id() == 4_000);
 
         let stale = decode_response(
-            &handle(&broker, 0, 3, &encode_request(&request(broker_epoch - 1)))
+            &handle(&broker, 0, 5, &encode_request(&request(broker_epoch - 1)))
                 .await
                 .unwrap(),
         );
         assert!(stale.error_code == codes::STALE_BROKER_EPOCH);
         assert!(stale.producer_id_start == -1);
+
+        let malformed = AllocateProducerIdsRequest {
+            broker_id: -1,
+            broker_epoch,
+            ..Default::default()
+        };
+        let malformed = decode_response(
+            &handle(&broker, 0, 6, &encode_request(&malformed))
+                .await
+                .unwrap(),
+        );
+        assert!(malformed.error_code == codes::BROKER_ID_NOT_REGISTERED);
+        assert!(malformed.producer_id_start == -1);
+        assert!(malformed.producer_id_len == 0);
+
+        // Seed the last frontier that cannot fit another positive block. The
+        // adapter must fail without submitting a wrapped or partial range.
+        broker
+            .controller
+            .submit_change(vec![krabka_metadata::MetadataRecord::V1ProducerIds(
+                krabka_metadata::ProducerIdsRecord {
+                    broker_id: broker.config.node_id,
+                    broker_epoch,
+                    next_producer_id: i64::MAX - 999,
+                },
+            )])
+            .await
+            .expect("seed producer ID limit");
+        let exhausted = decode_response(
+            &handle(&broker, 0, 7, &encode_request(&request(broker_epoch)))
+                .await
+                .unwrap(),
+        );
+        assert!(exhausted.error_code == codes::UNKNOWN_SERVER_ERROR);
+        assert!(exhausted.producer_id_start == -1);
+        assert!(exhausted.producer_id_len == 0);
+        assert!(broker.controller.current_image().next_producer_id() == i64::MAX - 999);
         broker_handle.shutdown().await;
     }
 }

@@ -29,7 +29,9 @@ pub use self::state::AuthenticatedSnapshot;
 pub use self::{
     gssapi::handle_authenticate_gssapi,
     handshake::handle_handshake,
-    oauthbearer::handle_authenticate_oauthbearer,
+    oauthbearer::{
+        handle_authenticate_oauthbearer, handle_authenticate_oauthbearer_with_jwks_cache,
+    },
     plain::handle_authenticate_plain,
     scram::handle_authenticate_scram,
     state::{ConnectionAuth, SaslExchange, is_pre_auth_allowed},

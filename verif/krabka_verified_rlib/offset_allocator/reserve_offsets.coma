@@ -1,15 +1,16 @@
-(* #"/home/user/krabka-broker/crates/verified/src/offset_allocator.rs" 12 0 12 65 *)
+(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 96 0 96 65 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
 let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
-let%span soffset_allocator = "/home/user/krabka-broker/crates/verified/src/offset_allocator.rs" 13 11 13 37
-let%span soffset_allocator'0 = "/home/user/krabka-broker/crates/verified/src/offset_allocator.rs" 8 29 8 40
-let%span soffset_allocator'1 = "/home/user/krabka-broker/crates/verified/src/offset_allocator.rs" 9 29 9 56
-let%span soffset_allocator'2 = "/home/user/krabka-broker/crates/verified/src/offset_allocator.rs" 10 28 10 46
-let%span soffset_allocator'3 = "/home/user/krabka-broker/crates/verified/src/offset_allocator.rs" 11 28 11 55
+let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 97 11 97 37
+let%span soffset_allocator'0 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 91 29 91 39
+let%span soffset_allocator'1 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 92 29 92 39
+let%span soffset_allocator'2 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 93 29 93 56
+let%span soffset_allocator'3 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 94 28 94 46
+let%span soffset_allocator'4 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 95 28 95 55
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -45,23 +46,24 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reserve_offsets [#"/home/user/krabka-broker/crates/verified/src/offset_allocator.rs" 12 0 12 65] (next: Int64.t)
+let reserve_offsets [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 96 0 96 65] (next: Int64.t)
   (count: Int64.t) (return (x: tup2_i64_i64)) =
-{[@stop_split] [@expl:reserve_offsets requires] ([@stop_split] [@expl:reserve_offsets requires #0] [%#soffset_allocator'0] ge_log_Int (Int64.to_int count) 0)
-  /\ ([@stop_split] [@expl:reserve_offsets requires #1] [%#soffset_allocator'1] Int64.to_int next + Int64.to_int count
+{[@stop_split] [@expl:reserve_offsets requires] ([@stop_split] [@expl:reserve_offsets requires #0] [%#soffset_allocator'0] ge_log_Int (Int64.to_int next) 0)
+  /\ ([@stop_split] [@expl:reserve_offsets requires #1] [%#soffset_allocator'1] gt_log_Int (Int64.to_int count) 0)
+  /\ ([@stop_split] [@expl:reserve_offsets requires #2] [%#soffset_allocator'2] Int64.to_int next + Int64.to_int count
   <= Int64.to_int const_MAX)}
   (! bb0
   [ bb0 = s0
-    [ s0 = saturating_add [%#soffset_allocator] {next} {count} (fun (_x: Int64.t) -> [ &_14 <- _x ] s1)
-    | s1 = [ &_ret <- { f0 = next; f1 = _14 } ] s2
+    [ s0 = saturating_add [%#soffset_allocator] {next} {count} (fun (_x: Int64.t) -> [ &_16 <- _x ] s1)
+    | s1 = [ &_ret <- { f0 = next; f1 = _16 } ] s2
     | s2 = return {_ret} ] ]
   [ & _ret: tup2_i64_i64 = Any.any_l ()
   | & next: Int64.t = next
   | & count: Int64.t = count
-  | & _14: Int64.t = Any.any_l () ])
+  | & _16: Int64.t = Any.any_l () ])
   [ return (result: tup2_i64_i64) ->
-  {[@stop_split] [@expl:reserve_offsets ensures] ([@stop_split] [@expl:reserve_offsets ensures #0] [%#soffset_allocator'2] Int64.to_int result.f0
+  {[@stop_split] [@expl:reserve_offsets ensures] ([@stop_split] [@expl:reserve_offsets ensures #0] [%#soffset_allocator'3] Int64.to_int result.f0
       = Int64.to_int next)
-    /\ ([@stop_split] [@expl:reserve_offsets ensures #1] [%#soffset_allocator'3] Int64.to_int result.f1
+    /\ ([@stop_split] [@expl:reserve_offsets ensures #1] [%#soffset_allocator'4] Int64.to_int result.f1
     = Int64.to_int next + Int64.to_int count)}
     (! return {result}) ]

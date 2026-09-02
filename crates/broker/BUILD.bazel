@@ -26,19 +26,43 @@ crate_tests(
     # material is `include_str!`ed by the suites that serve it and the keytabs
     # are opened at run time, so both lists are needed.
     compile_data = glob(["tests/fixtures/**"]),
-    # Assert on a committed high-watermark across three brokers, so they are
+    # Measure elapsed wall-clock time and assert a bound on it, so they are
     # timing-sensitive the way //crates/raft's engine simulation is: they pass in
     # the test run and fail under coverage instrumentation, which is a statement
-    # about the instrumentation rather than about the code. `diskless_e2e` boots
-    # three such clusters at once, one per case, and every case gates on a
-    # quorum-committed watermark inside a bounded deadline.
+    # about the instrumentation rather than about the code. `diskless_e2e` and
+    # `sharegroup_backlog` assert on a committed high-watermark across three
+    # brokers; `diskless_e2e` boots three such clusters at once, one per case,
+    # and every case gates on a quorum-committed watermark inside a bounded
+    # deadline.
+    #
+    # `durability` and `leader_election` each kill a broker and time the acks=-1
+    # produce that the resulting ISR shrink unblocks. The wait cannot finish
+    # before `replica_lag_time_max` elapses and must complete a few seconds
+    # after it, and instrumentation stretches only the second half: `durability`
+    # allows five seconds for a ~2s shrink, which leaves three for a detection
+    # loop the profiler has slowed down. `ip_quotas` asserts the opposite
+    # baseline -- five unthrottled connections inside 500ms -- which is bounded
+    # by scheduling rather than by a timer, and so is the shape instrumentation
+    # stretches most.
+    #
+    # `deliver_at_time` measures elapsed time too and is deliberately absent:
+    # its bound only separates a long poll woken by the delivery advance (~2s)
+    # from one that waited out its 20s `max.wait.ms`. That wake is timer-driven,
+    # so instrumentation does not move it.
     cpu_heavy = [
         "diskless_e2e",
+        "durability",
+        "ip_quotas",
+        "leader_election",
         "sharegroup_backlog",
     ],
     data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
     docker = {
+        # One image, used twice: as the client that reads krabka's advertised
+        # table and as the Kafka broker that table is compared against.
+        "api_versions_differential": ["apache_kafka_4_3_1"],
         "jvm_acceptance_cli": [
+            "apache_kafka_4_3_1",
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
@@ -71,6 +95,11 @@ crate_tests(
             "cp_kafka_7_5_0",
         ],
         "jvm_barrier_markers": ["cp_kafka_7_5_0"],
+        "jvm_bootstrap_controller": ["apache_kafka_4_3_1"],
+        # KIP-412 dynamic log levels. The 4.3.1 tool because its non-`--all`
+        # describe asks `DescribeCluster` whether the broker exists before it
+        # prints anything, which no older tool does.
+        "jvm_broker_loggers": ["apache_kafka_4_3_1"],
         "jvm_consumer_group_next_gen": [
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",
@@ -85,14 +114,18 @@ crate_tests(
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
+        "jvm_role_separated_admin": ["apache_kafka_4_3_1"],
         "jvm_share_groups": ["apache_kafka_4_1_0"],
         "jvm_static_quorum_spike": ["apache_kafka_4_0_0"],
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
         "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
         "librdkafka_conformance": [
-            "kafkacat_1_5_0",
             "kcat_1_7_1",
         ],
+        # One image, used twice: as the `kafka-topics` client that reads
+        # krabka's answer and as the Kafka broker the same command is run
+        # against for the differential.
+        "unavailable_partitions_jvm": ["apache_kafka_4_3_1"],
         # Same image set as `jvm_acceptance_tiered`: the suite reuses that
         # harness's producer, consumer and topic-create helpers, and adds an
         # Object-Lock bucket that `mc` creates and then fails to empty.
@@ -128,4 +161,11 @@ crate_tests(
     # the 20.5s test baseline: a full sweep is hours of work however it is split.
     # This is the one crate that needs the longer per-shard bound.
     mutants_timeout = "eternal",
+    # The digest //MODULE.bazel pins for each container image, as compile-time
+    # environment. `src/codes/tests/kafka_error_table.rs` is a checked-in copy of
+    # Kafka's `Errors` enum and records which image it was extracted from; the
+    # guard beside it compares that record with the live pin, so bumping the
+    # image fails the guard until the table is re-derived. `build.rs` emits the
+    # same variables under Cargo.
+    unit_rustc_env_files = ["//bazel/images:pinned_digests"],
 )

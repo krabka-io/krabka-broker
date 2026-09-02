@@ -1,0 +1,150 @@
+(* #"/workspace/crates/verified/src/delegation_token.rs" 231 0 231 82 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 270 31 270 32
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 274 47 274 48
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 252 30 252 31
+let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 202 10 221 9
+let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 222 10 229 75
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_TokenMutationKind = Renew | Expire | Delete
+
+type t_TokenMutationState = Missing | Expected | Applied | Stale
+
+type t_TokenMutationFacts = {
+  kind: t_TokenMutationKind;
+  state: t_TokenMutationState;
+  now_ms: Int64.t;
+  expected_expiry_ms: Int64.t;
+  incoming_expiry_ms: Int64.t;
+  max_timestamp_ms: Int64.t;
+  uncommitted_tail: bool }
+
+type t_TokenMutationDecision = Append | Retry | Reject
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.rs" 231 0 231 82]
+  (facts: t_TokenMutationFacts) (return (x: t_TokenMutationDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {facts.uncommitted_tail = false} (! bb2) | br1 -> {facts.uncommitted_tail} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb2 = any
+    [ br0 -> {facts.state = Missing} (! bb9)
+    | br1 -> {facts.state = Expected} (! bb7)
+    | br2 -> {facts.state = Applied} (! bb10)
+    | br3 -> {facts.state = Stale} (! bb8) ]
+  | bb8 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb7 = any
+    [ br0 -> {facts.kind = Renew} (! bb19)
+    | br1 -> {facts.kind = Expire} (! bb18)
+    | br2 -> {facts.kind = Delete} (! bb20) ]
+  | bb20 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb18 = s0
+    [ s0 = [ &_48 <- Int64.ge facts.now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_48 = false} (! bb51) | br1 -> {_48} (! bb39) ] ]
+  | bb39 = s0
+    [ s0 = [ &_50 <- Int64.gt facts.expected_expiry_ms facts.now_ms ] s1
+    | s1 = any [ br0 -> {_50 = false} (! bb51) | br1 -> {_50} (! bb40) ] ]
+  | bb40 = s0
+    [ s0 = [ &_53 <- Int64.gt facts.max_timestamp_ms facts.now_ms ] s1
+    | s1 = any [ br0 -> {_53 = false} (! bb51) | br1 -> {_53} (! bb41) ] ]
+  | bb41 = s0
+    [ s0 = [ &_56 <- Int64.le facts.expected_expiry_ms facts.max_timestamp_ms ] s1
+    | s1 = any [ br0 -> {_56 = false} (! bb51) | br1 -> {_56} (! bb42) ] ]
+  | bb42 = s0
+    [ s0 = [ &_59 <- Int64.ge facts.incoming_expiry_ms ([%#sdelegation_token'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_59 = false} (! bb51) | br1 -> {_59} (! bb43) ] ]
+  | bb43 = s0
+    [ s0 = [ &_61 <- Int64.le facts.incoming_expiry_ms facts.max_timestamp_ms ] s1
+    | s1 = any [ br0 -> {_61 = false} (! bb51) | br1 -> {_61} (! bb44) ] ]
+  | bb44 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb51 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb19 = s0
+    [ s0 = [ &_27 <- Int64.lt facts.now_ms ([%#sdelegation_token'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb22) | br1 -> {_27} (! bb28) ] ]
+  | bb22 = s0
+    [ s0 = [ &_29 <- Int64.le facts.expected_expiry_ms facts.now_ms ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb24) | br1 -> {_29} (! bb28) ] ]
+  | bb24 = s0
+    [ s0 = [ &_32 <- Int64.le facts.max_timestamp_ms facts.now_ms ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb26) | br1 -> {_32} (! bb28) ] ]
+  | bb26 = s0
+    [ s0 = [ &_35 <- Int64.gt facts.expected_expiry_ms facts.max_timestamp_ms ] s1
+    | s1 = any [ br0 -> {_35 = false} (! bb29) | br1 -> {_35} (! bb28) ] ]
+  | bb28 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb29 = s0
+    [ s0 = [ &_39 <- facts.incoming_expiry_ms = facts.expected_expiry_ms ] s1
+    | s1 = any [ br0 -> {_39 = false} (! bb31) | br1 -> {_39} (! bb30) ] ]
+  | bb30 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb31 = s0
+    [ s0 = [ &_42 <- Int64.gt facts.incoming_expiry_ms facts.expected_expiry_ms ] s1
+    | s1 = any [ br0 -> {_42 = false} (! bb36) | br1 -> {_42} (! bb32) ] ]
+  | bb32 = s0
+    [ s0 = [ &_45 <- Int64.le facts.incoming_expiry_ms facts.max_timestamp_ms ] s1
+    | s1 = any [ br0 -> {_45 = false} (! bb36) | br1 -> {_45} (! bb34) ] ]
+  | bb34 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb36 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb9 = any
+    [ br0 -> {facts.kind = Renew} (! bb13)
+    | br1 -> {facts.kind = Expire} (! bb13)
+    | br2 -> {facts.kind = Delete} (! bb14) ]
+  | bb14 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenMutationDecision = Any.any_l ()
+  | & facts: t_TokenMutationFacts = facts
+  | & _27: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _59: bool = Any.any_l ()
+  | & _61: bool = Any.any_l () ])
+  [ return (result: t_TokenMutationDecision) ->
+  {[@stop_split] [@expl:token_mutation_decision ensures] ([@stop_split] [@expl:token_mutation_decision ensures #0] [%#sdelegation_token'2] result
+        = Append
+      -> not facts.uncommitted_tail
+      /\ facts.state = Expected
+      /\ match facts.kind with
+        | Delete -> true
+        | Renew -> ge_log_Int (Int64.to_int facts.now_ms) 0
+        /\ gt_log_Int (Int64.to_int facts.expected_expiry_ms) (Int64.to_int facts.now_ms)
+        /\ gt_log_Int (Int64.to_int facts.max_timestamp_ms) (Int64.to_int facts.now_ms)
+        /\ Int64.to_int facts.expected_expiry_ms <= Int64.to_int facts.max_timestamp_ms
+        /\ gt_log_Int (Int64.to_int facts.incoming_expiry_ms) (Int64.to_int facts.expected_expiry_ms)
+        /\ Int64.to_int facts.incoming_expiry_ms <= Int64.to_int facts.max_timestamp_ms
+        | Expire -> ge_log_Int (Int64.to_int facts.now_ms) 0
+        /\ gt_log_Int (Int64.to_int facts.expected_expiry_ms) (Int64.to_int facts.now_ms)
+        /\ gt_log_Int (Int64.to_int facts.max_timestamp_ms) (Int64.to_int facts.now_ms)
+        /\ Int64.to_int facts.expected_expiry_ms <= Int64.to_int facts.max_timestamp_ms
+        /\ ge_log_Int (Int64.to_int facts.incoming_expiry_ms) 0
+        /\ Int64.to_int facts.incoming_expiry_ms <= Int64.to_int facts.max_timestamp_ms
+        end)
+    /\ ([@stop_split] [@expl:token_mutation_decision ensures #1] [%#sdelegation_token'3] result = Retry
+    -> not facts.uncommitted_tail
+    /\ (facts.state = Applied
+    \/ facts.kind = Delete /\ facts.state = Missing
+    \/ facts.kind = Renew
+    /\ facts.state = Expected /\ Int64.to_int facts.incoming_expiry_ms = Int64.to_int facts.expected_expiry_ms))}
+    (! return {result}) ]

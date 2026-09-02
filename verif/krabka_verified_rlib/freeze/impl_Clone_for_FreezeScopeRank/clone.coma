@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 140 27 140 32 *)
+
+(* <freeze::FreezeScopeRank as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_FreezeScopeRank = NoMatch | Prefix UInt64.t | Literal
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeScopeRank [#"/workspace/crates/verified/src/freeze.rs" 140 27 140 32] (self: t_FreezeScopeRank)
+  (return (x: t_FreezeScopeRank)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeScopeRank = Any.any_l () | & self: t_FreezeScopeRank = self ])
+  [ return (result: t_FreezeScopeRank) -> (! return {result}) ]

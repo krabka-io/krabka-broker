@@ -5,6 +5,8 @@
 //! is persisted, so the whole decision is kept in one place next to the
 //! log-recency comparison it depends on.
 
+use krabka_verified::{VoteAdmissionDecision, vote_admission_decision};
+
 use super::{QuorumStateMachine, VoteRequest};
 use crate::{
     action::{Action, TimerKind},
@@ -33,7 +35,7 @@ impl QuorumStateMachine {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(node = self.me.0, epoch = self.state.leader_epoch, from = request.from.0, voter_id = request.voter_id.0, candidate = request.candidate.0, candidate_epoch = request.candidate_epoch, pre_vote = request.pre_vote)
+        fields(node = self.me.0, epoch = self.state.leader_epoch, from = request.from.0, ?request.cluster_id, voter_id = request.voter_id.0, voter_directory_id = %request.voter_directory_id, candidate = request.candidate.0, candidate_directory_id = %request.candidate_directory_id, candidate_epoch = request.candidate_epoch, pre_vote = request.pre_vote)
     )]
     pub(super) fn handle_vote_request(
         &mut self,
@@ -43,36 +45,48 @@ impl QuorumStateMachine {
     ) -> Vec<Action> {
         let VoteRequest {
             from,
+            cluster_id,
             voter_id,
+            voter_directory_id,
             candidate_epoch,
             candidate,
+            candidate_directory_id,
             candidate_log_end: cand_log,
             pre_vote,
         } = request;
         let mut actions = Vec::new();
-        // Recipient-targeting check (KIP-595 / `KafkaRaftClient`): a Vote carries
-        // the id of the voter it is addressed to. If it targets a different node
-        // (a stale/misrouted/forged request), ignore it silently — do not even
-        // reply, exactly as the JVM does. Only enforce once the addressing field
-        // is meaningful: a `-1`/unset `voter_id` (decoded as 0) and the
-        // bootstrap case where we have no voter set yet are not rejected here.
-        if voter_id != self.me && voter_id != 0 {
-            tracing::warn!(
-                addressed_to = voter_id.0,
-                me = self.me.0,
-                "ignoring Vote addressed to a different voter"
-            );
-            return Vec::new();
-        }
-        // Only a member of the local latest set may cast a vote. The candidate
-        // can be in either side of the one adjacent KIP-853 transition.
-        if !self.is_voter() || !self.current_or_adjacent_voter(candidate) {
-            actions.push(Action::ReplyVote {
-                to: from,
-                epoch: self.state.leader_epoch,
-                granted: false,
-            });
-            return actions;
+        let candidate_key = ReplicaKey {
+            id: candidate,
+            directory_id: candidate_directory_id,
+        };
+        // The wire adapter rejects signed sentinels before conversion. The pure
+        // classifier then requires the exact target and both membership checks;
+        // the candidate can be in either side of one adjacent KIP-853 transition.
+        match vote_admission_decision(
+            voter_id.0,
+            self.me.0,
+            self.local_voter_directory_matches(voter_directory_id),
+            cluster_id.is_none_or(|id| id == self.state.cluster_id),
+            self.is_voter(),
+            self.current_or_adjacent_voter_key(candidate_key),
+        ) {
+            VoteAdmissionDecision::IgnoreWrongTarget => {
+                tracing::warn!(
+                    addressed_to = voter_id.0,
+                    me = self.me.0,
+                    "ignoring Vote addressed to a different voter"
+                );
+                return Vec::new();
+            }
+            VoteAdmissionDecision::Deny => {
+                actions.push(Action::ReplyVote {
+                    to: from,
+                    epoch: self.state.leader_epoch,
+                    granted: false,
+                });
+                return actions;
+            }
+            VoteAdmissionDecision::Consider => {}
         }
         // Fenced: candidate is behind our epoch.
         if candidate_epoch < self.state.leader_epoch {
@@ -96,16 +110,13 @@ impl QuorumStateMachine {
         } else {
             let not_voted_other = match self.state.voted_key {
                 None => true,
-                Some(k) => k.id == candidate,
+                Some(key) => self.same_voter(key, candidate_key),
             };
             up_to_date && not_voted_other && self.state.leader_id.is_none()
         };
         if granted && !pre_vote {
             // Binding: persist the vote, become Voted.
-            self.state.voted_key = Some(ReplicaKey {
-                id: candidate,
-                directory_id: uuid::Uuid::nil(),
-            });
+            self.state.voted_key = Some(candidate_key);
             let deadline = self.election_deadline(now);
             self.role = Role::Voted {
                 election_deadline: deadline,

@@ -9,7 +9,9 @@
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::describe_configs_response::DescribeConfigsResult;
 
-use super::wire::{RESOURCE_TYPE_BROKER, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC};
+use super::wire::{
+    RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+};
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     codes,
@@ -17,8 +19,9 @@ use crate::{
 
 /// Per-resource `DescribeConfigs` ACL check.
 ///
-/// A Topic resource needs `DescribeConfigs` on `Topic(name)`. A Broker
-/// resource needs `DescribeConfigs` on `Cluster("kafka-cluster")`.
+/// A Topic resource needs `DescribeConfigs` on `Topic(name)`. A Broker or
+/// `BROKER_LOGGER` resource needs `DescribeConfigs` on
+/// `Cluster("kafka-cluster")`.
 ///
 /// This function returns the authorization-failed code to stamp on a Deny. It
 /// returns `None` when the check allows the request, and for a resource type
@@ -38,7 +41,7 @@ pub(super) fn resource_authz_failure(
             resource_name,
             codes::TOPIC_AUTHORIZATION_FAILED,
         ),
-        RESOURCE_TYPE_BROKER => (
+        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER => (
             ResourceType::Cluster,
             crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             codes::CLUSTER_AUTHORIZATION_FAILED,

@@ -4,8 +4,9 @@
 //! the existing `OFFSET_OUT_OF_RANGE` recovery path. This matches the Apache
 //! Kafka model.
 //!
-//! KFC-1 adds one bound: on a topic that schedules delivery, the trim stops at
-//! the partition's delivery watermark. See [`delivery_capped`].
+//! A trim is bounded by the current high watermark and, on a topic that
+//! schedules delivery, by the partition's delivery watermark. See
+//! [`offsets::trim_decision`].
 //!
 //! # KFC-9: trimming a partition needs two people
 //!
@@ -51,6 +52,7 @@ use krabka_protocol::{
         delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     },
 };
+use krabka_verified::{DeleteRecordsTrimDecision, FreezeMutationKind};
 use uuid::Uuid;
 
 mod authz;
@@ -66,7 +68,7 @@ mod tests;
 use self::{
     authz::denied_topic_names,
     gate::{authorize_trim, consumed_proposal_id, refuse_trim, spend_approval, trim_target},
-    offsets::{delivery_capped, offset_out_of_range, target_offset},
+    offsets::trim_decision,
     response::{delete_records_response, error_partition_result, partition_result, topic_result},
 };
 use crate::{
@@ -196,7 +198,15 @@ async fn trim_one(
     // produce gate, this refusal emits no privileged-action audit event: a
     // freeze is not a break-glass act, and the registry entry that caused it is
     // already in the metadata log.
-    if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(env.image, topic) {
+    if let crate::freeze::resolve::FreezeMutationResolution::Frozen(record) =
+        crate::freeze::resolve::resolve_freeze_mutation(
+            env.image,
+            topic,
+            true,
+            FreezeMutationKind::DeleteRecords,
+        )
+    {
+        let verdict = crate::freeze::resolve::FreezeVerdict::from(record);
         tracing::warn!(
             %topic,
             partition = index,
@@ -215,32 +225,32 @@ async fn trim_one(
         Err(denial) => return refuse_trim(env, topic, index, &denial),
     };
 
-    // Translate offset == -1 → high_watermark per Kafka semantics.
     let leo = part.log_end_offset();
     let hw = part.high_watermark().await;
-    // `hw`/`leo` are `Offset`; the boundary helpers work in raw `i64`, so
-    // unwrap at the seam and re-wrap `requested` for the `Offset`-typed
-    // `trim_to_offset` call below.
-    let requested = Offset(target_offset(fp.offset, hw.0));
-
-    // The range check reads the offset the admin asked for. A target above the
-    // log end is still out of range, and the KFC-1 cap below must not turn that
-    // mistake into a silent partial trim.
-    if offset_out_of_range(requested.0, leo.0) {
-        return error_partition_result(index, codes::OFFSET_OUT_OF_RANGE);
-    }
-
-    // KFC-1: hold the trim at the delivery watermark. The recompute runs under
-    // the log mutex against the partition's own clock, so it agrees with the
-    // cap a fetch at this instant would apply, rather than with whatever the
-    // last scheduler sweep published. It answers `None` on a topic that
-    // delivers immediately, where the target stands.
-    let target = delivery_capped(
-        requested,
-        part.delivery
-            .publish_now(&part.log)
-            .map(|delivery| delivery.watermark),
-    );
+    // Recompute delivery under the log mutex against the partition's own
+    // clock. This agrees with the cap a fetch at this instant would apply,
+    // rather than with whatever the last scheduler sweep published. It
+    // answers `None` on a topic that delivers immediately. The verified
+    // decision rejects malformed state, preserves stale retries, and caps
+    // every admitted target at both HWM and delivery.
+    let delivery_watermark = part
+        .delivery
+        .publish_now(&part.log)
+        .map(|delivery| delivery.watermark);
+    let target = match trim_decision(
+        fp.offset,
+        hw,
+        leo,
+        part.log_start_offset(),
+        delivery_watermark,
+    ) {
+        DeleteRecordsTrimDecision::Noop { frontier }
+        | DeleteRecordsTrimDecision::Apply { frontier } => Offset(frontier),
+        DeleteRecordsTrimDecision::RejectMalformed
+        | DeleteRecordsTrimDecision::RejectOutOfRange => {
+            return error_partition_result(index, codes::OFFSET_OUT_OF_RANGE);
+        }
+    };
 
     let audit_target = trim_target(topic, index);
     if let Err(error) = require_transition(
@@ -262,7 +272,7 @@ async fn trim_one(
     }
 
     // KFC-9: spend the approval before the trim removes anything.
-    let proposal_id = match spend_approval(env.broker, spent, consumed).await {
+    let proposal_id = match spend_approval(env.broker, spent, consumed, &audit_target).await {
         Ok(proposal_id) => proposal_id,
         Err(error) => {
             tracing::warn!(

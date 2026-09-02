@@ -86,6 +86,8 @@ fn build_partition(storage: &LocalTieredStorage, spec: PartitionSpec<'_>) -> Par
         .map(|(export, batch)| {
             let segment_id = Uuid::new_v4();
             let partition_id = TopicIdPartition::new(spec.topic_id, spec.topic, spec.partition);
+            let leader_epoch_checkpoint =
+                Bytes::from(format!("0\n1\n0 {}\n", export.base_offset.0).into_bytes());
             let metadata = RemoteLogSegmentMetadata::new(
                 RemoteLogSegmentId::new(partition_id, segment_id),
                 export.base_offset.0,
@@ -114,7 +116,7 @@ fn build_partition(storage: &LocalTieredStorage, spec: PartitionSpec<'_>) -> Par
                         time_index: export.time_index_path.clone(),
                         transaction_index: export.transaction_index_path.clone(),
                         producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                        leader_epoch_index: Bytes::from_static(b"0\n1\n0 0\n"),
+                        leader_epoch_index: leader_epoch_checkpoint,
                     },
                 )
                 .expect("archive the segment");

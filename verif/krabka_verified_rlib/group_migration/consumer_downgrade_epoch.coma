@@ -1,0 +1,49 @@
+(* #"/workspace/crates/verified/src/group_migration.rs" 63 0 66 16 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sgroup_migration = "/workspace/crates/verified/src/group_migration.rs" 70 26 70 27
+let%span sgroup_migration'0 = "/workspace/crates/verified/src/group_migration.rs" 70 30 70 31
+let%span sgroup_migration'1 = "/workspace/crates/verified/src/group_migration.rs" 57 10 57 57
+let%span sgroup_migration'2 = "/workspace/crates/verified/src/group_migration.rs" 58 10 58 66
+let%span sgroup_migration'3 = "/workspace/crates/verified/src/group_migration.rs" 59 10 61 44
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let consumer_downgrade_epoch [#"/workspace/crates/verified/src/group_migration.rs" 63 0 66 16]
+  (every_member_hosted_classic: bool) (group_epoch: Int32.t) (return (x: t_Option_i32)) = (! bb0
+  [ bb0 = any [ br0 -> {every_member_hosted_classic = false} (! bb1) | br1 -> {every_member_hosted_classic} (! bb2) ]
+  | bb2 = s0
+    [ s0 = [ &_12 <- Int32.lt group_epoch ([%#sgroup_migration] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb4) | br1 -> {_12} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_11 <- [%#sgroup_migration'0] (0: Int32.t) ] s1 | s1 = bb5 ]
+  | bb4 = s0 [ s0 = [ &_11 <- group_epoch ] s1 | s1 = bb5 ]
+  | bb5 = s0 [ s0 = [ &_ret <- Some _11 ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i32 = Any.any_l ()
+  | & every_member_hosted_classic: bool = every_member_hosted_classic
+  | & group_epoch: Int32.t = group_epoch
+  | & _11: Int32.t = Any.any_l ()
+  | & _12: bool = Any.any_l () ])
+  [ return (result: t_Option_i32) ->
+  {[@stop_split] [@expl:consumer_downgrade_epoch ensures] ([@stop_split] [@expl:consumer_downgrade_epoch ensures #0] [%#sgroup_migration'1] (result
+        <> None)
+      = every_member_hosted_classic)
+    /\ ([@stop_split] [@expl:consumer_downgrade_epoch ensures #1] [%#sgroup_migration'2] forall epoch: Int32.t. result
+          = Some epoch -> ge_log_Int (Int32.to_int epoch) 0)
+    /\ ([@stop_split] [@expl:consumer_downgrade_epoch ensures #2] [%#sgroup_migration'3] forall epoch: Int32.t. result
+        = Some epoch
+      -> ge_log_Int (Int32.to_int group_epoch) 0 /\ Int32.to_int epoch = Int32.to_int group_epoch
+      \/ Int32.to_int group_epoch < 0 /\ Int32.to_int epoch = 0)}
+    (! return {result}) ]

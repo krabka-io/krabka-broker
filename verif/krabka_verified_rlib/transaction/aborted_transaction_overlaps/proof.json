@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_aborted_transaction_overlaps": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      }
+    }
+  }
+}

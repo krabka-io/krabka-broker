@@ -1,0 +1,52 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 14 0 14 87 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sraft = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 8 28 8 48
+let%span sraft'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 9 28 9 73
+let%span sraft'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 10 28 13 67
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let advance_high_watermark [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 14 0 14 87]
+  (previous: Int64.t) (requested: Int64.t) (log_end: Int64.t) (return (x: Int64.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- Int64.le requested log_end ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &clamped <- requested ] s1 | s1 = bb3 ]
+  | bb2 = s0 [ s0 = [ &clamped <- log_end ] s1 | s1 = bb3 ]
+  | bb3 = s0
+    [ s0 = [ &_17 <- Int64.ge previous clamped ] s1 | s1 = any [ br0 -> {_17 = false} (! bb5) | br1 -> {_17} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- previous ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- clamped ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & previous: Int64.t = previous
+  | & requested: Int64.t = requested
+  | & log_end: Int64.t = log_end
+  | & clamped: Int64.t = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l () ])
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:advance_high_watermark ensures] ([@stop_split] [@expl:advance_high_watermark ensures #0] [%#sraft] ge_log_Int (Int64.to_int result) (Int64.to_int previous))
+    /\ ([@stop_split] [@expl:advance_high_watermark ensures #1] [%#sraft'0] Int64.to_int previous
+        <= Int64.to_int log_end -> Int64.to_int result <= Int64.to_int log_end)
+    /\ ([@stop_split] [@expl:advance_high_watermark ensures #2] [%#sraft'1] Int64.to_int result
+    = (if Int64.to_int requested <= Int64.to_int log_end then
+      if ge_log_Int (Int64.to_int previous) (Int64.to_int requested) then
+        Int64.to_int previous
+      else
+        Int64.to_int requested
+    
+    else
+      if ge_log_Int (Int64.to_int previous) (Int64.to_int log_end) then Int64.to_int previous else Int64.to_int log_end
+    ))}
+    (! return {result}) ]

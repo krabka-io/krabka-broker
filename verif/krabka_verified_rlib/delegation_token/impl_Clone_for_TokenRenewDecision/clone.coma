@@ -1,0 +1,18 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 25 27 25 32 *)
+
+(* <delegation_token::TokenRenewDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_TokenRenewDecision = Invalid | Expired | Renew Int64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TokenRenewDecision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 25 27 25 32]
+  (self: t_TokenRenewDecision) (return (x: t_TokenRenewDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenRenewDecision = Any.any_l () | & self: t_TokenRenewDecision = self ])
+  [ return (result: t_TokenRenewDecision) -> (! return {result}) ]

@@ -51,7 +51,13 @@ pub(super) async fn handle_classic_leave_message(
             .filter(|member_id| !state.members.contains_key(member_id))
             .collect();
         if !removed.is_empty() && state.members.is_empty() {
-            state.generation_id += 1;
+            let Some(generation_id) = crate::metadata_epoch::next_i32(state.generation_id) else {
+                *state = previous;
+                tracing::warn!(group_id = %state.group_id,
+                    "classic LeaveGroup refused because the generation is exhausted");
+                return Err(codes::INVALID_REQUEST);
+            };
+            state.generation_id = generation_id;
             if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
                 *state = previous;
                 tracing::warn!(group_id = %state.group_id, %error,

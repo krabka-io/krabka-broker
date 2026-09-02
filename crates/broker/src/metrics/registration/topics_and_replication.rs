@@ -165,6 +165,17 @@ impl BrokerMetrics {
         );
 
         registry.register(
+            "controller_fencing_publications",
+            "Cumulative count of completed broker-fencing publication \
+             passes run by this broker while it holds the controller \
+             leadership, whether or not the pass had a difference to \
+             write. The pass awaits its own commit, so an increment means \
+             the fencing state it decided on is applied rather than in \
+             flight.",
+            self.controller_fencing_publications_total.clone(),
+        );
+
+        registry.register(
             "isr_shrinks",
             "Cumulative count of ISR shrinks proposed by this broker's \
              ISR-maintenance loop.",

@@ -1,0 +1,80 @@
+(* #"/proof-work-245/crates/verified/src/restore_sidecar.rs" 91 0 98 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span srestore_sidecar = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 99 19 99 20
+let%span srestore_sidecar'0 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 100 27 100 28
+let%span srestore_sidecar'1 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 106 20 106 24
+let%span srestore_sidecar'2 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 99 4 107 9
+let%span srestore_sidecar'3 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 81 10 89 6
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_txn_index_entry_valid [#"/proof-work-245/crates/verified/src/restore_sidecar.rs" 91 0 98 9]
+  (previous_start: t_Option_i64) (start_offset: Int64.t) (last_offset: Int64.t) (producer_id: Int64.t)
+  (segment_base: Int64.t) (segment_end: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- Int64.ge producer_id ([%#srestore_sidecar] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb11) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_16 <- Int64.ge segment_base ([%#srestore_sidecar'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb11) | br1 -> {_16} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_18 <- Int64.le segment_base start_offset ] s1
+    | s1 = any [ br0 -> {_18 = false} (! bb11) | br1 -> {_18} (! bb3) ] ]
+  | bb3 = s0
+    [ s0 = [ &_21 <- Int64.le start_offset last_offset ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb11) | br1 -> {_21} (! bb4) ] ]
+  | bb4 = s0
+    [ s0 = [ &_24 <- Int64.le last_offset segment_end ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb11) | br1 -> {_24} (! bb5) ] ]
+  | bb5 = any [ br0 -> {previous_start = None} (! bb14) | br1 (x0: Int64.t) -> {previous_start = Some x0} (! bb15) ]
+  | bb15 = s0
+    [ s0 = elim_Some {previous_start} (fun (r0: Int64.t) -> [ &previous <- r0 ] s1)
+    | s1 = [ &_ret <- Int64.lt previous start_offset ] s2
+    | s2 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'1] true ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'2] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & previous_start: t_Option_i64 = previous_start
+  | & start_offset: Int64.t = start_offset
+  | & last_offset: Int64.t = last_offset
+  | & producer_id: Int64.t = producer_id
+  | & segment_base: Int64.t = segment_base
+  | & segment_end: Int64.t = segment_end
+  | & _14: bool = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _18: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & previous: Int64.t = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:restore_txn_index_entry_valid ensures] [%#srestore_sidecar'3] result
+    = (ge_log_Int (Int64.to_int producer_id) 0
+    /\ ge_log_Int (Int64.to_int segment_base) 0
+    /\ Int64.to_int segment_base <= Int64.to_int start_offset
+    /\ Int64.to_int start_offset <= Int64.to_int last_offset
+    /\ Int64.to_int last_offset <= Int64.to_int segment_end
+    /\ match previous_start with
+      | Some previous -> Int64.to_int previous < Int64.to_int start_offset
+      | None -> true
+      end)}
+    (! return {result}) ]

@@ -1,0 +1,62 @@
+(* #"/proof-work-245/crates/verified/src/restore_sidecar.rs" 65 0 70 9 *)
+
+let%span srestore_sidecar = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 74 16 74 86
+let%span srestore_sidecar'0 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 76 20 76 24
+let%span srestore_sidecar'1 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 71 4 77 9
+let%span srestore_sidecar'2 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 58 10 63 6
+
+use creusot.int.UInt32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_u32 = { f0: Int64.t; f1: UInt32.t }
+
+type t_Option_tup2_i64_u32 = None | Some tup2_i64_u32
+
+let elim_Some (_x: t_Option_tup2_i64_u32) (return (f0'0: tup2_i64_u32)) = any
+  [ _k (f0'0: tup2_i64_u32) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_time_index_entry_valid [#"/proof-work-245/crates/verified/src/restore_sidecar.rs" 65 0 70 9]
+  (previous: t_Option_tup2_i64_u32) (timestamp: Int64.t) (relative_offset: UInt32.t) (max_relative: UInt32.t)
+  (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- UInt32.le relative_offset max_relative ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]
+  | bb1 = any [ br0 -> {previous = None} (! bb5) | br1 (x0: tup2_i64_u32) -> {previous = Some x0} (! bb6) ]
+  | bb6 = s0
+    [ s0 = elim_Some {previous} (fun (r0: tup2_i64_u32) -> [ &previous_timestamp <- r0.f0 ] s1)
+    | s1 = elim_Some {previous} (fun (r0: tup2_i64_u32) -> [ &previous_relative <- r0.f1 ] s2)
+    | s2 = [ &_16 <- Int64.le previous_timestamp timestamp ] s3
+    | s3 = any [ br0 -> {_16 = false} (! bb8) | br1 -> {_16} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- UInt32.lt previous_relative relative_offset ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar] false ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'0] true ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'1] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & previous: t_Option_tup2_i64_u32 = previous
+  | & timestamp: Int64.t = timestamp
+  | & relative_offset: UInt32.t = relative_offset
+  | & max_relative: UInt32.t = max_relative
+  | & _10: bool = Any.any_l ()
+  | & previous_timestamp: Int64.t = Any.any_l ()
+  | & previous_relative: UInt32.t = Any.any_l ()
+  | & _16: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:restore_time_index_entry_valid ensures] [%#srestore_sidecar'2] result
+    = (UInt32.t'int relative_offset <= UInt32.t'int max_relative
+    /\ match previous with
+      | Some {f0 = previous_timestamp; f1 = previous_relative} -> Int64.to_int previous_timestamp
+        <= Int64.to_int timestamp
+      /\ UInt32.t'int previous_relative < UInt32.t'int relative_offset
+      | None -> true
+      end)}
+    (! return {result}) ]

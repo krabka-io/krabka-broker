@@ -7,7 +7,8 @@
 //! types here back the observer metadata-fetch and the follower-to-leader
 //! submit-change forward.
 //!
-//! Api keys: `1003` `SubmitChange` (forward), `1004` `MetadataFetch` (observer).
+//! Api keys: `1003` `SubmitChange` (forward), `1004` `MetadataFetch`
+//! (observer), and `1005` `DelegationTokenMutation` (guarded forward).
 
 use bytes::{Buf, BufMut, Bytes};
 use krabka_protocol::ProtocolError;
@@ -31,6 +32,9 @@ pub const API_KEY_SUBMIT_CHANGE: i16 = 1003;
 /// encoded as Kafka record batches, plus `log_start_offset`, `high_watermark`,
 /// and a `leader_hint`.
 pub const API_KEY_METADATA_FETCH: i16 = 1004;
+
+/// Generation-bound delegation-token mutation forwarded to the leader.
+pub const API_KEY_DELEGATION_TOKEN_MUTATION: i16 = 1005;
 
 fn require_remaining(buf: &[u8], required: usize) -> Result<(), ProtocolError> {
     match required.checked_sub(buf.remaining()) {

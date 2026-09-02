@@ -1,0 +1,17 @@
+(* #"/proof-work-243/crates/verified/src/local_recovery.rs" 17 27 17 32 *)
+
+(* <local_recovery::LocalRecoverySwapAction as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_LocalRecoverySwapAction = DiscardSwap | PromoteAll | PromoteSidecars | Reject
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_LocalRecoverySwapAction [#"/proof-work-243/crates/verified/src/local_recovery.rs" 17 27 17 32]
+  (self: t_LocalRecoverySwapAction) (return (x: t_LocalRecoverySwapAction)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_LocalRecoverySwapAction = Any.any_l () | & self: t_LocalRecoverySwapAction = self ])
+  [ return (result: t_LocalRecoverySwapAction) -> (! return {result}) ]

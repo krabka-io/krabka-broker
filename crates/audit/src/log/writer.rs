@@ -7,10 +7,10 @@
 //! that commits the chain head. The degraded spool-and-replay path lives in
 //! `super::spool_mode`.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use krabka_units::prelude::{Time, TimeExt as _};
-use qubit_clock::sleep::AsyncSleeper;
+use qubit_clock::{TimeError, Timer, TimerFuture};
 
 use super::handle::AuditReceiver;
 use crate::{
@@ -42,11 +42,11 @@ pub struct AuditWriterParams {
     pub stats: Arc<AuditStats>,
     /// How often the writer tries to drain the spool in spool mode.
     pub replay_every: Time,
-    /// Relative sleeper that drives the checkpoint and replay cadence.
-    /// Production uses [`qubit_clock::sleep::SystemSleeper`]. Tests inject a
-    /// [`qubit_clock::sleep::MockSleeper`], so the two tickers fire on a
-    /// controlled mock timeline and not on real wall-clock time.
-    pub sleeper: Arc<dyn AsyncSleeper>,
+    /// Timer that drives the checkpoint and replay cadence. Production uses
+    /// [`qubit_clock::StdTimer`]. Tests inject a timer taken from a
+    /// [`qubit_clock::ManualMonotonicClock`], so the two tickers fire on a
+    /// manually advanced timeline and not on real wall-clock time.
+    pub timer: Arc<dyn Timer>,
 }
 
 /// Background task that chains and writes audit events.
@@ -66,7 +66,7 @@ pub struct AuditWriter {
     pub(super) spooling: bool,
     pub(super) stats: Arc<AuditStats>,
     replay_every: Time,
-    sleeper: Arc<dyn AsyncSleeper>,
+    timer: Arc<dyn Timer>,
     pending_losses: Arc<PendingLosses>,
 }
 
@@ -91,7 +91,7 @@ impl AuditWriter {
             spooling,
             stats: params.stats,
             replay_every: params.replay_every,
-            sleeper: params.sleeper,
+            timer: params.timer,
             pending_losses,
         }
     }
@@ -106,15 +106,27 @@ impl AuditWriter {
     )]
     pub async fn run(mut self) {
         // Drive the checkpoint and replay cadence through the injected
-        // `AsyncSleeper` (production: real time; tests: a mock timeline). Each
-        // ticker is a single sleep future re-armed only after it fires, which
-        // matches `tokio::time::interval` with `MissedTickBehavior::Delay`: a
-        // steady stream of events never resets or starves either tick. The
-        // sleeper is cloned into a local so the futures borrow it rather than
-        // `self`, leaving `self` free for the `&mut self` handlers below.
-        let sleeper = self.sleeper.clone();
-        let mut ckpt = sleeper.sleep_for_async(self.checkpoint_every.to_std());
-        let mut replay = sleeper.sleep_for_async(self.replay_every.to_std());
+        // `Timer` (production: real time; tests: a manually advanced
+        // timeline). Each ticker is a single deadline re-armed only after it
+        // fires, which matches `tokio::time::interval` with
+        // `MissedTickBehavior::Delay`: a steady stream of events never resets
+        // or starves either tick. The timer futures are `'static` and hold
+        // their own handle on the backend; the timer is still cloned into a
+        // local so that arming the next deadline in an arm below does not
+        // borrow `self`, which those `&mut self` handlers need.
+        //
+        // A ticker that cannot be armed, or that fails once armed, stops the
+        // drain loop -- but it never skips [`Self::finish`]. Losing the cadence
+        // is not a reason to abandon a chain head that is already committable,
+        // so a dead timer takes the same exit a closed channel takes, and only
+        // the two indeterminate-write paths still leave without flushing.
+        let timer = Arc::clone(&self.timer);
+        let Some(mut ckpt) = arm(&*timer, self.checkpoint_every.to_std(), CHECKPOINT_TASK) else {
+            return self.finish().await;
+        };
+        let Some(mut replay) = arm(&*timer, self.replay_every.to_std(), REPLAY_TASK) else {
+            return self.finish().await;
+        };
 
         loop {
             tokio::select! {
@@ -149,13 +161,24 @@ impl AuditWriter {
                         None => break,
                     }
                 }
-                () = &mut ckpt => {
+                outcome = &mut ckpt => {
+                    if !fired(outcome, CHECKPOINT_TASK) {
+                        break;
+                    }
                     if self.since_checkpoint > 0 {
                         self.emit_checkpoint().await;
                     }
-                    ckpt = sleeper.sleep_for_async(self.checkpoint_every.to_std());
+                    let Some(next) =
+                        arm(&*timer, self.checkpoint_every.to_std(), CHECKPOINT_TASK)
+                    else {
+                        break;
+                    };
+                    ckpt = next;
                 }
-                () = &mut replay => {
+                outcome = &mut replay => {
+                    if !fired(outcome, REPLAY_TASK) {
+                        break;
+                    }
                     if self.spooling
                         && let Err(error) = self.try_replay().await
                     {
@@ -165,10 +188,23 @@ impl AuditWriter {
                     if !self.spooling {
                         let _ = self.write_pending_loss_marker(false).await;
                     }
-                    replay = sleeper.sleep_for_async(self.replay_every.to_std());
+                    let Some(next) = arm(&*timer, self.replay_every.to_std(), REPLAY_TASK) else {
+                        break;
+                    };
+                    replay = next;
                 }
             }
         }
+        self.finish().await;
+    }
+
+    /// The final flush that every exit short of a lost-write abort takes: one
+    /// coalesced marker for the fail-open records this writer dropped, then a
+    /// checkpoint committing whatever chain tail is still uncommitted.
+    ///
+    /// It is a method rather than the tail of [`Self::run`] because a timer
+    /// that will not arm has to reach it too, before the loop is ever entered.
+    async fn finish(mut self) {
         let _ = self.write_pending_loss_marker(true).await;
         if self.since_checkpoint > 0 {
             self.emit_checkpoint().await;
@@ -250,6 +286,53 @@ impl AuditWriter {
     }
 }
 
+/// Names the checkpoint cadence in the timer-failure logs.
+const CHECKPOINT_TASK: &str = "audit checkpoint";
+
+/// Names the spool-replay cadence in the timer-failure logs.
+const REPLAY_TASK: &str = "audit replay";
+
+/// Registers a deadline `delay` from now on `timer`, for the ticker named
+/// `task`.
+///
+/// `None` means the timer refused the registration, and [`AuditWriter::run`]
+/// must stop. `krabka-audit` cannot reach the broker's `time_util` guards, so
+/// it keeps this pair local, with the same contract.
+///
+/// Stopping is the right answer here in particular. A broker whose timer
+/// backend is gone can no longer checkpoint the audit chain on cadence, and an
+/// audit writer that silently keeps running without its cadence is worse than
+/// one that stops loudly: the chain would grow with no committed head, and
+/// nothing would say so. Returning closes the channel the writer drains, so
+/// every sender sees the failure on its next emit instead of writing into a
+/// pipeline that has quietly lost half its guarantees. Re-arming in a loop is
+/// not an option either, because an unarmable timer would spin the task at
+/// full speed.
+fn arm(timer: &dyn Timer, delay: Duration, task: &'static str) -> Option<TimerFuture> {
+    match timer.after(delay) {
+        Ok(future) => Some(future),
+        Err(error) => {
+            tracing::error!(%error, task, "could not arm the audit timer; stopping the writer");
+            None
+        }
+    }
+}
+
+/// Reports whether a deadline armed by [`arm`] completed, for the ticker named
+/// `task`.
+///
+/// `false` means the timer gave up on a registration it had accepted, and the
+/// writer must stop for the same reason [`arm`] returning `None` makes it stop.
+fn fired(outcome: Result<(), TimeError>, task: &'static str) -> bool {
+    match outcome {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::error!(%error, task, "the armed audit timer failed; stopping the writer");
+            false
+        }
+    }
+}
+
 /// Epoch-millisecond clock for the checkpoint timestamps.
 // cargo-mutants: wall-clock read; no deterministic assertion.
 #[cfg_attr(test, mutants::skip)]
@@ -263,14 +346,14 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use qubit_clock::sleep::MockSleeper;
+    use qubit_clock::{MonotonicClock, MonotonicInstant, StdMonotonicClock};
 
     use super::*;
     use crate::{
         event::AuditEventClass,
         log::{
             AuditLog,
-            test_support::{DORMANT, ROOMY_CAP, header, life, product, test_signer},
+            test_support::{DORMANT, ROOMY_CAP, dormant_timer, header, life, product, test_signer},
         },
         sink::MemorySink,
     };
@@ -294,7 +377,7 @@ mod tests {
                 spool: Some(spool),
                 stats,
                 replay_every: DORMANT,
-                sleeper: Arc::new(MockSleeper::new()),
+                timer: dormant_timer(),
             },
         );
         let handle = tokio::spawn(writer.run());
@@ -333,7 +416,7 @@ mod tests {
                 spool: Some(spool),
                 stats: Arc::new(AuditStats::new()),
                 replay_every: DORMANT,
-                sleeper: Arc::new(MockSleeper::new()),
+                timer: dormant_timer(),
             },
         );
         let h = tokio::spawn(writer.run());
@@ -384,7 +467,7 @@ mod tests {
                 spool: Some(spool),
                 stats: Arc::new(AuditStats::new()),
                 replay_every: DORMANT,
-                sleeper: Arc::new(MockSleeper::new()),
+                timer: dormant_timer(),
             },
         );
         let h = tokio::spawn(writer.run());
@@ -439,7 +522,7 @@ mod tests {
                 spool: Some(spool),
                 stats: Arc::new(AuditStats::new()),
                 replay_every: DORMANT,
-                sleeper: Arc::new(MockSleeper::new()),
+                timer: dormant_timer(),
             },
         );
         let h = tokio::spawn(writer.run());
@@ -458,6 +541,39 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&cps[0].value).unwrap();
         let cp = Checkpoint::from_value(&v).unwrap();
         check!((cp.verify(&pubkey), cp.seq_high) == (true, Seq(2)));
+    }
+
+    /// A timer whose backend is gone: it refuses every registration.
+    struct DeadTimer(StdMonotonicClock);
+
+    impl Timer for DeadTimer {
+        fn clock(&self) -> &dyn MonotonicClock {
+            &self.0
+        }
+
+        fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
+            Err(TimeError::InstantOverflow)
+        }
+    }
+
+    #[tokio::test]
+    async fn writer_stops_when_a_ticker_cannot_be_armed() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let sink = Arc::new(MemorySink::default());
+        let (log, rx) = AuditLog::new(16);
+        let mut params =
+            crate::log::test_support::params(sink.clone(), spool, Arc::new(AuditStats::new()));
+        params.timer = Arc::new(DeadTimer(StdMonotonicClock::new()));
+        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+
+        // The sender is still alive, so nothing but the unarmable ticker can
+        // end the run: the writer stops rather than run on without a cadence,
+        // and the event emitted before it noticed never reaches the sink.
+        log.emit(life(1));
+        handle.await.unwrap();
+        check!(sink.records().is_empty());
+        drop(log);
     }
 
     #[tokio::test]

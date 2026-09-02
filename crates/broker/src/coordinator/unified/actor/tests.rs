@@ -1,16 +1,23 @@
 //! Unit tests for the actor loop itself: what a mailbox failure does to the
-//! task, and the one-actor-per-group guarantee the handle registry gives.
+//! task, what a dead session-expiry ticker does to it, and the
+//! one-actor-per-group guarantee the handle registry gives.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
+use qubit_clock::Timer;
+use tokio::sync::mpsc;
 
 use super::{
-    GroupActorMessage,
-    test_support::{await_until, make_coordinator},
+    GroupActorMessage, GroupKindTag, chrono_now_ms, run_actor,
+    test_support::{await_until, empty_metadata, make_coordinator},
 };
-use crate::codes;
+use crate::{
+    codes,
+    coordinator::unified::{config::NextGenConfig, group::CoordinatorGroup},
+    test_support::{BrokenTimer, TimerFailure},
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actor_exits_on_append_error() {
@@ -64,4 +71,86 @@ async fn cross_protocol_get_or_create_returns_the_one_actor() {
     let k_classic = coord.get_or_create_classic("k");
     let k_consumer = coord.get_or_create_consumer("k");
     assert!(Arc::ptr_eq(&k_classic, &k_consumer));
+}
+
+/// Runs one next-gen actor on `timer` until it stops on its own, and hands
+/// back the group it left behind.
+///
+/// The mailbox sender is held for the whole run, so a closed mailbox — the
+/// actor's other way out — cannot be what ends it. A hang-guard keeps an actor
+/// that does not give up from wedging the suite.
+async fn run_until_the_ticker_dies(timer: Arc<dyn Timer>) -> CoordinatorGroup {
+    let (coordinator, log) = make_coordinator();
+    let config = Arc::new(NextGenConfig {
+        timer,
+        ..NextGenConfig::default()
+    });
+    let (tx, rx) = mpsc::channel(config.actor_mailbox_capacity);
+    let group = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_actor(
+            "g".to_string(),
+            GroupKindTag::Consumer,
+            config,
+            empty_metadata(),
+            log,
+            coordinator,
+            rx,
+        ),
+    )
+    .await
+    .expect("the actor stops once its ticker is gone");
+    drop(tx);
+    group
+}
+
+#[tokio::test]
+async fn the_actor_stamps_the_retention_clock_when_its_ticker_cannot_be_armed() {
+    let timer = BrokenTimer::dead(TimerFailure::Registration);
+
+    // The actor never reaches its mailbox loop, so the start-up exit is the
+    // only thing that can stamp the offset-retention clock — and it must,
+    // because a memberless group whose stamp stayed `None` would never be
+    // measured for offset expiry at all.
+    let before = chrono_now_ms();
+    let group = run_until_the_ticker_dies(timer.injectable()).await;
+    let after = chrono_now_ms();
+
+    let stamped = group
+        .empty_since_ms
+        .expect("the retention clock is stamped");
+    check!((before..=after).contains(&stamped));
+    check!(timer.registrations() == 1);
+}
+
+#[tokio::test]
+async fn the_actor_stops_when_its_armed_tick_never_completes() {
+    let timer = BrokenTimer::dead(TimerFailure::Completion);
+
+    // The registration is accepted, so the actor reaches its select; the
+    // deadline then fails, and the loop tail still stamps the clock on the way
+    // out rather than returning from inside the arm.
+    let before = chrono_now_ms();
+    let group = run_until_the_ticker_dies(timer.injectable()).await;
+    let after = chrono_now_ms();
+
+    let stamped = group
+        .empty_since_ms
+        .expect("the retention clock is stamped");
+    check!((before..=after).contains(&stamped));
+    check!(timer.registrations() == 1);
+}
+
+#[tokio::test]
+async fn the_actor_stops_when_its_tick_cannot_be_re_armed() {
+    let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
+
+    // The start-up deadline is honoured, so the actor takes one session-expiry
+    // sweep and then asks for the next deadline. That one is refused, and the
+    // actor stops rather than retrying it: two registrations in all, not a
+    // climbing count.
+    let group = run_until_the_ticker_dies(timer.injectable()).await;
+
+    check!(group.empty_since_ms.is_some());
+    check!(timer.registrations() == 2);
 }

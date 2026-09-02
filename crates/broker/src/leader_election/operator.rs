@@ -36,6 +36,8 @@ pub(crate) enum ElectError {
     /// partition, and `kafka-leader-election` reports the refusal.
     PreferredIsWitness,
     NoEligibleReplica,
+    /// A safety-relevant metadata epoch reached its wire maximum.
+    EpochExhausted,
 }
 
 /// Pick a replacement leader for a partition currently led by a broker
@@ -82,17 +84,20 @@ pub(crate) async fn select_replacement_leader_for_shutdown(
     let Some(new_leader) = new_leader else {
         return Err(ElectError::NoEligibleReplica);
     };
+    let (partition_epoch, leader_epoch) =
+        crate::metadata_epoch::next_partition_change(pr.partition_epoch, pr.leader_epoch, true)
+            .ok_or(ElectError::EpochExhausted)?;
     Ok(krabka_metadata::PartitionRecord {
         topic: pr.topic.clone(),
         partition: pr.partition,
         leader: new_leader,
         replicas: pr.replicas.clone(),
         isr: pr.isr.clone(),
-        leader_epoch: pr.leader_epoch.next(),
+        leader_epoch,
         adding_replicas: pr.adding_replicas.clone(),
         removing_replicas: pr.removing_replicas.clone(),
         directories: pr.directories.clone(),
-        partition_epoch: pr.partition_epoch + 1,
+        partition_epoch,
     })
 }
 
@@ -136,17 +141,23 @@ pub(crate) async fn select_new_leader_for_partition(
             if !liveness.is_alive(preferred.0).await {
                 return Err(ElectError::PreferredNotAlive);
             }
+            let (partition_epoch, leader_epoch) = crate::metadata_epoch::next_partition_change(
+                pr.partition_epoch,
+                pr.leader_epoch,
+                true,
+            )
+            .ok_or(ElectError::EpochExhausted)?;
             Ok(PartitionRecord {
                 topic: pr.topic.clone(),
                 partition: pr.partition,
                 leader: preferred,
                 replicas: pr.replicas.clone(),
                 isr: pr.isr.clone(),
-                leader_epoch: pr.leader_epoch.next(),
+                leader_epoch,
                 adding_replicas: pr.adding_replicas.clone(),
                 removing_replicas: pr.removing_replicas.clone(),
                 directories: pr.directories.clone(),
-                partition_epoch: pr.partition_epoch + 1,
+                partition_epoch,
             })
         }
         ElectionType::Unclean => {
@@ -164,17 +175,24 @@ pub(crate) async fn select_new_leader_for_partition(
             // of ISR.
             for &n in &pr.replicas {
                 if !witnesses.contains(&n) && liveness.is_alive(n.0).await {
+                    let (partition_epoch, leader_epoch) =
+                        crate::metadata_epoch::next_partition_change(
+                            pr.partition_epoch,
+                            pr.leader_epoch,
+                            true,
+                        )
+                        .ok_or(ElectError::EpochExhausted)?;
                     return Ok(PartitionRecord {
                         topic: pr.topic.clone(),
                         partition: pr.partition,
                         leader: n,
                         replicas: pr.replicas.clone(),
                         isr: vec![n],
-                        leader_epoch: pr.leader_epoch.next(),
+                        leader_epoch,
                         adding_replicas: pr.adding_replicas.clone(),
                         removing_replicas: pr.removing_replicas.clone(),
                         directories: pr.directories.clone(),
-                        partition_epoch: pr.partition_epoch + 1,
+                        partition_epoch,
                     });
                 }
             }

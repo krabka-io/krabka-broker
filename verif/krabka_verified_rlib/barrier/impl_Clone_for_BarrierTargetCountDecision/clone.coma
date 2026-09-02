@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/barrier.rs" 11 27 11 32 *)
+
+(* <barrier::BarrierTargetCountDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_BarrierTargetCountDecision = Malformed | Overflow | Expand Int64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BarrierTargetCountDecision [#"/workspace/crates/verified/src/barrier.rs" 11 27 11 32]
+  (self: t_BarrierTargetCountDecision) (return (x: t_BarrierTargetCountDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierTargetCountDecision = Any.any_l () | & self: t_BarrierTargetCountDecision = self ])
+  [ return (result: t_BarrierTargetCountDecision) -> (! return {result}) ]

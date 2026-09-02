@@ -104,3 +104,69 @@ async fn kafka_topics_alter_partitions() {
         "describe missing PartitionCount: 3 — got: {s}"
     );
 }
+
+/// `kafka-topics --create`, `--list` (present), `--delete`, `--list` (gone).
+///
+/// The epic's criterion says create/describe/**delete**, and the only
+/// `--delete` any container suite ran was
+/// `jvm_acceptance_freeze/break_glass_delete.rs`, which asserts the two-person
+/// rule REFUSES one. A refusal does not evidence that the ordinary path works,
+/// so this pins the success case: `DeleteTopics` (`api_key` 20) over the broker
+/// listener, with `--list` on both sides so the assertion is the topic's
+/// disappearance rather than the tool's exit status.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn kafka_topics_delete_removes_the_topic() {
+    let (broker, _dir) = start_host_broker().await;
+    nc_check_connectivity();
+
+    docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--create",
+        "--topic",
+        "deleted-by-cli",
+        "--partitions",
+        "1",
+        "--replication-factor",
+        "1",
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+
+    let before = docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--list",
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+    let listed = String::from_utf8_lossy(&before.stdout);
+    assert!(
+        listed.lines().any(|line| line.trim() == "deleted-by-cli"),
+        "topic missing before the delete: {listed}"
+    );
+
+    docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--delete",
+        "--topic",
+        "deleted-by-cli",
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+
+    let after = docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--list",
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+    let remaining = String::from_utf8_lossy(&after.stdout);
+    assert!(
+        !remaining
+            .lines()
+            .any(|line| line.trim() == "deleted-by-cli"),
+        "topic still listed after the delete: {remaining}"
+    );
+
+    broker.shutdown().await;
+}

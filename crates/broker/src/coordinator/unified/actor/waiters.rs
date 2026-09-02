@@ -36,15 +36,20 @@ pub(super) fn complete_classic_rebalance(
             ..SyncResult::default()
         });
     }
-    let inconsistent = classic_ops::try_complete(state).is_err();
-    if inconsistent {
+    let completion_error = classic_ops::try_complete(state).err();
+    if completion_error.is_some() {
         state.rebalance_deadline = None;
         state.joined_this_round.clear();
     }
     for (member_id, sender) in joiners.drain() {
-        let result = if inconsistent {
+        let result = if let Some(error) = completion_error {
             JoinResult {
-                error_code: codes::INCONSISTENT_GROUP_PROTOCOL,
+                error_code: match error {
+                    classic_ops::CompleteError::InconsistentProtocol => {
+                        codes::INCONSISTENT_GROUP_PROTOCOL
+                    }
+                    classic_ops::CompleteError::EpochExhausted => codes::INVALID_REQUEST,
+                },
                 member_id: member_id.clone(),
                 protocol_type: state.protocol_type.clone(),
                 ..JoinResult::default()

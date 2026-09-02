@@ -1,0 +1,151 @@
+(* #"/proof-work-207/crates/verified/src/broker.rs" 247 0 254 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sbroker = "/proof-work-207/crates/verified/src/broker.rs" 257 11 257 34
+let%span sbroker'0 = "/proof-work-207/crates/verified/src/broker.rs" 257 38 257 60
+let%span sbroker'1 = "/proof-work-207/crates/verified/src/broker.rs" 259 15 259 20
+let%span sbroker'2 = "/proof-work-207/crates/verified/src/broker.rs" 262 30 262 35
+let%span sbroker'3 = "/proof-work-207/crates/verified/src/broker.rs" 263 16 263 22
+let%span sbroker'4 = "/proof-work-207/crates/verified/src/broker.rs" 270 32 270 61
+let%span sbroker'5 = "/proof-work-207/crates/verified/src/broker.rs" 271 14 271 37
+let%span sbroker'6 = "/proof-work-207/crates/verified/src/broker.rs" 268 34 269 59
+let%span sbroker'7 = "/proof-work-207/crates/verified/src/broker.rs" 266 34 267 57
+let%span sbroker'8 = "/proof-work-207/crates/verified/src/broker.rs" 265 34 265 85
+let%span sbroker'9 = "/proof-work-207/crates/verified/src/broker.rs" 264 34 264 64
+let%span sbroker'10 = "/proof-work-207/crates/verified/src/broker.rs" 272 11 272 31
+let%span sbroker'11 = "/proof-work-207/crates/verified/src/broker.rs" 272 35 272 54
+let%span sbroker'12 = "/proof-work-207/crates/verified/src/broker.rs" 275 11 275 30
+let%span sbroker'13 = "/proof-work-207/crates/verified/src/broker.rs" 276 30 276 34
+let%span sbroker'14 = "/proof-work-207/crates/verified/src/broker.rs" 278 13 278 14
+let%span sbroker'15 = "/proof-work-207/crates/verified/src/broker.rs" 278 8 278 14
+let%span sbroker'16 = "/proof-work-207/crates/verified/src/broker.rs" 273 19 273 24
+let%span sbroker'17 = "/proof-work-207/crates/verified/src/broker.rs" 241 10 245 43
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use creusot.int.Int32
+use int.Int
+
+let len_u64 (self_: Slice64.slice UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let unclean_recovery_commit_admission [#"/proof-work-207/crates/verified/src/broker.rs" 247 0 254 9]
+  (selected_partition_epoch: Int32.t) (current_partition_epoch: Int32.t) (selected_replicas: Slice64.slice UInt64.t)
+  (current_replicas: Slice64.slice UInt64.t) (winner: UInt64.t) (current_leader_alive: bool) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_15 <- selected_partition_epoch <> current_partition_epoch ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb2) | br1 -> {_15} (! bb7) ] ]
+  | bb2 = any [ br0 -> {current_leader_alive = false} (! bb3) | br1 -> {current_leader_alive} (! bb7) ]
+  | bb3 = s0
+    [ s0 = len_u64 [%#sbroker] {selected_replicas} (fun (_x: UInt64.t) -> [ &_20 <- _x ] s1)
+    | s1 = len_u64 [%#sbroker'0] {current_replicas} (fun (_x: UInt64.t) -> [ &_22 <- _x ] s2)
+    | s2 = [ &_19 <- _20 <> _22 ] s3
+    | s3 = any [ br0 -> {_19 = false} (! bb8) | br1 -> {_19} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#sbroker'1] false ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = [ &winner_assigned <- [%#sbroker'2] false ] s1 | s1 = [ &i <- [%#sbroker'3] (0: UInt64.t) ] s2 | s2 = bb9 ]
+  | bb9 = bb9invariant
+    [ bb9 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb9 ([%#sbroker'4] Seq.length (Slice64.view selected_replicas)
+      - UInt64.t'int i)}
+      bb9invariant
+    | bb9invariant = {[@expl:loop invariant #0] [%#sbroker'9] UInt64.t'int i
+      <= Seq.length (Slice64.view selected_replicas)}
+      {[@expl:loop invariant #1] [%#sbroker'8] Seq.length (Slice64.view selected_replicas)
+      = Seq.length (Slice64.view current_replicas)}
+      {[@expl:loop invariant #2] [%#sbroker'7] forall k: int. 0 <= k /\ k < UInt64.t'int i
+        -> Seq.get (Slice64.view selected_replicas) k = Seq.get (Slice64.view current_replicas) k}
+      {[@expl:loop invariant #3] [%#sbroker'6] winner_assigned
+      = (exists k: int. 0 <= k /\ k < UInt64.t'int i /\ Seq.get (Slice64.view current_replicas) k = winner)}
+      (! [ &variant_old_bb9 <- [%#sbroker'4] Seq.length (Slice64.view selected_replicas) - UInt64.t'int i ] s0)
+      [ s0 = len_u64 [%#sbroker'5] {selected_replicas} (fun (_x: UInt64.t) -> [ &_50 <- _x ] s1)
+      | s1 = [ &_48 <- UInt64.lt i _50 ] s2
+      | s2 = any [ br0 -> {_48 = false} (! bb21) | br1 -> {_48} (! bb12) ] ]
+      [ bb12 = s0
+        [ s0 = [ &_55 <- i ] s1
+        | s1 = [ &_56 <- Slice64.length selected_replicas ] s2
+        | s2 = [ &_57 <- UInt64.lt _55 _56 ] s3
+        | s3 = {[@expl:index in bounds] [%#sbroker'10] _57} s4
+        | s4 = Slice64.get [%#sbroker'10] <UInt64.t> {selected_replicas} {_55} (fun (r: UInt64.t) -> [ &_54 <- r ] s5)
+        | s5 = [ &_59 <- i ] s6
+        | s6 = [ &_60 <- Slice64.length current_replicas ] s7
+        | s7 = [ &_61 <- UInt64.lt _59 _60 ] s8
+        | s8 = {[@expl:index in bounds] [%#sbroker'11] _61} s9
+        | s9 = Slice64.get [%#sbroker'11] <UInt64.t> {current_replicas} {_59} (fun (r: UInt64.t) -> [ &_58 <- r ] s10)
+        | s10 = [ &_53 <- _54 <> _58 ] s11
+        | s11 = any [ br0 -> {_53 = false} (! bb16) | br1 -> {_53} (! bb15) ] ]
+      | bb16 = s0
+        [ s0 = [ &_66 <- i ] s1
+        | s1 = [ &_67 <- Slice64.length current_replicas ] s2
+        | s2 = [ &_68 <- UInt64.lt _66 _67 ] s3
+        | s3 = {[@expl:index in bounds] [%#sbroker'12] _68} s4
+        | s4 = Slice64.get [%#sbroker'12] <UInt64.t> {current_replicas} {_66} (fun (r: UInt64.t) -> [ &_65 <- r ] s5)
+        | s5 = [ &_64 <- _65 = winner ] s6
+        | s6 = any [ br0 -> {_64 = false} (! bb20) | br1 -> {_64} (! bb18) ] ]
+      | bb18 = s0 [ s0 = [ &winner_assigned <- [%#sbroker'13] true ] s1 | s1 = bb20 ]
+      | bb20 = s0
+        [ s0 = UInt64.add [%#sbroker'15] {i} {[%#sbroker'14] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb9 ] ] ]
+  | bb15 = s0 [ s0 = [ &_ret <- [%#sbroker'16] false ] s1 | s1 = return {_ret} ]
+  | bb21 = s0 [ s0 = [ &_ret <- winner_assigned ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & selected_partition_epoch: Int32.t = selected_partition_epoch
+  | & current_partition_epoch: Int32.t = current_partition_epoch
+  | & selected_replicas: Slice64.slice UInt64.t = selected_replicas
+  | & current_replicas: Slice64.slice UInt64.t = current_replicas
+  | & winner: UInt64.t = winner
+  | & current_leader_alive: bool = current_leader_alive
+  | & _15: bool = Any.any_l ()
+  | & _19: bool = Any.any_l ()
+  | & _20: UInt64.t = Any.any_l ()
+  | & _22: UInt64.t = Any.any_l ()
+  | & winner_assigned: bool = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _50: UInt64.t = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _55: UInt64.t = Any.any_l ()
+  | & _56: UInt64.t = Any.any_l ()
+  | & _57: bool = Any.any_l ()
+  | & _58: UInt64.t = Any.any_l ()
+  | & _59: UInt64.t = Any.any_l ()
+  | & _60: UInt64.t = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & _64: bool = Any.any_l ()
+  | & _65: UInt64.t = Any.any_l ()
+  | & _66: UInt64.t = Any.any_l ()
+  | & _67: UInt64.t = Any.any_l ()
+  | & _68: bool = Any.any_l ()
+  | & variant_old_bb9: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:unclean_recovery_commit_admission ensures] [%#sbroker'17] result
+    = (Int32.to_int selected_partition_epoch = Int32.to_int current_partition_epoch
+    /\ not current_leader_alive
+    /\ Slice64.view selected_replicas = Slice64.view current_replicas
+    /\ (exists i: int. 0 <= i
+      /\ i < Seq.length (Slice64.view current_replicas) /\ Seq.get (Slice64.view current_replicas) i = winner))}
+    (! return {result}) ]

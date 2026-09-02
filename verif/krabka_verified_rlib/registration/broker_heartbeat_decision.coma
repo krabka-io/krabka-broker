@@ -1,0 +1,112 @@
+(* #"/proof-work-234/crates/verified/src/registration.rs" 113 0 119 28 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sregistration = "/proof-work-234/crates/verified/src/registration.rs" 129 24 129 28
+let%span sregistration'0 = "/proof-work-234/crates/verified/src/registration.rs" 130 27 130 32
+let%span sregistration'1 = "/proof-work-234/crates/verified/src/registration.rs" 131 23 131 28
+let%span sregistration'2 = "/proof-work-234/crates/verified/src/registration.rs" 132 20 132 25
+let%span sregistration'3 = "/proof-work-234/crates/verified/src/registration.rs" 133 30 133 35
+let%span sregistration'4 = "/proof-work-234/crates/verified/src/registration.rs" 141 24 141 48
+let%span sregistration'5 = "/proof-work-234/crates/verified/src/registration.rs" 138 28 138 32
+let%span sregistration'6 = "/proof-work-234/crates/verified/src/registration.rs" 139 31 139 35
+let%span sregistration'7 = "/proof-work-234/crates/verified/src/registration.rs" 122 24 122 29
+let%span sregistration'8 = "/proof-work-234/crates/verified/src/registration.rs" 123 27 123 32
+let%span sregistration'9 = "/proof-work-234/crates/verified/src/registration.rs" 124 23 124 28
+let%span sregistration'10 = "/proof-work-234/crates/verified/src/registration.rs" 125 20 125 25
+let%span sregistration'11 = "/proof-work-234/crates/verified/src/registration.rs" 126 30 126 35
+let%span sregistration'12 = "/proof-work-234/crates/verified/src/registration.rs" 100 10 100 57
+let%span sregistration'13 = "/proof-work-234/crates/verified/src/registration.rs" 101 10 102 61
+let%span sregistration'14 = "/proof-work-234/crates/verified/src/registration.rs" 103 10 104 89
+let%span sregistration'15 = "/proof-work-234/crates/verified/src/registration.rs" 105 10 108 50
+let%span sregistration'16 = "/proof-work-234/crates/verified/src/registration.rs" 109 10 111 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_BrokerHeartbeatDecision = {
+  registered: bool;
+  epoch_matches: bool;
+  caught_up: bool;
+  fenced: bool;
+  should_shut_down: bool }
+
+predicate ge_log_i64 [@inline:trivial] (self: Int64.t) (other: Int64.t) = [%#sord] Int64.le other self
+
+meta "rewrite_def" predicate ge_log_i64
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let broker_heartbeat_decision [#"/proof-work-234/crates/verified/src/registration.rs" 113 0 119 28]
+  (registered_epoch: t_Option_i64) (request_epoch: Int64.t) (metadata_offset: Int64.t) (want_fence: bool)
+  (want_shut_down: bool) (return (x: t_BrokerHeartbeatDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {registered_epoch = None} (! bb6) | br1 (x0: Int64.t) -> {registered_epoch = Some x0} (! bb5) ]
+  | bb5 = s0
+    [ s0 = elim_Some {registered_epoch} (fun (r0: Int64.t) -> [ &epoch'0 <- r0 ] s1)
+    | s1 = [ &_26 <- request_epoch <> epoch'0 ] s2
+    | s2 = any [ br0 -> {_26 = false} (! bb4) | br1 -> {_26} (! bb7) ] ]
+  | bb7 = s0
+    [ s0 = elim_Some {registered_epoch} (fun (r0: Int64.t) -> [ &epoch <- r0 ] s1)
+    | s1 = [ &_ret <- { registered = ([%#sregistration] true);
+                        epoch_matches = ([%#sregistration'0] false);
+                        caught_up = ([%#sregistration'1] false);
+                        fenced = ([%#sregistration'2] false);
+                        should_shut_down = ([%#sregistration'3] false) } ] s2
+    | s2 = return {_ret} ]
+  | bb4 = s0
+    [ s0 = elim_Some {registered_epoch} (fun (r0: Int64.t) -> [ &epoch'1 <- r0 ] s1)
+    | s1 = [ &caught_up'0 <- Int64.ge metadata_offset epoch'1 ] s2
+    | s2 = any [ br0 -> {want_fence = false} (! bb10) | br1 -> {want_fence} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_34 <- [%#sregistration'4] true ] s1 | s1 = bb11 ]
+  | bb10 = s0 [ s0 = [ &_34 <- not caught_up'0 ] s1 | s1 = bb11 ]
+  | bb11 = s0
+    [ s0 = [ &_ret <- { registered = ([%#sregistration'5] true);
+                        epoch_matches = ([%#sregistration'6] true);
+                        caught_up = caught_up'0;
+                        fenced = _34;
+                        should_shut_down = want_shut_down } ] s1
+    | s1 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = [ &_ret <- { registered = ([%#sregistration'7] false);
+                        epoch_matches = ([%#sregistration'8] false);
+                        caught_up = ([%#sregistration'9] false);
+                        fenced = ([%#sregistration'10] false);
+                        should_shut_down = ([%#sregistration'11] false) } ] s1
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_BrokerHeartbeatDecision = Any.any_l ()
+  | & registered_epoch: t_Option_i64 = registered_epoch
+  | & request_epoch: Int64.t = request_epoch
+  | & metadata_offset: Int64.t = metadata_offset
+  | & want_fence: bool = want_fence
+  | & want_shut_down: bool = want_shut_down
+  | & epoch: Int64.t = Any.any_l ()
+  | & epoch'0: Int64.t = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & epoch'1: Int64.t = Any.any_l ()
+  | & caught_up'0: bool = Any.any_l ()
+  | & _34: bool = Any.any_l () ])
+  [ return (result: t_BrokerHeartbeatDecision) ->
+  {[@stop_split] [@expl:broker_heartbeat_decision ensures] ([@stop_split] [@expl:broker_heartbeat_decision ensures #0] [%#sregistration'12] result.registered
+      = (registered_epoch <> None))
+    /\ ([@stop_split] [@expl:broker_heartbeat_decision ensures #1] [%#sregistration'13] result.epoch_matches
+      = (exists epoch: Int64.t. registered_epoch = Some epoch /\ request_epoch = epoch))
+    /\ ([@stop_split] [@expl:broker_heartbeat_decision ensures #2] [%#sregistration'14] result.caught_up
+      = (exists epoch: Int64.t. registered_epoch = Some epoch
+        /\ request_epoch = epoch /\ ge_log_i64 metadata_offset epoch))
+    /\ ([@stop_split] [@expl:broker_heartbeat_decision ensures #3] [%#sregistration'15] result.fenced
+      = (exists epoch: Int64.t. registered_epoch = Some epoch
+        /\ request_epoch = epoch /\ (want_fence \/ Int64.lt metadata_offset epoch)))
+    /\ ([@stop_split] [@expl:broker_heartbeat_decision ensures #4] [%#sregistration'16] result.should_shut_down
+    = (result.epoch_matches /\ want_shut_down))}
+    (! return {result}) ]

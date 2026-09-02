@@ -43,7 +43,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 use krabka_raft::RaftError;
-use krabka_units::{Time, convert::TimeExt};
+use krabka_verified::FreezeMutationKind;
 
 use crate::{
     break_glass::{
@@ -79,12 +79,6 @@ use self::{
     tiering::{spawn_remote_cascades, tiered_partitions},
     wire::{delete_topic_result, delete_topics_response, refused_topic_result},
 };
-
-/// KIP-599: a zero delay means the request was never throttled, so the
-/// response path must not sleep at all.
-fn should_wait_for_quota_delay(delay: Time) -> bool {
-    delay > <Time as TimeExt>::ZERO
-}
 
 #[tracing::instrument(
     name = "handle_delete_topics",
@@ -190,7 +184,15 @@ pub(crate) async fn handle(
         // event. A freeze is not a break-glass act, and the registry entry that
         // caused the refusal is already in the metadata log and in the audit
         // record of the freeze that set it.
-        if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(&image, &name) {
+        if let crate::freeze::resolve::FreezeMutationResolution::Frozen(record) =
+            crate::freeze::resolve::resolve_freeze_mutation(
+                &image,
+                &name,
+                true,
+                FreezeMutationKind::DeleteTopic,
+            )
+        {
+            let verdict = crate::freeze::resolve::FreezeVerdict::from(record);
             let message = verdict.removal_message();
             tracing::warn!(topic = %name, refusal = %message, "DeleteTopics refused by a freeze");
             results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
@@ -304,12 +306,18 @@ pub(crate) async fn handle(
         deleted_topic_resources(&results),
     );
 
-    // KIP-599: apply controller_mutation_rate throttle after response assembly.
-    let delay = quota.delay();
+    // KIP-599: report the controller_mutation_rate throttle in the response and
+    // hand the window to the connection loop, which mutes the connection once
+    // the response is written (KIP-219). The delay is the only throttle this
+    // api applies — the dispatch loop marks it quota-exempt and never charges
+    // it the request quota — so resolving it through the metric records the
+    // throttle phase and the quota that caused it exactly once per request.
+    let delay = broker.metrics.record_applied_throttle(
+        krabka_protocol::api_key::ApiKey::DeleteTopics as i16,
+        &[(crate::metrics::QuotaType::ControllerMutation, quota.delay())],
+    );
     let throttle_time_ms = crate::quota::throttle_time_ms(delay);
-    if should_wait_for_quota_delay(delay) {
-        tokio::time::sleep(delay.to_std()).await;
-    }
+    ctx.record_throttle(delay);
 
     let resp = delete_topics_response(results, throttle_time_ms);
     crate::handlers::encode_response(&resp, version)

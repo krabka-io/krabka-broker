@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/barrier.rs" 57 27 57 32 *)
+
+(* <barrier::BarrierMarkerFenceDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BarrierMarkerFenceDecision = Malformed | NotLeader | FencedEpoch | Append
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BarrierMarkerFenceDecision [#"/workspace/crates/verified/src/barrier.rs" 57 27 57 32]
+  (self: t_BarrierMarkerFenceDecision) (return (x: t_BarrierMarkerFenceDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierMarkerFenceDecision = Any.any_l () | & self: t_BarrierMarkerFenceDecision = self ])
+  [ return (result: t_BarrierMarkerFenceDecision) -> (! return {result}) ]

@@ -1,0 +1,34 @@
+(* #"/proof-work-218b/crates/verified/src/isr.rs" 59 0 65 9 *)
+
+let%span sisr = "/proof-work-218b/crates/verified/src/isr.rs" 66 16 66 75
+let%span sisr'0 = "/proof-work-218b/crates/verified/src/isr.rs" 66 46 66 74
+let%span sisr'1 = "/proof-work-218b/crates/verified/src/isr.rs" 66 30 66 74
+let%span sisr'2 = "/proof-work-218b/crates/verified/src/isr.rs" 66 4 66 75
+let%span sisr'3 = "/proof-work-218b/crates/verified/src/isr.rs" 49 10 53 2
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let isr_maintenance_selected [#"/proof-work-218b/crates/verified/src/isr.rs" 59 0 65 9] (assigned: bool)
+  (is_leader: bool) (in_isr: bool) (fetch_recent: bool) (caught_up_recent: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {assigned = false} (! bb2) | br1 -> {assigned} (! bb1) ]
+  | bb1 = any [ br0 -> {is_leader = false} (! bb4) | br1 -> {is_leader} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#sisr] true ] s1 | s1 = return {_ret} ]
+  | bb4 = any [ br0 -> {fetch_recent = false} (! bb6) | br1 -> {fetch_recent} (! bb5) ]
+  | bb5 = any [ br0 -> {in_isr = false} (! bb8) | br1 -> {in_isr} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#sisr'0] true ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- caught_up_recent ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- [%#sisr'1] false ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#sisr'2] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & assigned: bool = assigned
+  | & is_leader: bool = is_leader
+  | & in_isr: bool = in_isr
+  | & fetch_recent: bool = fetch_recent
+  | & caught_up_recent: bool = caught_up_recent ])
+  [ return (result: bool) -> {[@stop_split] [@expl:isr_maintenance_selected ensures] [%#sisr'3] result
+    = (assigned /\ (is_leader \/ in_isr /\ fetch_recent \/ not in_isr /\ fetch_recent /\ caught_up_recent))}
+    (! return {result}) ]

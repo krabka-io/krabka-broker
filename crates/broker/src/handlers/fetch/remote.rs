@@ -30,7 +30,7 @@ fn remote_batch_is_deliverable(
     max_timestamp: i64,
     now_ms: i64,
 ) -> bool {
-    policy != DeliveryPolicy::Scheduled || max_timestamp <= now_ms.saturating_sub(uncertainty_ms)
+    krabka_log::batch_is_deliverable(policy, uncertainty_ms, max_timestamp, now_ms)
 }
 
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
@@ -129,7 +129,6 @@ pub(super) async fn try_remote_read(
                 return Some(0);
             }
             let bytes_est = <RecordBatch as Encode>::encoded_len(&batch, 0);
-            p.out.error_code = codes::NONE;
             // `log_start_offset` / HW / LSO stay at whatever `do_read`
             // wrote out (the local view); the remote tier doesn't change
             // those pointers.
@@ -142,24 +141,32 @@ pub(super) async fn try_remote_read(
             // the returned window over the LSO. `Some(empty)` is the correct
             // read-committed signal (read-uncommitted leaves it `None`).
             if p.read_committed && !p.is_follower_fetch {
-                let batch_last_offset = batch.base_offset + i64::from(batch.last_offset_delta);
+                let Some(batch_last_offset) = batch
+                    .base_offset
+                    .checked_add(i64::from(batch.last_offset_delta))
+                else {
+                    tracing::warn!(
+                        topic = %p.topic_name,
+                        partition = p.partition_index,
+                        offset = p.fetch_offset,
+                        "remote-reader: batch offset overflow; leaving OFFSET_OUT_OF_RANGE"
+                    );
+                    return None;
+                };
                 let aborts = match reader
                     .aborted_transactions(&tp, leader_epoch, p.fetch_offset, batch_last_offset)
                     .await
                 {
                     Ok(aborts) => aborts,
                     Err(e) => {
-                        // Degrade to "no aborts" but make it observable: an
-                        // empty list in read-committed means the consumer may
-                        // surface aborted records as committed.
                         tracing::warn!(
                             topic = %p.topic_name,
                             partition = p.partition_index,
                             offset = p.fetch_offset,
                             error = %e,
-                            "remote-reader: aborted_transactions failed; returning empty abort list"
+                            "remote-reader: aborted_transactions failed; leaving OFFSET_OUT_OF_RANGE"
                         );
-                        Vec::new()
+                        return None;
                     }
                 };
                 p.out.aborted_transactions = Some(
@@ -174,6 +181,7 @@ pub(super) async fn try_remote_read(
                 );
             }
 
+            p.out.error_code = codes::NONE;
             p.out.records = Some(batch.into());
             Some(bytes_est)
         }
@@ -209,7 +217,8 @@ pub(super) async fn try_remote_read(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_log::DeliveryPolicy;
+    use krabka_log::{DeliveryPolicy, Log, LogConfig};
+    use krabka_units::prelude::millis;
 
     #[test]
     fn a_remote_batch_is_held_back_until_its_activation_time_plus_the_bound() {
@@ -249,5 +258,30 @@ mod tests {
             10_000,
             i64::MIN
         ));
+    }
+
+    #[test]
+    fn local_and_remote_paths_agree_for_the_same_batch_and_clock() {
+        for (activation_ms, now_ms) in [(10_000, 10_249), (10_000, 10_250), (i64::MAX, i64::MAX)] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let config = LogConfig {
+                delivery_policy: DeliveryPolicy::Scheduled,
+                delivery_clock_uncertainty: millis(250),
+                ..LogConfig::default()
+            };
+            let mut log = Log::open(dir.path(), config).expect("open log");
+            let mut batch = crate::delivery::test_support::batch_at(activation_ms);
+            log.append(&mut batch).expect("append scheduled batch");
+            let local_visible =
+                log.advance_delivery_watermark(now_ms).watermark == log.log_end_offset();
+            let remote_visible = super::remote_batch_is_deliverable(
+                DeliveryPolicy::Scheduled,
+                250,
+                activation_ms,
+                now_ms,
+            );
+
+            assert!(local_visible == remote_visible);
+        }
     }
 }

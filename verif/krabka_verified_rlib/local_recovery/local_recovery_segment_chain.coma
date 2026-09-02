@@ -1,0 +1,128 @@
+(* #"/proof-work-243/crates/verified/src/local_recovery.rs" 57 0 57 58 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span slocal_recovery = "/proof-work-243/crates/verified/src/local_recovery.rs" 58 16 58 22
+let%span slocal_recovery'0 = "/proof-work-243/crates/verified/src/local_recovery.rs" 63 14 63 31
+let%span slocal_recovery'1 = "/proof-work-243/crates/verified/src/local_recovery.rs" 64 14 64 25
+let%span slocal_recovery'2 = "/proof-work-243/crates/verified/src/local_recovery.rs" 60 16 62 54
+let%span slocal_recovery'3 = "/proof-work-243/crates/verified/src/local_recovery.rs" 59 16 59 34
+let%span slocal_recovery'4 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 11 65 19
+let%span slocal_recovery'5 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 22 65 23
+let%span slocal_recovery'6 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 32 65 33
+let%span slocal_recovery'7 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 47 65 48
+let%span slocal_recovery'8 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 43 65 48
+let%span slocal_recovery'9 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 37 65 49
+let%span slocal_recovery'10 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 53 65 61
+let%span slocal_recovery'11 = "/proof-work-243/crates/verified/src/local_recovery.rs" 68 13 68 14
+let%span slocal_recovery'12 = "/proof-work-243/crates/verified/src/local_recovery.rs" 68 8 68 14
+let%span slocal_recovery'13 = "/proof-work-243/crates/verified/src/local_recovery.rs" 66 19 66 24
+let%span slocal_recovery'14 = "/proof-work-243/crates/verified/src/local_recovery.rs" 70 4 70 8
+let%span slocal_recovery'15 = "/proof-work-243/crates/verified/src/local_recovery.rs" 53 10 55 51
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let local_recovery_segment_chain [#"/proof-work-243/crates/verified/src/local_recovery.rs" 57 0 57 58]
+  (bases: Slice64.slice Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &i <- [%#slocal_recovery] (0: UInt64.t) ] s1 | s1 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#slocal_recovery'0] Seq.length (Slice64.view bases)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#slocal_recovery'3] UInt64.t'int i <= Seq.length (Slice64.view bases)}
+      {[@expl:loop invariant #1] [%#slocal_recovery'2] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view bases) j)) 0
+        /\ (j = 0
+        \/ Int64.to_int (Seq.get (Slice64.view bases) (j - 1)) < Int64.to_int (Seq.get (Slice64.view bases) j))}
+      (! [ &variant_old_bb1 <- [%#slocal_recovery'0] Seq.length (Slice64.view bases) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#slocal_recovery'1] {bases} (fun (_x: UInt64.t) -> [ &_19 <- _x ] s1)
+      | s1 = [ &_17 <- UInt64.lt i _19 ] s2
+      | s2 = any [ br0 -> {_17 = false} (! bb16) | br1 -> {_17} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_24 <- i ] s1
+        | s1 = [ &_25 <- Slice64.length bases ] s2
+        | s2 = [ &_26 <- UInt64.lt _24 _25 ] s3
+        | s3 = {[@expl:index in bounds] [%#slocal_recovery'4] _26} s4
+        | s4 = Slice64.get [%#slocal_recovery'4] <Int64.t> {bases} {_24} (fun (r: Int64.t) -> [ &_23 <- r ] s5)
+        | s5 = [ &_22 <- Int64.lt _23 ([%#slocal_recovery'5] (0: Int64.t)) ] s6
+        | s6 = any [ br0 -> {_22 = false} (! bb7) | br1 -> {_22} (! bb12) ] ]
+      | bb7 = s0
+        [ s0 = [ &_27 <- UInt64.gt i ([%#slocal_recovery'6] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_27 = false} (! bb15) | br1 -> {_27} (! bb8) ] ]
+      | bb8 = s0
+        [ s0 = UInt64.sub [%#slocal_recovery'8] {i} {[%#slocal_recovery'7] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &_31 <- _x ] s1)
+        | s1 = [ &_33 <- Slice64.length bases ] s2
+        | s2 = [ &_34 <- UInt64.lt _31 _33 ] s3
+        | s3 = {[@expl:index in bounds] [%#slocal_recovery'9] _34} s4
+        | s4 = Slice64.get [%#slocal_recovery'9] <Int64.t> {bases} {_31} (fun (r: Int64.t) -> [ &_30 <- r ] s5)
+        | s5 = [ &_36 <- i ] s6
+        | s6 = [ &_37 <- Slice64.length bases ] s7
+        | s7 = [ &_38 <- UInt64.lt _36 _37 ] s8
+        | s8 = {[@expl:index in bounds] [%#slocal_recovery'10] _38} s9
+        | s9 = Slice64.get [%#slocal_recovery'10] <Int64.t> {bases} {_36} (fun (r: Int64.t) -> [ &_35 <- r ] s10)
+        | s10 = [ &_29 <- Int64.ge _30 _35 ] s11
+        | s11 = any [ br0 -> {_29 = false} (! bb15) | br1 -> {_29} (! bb12) ] ]
+      | bb15 = s0
+        [ s0 = UInt64.add [%#slocal_recovery'12] {i} {[%#slocal_recovery'11] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- [%#slocal_recovery'13] false ] s1 | s1 = return {_ret} ]
+  | bb16 = s0 [ s0 = [ &_ret <- [%#slocal_recovery'14] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & bases: Slice64.slice Int64.t = bases
+  | & i: UInt64.t = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _19: UInt64.t = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _23: Int64.t = Any.any_l ()
+  | & _24: UInt64.t = Any.any_l ()
+  | & _25: UInt64.t = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _30: Int64.t = Any.any_l ()
+  | & _31: UInt64.t = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _35: Int64.t = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:local_recovery_segment_chain ensures] [%#slocal_recovery'15] result
+    = (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view bases)
+      -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view bases) i)) 0
+      /\ (i = 0
+      \/ Int64.to_int (Seq.get (Slice64.view bases) (i - 1)) < Int64.to_int (Seq.get (Slice64.view bases) i)))}
+    (! return {result}) ]

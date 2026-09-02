@@ -1,0 +1,96 @@
+(* #"/proof-work-226/crates/verified/src/voter_set.rs" 40 0 47 22 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span svoter_set = "/proof-work-226/crates/verified/src/voter_set.rs" 48 18 48 19
+let%span svoter_set'0 = "/proof-work-226/crates/verified/src/voter_set.rs" 52 32 52 33
+let%span svoter_set'1 = "/proof-work-226/crates/verified/src/voter_set.rs" 54 38 54 39
+let%span svoter_set'2 = "/proof-work-226/crates/verified/src/voter_set.rs" 55 35 55 36
+let%span svoter_set'3 = "/proof-work-226/crates/verified/src/voter_set.rs" 21 10 21 70
+let%span svoter_set'4 = "/proof-work-226/crates/verified/src/voter_set.rs" 22 10 24 1
+let%span svoter_set'5 = "/proof-work-226/crates/verified/src/voter_set.rs" 25 10 27 1
+let%span svoter_set'6 = "/proof-work-226/crates/verified/src/voter_set.rs" 28 10 33 1
+let%span svoter_set'7 = "/proof-work-226/crates/verified/src/voter_set.rs" 34 10 38 1
+
+use creusot.int.Int32
+use creusot.int.UInt64
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type t_VoterWireDecision = NegativeId | DirectoryMismatch | InvalidEndpoint | InvalidVersionRange | Accept
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let voter_wire_decision [#"/proof-work-226/crates/verified/src/voter_set.rs" 40 0 47 22] (voter_id: Int32.t)
+  (directory_id_exact: bool) (endpoint_count: UInt64.t) (endpoints_valid: bool) (min_supported_version: Int16.t)
+  (max_supported_version: Int16.t) (return (x: t_VoterWireDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_31 <- Int32.lt voter_id ([%#svoter_set] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb2) | br1 -> {_31} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- NegativeId ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {directory_id_exact = false} (! bb3) | br1 -> {directory_id_exact} (! bb4) ]
+  | bb4 = s0
+    [ s0 = [ &_34 <- endpoint_count = ([%#svoter_set'0] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb6) | br1 -> {_34} (! bb7) ] ]
+  | bb6 = any [ br0 -> {endpoints_valid = false} (! bb7) | br1 -> {endpoints_valid} (! bb8) ]
+  | bb8 = s0
+    [ s0 = [ &_37 <- Int16.lt min_supported_version ([%#svoter_set'1] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_37 = false} (! bb10) | br1 -> {_37} (! bb14) ] ]
+  | bb10 = s0
+    [ s0 = [ &_39 <- Int16.lt max_supported_version ([%#svoter_set'2] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_39 = false} (! bb12) | br1 -> {_39} (! bb14) ] ]
+  | bb12 = s0
+    [ s0 = [ &_41 <- Int16.gt min_supported_version max_supported_version ] s1
+    | s1 = any [ br0 -> {_41 = false} (! bb15) | br1 -> {_41} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- InvalidVersionRange ] s1 | s1 = return {_ret} ]
+  | bb15 = s0 [ s0 = [ &_ret <- Accept ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- InvalidEndpoint ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- DirectoryMismatch ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterWireDecision = Any.any_l ()
+  | & voter_id: Int32.t = voter_id
+  | & directory_id_exact: bool = directory_id_exact
+  | & endpoint_count: UInt64.t = endpoint_count
+  | & endpoints_valid: bool = endpoints_valid
+  | & min_supported_version: Int16.t = min_supported_version
+  | & max_supported_version: Int16.t = max_supported_version
+  | & _31: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _41: bool = Any.any_l () ])
+  [ return (result: t_VoterWireDecision) ->
+  {[@stop_split] [@expl:voter_wire_decision ensures] ([@stop_split] [@expl:voter_wire_decision ensures #0] [%#svoter_set'3] (result
+        = NegativeId)
+      = (Int32.to_int voter_id < 0))
+    /\ ([@stop_split] [@expl:voter_wire_decision ensures #1] [%#svoter_set'4] (result = DirectoryMismatch)
+      = (ge_log_Int (Int32.to_int voter_id) 0 /\ not directory_id_exact))
+    /\ ([@stop_split] [@expl:voter_wire_decision ensures #2] [%#svoter_set'5] (result = InvalidEndpoint)
+      = (ge_log_Int (Int32.to_int voter_id) 0
+      /\ directory_id_exact /\ (UInt64.t'int endpoint_count = 0 \/ not endpoints_valid)))
+    /\ ([@stop_split] [@expl:voter_wire_decision ensures #3] [%#svoter_set'6] (result = InvalidVersionRange)
+      = (ge_log_Int (Int32.to_int voter_id) 0
+      /\ directory_id_exact
+      /\ gt_log_Int (UInt64.t'int endpoint_count) 0
+      /\ endpoints_valid
+      /\ (Int16.to_int min_supported_version < 0
+      \/ Int16.to_int max_supported_version < 0
+      \/ gt_log_Int (Int16.to_int min_supported_version) (Int16.to_int max_supported_version))))
+    /\ ([@stop_split] [@expl:voter_wire_decision ensures #4] [%#svoter_set'7] (result = Accept)
+    = (ge_log_Int (Int32.to_int voter_id) 0
+    /\ directory_id_exact
+    /\ gt_log_Int (UInt64.t'int endpoint_count) 0
+    /\ endpoints_valid
+    /\ ge_log_Int (Int16.to_int min_supported_version) 0
+    /\ Int16.to_int min_supported_version <= Int16.to_int max_supported_version))}
+    (! return {result}) ]

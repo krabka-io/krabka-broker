@@ -1,0 +1,30 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 198 27 198 32 *)
+
+(* <freeze::FreezeMutationKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FreezeMutationKind =
+  | Produce
+  | TransactionEnlistment
+  | DeleteRecords
+  | DeleteTopic
+  | ReassignmentAlter
+  | ReassignmentCompletion
+  | Compaction
+  | Retention
+  | TransactionCompletion
+  | OffsetCommit
+  | Replication
+  | BarrierMarker
+  | TieringCopy
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeMutationKind [#"/workspace/crates/verified/src/freeze.rs" 198 27 198 32] (self: t_FreezeMutationKind)
+  (return (x: t_FreezeMutationKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeMutationKind = Any.any_l () | & self: t_FreezeMutationKind = self ])
+  [ return (result: t_FreezeMutationKind) -> (! return {result}) ]
