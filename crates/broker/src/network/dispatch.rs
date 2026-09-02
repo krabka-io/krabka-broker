@@ -31,6 +31,10 @@ mod fetch;
 mod guards;
 mod registry;
 mod response;
+/// Benchmark seam over the response-framing path, driven by
+/// `benches/perf_deferrals.rs`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod response_framing;
 mod sasl;
 mod session;
 #[cfg(test)]
