@@ -129,6 +129,21 @@ fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
     img
 }
 
+/// Rewrite the ISR the record for partition 0 of topic `t` names, leaving
+/// every other field alone. A recovery starts against a record whose ISR has
+/// not been rewritten, so what it still names is what the election reads.
+fn set_isr(img: &mut MetadataImage, isr: &[u64]) {
+    let pr = img
+        .partition("t", 0)
+        .expect("the partition is in the image")
+        .clone();
+    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        isr: isr.iter().copied().map(NodeId).collect(),
+        partition_epoch: pr.partition_epoch + 1,
+        ..pr
+    }));
+}
+
 /// Publish `krabka.elr` for partition 0 of topic `t`, in the grammar
 /// `TopicElr::parse` reads: these node ids are eligible, none are last-known.
 fn publish_elr(img: &mut MetadataImage, eligible: &[u64]) {
@@ -703,6 +718,9 @@ async fn a_witness_never_wins_the_election_however_the_elr_reads() {
     ];
     for (label, witness, expected) in cases {
         let mut img = image_with_partition(1, &[1, 2, 3]);
+        // The ISR named nothing but the leader that died, so the ELR rule is
+        // the one that decides.
+        set_isr(&mut img, &[1]);
         publish_elr(&mut img, &[3]);
         if let Some(id) = witness {
             crate::leader_election::test_support::mark_witnesses_in_image(&mut img, &[id]);
@@ -713,8 +731,12 @@ async fn a_witness_never_wins_the_election_however_the_elr_reads() {
         );
         let image = mgr.controller.current_image();
 
-        let election =
-            UncleanRecoveryManager::elect_from(&image, &[3], &[info(2, 400), info(3, 20)]);
+        let election = UncleanRecoveryManager::elect_from(
+            &image,
+            &[NodeId(1)],
+            &[3],
+            &[info(2, 400), info(3, 20)],
+        );
 
         check!(election == Some(expected), "case {label}");
     }
@@ -732,6 +754,7 @@ async fn a_witness_never_wins_the_election_however_the_elr_reads() {
 #[tokio::test]
 async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
     let mut img = image_with_partition(1, &[1, 2, 3]);
+    set_isr(&mut img, &[1]);
     img.apply(&MetadataRecord::V1BrokerRegistration(broker_record(
         3,
         Uuid::from_u128(1),
@@ -768,19 +791,53 @@ async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
 }
 
 /// The election one recovery of `t-0` reaches against `image`, from the
-/// responses `poll` carries: the partition's published ELR and the cluster's
-/// witness set both come out of the image, which is what makes the two halves
-/// of the test above differ.
+/// responses `poll` carries: the ISR the record still names, the partition's
+/// published ELR and the cluster's witness set all come out of the image,
+/// which is what makes the two halves of the test above differ.
 async fn elected_from(image: MetadataImage, poll: &[ReplicaLogInfo]) -> Option<Election> {
     let eligible = crate::elr::TopicElr::of_topic(&image, "t")
         .partition(0)
         .eligible_leader_replicas;
+    let in_sync = image
+        .partition("t", 0)
+        .expect("the partition is in the image")
+        .isr
+        .clone();
     let mgr = manager(
         MockSource::new(Some(NODE), image),
         liveness_with_alive(&[2, 3]).await,
     );
     let image = mgr.controller.current_image();
-    UncleanRecoveryManager::elect_from(&image, &eligible, poll)
+    UncleanRecoveryManager::elect_from(&image, &in_sync, &eligible, poll)
+}
+
+/// The first disjunct of Kafka's `isValidNewLeader`, through the image the
+/// recovery reads. A recovery starts because liveness called every ISR member
+/// dead, and it leaves the record's ISR alone while it polls, so a member that
+/// is back by the time the poll lands answers it while still named there. That
+/// replica holds every committed record, so the election is lossless and must
+/// not report itself otherwise -- `MostCompleteLog` would move the
+/// unclean-election meter, take the bypass audit path, and be refused outright
+/// under `unclean.recovery.require`.
+///
+/// Broker 3 answers with the shorter log and is the only ISR member left;
+/// broker 2 holds the longer log and is the partition's one eligible leader
+/// replica. Both rungs above the fallback point away from the longest log, and
+/// the ISR is the one that decides.
+#[tokio::test]
+async fn a_responder_the_record_still_names_in_the_isr_elects_cleanly() {
+    let mut img = image_with_partition(1, &[1, 2, 3]);
+    set_isr(&mut img, &[1, 3]);
+    publish_elr(&mut img, &[2]);
+    let poll = [info(2, 400), info(3, 20)];
+
+    check!(
+        elected_from(img, &poll).await
+            == Some(Election {
+                leader: NodeId(3),
+                basis: ElectionBasis::InSyncReplica,
+            })
+    );
 }
 
 /// KFC-9: the applied event is what an auditor joins to the approval that

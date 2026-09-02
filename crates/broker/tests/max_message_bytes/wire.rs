@@ -166,14 +166,22 @@ pub(super) async fn produce_batch(
     response.responses[0].partition_responses[0].clone()
 }
 
-/// The partition row an accepted produce answers with, at `base_offset`.
-pub(super) fn accepted(base_offset: i64) -> PartitionProduceResponse {
+/// The partition row an accepted produce answers with, at `base_offset`, on a
+/// partition whose log starts at `log_start_offset`.
+///
+/// `log_start_offset` is the partition's real first offset and not the -1 the
+/// pre-append refusals carry: Kafka fills it from `UnifiedLog`'s own pointer at
+/// append time. Every case in this suite produces to a fresh topic that nothing
+/// has trimmed, so they all pass 0. The value a trimmed log answers with is
+/// pinned in `crates/broker/tests/produce_log_start_offset.rs`, where a
+/// `DeleteRecords` moves it off 0 first.
+pub(super) fn accepted(base_offset: i64, log_start_offset: i64) -> PartitionProduceResponse {
     PartitionProduceResponse {
         index: 0,
         error_code: codes::NONE,
         base_offset,
         log_append_time_ms: -1,
-        log_start_offset: -1,
+        log_start_offset,
         record_errors: vec![],
         error_message: None,
         current_leader: LeaderIdAndEpoch::default(),

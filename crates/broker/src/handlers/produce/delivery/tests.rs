@@ -358,6 +358,10 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 index: 0,
                 error_code: crate::codes::NONE,
                 base_offset: 1,
+                // An accepted row carries the partition's real log start
+                // offset. Nothing has trimmed this one, so it is 0 and not
+                // the -1 the two refusals above keep from `Default`.
+                log_start_offset: 0,
                 ..Default::default()
             },
             "after the schedule and inside the bound",

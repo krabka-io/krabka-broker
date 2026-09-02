@@ -7,7 +7,7 @@ use std::time::Duration;
 use krabka_log::Offset;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
-use super::{ACKS_ALL, prepare::PreparedBatch};
+use super::{ACKS_ALL, INVALID_OFFSET, prepare::PreparedBatch};
 use crate::{codes, error::BrokerError};
 
 pub(super) async fn validate_transactional_produce(
@@ -86,7 +86,14 @@ pub(super) async fn handle_duplicate(
             batch.last_offset_delta,
         )
         .await;
-    let (error_code, base_offset) = match decision {
+    // A recognized retry is an accepted produce, so its row carries the
+    // partition's real log start offset just like a fresh append's does. The
+    // two refusals below happen before any append and keep the
+    // `UNKNOWN_LOG_APPEND_INFO` sentinel. A raw `Produce v8` replayed against
+    // `apache/kafka:4.3.1` on a partition whose low watermark `DeleteRecords`
+    // had moved off 0 answered the duplicate with that same real value, not
+    // with the sentinel.
+    let (error_code, base_offset, log_start_offset) = match decision {
         crate::producer_state::Decision::Duplicate { base_offset } => {
             let error_code = if acks == ACKS_ALL {
                 let target = base_offset + i64::from(batch.last_offset_delta) + 1;
@@ -103,16 +110,25 @@ pub(super) async fn handle_duplicate(
             } else {
                 codes::NONE
             };
-            (error_code, base_offset)
+            (error_code, base_offset, partition.log_start_offset().0)
         }
-        crate::producer_state::Decision::OutOfOrder => (codes::OUT_OF_ORDER_SEQUENCE_NUMBER, -1),
-        crate::producer_state::Decision::Fenced => (codes::INVALID_PRODUCER_EPOCH, -1),
+        crate::producer_state::Decision::OutOfOrder => (
+            codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
+            INVALID_OFFSET,
+            INVALID_OFFSET,
+        ),
+        crate::producer_state::Decision::Fenced => (
+            codes::INVALID_PRODUCER_EPOCH,
+            INVALID_OFFSET,
+            INVALID_OFFSET,
+        ),
         crate::producer_state::Decision::Append => return None,
     };
     Some(PartitionProduceResponse {
         index: partition_index,
         error_code,
         base_offset,
+        log_start_offset,
         ..Default::default()
     })
 }
