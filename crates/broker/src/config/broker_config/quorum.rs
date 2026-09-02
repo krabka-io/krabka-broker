@@ -75,13 +75,21 @@ macro_rules! quorum_fields {
             /// Default 30s.
             pub replica_lag_time_max: Time,
 
-            /// Openraft election timeout. It sets `election_timeout_min`, and the
-            /// maximum is 2×. It also sets `leader_lease = election_timeout_max`
-            /// inside openraft's engine. Peers refuse to grant a new leader's vote
-            /// until the lease expires, so this value is also the lower bound on how
-            /// fast a 3-broker cluster recovers from a dead controller leader.
-            /// Default 5s. The default is conservative and avoids a split vote on
-            /// slow runners.
+            /// Controller election timeout, Kafka's
+            /// `controller.quorum.fetch.timeout.ms`. Default 5s.
+            ///
+            /// One extent drives three deadlines in the `KRaft` engine. It is the
+            /// base of an electing voter's randomized election timer, before the
+            /// per-(node, epoch) jitter the core adds. It is the follower and
+            /// observer fetch watchdog, so it bounds how long a lost leader goes
+            /// unnoticed. And 1.5x of it -- Kafka's
+            /// `LeaderState.CHECK_QUORUM_TIMEOUT_FACTOR` -- is the leader's
+            /// check-quorum window: a leader that a majority of the voters has
+            /// not fetched from within that window resigns rather than keep
+            /// answering as the leader of an epoch the quorum has replaced.
+            ///
+            /// The default is conservative and avoids a split vote on slow
+            /// runners.
             pub controller_election_timeout: Time,
 
             /// Openraft heartbeat interval. Default 500ms. It should be ≤

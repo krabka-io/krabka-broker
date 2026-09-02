@@ -60,6 +60,8 @@ impl Model for ConsensusModel {
             committed: Vec::new(),
             appends_issued: 0,
             crashed: BTreeSet::new(),
+            check_quorum_violation: false,
+            leader_resigned: false,
         }]
     }
 
@@ -83,7 +85,13 @@ impl Model for ConsensusModel {
                 continue;
             }
             match node.machine.role() {
-                Role::Leader { .. } => {}
+                // A leader runs neither watchdog; its one timer is the
+                // check-quorum window that ends the epoch it has lost.
+                Role::Leader { .. } => {
+                    if self.enable_check_quorum {
+                        actions.push(ModelAction::Timeout(id, TimerKind::CheckQuorum));
+                    }
+                }
                 Role::Follower { .. } | Role::Observer { .. } => {
                     actions.push(ModelAction::Timeout(id, TimerKind::Fetch));
                     actions.push(ModelAction::Timeout(id, TimerKind::Election));
@@ -196,8 +204,20 @@ impl Model for ConsensusModel {
                 let event = match kind {
                     TimerKind::Election => Event::ElectionTimeout,
                     TimerKind::Fetch => Event::FetchTimeout,
+                    TimerKind::CheckQuorum => Event::CheckQuorumTimeout,
                 };
                 self.step(&mut state, id, event);
+                if kind == TimerKind::CheckQuorum && self.voter_ids.len() > 1 {
+                    // The core re-arms this timer only when a majority has
+                    // fetched, so an expiry that leaves the node still leading
+                    // means an isolated leader kept its epoch. That is the
+                    // whole defect check-quorum exists to close.
+                    state.check_quorum_violation |= is_leader(&state.nodes[&id]);
+                }
+                state.leader_resigned |= state
+                    .nodes
+                    .values()
+                    .any(|n| matches!(n.machine.role(), Role::Resigned));
             }
             ModelAction::ClientAppend(client, value) => {
                 let leader = state
@@ -264,6 +284,24 @@ impl Model for ConsensusModel {
             // Anti-vacuity witness: a leader is actually elected in some state.
             Property::sometimes("leader_elected", |_, s: &ModelState| {
                 s.nodes.values().any(is_leader)
+            }),
+            // Safety: a leader whose check-quorum window expires must step
+            // down. Without it, an old leader isolated by a partition holds its
+            // epoch indefinitely — KIP-996 pre-vote never bumps its epoch, so
+            // nothing else would ever tell it the majority side has moved on.
+            // `election_safety` cannot see that: the two leaders hold different
+            // epochs.
+            Property::always(
+                "check_quorum_expiry_ends_leadership",
+                |_, s: &ModelState| !s.check_quorum_violation,
+            ),
+            // Anti-vacuity witness for the property above: the resignation is
+            // actually reached, rather than the check holding because no
+            // check-quorum expiry was ever explored.
+            Property::sometimes("leader_resigns", |m: &ConsensusModel, s: &ModelState| {
+                // Only required where the expiry is offered; a config that
+                // does not explore it satisfies this trivially.
+                !m.enable_check_quorum || s.leader_resigned
             }),
             // Safety: at most one leader per leader-epoch.
             Property::always("election_safety", |_, s: &ModelState| {

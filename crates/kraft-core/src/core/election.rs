@@ -134,7 +134,7 @@ impl QuorumStateMachine {
                     granted.insert(from);
                 }
                 if self.tally_reached_majority() {
-                    self.promote_to_leader(log)
+                    self.promote_to_leader(log, now)
                 } else {
                     Vec::new()
                 }
@@ -194,14 +194,14 @@ impl QuorumStateMachine {
         ];
         // A lone voter wins its own election immediately.
         if self.tally_reached_majority() {
-            actions.extend(self.promote_to_leader_inner(log));
+            actions.extend(self.promote_to_leader_inner(log, now));
         }
         actions
     }
 
     /// Real vote succeeded: become leader for the current epoch.
-    fn promote_to_leader(&mut self, log: &dyn LogView) -> Vec<Action> {
-        self.promote_to_leader_inner(log)
+    fn promote_to_leader(&mut self, log: &dyn LogView, now: SimInstant) -> Vec<Action> {
+        self.promote_to_leader_inner(log, now)
     }
 
     #[tracing::instrument(
@@ -209,7 +209,7 @@ impl QuorumStateMachine {
         skip_all,
         fields(node = self.me.0, epoch = self.state.leader_epoch)
     )]
-    fn promote_to_leader_inner(&mut self, log: &dyn LogView) -> Vec<Action> {
+    fn promote_to_leader_inner(&mut self, log: &dyn LogView, now: SimInstant) -> Vec<Action> {
         let epoch = self.state.leader_epoch;
         self.state.leader_id = Some(self.me);
         let mut replicas = BTreeMap::new();
@@ -223,14 +223,28 @@ impl QuorumStateMachine {
         let epoch_start_offset = log.end_offset();
         self.role = Role::Leader {
             replicas,
+            // Nobody has fetched from this leader yet, so the first window
+            // starts empty and must be filled by real Fetches before its
+            // deadline. A fresh leader that no voter can reach therefore
+            // resigns one window after promotion instead of holding the epoch.
+            fetched_voters: BTreeSet::new(),
             high_watermark: 0,
             epoch_start_offset,
         };
-        vec![
+        let mut actions = vec![
             Action::AppendLeaderChange { epoch },
             Action::SendBeginQuorumEpoch { epoch },
             Action::PersistQuorumState,
             Action::TransitionedTo(self.role.name()),
-        ]
+        ];
+        // Leaders run no election or fetch watchdog; check-quorum is the only
+        // timer that bounds how long one can hold an epoch it has lost.
+        if self.runs_check_quorum() {
+            actions.push(Action::ResetTimer {
+                kind: TimerKind::CheckQuorum,
+                deadline: self.check_quorum_deadline(now),
+            });
+        }
+        actions
     }
 }

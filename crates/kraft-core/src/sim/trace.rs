@@ -117,6 +117,7 @@ pub(super) fn event_label(event: &Event) -> String {
     match event {
         Event::ElectionTimeout => "ElectionTimeout".to_string(),
         Event::FetchTimeout => "FetchTimeout".to_string(),
+        Event::CheckQuorumTimeout => "CheckQuorumTimeout".to_string(),
         Event::ReceiveVoteRequest { pre_vote, .. } => {
             if *pre_vote {
                 "PreVoteRequest".to_string()
@@ -134,6 +135,7 @@ pub(super) fn event_label(event: &Event) -> String {
         Event::ReceiveBeginQuorumEpoch { .. } => "BeginQuorumEpoch".to_string(),
         Event::ReceiveEndQuorumEpoch { .. } => "EndQuorumEpoch".to_string(),
         Event::ReceiveFetch { .. } => "Fetch".to_string(),
+        Event::ReceiveFetchSnapshot { .. } => "FetchSnapshot".to_string(),
         Event::ReceiveFetchResponse { .. } => "FetchResponse".to_string(),
     }
 }

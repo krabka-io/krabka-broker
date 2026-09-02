@@ -26,6 +26,16 @@ mod vote_request;
 #[cfg(test)]
 mod test_support;
 
+/// Numerator of Kafka's `LeaderState.CHECK_QUORUM_TIMEOUT_FACTOR`.
+///
+/// Kafka runs the leader's check-quorum window at 1.5x the fetch timeout, "to
+/// tolerate some network transition time or other IO time". The factor is a
+/// ratio of two integers here because the whole deadline timeline is integer
+/// milliseconds.
+const CHECK_QUORUM_FACTOR_NUM: u64 = 3;
+/// Denominator of Kafka's `LeaderState.CHECK_QUORUM_TIMEOUT_FACTOR`.
+const CHECK_QUORUM_FACTOR_DEN: u64 = 2;
+
 /// Deterministic per-`(node, epoch)` election-timeout jitter in `[0, base_ms)`.
 ///
 /// This is Raft's randomized backoff, made reproducible for the deterministic
@@ -146,6 +156,43 @@ impl QuorumStateMachine {
         )
     }
 
+    /// The deadline for a check-quorum timer armed at `now`.
+    ///
+    /// The extent is Kafka's 1.5x the fetch timeout. Krabka derives the
+    /// follower fetch deadline from the same configured election timeout (see
+    /// [`QuorumStateMachine::handle_fetch_response`]), so that one extent is
+    /// the fetch timeout this factor multiplies.
+    pub(super) fn check_quorum_deadline(&self, now: SimInstant) -> SimInstant {
+        now.saturating_add_ms(
+            self.election_timeout_ms
+                .saturating_mul(CHECK_QUORUM_FACTOR_NUM)
+                .div_euclid(CHECK_QUORUM_FACTOR_DEN),
+        )
+    }
+
+    /// Whether a leader over this voter set runs a check-quorum timer at all.
+    ///
+    /// A single-voter quorum has nobody to hear from, so Kafka's
+    /// `timeUntilCheckQuorumExpires` reports `Long.MAX_VALUE` for it and the
+    /// leader never resigns on this path.
+    pub(super) fn runs_check_quorum(&self) -> bool {
+        self.state.voters.len() > 1
+    }
+
+    /// How many *follower* voters must fetch to reset the check-quorum window.
+    ///
+    /// Kafka's `updateCheckQuorumForFollowingVoter`: the majority of the voter
+    /// set, less one when the leader is itself a voter, because the leader is
+    /// implicitly part of that majority and never appears in the fetched set.
+    pub(super) fn check_quorum_reset_threshold(&self) -> usize {
+        let majority = self.state.majority();
+        if self.is_voter() {
+            majority.saturating_sub(1)
+        } else {
+            majority
+        }
+    }
+
     #[tracing::instrument(
         level = "debug",
         skip_all,
@@ -179,6 +226,7 @@ impl QuorumStateMachine {
                 now,
             ),
             Event::ElectionTimeout => self.handle_election_timeout(log, now),
+            Event::CheckQuorumTimeout => self.handle_check_quorum_timeout(now),
             Event::ReceiveVoteResponse {
                 from,
                 epoch,
@@ -196,7 +244,8 @@ impl QuorumStateMachine {
                 from,
                 fetch_epoch,
                 fetch_offset,
-            } => self.handle_fetch(log, from, fetch_epoch, fetch_offset),
+            } => self.handle_fetch(log, from, fetch_epoch, fetch_offset, now),
+            Event::ReceiveFetchSnapshot { from } => self.handle_fetch_snapshot(from, now),
             Event::ReceiveFetchResponse {
                 leader_id,
                 leader_epoch,

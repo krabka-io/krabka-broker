@@ -185,12 +185,19 @@ impl Engine {
             }
             Inbound::FetchSnapshot { req, reply } => {
                 if let Some(wire::PeerRequest::FetchSnapshot {
+                    from,
                     snapshot_id,
                     position,
                     max_bytes,
-                    ..
                 }) = wire::decode_fetch_snapshot(&req)
                 {
+                    // A voter catching up through KIP-630 is in contact with us
+                    // even though it sends no Fetch, so score it for
+                    // check-quorum before serving the chunk. Kafka does the same
+                    // in `handleFetchSnapshotRequest`; without it a leader whose
+                    // only reachable follower is mid-snapshot resigns under a
+                    // healthy quorum.
+                    self.on_event(Event::ReceiveFetchSnapshot { from });
                     let (end_offset, epoch) = snapshot_id;
                     let resp = match load_checkpoint_by_id(
                         &checkpoint_dir(&self.data_dir),

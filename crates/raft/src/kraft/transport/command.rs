@@ -153,6 +153,10 @@ pub enum TimerTick {
     Fetch,
     /// The leader heartbeat interval ticked.
     Heartbeat,
+    /// The leader's check-quorum deadline passed. This is the leader-side
+    /// watchdog: a majority of the voters has stopped fetching, so the leader
+    /// resigns instead of holding an epoch it has lost.
+    CheckQuorum,
 }
 
 /// A structured, node-local snapshot of consensus state for the handle, which

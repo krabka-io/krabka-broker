@@ -40,4 +40,10 @@ pub(super) struct Node<L: SimNodeLog> {
     /// epoch and steps down. The core does not emit this on a timer, because a
     /// leader has no core-level timer, so the harness drives it.
     pub(super) heartbeat_deadline: Option<SimInstant>,
+    /// Next leader check-quorum deadline, if armed.
+    ///
+    /// The core arms this on promotion and re-arms it whenever a majority of
+    /// the voters has fetched. Reaching it means the leader has lost contact
+    /// with the quorum and resigns.
+    pub(super) check_quorum_deadline: Option<SimInstant>,
 }

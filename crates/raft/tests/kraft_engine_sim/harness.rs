@@ -78,7 +78,7 @@ pub(crate) fn build_engine_with_snapshot_interval(
             controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
             metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
             metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
-            peers: Arc::new(net.clone()),
+            peers: Arc::new(net.as_peer(me)),
             snapshot_interval_records,
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         },

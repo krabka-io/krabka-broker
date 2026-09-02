@@ -165,6 +165,7 @@ impl KraftController {
             metadata_raft_fetch_max,
             election_at,
             fetch_at: None,
+            check_quorum_at: None,
             fetch_misses: 0,
             commit_waiters: Vec::new(),
             was_leader: initial_was_leader,

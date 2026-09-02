@@ -91,6 +91,7 @@ impl Sim {
                     election_deadline: Some(SimInstant(deadline_millis(election_timeout))),
                     fetch_deadline: None,
                     heartbeat_deadline: None,
+                    check_quorum_deadline: None,
                 },
             );
         }

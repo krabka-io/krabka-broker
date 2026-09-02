@@ -23,6 +23,14 @@ pub struct ConsensusModel {
     pub max_crashes: usize,
     /// Offer appends through every live node, not just direct leader appends.
     pub enable_append_via: bool,
+    /// Offer the leader's check-quorum expiry as a timeout action.
+    ///
+    /// It roughly doubles the successors of every leader state -- a leader may
+    /// now resign, and a resignation opens a whole re-election subtree -- so it
+    /// is enabled on the configs whose focus is election and leadership safety
+    /// and left off on the two linearizability configs, whose space is already
+    /// bounded tightly because the tester keeps its history in the fingerprint.
+    pub enable_check_quorum: bool,
 }
 
 impl ConsensusModel {
@@ -38,6 +46,7 @@ impl ConsensusModel {
             enable_loss_dup: false,
             max_crashes: 0,
             enable_append_via: false,
+            enable_check_quorum: true,
         }
     }
 
@@ -54,6 +63,7 @@ impl ConsensusModel {
             enable_loss_dup: false,
             max_crashes: 0,
             enable_append_via: false,
+            enable_check_quorum: false,
         }
     }
 
@@ -71,6 +81,7 @@ impl ConsensusModel {
             enable_loss_dup: true,
             max_crashes: 1,
             enable_append_via: false,
+            enable_check_quorum: true,
         }
     }
 
@@ -86,6 +97,7 @@ impl ConsensusModel {
             enable_loss_dup: false,
             max_crashes: 0,
             enable_append_via: true,
+            enable_check_quorum: false,
         }
     }
 

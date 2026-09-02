@@ -28,12 +28,33 @@ impl QuorumStateMachine {
         }
         self.state.voters = voters;
 
-        if let Role::Leader { replicas, .. } = &mut self.role {
+        if let Role::Leader {
+            replicas,
+            fetched_voters,
+            ..
+        } = &mut self.role
+        {
             replicas.retain(|id, _| self.state.voters.contains(*id) && *id != self.me);
             for id in self.state.voters.ids() {
                 if id != self.me {
                     replicas.entry(id).or_default();
                 }
+            }
+            // A removed voter's fetch cannot count toward the new
+            // configuration's check-quorum majority, so drop it from the
+            // in-flight window rather than let it inflate the next tally.
+            fetched_voters.retain(|id| self.state.voters.contains(*id) && *id != self.me);
+            // Start a fresh window against the new configuration. A sole voter
+            // arms nothing at promotion, so without this the leader of a
+            // cluster that has just grown past one voter would never run
+            // check-quorum for the rest of its epoch. Re-arming here also gives
+            // an added voter a full window to make its first Fetch, rather than
+            // deposing the leader the instant the record applies.
+            if self.runs_check_quorum() {
+                return vec![Action::ResetTimer {
+                    kind: TimerKind::CheckQuorum,
+                    deadline: self.check_quorum_deadline(now),
+                }];
             }
             return Vec::new();
         }

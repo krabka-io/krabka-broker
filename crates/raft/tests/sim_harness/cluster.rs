@@ -57,6 +57,7 @@ impl<L: SimNodeLog> Sim<L> {
                     election_deadline: Some(SimInstant(election_timeout_ms)),
                     fetch_deadline: None,
                     heartbeat_deadline: None,
+                    check_quorum_deadline: None,
                 },
             );
         }

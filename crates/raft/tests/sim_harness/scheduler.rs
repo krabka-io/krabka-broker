@@ -34,6 +34,9 @@ impl<L: SimNodeLog> Sim<L> {
             if let Some(d) = node.heartbeat_deadline {
                 consider(&mut best, d, node.id, SimTimer::Heartbeat);
             }
+            if let Some(d) = node.check_quorum_deadline {
+                consider(&mut best, d, node.id, SimTimer::CheckQuorum);
+            }
         }
         let Some((deadline, id, kind)) = best else {
             return false;
@@ -48,11 +51,16 @@ impl<L: SimNodeLog> Sim<L> {
                 SimTimer::Election => node.election_deadline = None,
                 SimTimer::Fetch => node.fetch_deadline = None,
                 SimTimer::Heartbeat => node.heartbeat_deadline = None,
+                SimTimer::CheckQuorum => node.check_quorum_deadline = None,
             }
         }
         match kind {
             SimTimer::Heartbeat => {
                 self.fire_leader_heartbeat(id);
+                true
+            }
+            SimTimer::CheckQuorum => {
+                self.step(id, Event::CheckQuorumTimeout);
                 true
             }
             SimTimer::Fetch => {
@@ -211,6 +219,7 @@ impl<L: SimNodeLog> Sim<L> {
             Role::Follower { .. } | Role::Observer { .. } => {
                 node.election_deadline = None;
                 node.heartbeat_deadline = None;
+                node.check_quorum_deadline = None;
             }
             Role::Unattached { .. }
             | Role::Voted { .. }
@@ -219,6 +228,7 @@ impl<L: SimNodeLog> Sim<L> {
             | Role::Resigned => {
                 node.fetch_deadline = None;
                 node.heartbeat_deadline = None;
+                node.check_quorum_deadline = None;
             }
         }
     }

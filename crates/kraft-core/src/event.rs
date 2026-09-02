@@ -19,6 +19,11 @@ pub enum Event {
     ///
     /// The follower or observer lost contact with the leader.
     FetchTimeout,
+    /// The leader's check-quorum timer fired.
+    ///
+    /// A majority of the voters has not fetched within the check-quorum
+    /// window, so this leader has lost the quorum and resigns (KAFKA-15489).
+    CheckQuorumTimeout,
     /// A peer asks us for our vote.
     ReceiveVoteRequest {
         from: NodeId,
@@ -66,6 +71,12 @@ pub enum Event {
         fetch_epoch: Epoch,
         fetch_offset: i64,
     },
+    /// Leader side: a follower asked us for a byte window of a snapshot.
+    ///
+    /// KIP-630 catch-up carries no fetch offset the leader can score, but it is
+    /// still contact from that voter, and Kafka counts it toward check-quorum
+    /// exactly as it counts a Fetch.
+    ReceiveFetchSnapshot { from: NodeId },
     /// Follower side: the leader answered our Fetch.
     ReceiveFetchResponse {
         leader_id: NodeId,

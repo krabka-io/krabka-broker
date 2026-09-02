@@ -7,13 +7,14 @@ use krabka_raft::kraft::types::{NodeId, SimInstant};
 use krabka_units::prelude::{Time, TimeExt as _};
 
 /// Harness-level timer kinds. This extends the core's `TimerKind`, which is
-/// Election and Fetch, with the leader `Heartbeat` that the core does not model
-/// on a timer.
+/// Election, Fetch and `CheckQuorum`, with the leader `Heartbeat` that the core
+/// does not model on a timer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SimTimer {
     Election,
     Fetch,
     Heartbeat,
+    CheckQuorum,
 }
 
 /// Leader heartbeat period. It stays well below the election timeout, so a

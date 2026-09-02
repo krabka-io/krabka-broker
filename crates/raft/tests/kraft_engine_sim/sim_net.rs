@@ -3,11 +3,12 @@
 //! KIP-595 body into the target engine's inbound queue.
 //!
 //! Registering and removing an engine is how the acceptances model a node
-//! booting, crashing, and coming back, so the whole notion of reachability in
-//! this simulation lives here.
+//! booting, crashing, and coming back; partitioning and healing one is how they
+//! model a node that keeps running while the network cuts it off. The whole
+//! notion of reachability in this simulation lives here.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -30,6 +31,7 @@ use tokio::sync::oneshot;
 #[derive(Default)]
 struct Registry {
     nodes: HashMap<NodeId, KraftController>,
+    partitioned: HashSet<NodeId>,
 }
 
 /// An in-memory [`PeerSender`]. It routes the encoded request body to the target
@@ -37,12 +39,30 @@ struct Registry {
 #[derive(Clone)]
 pub(crate) struct SimNet {
     registry: Arc<Mutex<Registry>>,
+    /// The node whose outbound sends this handle carries, when it was made by
+    /// [`SimNet::as_peer`]. The registry handle the test itself holds has none,
+    /// and never sends.
+    me: Option<NodeId>,
 }
 
 impl SimNet {
     pub(crate) fn new() -> Self {
         Self {
             registry: Arc::new(Mutex::new(Registry::default())),
+            me: None,
+        }
+    }
+
+    /// The [`PeerSender`] one engine hands its outbound sends to.
+    ///
+    /// The sender identity is what lets a partition block both directions: an
+    /// anonymous handle could only ever refuse deliveries INTO a partitioned
+    /// node, leaving the isolated side still able to push `BeginQuorumEpoch` at
+    /// a majority that has moved on.
+    pub(crate) fn as_peer(&self, me: NodeId) -> Self {
+        Self {
+            registry: Arc::clone(&self.registry),
+            me: Some(me),
         }
     }
 
@@ -57,13 +77,43 @@ impl SimNet {
     pub(crate) fn get(&self, id: NodeId) -> Option<KraftController> {
         self.registry.lock().unwrap().nodes.get(&id).cloned()
     }
+
+    /// Cut `id` off the network in BOTH directions while leaving its engine
+    /// running and readable through [`SimNet::get`].
+    ///
+    /// This is what separates a partition from the kill that [`SimNet::remove`]
+    /// models. A killed leader stops answering because it is gone; a
+    /// partitioned one keeps its whole state machine ticking and still believes
+    /// what it believed a moment ago, which is exactly the case check-quorum
+    /// exists for. Blocking both directions matters: a leader that could still
+    /// push `BeginQuorumEpoch` one way would keep re-attaching the majority side
+    /// to an epoch it can no longer serve.
+    pub(crate) fn partition(&self, id: NodeId) {
+        self.registry.lock().unwrap().partitioned.insert(id);
+    }
+
+    /// Put `id` back on the network.
+    pub(crate) fn heal(&self, id: NodeId) {
+        self.registry.lock().unwrap().partitioned.remove(&id);
+    }
+
+    fn reachable(&self, to: NodeId) -> Option<KraftController> {
+        let registry = self.registry.lock().unwrap();
+        if registry.partitioned.contains(&to)
+            || self.me.is_some_and(|me| registry.partitioned.contains(&me))
+        {
+            return None;
+        }
+        registry.nodes.get(&to).cloned()
+    }
 }
 
 #[async_trait::async_trait]
 impl PeerSender for SimNet {
     async fn send(&self, peer: NodeId, api_key: i16, body: Bytes) -> Result<Bytes, RaftError> {
-        // Look up the target engine. A removed/crashed node is unreachable.
-        let target = self.get(peer).ok_or(RaftError::NotLeader {
+        // Look up the target engine. A removed/crashed node is unreachable, and
+        // so is either end of a partition.
+        let target = self.reachable(peer).ok_or(RaftError::NotLeader {
             current_leader: None,
         })?;
         let (reply, rx) = oneshot::channel();
