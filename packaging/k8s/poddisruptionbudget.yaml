@@ -1,0 +1,33 @@
+# Voluntary disruption, such as a node drain, a cluster upgrade, or a
+# descheduler, does not know that these three pods form a Raft quorum. Without
+# a budget it evicts two of them at once, and the metadata quorum loses its
+# majority: no leader, no metadata writes, and no leader election for the
+# partitions whose brokers went with them.
+#
+# `minAvailable: 2` is the majority of three. Scale the StatefulSet and this
+# has to move with it: the budget is the floor of half the replicas, plus one,
+# and not a constant.
+#
+# `unhealthyPodEvictionPolicy` is deliberately left at its default,
+# `IfHealthyBudget`. `AlwaysAllow` would let the eviction API evict any pod
+# that is not Ready even when the budget is already unmet -- and here an
+# unready pod is still a voter. The controller joins the quorum before log-dir
+# recovery runs and before the listeners bind, and `/readyz` reports 503
+# throughout both, so a pod that fails readiness is usually one that is voting
+# and replicating and simply not yet serving clients. With `AlwaysAllow`, a
+# drain that has already taken one of three voters could take a second one the
+# moment it went briefly unready, and the quorum would lose its majority to a
+# voluntary disruption -- which is the whole thing this budget exists to stop.
+# The cost of the default is that a drain blocks while a pod is stuck unready,
+# which is the right way round: that is an operator's decision to make.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: krabka
+  labels:
+    app.kubernetes.io/name: krabka
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: krabka
