@@ -181,6 +181,23 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
+  # Krabka tags and releases the whole workspace as one unit, so the root
+  # CHANGELOG.md is the only record of what shipped. The twelve crate
+  # changelogs this repository inherited said otherwise: they documented
+  # robot-head/crabka's releases under these crate names. This keeps a version
+  # heading from coming back into one.
+  changelogs:
+    name: changelogs
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: check the check
+        run: python3 tools/lint/test_crate_changelogs.py
+      - name: no crate changelog records a release
+        run: python3 tools/lint/crate_changelogs.py
+
   # Documentation source checks do not use Bazel, so they can stay parallel
   # while the `ci` job renders and uploads rustdoc from its warm output tree.
   docs:
@@ -487,6 +504,7 @@ jobs:
       - ci
       - coverage
       - supply-chain
+      - changelogs
       - docs
       - proofs
       - docker-select

@@ -19,9 +19,9 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     handlers::describe_transactions::{TRANSACTIONAL_ID_NOT_FOUND, transaction_state_row},
-    metadata_source::MetadataSource,
     partition::Partition,
     partition_registry::PartitionRegistry,
+    test_support::FakeMetadataSource,
     txn::{bootstrap, state::TxnEntry, two_pc::NO_TIMEOUT_MS, version::TxnVersion},
 };
 
@@ -425,73 +425,6 @@ async fn a_partition_this_broker_no_longer_leads_is_skipped() {
 
 // ── One tick of the background reaper ─────────────────────────────────
 
-/// A [`MetadataSource`] that serves one image and nothing else. The sweep
-/// tick reads `current_image` and no other method.
-struct OneImageSource(Arc<MetadataImage>);
-
-#[async_trait::async_trait]
-impl MetadataSource for OneImageSource {
-    fn current_image(&self) -> Arc<MetadataImage> {
-        Arc::clone(&self.0)
-    }
-    fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<MetadataImage>> {
-        unimplemented!("the sweep tick watches no image")
-    }
-    fn watch_leader(&self) -> tokio::sync::watch::Receiver<Option<krabka_raft::NodeId>> {
-        unimplemented!("the sweep tick watches no leader")
-    }
-    fn quorum_state(&self) -> krabka_raft::QuorumState {
-        unimplemented!("the sweep tick reads no quorum state")
-    }
-    async fn submit_change(
-        &self,
-        _records: Vec<MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
-        unimplemented!("the sweep tick submits no metadata change")
-    }
-    async fn change_membership(
-        &self,
-        _new_voters: std::collections::BTreeSet<krabka_raft::NodeId>,
-    ) -> Result<(), krabka_raft::RaftError> {
-        unimplemented!("the sweep tick changes no membership")
-    }
-    async fn add_learner(
-        &self,
-        _node_id: krabka_raft::NodeId,
-        _node: krabka_raft::Node,
-    ) -> Result<(), krabka_raft::RaftError> {
-        unimplemented!("the sweep tick adds no learner")
-    }
-    fn controller_bound_addr(&self) -> std::net::SocketAddr {
-        unimplemented!("the sweep tick reads no controller address")
-    }
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> krabka_raft::SnapshotRange {
-        unimplemented!("the sweep tick reads no snapshot")
-    }
-    async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
-        unimplemented!("the sweep tick triggers no snapshot")
-    }
-    async fn add_voter(
-        &self,
-        _req: krabka_raft::AddVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        unimplemented!("the sweep tick adds no voter")
-    }
-    async fn remove_voter(
-        &self,
-        _req: krabka_raft::RemoveVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        unimplemented!("the sweep tick removes no voter")
-    }
-    async fn update_voter(
-        &self,
-        _req: krabka_raft::UpdateVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        unimplemented!("the sweep tick updates no voter")
-    }
-    async fn cancel(&self) {}
-}
-
 /// One tick of [`crate::txn::id_expiration`], the background task the broker
 /// spawns, against the wall clock the task itself reads.
 ///
@@ -515,7 +448,9 @@ async fn a_sweep_tick_refreshes_leadership_before_expiring() {
 
     // Leadership moved here. One tick, at a 1ms expiry the entry's epoch
     // `last_update_ms` is long past under any wall clock.
-    let source = OneImageSource(Arc::new(image_with_leader(NodeId(1))));
+    let source = FakeMetadataSource::builder()
+        .image(image_with_leader(NodeId(1)))
+        .build();
     crate::txn::id_expiration::sweep_once(
         &coordinator,
         &source,
@@ -535,4 +470,8 @@ async fn a_sweep_tick_refreshes_leadership_before_expiring() {
     let records = transaction_state_records(&coordinator);
     check!(records.len() == 2, "{records:?}");
     check!(records[1] == (TID.to_string(), None));
+    // The tick reads the live image once, to refresh leadership, and writes
+    // no metadata of its own: the tombstone goes to `__transaction_state`.
+    check!(source.current_image_calls() == 1);
+    check!(source.submitted().is_empty());
 }

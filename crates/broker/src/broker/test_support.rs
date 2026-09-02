@@ -1,7 +1,8 @@
-//! Fixtures shared by the unit tests of several `broker` submodules: a stub
-//! [`crate::metadata_source::MetadataSource`], a locally spawned partition
-//! seeded with records, and the metadata records that tests submit. They live
-//! in one module so no submodule owns a helper its siblings also need.
+//! Fixtures shared by the unit tests of several `broker` submodules: the
+//! [`crate::metadata_source::MetadataSource`] they read from, a locally
+//! spawned partition seeded with records, and the metadata records that tests
+//! submit. They live in one module so no submodule owns a helper its siblings
+//! also need.
 
 use std::sync::Arc;
 
@@ -11,108 +12,20 @@ use krabka_ids::PartitionIndex;
 use crate::{
     broker::{BrokerHandle, partition_spawn::spawn_partition},
     partition::Partition,
+    test_support::FakeMetadataSource,
 };
 
-pub(super) struct MockMetadataSource {
-    pub(super) image: Arc<krabka_metadata::MetadataImage>,
-    pub(super) leader_tx: tokio::sync::watch::Sender<Option<krabka_raft::NodeId>>,
-}
-
-impl MockMetadataSource {
-    pub(super) fn new(
-        image: krabka_metadata::MetadataImage,
-        leader: Option<krabka_raft::NodeId>,
-    ) -> Self {
-        let (leader_tx, _) = tokio::sync::watch::channel(leader);
-        Self {
-            image: Arc::new(image),
-            leader_tx,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::metadata_source::MetadataSource for MockMetadataSource {
-    fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
-        self.image.clone()
-    }
-
-    fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>> {
-        let (_, rx) = tokio::sync::watch::channel(self.image.clone());
-        rx
-    }
-
-    fn watch_leader(&self) -> tokio::sync::watch::Receiver<Option<krabka_raft::NodeId>> {
-        self.leader_tx.subscribe()
-    }
-
-    fn quorum_state(&self) -> krabka_raft::QuorumState {
-        krabka_raft::QuorumState {
-            current_term: 0,
-            last_applied_index: 0,
-            current_leader: *self.leader_tx.borrow(),
-            voters: Vec::new(),
-            voter_nodes: std::collections::BTreeMap::new(),
-            per_voter_matched_index: std::collections::BTreeMap::new(),
-        }
-    }
-
-    async fn submit_change(
-        &self,
-        _records: Vec<krabka_metadata::MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
-    }
-
-    async fn change_membership(
-        &self,
-        _new_voters: std::collections::BTreeSet<krabka_raft::NodeId>,
-    ) -> Result<(), krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
-    }
-
-    async fn add_learner(
-        &self,
-        _node_id: krabka_raft::NodeId,
-        _node: krabka_raft::Node,
-    ) -> Result<(), krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
-    }
-
-    fn controller_bound_addr(&self) -> std::net::SocketAddr {
-        "127.0.0.1:9093".parse().unwrap()
-    }
-
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> krabka_raft::SnapshotRange {
-        krabka_raft::SnapshotRange::NoSnapshot
-    }
-
-    async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
-    }
-
-    async fn add_voter(
-        &self,
-        _req: krabka_raft::AddVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
-    }
-
-    async fn remove_voter(
-        &self,
-        _req: krabka_raft::RemoveVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
-    }
-
-    async fn update_voter(
-        &self,
-        _req: krabka_raft::UpdateVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
-    }
-
-    async fn cancel(&self) {}
+/// A metadata source over `image`, with `leader` as the controller leader and
+/// a loopback controller listener for the gauges and adapter paths to report.
+pub(super) fn fake_source(
+    image: krabka_metadata::MetadataImage,
+    leader: Option<krabka_raft::NodeId>,
+) -> FakeMetadataSource {
+    FakeMetadataSource::builder()
+        .image(image)
+        .leader(leader)
+        .controller_bound_addr("127.0.0.1:9093".parse().expect("loopback controller addr"))
+        .build()
 }
 
 pub(super) fn local_partition_with_records(

@@ -87,7 +87,7 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
         .len();
     partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
 
-    let controller = FixedMetadataSource::new(image);
+    let controller = fixed_source(image);
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
 

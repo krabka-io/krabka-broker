@@ -11,8 +11,8 @@ use super::*;
 use crate::{
     heartbeat::controller_state::TestClock,
     leader_election::test_support::{
-        TestMetadataSource, fencing_updates, img_with_partition, one_partition_change,
-        partition_batches, recovery_handle_for_tests, register_brokers,
+        fake_source, fencing_updates, img_with_partition, one_partition_change, partition_batches,
+        recovery_handle_for_tests, register_brokers,
     },
 };
 
@@ -22,7 +22,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
     // controller. Brokers 2 and 3 heartbeat as usual.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(2))));
+    let source = fake_source(img, Some(NodeId(2)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -54,7 +54,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
     assert!(!liveness.is_alive(1).await);
     assert!(liveness.unavailable_snapshot().await.contains(&1));
     assert!(liveness.dead_snapshot().await.is_empty());
-    let batches = source.submitted_batches().await;
+    let batches = source.submitted();
     assert!(partition_batches(&batches).is_empty());
     // Broker 1 is fenced until it proves catch-up, and the tick publishes
     // that so a follower-served response can see it.
@@ -75,7 +75,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
     )
     .await;
 
-    let batches = partition_batches(&source.submitted_batches().await);
+    let batches = partition_batches(&source.submitted());
     assert!(batches.len() == 1, "the edge submits once, got {batches:?}");
     let expected = PartitionRecord {
         topic: "t".into(),
@@ -103,7 +103,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
         &mut state,
     )
     .await;
-    let batches = partition_batches(&source.submitted_batches().await);
+    let batches = partition_batches(&source.submitted());
     assert!(batches.len() == 2, "the sweep retries, got {batches:?}");
     assert!(*one_partition_change(&batches[1]) == expected);
 }
@@ -112,7 +112,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
 async fn tick_on_a_follower_tracks_nothing_and_submits_nothing() {
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(9))));
+    let source = fake_source(img, Some(NodeId(9)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -147,7 +147,7 @@ async fn tick_on_a_follower_tracks_nothing_and_submits_nothing() {
     // sessions from the image. Otherwise every broker would look dead.
     assert!(liveness.dead_snapshot().await.is_empty());
     assert!(!liveness.is_alive(1).await);
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 }
 
 #[tokio::test]
@@ -158,7 +158,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     // stale dead set and fail over partitions whose leaders are healthy.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(9))));
+    let source = fake_source(img, Some(NodeId(9)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -189,7 +189,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     // registered broker alive and submits nothing.
     // `send_replace` does not need a live receiver: the tick subscribes
     // on demand and drops its receiver at once.
-    source.leader_tx.send_replace(Some(NodeId(2)));
+    source.set_leader(Some(NodeId(2)));
     run_liveness_tick(
         &controller,
         NodeId(2),
@@ -201,7 +201,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     .await;
     assert!(liveness.dead_snapshot().await.is_empty());
     assert!(liveness.is_alive(1).await);
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 
     // The seeded window is a real one: a broker that stays silent for a
     // full window afterwards still expires and fails over.
@@ -218,7 +218,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     )
     .await;
     assert!(liveness.dead_snapshot().await == [1].into_iter().collect());
-    let batches = source.submitted_batches().await;
+    let batches = source.submitted();
     assert!(partition_batches(&batches).len() == 1);
     // The death is published in the same tick that detects it, so a
     // follower-served `Metadata` sees broker 1's replicas offline.
@@ -239,7 +239,7 @@ async fn tick_tombstones_the_fencing_key_when_a_broker_comes_back() {
             config_value: Some(crate::config_keys::FENCED_TRUE.into()),
         },
     ));
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(2))));
+    let source = fake_source(img, Some(NodeId(2)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -266,7 +266,7 @@ async fn tick_tombstones_the_fencing_key_when_a_broker_comes_back() {
     )
     .await;
 
-    let batches = source.submitted_batches().await;
+    let batches = source.submitted();
     assert!(partition_batches(&batches).is_empty());
     assert!(fencing_updates(&batches) == vec![(3, false)]);
 }

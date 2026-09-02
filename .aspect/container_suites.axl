@@ -3,6 +3,25 @@
 _BROKER_TARGET_PREFIX = "//crates/broker:"
 _DOCKER_TEST_SUFFIX = "_docker_test"
 
+# The suites live under `//crates`, all but one: the container image and the
+# suite that loads it and runs every operator binary it carries are assembled in
+# `//packaging`. Scoping the queries to the crates alone would never select it.
+_SUITE_SCOPE = "//crates/... + //packaging/..."
+
+_IMAGE_SUITE_TARGET = "//packaging:image_docker_test"
+
+# A change to either selects every broker suite: this is where a dependency the
+# whole crate re-links against comes from.
+_BROKER_MANIFEST_PATHS = ["crates/broker/BUILD.bazel", "crates/broker/Cargo.toml"]
+
+# Nothing under `//crates` reaches the image's layer list, so no broker feature
+# rule selects the image suite and rdeps cannot help either: most files under
+# `packaging/` are inputs to an apko or rules_img rule rather than Bazel targets,
+# and one that is not a target fails the whole `set(...)` query. Match the
+# directory instead -- everything in it either changes what the image carries or
+# changes what the suite asserts about it.
+_IMAGE_PATH_PREFIXES = ["packaging/"]
+
 # Rust is one Bazel target at crate granularity, so rdeps turns every broker
 # source change into every broker container suite. These are the narrower
 # feature contracts worth gating on a PR; the complete matrix remains nightly.
@@ -204,6 +223,8 @@ def _select(paths, available_targets):
             missing.append(suite)
     if missing:
         fail("unknown broker container suites: " + ", ".join(sorted(missing)))
+    if _IMAGE_SUITE_TARGET not in available_targets:
+        fail("unknown container suite: " + _IMAGE_SUITE_TARGET)
 
     acceptance_suites = {}
     for suite in broker_suites.keys():
@@ -211,10 +232,20 @@ def _select(paths, available_targets):
             acceptance_suites[suite] = True
 
     suites = {}
+    image = False
     for raw_path in paths:
         path = raw_path.strip().replace("\\", "/")
         if path:
-            if path in ["crates/broker/BUILD.bazel", "crates/broker/Cargo.toml"]:
+            if _starts_with_any(path, _IMAGE_PATH_PREFIXES):
+                image = True
+
+            if path in _BROKER_MANIFEST_PATHS:
+                # The image suite is the only one that runs the broker and the
+                # operator tools under the apko base's own loader and libc, and a
+                # manifest is where a new dynamic dependency enters. A `.rs` edit
+                # cannot add one, so broker sources keep going through the
+                # feature map alone rather than building an image every PR.
+                image = True
                 for suite in broker_suites.keys():
                     suites[suite] = True
             elif _starts_with_any(path, ["crates/broker/tests/support/", "crates/broker/tests/fixtures/"]):
@@ -238,14 +269,17 @@ def _select(paths, available_targets):
             if path.startswith(_UNIFIED_PREFIX) and not _starts_with_any(path, _UNIFIED_EXCLUSIONS):
                 suites["jvm_consumer_group_next_gen"] = True
 
-    return [_target(suite) for suite in sorted(suites.keys())]
+    targets = [_target(suite) for suite in suites.keys()]
+    if image:
+        targets.append(_IMAGE_SUITE_TARGET)
+    return sorted(targets)
 
 def _check(condition, message):
     if not condition:
         fail(message)
 
 def _self_test():
-    available = [_target(suite) for suite in _mapped_suites().keys()]
+    available = [_target(suite) for suite in _mapped_suites().keys()] + [_IMAGE_SUITE_TARGET]
     _check(
         _select(["crates/broker/src/delivery/scheduler.rs"], available) == [_target("jvm_deliver_at_time")],
         "delivery source must select deliver-at-time",
@@ -315,7 +349,28 @@ def _self_test():
         _target("unavailable_partitions_jvm") in _select(["crates/broker/src/handlers/broker_heartbeat/failover.rs"], available),
         "the offline-dir failover path must select the unavailable-partitions differential",
     )
+    _check(
+        _select(["packaging/BUILD.bazel"], available) == [_IMAGE_SUITE_TARGET],
+        "a change to the image's layer list must select the image suite",
+    )
+    _check(
+        _select(["packaging/image_binaries_test.sh"], available) == [_IMAGE_SUITE_TARGET],
+        "a change to what the image asserts must select the image suite",
+    )
+    _check(
+        sorted(_select(["packaging/base.apko.yaml", "crates/broker/src/barrier/cut.rs"], available)) ==
+        sorted([_IMAGE_SUITE_TARGET, _target("jvm_barrier_markers")]),
+        "a change to both must select both",
+    )
     _check(_select(["crates/broker/src/codes.rs"], available) == [], "unmapped broker source must select nothing")
+    _check(
+        _IMAGE_SUITE_TARGET not in _select(["crates/broker/src/barrier/cut.rs"], available),
+        "a broker source edit must not build an image; it cannot add a dynamic dependency",
+    )
+    _check(
+        _IMAGE_SUITE_TARGET in _select(["crates/broker/Cargo.toml"], available),
+        "the broker manifest must select the image suite, which links against the base's libc",
+    )
     _check(
         len(_select(["crates/broker/Cargo.toml"], available)) == len(available),
         "broker manifest must select every suite",
@@ -361,7 +416,7 @@ def _is_deleted_source(path):
     )
 
 def _affected_targets(ctx, base):
-    all_targets = sorted(_run(ctx, "bazel", ["query", "attr(tags, 'docker', //crates/...)"]))
+    all_targets = sorted(_run(ctx, "bazel", ["query", "attr(tags, 'docker', " + _SUITE_SCOPE + ")"]))
     if not _valid_base(ctx, base):
         return all_targets
 
@@ -380,6 +435,9 @@ def _affected_targets(ctx, base):
     for label in _select(changed, all_targets):
         targets[label] = True
 
+    # Non-broker crates go through rdeps. Six of them build a binary the image
+    # carries, so the scope is what makes a change to `krabka-format` or
+    # `krabka-restore` select the image suite as well as the JVM ones.
     files = []
     root = ctx.std.env.bazel_root_dir()
     for path in changed:
@@ -391,7 +449,7 @@ def _affected_targets(ctx, base):
         ):
             files.append(path)
     if files:
-        expression = "attr(tags, 'docker', rdeps(//crates/..., set(" + " ".join(files) + ")))"
+        expression = "attr(tags, 'docker', rdeps(" + _SUITE_SCOPE + ", set(" + " ".join(files) + ")))"
         for label in _run(ctx, "bazel", ["query", expression]):
             targets[label] = True
 

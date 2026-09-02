@@ -10,15 +10,15 @@ use super::*;
 use crate::{
     heartbeat::controller_state::{LivenessTransition, TestClock},
     leader_election::test_support::{
-        TestMetadataSource, img_with_partition, liveness_with_alive, liveness_with_dead,
-        one_partition_change, recovery_handle_for_tests, register_brokers,
+        fake_source, img_with_partition, liveness_with_alive, liveness_with_dead,
+        one_partition_change, recovery_handle_for_tests, register_brokers, stalled_fake_source,
     },
 };
 
 #[tokio::test]
 async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(7))));
+    let source = fake_source(img, Some(NodeId(7)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let liveness = liveness_with_alive(&[2, 3]).await;
     let recovery = recovery_handle_for_tests();
@@ -34,7 +34,7 @@ async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
     .await
     .expect("broker dead handling should submit");
 
-    let batches = source.submitted_batches().await;
+    let batches = source.submitted();
     assert!(batches.len() == 1);
     let pr = one_partition_change(&batches[0]);
     assert!(pr.leader == 2);
@@ -44,7 +44,7 @@ async fn on_broker_dead_submits_failover_when_this_controller_is_leader() {
 #[tokio::test(start_paused = true)]
 async fn on_broker_dead_bounds_a_stalled_commit() {
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new_stalled(img, Some(NodeId(7))));
+    let source = stalled_fake_source(img, Some(NodeId(7)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let liveness = liveness_with_alive(&[2, 3]).await;
     let recovery = recovery_handle_for_tests();
@@ -63,14 +63,14 @@ async fn on_broker_dead_bounds_a_stalled_commit() {
 
     let error = result.expect_err("a stalled commit must surface as an error");
     assert!(matches!(error, crate::error::BrokerError::Replication(_)));
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 }
 
 #[tokio::test]
 async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     // Partition t-0: leader 1, ISR {1, 2}. Replica 3 is out of the ISR.
     let img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(7))));
+    let source = fake_source(img, Some(NodeId(7)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -100,7 +100,7 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     )
     .await
     .expect("edge handling");
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 
     // The sweep sees the same liveness state and is also a no-op.
     sweep_dead_leaders(
@@ -112,7 +112,7 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
         &mut state,
     )
     .await;
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 
     // Broker 2 comes alive. No new edge fires for broker 1: it is
     // already dead.
@@ -129,7 +129,7 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
         &mut state,
     )
     .await;
-    let batches = source.submitted_batches().await;
+    let batches = source.submitted();
     assert!(batches.len() == 1);
     let expected = PartitionRecord {
         topic: "t".into(),
@@ -219,7 +219,7 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
     ];
     for case in cases {
         let img = img_with_partition("t", 0, case.leader, &[1, 2, 3], case.isr);
-        let source = Arc::new(TestMetadataSource::new(img, case.controller_leader));
+        let source = fake_source(img, case.controller_leader);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
         let liveness = liveness_with_dead(case.dead, case.alive).await;
         let metrics = crate::metrics::BrokerMetrics::new();
@@ -236,7 +236,7 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         )
         .await;
 
-        let batches = source.submitted_batches().await;
+        let batches = source.submitted();
         let submitted = batches
             .first()
             .map(|batch| one_partition_change(batch).clone());
@@ -255,7 +255,7 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
     // walk on later ticks until the image or the dead set changes.
     let mut img = img_with_partition("t", 0, /*leader*/ 2, &[1, 2, 3], &[2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(7))));
+    let source = fake_source(img, Some(NodeId(7)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let liveness = liveness_with_dead(&[1], &[2, 3]).await;
     let metrics = crate::metrics::BrokerMetrics::new();
@@ -277,7 +277,7 @@ async fn sweep_walks_the_image_once_per_change_while_a_dead_broker_stays_resolve
         .expect("a clean sweep is remembered");
     assert!(Arc::ptr_eq(&memo.0, &controller.current_image()));
     assert!(memo.1 == [1].into_iter().collect());
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 
     // Broker 1 comes back: the dead set changes and the memo is dropped.
     liveness.record_heartbeat(1).await;

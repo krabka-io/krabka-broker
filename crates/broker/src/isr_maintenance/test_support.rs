@@ -1,7 +1,6 @@
 //! Fixtures shared by this module's unit tests: metadata records to seed an
-//! image, a real on-disk partition, a way to force a replica state, and a
-//! `MetadataSource` stub that answers only the image and leader reads the ISR
-//! code makes.
+//! image, a real on-disk partition, a way to force a replica state, and the
+//! `MetadataSource` the ISR code reads its image and leader from.
 
 use std::{
     path::Path,
@@ -13,9 +12,8 @@ use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_log::Offset;
 use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
 use krabka_raft::NodeId;
-use tokio::sync::watch;
 
-use crate::partition::Partition;
+use crate::{partition::Partition, test_support::FakeMetadataSource};
 
 pub(super) fn reg(id: NodeId) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
@@ -83,94 +81,10 @@ pub(super) async fn set_replica_state(
     }
 }
 
-pub(super) struct TestMetadataSource {
-    image_tx: watch::Sender<Arc<MetadataImage>>,
-    leader_tx: watch::Sender<Option<NodeId>>,
-}
-
-impl TestMetadataSource {
-    pub(super) fn new(image: MetadataImage, leader: Option<NodeId>) -> Self {
-        let (image_tx, _) = watch::channel(Arc::new(image));
-        let (leader_tx, _) = watch::channel(leader);
-        Self {
-            image_tx,
-            leader_tx,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::metadata_source::MetadataSource for TestMetadataSource {
-    fn current_image(&self) -> Arc<MetadataImage> {
-        self.image_tx.borrow().clone()
-    }
-
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        self.image_tx.subscribe()
-    }
-
-    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        self.leader_tx.subscribe()
-    }
-
-    fn quorum_state(&self) -> krabka_raft::QuorumState {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn submit_change(
-        &self,
-        _records: Vec<MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn change_membership(
-        &self,
-        _new_voters: std::collections::BTreeSet<NodeId>,
-    ) -> Result<(), krabka_raft::RaftError> {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn add_learner(
-        &self,
-        _node_id: NodeId,
-        _node: krabka_raft::Node,
-    ) -> Result<(), krabka_raft::RaftError> {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    fn controller_bound_addr(&self) -> std::net::SocketAddr {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> krabka_raft::SnapshotRange {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn add_voter(
-        &self,
-        _req: krabka_raft::AddVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn remove_voter(
-        &self,
-        _req: krabka_raft::RemoveVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn update_voter(
-        &self,
-        _req: krabka_raft::UpdateVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        unimplemented!("unused in isr_maintenance tests")
-    }
-
-    async fn cancel(&self) {}
+/// A metadata source over `image`, with `leader` as the controller leader.
+pub(super) fn fake_source(image: MetadataImage, leader: Option<NodeId>) -> FakeMetadataSource {
+    FakeMetadataSource::builder()
+        .image(image)
+        .leader(leader)
+        .build()
 }
