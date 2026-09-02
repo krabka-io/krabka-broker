@@ -153,19 +153,6 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
 
     let store = open_archive(args)?;
     let archive = inventory(&store, args).await?;
-    for partition in args
-        .to_offset
-        .iter()
-        .map(|bound| &bound.partition)
-        .chain(args.exclude_offset.iter().map(|range| &range.partition))
-    {
-        if !archive.holds(&partition.topic, partition.partition) {
-            return Err(RestoreError::UnknownPartition {
-                topic: partition.topic.clone(),
-                partition: partition.partition,
-            });
-        }
-    }
     let predicates = Predicates::from_args(args)?;
     let format = format_target(args, &archive).await?;
 
