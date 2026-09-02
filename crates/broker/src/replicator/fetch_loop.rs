@@ -167,7 +167,7 @@ fn build_fetch_request(
         min_bytes: cfg.replication.fetch_min.bytes_i32(),
         max_bytes: cfg.replication.fetch_max.bytes_i32(),
         topics: vec![FetchTopic {
-            topic: cfg.topic.clone(),
+            topic: cfg.topic.to_string(),
             topic_id: cfg.topic_id,
             partitions: vec![FetchPartition {
                 partition: cfg.partition.get(),

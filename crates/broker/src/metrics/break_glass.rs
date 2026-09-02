@@ -2,6 +2,8 @@
 //! counter, the freeze-registry gauge, and the proposal, refusal and bypass
 //! families that report on the two-person rule.
 
+use std::sync::Arc;
+
 use super::{
     BreakGlassAction, BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
     TopicLabel,
@@ -17,7 +19,7 @@ impl BrokerMetrics {
     /// series count is bounded by the number of topics a freeze covers.
     pub fn record_topic_freeze_rejection(&self, topic: &str) {
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::from(topic),
         };
         self.topic_freeze_rejections.get_or_create(&lbl).inc();
     }
@@ -80,7 +82,7 @@ mod tests {
         let cases = [("orders", 2), ("payments", 1), ("unfrozen", 0)];
         for (topic, want) in cases {
             let lbl = TopicLabel {
-                topic: topic.to_string(),
+                topic: Arc::from(topic),
             };
             // One `get_or_create` guard per statement (first
             // materialization takes the family write lock).

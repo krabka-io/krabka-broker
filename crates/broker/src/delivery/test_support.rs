@@ -137,7 +137,7 @@ pub(crate) fn scheduled_partition(
 /// Register `partition` under its own topic name.
 pub(crate) fn register(registry: &PartitionRegistry, partition: &Arc<Partition>) {
     registry.insert(
-        partition.topic.clone(),
+        partition.topic.as_str().into(),
         partition.index,
         Arc::clone(partition),
     );

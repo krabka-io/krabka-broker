@@ -27,7 +27,7 @@ async fn run_ticks_until_shutdown() {
     );
     let before = record_count(&partition);
     registry.insert(
-        "run-compact".to_string(),
+        "run-compact".into(),
         PartitionIndex(0),
         Arc::clone(&partition),
     );
@@ -110,7 +110,7 @@ fn spawn_on(
     let partition =
         compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact);
     let before = record_count(&partition);
-    registry.insert(topic.to_string(), PartitionIndex(0), Arc::clone(&partition));
+    registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
     let task = tokio::spawn(run(
         registry,
         NodeId(7),

@@ -24,7 +24,7 @@ pub(super) fn open_partition(broker: &Broker, log_dir: &Path, topic: &str, parti
     );
     broker
         .partitions
-        .insert(topic.to_string(), PartitionIndex(partition), part);
+        .insert(topic.into(), PartitionIndex(partition), part);
 }
 
 pub(super) async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {

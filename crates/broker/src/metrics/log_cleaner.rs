@@ -1,6 +1,8 @@
 //! Log-compaction accounting: the sweep counter the cleaner bumps once per
 //! pass, and the per-partition counter of compactions that pass completed.
 
+use std::sync::Arc;
+
 use super::{BrokerMetrics, PartitionLabel};
 
 impl BrokerMetrics {
@@ -16,7 +18,7 @@ impl BrokerMetrics {
     /// (`Partition::compact_log` returned `Ok`).
     pub fn record_compaction(&self, topic: &str, partition: i32) {
         let lbl = PartitionLabel {
-            topic: topic.to_string(),
+            topic: Arc::from(topic),
             partition,
         };
         self.log_compactions_total.get_or_create(&lbl).inc();

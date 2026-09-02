@@ -169,7 +169,7 @@ async fn seeded_coordinator(entry: TxnEntry, leader: NodeId) -> (TxnCoordinator,
     let dir = tempdir().expect("tempdir");
     let partitions = Arc::new(PartitionRegistry::new());
     partitions.insert(
-        bootstrap::TOPIC.to_string(),
+        bootstrap::TOPIC.into(),
         PartitionIndex(0),
         transaction_state_partition(dir.path()),
     );

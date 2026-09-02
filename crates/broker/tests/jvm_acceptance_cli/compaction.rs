@@ -189,7 +189,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         .metrics()
         .log_compactions_total
         .get_or_create(&krabka_broker::metrics::PartitionLabel {
-            topic: TOPIC.to_string(),
+            topic: TOPIC.into(),
             partition: 0,
         })
         .get();
@@ -197,7 +197,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         .wait_for_metrics("partition compacted after produce", |m| {
             m.log_compactions_total
                 .get_or_create(&krabka_broker::metrics::PartitionLabel {
-                    topic: TOPIC.to_string(),
+                    topic: TOPIC.into(),
                     partition: 0,
                 })
                 .get()

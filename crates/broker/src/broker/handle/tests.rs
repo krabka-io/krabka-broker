@@ -198,7 +198,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     let local_part = local_partition_with_records(dir.path(), local_topic, 0, &[b"a", b"b"]);
     assert!(!handle.partition_exists_for_test(local_topic, 0));
     broker.partitions.insert(
-        local_topic.to_string(),
+        local_topic.into(),
         PartitionIndex(0),
         Arc::clone(&local_part),
     );
@@ -230,7 +230,7 @@ async fn start_and_shutdown_clean() {
     let partition = local_partition_with_records(dir.path(), "shutdown", 0, &[]);
     broker
         .partitions
-        .insert("shutdown".to_string(), PartitionIndex(0), partition.clone());
+        .insert("shutdown".into(), PartitionIndex(0), partition.clone());
     assert!(addr.port() != 0);
     let stream = tokio::net::TcpStream::connect(addr)
         .await
@@ -261,11 +261,9 @@ async fn dropping_handle_stops_idle_connections_and_partition_writers() {
     let broker = handle.broker_arc_for_test();
     let addr = handle.listen_addr();
     let partition = local_partition_with_records(dir.path(), "drop-shutdown", 0, &[]);
-    broker.partitions.insert(
-        "drop-shutdown".to_string(),
-        PartitionIndex(0),
-        partition.clone(),
-    );
+    broker
+        .partitions
+        .insert("drop-shutdown".into(), PartitionIndex(0), partition.clone());
     let stream = tokio::net::TcpStream::connect(addr)
         .await
         .expect("listener accepts before handle drop");

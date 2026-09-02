@@ -42,7 +42,7 @@ pub(super) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i
         Arc::new(crate::producer_state::ProducerState::new()),
         false,
     );
-    reg.insert(bootstrap::TOPIC.to_string(), PartitionIndex(p), part);
+    reg.insert(bootstrap::TOPIC.into(), PartitionIndex(p), part);
 }
 
 /// A coordinator that leads every state partition it touches.

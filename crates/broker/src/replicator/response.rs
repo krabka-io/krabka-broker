@@ -298,7 +298,7 @@ fn fetch_topic_identity_matches(topic: &FetchableTopicResponse, cfg: &Config) ->
     let name_present = !topic.topic.is_empty();
     let id_present = topic.topic_id != WireUuid::ZERO;
     (name_present || id_present)
-        && (!name_present || topic.topic == cfg.topic)
+        && (!name_present || topic.topic.as_str() == &*cfg.topic)
         && (!id_present || topic.topic_id == cfg.topic_id)
 }
 

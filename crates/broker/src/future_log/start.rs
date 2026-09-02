@@ -241,7 +241,7 @@ mod tests {
         let partitions = Arc::new(PartitionRegistry::new());
         let future_logs = Arc::new(DashMap::new());
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        partitions.insert("t".to_string(), PartitionIndex(0), part);
+        partitions.insert("t".into(), PartitionIndex(0), part);
 
         start_move(
             &partitions,
@@ -292,7 +292,7 @@ mod tests {
         let partitions = Arc::new(PartitionRegistry::new());
         let future_logs = Arc::new(DashMap::new());
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        partitions.insert("t".to_string(), PartitionIndex(0), part);
+        partitions.insert("t".into(), PartitionIndex(0), part);
 
         // Plant a registry entry as if a prior ARLD already kicked off
         // a move — exercises the "already moving, same target" branch
@@ -343,7 +343,7 @@ mod tests {
         let future_logs = Arc::new(DashMap::new());
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
         append_records(&part, 3);
-        partitions.insert("t".to_string(), PartitionIndex(0), part.clone());
+        partitions.insert("t".into(), PartitionIndex(0), part.clone());
 
         // Plant a registry entry pointing at `extra`.
         let future_path = log_dir::future_partition_dir(extra.path(), "t", 0);

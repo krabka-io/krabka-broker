@@ -228,7 +228,7 @@ mod tests {
             false,
         );
         partitions.insert(
-            crate::txn::bootstrap::TOPIC.to_string(),
+            crate::txn::bootstrap::TOPIC.into(),
             krabka_ids::PartitionIndex(0),
             Arc::clone(&transaction_partition),
         );
@@ -358,7 +358,7 @@ mod tests {
         assert!(part.log_end_offset() == krabka_log::Offset(3));
         part.set_follower_hw(krabka_log::Offset(2)).await;
         assert!(part.high_watermark().await == krabka_log::Offset(2));
-        partitions.insert("orders".to_string(), krabka_ids::PartitionIndex(0), part);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
         // Pre-seed the dedup tracker so the incoming batch is a Duplicate whose
         // recorded base_offset is 0 and span is 0..=2.

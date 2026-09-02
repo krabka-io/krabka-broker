@@ -117,7 +117,7 @@ pub(super) async fn handle_epoch_fence(cfg: &Config) -> Result<(), String> {
     let Some(epoch_result) = resp
         .topics
         .iter()
-        .find(|t| t.topic == cfg.topic)
+        .find(|t| t.topic.as_str() == &*cfg.topic)
         .and_then(|t| t.partitions.iter().find(|p| p.partition == cfg.partition))
     else {
         return Ok(());
@@ -201,7 +201,7 @@ fn build_offset_for_leader_epoch_request(
     OffsetForLeaderEpochRequest {
         replica_id: i32::try_from(cfg.node_id.0).unwrap_or(-1),
         topics: vec![OffsetForLeaderTopic {
-            topic: cfg.topic.clone(),
+            topic: cfg.topic.to_string(),
             partitions: vec![OffsetForLeaderPartition {
                 partition: cfg.partition.get(),
                 current_leader_epoch: our_epoch,

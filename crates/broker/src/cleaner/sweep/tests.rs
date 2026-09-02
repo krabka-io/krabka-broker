@@ -32,7 +32,7 @@ async fn tick_all_compacts_only_local_leader_compact_topics() {
         .map(|(topic, leader, policy, expect_compacted)| {
             let partition = compactable_partition(&dir, topic, 0, NodeId(leader), policy);
             let before = record_count(&partition);
-            registry.insert(topic.to_string(), PartitionIndex(0), Arc::clone(&partition));
+            registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
             (topic, partition, before, expect_compacted)
         })
         .collect();
@@ -109,7 +109,7 @@ fn compactable_topics(
             let partition =
                 compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact);
             let before = record_count(&partition);
-            registry.insert(topic.to_string(), PartitionIndex(0), Arc::clone(&partition));
+            registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
             (topic, partition, before)
         })
         .collect()

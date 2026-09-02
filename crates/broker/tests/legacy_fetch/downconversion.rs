@@ -8,6 +8,7 @@
 
 use assert2::{assert, check};
 use bytes::Bytes;
+use krabka_broker::metrics::TopicLabel;
 use krabka_protocol::{
     Decode,
     kafka_3_6_2::owned::fetch_response::FetchResponse as LegacyFetchResponse,
@@ -17,7 +18,10 @@ use krabka_protocol::{
 use krabka_records_legacy::decode_message_set;
 
 use crate::{
-    harness::{create_topic, fetch_legacy_raw, produce_batch},
+    harness::{
+        create_topic, create_topic_with_partitions, fetch_legacy_raw, fetch_legacy_raw_partitions,
+        produce_batch, produce_batch_to,
+    },
     support,
 };
 
@@ -183,6 +187,112 @@ async fn fetch_v0_downconverts_to_magic_v0_without_timestamps() {
     check!(
         recs[0].timestamp == None,
         "v0 MessageSet must carry no timestamp"
+    );
+
+    p.broker.shutdown().await;
+}
+
+/// A legacy Fetch that reads several partitions of one topic converts, and
+/// meters, every one of them.
+///
+/// `downconvert_legacy_responses` resolves the topic name once per topic entry
+/// and then walks that entry's partitions, recording one
+/// `fetch_message_conversions` observation per converted partition under a
+/// single `topic` label. Every other case in this suite fetches one partition,
+/// so none of them can tell a per-topic resolution from a per-partition one,
+/// nor catch a loop that meters only the first row.
+#[tokio::test]
+async fn fetch_v3_meters_every_converted_partition_of_a_topic() {
+    const TOPIC: &str = "legacy_fetch_multi";
+    const PARTITIONS: [i32; 3] = [0, 1, 2];
+
+    let p = support::start().await;
+    create_topic_with_partitions(&p.client, TOPIC, 3).await;
+    let addr = p.broker.listen_addr();
+
+    for partition in PARTITIONS {
+        p.broker
+            .wait_until_partition_present(TOPIC, partition)
+            .await;
+        let batch = RecordBatch {
+            records: vec![Record {
+                offset_delta: 0,
+                key: Some(Bytes::from(format!("key{partition}"))),
+                value: Some(Bytes::from(format!("val{partition}"))),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        produce_batch_to(addr, TOPIC, partition, batch).await;
+        p.broker
+            .wait_until_high_watermark(TOPIC, partition, 1)
+            .await;
+    }
+
+    let before = p
+        .broker
+        .metrics()
+        .fetch_message_conversions
+        .get_or_create(&TopicLabel {
+            topic: TOPIC.into(),
+        })
+        .get();
+
+    let resp_body = fetch_legacy_raw_partitions(addr, TOPIC, 3, &PARTITIONS, 0).await;
+    let mut cur: &[u8] = &resp_body;
+    let fetch_resp =
+        LegacyFetchResponse::decode(&mut cur, 3).expect("decode LegacyFetchResponse v3");
+
+    assert!(
+        fetch_resp.responses.len() == 1,
+        "the three partitions belong to one topic entry"
+    );
+    let rows = &fetch_resp.responses[0].partitions;
+    assert!(
+        rows.len() == PARTITIONS.len(),
+        "expected one row per requested partition; got {}",
+        rows.len()
+    );
+
+    // Every row came back down-converted and carrying its own record, so
+    // every row is one the conversion counter must have seen.
+    for row in rows {
+        check!(
+            row.error_code == 0,
+            "partition {} error: {}",
+            row.partition_index,
+            row.error_code
+        );
+        let legacy_bytes = match row.records.as_ref().expect("records field should be Some") {
+            RecordsPayload::Legacy(b) => b.clone(),
+            _ => panic!(
+                "expected Legacy MessageSet for partition {}",
+                row.partition_index
+            ),
+        };
+        let mut ms_cur: &[u8] = &legacy_bytes;
+        let recs = decode_message_set(&mut ms_cur, legacy_bytes.len()).expect("decode_message_set");
+        check!(recs.len() == 1, "partition {}", row.partition_index);
+        check!(
+            recs[0].value.as_deref() == Some(format!("val{}", row.partition_index).as_bytes()),
+            "partition {} carries another partition's record",
+            row.partition_index
+        );
+    }
+
+    let after = p
+        .broker
+        .metrics()
+        .fetch_message_conversions
+        .get_or_create(&TopicLabel {
+            topic: TOPIC.into(),
+        })
+        .get();
+    assert!(
+        after - before == PARTITIONS.len() as u64,
+        "one conversion per converted partition under the one topic label; \
+         counter moved by {}",
+        after - before
     );
 
     p.broker.shutdown().await;

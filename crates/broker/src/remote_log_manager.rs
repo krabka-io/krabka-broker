@@ -270,7 +270,7 @@ mod tests {
             .tierable_segments()
             .len();
         assert!(export_count >= 2, "test needs multiple sealed segments");
-        partitions.insert("orders".to_string(), PartitionIndex(0), partition);
+        partitions.insert("orders".into(), PartitionIndex(0), partition);
 
         let controller: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(fixed_source(image_with_orders_topic()));
@@ -321,7 +321,7 @@ mod tests {
             .tierable_segments()
             .len();
         assert!(export_count >= 2, "test needs multiple sealed segments");
-        partitions.insert("orders".to_string(), PartitionIndex(0), partition);
+        partitions.insert("orders".into(), PartitionIndex(0), partition);
 
         let controller = fixed_source(image_with_orders_topic());
         let rsm: Arc<dyn RemoteStorageManager> =
@@ -356,7 +356,7 @@ mod tests {
         let partitions = PartitionRegistry::new();
         let partition = rolled_tiered_partition(log_dir.path());
         partition.current_leader.store(2, Ordering::Relaxed);
-        partitions.insert("orders".to_string(), PartitionIndex(0), partition);
+        partitions.insert("orders".into(), PartitionIndex(0), partition);
 
         let controller = fixed_source(image_with_orders_topic());
         let rsm: Arc<dyn RemoteStorageManager> =
@@ -393,7 +393,7 @@ mod tests {
                 ..LogConfig::default()
             },
         );
-        partitions.insert("orders".to_string(), PartitionIndex(0), partition);
+        partitions.insert("orders".into(), PartitionIndex(0), partition);
 
         let controller = fixed_source(image_with_orders_topic());
         let rsm: Arc<dyn RemoteStorageManager> =

@@ -152,7 +152,7 @@ mod tests {
             false,
         );
         registry.insert(
-            OFFSETS_TOPIC.to_string(),
+            OFFSETS_TOPIC.into(),
             PartitionIndex(OFFSETS_PARTITION),
             part,
         );

@@ -1,6 +1,15 @@
 //! Produce and fetch accounting: the per-topic and per-partition byte,
 //! request, failure and message-conversion counters that the data path bumps
 //! once per request slice.
+//!
+//! Every helper here takes the topic as `&Arc<str>` rather than `&str`. A
+//! Produce request with a hundred partitions runs eight of these calls per
+//! partition, and each one builds a throwaway label set only to hash it, so
+//! an owned `String` per call put an O(partitions) burst of allocations back
+//! on the path `PartitionRegistry` avoids them on. `PartitionRegistry::shared_topic_name`
+//! is where a caller gets the `Arc` without allocating one.
+
+use std::sync::Arc;
 
 use super::{BrokerMetrics, PartitionLabel, TopicLabel};
 
@@ -8,9 +17,9 @@ impl BrokerMetrics {
     /// Convenience: record a Produce hit on `topic` with the given
     /// payload size. No-op on the error path — callers shouldn't call
     /// this if the request was rejected.
-    pub fn record_produce(&self, topic: &str, bytes: u64) {
+    pub fn record_produce(&self, topic: &Arc<str>, bytes: u64) {
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
         };
         self.topic_produce_requests.get_or_create(&lbl).inc();
         if bytes > 0 {
@@ -24,12 +33,12 @@ impl BrokerMetrics {
     /// `RecordBatch` with the batch's record count. Zero is a
     /// legitimate value (legacy batches whose record count we can't
     /// cheaply derive without a full conversion) and is a no-op.
-    pub fn record_produce_messages(&self, topic: &str, messages: u64) {
+    pub fn record_produce_messages(&self, topic: &Arc<str>, messages: u64) {
         if messages == 0 {
             return;
         }
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
         };
         self.topic_messages_in.get_or_create(&lbl).inc_by(messages);
     }
@@ -37,9 +46,9 @@ impl BrokerMetrics {
     /// Convenience: record a Fetch hit on `topic` with the bytes
     /// delivered. The `bytes` arg may legitimately be zero (empty
     /// fetch); the request counter still increments.
-    pub fn record_fetch(&self, topic: &str, bytes: u64) {
+    pub fn record_fetch(&self, topic: &Arc<str>, bytes: u64) {
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
         };
         self.topic_fetch_requests.get_or_create(&lbl).inc();
         if bytes > 0 {
@@ -51,9 +60,9 @@ impl BrokerMetrics {
     /// for `topic`. Callers bump once per partition whose response
     /// carries a non-zero error code — mirrors the JVM's per-row
     /// `failedProduceRequestRate.mark()`.
-    pub fn record_failed_produce(&self, topic: &str) {
+    pub fn record_failed_produce(&self, topic: &Arc<str>) {
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
         };
         self.topic_failed_produce_requests.get_or_create(&lbl).inc();
     }
@@ -61,9 +70,9 @@ impl BrokerMetrics {
     /// Record a single failed Fetch partition response
     /// for `topic`. Same per-partition semantics as
     /// `record_failed_produce`.
-    pub fn record_failed_fetch(&self, topic: &str) {
+    pub fn record_failed_fetch(&self, topic: &Arc<str>) {
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
         };
         self.topic_failed_fetch_requests.get_or_create(&lbl).inc();
     }
@@ -71,24 +80,24 @@ impl BrokerMetrics {
     /// Convenience: account a partition's slice of a Produce request.
     /// Called once per partition by the request handler (alongside the
     /// existing topic-level `record_produce`).
-    pub fn record_partition_produce(&self, topic: &str, partition: i32, bytes: u64) {
+    pub fn record_partition_produce(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
         if bytes == 0 {
             return;
         }
         let lbl = PartitionLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
             partition,
         };
         self.partition_bytes_in.get_or_create(&lbl).inc_by(bytes);
     }
 
     /// Convenience: account a partition's slice of a Fetch response.
-    pub fn record_partition_fetch(&self, topic: &str, partition: i32, bytes: u64) {
+    pub fn record_partition_fetch(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
         if bytes == 0 {
             return;
         }
         let lbl = PartitionLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
             partition,
         };
         self.partition_bytes_out.get_or_create(&lbl).inc_by(bytes);
@@ -97,9 +106,9 @@ impl BrokerMetrics {
     /// Account one v0/v1 → v2 up-conversion on the Produce
     /// path (the partition's `records` field arrived as a legacy
     /// `MessageSet` and was decoded into a v2 `RecordBatch`).
-    pub fn record_produce_message_conversion(&self, topic: &str) {
+    pub fn record_produce_message_conversion(&self, topic: &Arc<str>) {
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
         };
         self.produce_message_conversions.get_or_create(&lbl).inc();
     }
@@ -107,9 +116,9 @@ impl BrokerMetrics {
     /// Account one v2 → v0/v1 down-conversion on the Fetch
     /// path (a legacy client's Fetch v < 4 response is being assembled
     /// from a v2 record batch).
-    pub fn record_fetch_message_conversion(&self, topic: &str) {
+    pub fn record_fetch_message_conversion(&self, topic: &Arc<str>) {
         let lbl = TopicLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
         };
         self.fetch_message_conversions.get_or_create(&lbl).inc();
     }
@@ -118,12 +127,12 @@ impl BrokerMetrics {
     /// partition. Called from the produce / fetch hot paths around the
     /// per-partition work. No-ops on zero so we don't allocate a label
     /// entry for trivial measurements.
-    pub fn record_partition_cpu_micros(&self, topic: &str, partition: i32, micros: u64) {
+    pub fn record_partition_cpu_micros(&self, topic: &Arc<str>, partition: i32, micros: u64) {
         if micros == 0 {
             return;
         }
         let lbl = PartitionLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
             partition,
         };
         self.partition_cpu_micros.get_or_create(&lbl).inc_by(micros);
@@ -136,14 +145,20 @@ mod tests {
 
     use super::*;
 
+    /// The topic name every case below records under.
+    fn topic(name: &str) -> Arc<str> {
+        Arc::from(name)
+    }
+
     #[test]
     fn record_fetch_zero_bytes_still_bumps_request_count() {
         let m = BrokerMetrics::new();
+        let t = topic("t");
         let lbl = TopicLabel {
-            topic: "t".to_string(),
+            topic: Arc::clone(&t),
         };
         // Pre-condition: no entry for the label yet.
-        m.record_fetch("t", 0);
+        m.record_fetch(&t, 0);
         assert!(m.topic_fetch_requests.get_or_create(&lbl).get() == 1);
         assert!(m.topic_bytes_out.get_or_create(&lbl).get() == 0);
     }
@@ -151,11 +166,12 @@ mod tests {
     #[test]
     fn record_produce_increments_both_counters() {
         let m = BrokerMetrics::new();
+        let t = topic("t");
         let lbl = TopicLabel {
-            topic: "t".to_string(),
+            topic: Arc::clone(&t),
         };
-        m.record_produce("t", 1024);
-        m.record_produce("t", 2048);
+        m.record_produce(&t, 1024);
+        m.record_produce(&t, 2048);
         assert!(m.topic_produce_requests.get_or_create(&lbl).get() == 2);
         assert!(m.topic_bytes_in.get_or_create(&lbl).get() == 3072);
     }
@@ -163,27 +179,29 @@ mod tests {
     #[test]
     fn record_produce_messages_sums_across_calls_and_skips_zero() {
         let m = BrokerMetrics::new();
+        let t = topic("t");
         let lbl = TopicLabel {
-            topic: "t".to_string(),
+            topic: Arc::clone(&t),
         };
         // Zero is a no-op (legacy batches; the v2-conversion-time
         // counter tracks those arrivals separately).
-        m.record_produce_messages("t", 0);
+        m.record_produce_messages(&t, 0);
         // The label entry is intentionally NOT eagerly created on a
         // zero-bump; rate(...) over a never-seen topic should yield
         // 0, not a phantom series.
-        m.record_produce_messages("t", 3);
-        m.record_produce_messages("t", 7);
+        m.record_produce_messages(&t, 3);
+        m.record_produce_messages(&t, 7);
         assert!(m.topic_messages_in.get_or_create(&lbl).get() == 10);
     }
 
     #[test]
     fn partition_helpers_increment_the_right_family() {
         let m = BrokerMetrics::new();
-        m.record_partition_produce("t", 0, 1024);
-        m.record_partition_produce("t", 1, 512);
-        m.record_partition_fetch("t", 0, 2048);
-        m.record_partition_cpu_micros("t", 0, 500);
+        let t = topic("t");
+        m.record_partition_produce(&t, 0, 1024);
+        m.record_partition_produce(&t, 1, 512);
+        m.record_partition_fetch(&t, 0, 2048);
+        m.record_partition_cpu_micros(&t, 0, 500);
         m.partition_disk_bytes
             .get_or_create(&PartitionLabel {
                 topic: "t".into(),
@@ -230,10 +248,12 @@ mod tests {
         // `t-good` and one on `t-bad` must land on the right labels
         // and yield independent series.
         let m = BrokerMetrics::new();
-        m.record_failed_produce("t-good");
-        m.record_failed_produce("t-good");
-        m.record_failed_produce("t-bad");
-        m.record_failed_fetch("t-good");
+        let t_good = topic("t-good");
+        let t_bad = topic("t-bad");
+        m.record_failed_produce(&t_good);
+        m.record_failed_produce(&t_good);
+        m.record_failed_produce(&t_bad);
+        m.record_failed_fetch(&t_good);
 
         let good = TopicLabel {
             topic: "t-good".into(),
@@ -261,8 +281,9 @@ mod tests {
     #[test]
     fn zero_bytes_no_op_on_partition_helpers() {
         let m = BrokerMetrics::new();
-        m.record_partition_produce("t", 0, 0);
-        m.record_partition_fetch("t", 0, 0);
+        let t = topic("t");
+        m.record_partition_produce(&t, 0, 0);
+        m.record_partition_fetch(&t, 0, 0);
         let lbl = PartitionLabel {
             topic: "t".into(),
             partition: 0,
@@ -275,7 +296,7 @@ mod tests {
     #[test]
     fn zero_micros_no_op() {
         let m = BrokerMetrics::new();
-        m.record_partition_cpu_micros("t", 0, 0);
+        m.record_partition_cpu_micros(&topic("t"), 0, 0);
         let lbl = PartitionLabel {
             topic: "t".into(),
             partition: 0,
@@ -287,12 +308,14 @@ mod tests {
     #[test]
     fn message_conversion_helpers_accumulate_per_topic() {
         let m = BrokerMetrics::new();
-        m.record_produce_message_conversion("orders");
-        m.record_produce_message_conversion("orders");
-        m.record_produce_message_conversion("payments");
-        m.record_fetch_message_conversion("orders");
-        m.record_fetch_message_conversion("payments");
-        m.record_fetch_message_conversion("payments");
+        let orders_name = topic("orders");
+        let payments_name = topic("payments");
+        m.record_produce_message_conversion(&orders_name);
+        m.record_produce_message_conversion(&orders_name);
+        m.record_produce_message_conversion(&payments_name);
+        m.record_fetch_message_conversion(&orders_name);
+        m.record_fetch_message_conversion(&payments_name);
+        m.record_fetch_message_conversion(&payments_name);
 
         let orders = TopicLabel {
             topic: "orders".into(),

@@ -133,7 +133,7 @@ mod tests {
         .await;
 
         let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert("t".to_string(), PartitionIndex(0), part);
+        partitions.insert("t".into(), PartitionIndex(0), part);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(fake_source(MetadataImage::new(uuid::Uuid::nil()), None));
         let metrics = crate::metrics::BrokerMetrics::default();

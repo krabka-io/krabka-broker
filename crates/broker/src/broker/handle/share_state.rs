@@ -191,7 +191,7 @@ mod tests {
             &[],
         );
         broker.partitions.insert(
-            crate::share_coordinator::bootstrap::TOPIC.to_string(),
+            crate::share_coordinator::bootstrap::TOPIC.into(),
             share_state_partition,
             share_state_part,
         );
