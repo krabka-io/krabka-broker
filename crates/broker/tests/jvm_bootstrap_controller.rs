@@ -306,3 +306,41 @@ async fn kafka_topics_has_no_bootstrap_controller_option() {
         "kafka-topics grew a --bootstrap-controller option: {combined}"
     );
 }
+
+/// `kafka-features --bootstrap-controller`: `describe`, then `downgrade`, then
+/// `describe` again. That is `ApiVersions` (18) and `UpdateFeatures` (57)
+/// routed over the controller listener.
+///
+/// KIP-919 names feature management as a thing an operator must be able to do
+/// with no broker reachable -- a cluster whose brokers will not start because
+/// of a finalized feature level is exactly when this matters, and it is the
+/// only tool of the three offering `--bootstrap-controller` that had no
+/// container test driving it that way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
+    let (broker, _dir) = start_host_broker_with(|_| {}).await;
+
+    let described = kafka_tool("kafka-features", &["describe"]);
+    check!(
+        described.contains("transaction.version"),
+        "describe over the controller listener named no transaction.version: {described}"
+    );
+
+    kafka_tool(
+        "kafka-features",
+        &[
+            "downgrade",
+            "--feature",
+            "transaction.version=1",
+            "--unsafe",
+        ],
+    );
+
+    let after = kafka_tool("kafka-features", &["describe"]);
+    check!(
+        after.contains("transaction.version") && after.contains("FinalizedVersionLevel: 1"),
+        "downgrade did not take over the controller listener: {after}"
+    );
+    broker.shutdown().await;
+}
