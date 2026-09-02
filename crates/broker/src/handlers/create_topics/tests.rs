@@ -388,6 +388,8 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.rack = Some("rack-a".into());
+        cfg.diskless_wal_local_replica_count = 1;
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
             dir: object_store.path().to_path_buf(),
         });
@@ -434,6 +436,63 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     assert!(partition.diskless);
 
     broker_handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
+    let object_store = tempfile::TempDir::new().expect("object store dir");
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: object_store.path().to_path_buf(),
+        });
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let req = request(vec![topic_with_configs(
+        "unplaceable-diskless",
+        &[("krabka.diskless", "true")],
+    )]);
+
+    let resp = drive(&broker, &req, &principal("admin"), &peer()).await;
+
+    assert!(resp.topics[0].error_code == codes::INVALID_CONFIG);
+    let message = resp.topics[0].error_message.as_deref().unwrap_or_default();
+    for needle in [
+        "partition 0",
+        "leader 1",
+        "0 eligible",
+        "3 are required",
+        "broker.rack",
+    ] {
+        check!(message.contains(needle), "{message}");
+    }
+    assert!(
+        broker_handle
+            .controller_image_for_test()
+            .topic("unplaceable-diskless")
+            .is_none()
+    );
+    broker_handle.shutdown().await;
+}
+
+#[test]
+fn diskless_wal_validation_uses_the_local_registration_fallback() {
+    let dir = tempfile::TempDir::new().expect("log dir");
+    let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.rack = Some("rack-a".into());
+    config.diskless_wal_local_replica_count = 1;
+
+    assert!(
+        diskless_wal_placement_error(
+            &krabka_metadata::MetadataImage::default(),
+            &config,
+            0,
+            &[vec![config.node_id]],
+        )
+        .is_none()
+    );
 }
 
 #[tokio::test]

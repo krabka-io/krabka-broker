@@ -66,18 +66,23 @@ fn assignment_changes(
     let Some(pr) = image.partition(&topic_name, partition) else {
         return Vec::new();
     };
-    let Some(slot) = pr.replicas.iter().position(|n| n.0 == broker_id) else {
+    let replica_slot = pr.replicas.iter().position(|n| n.0 == broker_id);
+    let already_assigned =
+        replica_slot.and_then(|slot| pr.directories.get(slot)) == Some(&dir_uuid);
+    let slot = match krabka_verified::directory_assignment_decision(replica_slot, already_assigned)
+    {
+        krabka_verified::DirectoryAssignmentDecision::Ignore
+        | krabka_verified::DirectoryAssignmentDecision::NoOp => return Vec::new(),
+        krabka_verified::DirectoryAssignmentDecision::Assign(slot) => slot,
+    };
+    let Some(&replica) = pr.replicas.get(slot) else {
         return Vec::new();
     };
-    // Idempotent: skip if the slot already holds this dir (avoids churn).
-    if pr.directories.get(slot) == Some(&dir_uuid) {
-        return Vec::new();
-    }
     vec![MetadataRecord::V1PartitionDirAssignment(
         PartitionDirAssignmentRecord {
             topic: topic_name,
             partition,
-            replica: krabka_metadata::NodeId(broker_id),
+            replica,
             directory: dir_uuid,
         },
     )]
@@ -155,6 +160,20 @@ mod tests {
             directories: vec![uuid::Uuid::nil(), dir],
             partition_epoch: 0,
         }));
+        assert!(assignment_changes(&image, 2, topic_id, 0, dir).is_empty());
+    }
+
+    #[test]
+    fn delta_preserves_replica_order_and_only_changes_the_reporting_slot() {
+        let (mut image, topic_id) = make_image_with_broker2_replica();
+        let dir = uuid::Uuid::from_u128(0xAA);
+        let changes = assignment_changes(&image, 2, topic_id, 0, dir);
+        assert!(changes.len() == 1);
+        image.apply(&changes[0]);
+
+        let partition = image.partition("t", 0).expect("updated partition");
+        assert!(partition.replicas == vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)]);
+        assert!(partition.directories == vec![uuid::Uuid::nil(), dir]);
         assert!(assignment_changes(&image, 2, topic_id, 0, dir).is_empty());
     }
 

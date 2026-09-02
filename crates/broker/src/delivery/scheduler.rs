@@ -33,7 +33,11 @@ use tracing::debug;
 use crate::{
     delivery::{DeliveryWaker, config::DeliveryConfig, metrics::DeliveryMetrics},
     partition_registry::PartitionRegistry,
+    time_util,
 };
+
+/// Names this cadence loop in the error a failed timer registration logs.
+const TASK: &str = "delivery scheduler";
 
 /// How the scheduler names a partition in its own bookkeeping.
 type PartitionKey = (String, PartitionIndex);
@@ -111,16 +115,22 @@ pub(crate) async fn run(
     shutdown: CancellationToken,
 ) {
     let mut heap = DeadlineHeap::default();
-    let sleeper = Arc::clone(&config.sleeper);
+    let timer = Arc::clone(&config.timer);
     // A zero-length first sleep makes the loop sweep at startup, the way
     // `tokio::time::interval` fires at t=0. Every later sleep is armed after the
     // sweep finishes, so a slow sweep never triggers a catch-up burst.
-    let mut tick = sleeper.sleep_for_async(Duration::ZERO);
+    let Some(mut tick) = time_util::arm(&*timer, Duration::ZERO, TASK) else {
+        return;
+    };
     // The first sweep adopts every partition, so it advances all of them.
     let mut advance_all = true;
     loop {
         tokio::select! {
-            () = &mut tick => {}
+            outcome = &mut tick => {
+                if !time_util::fired(outcome, TASK) {
+                    return;
+                }
+            }
             () = waker.woken() => advance_all = true,
             () = shutdown.cancelled() => {
                 debug!("delivery scheduler shutting down");
@@ -131,19 +141,22 @@ pub(crate) async fn run(
         metrics.scheduler_woke();
         sweep(
             (&partitions, node_id),
-            (config.clock.millis(), advance_all),
+            (time_util::epoch_millis(config.clock.now()), advance_all),
             &mut heap,
             (metrics.as_ref(), &waker),
         );
         advance_all = false;
 
-        let now_ms = config.clock.millis();
+        let now_ms = time_util::epoch_millis(config.clock.now());
         let wait = sleep_for(heap.earliest(), now_ms, &config);
         // Publish the wake instant before the sleep is armed. A produce that
         // pokes in between compares against the value that is about to hold,
         // and the notification permit outlives the gap either way.
         waker.arm(now_ms.saturating_add(millis_of(wait)));
-        tick = sleeper.sleep_for_async(wait);
+        let Some(next) = time_util::arm(&*timer, wait, TASK) else {
+            return;
+        };
+        tick = next;
     }
 }
 

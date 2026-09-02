@@ -30,7 +30,10 @@ impl ClassicGroup {
     /// Completes the rebalance. It picks the leader, where the oldest
     /// `member_id` wins, which keeps the choice stable for tests. It then
     /// raises the generation and advances the state.
-    pub fn complete_rebalance(&mut self, protocol_name: impl Into<String>) {
+    pub fn complete_rebalance(&mut self, protocol_name: impl Into<String>) -> bool {
+        let Some(generation_id) = crate::metadata_epoch::next_i32(self.generation_id) else {
+            return false;
+        };
         let leader = self
             .members
             .keys()
@@ -39,11 +42,12 @@ impl ClassicGroup {
             .expect("complete_rebalance requires ≥1 member");
         self.leader_id = Some(leader);
         self.protocol_name = Some(protocol_name.into());
-        self.generation_id += 1;
+        self.generation_id = generation_id;
         self.state = GroupState::CompletingRebalance;
         self.rebalance_deadline = None;
         self.joined_this_round.clear();
         self.rebalance_from_empty = false;
+        true
     }
 
     /// Sets each member's `protocol_metadata` to its proposal for `name`. A
@@ -83,11 +87,23 @@ mod tests {
         let mut g = ClassicGroup::new("g");
         g.add_member(sample_member("m1"));
         g.add_member(sample_member("m2"));
-        g.complete_rebalance("range");
+        assert!(g.complete_rebalance("range"));
         check!(g.generation_id == 1);
         check!(g.leader_id.as_deref() == Some("m1"));
         check!(g.protocol_name.as_deref() == Some("range"));
         check!(g.state == GroupState::CompletingRebalance);
+    }
+
+    #[test]
+    fn complete_rebalance_rejects_generation_exhaustion_without_mutation() {
+        let mut group = ClassicGroup::new("g");
+        group.add_member(sample_member("m1"));
+        group.generation_id = i32::MAX;
+
+        assert!(!group.complete_rebalance("range"));
+        assert!(group.generation_id == i32::MAX);
+        assert!(group.leader_id.is_none());
+        assert!(group.protocol_name.is_none());
     }
 
     #[test]

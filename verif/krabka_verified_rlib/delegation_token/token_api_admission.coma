@@ -1,0 +1,44 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 40 0 44 22 *)
+
+let%span sdelegation_token = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 31 10 34 1
+let%span sdelegation_token'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 35 10 38 1
+
+use creusot.prelude.Any
+
+type t_TokenApi = Create | Renew | Expire | Describe
+
+type tup2_bool_TokenApi = { f0: bool; f1: t_TokenApi }
+
+type t_TokenApiAdmission = Reject | Allow
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let token_api_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 40 0 44 22]
+  (has_authenticated_identity: bool) (authenticated_via_token: bool) (api: t_TokenApi)
+  (return (x: t_TokenApiAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {has_authenticated_identity = false} (! bb1) | br1 -> {has_authenticated_identity} (! bb2) ]
+  | bb2 = s0
+    [ s0 = [ &_15 <- { f0 = authenticated_via_token; f1 = api } ] s1
+    | s1 = any [ br0 -> {_15.f0 = false} (! bb3) | br1 -> {_15.f0} (! bb4) ] ]
+  | bb4 = any
+    [ br0 -> {_15.f1 = Create} (! bb6)
+    | br1 -> {_15.f1 = Renew} (! bb6)
+    | br2 -> {_15.f1 = Expire} (! bb6)
+    | br3 -> {_15.f1 = Describe} (! bb3) ]
+  | bb6 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- Allow ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenApiAdmission = Any.any_l ()
+  | & has_authenticated_identity: bool = has_authenticated_identity
+  | & authenticated_via_token: bool = authenticated_via_token
+  | & api: t_TokenApi = api
+  | & _15: tup2_bool_TokenApi = Any.any_l () ])
+  [ return (result: t_TokenApiAdmission) ->
+  {[@stop_split] [@expl:token_api_admission ensures] ([@stop_split] [@expl:token_api_admission ensures #0] [%#sdelegation_token] (result
+        = Allow)
+      = (has_authenticated_identity /\ (not authenticated_via_token \/ api = Describe)))
+    /\ ([@stop_split] [@expl:token_api_admission ensures #1] [%#sdelegation_token'0] (result = Reject)
+    = (not has_authenticated_identity \/ authenticated_via_token /\ api <> Describe))}
+    (! return {result}) ]

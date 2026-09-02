@@ -93,7 +93,7 @@ pub struct PartitionVerifyReport {
     pub offset_gaps: Vec<OffsetGap>,
     /// Chain head after the last verified manifest.
     pub head: Option<ChainHead>,
-    /// `false` when the walk found a break.
+    /// `true` only for an unbroken, fully attested chain with no orphan object.
     pub ok: bool,
     /// The break, when there is one.
     pub first_break: Option<VerifyBreak>,
@@ -107,7 +107,7 @@ pub struct ArchiveVerifyReport {
 }
 
 impl ArchiveVerifyReport {
-    /// `true` when no partition broke.
+    /// `true` when every partition is unbroken, fully attested, and complete.
     #[must_use]
     pub fn ok(&self) -> bool {
         self.partitions.iter().all(|partition| partition.ok)

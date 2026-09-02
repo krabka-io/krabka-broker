@@ -4,16 +4,39 @@
 //! last-known-good cache. The k15 group-metadata tombstone is the downgrade
 //! marker, so it also drops the group's type lock.
 
-use super::{group_coordinator::GroupCoordinator, seeds::StreamsGroupSeed, streams};
+use super::{
+    group_coordinator::GroupCoordinator,
+    replay_policy::{
+        ReplayMutation, ReplayRecordKind, replay_epoch_is_admissible, replay_mutation,
+        replay_write_is_admissible,
+    },
+    seeds::StreamsGroupSeed,
+    streams,
+};
 
 impl GroupCoordinator {
     pub fn replay_streams_group_metadata(&self, group_id: &str, epoch: i32) {
+        if !replay_write_is_admissible(
+            ReplayRecordKind::GroupMetadata,
+            self.streams_seeds.contains_key(group_id)
+                || self.streams_seeds_cache.contains_key(group_id),
+            false,
+        ) || epoch < 0
+        {
+            return;
+        }
         {
             let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
-            seed.group_epoch = epoch;
+            if replay_epoch_is_admissible(seed.group_epoch, epoch) {
+                seed.group_epoch = epoch;
+            }
         }
-        let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
-        cached.group_epoch = epoch;
+        {
+            let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
+            if replay_epoch_is_admissible(cached.group_epoch, epoch) {
+                cached.group_epoch = epoch;
+            }
+        }
     }
     pub fn replay_streams_member_metadata(
         &self,
@@ -22,11 +45,25 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupMemberMetadataValue,
     ) {
         {
-            let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
-            seed.members.insert(member_id.into(), v.clone());
+            if let Some(mut seed) = self.streams_seeds.get_mut(group_id)
+                && replay_write_is_admissible(
+                    ReplayRecordKind::MemberMetadata,
+                    true,
+                    seed.members.contains_key(member_id),
+                )
+            {
+                seed.members.insert(member_id.into(), v.clone());
+            }
         }
-        let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
-        cached.members.insert(member_id.into(), v);
+        if let Some(mut cached) = self.streams_seeds_cache.get_mut(group_id)
+            && replay_write_is_admissible(
+                ReplayRecordKind::MemberMetadata,
+                true,
+                cached.members.contains_key(member_id),
+            )
+        {
+            cached.members.insert(member_id.into(), v);
+        }
     }
     pub fn replay_streams_topology(
         &self,
@@ -34,11 +71,17 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupTopologyValue,
     ) {
         {
-            let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
-            seed.topology = Some(v.clone());
+            if let Some(mut seed) = self.streams_seeds.get_mut(group_id)
+                && replay_write_is_admissible(ReplayRecordKind::Topology, true, false)
+            {
+                seed.topology = Some(v.clone());
+            }
         }
-        let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
-        cached.topology = Some(v);
+        if let Some(mut cached) = self.streams_seeds_cache.get_mut(group_id)
+            && replay_write_is_admissible(ReplayRecordKind::Topology, true, false)
+        {
+            cached.topology = Some(v);
+        }
     }
     pub fn replay_streams_partition_metadata(
         &self,
@@ -46,19 +89,40 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupPartitionMetadataValue,
     ) {
         {
-            let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
-            seed.partition_metadata = Some(v.clone());
+            if let Some(mut seed) = self.streams_seeds.get_mut(group_id)
+                && replay_write_is_admissible(ReplayRecordKind::PartitionMetadata, true, false)
+            {
+                seed.partition_metadata = Some(v.clone());
+            }
         }
-        let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
-        cached.partition_metadata = Some(v);
+        if let Some(mut cached) = self.streams_seeds_cache.get_mut(group_id)
+            && replay_write_is_admissible(ReplayRecordKind::PartitionMetadata, true, false)
+        {
+            cached.partition_metadata = Some(v);
+        }
     }
     pub fn replay_streams_target_assignment_metadata(&self, group_id: &str, assignment_epoch: i32) {
-        {
-            let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
-            seed.assignment_epoch = assignment_epoch;
+        if assignment_epoch < 0 {
+            return;
         }
-        let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
-        cached.assignment_epoch = assignment_epoch;
+        {
+            if let Some(mut seed) = self.streams_seeds.get_mut(group_id)
+                && replay_write_is_admissible(
+                    ReplayRecordKind::TargetAssignmentMetadata,
+                    true,
+                    false,
+                )
+                && replay_epoch_is_admissible(seed.assignment_epoch, assignment_epoch)
+            {
+                seed.assignment_epoch = assignment_epoch;
+            }
+        }
+        if let Some(mut cached) = self.streams_seeds_cache.get_mut(group_id)
+            && replay_write_is_admissible(ReplayRecordKind::TargetAssignmentMetadata, true, false)
+            && replay_epoch_is_admissible(cached.assignment_epoch, assignment_epoch)
+        {
+            cached.assignment_epoch = assignment_epoch;
+        }
     }
     pub fn replay_streams_target_assignment_member(
         &self,
@@ -67,11 +131,25 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupTargetAssignmentMemberValue,
     ) {
         {
-            let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
-            seed.target_per_member.insert(member_id.into(), v.clone());
+            if let Some(mut seed) = self.streams_seeds.get_mut(group_id)
+                && replay_write_is_admissible(
+                    ReplayRecordKind::TargetAssignmentMember,
+                    true,
+                    seed.members.contains_key(member_id),
+                )
+            {
+                seed.target_per_member.insert(member_id.into(), v.clone());
+            }
         }
-        let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
-        cached.target_per_member.insert(member_id.into(), v);
+        if let Some(mut cached) = self.streams_seeds_cache.get_mut(group_id)
+            && replay_write_is_admissible(
+                ReplayRecordKind::TargetAssignmentMember,
+                true,
+                cached.members.contains_key(member_id),
+            )
+        {
+            cached.target_per_member.insert(member_id.into(), v);
+        }
     }
     pub fn replay_streams_current_member_assignment(
         &self,
@@ -80,11 +158,37 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupCurrentMemberAssignmentValue,
     ) {
         {
-            let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
-            seed.current_per_member.insert(member_id.into(), v.clone());
+            if let Some(mut seed) = self.streams_seeds.get_mut(group_id)
+                && replay_write_is_admissible(
+                    ReplayRecordKind::CurrentMemberAssignment,
+                    true,
+                    seed.members.contains_key(member_id),
+                )
+                && seed
+                    .current_per_member
+                    .get(member_id)
+                    .is_none_or(|current| {
+                        replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
+                    })
+            {
+                seed.current_per_member.insert(member_id.into(), v.clone());
+            }
         }
-        let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
-        cached.current_per_member.insert(member_id.into(), v);
+        if let Some(mut cached) = self.streams_seeds_cache.get_mut(group_id)
+            && replay_write_is_admissible(
+                ReplayRecordKind::CurrentMemberAssignment,
+                true,
+                cached.members.contains_key(member_id),
+            )
+            && cached
+                .current_per_member
+                .get(member_id)
+                .is_none_or(|current| {
+                    replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
+                })
+        {
+            cached.current_per_member.insert(member_id.into(), v);
+        }
     }
 
     /// Apply a tombstone for a streams-group key.
@@ -112,6 +216,10 @@ impl GroupCoordinator {
         // does not respawn this group as streams; also drop the Streams type lock
         // so a later classic join can re-lock it as Classic.
         if matches!(key, K::GroupMetadata { .. }) {
+            assert2::debug_assert!(
+                replay_mutation(ReplayRecordKind::GroupMetadata, None, true, false)
+                    == ReplayMutation::RemoveGroup
+            );
             self.streams_seeds.remove(group_id);
             self.streams_seeds_cache.remove(group_id);
             self.group_types.remove(group_id);
@@ -121,10 +229,15 @@ impl GroupCoordinator {
             K::GroupMetadata { .. } => unreachable!("handled above"),
             K::MemberMetadata { member_id, .. } => {
                 seed.members.remove(member_id);
+                seed.target_per_member.remove(member_id);
+                seed.current_per_member.remove(member_id);
             }
             K::Topology { .. } => seed.topology = None,
             K::PartitionMetadata { .. } => seed.partition_metadata = None,
-            K::TargetAssignmentMetadata { .. } => seed.assignment_epoch = 0,
+            K::TargetAssignmentMetadata { .. } => {
+                seed.assignment_epoch = 0;
+                seed.target_per_member.clear();
+            }
             K::TargetAssignmentMember { member_id, .. } => {
                 seed.target_per_member.remove(member_id);
             }
@@ -145,9 +258,9 @@ impl GroupCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
 
-    use super::*;
+    use super::{StreamsGroupSeed, streams};
     use crate::coordinator::unified::test_support::{make_coord, real_uuid, streams_member};
 
     #[test]
@@ -211,5 +324,25 @@ mod tests {
         };
         assert!(*coord.streams_seeds.get("st").unwrap() == expected);
         assert!(coord.cached_streams_seed("st") == Some(expected));
+    }
+
+    #[test]
+    fn streams_group_tombstone_blocks_orphan_topology_and_member() {
+        let coord = make_coord();
+        coord.mark_streams("st");
+        coord.replay_streams_group_metadata("st", 2);
+        coord.replay_streams_member_metadata("st", "m", streams_member("m"));
+
+        coord.replay_streams_tombstone(&streams::persistence::StreamsGroupKey::GroupMetadata {
+            group_id: "st".into(),
+        });
+        coord.replay_streams_member_metadata("st", "m", streams_member("m"));
+        coord.replay_streams_topology(
+            "st",
+            streams::persistence::StreamsGroupTopologyValue::default(),
+        );
+
+        check!(coord.cached_streams_seed("st").is_none());
+        assert!(coord.group_type("st").is_none());
     }
 }

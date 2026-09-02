@@ -1,0 +1,17 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 80 27 80 32 *)
+
+(* <vote::VoteAdmissionDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_VoteAdmissionDecision = IgnoreWrongTarget | Deny | Consider
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_VoteAdmissionDecision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 80 27 80 32]
+  (self: t_VoteAdmissionDecision) (return (x: t_VoteAdmissionDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoteAdmissionDecision = Any.any_l () | & self: t_VoteAdmissionDecision = self ])
+  [ return (result: t_VoteAdmissionDecision) -> (! return {result}) ]

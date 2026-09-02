@@ -75,7 +75,7 @@ pub(super) async fn handle_v4(
         } else {
             // Per-topic Write check, then the per-topic freeze read.
             let denied = denied_topics(authorizer, image, principal, peer, &txn.topics);
-            let frozen = frozen_topics(image, &txn.topics);
+            let frozen = frozen_topics(image, &txn.topics, &denied);
             process_one_txn(
                 coord,
                 TransactionRequest {
@@ -135,7 +135,7 @@ pub(super) async fn handle_v3(
         )
     } else {
         let denied = denied_topics(authorizer, image, principal, peer, &req.v3_and_below_topics);
-        let frozen = frozen_topics(image, &req.v3_and_below_topics);
+        let frozen = frozen_topics(image, &req.v3_and_below_topics, &denied);
         process_one_txn(
             coord,
             TransactionRequest {

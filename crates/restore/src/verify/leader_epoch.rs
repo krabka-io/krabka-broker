@@ -29,7 +29,8 @@ fn checkpoint_error(key: &Path, position: u64, declared: u64, available: usize) 
 /// Parse a `.leader_epoch_checkpoint`: `"0\n{n}\n"` followed by exactly `n`
 /// `"{epoch} {offset}"` rows, matching the format
 /// `krabka_log::LeaderEpochCheckpoint` and the broker's remote-log-manager
-/// copy path both write.
+/// copy path both write. Rows must carry nonnegative, strictly increasing
+/// epochs and start offsets within the archived segment's inclusive range.
 ///
 /// Unlike `LeaderEpochCheckpoint::parse`, which is written for a local file a
 /// process itself created and is lenient about a bad version line or a short
@@ -42,6 +43,8 @@ fn checkpoint_error(key: &Path, position: u64, declared: u64, available: usize) 
 pub(super) fn parse_leader_epoch_checkpoint(
     key: &Path,
     bytes: &[u8],
+    segment_base: Offset,
+    segment_end: Offset,
 ) -> Result<Vec<(LeaderEpoch, Offset)>, RestoreError> {
     let text = std::str::from_utf8(bytes).map_err(|_| checkpoint_error(key, 0, 0, 0))?;
     let mut lines = text.split('\n');
@@ -64,6 +67,7 @@ pub(super) fn parse_leader_epoch_checkpoint(
     position += u64::try_from(count_line.len().saturating_add(1)).unwrap_or(u64::MAX);
 
     let mut entries = Vec::new();
+    let mut previous: Option<(i32, i64)> = None;
     for _ in 0..count {
         let line = lines
             .next()
@@ -80,7 +84,17 @@ pub(super) fn parse_leader_epoch_checkpoint(
         if parts.next().is_some() {
             return Err(checkpoint_error(key, position, declared, entries.len()));
         }
+        if !krabka_verified::restore_leader_epoch_entry_valid(
+            previous,
+            epoch,
+            start_offset,
+            segment_base.0,
+            segment_end.0,
+        ) {
+            return Err(checkpoint_error(key, position, declared, entries.len()));
+        }
         entries.push((LeaderEpoch(epoch), Offset(start_offset)));
+        previous = Some((epoch, start_offset));
         position += u64::try_from(line.len().saturating_add(1)).unwrap_or(u64::MAX);
     }
 

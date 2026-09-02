@@ -8,6 +8,7 @@ use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::records::{
     Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
 };
+use krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission};
 
 use super::{framing::PartitionPayload, owned_decode::decode_owned_batch};
 use crate::codes;
@@ -70,6 +71,56 @@ impl PreparedBatch {
             source: PreparedSource::Owned(batch),
         }
     }
+
+    /// Wire length of this batch as the writer will store it, when storing it
+    /// means encoding it afresh.
+    ///
+    /// `None` is the verbatim path. Those bytes are the producer's own, byte
+    /// for byte, so the length that arrived is the length that lands and the
+    /// `max.message.bytes` gate already measured it before `prepare_batch`
+    /// ran.
+    ///
+    /// The owned path re-encodes, and re-encoding moves the number. A batch
+    /// the producer compressed that the topic stores under a different
+    /// `compression.type` changes by the whole ratio between the two codecs,
+    /// and `uncompressed` is the direction that grows: a 2 KiB gzip batch of
+    /// repeated bytes is hundreds of kilobytes once the writer expands it. A
+    /// legacy `MessageSet` moves too, by the v2 up-conversion.
+    ///
+    /// Kafka measures exactly this, in the same place. `message.max.bytes` is
+    /// documented in `ServerConfigs` as "The largest record batch size allowed
+    /// by Kafka (after compression if compression is enabled)", and
+    /// `UnifiedLog.append` re-runs its per-batch size check over the
+    /// *validated* records whenever `LogValidator` reports
+    /// `messageSizeMaybeChanged`, throwing the same `RecordTooLargeException`
+    /// its pre-append check throws.
+    ///
+    /// `None` also answers an encode this measurement cannot perform, because
+    /// that is an encode the writer cannot perform either: the append fails on
+    /// its own and reports its own error rather than borrowing this gate's.
+    pub(super) fn stored_len(
+        &self,
+        topic_compression: Option<krabka_compression::CompressionType>,
+    ) -> Option<usize> {
+        let PreparedSource::Owned(batch) = &self.source else {
+            return None;
+        };
+        match topic_compression {
+            Some(target) if target != batch.attributes.compression() => {
+                let mut stored = batch.clone();
+                stored.attributes = stored.attributes.with_compression(target);
+                encoded_len(&stored)
+            }
+            _ => encoded_len(batch),
+        }
+    }
+}
+
+/// Bytes that [`RecordBatch::encode`] writes, which for a compressed batch
+/// only an encode can answer.
+fn encoded_len(batch: &RecordBatch) -> Option<usize> {
+    let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
+    batch.encode(&mut buf).ok().map(|()| buf.len())
 }
 
 /// Decide the append shape for one partition's records and extract the header
@@ -226,19 +277,19 @@ fn validate_client_batch_fields(
     producer_id: i64,
     base_sequence: i32,
 ) -> Result<(), i16> {
-    let offset_count = last_offset_delta.checked_add(1);
-    if base_offset != 0
-        || offset_count.is_none_or(|count| count <= 0 || count != records_count)
-        || records_count <= 0
-        || attributes.is_control_batch()
-        || (producer_id >= 0 && base_sequence < 0)
-    {
-        return Err(codes::INVALID_RECORD);
+    match produce_batch_admission(
+        base_offset,
+        last_offset_delta,
+        records_count,
+        attributes.is_control_batch(),
+        producer_id,
+        base_sequence,
+        attributes.timestamp_type() == TimestampType::CreateTime,
+    ) {
+        ProduceBatchAdmission::Admit => Ok(()),
+        ProduceBatchAdmission::InvalidRecord => Err(codes::INVALID_RECORD),
+        ProduceBatchAdmission::InvalidTimestamp => Err(codes::INVALID_TIMESTAMP),
     }
-    if attributes.timestamp_type() != TimestampType::CreateTime {
-        return Err(codes::INVALID_TIMESTAMP);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

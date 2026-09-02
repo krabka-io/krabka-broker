@@ -8,6 +8,9 @@
 
 use krabka_metadata::TopicFreezeRecord;
 use krabka_units::{Time, convert::TimeExt as _};
+use krabka_verified::{
+    FreezeIdentityState, FreezeSignatureDecision, FreezeSignatureFacts, freeze_signature_decision,
+};
 
 use super::{SignatureRefusal, freeze_signing_bytes};
 use crate::operator_keys::OperatorKeys;
@@ -48,42 +51,53 @@ pub(crate) fn verify_freeze_signature(
     check: &FreezeSignatureCheck<'_>,
     record: &TopicFreezeRecord,
 ) -> Result<(), SignatureRefusal> {
-    let key = check
-        .keys
-        .get(&record.key_id)
-        .ok_or(SignatureRefusal::UnknownKeyId)?;
-    if key.principal() != record.set_by {
-        return Err(SignatureRefusal::AuthorIsNotTheKeyPrincipal);
+    let identity = match check.keys.get(&record.key_id) {
+        None => FreezeIdentityState::UnknownKey,
+        Some(key) if key.principal() != record.set_by => FreezeIdentityState::WrongKeyPrincipal,
+        Some(_) if record.set_by != check.connection_principal => {
+            FreezeIdentityState::WrongConnectionPrincipal
+        }
+        Some(_) => FreezeIdentityState::Bound,
+    };
+    let mut facts = FreezeSignatureFacts {
+        identity,
+        set_at_ms: record.set_at_ms,
+        now_ms: check.now_ms,
+        max_skew_ms: check.max_skew.millis_i64(),
+        replaces: check.replaces.is_some(),
+        replaced_set_at_ms: check.replaces.map_or(0, |replaced| replaced.set_at_ms),
+        // The first pass stops before crypto when any earlier rule fails.
+        signature_valid: false,
+    };
+    let precheck = freeze_signature_decision(facts);
+    if precheck != FreezeSignatureDecision::SignatureInvalid {
+        return decision_result(precheck);
     }
-    if record.set_by != check.connection_principal {
-        return Err(SignatureRefusal::AuthorIsNotTheConnectionPrincipal);
-    }
-    if !inside_skew_window(record.set_at_ms, check.now_ms, check.max_skew) {
-        return Err(SignatureRefusal::TimestampOutsideSkewWindow);
-    }
-    if let Some(replaced) = check.replaces
-        && record.set_at_ms <= replaced.set_at_ms
-    {
-        return Err(SignatureRefusal::TimestampNotNewerThanTheEntryItReplaces);
-    }
+
     let message = freeze_signing_bytes(check.cluster_id, record);
-    if !check
-        .keys
-        .verify(&record.key_id, &record.set_by, &message, &record.signature)
-    {
-        return Err(SignatureRefusal::SignatureDidNotVerify);
-    }
-    Ok(())
+    facts.signature_valid =
+        check
+            .keys
+            .verify(&record.key_id, &record.set_by, &message, &record.signature);
+    decision_result(freeze_signature_decision(facts))
 }
 
-/// Whether `set_at_ms` sits within `max_skew` of `now_ms`, in either
-/// direction.
-///
-/// A record from the future is as suspect as one from the past, so the window
-/// is symmetric. The subtraction saturates, which keeps a clock at the far end
-/// of the `i64` range from wrapping into the window.
-fn inside_skew_window(set_at_ms: i64, now_ms: i64, max_skew: Time) -> bool {
-    let distance = now_ms.saturating_sub(set_at_ms).unsigned_abs();
-    let window = u64::try_from(max_skew.millis_i64()).unwrap_or(0);
-    distance <= window
+fn decision_result(decision: FreezeSignatureDecision) -> Result<(), SignatureRefusal> {
+    match decision {
+        FreezeSignatureDecision::UnknownKey => Err(SignatureRefusal::UnknownKeyId),
+        FreezeSignatureDecision::AuthorIsNotKeyPrincipal => {
+            Err(SignatureRefusal::AuthorIsNotTheKeyPrincipal)
+        }
+        FreezeSignatureDecision::AuthorIsNotConnectionPrincipal => {
+            Err(SignatureRefusal::AuthorIsNotTheConnectionPrincipal)
+        }
+        FreezeSignatureDecision::TimestampOutsideSkewWindow => {
+            Err(SignatureRefusal::TimestampOutsideSkewWindow)
+        }
+        FreezeSignatureDecision::TimestampNotNewer => {
+            Err(SignatureRefusal::TimestampNotNewerThanTheEntryItReplaces)
+        }
+        FreezeSignatureDecision::SignatureInvalid => Err(SignatureRefusal::SignatureDidNotVerify),
+        FreezeSignatureDecision::Admit => Ok(()),
+    }
 }

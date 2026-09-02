@@ -1,0 +1,30 @@
+(* #"/proof-work-224/crates/verified/src/checkpoint.rs" 58 0 63 9 *)
+
+let%span scheckpoint = "/proof-work-224/crates/verified/src/checkpoint.rs" 64 4 64 70
+let%span scheckpoint'0 = "/proof-work-224/crates/verified/src/checkpoint.rs" 55 10 56 43
+
+use creusot.prelude.Any
+use creusot.int.Int64
+use creusot.int.Int32
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let checkpoint_id_retained [#"/proof-work-224/crates/verified/src/checkpoint.rs" 58 0 63 9] (candidate_end: Int64.t)
+  (candidate_epoch: Int32.t) (selected_end: Int64.t) (selected_epoch: Int32.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- candidate_end = selected_end ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- candidate_epoch = selected_epoch ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#scheckpoint] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & candidate_end: Int64.t = candidate_end
+  | & candidate_epoch: Int32.t = candidate_epoch
+  | & selected_end: Int64.t = selected_end
+  | & selected_epoch: Int32.t = selected_epoch
+  | & _10: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:checkpoint_id_retained ensures] [%#scheckpoint'0] result
+    = (Int64.to_int candidate_end = Int64.to_int selected_end
+    /\ Int32.to_int candidate_epoch = Int32.to_int selected_epoch)}
+    (! return {result}) ]

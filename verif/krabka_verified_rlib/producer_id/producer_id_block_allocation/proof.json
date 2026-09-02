@@ -1,0 +1,14 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_checked_add": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_producer_id_block_allocation": {
+        "prover": "alt-ergo",
+        "time": 0.016
+      }
+    }
+  }
+}

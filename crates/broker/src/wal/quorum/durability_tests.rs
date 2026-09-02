@@ -202,24 +202,37 @@ async fn quorum_wal_store_trims_every_replica_before_the_source() {
     let source = Arc::new(Mutex::new(
         Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
     ));
+    let topic_id = Uuid::from_u128(10);
+    let partition = PartitionIndex(0);
+    let cache = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
     let store = QuorumWalStore::for_partition(
         "topic",
-        None,
-        PartitionIndex(0),
+        Some(topic_id),
+        partition,
         dir.path(),
         source.clone(),
-        None,
+        Some(cache.clone()),
         3,
     )
     .unwrap();
     let (_results, leo) = append_source(&store, 3).await;
     store.sync_durable(leo).await.unwrap();
+    assert!(
+        cache
+            .get(topic_id, partition, 0, i64::MAX, usize::MAX)
+            .is_some()
+    );
 
     let start = store.trim_to_offset(Offset(2)).await.unwrap();
 
     assert!(start >= Offset(2));
     assert!(source.lock().unwrap().log_start_offset() == start);
     assert!(store.engine.replica_start_offsets() == vec![start, start, start]);
+    assert!(
+        cache
+            .get(topic_id, partition, 0, i64::MAX, usize::MAX)
+            .is_none()
+    );
 }
 
 #[tokio::test]

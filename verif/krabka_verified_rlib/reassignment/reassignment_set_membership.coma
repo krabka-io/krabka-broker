@@ -1,0 +1,46 @@
+(* #"/proof-work-229/crates/verified/src/reassignment.rs" 33 0 33 98 *)
+
+let%span sreassignment = "/proof-work-229/crates/verified/src/reassignment.rs" 35 18 35 41
+let%span sreassignment'0 = "/proof-work-229/crates/verified/src/reassignment.rs" 36 16 36 40
+let%span sreassignment'1 = "/proof-work-229/crates/verified/src/reassignment.rs" 37 18 37 42
+let%span sreassignment'2 = "/proof-work-229/crates/verified/src/reassignment.rs" 28 10 28 54
+let%span sreassignment'3 = "/proof-work-229/crates/verified/src/reassignment.rs" 29 10 29 53
+let%span sreassignment'4 = "/proof-work-229/crates/verified/src/reassignment.rs" 30 10 30 55
+let%span sreassignment'5 = "/proof-work-229/crates/verified/src/reassignment.rs" 31 10 31 45
+
+use creusot.prelude.Any
+
+type t_ReassignmentSetMembership = { in_union: bool; adding: bool; removing: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reassignment_set_membership [#"/proof-work-229/crates/verified/src/reassignment.rs" 33 0 33 98] (in_current: bool)
+  (in_target: bool) (return (x: t_ReassignmentSetMembership)) = (! bb0
+  [ bb0 = any [ br0 -> {in_current = false} (! bb2) | br1 -> {in_current} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_13 <- [%#sreassignment] true ] s1 | s1 = bb3 ]
+  | bb2 = s0 [ s0 = [ &_13 <- in_target ] s1 | s1 = bb3 ]
+  | bb3 = any [ br0 -> {in_target = false} (! bb5) | br1 -> {in_target} (! bb4) ]
+  | bb4 = s0 [ s0 = [ &_15 <- not in_current ] s1 | s1 = bb6 ]
+  | bb5 = s0 [ s0 = [ &_15 <- [%#sreassignment'0] false ] s1 | s1 = bb6 ]
+  | bb6 = any [ br0 -> {in_current = false} (! bb8) | br1 -> {in_current} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_18 <- not in_target ] s1 | s1 = bb9 ]
+  | bb8 = s0 [ s0 = [ &_18 <- [%#sreassignment'1] false ] s1 | s1 = bb9 ]
+  | bb9 = s0 [ s0 = [ &_ret <- { in_union = _13; adding = _15; removing = _18 } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReassignmentSetMembership = Any.any_l ()
+  | & in_current: bool = in_current
+  | & in_target: bool = in_target
+  | & _13: bool = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & _18: bool = Any.any_l () ])
+  [ return (result: t_ReassignmentSetMembership) ->
+  {[@stop_split] [@expl:reassignment_set_membership ensures] ([@stop_split] [@expl:reassignment_set_membership ensures #0] [%#sreassignment'2] result.in_union
+      = (in_current \/ in_target))
+    /\ ([@stop_split] [@expl:reassignment_set_membership ensures #1] [%#sreassignment'3] result.adding
+      = (in_target /\ not in_current))
+    /\ ([@stop_split] [@expl:reassignment_set_membership ensures #2] [%#sreassignment'4] result.removing
+      = (in_current /\ not in_target))
+    /\ ([@stop_split] [@expl:reassignment_set_membership ensures #3] [%#sreassignment'5] not (result.adding
+    /\ result.removing))}
+    (! return {result}) ]

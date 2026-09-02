@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_barrier_recovery_finalize_decision": {
+        "prover": "alt-ergo",
+        "time": 0.012
+      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.012 }
+    }
+  }
+}

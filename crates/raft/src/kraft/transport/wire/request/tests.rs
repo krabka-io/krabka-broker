@@ -1,26 +1,165 @@
 use assert2::{assert, check};
+use base64::Engine as _;
 
 use super::*;
 
+fn raw_vote_request() -> VoteRequest {
+    VoteRequest {
+        voter_id: 1,
+        topics: vec![vote_req::TopicData {
+            topic_name: METADATA_TOPIC.to_string(),
+            partitions: vec![vote_req::PartitionData {
+                partition_index: METADATA_PARTITION,
+                replica_epoch: 3,
+                replica_id: 2,
+                last_offset_epoch: 2,
+                last_offset: 42,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+fn raw_vote_body(request: &VoteRequest) -> Bytes {
+    encode_body(request, VOTE_VERSION)
+}
+
 #[test]
 fn vote_request_round_trips() {
+    let cluster_id = uuid::Uuid::from_u128(1);
     let req = PeerRequest::Vote {
+        cluster_id: Some(cluster_id),
         voter_id: NodeId(9),
+        voter_directory_id: uuid::Uuid::from_u128(2),
         candidate_epoch: 3,
         candidate: NodeId(7),
+        candidate_directory_id: uuid::Uuid::from_u128(3),
         last_epoch: 2,
         last_offset: 42,
         pre_vote: true,
+    };
+    let encoded = req.encode();
+    assert2::assert!(decode_vote(&encoded) == Some(req));
+
+    let mut cur = &encoded[..];
+    let raw = VoteRequest::decode(&mut cur, VOTE_VERSION).expect("decode vote request");
+    assert2::assert!(
+        raw.cluster_id
+            == Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()))
+    );
+}
+
+#[test]
+fn vote_request_preserves_legitimate_node_zero() {
+    let req = PeerRequest::Vote {
+        cluster_id: None,
+        voter_id: NodeId(0),
+        voter_directory_id: uuid::Uuid::nil(),
+        candidate_epoch: 0,
+        candidate: NodeId(0),
+        candidate_directory_id: uuid::Uuid::nil(),
+        last_epoch: 0,
+        last_offset: 0,
+        pre_vote: false,
     };
     assert2::assert!(decode_vote(&req.encode()) == Some(req));
 }
 
 #[test]
+fn vote_decode_accepts_kafka_base64_cluster_id() {
+    let cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+    let mut request = raw_vote_request();
+    request.cluster_id =
+        Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()));
+
+    let Some(PeerRequest::Vote {
+        cluster_id: decoded,
+        ..
+    }) = decode_vote(&raw_vote_body(&request))
+    else {
+        panic!("valid Kafka cluster id must decode");
+    };
+    assert2::assert!(decoded == Some(cluster_id));
+}
+
+#[test]
+fn vote_encode_rejects_values_above_signed_wire_maximum() {
+    let max_id = i32::MAX as u64;
+    let max_epoch = i32::MAX as u32;
+    let request = |voter_id, candidate, candidate_epoch, last_epoch| PeerRequest::Vote {
+        cluster_id: None,
+        voter_id: NodeId(voter_id),
+        voter_directory_id: uuid::Uuid::nil(),
+        candidate_epoch,
+        candidate: NodeId(candidate),
+        candidate_directory_id: uuid::Uuid::nil(),
+        last_epoch,
+        last_offset: 0,
+        pre_vote: false,
+    };
+
+    assert2::assert!(
+        request(max_id, max_id, max_epoch, max_epoch)
+            .try_encode()
+            .is_some()
+    );
+    assert2::assert!(request(max_id + 1, 0, 0, 0).try_encode().is_none());
+    assert2::assert!(request(0, max_id + 1, 0, 0).try_encode().is_none());
+    assert2::assert!(request(0, 0, max_epoch + 1, 0).try_encode().is_none());
+    assert2::assert!(request(0, 0, 0, max_epoch + 1).try_encode().is_none());
+}
+
+#[test]
+fn vote_decode_rejects_negative_ids() {
+    let mut request = raw_vote_request();
+    request.voter_id = -1;
+    assert2::assert!(decode_vote(&raw_vote_body(&request)).is_none());
+
+    let mut request = raw_vote_request();
+    request.topics[0].partitions[0].replica_id = -1;
+    assert2::assert!(decode_vote(&raw_vote_body(&request)).is_none());
+}
+
+#[test]
+fn vote_decode_rejects_negative_epochs() {
+    let mut request = raw_vote_request();
+    request.topics[0].partitions[0].replica_epoch = -1;
+    assert2::assert!(decode_vote(&raw_vote_body(&request)).is_none());
+
+    let mut request = raw_vote_request();
+    request.topics[0].partitions[0].last_offset_epoch = -1;
+    assert2::assert!(decode_vote(&raw_vote_body(&request)).is_none());
+}
+
+#[test]
+fn vote_decode_rejects_wrong_topic_or_partition() {
+    let mut request = raw_vote_request();
+    request.topics[0].topic_name = "other".to_string();
+    assert2::assert!(decode_vote(&raw_vote_body(&request)).is_none());
+
+    let mut request = raw_vote_request();
+    request.topics[0].partitions[0].partition_index = 1;
+    assert2::assert!(decode_vote(&raw_vote_body(&request)).is_none());
+}
+
+#[test]
+fn vote_decode_rejects_trailing_bytes() {
+    let mut body = raw_vote_body(&raw_vote_request()).to_vec();
+    body.push(0);
+    assert2::assert!(decode_vote(&body).is_none());
+}
+
+#[test]
 fn generic_request_decode_accepts_vote_request() {
     let req = PeerRequest::Vote {
+        cluster_id: None,
         voter_id: NodeId(9),
+        voter_directory_id: uuid::Uuid::nil(),
         candidate_epoch: 3,
         candidate: NodeId(7),
+        candidate_directory_id: uuid::Uuid::nil(),
         last_epoch: 2,
         last_offset: 42,
         pre_vote: true,
@@ -33,9 +172,12 @@ fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
     use krabka_protocol::Decode;
 
     let req = PeerRequest::Vote {
+        cluster_id: None,
         voter_id: NodeId(9),
+        voter_directory_id: uuid::Uuid::nil(),
         candidate_epoch: 3,
         candidate: NodeId(7),
+        candidate_directory_id: uuid::Uuid::nil(),
         last_epoch: 2,
         last_offset: 42,
         pre_vote: true,

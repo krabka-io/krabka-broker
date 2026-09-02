@@ -5,6 +5,11 @@
 //! looks revoked across the flip, and builds the atomic record batch that
 //! tombstones the next-gen records and writes the classic one.
 
+use krabka_verified::{
+    GroupMigrationDirection, GroupMigrationRecordAction, consumer_downgrade_epoch,
+    group_migration_record_plan,
+};
+
 use super::assignment::member_target_assignment;
 use crate::coordinator::unified::{
     actor::{PendingRecords, classic_group_metadata_record},
@@ -15,12 +20,18 @@ use crate::coordinator::unified::{
 
 /// Can this consumer group be downgraded to a classic group?
 ///
-/// The answer is always `true` in Kafka. A server-managed consumer group can
-/// always be re-expressed as a classic group: members become classic members,
-/// and the server target becomes the seed assignment. This function exists for
-/// symmetry with the upgrade path.
-pub(crate) fn consumer_is_convertible() -> bool {
-    true
+/// Every remaining member must carry a classic facade. A native consumer
+/// member has no classic protocol list or session timeout to restore and makes
+/// the current group unrepresentable as classic state.
+pub(crate) fn consumer_is_convertible(state: &ConsumerState) -> bool {
+    consumer_downgrade_epoch(
+        state
+            .members
+            .values()
+            .all(|member| member.classic.is_some()),
+        state.group_epoch,
+    )
+    .is_some()
 }
 
 /// Converts a consumer group back into a classic group during a KIP-848
@@ -78,7 +89,14 @@ pub(crate) fn convert_consumer_to_classic(
     }
     // Set generation_id LAST so neither complete_rebalance (+1) nor
     // install_assignments overrides the consumer group's epoch.
-    classic.generation_id = state.group_epoch.max(0);
+    classic.generation_id = consumer_downgrade_epoch(
+        state
+            .members
+            .values()
+            .all(|member| member.classic.is_some()),
+        state.group_epoch,
+    )
+    .expect("downgrade precondition: every member has a classic facade");
     classic
 }
 
@@ -99,18 +117,29 @@ pub(crate) fn convert_consumer_to_classic(
 pub(crate) fn downgrade_pending_records(
     consumer: &ConsumerState,
     classic: &ClassicState,
+    now_ms: i64,
 ) -> PendingRecords {
+    let plan =
+        group_migration_record_plan(GroupMigrationDirection::Downgrade, consumer.members.len());
     let mut pending = PendingRecords {
-        next_gen_group_metadata_tombstone: true,
-        next_gen_target_metadata_tombstone: true,
-        classic_group_metadata: Some(classic_group_metadata_record(classic)),
+        next_gen_group_metadata_tombstone: plan.next_gen_group
+            == GroupMigrationRecordAction::Tombstone,
+        next_gen_target_metadata_tombstone: plan.next_gen_target
+            == GroupMigrationRecordAction::Tombstone,
+        classic_group_metadata: (plan.classic_group == GroupMigrationRecordAction::Write)
+            .then(|| classic_group_metadata_record(classic, now_ms)),
         ..Default::default()
     };
-    for mid in consumer.members.keys() {
-        pending.member_metadata.push((mid.clone(), None));
-        pending.target_per_member.push((mid.clone(), None));
-        pending.current_per_member.push((mid.clone(), None));
+    if plan.member_metadata == GroupMigrationRecordAction::Tombstone {
+        for mid in consumer.members.keys() {
+            pending.member_metadata.push((mid.clone(), None));
+            pending.target_per_member.push((mid.clone(), None));
+            pending.current_per_member.push((mid.clone(), None));
+        }
     }
+    assert2::debug_assert!(pending.member_metadata.len() == plan.member_count);
+    assert2::debug_assert!(pending.target_per_member.len() == plan.member_count);
+    assert2::debug_assert!(pending.current_per_member.len() == plan.member_count);
     pending
 }
 
@@ -126,8 +155,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn consumer_group_always_downgradable() {
-        assert!(consumer_is_convertible());
+    fn downgrade_requires_every_member_to_have_a_classic_facade() {
+        use std::{
+            collections::{HashMap, HashSet},
+            time::{Duration, Instant},
+        };
+
+        use crate::coordinator::unified::{
+            consumer_state::{CompiledRegex, MemberState},
+            persistence_next_gen::MemberAssignmentState,
+        };
+
+        let mut state = ConsumerState::new("g");
+        assert!(consumer_is_convertible(&state));
+        state.add_or_update_member(MemberState {
+            member_id: "native".into(),
+            instance_id: None,
+            rack_id: None,
+            client_id: "c".into(),
+            client_host: "h".into(),
+            subscribed_topic_names: HashSet::default(),
+            subscribed_topic_regex: None,
+            compiled_regex: CompiledRegex::Absent,
+            server_assignor: None,
+            rebalance_timeout: Duration::from_secs(30),
+            member_epoch: 0,
+            previous_member_epoch: 0,
+            assignment_state: MemberAssignmentState::Stable,
+            assigned_partitions: HashMap::new(),
+            partitions_pending_revocation: HashMap::new(),
+            last_seen: Instant::now(),
+            classic: None,
+        });
+        assert!(!consumer_is_convertible(&state));
     }
 
     #[test]
@@ -210,5 +270,10 @@ mod tests {
         // complete_rebalance must have set the protocol metadata coherently.
         check!(classic.protocol_name.as_deref() == Some("range"));
         check!(classic.leader_id.as_deref() == Some("m1"));
+
+        let first = downgrade_pending_records(&state, &classic, 7).to_batch("g", 7);
+        let second = downgrade_pending_records(&state, &classic, 7).to_batch("g", 7);
+        check!(first.records.len() == 6);
+        assert!(first.records == second.records);
     }
 }

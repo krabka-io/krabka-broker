@@ -1,0 +1,141 @@
+"""The hermetic Creusot proof image.
+
+The expensive Creusot installation is a Bazel output whose inputs are only the
+locked apko base, the pinned Creusot release, and the installer.
+
+Building it takes about eleven minutes, and CI kept paying that on trees that
+changed none of those inputs. The Bazel disk cache did not spare it: that cache
+lives in the GitHub Actions cache, where this gigabyte-scale toolchain layer
+competes for one 10 GB repository-wide quota with every other namespace.
+
+The registry is the durable cache instead. `image-tag.sh` digests exactly the
+inputs above into a tag, CI pulls that tag when the registry already holds it,
+and only a tree that changes what the image contains builds and publishes one.
+
+    bazel run //tools/creusot:image_load                          # local daemon
+    bazel run //tools/creusot:push -- --tag "$(tools/creusot/image-tag.sh)"
+"""
+
+load("@rules_apko//apko:defs.bzl", "apko_image")
+load("@rules_img//img:convert.bzl", "image_manifest_from_oci_layout")
+load("@rules_img//img:image.bzl", "image_manifest")
+load("@rules_img//img:layer.bzl", "file_metadata", "image_layer", "layer_from_tar")
+load("@rules_img//img:load.bzl", "image_load")
+load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
+load("@rules_img//img:push.bzl", "image_push")
+
+package(default_visibility = ["//visibility:public"])
+
+apko_image(
+    name = "base_oci",
+    config = "image.apko.yaml",
+    contents = "@creusot_base_lock//:contents",
+    tag = "krabka-creusot-base:locked",
+    tags = ["manual"],
+)
+
+image_manifest_from_oci_layout(
+    name = "base",
+    src = ":base_oci",
+    architecture = "amd64",
+    layers = [GZIP_LAYER],
+    os = "linux",
+    tags = ["manual"],
+)
+
+image_layer(
+    name = "installer_layer",
+    srcs = {
+        "/opt/creusot-version": "//:.creusot-version",
+        "/usr/local/bin/install-creusot": ":install-creusot.sh",
+    },
+    default_metadata = file_metadata(mode = "0755"),
+    tags = ["manual"],
+)
+
+image_manifest(
+    name = "builder_image",
+    base = ":base",
+    entrypoint = ["/usr/local/bin/install-creusot"],
+    layers = [":installer_layer"],
+    tags = ["manual"],
+)
+
+image_load(
+    name = "builder_load",
+    image = ":builder_image",
+    tag = "docker.io/krabka-io/creusot-builder:0.13.0",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "builder_tar",
+    srcs = [":builder_load"],
+    output_group = "tarball",
+    tags = ["manual"],
+)
+
+# This action uses Docker only as the Linux isolation boundary. All compilers,
+# libraries, package managers and source pins come from builder_image. Its tar
+# output is cached by Bazel and is rebuilt only when those inputs change.
+genrule(
+    name = "installed_toolchain_tar",
+    srcs = [
+        ":build-layer.sh",
+        ":builder_tar",
+    ],
+    outs = ["installed-toolchain.tar"],
+    cmd = "$(location :build-layer.sh) $(location :builder_tar) $@",
+    local = True,
+    tags = [
+        "manual",
+        "no-sandbox",
+        "requires-network",
+    ],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+layer_from_tar(
+    name = "installed_toolchain_layer",
+    src = ":installed_toolchain_tar",
+    optimize = True,
+    tags = ["manual"],
+)
+
+image_layer(
+    name = "proof_runner_layer",
+    srcs = {
+        "/usr/local/bin/prove": ":prove.sh",
+    },
+    default_metadata = file_metadata(mode = "0755"),
+    tags = ["manual"],
+)
+
+image_manifest(
+    name = "image",
+    base = ":base",
+    entrypoint = ["/usr/local/bin/prove"],
+    layers = [
+        ":installed_toolchain_layer",
+        ":proof_runner_layer",
+    ],
+    tags = ["manual"],
+    working_dir = "/workspace",
+)
+
+image_load(
+    name = "image_load",
+    image = ":image",
+    tag = "docker.io/krabka-io/creusot:0.13.0",
+    tags = ["manual"],
+)
+
+# The content-addressed cache CI pulls from. The tag is never written here: it
+# is a digest of this package's inputs, which only `image-tag.sh` can compute.
+image_push(
+    name = "push",
+    image = ":image",
+    registry = "ghcr.io",
+    repository = "krabka-io/creusot",
+    tags = ["manual"],
+)

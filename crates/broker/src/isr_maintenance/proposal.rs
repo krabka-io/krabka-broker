@@ -2,7 +2,10 @@
 //! `replica_state` lock once and returns everything the scan loop needs, so
 //! the lag comparison is testable without the surrounding scan.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 use krabka_ids::LeaderEpoch;
 use krabka_raft::NodeId;
@@ -32,33 +35,51 @@ pub(super) async fn compute_proposal(part: &Partition, lag_max: Duration) -> Opt
     // Capture the pre-proposal ISR (sorted) once, inside this lock scope.
     let mut prev_isr: Vec<NodeId> = st.isr.iter().copied().collect();
     prev_isr.sort_unstable();
-    let mut new_isr: Vec<NodeId> = prev_isr.clone();
-    // Shrink: drop followers lagging > lag_max.
-    new_isr.retain(|n| {
-        st.per_follower
-            .get(n)
-            .is_none_or(|stats| now.duration_since(stats.last_fetch) <= lag_max)
-    });
-    // Expand: add followers in per_follower not in current ISR that have
-    // been recently caught up.
-    for (n, stats) in &st.per_follower {
-        if !st.isr.contains(n)
-            && now.duration_since(stats.last_caught_up) <= lag_max
-            && !new_isr.contains(n)
-        {
-            new_isr.push(*n);
+    let (Some(leader), replicas) = st.leader_and_replicas() else {
+        return None;
+    };
+    // A malformed metadata installation must never propose an ISR without its
+    // assigned leader. Normal installations establish both facts together.
+    if !replicas.contains(&leader) || !st.isr.contains(&leader) {
+        return None;
+    }
+
+    // BTreeSet supplies one sorted decision per assigned/current replica. The
+    // kernel then proves the exact keep/remove/add predicate for each member.
+    let candidates: BTreeSet<NodeId> = replicas.union(&st.isr).copied().collect();
+    let mut new_isr = Vec::with_capacity(candidates.len());
+    for node in candidates {
+        let stats = st.per_follower.get(&node);
+        let fetch_recent =
+            stats.is_some_and(|stats| now.saturating_duration_since(stats.last_fetch) <= lag_max);
+        let caught_up_recent = stats
+            .is_some_and(|stats| now.saturating_duration_since(stats.last_caught_up) <= lag_max);
+        if krabka_verified::isr::isr_maintenance_selected((
+            replicas.contains(&node),
+            node == leader,
+            st.isr.contains(&node),
+            fetch_recent,
+            caught_up_recent,
+        )) {
+            new_isr.push(node);
         }
     }
-    new_isr.sort_unstable();
-    let no_change = new_isr == prev_isr;
-    if no_change {
-        None
-    } else {
+    let removed = prev_isr
+        .iter()
+        .filter(|node| new_isr.binary_search(node).is_err())
+        .count();
+    let added = new_isr
+        .iter()
+        .filter(|node| prev_isr.binary_search(node).is_err())
+        .count();
+    if krabka_verified::isr::isr_proposal_changed(removed, added) {
         Some(Proposal {
             prev_isr,
             new_isr,
             leader_epoch: st.current_leader_epoch,
         })
+    } else {
+        None
     }
 }
 
@@ -140,6 +161,54 @@ mod tests {
             &[
                 (NodeId(2), Duration::from_secs(1), Duration::from_secs(1)),
                 (NodeId(3), Duration::from_secs(1), Duration::from_secs(30)),
+            ],
+        )
+        .await;
+
+        assert2::assert!(
+            compute_proposal(&part, Duration::from_secs(5))
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn leader_lag_and_duplicate_assignment_do_not_change_the_isr() {
+        let log_dir = tempdir().unwrap();
+        let part = fixture_partition(log_dir.path(), "t", 0);
+        set_replica_state(
+            &part,
+            &[NodeId(1), NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(1), NodeId(2), NodeId(2)],
+            NodeId(1),
+            10,
+            &[
+                (NodeId(1), Duration::from_secs(30), Duration::from_secs(30)),
+                (NodeId(2), Duration::from_secs(1), Duration::from_secs(1)),
+            ],
+        )
+        .await;
+
+        assert2::assert!(
+            compute_proposal(&part, Duration::from_secs(5))
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn caught_up_but_no_longer_live_replica_is_not_admitted() {
+        let log_dir = tempdir().unwrap();
+        let part = fixture_partition(log_dir.path(), "t", 0);
+        set_replica_state(
+            &part,
+            &[NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(2), NodeId(3)],
+            NodeId(1),
+            11,
+            &[
+                (NodeId(2), Duration::from_secs(1), Duration::from_secs(1)),
+                (NodeId(3), Duration::from_secs(30), Duration::from_secs(1)),
             ],
         )
         .await;

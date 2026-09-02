@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_list_offsets_bound_decision": {
+        "prover": "alt-ergo",
+        "time": 0.017
+      }
+    }
+  }
+}

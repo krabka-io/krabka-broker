@@ -1,6 +1,10 @@
 //! Response framing and the KIP-219 throttle. It prepends the response header
 //! to a handler's body, charges the request quota, and patches the leading
 //! `ThrottleTimeMs` of the responses whose schema carries that field first.
+//!
+//! Charging a quota never sleeps here. It returns the throttle window
+//! alongside the bytes, and the connection loop enforces it by muting the
+//! connection *after* the response is written, which is what KIP-219 asks for.
 
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::api_key::ApiKey;
@@ -13,42 +17,116 @@ use crate::{
     network::codec,
 };
 
-pub(super) async fn maybe_apply_request_quota(
+/// A framed response together with the KIP-219 window the connection must
+/// stay muted for once those bytes are on the wire.
+#[derive(Debug)]
+pub(super) struct ThrottledResponse {
+    pub(super) bytes: Bytes,
+    pub(super) throttle: Time,
+}
+
+impl ThrottledResponse {
+    /// A response that trips no quota, so the connection is not muted.
+    pub(super) fn unthrottled(bytes: Bytes) -> Self {
+        Self {
+            bytes,
+            throttle: <Time as TimeExt>::ZERO,
+        }
+    }
+}
+
+/// The schema version and header flexibility of the response that was
+/// actually encoded.
+///
+/// It is not always the request's. `send_unsupported_version` replies at the
+/// nearest supported version, which for a request below an API's minimum is
+/// higher than the one the client asked for and can be flexible where the
+/// request header was not. `patch_leading_throttle` derives the body offset
+/// from the flexibility, and `throttle_is_leading_field` from the version, so
+/// both must read the response's values: patching a flexible v0 body from the
+/// request's non-flexible header offset overwrites the tagged-fields byte and
+/// three quarters of `ThrottleTimeMs`.
+#[derive(Clone, Copy)]
+pub(super) struct ResponseShape {
+    pub(super) version: ApiVersion,
+    pub(super) body_flexible: bool,
+}
+
+impl ResponseShape {
+    /// The ordinary case: the handler answered at the version the client
+    /// asked for, with the header flexibility the request header used.
+    pub(super) fn mirroring_request(parsed: &crate::network::request::ParsedRequest<'_>) -> Self {
+        Self {
+            version: parsed.api_version,
+            body_flexible: parsed.body_flexible,
+        }
+    }
+}
+
+/// Charges the KIP-124 request quota for a finished request and returns the
+/// response with the throttle window it earned.
+///
+/// The function does not wait. It patches the response's leading
+/// `ThrottleTimeMs` where the schema has one, so the client learns how long to
+/// back off, and returns the window so the caller can mute the connection
+/// after the write.
+pub(super) fn apply_request_quota(
     broker: &Broker,
     mut response_bytes: Bytes,
     parsed: &crate::network::request::ParsedRequest<'_>,
+    shape: ResponseShape,
     auth: &crate::network::auth::ConnectionAuth,
     started: std::time::Instant,
-) -> Bytes {
+) -> ThrottledResponse {
     let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let self_accounts = matches!(
         ApiKey::from_i16(parsed.api_key),
         Some(ApiKey::Produce | ApiKey::Fetch)
     );
-    if !self_accounts && let Some(principal) = auth.principal() {
-        let image = broker.controller.current_image();
-        let delay = crate::quota::consume_request_quota(
-            &image,
-            &broker.quota_buckets,
-            &principal.name,
-            parsed.client_id.unwrap_or(""),
-            elapsed_micros,
-            broker.config.quota_throttle_max,
+    let mut throttle = <Time as TimeExt>::ZERO;
+    if !self_accounts {
+        // KIP-124 keys the request quota on the principal, so a connection
+        // that never authenticated is charged nothing. The zero still reaches
+        // the throttle histogram below, which is what keeps that family's
+        // `_count` equal to the number of requests this path accounted for.
+        let charged = match auth.principal() {
+            None => <Time as TimeExt>::ZERO,
+            Some(principal) => {
+                let image = broker.controller.current_image();
+                crate::quota::consume_request_quota(
+                    &image,
+                    &broker.quota_buckets,
+                    &principal.name,
+                    parsed.client_id.unwrap_or(""),
+                    elapsed_micros,
+                    broker.config.quota_throttle_max,
+                )
+            }
+        };
+        // The request quota is the only one an api that does not account for
+        // itself is charged, so it is the only entry, and the delay it asks
+        // for is the window this request is muted for.
+        let delay = broker.metrics.record_applied_throttle(
+            parsed.api_key,
+            &[(crate::metrics::QuotaType::Request, charged)],
         );
         if delay > <Time as TimeExt>::ZERO {
-            if throttle_is_leading_field(parsed.api_key, parsed.api_version) {
+            if throttle_is_leading_field(parsed.api_key, shape.version) {
                 let delay_ms = crate::quota::throttle_time_ms(delay);
                 response_bytes = patch_leading_throttle(
                     response_bytes,
                     parsed.api_key,
-                    parsed.body_flexible,
+                    shape.body_flexible,
                     delay_ms,
                 );
             }
-            tokio::time::sleep(delay.to_std()).await;
+            throttle = delay;
         }
     }
-    response_bytes
+    ThrottledResponse {
+        bytes: response_bytes,
+        throttle,
+    }
 }
 
 /// Prepends the response header, the `corr_id` and an optional tagged-fields
@@ -109,34 +187,143 @@ pub(super) fn encode_response(
 /// The dispatch loop then reports the request-quota throttle by patching that
 /// leading int32 in place.
 ///
-/// The boundaries are verified against the 4.x response schemas. APIs that are
-/// absent from this table keep the pre-KIP-219 behavior: the channel mute
-/// still enforces the throttle, but the response does not echo it. Produce (0)
-/// and Fetch (1) account for themselves and never reach this path.
-/// `OffsetDelete` (47) is deliberately excluded, because its leading field is
-/// `ErrorCode` and a patch would corrupt it.
-fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion) -> bool {
+/// The table is an exhaustive audit of every response schema in the pinned
+/// `krabka-protocol` checkout. The `throttle_audit` sibling module pins it: it
+/// enumerates every advertised `(api_key, version)` pair and compares this
+/// predicate against the byte layout the generated encoder actually produces.
+/// Adding an API to [`crate::api_catalog`] without classifying it here fails
+/// that test.
+///
+/// Classifying an API correctly is necessary but not sufficient for it to echo
+/// a delay. This predicate is only consulted where `apply_request_quota`
+/// runs: the dispatch entries whose policy is
+/// `RequestQuotaPolicy::ApplyFallbackAccounting` (the `DispatchEntry::plain`
+/// ones) and the unsupported-version reply path, which takes it for every
+/// `api_key`. The `InlineExempt` entries -- every handler that takes a
+/// `RequestContext`, which is most of the admin and ACL surface -- are exempt
+/// from the request quota altogether and so are neither delayed nor throttle-
+/// stamped. Narrowing that exemption is KIP-124 work rather than KIP-219 work;
+/// this table is what a narrowing would land on.
+///
+/// `Produce` (0) and `Fetch` (1) never reach this predicate. Both their
+/// bandwidth quota and their share of the request quota are charged by the
+/// handler, which sets `ThrottleTimeMs` on the typed response before encoding,
+/// so `apply_request_quota` returns for both before consulting the
+/// table. They are still classified below, and the audit still probes them, so
+/// a schema move cannot pass unnoticed.
+///
+/// Everything else that answers `false` falls into three groups.
+///
+/// * Versions below the one at which the API moved `ThrottleTimeMs` to the
+///   front of its response body: `Metadata` v0-2, `JoinGroup` v0-1,
+///   `ListOffsets` v0-1, `FindCoordinator` v0 and the rest. The version bounds
+///   in the arms below are exactly those boundaries.
+/// * No `ThrottleTimeMs` field at any version: `SaslHandshake` (17),
+///   `WriteTxnMarkers` (27), `SaslAuthenticate` (36), `DescribeQuorum` (55),
+///   the share-coordinator state RPCs (83-87) and `GetReplicaLogInfo` (93).
+///   There is nothing to echo. `Vote` (52), `BeginQuorumEpoch` (53),
+///   `EndQuorumEpoch` (54) and `Envelope` (58) are throttle-free as well, but
+///   the broker does not advertise them, so the audit does not reach them.
+/// * KIP-219 divergences -- the field is present but sits behind another
+///   field, so patching a leading int32 would corrupt the response. These are
+///   recorded as `THROTTLE_ECHO_DIVERGENCES` in the audit module and as rows
+///   in the generated `docs/KIP_MATRIX.md`:
+///   `Produce` (0) v1+ and `ApiVersions` (18) v1+ carry it after a
+///   variable-length array, the four delegation-token APIs (38-41) carry it
+///   last, and `OffsetDelete` (47) leads with `ErrorCode`.
+///   What that costs on the wire differs per API, and the audit records it
+///   as a `QuotaReach` pinned against the dispatch registry: `Produce` is
+///   `SelfAccounted`, so it never reaches this predicate and its handler
+///   fills the field in; `ApiVersions` is `ApplyFallbackAccounting`, so an
+///   ordinary request can be held while the response reports zero; the other
+///   five are `InlineExempt`, so only the unsupported-version reply path --
+///   which charges every `api_key` -- can hold one.
+///   Echoing the field on any of them needs it set on the typed response
+///   before encoding, which is how the Produce and Fetch handlers already do
+///   it.
+pub(super) fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion) -> bool {
     // The version bounds are the schema versions at which each API moved
-    // `ThrottleTimeMs` to the front of its response (verified against the
-    // 4.x response schemas); they are deliberately kept as literals here
-    // and pinned by the schema-boundary tests.
-    match ApiKey::from_i16(api_key) {
-        Some(ApiKey::ListOffsets | ApiKey::JoinGroup | ApiKey::OffsetForLeaderEpoch) => {
-            version >= 2
-        }
-        Some(ApiKey::Metadata | ApiKey::OffsetCommit | ApiKey::OffsetFetch) => version >= 3,
-        Some(
-            ApiKey::FindCoordinator
-            | ApiKey::Heartbeat
-            | ApiKey::LeaveGroup
-            | ApiKey::SyncGroup
-            | ApiKey::DescribeGroups
-            | ApiKey::ListGroups,
-        ) => version >= 1,
-        // InitProducerId / DescribeCluster / ConsumerGroupHeartbeat (all 0+)
-        Some(ApiKey::InitProducerId | ApiKey::DescribeCluster | ApiKey::ConsumerGroupHeartbeat) => {
-            true
-        }
+    // `ThrottleTimeMs` to the front of its response. They are deliberately
+    // kept as literals and pinned by `throttle_audit`.
+    let Some(api) = ApiKey::from_i16(api_key) else {
+        return false;
+    };
+    match api {
+        // Leading at every version the pinned schema defines.
+        ApiKey::DeleteRecords
+        | ApiKey::InitProducerId
+        | ApiKey::AddPartitionsToTxn
+        | ApiKey::AddOffsetsToTxn
+        | ApiKey::EndTxn
+        | ApiKey::TxnOffsetCommit
+        | ApiKey::AlterConfigs
+        | ApiKey::CreatePartitions
+        | ApiKey::DeleteGroups
+        | ApiKey::ElectLeaders
+        | ApiKey::IncrementalAlterConfigs
+        | ApiKey::AlterPartitionReassignments
+        | ApiKey::ListPartitionReassignments
+        | ApiKey::DescribeClientQuotas
+        | ApiKey::AlterClientQuotas
+        | ApiKey::DescribeUserScramCredentials
+        | ApiKey::AlterUserScramCredentials
+        | ApiKey::UpdateFeatures
+        | ApiKey::FetchSnapshot
+        | ApiKey::DescribeCluster
+        | ApiKey::DescribeProducers
+        | ApiKey::BrokerRegistration
+        | ApiKey::BrokerHeartbeat
+        | ApiKey::UnregisterBroker
+        | ApiKey::DescribeTransactions
+        | ApiKey::ListTransactions
+        | ApiKey::AllocateProducerIds
+        | ApiKey::ConsumerGroupHeartbeat
+        | ApiKey::ConsumerGroupDescribe
+        | ApiKey::ControllerRegistration
+        | ApiKey::GetTelemetrySubscriptions
+        | ApiKey::PushTelemetry
+        | ApiKey::AssignReplicasToDirs
+        | ApiKey::ListConfigResources
+        | ApiKey::DescribeTopicPartitions
+        | ApiKey::AddRaftVoter
+        | ApiKey::RemoveRaftVoter
+        | ApiKey::UpdateRaftVoter
+        | ApiKey::StreamsGroupHeartbeat
+        | ApiKey::StreamsGroupDescribe
+        | ApiKey::DescribeShareGroupOffsets
+        | ApiKey::AlterShareGroupOffsets
+        | ApiKey::DeleteShareGroupOffsets => true,
+        // Moved to the front at v1.
+        ApiKey::Fetch
+        | ApiKey::FindCoordinator
+        | ApiKey::Heartbeat
+        | ApiKey::LeaveGroup
+        | ApiKey::SyncGroup
+        | ApiKey::DescribeGroups
+        | ApiKey::ListGroups
+        | ApiKey::DeleteTopics
+        | ApiKey::DescribeAcls
+        | ApiKey::CreateAcls
+        | ApiKey::DeleteAcls
+        | ApiKey::DescribeConfigs
+        | ApiKey::AlterReplicaLogDirs
+        | ApiKey::DescribeLogDirs
+        | ApiKey::ShareGroupHeartbeat
+        | ApiKey::ShareGroupDescribe
+        | ApiKey::ShareFetch
+        | ApiKey::ShareAcknowledge => version >= 1,
+        // Moved to the front at v2.
+        ApiKey::ListOffsets
+        | ApiKey::JoinGroup
+        | ApiKey::CreateTopics
+        | ApiKey::OffsetForLeaderEpoch
+        | ApiKey::AlterPartition => version >= 2,
+        // Moved to the front at v3.
+        ApiKey::Metadata | ApiKey::OffsetCommit | ApiKey::OffsetFetch => version >= 3,
+        // Throttle-free, self-accounting, or a recorded divergence; see the
+        // three groups in the doc comment. `ApiKey` is `#[non_exhaustive]`, so
+        // a future variant lands here until the audit forces it to be
+        // classified.
         _ => false,
     }
 }
@@ -181,31 +368,6 @@ mod tests {
             .expect("encode response");
         // 4 byte corr_id + body, no tagged byte.
         assert!(out.len() == 4 + body.len());
-    }
-
-    #[test]
-    fn throttle_leading_field_table_matches_schemas() {
-        // Present-and-leading version boundaries (verified vs 4.x schemas).
-        // OffsetDelete (47) leads with ErrorCode — must never be patched.
-        // Produce/Fetch self-account; ApiVersions is not in the table.
-        let cases = [
-            (11, 1, false), // JoinGroup v1: no throttle
-            (11, 2, true),  // JoinGroup v2+: leading
-            (3, 2, false),  // Metadata v2: no throttle
-            (3, 3, true),   // Metadata v3+
-            (12, 1, true),  // Heartbeat v1+
-            (68, 0, true),  // ConsumerGroupHeartbeat v0+
-            (47, 0, false), // OffsetDelete
-            (0, 9, false),  // Produce
-            (1, 13, false), // Fetch
-            (18, 3, false), // ApiVersions
-        ];
-        for (api_key, version, want) in cases {
-            assert!(
-                throttle_is_leading_field(api_key, version) == want,
-                "api_key {api_key} version {version}"
-            );
-        }
     }
 
     #[test]

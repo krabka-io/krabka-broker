@@ -266,8 +266,14 @@ fn index_partition(key: &[u8], partitions: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use assert2::assert;
-    use krabka_remote_storage_topic::InProcessMetadataEventLog;
+    use async_trait::async_trait;
+    use krabka_remote_storage_topic::{
+        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
+        MetadataLogError, PartitionStart,
+    };
     use tokio::time::timeout;
     use uuid::Uuid;
 
@@ -276,6 +282,59 @@ mod tests {
         *,
     };
     use crate::diskless::wal_index::WalIndexEntry;
+
+    struct TogglePublishLog {
+        inner: Arc<dyn MetadataEventLog>,
+        fail: AtomicBool,
+    }
+
+    impl TogglePublishLog {
+        fn new(inner: Arc<dyn MetadataEventLog>, fail: bool) -> Arc<Self> {
+            Arc::new(Self {
+                inner,
+                fail: AtomicBool::new(fail),
+            })
+        }
+
+        fn set_failing(&self, fail: bool) {
+            self.fail.store(fail, Ordering::Relaxed);
+        }
+    }
+
+    #[async_trait]
+    impl MetadataEventLog for TogglePublishLog {
+        fn partition_count(&self) -> i32 {
+            self.inner.partition_count()
+        }
+
+        async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
+            self.inner.publish(partition, event).await
+        }
+
+        async fn publish_keyed(
+            &self,
+            partition: i32,
+            key: Bytes,
+            event: Option<Bytes>,
+        ) -> Result<i64, MetadataLogError> {
+            if self.fail.load(Ordering::Relaxed) {
+                Err(MetadataLogError::Closed)
+            } else {
+                self.inner.publish_keyed(partition, key, event).await
+            }
+        }
+
+        fn subscribe(
+            &self,
+            assignment: Vec<PartitionStart>,
+        ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+            self.inner.subscribe(assignment)
+        }
+
+        async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+            self.inner.high_water_marks().await
+        }
+    }
 
     fn flush_record(object_key: &str, topic_id: Uuid, first: i64, last: i64) -> WalFlushRecord {
         WalFlushRecord {
@@ -427,5 +486,81 @@ mod tests {
         .await
         .unwrap();
         assert!(index.cache().lock().await.lookup(topic_id, 0, 2).is_some());
+    }
+
+    #[tokio::test]
+    async fn startup_surfaces_a_replay_fence_publish_failure() {
+        let inner = InProcessMetadataEventLog::new(1);
+        inner
+            .publish(0, Bytes::from_static(b"legacy"))
+            .await
+            .unwrap();
+
+        let Err(error) = DisklessIndexLog::start(TogglePublishLog::new(inner, true)).await else {
+            panic!("the replay fence publish must fail");
+        };
+        assert!(error.to_string().contains("diskless index replay fence"));
+    }
+
+    #[tokio::test]
+    async fn flush_and_tombstone_publish_failures_are_returned() {
+        let transport = TogglePublishLog::new(InProcessMetadataEventLog::new(1), false);
+        let index = DisklessIndexLog::start(transport.clone()).await.unwrap();
+        let topic_id = Uuid::from_u128(7);
+        let record = flush_record("object-a", topic_id, 0, 3);
+
+        index.publish_flush(&record).await.unwrap();
+        assert!(
+            index
+                .wait_until_applied(&record, Duration::from_secs(1))
+                .await
+        );
+        transport.set_failing(true);
+
+        let publish_error = index
+            .publish_flush(&flush_record("object-b", topic_id, 4, 7))
+            .await
+            .unwrap_err();
+        assert!(publish_error.to_string().contains("diskless index publish"));
+
+        let tombstone_error = index.tombstone_topic(topic_id).await.unwrap_err();
+        assert!(
+            tombstone_error
+                .to_string()
+                .contains("diskless index tombstone")
+        );
+    }
+
+    #[tokio::test]
+    async fn consumed_tombstone_removes_the_projected_range() {
+        let transport = InProcessMetadataEventLog::new(1);
+        let index = DisklessIndexLog::start(transport.clone()).await.unwrap();
+        let topic_id = Uuid::from_u128(7);
+        let record = flush_record("object-a", topic_id, 0, 3);
+        let key = WalIndexKey::from(&record.entries[0]);
+
+        index.publish_flush(&record).await.unwrap();
+        assert!(
+            index
+                .wait_until_applied(&record, Duration::from_secs(1))
+                .await
+        );
+        let bytes = key.to_bytes();
+        transport
+            .publish_keyed(
+                index_partition(&bytes, transport.partition_count()),
+                bytes,
+                None,
+            )
+            .await
+            .unwrap();
+
+        timeout(Duration::from_secs(1), async {
+            while index.cache().lock().await.lookup(topic_id, 0, 0).is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

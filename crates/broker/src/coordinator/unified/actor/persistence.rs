@@ -160,6 +160,7 @@ pub(crate) fn full_pending_records(state: &GroupState) -> PendingRecords {
 /// this function.
 pub(crate) fn classic_group_metadata_record(
     state: &ClassicGroup,
+    now_ms: i64,
 ) -> crate::coordinator::unified::persistence::GroupMetadataValue {
     use crate::coordinator::unified::persistence::{GroupMetadataValue, MemberMetadata};
     let members = state
@@ -186,7 +187,7 @@ pub(crate) fn classic_group_metadata_record(
         generation: state.generation_id,
         protocol_name: state.protocol_name.clone(),
         leader: state.leader_id.clone(),
-        current_state_timestamp_ms: chrono_now_ms(),
+        current_state_timestamp_ms: now_ms,
         members,
     }
 }
@@ -196,15 +197,13 @@ pub(super) async fn flush_classic_metadata(
     state: &ClassicGroup,
     offsets_log: &dyn OffsetsLog,
 ) -> Result<(), crate::error::BrokerError> {
+    let now_ms = chrono_now_ms();
     let pending = PendingRecords {
-        classic_group_metadata: Some(classic_group_metadata_record(state)),
+        classic_group_metadata: Some(classic_group_metadata_record(state, now_ms)),
         ..PendingRecords::default()
     };
     offsets_log
-        .append(
-            &state.group_id,
-            pending.to_batch(&state.group_id, chrono_now_ms()),
-        )
+        .append(&state.group_id, pending.to_batch(&state.group_id, now_ms))
         .await
 }
 

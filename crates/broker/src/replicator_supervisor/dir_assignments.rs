@@ -66,10 +66,11 @@ pub(super) trait AssignDirsReporter: Send + Sync {
     ) -> Result<(), String>;
 }
 
-#[derive(Default)]
+/// Sends the report over the controller leader's CONTROLLER listener, the
+/// endpoint KIP-919 puts api key 73 on, through the same authenticated dialer
+/// the raft transport reaches its peers with.
 pub(super) struct NetworkAssignDirsReporter {
-    pub(super) dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
-    pub(super) frame_max: krabka_client_core::ClientFrameMax,
+    pub(super) dialer: crate::controller_endpoint::ControllerDialer,
 }
 
 #[async_trait::async_trait]
@@ -80,14 +81,7 @@ impl AssignDirsReporter for NetworkAssignDirsReporter {
         client_id: &str,
         req: krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
     ) -> Result<(), String> {
-        crate::assign_dirs::send_assignments_with_policy(
-            controller,
-            client_id,
-            req,
-            self.dispatch_queue_capacity,
-            self.frame_max,
-        )
-        .await
+        crate::assign_dirs::send_assignments(controller, &self.dialer, client_id, req).await
     }
 }
 
@@ -147,13 +141,28 @@ mod tests {
         test_support::{StaticMetadataSource, image_with, partition_record, supervisor_fixture},
     };
 
+    /// A reporter that dials a plaintext controller listener and knows no
+    /// statically configured quorum.
+    fn plaintext_reporter() -> NetworkAssignDirsReporter {
+        NetworkAssignDirsReporter {
+            dialer: crate::controller_endpoint::ControllerDialer {
+                outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(
+                    None, None,
+                )),
+                listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+                server_name: "localhost".to_owned(),
+                quorum_voters: Vec::new(),
+            },
+        }
+    }
+
     #[tokio::test]
     async fn network_reporter_send_propagates_controller_resolution_errors() {
         // The real network reporter must surface send_assignments' error
         // (here: no controller leader elected), not swallow it into Ok(()).
         let source: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(StaticMetadataSource::new(MetadataImage::new(Uuid::nil())));
-        let err = NetworkAssignDirsReporter::default()
+        let err = plaintext_reporter()
             .send(
                 &source,
                 "test",

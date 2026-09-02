@@ -7,8 +7,15 @@
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
+use krabka_verified::{
+    FreezeMutationKind,
+    reassignment::{ReassignmentAction, reassignment_action},
+};
 
-use crate::heartbeat::controller_state::ControllerLivenessState;
+use crate::{
+    freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
+    heartbeat::controller_state::ControllerLivenessState,
+};
 
 /// Remaps a partition's `directories` vector onto a new `replicas` order. A
 /// KIP-455 reassignment changes both the replica membership and the order.
@@ -51,26 +58,35 @@ pub(crate) fn reassign_one(
         .filter(|r| !pr.removing_replicas.contains(r))
         .copied()
         .collect();
-    if !pr.adding_replicas.iter().all(|n| pr.isr.contains(n)) {
-        return None; // wait for replication
-    }
-    if pr.removing_replicas.contains(&pr.leader) {
-        // Leader-handoff phase: pick a new leader from target ∩ isr ∩ alive.
-        let new_leader = *target
-            .iter()
-            .find(|n| pr.isr.contains(n) && alive.contains(n))?;
+    let eligible_handoffs: Vec<bool> = target
+        .iter()
+        .map(|n| pr.isr.contains(n) && alive.contains(n))
+        .collect();
+    let action = reassignment_action(
+        pr.adding_replicas.iter().all(|n| pr.isr.contains(n)),
+        pr.removing_replicas.contains(&pr.leader),
+        &eligible_handoffs,
+    );
+    if let ReassignmentAction::Handoff(index) = action {
+        // The verified index maps to target ∩ ISR ∩ alive.
+        let new_leader = target[index];
+        let leader_epoch = crate::metadata_epoch::next_leader(pr.leader_epoch)?;
+        let partition_epoch = crate::metadata_epoch::next_i32(pr.partition_epoch)?;
         return Some(PartitionRecord {
             topic: pr.topic.clone(),
             partition: pr.partition,
             leader: new_leader,
-            leader_epoch: pr.leader_epoch.next(),
+            leader_epoch,
             replicas: pr.replicas.clone(),
             isr: pr.isr.clone(),
             adding_replicas: pr.adding_replicas.clone(),
             removing_replicas: pr.removing_replicas.clone(),
             directories: pr.directories.clone(),
-            partition_epoch: pr.partition_epoch + 1,
+            partition_epoch,
         });
+    }
+    if action != ReassignmentAction::Complete {
+        return None;
     }
     // Completion phase: switch to the target replica set.
     let new_isr: Vec<NodeId> = pr
@@ -80,6 +96,7 @@ pub(crate) fn reassign_one(
         .copied()
         .collect();
     let new_directories = remap_directories(&pr.replicas, &pr.directories, &target);
+    let partition_epoch = crate::metadata_epoch::next_i32(pr.partition_epoch)?;
     Some(PartitionRecord {
         topic: pr.topic.clone(),
         partition: pr.partition,
@@ -90,13 +107,20 @@ pub(crate) fn reassign_one(
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: new_directories,
-        partition_epoch: pr.partition_epoch + 1,
+        partition_epoch,
     })
 }
 
 /// Pure logic. It scans every in-flight reassignment, and produces a
 /// completion record or a leader-handoff record for each one that is ready to
-/// advance.
+/// advance, followed by the KIP-966 eligible-leader state those records imply.
+///
+/// A completion narrows the ISR to the target replicas and drops the rest of
+/// the replica set, so it is an ISR shrink and a replica-set change at once.
+/// [`ElrPublisher`](crate::elr::ElrPublisher) rides the same batch, the way it
+/// does on every other path that moves an ISR: without it a replica the
+/// partition no longer has could stay in the ELR that
+/// `DescribeTopicPartitions` reports.
 pub(crate) async fn compute_reassignment_progress(
     image: &MetadataImage,
     liveness: &ControllerLivenessState,
@@ -111,10 +135,22 @@ pub(crate) async fn compute_reassignment_progress(
         .map(NodeId)
         .collect();
     for pr in image.reassignments_in_flight() {
+        if matches!(
+            resolve_freeze_mutation(
+                image,
+                &pr.topic,
+                true,
+                FreezeMutationKind::ReassignmentCompletion,
+            ),
+            FreezeMutationResolution::Frozen(_)
+        ) {
+            continue;
+        }
         if let Some(next) = reassign_one(pr, &alive) {
             updates.push(MetadataRecord::V1Partition(next));
         }
     }
+    crate::elr::ElrPublisher::new(image).extend(&mut updates);
     updates
 }
 
@@ -123,7 +159,10 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_metadata::{
+        BrokerRegistrationRecord, MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord,
+        TopicRecord,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -186,6 +225,95 @@ mod tests {
         check!(pr.leader == 1);
         check!(pr.leader_epoch == krabka_metadata::LeaderEpoch(5));
         check!(pr.partition_epoch == 1);
+    }
+
+    /// KIP-966: a completion is an ISR shrink and a replica-set change at
+    /// once, so the eligible-leader state moves with it in the same batch.
+    /// Without the publisher on this path a replica the partition no longer
+    /// has would stay in the ELR `DescribeTopicPartitions` reports.
+    #[tokio::test]
+    async fn a_completion_republishes_the_eligible_leader_state() {
+        for (label, isr, published, want) in [
+            (
+                "a completion that reaches min ISR tombstones the key",
+                &[1u64, 2u64][..],
+                "0:3:",
+                None,
+            ),
+            (
+                "a dropped replica leaves the ELR for the last-known set",
+                &[1u64][..],
+                "0:3:",
+                Some("0::3"),
+            ),
+        ] {
+            // replicas=[1,2,3], removing=[3]: the completion drops broker 3
+            // from the replica set, and the published ELR still names it.
+            let mut image = std::sync::Arc::try_unwrap(img(&[1, 2, 3], isr, &[], &[3], 1))
+                .expect("the fixture holds the only reference");
+            image.apply(&MetadataRecord::V1TopicConfig(
+                krabka_metadata::TopicConfigRecord {
+                    topic: "foo".into(),
+                    overrides: [
+                        (
+                            crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                            "3".to_string(),
+                        ),
+                        (
+                            crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+                            published.to_string(),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ));
+            let l = liveness(&[1, 2, 3]).await;
+
+            let updates = compute_reassignment_progress(&image, &l).await;
+
+            let mut overrides = std::collections::BTreeMap::from([(
+                crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                "3".to_string(),
+            )]);
+            if let Some(value) = want {
+                overrides.insert(
+                    crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+                    value.to_string(),
+                );
+            }
+            check!(
+                updates[1..]
+                    == [MetadataRecord::V1TopicConfig(
+                        krabka_metadata::TopicConfigRecord {
+                            topic: "foo".into(),
+                            overrides,
+                        }
+                    )],
+                "{label}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn freeze_allows_completion_of_an_already_accepted_reassignment() {
+        let mut image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
+        Arc::make_mut(&mut image).apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+            scope: "foo".into(),
+            pattern_type: PatternType::Literal,
+            frozen: true,
+            reason: "DR cutover".into(),
+            set_by: "User:alice".into(),
+            set_at_ms: 10,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }));
+        let l = liveness(&[1, 2, 3]).await;
+
+        let completed = compute_reassignment_progress(&image, &l).await;
+        assert!(completed.len() == 1);
+        check!(first_partition(&completed[0]).replicas == vec![NodeId(1), NodeId(3)]);
     }
 
     #[tokio::test]
@@ -255,6 +383,20 @@ mod tests {
         check!(pr.partition_epoch == 1);
         check!(pr.adding_replicas == vec![NodeId(3)]);
         check!(pr.removing_replicas == vec![NodeId(2)]);
+    }
+
+    #[test]
+    fn exhausted_epochs_block_reassignment_transitions() {
+        let image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 2);
+        let mut record = image.partition("foo", 0).expect("seeded partition").clone();
+        let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
+
+        record.partition_epoch = i32::MAX;
+        assert!(reassign_one(&record, &alive).is_none());
+
+        record.partition_epoch = 0;
+        record.leader_epoch = krabka_metadata::LeaderEpoch(i32::MAX);
+        assert!(reassign_one(&record, &alive).is_none());
     }
 
     #[tokio::test]

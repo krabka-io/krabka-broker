@@ -1,0 +1,29 @@
+(* #"/workspace/crates/verified/src/quota.rs" 144 0 144 75 *)
+
+let%span squota = "/workspace/crates/verified/src/quota.rs" 140 10 140 55
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 141 10 141 71
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 142 10 142 69
+
+use creusot.prelude.Any
+
+type t_IpQuotaPrecedence = Exact | Default | None
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let ip_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 144 0 144 75] (exact: bool) (default: bool)
+  (return (x: t_IpQuotaPrecedence)) = (! bb0
+  [ bb0 = any [ br0 -> {exact = false} (! bb2) | br1 -> {exact} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Exact ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {default = false} (! bb4) | br1 -> {default} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- Default ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_IpQuotaPrecedence = Any.any_l () | & exact: bool = exact | & default: bool = default ])
+  [ return (result: t_IpQuotaPrecedence) ->
+  {[@stop_split] [@expl:ip_quota_precedence ensures] ([@stop_split] [@expl:ip_quota_precedence ensures #0] [%#squota] (result
+        = Exact)
+      = exact)
+    /\ ([@stop_split] [@expl:ip_quota_precedence ensures #1] [%#squota'0] (result = Default) = (not exact /\ default))
+    /\ ([@stop_split] [@expl:ip_quota_precedence ensures #2] [%#squota'1] (result = None) = (not exact /\ not default))}
+    (! return {result}) ]

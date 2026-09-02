@@ -85,12 +85,12 @@ impl crate::delegation_token_cleanup::DelegationTokenController
         self.handle.current_image()
     }
 
-    async fn submit_change(
+    async fn submit_mutations(
         &self,
-        records: Vec<krabka_metadata::MetadataRecord>,
+        mutations: Vec<krabka_raft::DelegationTokenMutation>,
     ) -> Result<(), String> {
         self.handle
-            .submit_change(records)
+            .submit_delegation_token_mutations(mutations)
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -242,9 +242,9 @@ mod tests {
 
         let cleanup = DelegationTokenCleanupControllerAdapter { handle: source };
         assert!(
-            crate::delegation_token_cleanup::DelegationTokenController::submit_change(
+            crate::delegation_token_cleanup::DelegationTokenController::submit_mutations(
                 &cleanup,
-                vec![record],
+                Vec::new(),
             )
             .await
             .is_err()

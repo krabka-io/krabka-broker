@@ -1,0 +1,44 @@
+(* #"/proof-work-229/crates/verified/src/reassignment.rs" 56 0 64 9 *)
+
+let%span sreassignment = "/proof-work-229/crates/verified/src/reassignment.rs" 68 12 68 49
+let%span sreassignment'0 = "/proof-work-229/crates/verified/src/reassignment.rs" 70 12 70 68
+let%span sreassignment'1 = "/proof-work-229/crates/verified/src/reassignment.rs" 65 4 71 9
+let%span sreassignment'2 = "/proof-work-229/crates/verified/src/reassignment.rs" 42 10 50 1
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reassignment_plan_admission [#"/proof-work-229/crates/verified/src/reassignment.rs" 56 0 64 9] (is_cancel: bool)
+  (target_nonempty_unique_registered: bool) (rf_policy_satisfied: bool) (cancel_approved: bool)
+  (cancel_in_progress: bool) (leader_eligible: bool) (epoch_available: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {leader_eligible = false} (! bb3) | br1 -> {leader_eligible} (! bb1) ]
+  | bb1 = any [ br0 -> {epoch_available = false} (! bb3) | br1 -> {epoch_available} (! bb2) ]
+  | bb2 = any [ br0 -> {is_cancel = false} (! bb8) | br1 -> {is_cancel} (! bb4) ]
+  | bb4 = any [ br0 -> {cancel_approved = false} (! bb6) | br1 -> {cancel_approved} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- cancel_in_progress ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- [%#sreassignment] false ] s1 | s1 = return {_ret} ]
+  | bb8 = any
+    [ br0 -> {target_nonempty_unique_registered = false} (! bb10) | br1 -> {target_nonempty_unique_registered} (! bb9) ]
+  | bb9 = s0 [ s0 = [ &_ret <- rf_policy_satisfied ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- [%#sreassignment'0] false ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#sreassignment'1] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & is_cancel: bool = is_cancel
+  | & target_nonempty_unique_registered: bool = target_nonempty_unique_registered
+  | & rf_policy_satisfied: bool = rf_policy_satisfied
+  | & cancel_approved: bool = cancel_approved
+  | & cancel_in_progress: bool = cancel_in_progress
+  | & leader_eligible: bool = leader_eligible
+  | & epoch_available: bool = epoch_available ])
+  [ return (result: bool) -> {[@stop_split] [@expl:reassignment_plan_admission ensures] [%#sreassignment'2] result
+    = (leader_eligible
+    /\ epoch_available
+    /\ (if is_cancel then
+      cancel_approved /\ cancel_in_progress
+    else
+      target_nonempty_unique_registered /\ rf_policy_satisfied
+    ))}
+    (! return {result}) ]

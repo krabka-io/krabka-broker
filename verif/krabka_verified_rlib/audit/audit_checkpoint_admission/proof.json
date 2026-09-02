@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_audit_checkpoint_admission": {
+        "prover": "alt-ergo",
+        "time": 0.012
+      }
+    }
+  }
+}

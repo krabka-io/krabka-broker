@@ -2,6 +2,14 @@
 //! controller leader at every configured `heartbeat_interval`. It finds the
 //! current controller in the metadata image, and it retries after transient
 //! errors.
+//!
+//! KIP-919 puts `BrokerHeartbeat` on the controller's CONTROLLER listener, so
+//! the leader's address is the one the raft transport already dials it on --
+//! its KIP-853 voter endpoint -- not a broker registration. A controller-only
+//! node never registers as a broker, so resolving the leader through
+//! `image.broker()` would strand every broker in a role-separated cluster: no
+//! heartbeat would ever arrive, and the controller's liveness registry would
+//! fence the whole cluster one `liveness_tick_interval` after boot.
 
 use std::sync::Arc;
 
@@ -17,12 +25,21 @@ pub(crate) struct Config {
     pub interval: Time,
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
     pub shutdown: CancellationToken,
-    /// Shared inter-broker dialer that reaches the controller leader.
-    /// It runs TLS / SASL when the inter-broker listener needs them.
-    /// If not, it uses plain TCP.
-    pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
-    pub inter_broker_listener_protocol: ListenerProtocol,
-    pub inter_broker_listener_name: String,
+    /// Shared outbound dialer that reaches the controller leader. It runs
+    /// TLS / SASL when the controller listener needs them. If not, it uses
+    /// plain TCP. This is the same dialer the raft transport uses to reach
+    /// its peers, so a heartbeat travels the channel the quorum already
+    /// authenticates on.
+    pub outbound_client: Arc<crate::network::client::InterBrokerClient>,
+    pub controller_listener_protocol: ListenerProtocol,
+    /// SNI and SASL server name for the controller listener, matching the one
+    /// the raft dialer presents.
+    pub controller_server_name: String,
+    /// The statically configured quorum, `controller_quorum_voters`. It backs
+    /// the voter set as a source of the leader's address, for the window
+    /// before the committed voter set names it. See
+    /// [`crate::controller_endpoint::leader_endpoint`].
+    pub controller_quorum_voters: Vec<(krabka_raft::NodeId, String)>,
     /// When `true`, the client stamps `want_shut_down=true` on outbound
     /// `BrokerHeartbeat` requests.
     /// [`crate::BrokerHandle::controlled_shutdown`] drives this flag.
@@ -127,9 +144,8 @@ pub(crate) async fn run(mut cfg: Config) {
             trigger_all_dirs_offline_shutdown(&mut cfg, "detected before controller resolution");
             return;
         }
-        // Resolve current controller leader's listen address from
-        // the metadata image (via brokers() iteration), or skip this
-        // tick if not yet known.
+        // Resolve the current controller leader's CONTROLLER-listener address
+        // from the metadata image, or skip this tick if it is not known yet.
         let leader_id = *cfg.controller.watch_leader().borrow();
         let Some(leader_id) = leader_id else {
             debug!("heartbeat: no controller leader yet");
@@ -145,30 +161,26 @@ pub(crate) async fn run(mut cfg: Config) {
             );
             continue;
         };
-        let Some(broker_rec) = image.broker(leader_id) else {
-            debug!("heartbeat: controller leader not in metadata image yet");
+        let Some((host, port)) = crate::controller_endpoint::leader_endpoint(
+            &image,
+            &cfg.controller_quorum_voters,
+            leader_id,
+        ) else {
+            debug!(
+                leader = leader_id.0,
+                "heartbeat: controller leader has no known controller endpoint yet"
+            );
             continue;
         };
-        // Prefer the inter-broker listener's endpoint when available;
-        // fall back to the legacy top-level host/port. Mirrors the
-        // resolution in the replicator supervisor.
-        let (host, port) = broker_rec
-            .endpoints
-            .iter()
-            .find(|e| e.name == cfg.inter_broker_listener_name)
-            .map_or_else(
-                || (broker_rec.host.clone(), broker_rec.port),
-                |e| (e.host.clone(), e.port),
-            );
         let opts = heartbeat_connection_options(cfg.broker_id, cfg.interval);
         let rpc_timeout = heartbeat_rpc_timeout(cfg.interval);
         let client_res = tokio::time::timeout(
             rpc_timeout.to_std(),
-            cfg.inter_broker_client.connect_as_connection(
+            cfg.outbound_client.connect_as_connection(
                 &host,
                 port,
-                cfg.inter_broker_listener_protocol,
-                "localhost",
+                cfg.controller_listener_protocol,
+                &cfg.controller_server_name,
                 opts,
             ),
         )

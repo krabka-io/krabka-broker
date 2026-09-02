@@ -30,7 +30,7 @@ The only symptom today is the one KFC-1's [Metrics](KFC-1-deliver-at-time-visibi
 
 The broker has no clock abstraction that could report confidence. A grep for a `Clock` trait across `crates/` finds no definition at all. Three separate time sources sit in the tree instead.
 
-`crates/broker/src/delivery/` and `crates/broker/tests/deliver_at_time.rs` use the external `qubit_clock::Clock` trait. `crates/broker/src/fetch_session.rs` and `crates/throttle/src/runtime.rs` use `qubit_clock::NanoMonotonicClock`. `crates/broker/src/heartbeat/controller_state.rs` declares a private `enum Clock` with a `Real` variant and a test variant, for liveness tracking alone. Each of them returns an instant. None of them returns how good that instant is.
+`crates/broker/src/delivery/` and `crates/broker/tests/deliver_at_time.rs` use the external `qubit_clock::WallClock` trait. `crates/broker/src/fetch_session/` and `crates/throttle/src/runtime.rs` use `qubit_clock::MonotonicClock`, whose `StdMonotonicClock` implementation is the production one. `crates/broker/src/heartbeat/controller_state.rs` declares a private `enum Clock` with a `Real` variant and a test variant, for liveness tracking alone. Each of them returns an instant. None of them returns how good that instant is.
 
 Until this KFC the broker also published nothing an alert could compare against. `krabka-telemetry` builds an OTLP pipeline for spans and logs, and its `opentelemetry-otlp` dependency names the `trace` and `logs` features and not `metrics`. Broker metrics go out through `prometheus_client` in `crates/broker/src/metrics.rs`, and no series there carried the declared bound. This KFC adds one, so a rule reads the bound the broker relies on instead of a copy of it.
 

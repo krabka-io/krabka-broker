@@ -45,29 +45,32 @@ pub(crate) fn remote_retention_eviction_set(
     retention_size: Option<ByteSize>,
     now_ms: i64,
 ) -> Vec<RemoteLogSegmentMetadata> {
-    if archive == ArchiveMode::WriteOnce {
-        return Vec::new();
-    }
     let total: ByteSize = finished
         .iter()
         .map(segment_size)
         .fold(NO_BYTES, |acc, size| acc + size);
-    let mut size_to_reclaim =
-        retention_size.map_or(NO_BYTES, |budget| (total - budget).max(NO_BYTES));
-    let mut out = Vec::new();
-    for md in finished {
-        let age = Time::from_millis(now_ms.saturating_sub(md.max_timestamp_ms()));
-        let by_time = matches!(retention, Some(window) if age > window);
-        let by_size = size_to_reclaim > NO_BYTES;
-        if !(by_time || by_size) {
-            break;
-        }
-        if by_size {
-            size_to_reclaim = (size_to_reclaim - segment_size(md)).max(NO_BYTES);
-        }
-        out.push(md.clone());
-    }
-    out
+    let size_to_reclaim = retention_size.map_or(NO_BYTES, |budget| (total - budget).max(NO_BYTES));
+    let time_expired: Vec<bool> = finished
+        .iter()
+        .map(|md| {
+            let max_timestamp_ms = md.max_timestamp_ms();
+            let age = Time::from_millis(now_ms.saturating_sub(max_timestamp_ms));
+            max_timestamp_ms != -1 && matches!(retention, Some(window) if age > window)
+        })
+        .collect();
+    let sizes: Vec<u64> = finished
+        .iter()
+        .map(|md| segment_size(md).bytes_u64())
+        .collect();
+    let finished_flags = vec![true; finished.len()];
+    let prefix = krabka_verified::retention::retention_prefix(
+        archive != ArchiveMode::WriteOnce,
+        &finished_flags,
+        &time_expired,
+        &sizes,
+        size_to_reclaim.bytes_u64(),
+    );
+    finished.iter().take(prefix.len).cloned().collect()
 }
 
 /// The remote metadata's `segment_size_in_bytes` (a wire `int32`) as a

@@ -9,7 +9,7 @@ use crate::config::test_support::{RuntimeInvalidator, assert_invalid_runtime, ba
 
 #[test]
 fn rejects_non_positive_runtime_scalars() {
-    let cases: [RuntimeInvalidator; 22] = [
+    let cases: [RuntimeInvalidator; 23] = [
         ("startup_leader_wait_timeout", |c| {
             c.startup_leader_wait_timeout = <Time as TimeExt>::ZERO;
         }),
@@ -24,6 +24,9 @@ fn rejects_non_positive_runtime_scalars() {
         }),
         ("diskless_wal_flush_max_size", |c| {
             c.diskless_wal_flush_max_size = <ByteSize as ByteSizeExt>::ZERO;
+        }),
+        ("diskless_wal_hot_tail_max_size", |c| {
+            c.diskless_wal_hot_tail_max_size = <ByteSize as ByteSizeExt>::ZERO;
         }),
         ("client_metrics_default_interval", |c| {
             c.client_metrics_default_interval = <Time as TimeExt>::ZERO;
@@ -280,4 +283,68 @@ fn metadata_snapshot_fetch_max_cannot_raise_the_core_security_ceiling() {
 
     let error = cfg.validate().expect_err("over-ceiling limit must fail");
     assert!(error.to_string().contains("metadata_snapshot_fetch_max"));
+}
+
+/// The whole-config check `Broker::start` runs states the same bounds on the
+/// two KIP-98 expiry knobs that the file-config validator does, because an
+/// embedding caller that builds a `BrokerConfig` in process never passes
+/// through that validator.
+///
+/// Both keys are `ConfigDef.Type::INT` in Kafka, so the value the sweep runs
+/// on has to be a whole number of milliseconds an `i32` holds -- otherwise
+/// `DescribeConfigs` saturates and reports an expiry the broker is not using.
+/// The expiry itself must run (Kafka's `atLeast(1)`); zero on the cadence
+/// disables the sweep and is accepted.
+#[test]
+fn rejects_expiry_settings_outside_the_kafka_int_millisecond_range() {
+    let cases: [RuntimeInvalidator; 6] = [
+        ("txn_id_expiration must be within 1ms..=2147483647ms", |c| {
+            c.txn_id_expiration = <Time as TimeExt>::ZERO;
+        }),
+        ("txn_id_expiration must be within 1ms..=2147483647ms", |c| {
+            c.txn_id_expiration = <Time as TimeExt>::from_millis(i64::from(i32::MAX) + 1);
+        }),
+        (
+            "txn_id_expiration must be a whole number of milliseconds",
+            |c| {
+                c.txn_id_expiration = nanos(1_500_000);
+            },
+        ),
+        (
+            "txn_id_expiration_cleanup_interval must be within 0ms..=2147483647ms",
+            |c| {
+                c.txn_id_expiration_cleanup_interval =
+                    <Time as TimeExt>::from_millis(i64::from(i32::MAX) + 1);
+            },
+        ),
+        (
+            "txn_id_expiration_cleanup_interval must be a whole number of milliseconds",
+            |c| {
+                c.txn_id_expiration_cleanup_interval = nanos(1_500_000);
+            },
+        ),
+        (
+            "txn_id_expiration_cleanup_interval must be within 0ms..=2147483647ms",
+            |c| {
+                c.txn_id_expiration_cleanup_interval = <Time as TimeExt>::from_millis(-1);
+            },
+        ),
+    ];
+
+    for (expected, invalidate) in cases {
+        let mut config = BrokerConfig::default();
+        invalidate(&mut config);
+        assert_invalid_runtime(&config, expected);
+    }
+}
+
+/// A zero cadence disables the sweep, so it is a value the whole-config check
+/// must accept, and the default expiry has to pass its own bound.
+#[test]
+fn a_disabled_expiry_sweep_and_the_kafka_defaults_validate() {
+    let config = BrokerConfig {
+        txn_id_expiration_cleanup_interval: <Time as TimeExt>::ZERO,
+        ..base()
+    };
+    assert!(config.validate().is_ok());
 }

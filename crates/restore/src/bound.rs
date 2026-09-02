@@ -20,10 +20,15 @@
 use std::collections::{HashMap, HashSet};
 
 use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::{RecordBatchBorrowed, RecordBorrowed};
+use krabka_protocol::records::{
+    RecordBatchBorrowed, RecordBatchHeader, RecordBorrowed, RecordsError,
+};
 use regex::Regex;
 
-use crate::args::{HeaderPattern, PartitionRef};
+use crate::{
+    args::{HeaderPattern, PartitionRef},
+    error::RestoreError,
+};
 
 mod compile;
 
@@ -102,27 +107,33 @@ impl Predicates {
         self.to_offset.get(partition).copied()
     }
 
+    /// Whether this batch and every later ordered batch start past the
+    /// partition's inclusive offset bound.
+    #[must_use]
+    pub fn batch_past_offset_bound(&self, partition: &PartitionRef, batch_base: Offset) -> bool {
+        let (applies, bound) = self
+            .offset_bound(partition)
+            .map_or((false, 0), |bound| (true, bound.0));
+        krabka_verified::restore_batch_past_offset_bound(batch_base.0, applies, bound)
+    }
+
     /// Decide the fate of one archived batch.
     ///
-    /// The caller applies [`Self::offset_bound`] first and stops walking the
-    /// partition once a batch's base offset is past it; this method only
-    /// judges the exclude predicates against a batch that is within bound, so
-    /// its answer is never [`BatchDecision::Empty`] on that account alone.
+    /// The caller applies [`Self::batch_past_offset_bound`] first and stops
+    /// walking the partition once a batch's base offset is past it. A batch
+    /// that straddles the inclusive offset bound is still decoded here so only
+    /// its records at or below the bound survive.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if a record inside `batch` fails to parse. A batch reaches this
-    /// method only after `crate::verify::verify_segment` has checked its CRC
-    /// over the raw body, and a body whose CRC matches the bytes the
-    /// producer wrote parses record by record without error; a parse failure
-    /// here would mean corruption the CRC check missed, which its own
-    /// guarantee rules out.
-    #[must_use]
+    /// While evaluating an applicable record predicate, returns an integrity
+    /// error if a record fails to parse, lies outside the batch's declared
+    /// offset range, or its absolute offset or timestamp cannot be represented.
     pub fn decide_batch(
         &self,
         partition: &PartitionRef,
         batch: &RecordBatchBorrowed<'_>,
-    ) -> BatchDecision {
+    ) -> Result<BatchDecision, RestoreError> {
         // A control batch carries a transaction commit or abort marker, not
         // operator data -- no exclude predicate is about transaction
         // bookkeeping, and an operator writing `--exclude-producer-id` for a
@@ -130,33 +141,26 @@ impl Predicates {
         // that the same id also names the marker that closes out that
         // producer's transaction. Filtering or emptying a control batch would
         // silently corrupt the restored partition's transaction state, which
-        // is a worse outcome than restoring one record the operator meant to
-        // exclude. The offset it claims is unaffected either way: the caller
-        // applies `--to-offset`/`--to-timestamp` tail truncation before ever
-        // calling this, so a control batch past that bound is still dropped
-        // by not being written at all, exactly like any other batch.
+        // is a worse outcome than retaining marker metadata past a timestamp
+        // bound. The caller still stops before a control batch whose base is
+        // past `--to-offset`; a valid Kafka control batch carries its one
+        // marker at that base.
         if batch.attributes().is_control_batch() {
-            return BatchDecision::Keep;
+            return Ok(BatchDecision::Keep);
         }
 
         if self.keeps_everything_in(partition) {
-            return BatchDecision::Keep;
+            return Ok(BatchDecision::Keep);
         }
 
         let header = batch.header();
         let producer_id = ProducerId(header.producer_id.get());
-        let base_offset = header.base_offset.get();
-        let base_timestamp = header.base_timestamp.get();
 
         let mut saw_keep = false;
         let mut saw_drop = false;
         for parsed in batch {
-            let record = parsed.expect(
-                "a batch already checked by verify_segment's CRC parses record by record \
-                 without error",
-            );
-            let offset = Offset(base_offset + i64::from(record.offset_delta));
-            let timestamp_ms = base_timestamp + record.timestamp_delta;
+            let record = parsed?;
+            let (offset, timestamp_ms) = record_coordinates(header, &record)?;
             match self.decide_record(partition, offset, timestamp_ms, producer_id, &record) {
                 RecordDecision::Keep => saw_keep = true,
                 RecordDecision::Drop => saw_drop = true,
@@ -166,16 +170,11 @@ impl Predicates {
             // record during the actual rewrite either way, so nothing here is
             // worth precomputing.
             if saw_keep && saw_drop {
-                return BatchDecision::Filter;
+                return Ok(batch_decision(saw_keep, saw_drop));
             }
         }
-        if saw_drop {
-            BatchDecision::Empty
-        } else {
-            // Covers both "no record was dropped" and "the batch holds no
-            // records", which filter_batch also treats as unchanged.
-            BatchDecision::Keep
-        }
+        // No drops, including an empty batch, stays byte-identical.
+        Ok(batch_decision(saw_keep, saw_drop))
     }
 
     /// Whether no exclude predicate could possibly touch a record in
@@ -185,6 +184,7 @@ impl Predicates {
     /// all.
     fn keeps_everything_in(&self, partition: &PartitionRef) -> bool {
         self.to_timestamp.is_none()
+            && !self.to_offset.contains_key(partition)
             && self.exclude_key.is_empty()
             && self.exclude_header.is_empty()
             && self.exclude_producer_id.is_empty()
@@ -198,13 +198,11 @@ impl Predicates {
     /// `partition`, `producer_id` is named by `--exclude-producer-id`,
     /// `record.key` matches an `--exclude-key` pattern, or one of `record`'s
     /// headers matches an `--exclude-header NAME=REGEX` pattern by name and
-    /// value. A record with `key: None` never matches a key pattern, and a
-    /// header whose value is absent never matches a header pattern; neither
-    /// is treated as matching an empty string. `timestamp_ms >= bound` is the
-    /// only timestamp check, on the global `--to-timestamp` bound; it never
-    /// reads `partition`, and it uses the identical `>=` comparison
-    /// [`Self::decide_batch`] would need if it judged a record's timestamp
-    /// itself, so the two can never disagree about the same record.
+    /// value. A record is also dropped when it is above the partition's
+    /// inclusive `--to-offset` bound or at or after the global exclusive
+    /// `--to-timestamp` bound. A record with `key: None` never matches a key
+    /// pattern, and a header whose value is absent never matches a header
+    /// pattern; neither is treated as matching an empty string.
     ///
     /// `--exclude-key` and `--exclude-header` match the raw bytes only when
     /// those bytes are valid UTF-8. `regex::Regex::is_match` takes `&str`,
@@ -220,28 +218,22 @@ impl Predicates {
         producer_id: ProducerId,
         record: &RecordBorrowed<'_>,
     ) -> RecordDecision {
-        if self.to_timestamp.is_some_and(|bound| timestamp_ms >= bound) {
-            return RecordDecision::Drop;
-        }
-        if self.exclude_producer_id.contains(&producer_id) {
-            return RecordDecision::Drop;
-        }
+        let (offset_bound_applies, offset_bound) = self
+            .offset_bound(partition)
+            .map_or((false, 0), |bound| (true, bound.0));
+        let (timestamp_bound_applies, timestamp_bound) =
+            self.to_timestamp.map_or((false, 0), |bound| (true, bound));
+        let producer_excluded = self.exclude_producer_id.contains(&producer_id);
         let offset_excluded = self.exclude_offset.get(partition).is_some_and(|ranges| {
             ranges
                 .iter()
                 .any(|&(start, end_exclusive)| offset >= start && offset < end_exclusive)
         });
-        if offset_excluded {
-            return RecordDecision::Drop;
-        }
-        if let Some(key) = record.key
-            && self
-                .exclude_key
+        let key_excluded = record.key.is_some_and(|key| {
+            self.exclude_key
                 .iter()
                 .any(|pattern| matches_utf8(pattern, key))
-        {
-            return RecordDecision::Drop;
-        }
+        });
         let header_excluded = record.headers.iter().any(|header| {
             self.exclude_header.iter().any(|candidate| {
                 candidate.name == header.key
@@ -250,12 +242,59 @@ impl Predicates {
                         .is_some_and(|value| matches_utf8(&candidate.pattern, value))
             })
         });
-        if header_excluded {
-            RecordDecision::Drop
-        } else {
+        if krabka_verified::restore_record_selected(
+            offset.0,
+            offset_bound_applies.then_some(offset_bound),
+            timestamp_ms,
+            timestamp_bound_applies.then_some(timestamp_bound),
+            (
+                producer_excluded,
+                offset_excluded,
+                key_excluded,
+                header_excluded,
+            ),
+        ) {
             RecordDecision::Keep
+        } else {
+            RecordDecision::Drop
         }
     }
+}
+
+fn batch_decision(saw_keep: bool, saw_drop: bool) -> BatchDecision {
+    match krabka_verified::restore_batch_filter_decision(saw_keep, saw_drop) {
+        krabka_verified::RestoreFilterDecision::Keep => BatchDecision::Keep,
+        krabka_verified::RestoreFilterDecision::Empty => BatchDecision::Empty,
+        krabka_verified::RestoreFilterDecision::Filter => BatchDecision::Filter,
+    }
+}
+
+/// Validate and adapt one decoded record's primitive coordinates at the
+/// verified boundary.
+pub(crate) fn record_coordinates(
+    header: &RecordBatchHeader,
+    record: &RecordBorrowed<'_>,
+) -> Result<(Offset, i64), RestoreError> {
+    krabka_verified::restore_record_coordinates(
+        header.base_offset.get(),
+        header.last_offset_delta.get(),
+        header.base_timestamp.get(),
+        record.offset_delta,
+        record.timestamp_delta,
+    )
+    .map(|(offset, timestamp)| (Offset(offset), timestamp))
+    .ok_or_else(|| {
+        RecordsError::RecordParse(format!(
+            "record coordinates are outside the batch: base offset {}, last offset delta {}, \
+             record offset delta {}, base timestamp {}, record timestamp delta {}",
+            header.base_offset.get(),
+            header.last_offset_delta.get(),
+            record.offset_delta,
+            header.base_timestamp.get(),
+            record.timestamp_delta,
+        ))
+        .into()
+    })
 }
 
 /// Whether `bytes` is valid UTF-8 and `pattern` matches the decoded text.

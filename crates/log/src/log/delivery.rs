@@ -49,15 +49,22 @@ impl Log {
             };
         }
 
+        let start = self.log_start_offset();
         let end = self.log_end_offset();
         let cursor = self.bounded_watermark();
-        let active_through_ms = now_ms.saturating_sub(uncertainty_ms);
 
         if cursor == self.delivery_watermark {
             match self.delivery_pending_ms {
                 // The batch that stopped the last walk is still waiting, and
                 // no walk can get past it, so the watermark cannot have moved.
-                Some(activation_ms) if activation_ms > active_through_ms => {
+                Some(activation_ms)
+                    if !delivery::batch_is_deliverable(
+                        DeliveryPolicy::Scheduled,
+                        uncertainty_ms,
+                        activation_ms,
+                        now_ms,
+                    ) =>
+                {
                     return DeliveryAdvance {
                         watermark: cursor,
                         next_deadline_ms: Some(delivery::visible_at_ms(
@@ -77,7 +84,18 @@ impl Log {
             }
         }
 
-        let (watermark, pending_ms) = self.walk_activation(cursor, end, active_through_ms);
+        let (candidate, pending_ms) = self.walk_activation(cursor, end, uncertainty_ms, now_ms);
+        let watermark = Offset(krabka_verified::delivery_watermark_advance(
+            start.0,
+            cursor.0,
+            candidate.0,
+            end.0,
+        ));
+        let pending_ms = if watermark == candidate {
+            pending_ms
+        } else {
+            None
+        };
         self.delivery_watermark = watermark;
         self.delivery_pending_ms = pending_ms;
         DeliveryAdvance {
@@ -136,8 +154,6 @@ impl Log {
         if low > high {
             return Vec::new();
         }
-        let active_through_ms = now_ms.saturating_sub(uncertainty_ms);
-
         let mut ranges: Vec<(Offset, Offset)> = Vec::new();
         let mut cursor = low;
         for segment in self.segments.iter().chain(self.active.as_ref()) {
@@ -147,9 +163,13 @@ impl Log {
             if segment.last_offset() < cursor {
                 continue;
             }
-            if let Err(error) =
-                segment.pending_activation_ranges_into(cursor, high, active_through_ms, &mut ranges)
-            {
+            if let Err(error) = segment.pending_activation_ranges_into(
+                cursor,
+                high,
+                uncertainty_ms,
+                now_ms,
+                &mut ranges,
+            ) {
                 tracing::warn!(
                     %error,
                     base_offset = segment.base_offset().0,
@@ -195,7 +215,8 @@ impl Log {
         &self,
         from: Offset,
         end: Offset,
-        active_through_ms: i64,
+        uncertainty_ms: i64,
+        now_ms: i64,
     ) -> (Offset, Option<i64>) {
         let mut cursor = from;
         for segment in self.segments.iter().chain(self.active.as_ref()) {
@@ -205,7 +226,7 @@ impl Log {
             if segment.last_offset() < cursor {
                 continue;
             }
-            match segment.scan_activation(cursor, active_through_ms) {
+            match segment.scan_activation(cursor, uncertainty_ms, now_ms) {
                 Ok(scan) => {
                     cursor = scan.active_end.max(cursor).min(end);
                     if let Some(activation_ms) = scan.pending_at {

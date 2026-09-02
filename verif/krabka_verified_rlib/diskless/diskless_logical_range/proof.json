@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_diskless_logical_range": { "prover": "z3", "time": 0.013 },
+      "vc_len_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.012 }
+    }
+  }
+}

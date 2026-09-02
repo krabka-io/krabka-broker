@@ -7,13 +7,14 @@
 //! and the batch one request accumulates live in `cancel_approval`, and the
 //! result rows and the encode step live in `response`.
 //!
-//! # KFC-9: a cancel needs two people, and a start does not
+//! # KFC-9: a cancel needs two people, and every alter respects a freeze
 //!
 //! A cancel reverts a reassignment that is already under way, drops every
 //! adding replica, and can move leadership off one. It is one of the
-//! transitions the break-glass two-person rule gates. A start is not: it adds
-//! replicas and removes none until the new ones catch up. **The completion path
-//! in [`crate::reassignment`] is not a cancel either, and it is not gated.**
+//! transitions the break-glass two-person rule gates. A start does not need an
+//! approval, but a live topic freeze refuses starts and cancels alike. The
+//! background completion path in [`crate::reassignment`] uses the same freeze
+//! admission and classifies completion as work the cluster already accepted.
 //!
 //! KIP-455 defines the request that `kafka-reassign-partitions` sends and it
 //! gains no field for this. An operator gets the approval out of band through
@@ -33,6 +34,7 @@ use krabka_protocol::owned::{
         ReassignableTopicResponse,
     },
 };
+use krabka_verified::FreezeMutationKind;
 
 mod cancel_approval;
 mod plan;
@@ -52,6 +54,7 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, POLICY_VIOLATION},
+    freeze::resolve::resolve_freeze_mutation,
     handlers::RequestContext,
 };
 
@@ -99,11 +102,23 @@ pub(crate) async fn handle(
     let mut batch = ReassignBatch::default();
     for topic in &req.topics {
         let mut rows = Vec::with_capacity(topic.partitions.len());
+        let freeze = resolve_freeze_mutation(
+            &image,
+            &topic.name,
+            true,
+            FreezeMutationKind::ReassignmentAlter,
+        );
         for p in &topic.partitions {
-            rows.push(alter_one(&env, &mut batch, &topic.name, p));
+            rows.push(alter_one(&env, &mut batch, &topic.name, p, freeze));
         }
         by_topic.insert(topic.name.clone(), rows);
     }
+
+    // KIP-966: starting or cancelling a reassignment rewrites the replica set
+    // and the ISR with it, so the eligible-leader state the controller keeps
+    // rides the same batch. Without it a cancel can leave a replica the
+    // partition no longer has in the published ELR.
+    crate::elr::ElrPublisher::new(&image).extend(&mut batch.records);
 
     let mut submit_failure = None;
     if !batch.records.is_empty() {

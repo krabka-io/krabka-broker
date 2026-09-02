@@ -3,12 +3,15 @@
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_protocol::records::Record;
+use krabka_protocol::records::{Record, RecordsError};
 
 use super::{
-    test_support::{BASE_TIMESTAMP, batch, decide, header, partition, predicates, record},
+    test_support::{
+        BASE_TIMESTAMP, batch, decide, header, partition, predicates, record, try_decide,
+    },
     *,
 };
+use crate::error::RestoreError;
 
 #[test]
 fn no_predicates_keep_everything() {
@@ -41,6 +44,32 @@ fn to_offset_bound_is_inclusive_at_the_named_offset() {
     check!(predicates.offset_bound(&partition("orders", 0)) == Some(Offset(42)));
     check!(predicates.offset_bound(&partition("orders", 1)).is_none());
     check!(predicates.offset_bound(&partition("other", 0)).is_none());
+    check!(!predicates.batch_past_offset_bound(&partition("orders", 0), Offset(42)));
+    check!(predicates.batch_past_offset_bound(&partition("orders", 0), Offset(43)));
+    check!(!predicates.batch_past_offset_bound(&partition("orders", 1), Offset(i64::MAX)));
+}
+
+#[test]
+fn to_offset_filters_a_batch_that_straddles_the_inclusive_bound() {
+    let predicates = predicates(&["--to-offset", "orders:0=1001"]);
+    let orders_0 = partition("orders", 0);
+    let owned = batch(1, vec![record(0), record(1), record(2)]);
+
+    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
+
+    check!(batch_decision == BatchDecision::Filter);
+    check!(
+        records
+            == [
+                RecordDecision::Keep,
+                RecordDecision::Keep,
+                RecordDecision::Drop,
+            ]
+    );
+
+    let (other_decision, other_records) = decide(&predicates, &partition("orders", 1), &owned);
+    check!(other_decision == BatchDecision::Keep);
+    check!(other_records == [RecordDecision::Keep; 3]);
 }
 
 #[test]
@@ -357,4 +386,56 @@ fn non_utf8_key_bytes_never_match_and_do_not_panic() {
 
     check!(batch_decision == BatchDecision::Keep);
     check!(records == [RecordDecision::Keep]);
+}
+
+#[test]
+fn record_offset_outside_the_declared_batch_is_an_integrity_error() {
+    let predicates = predicates(&["--exclude-key", "never"]);
+    let orders_0 = partition("orders", 0);
+    let mut owned = batch(1, vec![record(1)]);
+    owned.last_offset_delta = 0;
+
+    let error = try_decide(&predicates, &orders_0, &owned).unwrap_err();
+
+    check!(matches!(
+        error,
+        RestoreError::Records(RecordsError::RecordParse(_))
+    ));
+}
+
+#[test]
+fn record_offset_overflow_is_an_integrity_error() {
+    let predicates = predicates(&["--exclude-key", "never"]);
+    let orders_0 = partition("orders", 0);
+    let mut owned = batch(1, vec![record(1)]);
+    owned.base_offset = i64::MAX;
+
+    let error = try_decide(&predicates, &orders_0, &owned).unwrap_err();
+
+    check!(matches!(
+        error,
+        RestoreError::Records(RecordsError::RecordParse(_))
+    ));
+}
+
+#[test]
+fn record_timestamp_overflow_is_an_integrity_error() {
+    let predicates = predicates(&["--to-timestamp", "0"]);
+    let orders_0 = partition("orders", 0);
+    let mut owned = batch(
+        1,
+        vec![Record {
+            timestamp_delta: 1,
+            ..record(0)
+        }],
+    );
+    owned.base_timestamp = i64::MAX;
+    owned.max_timestamp = i64::MAX;
+
+    let error = try_decide(&predicates, &orders_0, &owned).unwrap_err();
+
+    check!(matches!(
+        error,
+        RestoreError::Records(RecordsError::RecordParse(_))
+    ));
 }

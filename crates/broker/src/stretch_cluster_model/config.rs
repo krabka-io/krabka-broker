@@ -32,11 +32,17 @@ const MAX_IMPAIRED_SITES: usize = 2;
 /// The controller failover decision, as a function pointer. The model runs the
 /// real [`failover_one`](crate::leader_election::failover_one) under it. The
 /// RED witness runs [`legacy_elect`](super::red_witness::legacy_elect).
+///
+/// The `&[i32]` is the partition's published eligible-leader-replica set. This
+/// model carries no ELR state, so it is always empty here: what it checks is
+/// the witness rule, and the KIP-966 rung is exercised in
+/// `leader_election::policy`.
 pub type ElectFn = fn(
     &PartitionRecord,
     NodeId,
     &HashSet<NodeId>,
     &HashSet<NodeId>,
+    &[i32],
     RecoveryStrategy,
     bool,
 ) -> FailoverDecision;

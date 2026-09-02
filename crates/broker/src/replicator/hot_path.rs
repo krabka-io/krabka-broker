@@ -94,6 +94,12 @@ impl ReplicaSeam {
                 log_dir,
                 log,
                 writer_tx,
+                // Empty, exactly as `broker::partition_spawn` leaves it: this
+                // seam replicates data batches and never materializes a
+                // transaction marker, so nothing ever reaches this map.
+                marker_materialization: Arc::new(tokio::sync::Mutex::new(
+                    std::collections::HashMap::default(),
+                )),
                 append_notify,
                 replica_state,
                 hw_advance_notify,

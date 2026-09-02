@@ -8,26 +8,32 @@
 
 /// Request timestamp sentinel (-2): resolve the earliest available offset.
 /// Kafka's `ListOffsetsRequest.EARLIEST_TIMESTAMP`.
+#[cfg(test)]
 pub(super) const EARLIEST_TIMESTAMP: i64 = -2;
 
 /// Request timestamp sentinel (-1): resolve the log-end (next) offset.
 /// Kafka's `ListOffsetsRequest.LATEST_TIMESTAMP`.
+#[cfg(test)]
 pub(super) const LATEST_TIMESTAMP: i64 = -1;
 
 /// Request timestamp sentinel (-3, KIP-734): resolve the offset of the record
 /// with the highest timestamp. Kafka's `ListOffsetsRequest.MAX_TIMESTAMP`.
+#[cfg(test)]
 pub(super) const MAX_TIMESTAMP: i64 = -3;
 
 /// Request timestamp sentinel (-4, KIP-405): resolve the earliest offset still
 /// in local storage. Kafka's `ListOffsetsRequest.EARLIEST_LOCAL_TIMESTAMP`.
+#[cfg(test)]
 pub(super) const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 
 /// Request timestamp sentinel (-5, KIP-1005): resolve the highest offset in a
 /// finished remote segment.
+#[cfg(test)]
 pub(super) const LATEST_TIERED_TIMESTAMP: i64 = -5;
 
 /// Request timestamp sentinel (-6, KIP-1023): resolve the first offset that
 /// has not been uploaded to the remote tier.
+#[cfg(test)]
 pub(super) const EARLIEST_PENDING_UPLOAD_TIMESTAMP: i64 = -6;
 
 /// Response placeholder (-1) meaning "no record timestamp matched/echoed".
@@ -42,17 +48,8 @@ pub(super) const UNKNOWN_OFFSET: i64 = -1;
 /// Kafka's `ListOffsetsResponse.UNKNOWN_EPOCH`.
 pub(super) const UNKNOWN_EPOCH: i32 = -1;
 
-pub(super) fn timestamp_supported(timestamp: i64, version: i16) -> bool {
-    let minimum_version = match timestamp {
-        EARLIEST_TIMESTAMP | LATEST_TIMESTAMP => 0,
-        MAX_TIMESTAMP => 7,
-        EARLIEST_LOCAL_TIMESTAMP => 8,
-        LATEST_TIERED_TIMESTAMP => 9,
-        EARLIEST_PENDING_UPLOAD_TIMESTAMP => 11,
-        timestamp if timestamp >= 0 => return true,
-        _ => return false,
-    };
-    version >= minimum_version
+pub(super) fn timestamp_kind(timestamp: i64, version: i16) -> krabka_verified::ListOffsetsKind {
+    krabka_verified::list_offsets_kind(timestamp, version)
 }
 
 #[cfg(test)]
@@ -97,7 +94,11 @@ mod tests {
             (0, 1, true),
         ];
         for (timestamp, version, expected) in cases {
-            assert!(timestamp_supported(timestamp, version) == expected);
+            assert!(
+                (timestamp_kind(timestamp, version)
+                    != krabka_verified::ListOffsetsKind::Unsupported)
+                    == expected
+            );
         }
     }
 }

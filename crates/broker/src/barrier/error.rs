@@ -44,6 +44,13 @@ pub(crate) enum BarrierError {
         group: String,
     },
 
+    /// The group allocated every representable barrier epoch.
+    #[error("barrier group {group} exhausted its epoch space")]
+    EpochExhausted {
+        /// The group whose epoch cannot advance.
+        group: String,
+    },
+
     /// The caller supplied a group definition that the coordinator rejects,
     /// such as an empty topic list or a cut retention below one.
     #[error("invalid barrier group definition: {0}")]

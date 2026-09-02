@@ -29,6 +29,9 @@ pub(super) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(
             crate::replica_state::ReplicaState::new(),
@@ -82,6 +85,9 @@ pub(super) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
         log_dir,
         log,
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify,
         replica_state,
         hw_advance_notify,
