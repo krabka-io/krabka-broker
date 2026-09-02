@@ -30,17 +30,6 @@ mod policy;
 mod query;
 mod selection;
 
-/// The most-complete-log ranking on its own. [`select_leader`] is what the
-/// controller calls; the stateright models in `leader_failover_model` and
-/// `data_path_model` drive this half directly, so it is exported for them.
-///
-/// Neither model carries ELR state, so neither checks the rule that runs ahead
-/// of this one -- and that is the rule with something to check. The fallback
-/// is audited and metered as the guess it is, while an ELR election reports
-/// itself lossless on the strength of a claim about what the published set
-/// holds. Teaching the models that claim is krabka-io/krabka-broker#317.
-#[cfg(test)]
-pub(crate) use self::selection::select_best_replica;
 pub(crate) use self::{
     background::BackgroundRecovery,
     job::{RecoveryJob, RecoveryOutcome, UncleanRecoveryHandle},

@@ -246,7 +246,13 @@ impl<'a> Batch<'a> {
 /// carries for it. `unclean_shutdown` is Kafka's `uncleanShutdownReplicas`:
 /// replicas the batch has just stopped trusting, which no rule here may make
 /// eligible again.
-fn next_partition_elr(
+///
+/// This is the whole KIP-966 maintenance rule, and the claim an ELR election
+/// rests on is a claim about it, so the `data_path_model` stateright search
+/// drives it directly: it is the one seam where the model can run the real
+/// rule over a partition whose per-replica logs and committed prefix it also
+/// holds.
+pub(crate) fn next_partition_elr(
     image: &MetadataImage,
     previous: Option<&PartitionRecord>,
     next: &PartitionRecord,
