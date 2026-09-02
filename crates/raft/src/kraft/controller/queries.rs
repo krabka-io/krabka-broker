@@ -38,6 +38,14 @@ impl Engine {
         save_quorum_state(&self.data_dir, self.core.quorum_state())
     }
 
+    /// Highest offset the quorum has committed, as this node knows it: its own
+    /// watermark on a leader, and the highest watermark a leader has reported
+    /// on a follower, which is the larger of the two while the follower is
+    /// still replaying.
+    pub fn quorum_high_watermark(&self) -> i64 {
+        self.log.hwm().0.max(self.leader_reported_hwm)
+    }
+
     /// Snapshot the consensus state for `DescribeQuorum`.
     pub fn quorum_state_snapshot(&self) -> QuorumStateSnapshot {
         let qs = self.core.quorum_state();
@@ -65,6 +73,7 @@ impl Engine {
             leader_id: qs.leader_id,
             leader_epoch: qs.leader_epoch,
             high_watermark: self.log.hwm().0,
+            quorum_high_watermark: self.quorum_high_watermark(),
             log_end_offset: self.log.log_end_offset().0,
             log_start_offset: self.log.log_start_offset().0,
             voters: qs.voters.clone(),
@@ -114,6 +123,12 @@ impl Engine {
             // `MetadataFetchSlice` is a wire-facing DTO of raw `i64` offsets.
             log_start_offset: log_start_offset.0,
             high_watermark: high_watermark.0,
+            // Every controller serves this fetch, not only the leader, so the
+            // observer is told the quorum's committed offset separately: a
+            // follower still catching up serves records only up to its own
+            // clamped watermark, and an observer that read that as the
+            // quorum's would call itself caught up while both were far behind.
+            quorum_high_watermark: self.quorum_high_watermark(),
         }
     }
 }

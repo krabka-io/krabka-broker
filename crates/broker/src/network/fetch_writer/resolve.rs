@@ -20,6 +20,14 @@ use crate::error::BrokerError;
 /// into a fresh buffer, which is the rare non-passthrough path. For a
 /// `FileRegions` payload, the TLS and non-Linux fallback, it `pread`s the
 /// regions into one buffer.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Io`] only for the payload kinds this function
+/// encodes rather than shares: a parsed batch whose re-encode fails, and a
+/// file-backed payload whose positioned read fails, which is a segment file
+/// that was truncated or unlinked under the reader. A `Raw` or `Legacy`
+/// payload is a refcount bump and cannot fail.
 pub fn resolve_records_inline(payload: &RecordsPayload) -> Result<Vec<WriteOp>, BrokerError> {
     let bytes = match payload {
         // `Raw`/`Legacy` are already verbatim wire bytes — share the `Bytes`.
@@ -62,6 +70,12 @@ crate::sendfile_cfg! {
     /// `FileRegions` payload that arrives here on a non-sendfile path. This
     /// function compiles on the SENDFILE alias (Linux + Apple +
     /// FreeBSD/DragonFly).
+    ///
+    /// # Errors
+    ///
+    /// A `FileRegions` payload cannot fail here: the regions are cloned, not
+    /// read. Every other payload kind carries [`resolve_records_inline`]'s
+    /// error conditions, because it is what serves them.
     pub fn resolve_records_sendfile(payload: &RecordsPayload) -> Result<Vec<WriteOp>, BrokerError> {
         match payload {
             RecordsPayload::FileRegions(regions) => {

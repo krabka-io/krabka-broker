@@ -77,6 +77,17 @@ pub struct FormatArgs {
     /// `VotersRecord` when `--standalone`.
     #[arg(long)]
     pub(super) controller_listener: Option<String>,
+    /// Exit 0 without touching an already-formatted directory, instead of
+    /// refusing it. Matches Kafka's `kafka-storage.sh format
+    /// --ignore-formatted`.
+    ///
+    /// This is what makes the formatter safe to run unconditionally, which a
+    /// Kubernetes init container has to: the image carries no shell, so there
+    /// is nothing to test the directory with before the call, and a pod that
+    /// restarts against its existing volume would otherwise fail every
+    /// restart after the first.
+    #[arg(long)]
+    pub(super) ignore_formatted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
