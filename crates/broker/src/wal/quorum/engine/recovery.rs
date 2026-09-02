@@ -10,7 +10,8 @@ use krabka_ids::Offset;
 use krabka_kraft_core::NodeId;
 
 use super::{
-    WalReplica, read_batches_exact, replica_end_offset, replica_io::sync_replica_blocking,
+    BatchBytes, WalReplica, read_batches_exact, replica_end_offset,
+    replica_io::sync_replica_blocking, replica_start_offset,
 };
 use crate::error::BrokerError;
 
@@ -38,8 +39,10 @@ pub(super) fn recover_durable_prefix(
         0,
         true,
     ));
+    let recovery_start = recovery_start(replicas, &ends, durable)?;
+    let donor_index = quorum_donor(replicas, &ends, majority, recovery_start, durable)?;
 
-    normalize_durable_prefix(replicas, &ends, donor_index, durable)?;
+    normalize_durable_prefix(replicas, &ends, donor_index, recovery_start, durable)?;
     Ok(durable)
 }
 
@@ -58,22 +61,98 @@ pub(super) fn bootstrap_durable_prefix(
             ))
         })?;
     let durable = ends[source_index];
-    normalize_durable_prefix(replicas, &ends, source_index, durable)?;
+    let recovery_start = recovery_start(replicas, &ends, durable)?;
+    normalize_durable_prefix(replicas, &ends, source_index, recovery_start, durable)?;
     Ok(durable)
+}
+
+fn recovery_start(
+    replicas: &[WalReplica],
+    ends: &[Offset],
+    durable: Offset,
+) -> Result<Offset, BrokerError> {
+    let start = replicas
+        .iter()
+        .map(replica_start_offset)
+        .max()
+        .ok_or_else(|| BrokerError::Replication("wal quorum has no recovery start".into()))?;
+    if durable < start || ends.iter().any(|end| *end < start) {
+        return Err(BrokerError::Replication(format!(
+            "wal quorum cannot reconcile recovery range {}..{}",
+            start.0, durable.0
+        )));
+    }
+    Ok(start)
+}
+
+fn quorum_donor(
+    replicas: &[WalReplica],
+    ends: &[Offset],
+    majority: usize,
+    start: Offset,
+    durable: Offset,
+) -> Result<usize, BrokerError> {
+    for (candidate_index, candidate) in replicas.iter().enumerate() {
+        if ends[candidate_index] < durable {
+            continue;
+        }
+        let Ok(candidate_prefix) = read_batches_exact(&candidate.log, start, durable) else {
+            continue;
+        };
+        let supporters = replicas
+            .iter()
+            .enumerate()
+            .filter(|(index, replica)| {
+                ends[*index] >= durable
+                    && read_batches_exact(&replica.log, start, durable)
+                        .is_ok_and(|prefix| same_batches(&prefix, &candidate_prefix))
+            })
+            .count();
+        if supporters >= majority {
+            return Ok(candidate_index);
+        }
+    }
+    Err(BrokerError::Replication(format!(
+        "wal quorum has no byte-identical majority for durable range {}..{}",
+        start.0, durable.0
+    )))
+}
+
+fn same_batches(left: &[BatchBytes], right: &[BatchBytes]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.base_offset == right.base_offset
+                && left.last_offset == right.last_offset
+                && left.verbatim.bytes == right.verbatim.bytes
+        })
 }
 
 fn normalize_durable_prefix(
     replicas: &[WalReplica],
     ends: &[Offset],
     donor_index: usize,
+    recovery_start: Offset,
     durable: Offset,
 ) -> Result<(), BrokerError> {
-    for replica in replicas {
-        let mut log = replica.log.lock();
-        log.truncate_to(durable)?;
+    let mut current_offsets = Vec::with_capacity(replicas.len());
+    for (index, replica) in replicas.iter().enumerate() {
+        let retained_end = ends[index].min(durable);
+        let donor_prefix =
+            read_batches_exact(&replicas[donor_index].log, recovery_start, retained_end)?;
+        let matching = read_batches_exact(&replica.log, recovery_start, retained_end)
+            .is_ok_and(|prefix| same_batches(&prefix, &donor_prefix));
+        replica
+            .log
+            .lock()
+            .truncate_to(if matching { durable } else { recovery_start })?;
+        current_offsets.push(if matching {
+            retained_end
+        } else {
+            recovery_start
+        });
     }
-    for (replica, end) in replicas.iter().zip(ends) {
-        let batches = read_batches_exact(&replicas[donor_index].log, (*end).min(durable), durable)?;
+    for (replica, current) in replicas.iter().zip(current_offsets) {
+        let batches = read_batches_exact(&replicas[donor_index].log, current, durable)?;
         sync_replica_blocking(&replica.log, &batches)?;
     }
     Ok(())

@@ -4,6 +4,16 @@
 //!
 //! The metadata comes from `controller.current_image()`, the
 //! quorum-replicated snapshot, and not from a local in-memory struct.
+//!
+//! `MetadataResponsePartition` carries no KIP-966 eligible-leader-replica
+//! field in any version of Kafka's schema, `0-13` included, so a partition row
+//! here stops at `offline_replicas`. `DescribeTopicPartitions` is the only API
+//! that reports ELR; see [`crate::handlers::elr`].
+//!
+//! Leader, ISR and `offline_replicas` are decided together, by
+//! `crate::handlers::offline_replicas::partition_availability`, so this API and
+//! `DescribeTopicPartitions` cannot report a replica offline in one column and
+//! leading in another.
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -24,7 +34,7 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::{authorized_operations::authorized_operations_bits, offline_replicas::NO_LEADER_ID},
 };
 
 // ACL preamble + asymmetric loop.
@@ -125,22 +135,26 @@ pub(crate) async fn handle(
         .map(|broker| project_broker(broker, ctx.connection_listener_name, &inter_broker_name))
         .collect();
 
+    // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
+    // as the image; see `handlers::offline_replicas`.
+    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
     let topics_out = build_topic_rows(
         broker,
         &image,
         ctx,
-        &req,
-        &resolved,
-        &candidate_topics,
-        &acl_by_name,
+        &TopicRowInputs {
+            request: &req,
+            resolved: &resolved,
+            candidates: &candidate_topics,
+            authorization: &acl_by_name,
+            unavailable: &unavailable,
+        },
     );
 
-    // controller_id: the current Raft leader, or -1 when unknown.
-    let controller_id: i32 = controller
-        .watch_leader()
-        .borrow()
-        .and_then(|id| i32::try_from(id.0).ok())
-        .unwrap_or(-1);
+    // controller_id: an unfenced registered broker, not the quorum leader.
+    // See `handlers::controller_id`.
+    let controller_id =
+        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
 
     // KIP-430: the cluster-level field only exists on the wire for v8-10;
     // the codegen drops it on other versions. Compute when the opt-in
@@ -185,38 +199,50 @@ type ResolvedTopic<'a> = (
     Result<&'a krabka_metadata::TopicRecord, i16>,
 );
 
+/// The per-request inputs every topic row shares. They travel as one struct so
+/// the row builders keep a readable arity as the response gains fields.
+struct TopicRowInputs<'a> {
+    request: &'a MetadataRequest,
+    resolved: &'a [ResolvedTopic<'a>],
+    candidates: &'a [String],
+    authorization: &'a std::collections::HashMap<&'a str, AuthorizationResult>,
+    /// Brokers the controller currently treats as fenced or dead, from
+    /// [`crate::handlers::offline_replicas::unavailable_brokers`].
+    unavailable: &'a std::collections::HashSet<u64>,
+}
+
 fn build_topic_rows(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
-    request: &MetadataRequest,
-    resolved: &[ResolvedTopic<'_>],
-    candidates: &[String],
-    authorization: &std::collections::HashMap<&str, AuthorizationResult>,
+    inputs: &TopicRowInputs<'_>,
 ) -> Vec<MetadataResponseTopic> {
     let allowed = |name: &str| {
-        authorization
+        inputs
+            .authorization
             .get(name)
             .copied()
             .unwrap_or(AuthorizationResult::Deny)
             == AuthorizationResult::Allow
     };
-    if request.topics.is_none() {
-        return candidates
+    if inputs.request.topics.is_none() {
+        return inputs
+            .candidates
             .iter()
             .filter(|name| allowed(name))
             .filter_map(|name| {
                 image
                     .topic(name)
-                    .map(|record| success_topic_row(broker, image, context, request, name, record))
+                    .map(|record| success_topic_row(broker, image, context, inputs, name, record))
             })
             .collect();
     }
-    resolved
+    inputs
+        .resolved
         .iter()
         .map(|(topic, outcome)| match outcome {
             Ok(record) if allowed(&record.name) => {
-                success_topic_row(broker, image, context, request, &record.name, record)
+                success_topic_row(broker, image, context, inputs, &record.name, record)
             }
             Ok(record) => MetadataResponseTopic {
                 error_code: codes::TOPIC_AUTHORIZATION_FAILED,
@@ -251,31 +277,46 @@ fn success_topic_row(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
-    request: &MetadataRequest,
+    inputs: &TopicRowInputs<'_>,
     name: &str,
     record: &krabka_metadata::TopicRecord,
 ) -> MetadataResponseTopic {
     let partitions = image
         .partitions_of(name)
-        .map(|partition| MetadataResponsePartition {
-            error_code: codes::NONE,
-            partition_index: partition.partition,
-            leader_id: i32::try_from(partition.leader.0).unwrap_or(i32::MAX),
-            leader_epoch: partition.leader_epoch.0,
-            replica_nodes: partition
-                .replicas
-                .iter()
-                .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
-                .collect(),
-            isr_nodes: partition
-                .isr
-                .iter()
-                .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
-                .collect(),
-            ..Default::default()
+        .map(|partition| {
+            let availability = crate::handlers::offline_replicas::partition_availability(
+                image,
+                partition,
+                inputs.unavailable,
+            );
+            MetadataResponsePartition {
+                // Kafka's `KRaftMetadataCache.partitionMetadata` answers a
+                // partition it can find no live leader endpoint for with
+                // `LEADER_NOT_AVAILABLE` beside the `-1`, and with the
+                // replica, ISR and offline lists filled in as usual. Read out
+                // of `kafka-metadata-4.3.1.jar`; `DescribeTopicPartitions`
+                // takes the same `-1` with no error code, which is why only
+                // this API sets one.
+                error_code: if availability.leader_id == NO_LEADER_ID {
+                    codes::LEADER_NOT_AVAILABLE
+                } else {
+                    codes::NONE
+                },
+                partition_index: partition.partition,
+                leader_id: availability.leader_id,
+                leader_epoch: partition.leader_epoch.0,
+                replica_nodes: partition
+                    .replicas
+                    .iter()
+                    .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
+                    .collect(),
+                isr_nodes: availability.isr_nodes,
+                offline_replicas: availability.offline_replicas,
+                ..Default::default()
+            }
         })
         .collect();
-    let topic_authorized_operations = if request.include_topic_authorized_operations {
+    let topic_authorized_operations = if inputs.request.include_topic_authorized_operations {
         authorized_operations_bits(
             broker.config.authorizer.as_ref(),
             image,
@@ -292,7 +333,7 @@ fn success_topic_row(
         name: Some(record.name.clone()),
         topic_id: WireUuid(record.topic_id.into_bytes()),
         partitions,
-        is_internal: crate::handlers::is_internal_topic(name),
+        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
         topic_authorized_operations,
         ..Default::default()
     }
@@ -460,17 +501,5 @@ mod tests {
         let out = project_broker(&rec, "tls", "plain");
         assert!(out.host == "legacy-host");
         assert!(out.port == 1000);
-    }
-
-    #[test]
-    fn internal_topics_are_marked_in_metadata() {
-        for (name, expected) in [
-            ("__consumer_offsets", true),
-            ("__transaction_state", true),
-            ("__remote_log_metadata", true),
-            ("orders", false),
-        ] {
-            assert!(crate::handlers::is_internal_topic(name) == expected);
-        }
     }
 }

@@ -3,7 +3,10 @@
 //! the parked commit waiters that the high watermark later resolves or fails.
 
 use krabka_ids::Offset;
-use krabka_metadata::{MetadataRecord, to_kraft_values};
+use krabka_metadata::{
+    BreakGlassProposalRecord, DelegationToken, DelegationTokenRecord, DeleteDelegationTokenRecord,
+    MetadataImage, MetadataRecord, TopicFreezeRecord, to_kraft_values,
+};
 use tokio::sync::oneshot;
 
 use super::{
@@ -14,9 +17,231 @@ use super::{
     },
     records::metadata_record_batch,
 };
-use crate::{OffsetReservation, SubmitChangeResult, error::RaftError};
+use crate::{
+    DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError,
+    kraft::role::Role,
+};
 
 impl Engine {
+    fn delegation_token_record(token: &DelegationToken) -> DelegationTokenRecord {
+        DelegationTokenRecord {
+            token_id: token.token_id.clone(),
+            owner: token.owner.clone(),
+            hmac: token.hmac.clone(),
+            issue_timestamp_ms: token.issue_timestamp_ms,
+            expiry_timestamp_ms: token.expiry_timestamp_ms,
+            max_timestamp_ms: token.max_timestamp_ms,
+            renewers: token.renewers.clone(),
+        }
+    }
+
+    fn wall_clock_ms() -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| {
+                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+            })
+    }
+
+    fn token_generation_matches(
+        expected: &DelegationTokenRecord,
+        replacement: &DelegationTokenRecord,
+    ) -> bool {
+        expected.token_id == replacement.token_id
+            && expected.owner == replacement.owner
+            && expected.hmac == replacement.hmac
+            && expected.issue_timestamp_ms == replacement.issue_timestamp_ms
+            && expected.max_timestamp_ms == replacement.max_timestamp_ms
+            && expected.renewers == replacement.renewers
+    }
+
+    fn token_mutation_decision(
+        image: &MetadataImage,
+        mutation: &DelegationTokenMutation,
+        now_ms: i64,
+        uncommitted_tail: bool,
+    ) -> krabka_verified::TokenMutationDecision {
+        let (kind, expected, replacement) = match mutation {
+            DelegationTokenMutation::Renew {
+                expected,
+                replacement,
+            } => (
+                krabka_verified::TokenMutationKind::Renew,
+                expected,
+                Some(replacement),
+            ),
+            DelegationTokenMutation::Expire {
+                expected,
+                replacement,
+            } => (
+                krabka_verified::TokenMutationKind::Expire,
+                expected,
+                Some(replacement),
+            ),
+            DelegationTokenMutation::Delete { expected } => {
+                (krabka_verified::TokenMutationKind::Delete, expected, None)
+            }
+        };
+        let stored = image
+            .delegation_token_by_id(&expected.token_id)
+            .map(Self::delegation_token_record);
+        let generation_matches = replacement
+            .is_none_or(|replacement| Self::token_generation_matches(expected, replacement));
+        let state = match (&stored, replacement, generation_matches) {
+            (None, _, true) => krabka_verified::TokenMutationState::Missing,
+            (Some(stored), Some(replacement), true) if stored == replacement => {
+                krabka_verified::TokenMutationState::Applied
+            }
+            (Some(stored), _, true) if stored == expected => {
+                krabka_verified::TokenMutationState::Expected
+            }
+            (_, _, false) | (Some(_), _, true) => krabka_verified::TokenMutationState::Stale,
+        };
+        krabka_verified::token_mutation_decision(krabka_verified::TokenMutationFacts {
+            kind,
+            state,
+            now_ms,
+            expected_expiry_ms: expected.expiry_timestamp_ms,
+            incoming_expiry_ms: replacement.map_or(expected.expiry_timestamp_ms, |record| {
+                record.expiry_timestamp_ms
+            }),
+            max_timestamp_ms: expected.max_timestamp_ms,
+            uncommitted_tail,
+        })
+    }
+
+    fn token_mutation_record(mutation: &DelegationTokenMutation) -> MetadataRecord {
+        match mutation {
+            DelegationTokenMutation::Renew { replacement, .. }
+            | DelegationTokenMutation::Expire { replacement, .. } => {
+                MetadataRecord::V1DelegationToken(replacement.clone())
+            }
+            DelegationTokenMutation::Delete { expected } => {
+                MetadataRecord::V1DeleteDelegationToken(DeleteDelegationTokenRecord {
+                    token_id: expected.token_id.clone(),
+                })
+            }
+        }
+    }
+
+    fn token_mutation_id(mutation: &DelegationTokenMutation) -> &str {
+        match mutation {
+            DelegationTokenMutation::Renew { expected, .. }
+            | DelegationTokenMutation::Expire { expected, .. }
+            | DelegationTokenMutation::Delete { expected } => &expected.token_id,
+        }
+    }
+
+    pub fn on_submit_delegation_token_mutations(
+        &mut self,
+        mutations: &[DelegationTokenMutation],
+        reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+    ) {
+        if !self.core.role().is_leader() {
+            let _ = reply.send(Err(RaftError::NotLeader {
+                current_leader: self.core.quorum_state().leader_id,
+            }));
+            return;
+        }
+
+        let uncommitted_tail = self.log.hwm() < self.log.log_end_offset();
+        let now_ms = Self::wall_clock_ms();
+        let mut scratch = self.image.clone();
+        let mut records = Vec::with_capacity(mutations.len());
+        for mutation in mutations {
+            let decision =
+                Self::token_mutation_decision(&scratch, mutation, now_ms, uncommitted_tail);
+            match decision {
+                krabka_verified::TokenMutationDecision::Append => {
+                    let record = Self::token_mutation_record(mutation);
+                    scratch.apply(&record);
+                    records.push(record);
+                }
+                krabka_verified::TokenMutationDecision::Retry => {}
+                krabka_verified::TokenMutationDecision::Reject => {
+                    let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                        "delegation-token mutation {} rejected",
+                        Self::token_mutation_id(mutation)
+                    ))));
+                    return;
+                }
+            }
+        }
+        if records.is_empty() {
+            let _ = reply.send(Ok(SubmitChangeResult::default()));
+            return;
+        }
+        self.on_submit_change_guarded(&records, reply, true);
+    }
+
+    fn consumption_matches_stored(
+        stored: &BreakGlassProposalRecord,
+        consumed: &BreakGlassProposalRecord,
+    ) -> bool {
+        let mut expected = stored.clone();
+        expected.consumed_at_ms = consumed.consumed_at_ms;
+        expected == *consumed
+    }
+
+    fn break_glass_consumption_decision(
+        &self,
+        consumed: &BreakGlassProposalRecord,
+    ) -> krabka_verified::BreakGlassConsumptionDecision {
+        let stored = self.image.break_glass_proposal(consumed.proposal_id);
+        let proposal = match stored {
+            None => krabka_verified::BreakGlassProposalState::Missing,
+            Some(stored)
+                if Self::consumption_matches_stored(stored, consumed)
+                    && stored.consumed_at_ms == 0
+                    && !stored.withdrawn =>
+            {
+                krabka_verified::BreakGlassProposalState::ExactPending
+            }
+            Some(_) => krabka_verified::BreakGlassProposalState::Stale,
+        };
+        krabka_verified::break_glass_consumption_decision(
+            krabka_verified::BreakGlassConsumptionFacts {
+                proposal,
+                consumed_at_ms: consumed.consumed_at_ms,
+                // A consume is a security-sensitive compare-and-set. Require
+                // the committed image to cover the whole log prefix before
+                // appending it. This conservative fence survives leadership
+                // loss, where a waiter can disappear while its uncommitted
+                // log entry remains and may later commit.
+                uncommitted_tail: self.log.hwm() < self.log.log_end_offset(),
+            },
+        )
+    }
+
+    fn freeze_replacement_decision(
+        &self,
+        incoming: &TopicFreezeRecord,
+        another_freeze_in_batch: bool,
+    ) -> krabka_verified::FreezeReplacementDecision {
+        let stored = self
+            .image
+            .topic_freezes()
+            .find(|stored| {
+                stored.pattern_type == incoming.pattern_type && stored.scope == incoming.scope
+            })
+            .map_or(krabka_verified::FreezeStoredState::Missing, |stored| {
+                krabka_verified::FreezeStoredState::Present {
+                    set_at_ms: stored.set_at_ms,
+                }
+            });
+        krabka_verified::freeze_replacement_decision(krabka_verified::FreezeReplacementFacts {
+            stored,
+            incoming_frozen: incoming.frozen,
+            incoming_set_at_ms: incoming.set_at_ms,
+            // Like proposal consumption, replacement is a compare-and-set
+            // against the committed image. A retained tail or a second
+            // freeze in this batch must commit or fail before retry.
+            uncommitted_tail: another_freeze_in_batch || self.log.hwm() < self.log.log_end_offset(),
+        })
+    }
+
     /// Handle a `submit_change`: leader appends + parks a waiter; non-leader
     /// rejects immediately with the leader hint.
     #[tracing::instrument(
@@ -34,11 +259,87 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
     ) {
+        self.on_submit_change_guarded(records, reply, false);
+    }
+
+    fn on_submit_change_guarded(
+        &mut self,
+        records: &[krabka_metadata::MetadataRecord],
+        reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+        delegation_token_guarded: bool,
+    ) {
         if !self.core.role().is_leader() {
             let _ = reply.send(Err(RaftError::NotLeader {
                 current_leader: self.core.quorum_state().leader_id,
             }));
             return;
+        }
+        let leader_epoch = self.core.quorum_state().leader_epoch;
+        let epoch_ready = match self.core.role() {
+            Role::Leader {
+                epoch_start_offset, ..
+            } => {
+                krabka_verified::wal_reservation_epoch_ready(self.log.hwm().0, *epoch_start_offset)
+            }
+            _ => false,
+        };
+        if records
+            .iter()
+            .any(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
+            && !epoch_ready
+        {
+            let _ = reply.send(Err(RaftError::ChangeRejected(
+                "leader epoch must commit before reserving offsets".to_string(),
+            )));
+            return;
+        }
+
+        let mut freeze_in_batch = false;
+        let mut token_create_in_batch = std::collections::HashSet::new();
+        for record in records {
+            match record {
+                MetadataRecord::V1BreakGlassProposal(consumed) if consumed.consumed_at_ms != 0 => {
+                    let decision = self.break_glass_consumption_decision(consumed);
+                    if decision != krabka_verified::BreakGlassConsumptionDecision::Append {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                            "break-glass consume {} rejected: {decision:?}",
+                            consumed.proposal_id
+                        ))));
+                        return;
+                    }
+                }
+                MetadataRecord::V1TopicFreeze(freeze) => {
+                    let decision = self.freeze_replacement_decision(freeze, freeze_in_batch);
+                    if decision != krabka_verified::FreezeReplacementDecision::Append {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                            "topic-freeze mutation {:?}:{} rejected: {decision:?}",
+                            freeze.pattern_type, freeze.scope
+                        ))));
+                        return;
+                    }
+                    freeze_in_batch = true;
+                }
+                MetadataRecord::V1DelegationToken(token) if !delegation_token_guarded => {
+                    let create_is_unique =
+                        self.image.delegation_token_by_id(&token.token_id).is_none()
+                            && token_create_in_batch.insert(token.token_id.clone());
+                    if !create_is_unique || self.log.hwm() < self.log.log_end_offset() {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                            "delegation-token create {} rejected: replacement requires a guarded mutation",
+                            token.token_id
+                        ))));
+                        return;
+                    }
+                }
+                MetadataRecord::V1DeleteDelegationToken(token) if !delegation_token_guarded => {
+                    let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                        "delegation-token delete {} rejected: mutation is not generation-bound",
+                        token.token_id
+                    ))));
+                    return;
+                }
+                _ => {}
+            }
         }
 
         // Pre-validate and translate to KIP-631 value blobs in ONE pass against
@@ -82,12 +383,33 @@ impl Engine {
                 return;
             }
             if let MetadataRecord::V1PartitionOffsetAdvance(r) = r {
-                let next_offset = scratch
+                let mut next_offset = scratch
                     .partition_next_offset(&r.topic, r.partition)
                     .unwrap_or(0);
-                // `reserve_offsets` is proved only for non-negative counts
-                // whose sum fits in i64, so reject untrusted metadata first.
-                if r.count < 0 || next_offset.checked_add(r.count).is_none() {
+                // A multi-voter leader may have earlier reservations appended
+                // but not committed into `scratch` yet. Fold their exact
+                // contiguous ends so concurrent submissions cannot reuse the
+                // same committed base.
+                for pending in self.commit_waiters.iter().flat_map(|waiter| {
+                    waiter.result.offset_reservations.iter().filter(|pending| {
+                        pending.topic == r.topic && pending.partition == r.partition
+                    })
+                }) {
+                    let Some(frontier) = krabka_verified::wal_reservation_frontier(
+                        next_offset,
+                        pending.base_offset,
+                        pending.count,
+                    ) else {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(
+                            "pending offset reservation chain is invalid".to_string(),
+                        )));
+                        return;
+                    };
+                    next_offset = frontier;
+                }
+                // `reserve_offsets` is proved only for positive counts whose
+                // sum fits in i64, so reject untrusted metadata first.
+                if r.count <= 0 || next_offset.checked_add(r.count).is_none() {
                     let _ = reply.send(Err(RaftError::ChangeRejected(format!(
                         "partition offset advance count {} is out of range at next offset {next_offset}",
                         r.count
@@ -101,6 +423,7 @@ impl Engine {
                     partition: r.partition,
                     base_offset,
                     count: r.count,
+                    leader_epoch: u64::from(leader_epoch),
                 });
             }
             match to_kraft_values(r, &scratch) {
@@ -120,8 +443,13 @@ impl Engine {
             return;
         }
 
-        let leader_epoch = self.core.quorum_state().leader_epoch;
-        let mut batch = metadata_record_batch(leader_epoch, &value_blobs);
+        let mut batch = match metadata_record_batch(leader_epoch, &value_blobs) {
+            Ok(batch) => batch,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
         let base = match self.log.append(&mut batch) {
             Ok(off) => off,
             Err(e) => {
@@ -139,7 +467,6 @@ impl Engine {
             return;
         }
         let need_offset = submit_waiter_need_offset(base, value_blobs.len());
-
         // Park the waiter, then try to advance the HWM immediately: a single
         // voter commits its own append with no peer fetch.
         self.commit_waiters.push(CommitWaiter {
@@ -170,7 +497,13 @@ impl Engine {
             }
             scratch.apply(r);
         }
-        let mut batch = metadata_record_batch(leader_epoch, &blobs);
+        let mut batch = match metadata_record_batch(leader_epoch, &blobs) {
+            Ok(batch) => batch,
+            Err(e) => {
+                tracing::error!(?e, "kraft: test batch construction failed");
+                return -1;
+            }
+        };
         let expected_base = self.log.log_end_offset();
         let base = match self.log.append(&mut batch) {
             Ok(off) => off,

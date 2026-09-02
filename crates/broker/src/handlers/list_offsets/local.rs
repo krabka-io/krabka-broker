@@ -74,7 +74,7 @@ mod tests {
     use crate::{
         broker::Broker,
         codes,
-        delivery::test_support::{BOUND_MS, NOW_MS},
+        delivery::test_support::{BOUND_MS, NOW_MS, wall_at},
         handlers::list_offsets::{
             handle,
             sentinels::{
@@ -90,7 +90,7 @@ mod tests {
     const DELIVERED_MS: i64 = 1_700_000_000_000;
     // Activation time of a batch that still waits. It sits far enough ahead
     // that every clock this test can read calls it pending, so the schedule
-    // holds without a mock timeline.
+    // holds without a manual timeline.
     const PENDING_MS: i64 = 4_100_000_000_000;
     // One batch that has come due and one that has not, two records each. The
     // log end offset is therefore 4, and a scheduled topic's delivery
@@ -104,7 +104,7 @@ mod tests {
         topic: &str,
         policy: DeliveryPolicy,
     ) {
-        let clock: Arc<dyn qubit_clock::Clock> = Arc::new(qubit_clock::SystemClock::new());
+        let clock: Arc<dyn qubit_clock::WallClock> = Arc::new(qubit_clock::StdWallClock::new());
         let partition = crate::delivery::test_support::scheduled_partition(
             logs,
             topic,
@@ -215,10 +215,8 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         assert!(broker.config.node_id.get() != OTHER_BROKER);
         let logs = tempfile::tempdir().expect("log root");
-        let time = qubit_clock::MockTime::at(
-            qubit_clock::DateTime::from_timestamp_millis(NOW_MS).expect("a representable instant"),
-        );
-        let clock: Arc<dyn qubit_clock::Clock> = Arc::new(time.clock());
+        let timeline = qubit_clock::ManualMonotonicClock::new_shared();
+        let clock: Arc<dyn qubit_clock::WallClock> = timeline.new_wall_clock(wall_at(NOW_MS));
         let partition = crate::delivery::test_support::scheduled_partition(
             &logs,
             TOPIC,
@@ -237,9 +235,11 @@ mod tests {
         // Cross the activation boundary. The batch comes due on the clock
         // alone: no append and no scheduler sweep publishes the new watermark,
         // so the mirror still reports the old one.
-        time.advance(std::time::Duration::from_millis(
-            u64::try_from(10_000 + BOUND_MS).expect("a positive delay"),
-        ));
+        timeline
+            .advance(std::time::Duration::from_millis(
+                u64::try_from(10_000 + BOUND_MS).expect("a positive delay"),
+            ))
+            .expect("manual time moves forward");
         check!(partition.delivery_watermark() == krabka_log::Offset(2));
 
         check!(list_partition(&broker, TOPIC, LATEST_TIMESTAMP, &ctx).await == latest_row(4));

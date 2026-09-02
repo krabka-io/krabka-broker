@@ -1,0 +1,33 @@
+(* #"/proof-work-242/crates/verified/src/producer_snapshot.rs" 131 0 131 79 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sproducer_snapshot = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 132 23 132 24
+let%span sproducer_snapshot'0 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 132 4 132 50
+let%span sproducer_snapshot'1 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 129 10 129 71
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let producer_snapshot_retained [#"/proof-work-242/crates/verified/src/producer_snapshot.rs" 131 0 131 79]
+  (snapshot_offset: Int64.t) (cut: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- Int64.ge snapshot_offset ([%#sproducer_snapshot] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Int64.le snapshot_offset cut ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#sproducer_snapshot'0] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & snapshot_offset: Int64.t = snapshot_offset
+  | & cut: Int64.t = cut
+  | & _6: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:producer_snapshot_retained ensures] [%#sproducer_snapshot'1] result
+    = (ge_log_Int (Int64.to_int snapshot_offset) 0 /\ Int64.to_int snapshot_offset <= Int64.to_int cut)}
+    (! return {result}) ]

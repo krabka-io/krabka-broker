@@ -1,0 +1,17 @@
+(* #"/proof-work-231/crates/verified/src/features.rs" 9 27 9 32 *)
+
+(* <features::FeatureUpdateDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FeatureUpdateDecision = Reject | EmitFeature | EmitCleanupThenFeature
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FeatureUpdateDecision [#"/proof-work-231/crates/verified/src/features.rs" 9 27 9 32]
+  (self: t_FeatureUpdateDecision) (return (x: t_FeatureUpdateDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FeatureUpdateDecision = Any.any_l () | & self: t_FeatureUpdateDecision = self ])
+  [ return (result: t_FeatureUpdateDecision) -> (! return {result}) ]

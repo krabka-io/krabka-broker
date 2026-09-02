@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_delete_records_trim_application": {
+        "prover": "alt-ergo",
+        "time": 0.018
+      }
+    }
+  }
+}

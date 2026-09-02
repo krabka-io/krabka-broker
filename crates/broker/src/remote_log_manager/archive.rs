@@ -53,6 +53,9 @@ pub(super) enum ChainPosition {
     Unchained,
     /// Write-once archive: the next manifest joins the chain here.
     At(ChainStamp),
+    /// Write-once archive: the last receipt used `u64::MAX`, so no later
+    /// manifest can be assigned a distinct sequence number.
+    Exhausted,
 }
 
 impl ChainPosition {
@@ -66,7 +69,9 @@ impl ChainPosition {
     pub(super) fn seed(archive: ArchiveMode, listed: &[RemoteLogSegmentMetadata]) -> Self {
         match archive {
             ArchiveMode::Mutable => Self::Unchained,
-            ArchiveMode::WriteOnce => Self::At(next_chain_stamp(listed, EpochId(Uuid::new_v4()))),
+            ArchiveMode::WriteOnce => {
+                next_chain_stamp(listed, EpochId(Uuid::new_v4())).map_or(Self::Exhausted, Self::At)
+            }
         }
     }
 
@@ -75,7 +80,7 @@ impl ChainPosition {
     pub(super) const fn archive(self) -> ArchiveMode {
         match self {
             Self::Unchained => ArchiveMode::Mutable,
-            Self::At(_) => ArchiveMode::WriteOnce,
+            Self::At(_) | Self::Exhausted => ArchiveMode::WriteOnce,
         }
     }
 }

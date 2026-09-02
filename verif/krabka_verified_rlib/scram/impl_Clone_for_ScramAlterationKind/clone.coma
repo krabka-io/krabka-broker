@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/scram.rs" 11 27 11 32 *)
+
+(* <scram::ScramAlterationKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ScramAlterationKind = Delete | Upsert
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ScramAlterationKind [#"/workspace/crates/verified/src/scram.rs" 11 27 11 32] (self: t_ScramAlterationKind)
+  (return (x: t_ScramAlterationKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ScramAlterationKind = Any.any_l () | & self: t_ScramAlterationKind = self ])
+  [ return (result: t_ScramAlterationKind) -> (! return {result}) ]

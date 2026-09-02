@@ -26,5 +26,7 @@ mod console_groups;
 mod consumer_groups;
 #[path = "jvm_acceptance_cli/delete_records.rs"]
 mod delete_records;
+#[path = "jvm_acceptance_cli/elr_columns.rs"]
+mod elr_columns;
 #[path = "jvm_acceptance_cli/topics.rs"]
 mod topics;

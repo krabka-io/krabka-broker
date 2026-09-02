@@ -19,10 +19,19 @@
 //!
 //! Each list is an [`LruCache`] used purely for its ordering: unbounded, so it
 //! never evicts on its own, keyed by session id and valued by the session's
-//! `last_used_nanos`. Those stamps are what let a privileged caller compare the
+//! last-use stamp. Those stamps are what let a privileged caller compare the
 //! two heads. They come from the cache's injected
-//! [`NanoClock`](qubit_clock::NanoClock), so a test can drive the order with a
-//! mock timeline instead of a sleep.
+//! [`MonotonicClock`](qubit_clock::MonotonicClock) as a [`Duration`] elapsed
+//! since that clock's origin, so a test can drive the order with a
+//! [`qubit_clock::ManualMonotonicClock`] instead of a sleep.
+//!
+//! An elapsed-since-origin [`Duration`] is the right stamp type because every
+//! stamp in one cache is read from that one cache's own clock, so they all
+//! share a single clock domain and compare as a total order. A
+//! [`qubit_clock::MonotonicInstant`] could not serve: it is `PartialOrd` but
+//! not `Ord`, because instants from different clock domains do not compare.
+
+use std::time::Duration;
 
 use lru::LruCache;
 
@@ -41,10 +50,10 @@ use super::epoch::FetchSessionId;
 /// and the two orderings agree.
 pub(super) struct SessionOrder {
     /// Consumer sessions, least recently used first.
-    ordinary: LruCache<FetchSessionId, i128>,
+    ordinary: LruCache<FetchSessionId, Duration>,
     /// Follower sessions (`replica_id >= 0`), least recently used first. Only
     /// a privileged caller may take a victim from here.
-    privileged: LruCache<FetchSessionId, i128>,
+    privileged: LruCache<FetchSessionId, Duration>,
 }
 
 impl SessionOrder {
@@ -56,13 +65,13 @@ impl SessionOrder {
     }
 
     /// Records `id` as the most recently used session of its class, stamped
-    /// `nanos`. Inserts it when it is not yet present, which is what an
+    /// `last_used`. Inserts it when it is not yet present, which is what an
     /// allocation does.
     ///
     /// O(1): [`LruCache::put`] moves an existing key to the most-recent end
     /// rather than re-sorting.
-    pub(super) fn touch(&mut self, id: FetchSessionId, privileged: bool, nanos: i128) {
-        self.class_mut(privileged).put(id, nanos);
+    pub(super) fn touch(&mut self, id: FetchSessionId, privileged: bool, last_used: Duration) {
+        self.class_mut(privileged).put(id, last_used);
     }
 
     /// Drops `id` from its class's order. Called for both an eviction and a
@@ -77,7 +86,7 @@ impl SessionOrder {
     /// O(1): each candidate is a list head, read by [`LruCache::peek_lru`],
     /// which does not itself reorder.
     ///
-    /// A privileged caller compares the two heads on `last_used_nanos` and
+    /// A privileged caller compares the two heads on their last-use stamps and
     /// takes the older. On equal stamps it takes the ordinary session. The
     /// `min_by_key` scan this replaced broke such a tie by `HashMap` iteration
     /// order, so there is no prior choice to reproduce; preferring the
@@ -90,8 +99,8 @@ impl SessionOrder {
         }
         let privileged = self.privileged.peek_lru();
         match (ordinary, privileged) {
-            (Some((ordinary_id, ordinary_nanos)), Some((privileged_id, privileged_nanos))) => {
-                if privileged_nanos < ordinary_nanos {
+            (Some((ordinary_id, ordinary_used)), Some((privileged_id, privileged_used))) => {
+                if privileged_used < ordinary_used {
                     Some(*privileged_id)
                 } else {
                     Some(*ordinary_id)
@@ -102,7 +111,7 @@ impl SessionOrder {
         }
     }
 
-    fn class_mut(&mut self, privileged: bool) -> &mut LruCache<FetchSessionId, i128> {
+    fn class_mut(&mut self, privileged: bool) -> &mut LruCache<FetchSessionId, Duration> {
         if privileged {
             &mut self.privileged
         } else {
@@ -119,10 +128,11 @@ mod tests {
 
     /// One `victim` scenario: a label, the `(id, privileged, nanos)` triples
     /// to seed in touch order, the calling session's privilege, and the
-    /// session the cache should offer up.
+    /// session the cache should offer up. The nanosecond counts stand for
+    /// elapsed-since-origin stamps; the cache only ever compares them.
     type VictimCase = (
         &'static str,
-        &'static [(FetchSessionId, bool, i128)],
+        &'static [(FetchSessionId, bool, u64)],
         bool,
         Option<FetchSessionId>,
     );
@@ -133,13 +143,14 @@ mod tests {
     /// monotonic and `victim` compares the two lists' heads on the assumption
     /// that list position and stamp order agree. Seeding a state that could
     /// not arise would test something the cache cannot do.
-    fn seeded(entries: &[(FetchSessionId, bool, i128)]) -> SessionOrder {
+    fn seeded(entries: &[(FetchSessionId, bool, u64)]) -> SessionOrder {
         let mut order = SessionOrder::new();
-        let mut previous = i128::MIN;
+        let mut previous = Duration::ZERO;
         for &(id, privileged, nanos) in entries {
-            assert!(nanos >= previous, "stamps must not go backwards");
-            previous = nanos;
-            order.touch(id, privileged, nanos);
+            let last_used = Duration::from_nanos(nanos);
+            assert!(last_used >= previous, "stamps must not go backwards");
+            previous = last_used;
+            order.touch(id, privileged, last_used);
         }
         order
     }
@@ -196,7 +207,7 @@ mod tests {
     fn touching_an_existing_session_moves_it_off_the_head() {
         let mut order = seeded(&[(1, false, 10), (2, false, 20)]);
         assert!(order.victim(false) == Some(1));
-        order.touch(1, false, 30);
+        order.touch(1, false, Duration::from_nanos(30));
         assert!(order.victim(false) == Some(2));
     }
 

@@ -1,0 +1,18 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 8 27 8 32 *)
+
+(* <recovery::ReplayRecordDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_ReplayRecordDecision = Apply Int64.t | Skip
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ReplayRecordDecision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 8 27 8 32]
+  (self: t_ReplayRecordDecision) (return (x: t_ReplayRecordDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReplayRecordDecision = Any.any_l () | & self: t_ReplayRecordDecision = self ])
+  [ return (result: t_ReplayRecordDecision) -> (! return {result}) ]

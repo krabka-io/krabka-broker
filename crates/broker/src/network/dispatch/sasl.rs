@@ -70,15 +70,7 @@ async fn handle_sasl_frame(
             // (KIP-368 in-band re-auth: a SaslHandshake just ran on an
             // already-authenticated connection). Any other state returns
             // ILLEGAL_SASL_STATE (34) and closes.
-            let mech_opt = match auth {
-                crate::network::auth::ConnectionAuth::Negotiating { mechanism, .. } => {
-                    Some(*mechanism)
-                }
-                crate::network::auth::ConnectionAuth::Reauthenticating { previous, .. } => {
-                    Some(previous.mechanism)
-                }
-                _ => None,
-            };
+            let mech_opt = auth.negotiated_mechanism();
             let resp = if let Some(mech) = mech_opt {
                 match mech {
                     krabka_security::SaslMechanism::Plain => {
@@ -100,10 +92,12 @@ async fn handle_sasl_frame(
                         let now_ms = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-                        crate::network::auth::handle_authenticate_oauthbearer(
+                        crate::network::auth::handle_authenticate_oauthbearer_with_jwks_cache(
                             &req,
                             auth,
                             &broker.config.oauthbearer_validator,
+                            &broker.config.oauthbearer_jwks_cache_generation,
+                            &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
                             now_ms,
                             broker.config.oauthbearer_max_session_lifetime,
                         )

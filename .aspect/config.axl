@@ -9,6 +9,7 @@ most of an hour:
     aspect lint       # clippy, over changed targets
     aspect format     # rustfmt/buildifier/yamlfmt, over changed files
     aspect delivery   # push only images whose built output changed
+    aspect container-suites  # select the PR container matrix
 
 `bazel build|test //...` remains equivalent and is what a developer without the
 CLI runs; nothing here is required to build the repository.

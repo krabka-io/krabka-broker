@@ -34,6 +34,21 @@ pub struct PartitionLabel {
     pub partition: i32,
 }
 
+/// One diskless WAL shard. Topic UUIDs keep delete/recreate cycles distinct.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct WalShardLabel {
+    pub topic_id: String,
+    pub partition: i32,
+}
+
+/// One voter in a diskless WAL shard's metadata-selected quorum.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct WalVoterLabel {
+    pub topic_id: String,
+    pub partition: i32,
+    pub voter: u64,
+}
+
 /// Fleet-complete KIP-932 backlog for one share-group partition.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ShareGroupLabel {
@@ -203,4 +218,139 @@ pub struct BreakGlassStateLabel {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct BreakGlassActionLabel {
     pub action: BreakGlassAction,
+}
+
+/// Why the broker stopped serving a client connection.
+///
+/// The four reasons are every way a connection ends on its own — as a peer
+/// that stopped talking, or as bytes that are not a request — plus the TLS
+/// handshake the peer never drove, so a closed enum bounds the
+/// `connection_closes` label set at four series however many connections the
+/// broker serves.
+///
+/// A connection the broker drops because of a request it did read is *not* a
+/// fifth reason: each such exit is already one count in another family, and
+/// counting it twice would make the two disagree. A request at an
+/// unregistered `api_key` is an `api_requests{api_key="Unknown"}`; one whose
+/// version is out of range is an `unsupported_api_requests`; one whose
+/// handler failed, or whose response would not encode or send, was counted by
+/// `api_requests` when it was dispatched; and a rejected `SaslAuthenticate` —
+/// including the pre-auth gate's `ILLEGAL_SASL_STATE`, under the mechanism a
+/// `SaslHandshake` named or the `Unknown` sentinel when none did — is a
+/// `failed_authentication`. What is left over is the broker
+/// failing to encode or to send its own answer to a SASL frame, which is a
+/// broker fault rather than anything the connection did, and is logged.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum ConnectionCloseReason {
+    /// The connection went `connections.max.idle.ms` without a complete frame
+    /// — counting a TLS handshake it opened the socket for and never drove,
+    /// which Kafka's idle expiry covers for the same reason.
+    Idle,
+    /// KIP-368: the SASL session passed the token's expiry without an in-band
+    /// re-authentication.
+    SaslSessionExpired,
+    /// The client sent bytes the broker could not read as a request: either
+    /// the length-delimited codec refused the frame, or the frame was too
+    /// short or too malformed to parse a request header out of.
+    DecodeError,
+    /// The client closed its end of the connection.
+    PeerClosed,
+}
+
+impl ConnectionCloseReason {
+    /// Every reason, in the order the module documents them.
+    pub const ALL: [Self; 4] = [
+        Self::Idle,
+        Self::SaslSessionExpired,
+        Self::DecodeError,
+        Self::PeerClosed,
+    ];
+
+    /// The `reason` label value this variant renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::SaslSessionExpired => "sasl_session_expired",
+            Self::DecodeError => "decode_error",
+            Self::PeerClosed => "peer_closed",
+        }
+    }
+}
+
+impl EncodeLabelValue for ConnectionCloseReason {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Connection-close label set, paired with the `connection_closes` counter
+/// family. Cardinality is bounded at four, because the field is the closed
+/// [`ConnectionCloseReason`] enum and no caller can name a fifth reason.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ConnectionCloseReasonLabel {
+    pub reason: ConnectionCloseReason,
+}
+
+/// The client quota that caused a throttle the broker applied.
+///
+/// Kafka splits its quotas the same way, and names them the same way in
+/// `kafka.server:type=*QuotaManager`. The four variants are the quotas whose
+/// delay this broker *sleeps* on: `producer_byte_rate` (KIP-13),
+/// `consumer_byte_rate` (KIP-13), `request_percentage` (KIP-124), and
+/// `controller_mutation_rate` (KIP-599), which `CreateTopics`,
+/// `CreatePartitions` and `DeleteTopics` apply inline once they have assembled
+/// their response. Kafka's `LeaderReplication` and `FollowerReplication`
+/// quotas are absent because KIP-73 throttles a follower fetch by dropping
+/// partitions out of the response rather than by delaying it, so there is no
+/// sleep to attribute.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum QuotaType {
+    /// KIP-13 `producer_byte_rate`, charged on the Produce path.
+    Produce,
+    /// KIP-13 `consumer_byte_rate`, charged on the Fetch path.
+    Fetch,
+    /// KIP-124 `request_percentage`, charged on every api by handler time.
+    Request,
+    /// KIP-599 `controller_mutation_rate`, charged on the topic-mutating
+    /// admin apis by the number of partitions the request moves.
+    ControllerMutation,
+}
+
+impl QuotaType {
+    /// Every quota the broker applies a throttle for.
+    pub const ALL: [Self; 4] = [
+        Self::Produce,
+        Self::Fetch,
+        Self::Request,
+        Self::ControllerMutation,
+    ];
+
+    /// The `quota_type` label value this variant renders as. The spelling is
+    /// Kafka's own `QuotaType` name, so one dashboard query reads the same
+    /// against either broker.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Produce => "Produce",
+            Self::Fetch => "Fetch",
+            Self::Request => "Request",
+            Self::ControllerMutation => "ControllerMutation",
+        }
+    }
+}
+
+impl EncodeLabelValue for QuotaType {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Applied-quota label set, paired with the `quota_throttle_duration_seconds`
+/// histogram family. Cardinality is bounded at four, because the field is the
+/// closed [`QuotaType`] enum: no principal, client id or topic reaches this
+/// label set, so no client can invent a series.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct QuotaTypeLabel {
+    pub quota_type: QuotaType,
 }

@@ -1,0 +1,31 @@
+(* #"/proof-work-235/crates/verified/src/storage.rs" 90 0 90 68 *)
+
+let%span sstorage = "/proof-work-235/crates/verified/src/storage.rs" 86 10 86 30
+let%span sstorage'0 = "/proof-work-235/crates/verified/src/storage.rs" 87 10 87 29
+let%span sstorage'1 = "/proof-work-235/crates/verified/src/storage.rs" 88 10 88 53
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let truncation_frontier [#"/proof-work-235/crates/verified/src/storage.rs" 90 0 90 68] (frontier: Int64.t)
+  (new_end: Int64.t) (return (x: Int64.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- Int64.lt frontier new_end ] s1 | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- frontier ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- new_end ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & frontier: Int64.t = frontier
+  | & new_end: Int64.t = new_end
+  | & _10: bool = Any.any_l () ])
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:truncation_frontier ensures] ([@stop_split] [@expl:truncation_frontier ensures #0] [%#sstorage] Int64.to_int result
+      <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #1] [%#sstorage'0] Int64.to_int result <= Int64.to_int new_end)
+    /\ ([@stop_split] [@expl:truncation_frontier ensures #2] [%#sstorage'1] Int64.to_int result = Int64.to_int frontier
+    \/ Int64.to_int result = Int64.to_int new_end)}
+    (! return {result}) ]

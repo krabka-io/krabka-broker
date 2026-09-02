@@ -1,0 +1,56 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 229 0 229 61 *)
+
+let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 243 45 243 50
+let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 237 43 237 47
+let%span sfreeze'1 = "/workspace/crates/verified/src/freeze.rs" 227 10 227 46
+let%span sfreeze'2 = "/workspace/crates/verified/src/freeze.rs" 251 4 265 5
+
+use creusot.prelude.Any
+
+type t_FreezeMutationKind =
+  | Produce
+  | TransactionEnlistment
+  | DeleteRecords
+  | DeleteTopic
+  | ReassignmentAlter
+  | ReassignmentCompletion
+  | Compaction
+  | Retention
+  | TransactionCompletion
+  | OffsetCommit
+  | Replication
+  | BarrierMarker
+  | TieringCopy
+
+predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze.rs" 250 0 250 57] (kind: t_FreezeMutationKind) =
+  [%#sfreeze'2] match kind with
+    | Produce | TransactionEnlistment | DeleteRecords | DeleteTopic | ReassignmentAlter | Compaction | Retention -> true
+    | TransactionCompletion | ReassignmentCompletion | OffsetCommit | Replication | BarrierMarker | TieringCopy -> false
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let freeze_refuses [#"/workspace/crates/verified/src/freeze.rs" 229 0 229 61] (kind: t_FreezeMutationKind)
+  (return (x: bool)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {kind = Produce} (! bb4)
+    | br1 -> {kind = TransactionEnlistment} (! bb4)
+    | br2 -> {kind = DeleteRecords} (! bb4)
+    | br3 -> {kind = DeleteTopic} (! bb4)
+    | br4 -> {kind = ReassignmentAlter} (! bb4)
+    | br5 -> {kind = ReassignmentCompletion} (! bb3)
+    | br6 -> {kind = Compaction} (! bb4)
+    | br7 -> {kind = Retention} (! bb4)
+    | br8 -> {kind = TransactionCompletion} (! bb3)
+    | br9 -> {kind = OffsetCommit} (! bb3)
+    | br10 -> {kind = Replication} (! bb3)
+    | br11 -> {kind = BarrierMarker} (! bb3)
+    | br12 -> {kind = TieringCopy} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#sfreeze] false ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#sfreeze'0] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & kind: t_FreezeMutationKind = kind ])
+  [ return (result: bool) -> {[@stop_split] [@expl:freeze_refuses ensures] [%#sfreeze'1] result
+    = freeze_refusal_model kind}
+    (! return {result}) ]

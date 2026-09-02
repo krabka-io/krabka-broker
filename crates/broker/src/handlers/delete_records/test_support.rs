@@ -11,7 +11,6 @@ use uuid::Uuid;
 use crate::{config::BreakGlassConfig, time_util::now_ms};
 
 pub(super) const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-pub(super) const NOW_MS: i64 = 60_000;
 
 pub(super) fn gated_config() -> BreakGlassConfig {
     BreakGlassConfig {

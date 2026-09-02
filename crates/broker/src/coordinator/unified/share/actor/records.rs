@@ -202,6 +202,14 @@ pub(super) async fn flush_pending(
     Ok(())
 }
 
+/// The wall-clock reading this actor stamps share-group records with, in
+/// milliseconds since the Unix epoch. It reads `std::time`, not chrono, which
+/// the name predates.
+///
+/// This is deliberately **not** [`crate::time_util::now_ms`], for the reason
+/// its twin in [`crate::coordinator::unified::actor`] gives: the two disagree
+/// on the `i64`-overflow arm, which saturates to `i64::MAX` in the shared
+/// helper and to `0` here.
 pub(super) fn chrono_now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

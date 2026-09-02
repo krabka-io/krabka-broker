@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_transaction_completion_decision": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      }
+    }
+  }
+}

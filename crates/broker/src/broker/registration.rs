@@ -231,6 +231,36 @@ pub(super) fn spawn_deferred_controller_registration(
     });
 }
 
+/// The batch this broker submits to register itself after an unclean restart:
+/// the ELR withdrawals its lost log tail requires, and then the ordinary
+/// registration batch.
+///
+/// A crashed broker keeps its node id, and krabka keeps its incarnation id in
+/// the log dir, so neither says anything about whether the log this node
+/// brings back is the log its ELR membership claims. The clean-shutdown proof
+/// does: a graceful stop wrote the broker epoch the cluster still holds, and
+/// nothing else can. Absent or stale, the restart is unclean and every ELR
+/// naming this node is withdrawn, exactly as
+/// `ClusterControlManager.registerBroker` calls
+/// `ReplicationControlManager.handleBrokerShutdown(id, isCleanShutdown=false,
+/// ...)` before it appends its `RegisterBrokerRecord`.
+fn broker_restart_batch(
+    config: &BrokerConfig,
+    image: &krabka_metadata::MetadataImage,
+) -> Vec<krabka_metadata::MetadataRecord> {
+    let mut records = if crate::clean_shutdown::restart_was_clean(
+        image,
+        config.node_id,
+        config.previous_broker_epoch,
+    ) {
+        Vec::new()
+    } else {
+        crate::elr::withdraw_elr_membership(image, config.node_id)
+    };
+    records.extend(broker_registration_batch(config));
+    records
+}
+
 pub(super) async fn register_broker(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
@@ -238,13 +268,8 @@ pub(super) async fn register_broker(
     if !config.is_broker() {
         return Ok(());
     }
-    submit_startup_records(
-        config,
-        controller,
-        broker_registration_batch(config),
-        "broker self-registration",
-    )
-    .await
+    let records = broker_restart_batch(config, &controller.current_image());
+    submit_startup_records(config, controller, records, "broker self-registration").await
 }
 
 pub(super) async fn submit_bootstrap_records(

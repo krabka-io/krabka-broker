@@ -1,0 +1,167 @@
+(* #"/proof-work-224/crates/verified/src/checkpoint.rs" 32 0 32 67 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span scheckpoint = "/proof-work-224/crates/verified/src/checkpoint.rs" 33 7 33 16
+let%span scheckpoint'0 = "/proof-work-224/crates/verified/src/checkpoint.rs" 33 20 33 21
+let%span scheckpoint'1 = "/proof-work-224/crates/verified/src/checkpoint.rs" 36 23 36 29
+let%span scheckpoint'2 = "/proof-work-224/crates/verified/src/checkpoint.rs" 37 16 37 22
+let%span scheckpoint'3 = "/proof-work-224/crates/verified/src/checkpoint.rs" 44 14 44 29
+let%span scheckpoint'4 = "/proof-work-224/crates/verified/src/checkpoint.rs" 45 14 45 23
+let%span scheckpoint'5 = "/proof-work-224/crates/verified/src/checkpoint.rs" 40 16 43 52
+let%span scheckpoint'6 = "/proof-work-224/crates/verified/src/checkpoint.rs" 39 16 39 30
+let%span scheckpoint'7 = "/proof-work-224/crates/verified/src/checkpoint.rs" 38 16 38 43
+let%span scheckpoint'8 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 31 46 37
+let%span scheckpoint'9 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 31 46 39
+let%span scheckpoint'10 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 41 46 47
+let%span scheckpoint'11 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 41 46 49
+let%span scheckpoint'12 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 51 46 64
+let%span scheckpoint'13 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 51 46 66
+let%span scheckpoint'14 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 68 46 81
+let%span scheckpoint'15 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 68 46 83
+let%span scheckpoint'16 = "/proof-work-224/crates/verified/src/checkpoint.rs" 46 11 46 84
+let%span scheckpoint'17 = "/proof-work-224/crates/verified/src/checkpoint.rs" 49 13 49 14
+let%span scheckpoint'18 = "/proof-work-224/crates/verified/src/checkpoint.rs" 49 8 49 14
+let%span scheckpoint'19 = "/proof-work-224/crates/verified/src/checkpoint.rs" 19 10 26 1
+let%span scheckpoint'20 = "/proof-work-224/crates/verified/src/checkpoint.rs" 6 10 7 77
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i32 = { f0: Int64.t; f1: Int32.t }
+
+let len_tup2_i64_i32 (self_: Slice64.slice tup2_i64_i32) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let checkpoint_id_newer (candidate_end: Int64.t) (candidate_epoch: Int32.t) (current_end: Int64.t)
+  (current_epoch: Int32.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:checkpoint_id_newer ensures] [%#scheckpoint'20] result
+    = (gt_log_Int (Int64.to_int candidate_end) (Int64.to_int current_end)
+    \/ Int64.to_int candidate_end = Int64.to_int current_end
+    /\ gt_log_Int (Int32.to_int candidate_epoch) (Int32.to_int current_epoch))}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let latest_checkpoint_index [#"/proof-work-224/crates/verified/src/checkpoint.rs" 32 0 32 67]
+  (ids: Slice64.slice tup2_i64_i32) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0
+    [ s0 = len_tup2_i64_i32 [%#scheckpoint] {ids} (fun (_x: UInt64.t) -> [ &_6 <- _x ] s1)
+    | s1 = [ &_5 <- _6 = ([%#scheckpoint'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_5 = false} (! bb3) | br1 -> {_5} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = [ &selected <- [%#scheckpoint'1] (0: UInt64.t) ] s1
+    | s1 = [ &i <- [%#scheckpoint'2] (1: UInt64.t) ] s2
+    | s2 = bb4 ]
+  | bb4 = bb4invariant
+    [ bb4 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb4 ([%#scheckpoint'3] Seq.length (Slice64.view ids)
+      - UInt64.t'int i)}
+      bb4invariant
+    | bb4invariant = {[@expl:loop invariant #0] [%#scheckpoint'7] 1 <= UInt64.t'int i
+      /\ UInt64.t'int i <= Seq.length (Slice64.view ids)}
+      {[@expl:loop invariant #1] [%#scheckpoint'6] UInt64.t'int selected < UInt64.t'int i}
+      {[@expl:loop invariant #2] [%#scheckpoint'5] forall k: int. 0 <= k /\ k < UInt64.t'int i
+        -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view ids) (UInt64.t'int selected)).f0) (Int64.to_int (Seq.get (Slice64.view ids) k).f0)
+        \/ Int64.to_int (Seq.get (Slice64.view ids) (UInt64.t'int selected)).f0
+          = Int64.to_int (Seq.get (Slice64.view ids) k).f0
+        /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view ids) (UInt64.t'int selected)).f1) (Int32.to_int (Seq.get (Slice64.view ids) k).f1)}
+      (! [ &variant_old_bb4 <- [%#scheckpoint'3] Seq.length (Slice64.view ids) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_i64_i32 [%#scheckpoint'4] {ids} (fun (_x: UInt64.t) -> [ &_29 <- _x ] s1)
+      | s1 = [ &_27 <- UInt64.lt i _29 ] s2
+      | s2 = any [ br0 -> {_27 = false} (! bb16) | br1 -> {_27} (! bb7) ] ]
+      [ bb7 = s0
+        [ s0 = [ &_34 <- i ] s1
+        | s1 = [ &_35 <- Slice64.length ids ] s2
+        | s2 = [ &_36 <- UInt64.lt _34 _35 ] s3
+        | s3 = {[@expl:index in bounds] [%#scheckpoint'8] _36} s4
+        | s4 = Slice64.get [%#scheckpoint'9] <tup2_i64_i32> {ids} {_34} (fun (r: tup2_i64_i32) -> [ &_33 <- r.f0 ] s5)
+        | s5 = [ &_38 <- i ] s6
+        | s6 = [ &_39 <- Slice64.length ids ] s7
+        | s7 = [ &_40 <- UInt64.lt _38 _39 ] s8
+        | s8 = {[@expl:index in bounds] [%#scheckpoint'10] _40} s9
+        | s9 = Slice64.get [%#scheckpoint'11] <tup2_i64_i32> {ids} {_38} (fun (r: tup2_i64_i32) -> [ &_37 <- r.f1 ] s10)
+        | s10 = [ &_42 <- selected ] s11
+        | s11 = [ &_43 <- Slice64.length ids ] s12
+        | s12 = [ &_44 <- UInt64.lt _42 _43 ] s13
+        | s13 = {[@expl:index in bounds] [%#scheckpoint'12] _44} s14
+        | s14 = Slice64.get [%#scheckpoint'13] <tup2_i64_i32> {ids} {_42}
+            (fun (r: tup2_i64_i32) -> [ &_41 <- r.f0 ] s15)
+        | s15 = [ &_46 <- selected ] s16
+        | s16 = [ &_47 <- Slice64.length ids ] s17
+        | s17 = [ &_48 <- UInt64.lt _46 _47 ] s18
+        | s18 = {[@expl:index in bounds] [%#scheckpoint'14] _48} s19
+        | s19 = Slice64.get [%#scheckpoint'15] <tup2_i64_i32> {ids} {_46}
+            (fun (r: tup2_i64_i32) -> [ &_45 <- r.f1 ] s20)
+        | s20 = checkpoint_id_newer [%#scheckpoint'16] {_33} {_37} {_41} {_45} (fun (_x: bool) -> [ &_32 <- _x ] s21)
+        | s21 = any [ br0 -> {_32 = false} (! bb15) | br1 -> {_32} (! bb13) ] ]
+      | bb13 = s0 [ s0 = [ &selected <- i ] s1 | s1 = bb15 ]
+      | bb15 = s0
+        [ s0 = UInt64.add [%#scheckpoint'18] {i} {[%#scheckpoint'17] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb4 ] ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- Some selected ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & ids: Slice64.slice tup2_i64_i32 = ids
+  | & _5: bool = Any.any_l ()
+  | & _6: UInt64.t = Any.any_l ()
+  | & selected: UInt64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: UInt64.t = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _33: Int64.t = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _37: Int32.t = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _41: Int64.t = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _43: UInt64.t = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _45: Int32.t = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & variant_old_bb4: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:latest_checkpoint_index ensures] [%#scheckpoint'19] match result with
+      | Some selected -> UInt64.t'int selected < Seq.length (Slice64.view ids)
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view ids)
+        -> gt_log_Int (Int64.to_int (Seq.get (Slice64.view ids) (UInt64.t'int selected)).f0) (Int64.to_int (Seq.get (Slice64.view ids) i).f0)
+        \/ Int64.to_int (Seq.get (Slice64.view ids) (UInt64.t'int selected)).f0
+          = Int64.to_int (Seq.get (Slice64.view ids) i).f0
+        /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view ids) (UInt64.t'int selected)).f1) (Int32.to_int (Seq.get (Slice64.view ids) i).f1))
+      | None -> Seq.length (Slice64.view ids) = 0
+      end}
+    (! return {result}) ]

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_break_glass_local_action_decision": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      }
+    }
+  }
+}

@@ -282,3 +282,143 @@ async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
         RestoreError::Io(io_error) if io_error.kind() == std::io::ErrorKind::NotFound
     ));
 }
+
+#[tokio::test]
+async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = Uuid::from_u128(10);
+    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
+
+    let snap_dir = tempfile::tempdir().expect("temp dir");
+    let snap_path = snap_dir.path().join("snapshot");
+    write_snapshot(
+        &snap_path,
+        RlmmCacheDump {
+            partitions: vec![PartitionDump {
+                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
+                segments: vec![
+                    snapshot_segment(
+                        "orders",
+                        0,
+                        topic_id,
+                        segment_id,
+                        0,
+                        RemoteLogSegmentState::CopySegmentFinished,
+                    ),
+                    snapshot_segment(
+                        "orders",
+                        0,
+                        topic_id,
+                        segment_id,
+                        0,
+                        RemoteLogSegmentState::CopySegmentFinished,
+                    ),
+                ],
+                delete_state: None,
+            }],
+        },
+    );
+
+    let args = args_from(
+        archive.path(),
+        &["--rlmm-snapshot", &snap_path.display().to_string()],
+    );
+    let store = open_archive(&args).expect("store");
+    let err = inventory(&store, &args).await.unwrap_err();
+    check!(matches!(err, RestoreError::MetadataDisagreement { .. }));
+}
+
+#[tokio::test]
+async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = Uuid::from_u128(10);
+    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
+
+    let snap_dir = tempfile::tempdir().expect("temp dir");
+    let snap_path = snap_dir.path().join("snapshot");
+    let duplicate = PartitionDump {
+        topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
+        segments: vec![snapshot_segment(
+            "orders",
+            0,
+            topic_id,
+            segment_id,
+            0,
+            RemoteLogSegmentState::CopySegmentFinished,
+        )],
+        delete_state: None,
+    };
+    write_snapshot(
+        &snap_path,
+        RlmmCacheDump {
+            partitions: vec![duplicate.clone(), duplicate],
+        },
+    );
+
+    let args = args_from(
+        archive.path(),
+        &["--rlmm-snapshot", &snap_path.display().to_string()],
+    );
+    let store = open_archive(&args).expect("store");
+    let err = inventory(&store, &args).await.unwrap_err();
+    check!(matches!(err, RestoreError::MetadataDisagreement { .. }));
+}
+
+#[tokio::test]
+async fn maximum_offset_reconciliation_is_stable_across_retry() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = Uuid::from_u128(10);
+    write_full_segment(archive.path(), "orders", 0, topic_id, i64::MAX, segment_id);
+
+    let snap_dir = tempfile::tempdir().expect("temp dir");
+    let snap_path = snap_dir.path().join("snapshot");
+    write_snapshot(
+        &snap_path,
+        RlmmCacheDump {
+            partitions: vec![PartitionDump {
+                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
+                segments: vec![snapshot_segment(
+                    "orders",
+                    0,
+                    topic_id,
+                    segment_id,
+                    i64::MAX,
+                    RemoteLogSegmentState::CopySegmentFinished,
+                )],
+                delete_state: None,
+            }],
+        },
+    );
+
+    let args = args_from(
+        archive.path(),
+        &["--rlmm-snapshot", &snap_path.display().to_string()],
+    );
+    let store = open_archive(&args).expect("store");
+    let first = inventory(&store, &args).await.expect("first inventory");
+    let retry = inventory(&store, &args).await.expect("retry inventory");
+
+    check!(first == retry);
+    check!(first.partitions[0].segments[0].base_offset.get() == i64::MAX);
+}
+
+#[tokio::test]
+async fn a_corrupt_snapshot_file_is_reported_as_io_invalid_data() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let snap_path = archive.path().join("snapshot");
+    std::fs::write(&snap_path, b"not an RLMM snapshot").expect("write corrupt snapshot");
+
+    let args = args_from(
+        archive.path(),
+        &["--rlmm-snapshot", &snap_path.display().to_string()],
+    );
+    let store = open_archive(&args).expect("store");
+    let err = inventory(&store, &args).await.unwrap_err();
+    check!(matches!(
+        err,
+        RestoreError::Io(io_error) if io_error.kind() == std::io::ErrorKind::InvalidData
+    ));
+}

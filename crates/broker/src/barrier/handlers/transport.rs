@@ -153,7 +153,8 @@ fn endpoint_of(broker_info: &BrokerRegistrationRecord, listener_name: &str) -> (
         )
 }
 
-/// The epoch value that asks the receiving broker not to fence a partition.
+/// The malformed epoch used when this image has no partition record. The
+/// receiver fences it, and the next fan-out attempt reads a fresh image.
 const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
 
 /// The request that asks one leader to mark every target it leads.
@@ -172,8 +173,8 @@ fn build_request(
             .or_default()
             .push(WritableBarrierPartition {
                 partition: target.partition.get(),
-                // -1 asks the receiver not to fence. The partition is absent
-                // from this image, so this broker has no epoch to offer.
+                // The partition is absent from this image, so this broker has
+                // no generation to assert. The receiver fences -1.
                 expected_leader_epoch: image
                     .partition(&target.topic, target.partition.get())
                     .map_or(NO_EXPECTED_LEADER_EPOCH, |record| record.leader_epoch.get()),
@@ -227,11 +228,23 @@ fn placements(response: &WriteBarrierMarkersResponse) -> Vec<MarkerPlacement> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_metadata::BrokerEndpoint;
-    use krabka_protocol::krabka::barrier::{WrittenBarrierPartition, WrittenBarrierTopic};
+    use std::collections::BTreeMap;
 
-    use super::*;
+    use assert2::check;
+    use krabka_ids::{NodeId, PartitionIndex};
+    use krabka_log::Offset;
+    use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataImage};
+    use krabka_protocol::krabka::barrier::{
+        WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
+        WriteBarrierMarkersResponse, WrittenBarrierPartition, WrittenBarrierTopic,
+    };
+    use krabka_security::ListenerProtocol;
+
+    use super::{build_request, endpoint_of, placements};
+    use crate::{
+        barrier::{injection::MarkerPlacement, marker::BarrierMarker, state::TargetPartition},
+        codes,
+    };
 
     fn marker() -> BarrierMarker {
         BarrierMarker {
@@ -258,7 +271,7 @@ mod tests {
             rack: None,
             endpoints,
             log_dirs: Vec::new(),
-            features: std::collections::BTreeMap::new(),
+            features: BTreeMap::new(),
         }
     }
 
@@ -271,7 +284,7 @@ mod tests {
         }
     }
 
-    /// One requested partition, carrying the no-fence epoch.
+    /// One requested partition, carrying the malformed missing-image epoch.
     fn part(partition: i32) -> WritableBarrierPartition {
         WritableBarrierPartition {
             partition,
@@ -305,8 +318,8 @@ mod tests {
             ],
             ..WriteBarrierMarkersRequest::default()
         };
-        // No partition is in this image, so the request asks the receiver not
-        // to fence on any of them.
+        // No partition is in this image, so every row carries -1 and the
+        // receiver will fence it.
         let image = MetadataImage::default();
         check!(build_request(&marker(), &targets, &image) == expected);
     }

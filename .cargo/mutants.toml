@@ -1,9 +1,8 @@
 # cargo-mutants configuration — https://mutants.rs
 #
 # Read by local cargo-mutants and by Bazel through the label flag in `.bazelrc`.
-# The separate `mutants-baseline.txt` records survivors rather than excluding
-# them: the blocking CI wrapper still runs every mutant and rejects any change
-# to that reviewed list.
+# The manually triggered Bazel sweep has no survivor baseline, so any missed
+# mutant fails its shard.
 
 test_tool = "nextest"
 profile = "mutants"

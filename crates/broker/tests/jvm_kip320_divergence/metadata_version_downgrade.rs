@@ -27,46 +27,6 @@ fn run_features(bootstrap: &str, command: &[&str]) -> std::process::Output {
     docker_run_kafka_tool_with_image(KAFKA_IMAGE_FEATURES, &args)
 }
 
-/// Default text a JVM broker returns for `UNKNOWN_SERVER_ERROR`. A
-/// broker-only JVM node answers with it when its controller forward fails.
-const JVM_FORWARD_FAILURE: &str = "The server experienced an unexpected error";
-
-/// Run `kafka-features.sh` until a Krabka broker serves the request.
-///
-/// The `AdminClient` fetches metadata from a random bootstrap node and sends
-/// `UpdateFeatures` to the node that the response names as controller. Krabka
-/// names the raft leader, which is a Krabka broker. A `KRaft` JVM broker names
-/// a random live broker, so it can name itself. `bootstrap` names the JVM
-/// broker too. A broker-only JVM node forwards admin writes to the controller
-/// with the KIP-590 `Envelope` RPC. Krabka does not implement `Envelope` (see
-/// `docs/KIP_MATRIX.md`). The JVM node then answers `UNKNOWN_SERVER_ERROR`
-/// with its default text, and that answer says nothing about Krabka's
-/// validation. Retry on that text until a Krabka broker serves the request.
-/// Any other outcome returns at once.
-async fn run_features_on_krabka(bootstrap: &str, command: &[&str]) -> std::process::Output {
-    let deadline = Instant::now() + Duration::from_mins(1);
-    loop {
-        let output = run_features(bootstrap, command);
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if !text.contains(JVM_FORWARD_FAILURE) {
-            return output;
-        }
-        eprintln!(
-            "KRABKA[kip320] kafka-features {command:?} landed on the JVM broker \
-             (Envelope forward failed); retrying"
-        );
-        assert2::assert!(
-            Instant::now() <= deadline,
-            "kafka-features {command:?} never reached a Krabka broker: {text}"
-        );
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-}
-
 /// Block until every Krabka broker sees the JVM broker (id 3) advertise
 /// `expected` as its `metadata.version` maximum. The `AdminClient` can route
 /// `UpdateFeatures` to either Krabka broker, so both images must hold the
@@ -176,7 +136,7 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
             vec!["downgrade", "--metadata", "3.7-IV1", "--unsafe"],
         ),
     ] {
-        let output = run_features_on_krabka(&cluster.bootstrap_all, &command).await;
+        let output = run_features(&cluster.bootstrap_all, &command);
         let error = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),

@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_broker_registration_decision": {
+        "prover": "alt-ergo",
+        "time": 0.015
+      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 }
+    }
+  }
+}

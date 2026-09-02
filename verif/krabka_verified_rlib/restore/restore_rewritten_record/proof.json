@@ -1,0 +1,24 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_branch_Option_tup2_i64_i64": {
+        "prover": "alt-ergo",
+        "time": 0.006
+      },
+      "vc_closure0": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_from_residual_Option_tup2_i64_i64": {
+        "prover": "alt-ergo",
+        "time": 0.014
+      },
+      "vc_is_some_and_i32": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_restore_record_coordinates": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_restore_rewritten_record": { "prover": "alt-ergo", "time": 0.038 }
+    }
+  }
+}

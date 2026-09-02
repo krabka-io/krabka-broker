@@ -53,7 +53,7 @@
 //! # What lives here
 //!
 //! - [`config`] holds the scheduler's tunables and the injected clock and
-//!   sleeper.
+//!   timer.
 //! - [`handles`] holds the per-partition state: the lock-free watermark mirror,
 //!   the long-poll wake, and the slot the scheduler installs its poke into.
 //! - [`waker`] is that poke. A produce that lands a batch due before the

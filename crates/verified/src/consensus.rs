@@ -4,7 +4,180 @@
 //! postconditions, invariants, variants, and supporting lemmas directly beside
 //! the executable bodies.
 
+#[cfg(creusot)]
+use std::clone::Clone;
+
 use creusot_std::prelude::*;
+
+/// Majority size for a voter set: `floor(n / 2) + 1`.
+#[ensures(result@ == voter_count@ / 2 + 1)]
+#[must_use]
+pub const fn majority_size(voter_count: usize) -> usize {
+    voter_count / 2 + 1
+}
+
+/// Whether the unique grants from current voters reach a majority.
+#[ensures(result == (current_grants@ >= voter_count@ / 2 + 1))]
+#[must_use]
+pub const fn election_has_quorum(voter_count: usize, current_grants: usize) -> bool {
+    current_grants >= majority_size(voter_count)
+}
+
+/// Offset-aware recovery mode resolved for one partition.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FailoverRecovery {
+    None,
+    Balanced,
+    Aggressive,
+}
+
+/// Safety action selected after the host classifies live ISR and replicas.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FailoverAction {
+    ElectClean,
+    ElectFromElr,
+    Recover(FailoverRecovery),
+    ElectUnclean,
+    Unavailable,
+    ShrinkIsr,
+    NoChange,
+}
+
+/// Select the only safe failover class, preserving clean-election precedence.
+///
+/// `has_electable_elr` is the KIP-966 rung between the clean election and
+/// everything that risks data: a replica that left the ISR while the partition
+/// still held `min.insync.replicas` members holds every committed record, so
+/// electing it is lossless and neither the `unclean.leader.election.enable`
+/// toggle nor `unclean.recovery.strategy` gates it. It is reachable only once
+/// the live ISR is empty, which is the same guard Apache Kafka's
+/// `isValidNewLeader` puts on its `targetElr` disjunct.
+///
+/// `unclean_election_available` is the KIP-841 out-of-ISR election being both
+/// permitted and possible. The two halves -- the topic's toggle, and a replica
+/// that can serve -- are one fact here because the classification never
+/// separates them: an election that is allowed with nobody to elect and one
+/// that has a candidate and no permission are the same unavailable partition.
+#[ensures(match result {
+    FailoverAction::ElectClean => leader_dead && has_electable_isr,
+    FailoverAction::ElectFromElr => leader_dead
+        && !has_electable_isr
+        && alive_isr_empty
+        && has_electable_elr,
+    FailoverAction::Recover(selected) => leader_dead
+        && !has_electable_isr
+        && alive_isr_empty
+        && !has_electable_elr
+        && recovery != FailoverRecovery::None
+        && selected == recovery,
+    FailoverAction::ElectUnclean => leader_dead
+        && !has_electable_isr
+        && alive_isr_empty
+        && !has_electable_elr
+        && recovery == FailoverRecovery::None
+        && unclean_election_available,
+    FailoverAction::Unavailable => leader_dead
+        && !has_electable_isr
+        && (!alive_isr_empty
+            || (!has_electable_elr
+                && recovery == FailoverRecovery::None
+                && !unclean_election_available)),
+    FailoverAction::ShrinkIsr => !leader_dead && isr_shrunk,
+    FailoverAction::NoChange => !leader_dead && !isr_shrunk,
+})]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies independent failover facts supplied by the host"
+)]
+#[must_use]
+pub fn failover_action(
+    leader_dead: bool,
+    has_electable_isr: bool,
+    alive_isr_empty: bool,
+    has_electable_elr: bool,
+    recovery: FailoverRecovery,
+    unclean_election_available: bool,
+    isr_shrunk: bool,
+) -> FailoverAction {
+    if !leader_dead {
+        return if isr_shrunk {
+            FailoverAction::ShrinkIsr
+        } else {
+            FailoverAction::NoChange
+        };
+    }
+    if has_electable_isr {
+        return FailoverAction::ElectClean;
+    }
+    if !alive_isr_empty {
+        return FailoverAction::Unavailable;
+    }
+    if has_electable_elr {
+        return FailoverAction::ElectFromElr;
+    }
+    match recovery {
+        FailoverRecovery::Balanced | FailoverRecovery::Aggressive => {
+            FailoverAction::Recover(recovery)
+        }
+        FailoverRecovery::None if unclean_election_available => FailoverAction::ElectUnclean,
+        FailoverRecovery::None => FailoverAction::Unavailable,
+    }
+}
+
+/// Select the replica with highest `(last leader epoch, log end offset)` and
+/// lowest broker ID as the deterministic tie-breaker.
+#[ensures((result == None) == (candidates@.len() == 0))]
+#[ensures(match result {
+    None => true,
+    Some(index) => index@ < candidates@.len()
+        && (forall<j: Int> 0 <= j && j < candidates@.len() ==>
+            candidates@[j].0@ <= candidates@[index@].0@)
+        && (forall<j: Int> 0 <= j && j < candidates@.len()
+            && candidates@[j].0@ == candidates@[index@].0@ ==>
+            candidates@[j].1@ <= candidates@[index@].1@)
+        && (forall<j: Int> 0 <= j && j < candidates@.len()
+            && candidates@[j].0@ == candidates@[index@].0@
+            && candidates@[j].1@ == candidates@[index@].1@ ==>
+            candidates@[index@].2@ <= candidates@[j].2@),
+})]
+#[allow(
+    clippy::len_zero,
+    reason = "Creusot 0.13 has no contract for slice::is_empty"
+)]
+#[must_use]
+pub fn select_best_recovery_replica(candidates: &[(i32, i64, u64)]) -> Option<usize> {
+    if candidates.len() == 0 {
+        return None;
+    }
+    let mut best = 0usize;
+    let mut i = 1usize;
+    #[invariant(1 <= i@ && i@ <= candidates@.len())]
+    #[invariant(best@ < i@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
+        candidates@[j].0@ <= candidates@[best@].0@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@
+        && candidates@[j].0@ == candidates@[best@].0@ ==>
+        candidates@[j].1@ <= candidates@[best@].1@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@
+        && candidates@[j].0@ == candidates@[best@].0@
+        && candidates@[j].1@ == candidates@[best@].1@ ==>
+        candidates@[best@].2@ <= candidates@[j].2@)]
+    #[variant(candidates@.len() - i@)]
+    while i < candidates.len() {
+        let candidate = candidates[i];
+        let current = candidates[best];
+        if candidate.0 > current.0
+            || (candidate.0 == current.0 && candidate.1 > current.1)
+            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 < current.2)
+        {
+            best = i;
+        }
+        i += 1;
+    }
+    Some(best)
+}
 
 /// Members of `{log_end} U s` with value >= `v`. This is the
 /// majority-replication witness.
@@ -508,6 +681,21 @@ mod tests {
     }
 
     #[test]
+    fn election_quorum_is_a_strict_majority() {
+        for (voters, grants, expected) in [
+            (1, 1, true),
+            (2, 1, false),
+            (2, 2, true),
+            (3, 1, false),
+            (3, 2, true),
+            (4, 2, false),
+            (4, 3, true),
+        ] {
+            check!(election_has_quorum(voters, grants) == expected);
+        }
+    }
+
+    #[test]
     fn hwm_never_regresses_and_gates_on_epoch_start() {
         // majority offset (2 of {10, 3, 9} with majority=2 -> 9) is <= epoch_start 9: hold.
         for (name, followers, epoch_start, current, expected) in [
@@ -546,5 +734,84 @@ mod tests {
     fn handoff_high_watermark_is_monotonic() {
         check!(handoff_high_watermark(7, 5) == 7);
         check!(handoff_high_watermark(7, 9) == 9);
+    }
+
+    #[test]
+    fn failover_action_covers_clean_unclean_recovery_and_shrink_paths() {
+        use FailoverAction::{
+            ElectClean, ElectFromElr, ElectUnclean, NoChange, Recover, ShrinkIsr, Unavailable,
+        };
+        use FailoverRecovery::{Aggressive, Balanced, None};
+
+        // (leader_dead, has_electable_isr, alive_isr_empty, has_electable_elr,
+        //  recovery, unclean_election_available, isr_shrunk) -> action.
+        for (dead, isr, empty, elr, recovery, unclean, shrunk, expected) in [
+            (true, true, false, false, None, false, true, ElectClean),
+            // An electable ELR member outranks every offset-aware strategy and
+            // the KIP-841 election, and never reaches either.
+            (true, false, true, true, None, false, false, ElectFromElr),
+            (true, false, true, true, None, true, false, ElectFromElr),
+            (
+                true,
+                false,
+                true,
+                true,
+                Balanced,
+                false,
+                false,
+                ElectFromElr,
+            ),
+            (
+                true,
+                false,
+                true,
+                false,
+                Balanced,
+                false,
+                false,
+                Recover(Balanced),
+            ),
+            (
+                true,
+                false,
+                true,
+                false,
+                Aggressive,
+                true,
+                false,
+                Recover(Aggressive),
+            ),
+            (true, false, true, false, None, true, false, ElectUnclean),
+            (true, false, true, false, None, false, false, Unavailable),
+            (
+                true,
+                false,
+                false,
+                false,
+                Balanced,
+                true,
+                false,
+                Unavailable,
+            ),
+            // A live ISR that holds nothing electable is unavailable even with
+            // an ELR: the ELR rung is guarded on an empty ISR.
+            (true, false, false, true, Balanced, true, false, Unavailable),
+            (false, false, false, false, None, false, true, ShrinkIsr),
+            (false, false, false, false, None, false, false, NoChange),
+        ] {
+            check!(failover_action(dead, isr, empty, elr, recovery, unclean, shrunk) == expected);
+        }
+    }
+
+    #[test]
+    fn recovery_replica_ranking_is_epoch_then_offset_then_lowest_node() {
+        for (candidates, expected) in [
+            (&[][..], None),
+            (&[(4, 100, 2), (5, 10, 3)][..], Some(1)),
+            (&[(5, 90, 2), (5, 120, 3)][..], Some(1)),
+            (&[(5, 100, 3), (5, 100, 1), (5, 100, 2)][..], Some(1)),
+        ] {
+            check!(select_best_recovery_replica(candidates) == expected);
+        }
     }
 }

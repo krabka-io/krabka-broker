@@ -1,0 +1,161 @@
+(* #"/workspace/crates/verified/src/raft.rs" 70 0 74 26 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span sraft = "/workspace/crates/verified/src/raft.rs" 79 11 79 32
+let%span sraft'0 = "/workspace/crates/verified/src/raft.rs" 80 11 80 35
+let%span sraft'1 = "/workspace/crates/verified/src/raft.rs" 84 14 84 39
+let%span sraft'2 = "/workspace/crates/verified/src/raft.rs" 85 11 85 39
+let%span sraft'3 = "/workspace/crates/verified/src/raft.rs" 23 28 27 35
+let%span sraft'4 = "/workspace/crates/verified/src/raft.rs" 28 28 36 36
+let%span sraft'5 = "/workspace/crates/verified/src/raft.rs" 37 28 68 1
+
+use creusot.int.UInt64
+use creusot.int.UInt32
+use creusot.prelude.Any
+
+type t_Option_u64 = None | Some UInt64.t
+
+type tup4_bool_Option_u64_Option_u64_u32 = { f0: bool; f1: t_Option_u64; f2: t_Option_u64; f3: UInt32.t }
+
+type tup3_u64_u64_u32 = { f0'0: UInt64.t; f1'0: UInt64.t; f2'0: UInt32.t }
+
+type tup3_bool_bool_bool = { f0'1: bool; f1'1: bool; f2'1: bool }
+
+let is_none_u64 (self_: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_none ensures] [%#soption] result = (self_ = None)}
+    (! return {result}) ]
+
+type t_FetchResponseMutation = Reject | Discover | Snapshot | Truncate | Append | HighWatermark
+
+type t_Option_Int = None'0 | Some'0 int
+
+function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum] UInt64.t'int self
+
+meta "rewrite_def" function deep_model_u64
+
+function deep_model_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int = [%#soption'0] match self with
+    | Some t -> Some'0 (deep_model_u64 t)
+    | None -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_u64
+
+function deep_model_ref_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int =
+  [%#smodel] deep_model_Option_u64 self
+
+meta "rewrite_def" function deep_model_ref_Option_u64
+
+let ne_Option_u64 (self_: t_Option_u64) (rhs: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:ne ensures] [%#scmp] result
+    = (deep_model_ref_Option_u64 self_ <> deep_model_ref_Option_u64 rhs)}
+    (! return {result}) ]
+
+predicate ge_log_u32 [@inline:trivial] (self: UInt32.t) (other: UInt32.t) = [%#sord] UInt32.le other self
+
+meta "rewrite_def" predicate ge_log_u32
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let fetch_response_mutation [#"/workspace/crates/verified/src/raft.rs" 70 0 74 26]
+  (current': tup4_bool_Option_u64_Option_u64_u32) (response: tup3_u64_u64_u32) (content: tup3_bool_bool_bool)
+  (return (x: t_FetchResponseMutation)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &discovering <- current'.f0 ] s1
+    | s1 = [ &role_leader <- current'.f1 ] s2
+    | s2 = [ &current_leader <- current'.f2 ] s3
+    | s3 = [ &current_epoch <- current'.f3 ] s4
+    | s4 = [ &from <- response.f0'0 ] s5
+    | s5 = [ &response_leader <- response.f1'0 ] s6
+    | s6 = [ &response_epoch <- response.f2'0 ] s7
+    | s7 = [ &has_snapshot <- content.f0'1 ] s8
+    | s8 = [ &has_divergence <- content.f1'1 ] s9
+    | s9 = [ &has_records <- content.f2'1 ] s10
+    | s10 = any [ br0 -> {discovering = false} (! bb10) | br1 -> {discovering} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = is_none_u64 [%#sraft] {role_leader} (fun (_x: bool) -> [ &_40 <- _x ] s1)
+    | s1 = any [ br0 -> {_40 = false} (! bb10) | br1 -> {_40} (! bb3) ] ]
+  | bb3 = s0
+    [ s0 = is_none_u64 [%#sraft'0] {current_leader} (fun (_x: bool) -> [ &_42 <- _x ] s1)
+    | s1 = any [ br0 -> {_42 = false} (! bb10) | br1 -> {_42} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = [ &_44 <- UInt32.ge response_epoch current_epoch ] s1
+    | s1 = any [ br0 -> {_44 = false} (! bb10) | br1 -> {_44} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- Discover ] s1 | s1 = return {_ret} ]
+  | bb10 = s0
+    [ s0 = [ &_50 <- Some from ] s1
+    | s1 = ne_Option_u64 [%#sraft'1] {role_leader} {_50} (fun (_x: bool) -> [ &_47 <- _x ] s2)
+    | s2 = any [ br0 -> {_47 = false} (! bb13) | br1 -> {_47} (! bb20) ] ]
+  | bb13 = s0
+    [ s0 = [ &_55 <- Some from ] s1
+    | s1 = ne_Option_u64 [%#sraft'2] {current_leader} {_55} (fun (_x: bool) -> [ &_52 <- _x ] s2)
+    | s2 = any [ br0 -> {_52 = false} (! bb16) | br1 -> {_52} (! bb20) ] ]
+  | bb16 = s0
+    [ s0 = [ &_57 <- response_leader <> from ] s1 | s1 = any [ br0 -> {_57 = false} (! bb18) | br1 -> {_57} (! bb20) ] ]
+  | bb18 = s0
+    [ s0 = [ &_60 <- response_epoch <> current_epoch ] s1
+    | s1 = any [ br0 -> {_60 = false} (! bb21) | br1 -> {_60} (! bb20) ] ]
+  | bb20 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb21 = any [ br0 -> {has_snapshot = false} (! bb23) | br1 -> {has_snapshot} (! bb22) ]
+  | bb22 = s0 [ s0 = [ &_ret <- Snapshot ] s1 | s1 = return {_ret} ]
+  | bb23 = any [ br0 -> {has_divergence = false} (! bb25) | br1 -> {has_divergence} (! bb24) ]
+  | bb24 = s0 [ s0 = [ &_ret <- Truncate ] s1 | s1 = return {_ret} ]
+  | bb25 = any [ br0 -> {has_records = false} (! bb27) | br1 -> {has_records} (! bb26) ]
+  | bb26 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb27 = s0 [ s0 = [ &_ret <- HighWatermark ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FetchResponseMutation = Any.any_l ()
+  | & current': tup4_bool_Option_u64_Option_u64_u32 = current'
+  | & response: tup3_u64_u64_u32 = response
+  | & content: tup3_bool_bool_bool = content
+  | & discovering: bool = Any.any_l ()
+  | & role_leader: t_Option_u64 = Any.any_l ()
+  | & current_leader: t_Option_u64 = Any.any_l ()
+  | & current_epoch: UInt32.t = Any.any_l ()
+  | & from: UInt64.t = Any.any_l ()
+  | & response_leader: UInt64.t = Any.any_l ()
+  | & response_epoch: UInt32.t = Any.any_l ()
+  | & has_snapshot: bool = Any.any_l ()
+  | & has_divergence: bool = Any.any_l ()
+  | & has_records: bool = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & _50: t_Option_u64 = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _55: t_Option_u64 = Any.any_l ()
+  | & _57: bool = Any.any_l ()
+  | & _60: bool = Any.any_l () ])
+  [ return (result: t_FetchResponseMutation) ->
+  {[@stop_split] [@expl:fetch_response_mutation ensures] ([@stop_split] [@expl:fetch_response_mutation ensures #0] [%#sraft'3] (result
+        = Discover)
+      = (current'.f0 /\ current'.f1 = None /\ current'.f2 = None /\ ge_log_u32 response.f2'0 current'.f3))
+    /\ ([@stop_split] [@expl:fetch_response_mutation ensures #1] [%#sraft'4] (result = Reject)
+      = (not (current'.f0 /\ current'.f1 = None /\ current'.f2 = None /\ ge_log_u32 response.f2'0 current'.f3)
+      /\ (current'.f1 <> Some (response.f0'0)
+      \/ current'.f2 <> Some (response.f0'0) \/ response.f1'0 <> response.f0'0 \/ response.f2'0 <> current'.f3)))
+    /\ ([@stop_split] [@expl:fetch_response_mutation ensures #2] [%#sraft'5] match result with
+      | Discover -> current'.f0 /\ current'.f1 = None /\ current'.f2 = None /\ ge_log_u32 response.f2'0 current'.f3
+      | Snapshot -> current'.f1 = Some (response.f0'0)
+      /\ current'.f2 = Some (response.f0'0)
+      /\ response.f1'0 = response.f0'0 /\ response.f2'0 = current'.f3 /\ content.f0'1
+      | Truncate -> current'.f1 = Some (response.f0'0)
+      /\ current'.f2 = Some (response.f0'0)
+      /\ response.f1'0 = response.f0'0 /\ response.f2'0 = current'.f3 /\ not content.f0'1 /\ content.f1'1
+      | Append -> current'.f1 = Some (response.f0'0)
+      /\ current'.f2 = Some (response.f0'0)
+      /\ response.f1'0 = response.f0'0
+      /\ response.f2'0 = current'.f3 /\ not content.f0'1 /\ not content.f1'1 /\ content.f2'1
+      | HighWatermark -> current'.f1 = Some (response.f0'0)
+      /\ current'.f2 = Some (response.f0'0)
+      /\ response.f1'0 = response.f0'0
+      /\ response.f2'0 = current'.f3 /\ not content.f0'1 /\ not content.f1'1 /\ not content.f2'1
+      | Reject -> true
+      end)}
+    (! return {result}) ]

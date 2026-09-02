@@ -1,0 +1,17 @@
+(* #"/proof-work-227/crates/verified/src/broker.rs" 44 27 44 32 *)
+
+(* <broker::ReplicaFetchMutation as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ReplicaFetchMutation = Reject | Retry | Truncate | Append
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ReplicaFetchMutation [#"/proof-work-227/crates/verified/src/broker.rs" 44 27 44 32]
+  (self: t_ReplicaFetchMutation) (return (x: t_ReplicaFetchMutation)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReplicaFetchMutation = Any.any_l () | & self: t_ReplicaFetchMutation = self ])
+  [ return (result: t_ReplicaFetchMutation) -> (! return {result}) ]

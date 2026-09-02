@@ -1,0 +1,85 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 22 0 22 87 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span srestore = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 23 20 23 21
+let%span srestore'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 27 16 27 37
+let%span srestore'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 14 28 22
+let%span srestore'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 14 28 30
+let%span srestore'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 33 28 34
+let%span srestore'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 14 28 34
+let%span srestore'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 31 13 31 25
+let%span srestore'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 31 28 31 29
+let%span srestore'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 31 13 31 29
+let%span srestore'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 11 10 20 1
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_batch_step [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 22 0 22 87]
+  (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int32.lt last_delta ([%#srestore] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_11 <- Int64.lt base minimum_base ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb5) | br1 -> {_11} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = from_i64 [%#srestore'0] {last_delta} (fun (_x: Int64.t) -> [ &delta <- _x ] s1)
+    | s1 = Int64.sub [%#srestore'2] {[%#srestore'1] const_MAX} {delta} (fun (_x: Int64.t) -> [ &_20 <- _x ] s2)
+    | s2 = Int64.sub [%#srestore'4] {_20} {[%#srestore'3] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_19 <- _x ] s3)
+    | s3 = [ &_17 <- Int64.gt base _19 ] s4
+    | s4 = any [ br0 -> {_17 = false} (! bb8) | br1 -> {_17} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = Int64.add [%#srestore'5] {base} {delta} (fun (_x: Int64.t) -> [ &_23 <- _x ] s1)
+    | s1 = Int64.add [%#srestore'7] {_23} {[%#srestore'6] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_22 <- _x ] s2)
+    | s2 = [ &_ret <- Some _22 ] s3
+    | s3 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & minimum_base: Int64.t = minimum_base
+  | & base: Int64.t = base
+  | & last_delta: Int32.t = last_delta
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & delta: Int64.t = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _19: Int64.t = Any.any_l ()
+  | & _20: Int64.t = Any.any_l ()
+  | & _22: Int64.t = Any.any_l ()
+  | & _23: Int64.t = Any.any_l () ])
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:restore_batch_step ensures] [%#srestore'8] match result with
+      | Some next -> ge_log_Int (Int32.to_int last_delta) 0
+      /\ ge_log_Int (Int64.to_int base) (Int64.to_int minimum_base)
+      /\ Int64.to_int next = Int64.to_int base + Int32.to_int last_delta + 1
+      /\ gt_log_Int (Int64.to_int next) (Int64.to_int base) /\ Int64.to_int next <= Int64.to_int const_MAX
+      | None -> Int32.to_int last_delta < 0
+      \/ Int64.to_int base < Int64.to_int minimum_base
+      \/ gt_log_Int (Int64.to_int base + Int32.to_int last_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]

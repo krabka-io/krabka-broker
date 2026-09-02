@@ -16,8 +16,11 @@
 use std::time::Duration;
 
 use assert2::check;
-use krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId, TopicRecord};
-use krabka_raft::{BootstrapMode, Controller, ControllerConfig};
+use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord, NodeId, TopicRecord};
+use krabka_raft::{
+    BootstrapMode, Controller, ControllerConfig, deserialize_metadata_snapshot,
+    serialize_metadata_snapshot,
+};
 use krabka_units::prelude::{Time, millis};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -25,6 +28,24 @@ use uuid::Uuid;
 /// Single-voter elections are instant, and a short timeout keeps each boot well
 /// inside the 30-second leader deadline.
 const FAST_ELECTION_TIMEOUT: Time = millis(200);
+
+#[test]
+fn public_snapshot_codec_round_trips_metadata() {
+    let cid = Uuid::new_v4();
+    let record = MetadataRecord::V1Topic(TopicRecord {
+        name: "snapshot-codec".into(),
+        topic_id: Uuid::new_v4(),
+        partitions: 0,
+        replication_factor: 1,
+    });
+    let image = MetadataImage::from_records(cid, &[record]);
+
+    let bytes = serialize_metadata_snapshot(&image, 1_700_000_000_000).unwrap();
+    let decoded = deserialize_metadata_snapshot(&bytes).unwrap();
+
+    check!(!decoded.is_empty());
+    check!(MetadataImage::from_records(cid, &decoded) == image);
+}
 
 async fn wait_for_leader(controller: &krabka_raft::ControllerHandle) {
     let mut rx = controller.watch_leader();

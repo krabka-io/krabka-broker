@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_election_has_quorum": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_majority_size": { "prover": "alt-ergo", "time": 0.009 }
+    }
+  }
+}

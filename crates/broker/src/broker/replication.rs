@@ -43,8 +43,6 @@ pub(super) fn spawn_replicator_supervisor(
         });
     crate::replicator_supervisor::ReplicatorSupervisor::new(
         crate::replicator_supervisor::ReplicatorSupervisorConfig {
-            client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
-            client_frame_max: config.client_frame_max,
             node_id: config.node_id,
             broker_id: config.broker_id,
             controller: Arc::clone(controller),
@@ -59,6 +57,12 @@ pub(super) fn spawn_replicator_supervisor(
             inter_broker_listener_protocol: protocol,
             inter_broker_server_name: config.inter_broker_server_name.clone(),
             inter_broker_listener_name: config.inter_broker_listener_name.clone(),
+            controller_listener_protocol: config.controller_listener_protocol,
+            controller_server_name: config
+                .controller_server_name
+                .clone()
+                .unwrap_or_else(|| "localhost".to_owned()),
+            controller_quorum_voters: config.controller_quorum_voters.clone(),
             replication: config.replication.clone(),
             throttle_state: Arc::clone(runtime.1),
             log_dir_status: storage.log_dir_status.clone(),

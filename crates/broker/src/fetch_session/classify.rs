@@ -9,6 +9,7 @@
 use std::sync::atomic::Ordering;
 
 use krabka_protocol::owned::fetch_request::FetchRequest;
+use qubit_clock::MonotonicClock as _;
 
 use super::{
     cache::FetchSessionCache,
@@ -146,7 +147,9 @@ impl FetchSessionCache {
         // unlinked and relinked at the head of its class's list. It happens
         // after the `session` borrow above ends, because both halves of the
         // cache live behind the one `guard`.
-        guard.order.touch(sid, privileged, self.clock.nanos());
+        guard
+            .order
+            .touch(sid, privileged, self.clock.now().elapsed_since_origin());
 
         SessionDecision::Incremental {
             session_id: sid,

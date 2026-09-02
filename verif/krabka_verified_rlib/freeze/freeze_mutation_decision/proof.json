@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_freeze_mutation_decision": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_freeze_refuses": { "prover": "alt-ergo", "time": 0.004 }
+    }
+  }
+}

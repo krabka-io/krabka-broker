@@ -11,6 +11,8 @@
 
 use std::{collections::HashMap, sync::atomic::Ordering};
 
+use qubit_clock::MonotonicClock as _;
+
 use super::{
     cache::{FetchSession, FetchSessionCache},
     epoch::{
@@ -99,7 +101,9 @@ impl FetchSessionCache {
         };
         let added_partitions = session.partitions.len();
         guard.sessions.insert(id, session);
-        guard.order.touch(id, privileged, self.clock.nanos());
+        guard
+            .order
+            .touch(id, privileged, self.clock.now().elapsed_since_origin());
         self.num_sessions.fetch_add(1, Ordering::Relaxed);
         self.num_partitions
             .fetch_add(added_partitions, Ordering::Relaxed);
@@ -115,7 +119,7 @@ mod tests {
     use super::*;
     use crate::fetch_session::{
         SessionDecision,
-        test_support::{TICK, mock_cache, req},
+        test_support::{TICK, manual_cache, req},
     };
 
     #[test]
@@ -159,13 +163,13 @@ mod tests {
 
     #[test]
     fn lru_eviction_drops_oldest_non_privileged() {
-        let (cache, mock) = mock_cache(2);
+        let (cache, clock) = manual_cache(2);
         let a = cache.try_allocate(false, "a".into(), vec![]);
         // Advance logical time so each session gets a strictly increasing
         // recency stamp, making `a` the unambiguous LRU victim — no sleep.
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let b = cache.try_allocate(false, "b".into(), vec![]);
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let c = cache.try_allocate(false, "c".into(), vec![]);
         assert!(cache.len() == 2);
         assert!(cache.evictions_total() == 1);
@@ -190,10 +194,10 @@ mod tests {
 
     #[test]
     fn privileged_can_evict_privileged() {
-        let (cache, mock) = mock_cache(1);
+        let (cache, clock) = manual_cache(1);
         let p1 = cache.try_allocate(true, "f1".into(), vec![]);
         // Advance so `f2` is strictly newer than `f1`; `f1` is the LRU victim.
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let p2 = cache.try_allocate(true, "f2".into(), vec![]);
         // p2 gets the next monotonic id (p1 + 1) after evicting p1.
         check!(p2 == p1 + 1);
@@ -209,19 +213,19 @@ mod tests {
         // The recency order is only useful if a live session's own traffic
         // updates it. `refetched` is allocated first, so it starts as the
         // victim; one incremental fetch on it must hand that role to `idle`.
-        let (cache, mock) = mock_cache(2);
+        let (cache, clock) = manual_cache(2);
         let refetched = cache.try_allocate(false, "refetched".into(), vec![]);
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let idle = cache.try_allocate(false, "idle".into(), vec![]);
 
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let incremental = req(refetched, 1, vec![], vec![]);
         assert!(matches!(
             cache.classify(&incremental),
             SessionDecision::Incremental { .. }
         ));
 
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let newcomer = cache.try_allocate(false, "newcomer".into(), vec![]);
         check!(cache.evictions_total() == 1);
         let guard = cache.inner.lock().unwrap();
@@ -237,11 +241,11 @@ mod tests {
         // round so neither answer can come from a standing class preference.
         let cases = [("follower is older", true), ("consumer is older", false)];
         for (label, follower_first) in cases {
-            let (cache, mock) = mock_cache(2);
+            let (cache, clock) = manual_cache(2);
             let first = cache.try_allocate(follower_first, "first".into(), vec![]);
-            mock.advance(TICK);
+            clock.advance(TICK).expect("manual time moves forward");
             let second = cache.try_allocate(!follower_first, "second".into(), vec![]);
-            mock.advance(TICK);
+            clock.advance(TICK).expect("manual time moves forward");
             let third = cache.try_allocate(true, "follower".into(), vec![]);
 
             check!(cache.evictions_total() == 1, "{label}");
@@ -259,15 +263,15 @@ mod tests {
         // the map. If it did not, the order would still name the closed
         // session as the oldest and the next allocation into a full cache
         // would go looking for a session that is no longer there.
-        let (cache, mock) = mock_cache(2);
+        let (cache, clock) = manual_cache(2);
         let closed = cache.try_allocate(false, "closed".into(), vec![]);
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let oldest_live = cache.try_allocate(false, "oldest-live".into(), vec![]);
         cache.close(closed);
 
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let refill = cache.try_allocate(false, "refill".into(), vec![]);
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let newcomer = cache.try_allocate(false, "newcomer".into(), vec![]);
 
         // The cache refilled to {oldest_live, refill}; `newcomer` displaced

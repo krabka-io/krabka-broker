@@ -10,8 +10,8 @@ use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
 
 use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_raft::{
-    AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-    SubmitChangeResult, UpdateVoter,
+    AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError, ReconfigOutcome,
+    RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
 };
 use tokio::sync::watch;
 
@@ -31,6 +31,12 @@ pub trait MetadataSource: Send + Sync {
     fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>>;
     fn watch_leader(&self) -> watch::Receiver<Option<NodeId>>;
     fn quorum_state(&self) -> QuorumState;
+    /// Current controller epoch when this source owns a quorum view.
+    /// Broker-only observers return `None` because they track the leader id but
+    /// do not own the controller's term state.
+    fn current_controller_epoch(&self) -> Option<u64> {
+        Some(self.quorum_state().current_term)
+    }
     /// Highest metadata-log offset applied to the current image, or `-1`
     /// before the first record.
     fn current_metadata_offset(&self) -> i64 {
@@ -46,6 +52,14 @@ pub trait MetadataSource: Send + Sync {
         &self,
         records: Vec<MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError>;
+    async fn submit_delegation_token_mutations(
+        &self,
+        _mutations: Vec<DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        Err(RaftError::ChangeRejected(
+            "metadata source does not support generation-bound token mutations".to_string(),
+        ))
+    }
     async fn change_membership(&self, new_voters: BTreeSet<NodeId>) -> Result<(), RaftError>;
     async fn add_learner(&self, node_id: NodeId, node: Node) -> Result<(), RaftError>;
     /// The controller listener's bound address. It is meaningful only on
@@ -79,4 +93,12 @@ pub trait MetadataWriter: Send + Sync {
         &self,
         records: Vec<MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError>;
+    async fn submit_delegation_token_mutations(
+        &self,
+        _mutations: Vec<DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        Err(RaftError::ChangeRejected(
+            "metadata writer does not support generation-bound token mutations".to_string(),
+        ))
+    }
 }

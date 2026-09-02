@@ -1,0 +1,55 @@
+(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 47 0 49 34 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbreak_glass_persistence = "/workspace/crates/verified/src/break_glass_persistence.rs" 60 39 60 40
+let%span sbreak_glass_persistence'0 = "/workspace/crates/verified/src/break_glass_persistence.rs" 53 39 53 40
+let%span sbreak_glass_persistence'1 = "/workspace/crates/verified/src/break_glass_persistence.rs" 41 10 45 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_BreakGlassProposalState = Missing | Stale | ExactPending
+
+type t_BreakGlassConsumptionFacts = {
+  proposal: t_BreakGlassProposalState;
+  consumed_at_ms: Int64.t;
+  uncommitted_tail: bool }
+
+type t_BreakGlassConsumptionDecision = Missing'0 | Malformed'0 | Stale'0 | InFlight'0 | Append'0
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let break_glass_consumption_decision [#"/workspace/crates/verified/src/break_glass_persistence.rs" 47 0 49 34]
+  (facts: t_BreakGlassConsumptionFacts) (return (x: t_BreakGlassConsumptionDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {facts.proposal = Missing} (! bb6)
+    | br1 -> {facts.proposal = Stale} (! bb5)
+    | br2 -> {facts.proposal = ExactPending} (! bb4) ]
+  | bb4 = s0
+    [ s0 = [ &_9 <- Int64.le facts.consumed_at_ms ([%#sbreak_glass_persistence] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb11) | br1 -> {_9} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- Malformed'0 ] s1 | s1 = return {_ret} ]
+  | bb11 = any [ br0 -> {facts.uncommitted_tail = false} (! bb13) | br1 -> {facts.uncommitted_tail} (! bb12) ]
+  | bb12 = s0 [ s0 = [ &_ret <- InFlight'0 ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- Append'0 ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_7 <- Int64.le facts.consumed_at_ms ([%#sbreak_glass_persistence'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_7 = false} (! bb8) | br1 -> {_7} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- Malformed'0 ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- Stale'0 ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- Missing'0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassConsumptionDecision = Any.any_l ()
+  | & facts: t_BreakGlassConsumptionFacts = facts
+  | & _7: bool = Any.any_l ()
+  | & _9: bool = Any.any_l () ])
+  [ return (result: t_BreakGlassConsumptionDecision) ->
+  {[@stop_split] [@expl:break_glass_consumption_decision ensures] [%#sbreak_glass_persistence'1] (result = Append'0)
+    = (facts.proposal = ExactPending /\ gt_log_Int (Int64.to_int facts.consumed_at_ms) 0 /\ not facts.uncommitted_tail)}
+    (! return {result}) ]

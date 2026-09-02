@@ -24,8 +24,6 @@ mod object_flush;
 #[cfg(test)]
 mod test_support;
 
-#[cfg(any(test, feature = "test-helpers"))]
-pub(crate) use self::object_flush::put_failure_count;
 pub(crate) use self::{config::FlushConfig, object_flush::flush_once};
 
 /// Every broker sweeps the shared prefix, so objects from removed brokers are
@@ -48,6 +46,7 @@ pub(crate) struct FlusherContext {
     pub(crate) index_log: DisklessIndexLog,
     pub(crate) node_id: NodeId,
     pub(crate) broker_id: i32,
+    pub(crate) metrics: crate::metrics::BrokerMetrics,
     /// Set once the first tick is allowed to fire, which is after the index
     /// projection has replayed the index topic.
     pub(crate) ready: Arc<AtomicBool>,
@@ -137,10 +136,12 @@ async fn flush_tick(
     flush_once(
         Arc::clone(&context.object_store),
         context.broker_id,
+        &context.metrics,
         &context.index_log,
         context.index_log.cache(),
         &partitions,
         config,
+        |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
     )
     .await
 }
@@ -199,7 +200,17 @@ impl Reclaimer {
             }
             unreferenced.insert(object_key.clone());
             let first_seen = *self.first_seen.entry(object_key.clone()).or_insert(now);
-            if now.duration_since(first_seen) < self.grace {
+            let grace_elapsed = now.duration_since(first_seen) >= self.grace;
+            if !krabka_verified::diskless_object_reclaimable(false, grace_elapsed) {
+                continue;
+            }
+            let cache = context.index_log.cache();
+            let cache = cache.lock().await;
+            if !krabka_verified::diskless_object_reclaimable(
+                cache.references_object(&object_key),
+                true,
+            ) {
+                self.first_seen.remove(&object_key);
                 continue;
             }
             match context.object_store.delete(&object.location).await {
@@ -290,6 +301,7 @@ mod tests {
             index_log: index,
             node_id: NodeId(1),
             broker_id: 7,
+            metrics: crate::metrics::BrokerMetrics::new(),
             ready: Arc::new(AtomicBool::new(false)),
         };
 
@@ -343,6 +355,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::new(AtomicBool::new(false)),
             },
             FlushConfig {
@@ -450,10 +463,11 @@ mod tests {
             index_log: index,
             node_id: NodeId(1),
             broker_id: 7,
+            metrics: crate::metrics::BrokerMetrics::new(),
             ready: Arc::new(AtomicBool::new(false)),
         };
 
-        let mut reclaimer = Reclaimer::new(Duration::from_secs(60));
+        let mut reclaimer = Reclaimer::new(Duration::from_mins(1));
         let observed = Instant::now();
         reclaimer.sweep_at(&context, observed).await;
         assert!(
@@ -464,7 +478,7 @@ mod tests {
             "the grace period protects lagging projections"
         );
         reclaimer
-            .sweep_at(&context, observed + Duration::from_secs(60))
+            .sweep_at(&context, observed + Duration::from_mins(1))
             .await;
 
         assert!(
@@ -521,6 +535,7 @@ mod tests {
             index_log: index,
             node_id: NodeId(1),
             broker_id: 7,
+            metrics: crate::metrics::BrokerMetrics::new(),
             ready: Arc::new(AtomicBool::new(false)),
         };
 
@@ -574,6 +589,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::new(AtomicBool::new(false)),
             },
             config.clone(),
@@ -613,6 +629,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::clone(&ready),
             },
             config,
@@ -695,6 +712,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready,
             },
             store,
@@ -792,6 +810,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::new(AtomicBool::new(false)),
             },
             FlushConfig {

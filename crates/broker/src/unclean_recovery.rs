@@ -3,7 +3,16 @@
 //! This module holds the pure selection helpers and the controller-side
 //! Unclean Recovery Manager (URM) task. The URM polls surviving replicas for
 //! their log-end-offset and last-written leader epoch with `GetReplicaLogInfo`
-//! (`api_key` 93), and elects the most complete log.
+//! (`api_key` 93), and elects a leader out of what answers.
+//!
+//! Which leader is [`select_leader`]'s decision, and the most complete log is
+//! its last choice. A responder the partition record still names in its ISR
+//! goes first, and a surviving member of the partition's KIP-966
+//! eligible-leader-replica set next; either is elected ahead of a longer log
+//! that is in neither set, because only those two are known to hold every
+//! committed record. [`ElectionBasis`] carries which of the three happened all
+//! the way to the audit record and the unclean-leader-election counter,
+//! neither of which should call a lossless election a loss.
 //!
 //! # KFC-9: the path with no caller to refuse
 //!
@@ -27,5 +36,5 @@ pub(crate) use self::{
     job::{RecoveryJob, RecoveryOutcome, UncleanRecoveryHandle},
     manager::UncleanRecoveryManager,
     policy::RecoveryPolicy,
-    selection::{ReplicaLogInfo, has_newer_leader, select_best_replica},
+    selection::{Election, ReplicaLogInfo, has_newer_leader, select_leader},
 };

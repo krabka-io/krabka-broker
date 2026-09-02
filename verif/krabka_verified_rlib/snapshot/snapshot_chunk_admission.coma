@@ -1,0 +1,157 @@
+(* #"/proof-work-217c/crates/verified/src/snapshot.rs" 62 0 70 26 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span ssnapshot = "/proof-work-217c/crates/verified/src/snapshot.rs" 72 22 72 23
+let%span ssnapshot'0 = "/proof-work-217c/crates/verified/src/snapshot.rs" 73 23 73 24
+let%span ssnapshot'1 = "/proof-work-217c/crates/verified/src/snapshot.rs" 74 22 74 23
+let%span ssnapshot'2 = "/proof-work-217c/crates/verified/src/snapshot.rs" 75 27 75 28
+let%span ssnapshot'3 = "/proof-work-217c/crates/verified/src/snapshot.rs" 86 30 86 61
+let%span ssnapshot'4 = "/proof-work-217c/crates/verified/src/snapshot.rs" 22 10 60 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_SnapshotChunkDecision = Restart | Continue Int64.t | Complete
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let snapshot_chunk_admission [#"/proof-work-217c/crates/verified/src/snapshot.rs" 62 0 70 26] (identity_matches: bool)
+  (fixed_size: t_Option_i64) (received: Int64.t) (declared_size: Int64.t) (position: Int64.t) (chunk_len: Int64.t)
+  (max_size: Int64.t) (return (x: t_SnapshotChunkDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {identity_matches = false} (! bb13) | br1 -> {identity_matches} (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_18 <- Int64.lt received ([%#ssnapshot] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_18 = false} (! bb3) | br1 -> {_18} (! bb13) ] ]
+  | bb3 = s0
+    [ s0 = [ &_20 <- Int64.lt chunk_len ([%#ssnapshot'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb5) | br1 -> {_20} (! bb13) ] ]
+  | bb5 = s0
+    [ s0 = [ &_22 <- Int64.lt max_size ([%#ssnapshot'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb7) | br1 -> {_22} (! bb13) ] ]
+  | bb7 = s0
+    [ s0 = [ &_24 <- Int64.lt declared_size ([%#ssnapshot'2] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb9) | br1 -> {_24} (! bb13) ] ]
+  | bb9 = s0
+    [ s0 = [ &_26 <- Int64.gt declared_size max_size ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb11) | br1 -> {_26} (! bb13) ] ]
+  | bb11 = s0
+    [ s0 = [ &_29 <- position <> received ] s1 | s1 = any [ br0 -> {_29 = false} (! bb14) | br1 -> {_29} (! bb13) ] ]
+  | bb14 = any [ br0 -> {fixed_size = None} (! bb19) | br1 (x0: Int64.t) -> {fixed_size = Some x0} (! bb16) ]
+  | bb16 = s0
+    [ s0 = elim_Some {fixed_size} (fun (r0: Int64.t) -> [ &size <- r0 ] s1)
+    | s1 = [ &_36 <- size <> declared_size ] s2
+    | s2 = any [ br0 -> {_36 = false} (! bb19) | br1 -> {_36} (! bb17) ] ]
+  | bb17 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ]
+  | bb19 = s0
+    [ s0 = checked_add [%#ssnapshot'3] {received} {chunk_len} (fun (_x: t_Option_i64) -> [ &_42 <- _x ] s1)
+    | s1 = any [ br0 -> {_42 = None} (! bb23) | br1 (x0: Int64.t) -> {_42 = Some x0} (! bb22) ] ]
+  | bb23 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ]
+  | bb22 = s0
+    [ s0 = elim_Some {_42} (fun (r0: Int64.t) -> [ &next_position <- r0 ] s1)
+    | s1 = [ &_46 <- Int64.gt next_position declared_size ] s2
+    | s2 = any [ br0 -> {_46 = false} (! bb25) | br1 -> {_46} (! bb24) ] ]
+  | bb24 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ]
+  | bb25 = s0
+    [ s0 = [ &_49 <- next_position = declared_size ] s1
+    | s1 = any [ br0 -> {_49 = false} (! bb27) | br1 -> {_49} (! bb26) ] ]
+  | bb26 = s0 [ s0 = [ &_ret <- Complete ] s1 | s1 = return {_ret} ]
+  | bb27 = s0 [ s0 = [ &_ret <- Continue next_position ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SnapshotChunkDecision = Any.any_l ()
+  | & identity_matches: bool = identity_matches
+  | & fixed_size: t_Option_i64 = fixed_size
+  | & received: Int64.t = received
+  | & declared_size: Int64.t = declared_size
+  | & position: Int64.t = position
+  | & chunk_len: Int64.t = chunk_len
+  | & max_size: Int64.t = max_size
+  | & _18: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & size: Int64.t = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & next_position: Int64.t = Any.any_l ()
+  | & _42: t_Option_i64 = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _49: bool = Any.any_l () ])
+  [ return (result: t_SnapshotChunkDecision) ->
+  {[@stop_split] [@expl:snapshot_chunk_admission ensures] [%#ssnapshot'4] match result with
+      | Restart -> not identity_matches
+      \/ Int64.to_int received < 0
+      \/ Int64.to_int chunk_len < 0
+      \/ Int64.to_int max_size < 0
+      \/ Int64.to_int declared_size < 0
+      \/ gt_log_Int (Int64.to_int declared_size) (Int64.to_int max_size)
+      \/ Int64.to_int position <> Int64.to_int received
+      \/ match fixed_size with
+          | Some size -> Int64.to_int size <> Int64.to_int declared_size
+          | None -> false
+          end
+      \/ gt_log_Int (Int64.to_int received + Int64.to_int chunk_len) (Int64.to_int declared_size)
+      | Continue next_position -> identity_matches
+      /\ ge_log_Int (Int64.to_int received) 0
+      /\ ge_log_Int (Int64.to_int chunk_len) 0
+      /\ ge_log_Int (Int64.to_int max_size) 0
+      /\ ge_log_Int (Int64.to_int declared_size) 0
+      /\ Int64.to_int declared_size <= Int64.to_int max_size
+      /\ Int64.to_int position = Int64.to_int received
+      /\ match fixed_size with
+          | Some size -> Int64.to_int size = Int64.to_int declared_size
+          | None -> true
+          end
+      /\ Int64.to_int next_position = Int64.to_int received + Int64.to_int chunk_len
+      /\ Int64.to_int next_position < Int64.to_int declared_size
+      | Complete -> identity_matches
+      /\ ge_log_Int (Int64.to_int received) 0
+      /\ ge_log_Int (Int64.to_int chunk_len) 0
+      /\ ge_log_Int (Int64.to_int max_size) 0
+      /\ ge_log_Int (Int64.to_int declared_size) 0
+      /\ Int64.to_int declared_size <= Int64.to_int max_size
+      /\ Int64.to_int position = Int64.to_int received
+      /\ match fixed_size with
+          | Some size -> Int64.to_int size = Int64.to_int declared_size
+          | None -> true
+          end
+      /\ Int64.to_int received + Int64.to_int chunk_len = Int64.to_int declared_size
+      end}
+    (! return {result}) ]

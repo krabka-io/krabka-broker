@@ -51,36 +51,56 @@ impl Segment {
         batch.encode(&mut buf)?;
         let bytes = buf.freeze();
 
+        let (last_offset, _) = krabka_verified::local_append_coordinates(
+            batch.base_offset,
+            batch.base_offset,
+            batch.last_offset_delta,
+        )
+        .ok_or_else(|| LogError::InvalidArgument("invalid batch offset interval".into()))?;
         let position = self.log_size;
+        let appended_len = u64::try_from(bytes.len())
+            .map_err(|_| LogError::InvalidArgument("encoded batch length overflow".into()))?;
+        let new_log_size = position
+            .checked_add(appended_len)
+            .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
         let previous_last_offset = self.last_offset;
         let previous_max_timestamp = self.max_timestamp;
-        // The active file cursor is kept at log_size by open/recovery/truncate,
-        // so the hot append path does not need an lseek before every write.
-        if let Err(error) = write_all(&*self.io, &self.log_file, &bytes) {
-            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
-            return Err(error.into());
-        }
-        self.log_size += bytes.len() as u64;
-
-        let last_offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta));
-        self.last_offset = last_offset;
-        if batch.max_timestamp > self.max_timestamp {
-            self.max_timestamp = batch.max_timestamp;
-        }
-
         let should_index = match self.offset_index.last_entry() {
             None => true,
             Some((_, last_pos)) => {
                 position.saturating_sub(u64::from(last_pos)) >= index_interval.bytes_u64()
             }
         };
-        if should_index {
+        let index_entry = if should_index {
             let rel = u32::try_from(batch.base_offset - self.base_offset.0)
                 .map_err(|_| LogError::BadSegmentName("offset overflow in segment".into()))?;
-            let pos_u32 = u32::try_from(position)
+            let pos = u32::try_from(position)
                 .map_err(|_| LogError::BadSegmentName("position overflow in segment".into()))?;
-            self.offset_index.append(rel, pos_u32)?;
-            self.time_index.append(self.max_timestamp, rel)?;
+            Some((rel, pos))
+        } else {
+            None
+        };
+        // The active file cursor is kept at log_size by open/recovery/truncate,
+        // so the hot append path does not need an lseek before every write.
+        if let Err(error) = write_all(&*self.io, &self.log_file, &bytes) {
+            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            return Err(error.into());
+        }
+        self.log_size = new_log_size;
+
+        self.last_offset = Offset(last_offset);
+        if batch.max_timestamp > self.max_timestamp {
+            self.max_timestamp = batch.max_timestamp;
+        }
+
+        if let Some((rel, pos)) = index_entry
+            && let Err(error) = self
+                .offset_index
+                .append(rel, pos)
+                .and_then(|()| self.time_index.append(self.max_timestamp, rel))
+        {
+            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            return Err(error);
         }
 
         tracing::Span::current().record("position", position);
@@ -157,35 +177,55 @@ impl Segment {
         // The protocol patcher writes the raw KIP-320 wire `int32`; unwrap here.
         patch_base_offset_and_leader_epoch(&mut header, base_offset.0, leader_epoch.0);
 
+        let (last_offset, _) = krabka_verified::local_append_coordinates(
+            base_offset.0,
+            base_offset.0,
+            last_offset_delta,
+        )
+        .ok_or_else(|| LogError::InvalidArgument("invalid batch offset interval".into()))?;
         let position = self.log_size;
+        let appended_len = u64::try_from(bytes.len())
+            .map_err(|_| LogError::InvalidArgument("encoded batch length overflow".into()))?;
+        let new_log_size = position
+            .checked_add(appended_len)
+            .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
         let previous_last_offset = self.last_offset;
         let previous_max_timestamp = self.max_timestamp;
-        let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
-        if let Err(error) = write_all_vectored(&*self.io, &self.log_file, &mut bufs) {
-            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
-            return Err(error.into());
-        }
-        self.log_size += bytes.len() as u64;
-
-        let last_offset = base_offset + i64::from(last_offset_delta);
-        self.last_offset = last_offset;
-        if max_timestamp > self.max_timestamp {
-            self.max_timestamp = max_timestamp;
-        }
-
         let should_index = match self.offset_index.last_entry() {
             None => true,
             Some((_, last_pos)) => {
                 position.saturating_sub(u64::from(last_pos)) >= index_interval.bytes_u64()
             }
         };
-        if should_index {
+        let index_entry = if should_index {
             let rel = u32::try_from(base_offset.0 - self.base_offset.0)
                 .map_err(|_| LogError::BadSegmentName("offset overflow in segment".into()))?;
-            let pos_u32 = u32::try_from(position)
+            let pos = u32::try_from(position)
                 .map_err(|_| LogError::BadSegmentName("position overflow in segment".into()))?;
-            self.offset_index.append(rel, pos_u32)?;
-            self.time_index.append(self.max_timestamp, rel)?;
+            Some((rel, pos))
+        } else {
+            None
+        };
+        let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
+        if let Err(error) = write_all_vectored(&*self.io, &self.log_file, &mut bufs) {
+            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            return Err(error.into());
+        }
+        self.log_size = new_log_size;
+
+        self.last_offset = Offset(last_offset);
+        if max_timestamp > self.max_timestamp {
+            self.max_timestamp = max_timestamp;
+        }
+
+        if let Some((rel, pos)) = index_entry
+            && let Err(error) = self
+                .offset_index
+                .append(rel, pos)
+                .and_then(|()| self.time_index.append(self.max_timestamp, rel))
+        {
+            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            return Err(error);
         }
 
         tracing::Span::current().record("position", position);
@@ -214,6 +254,24 @@ mod tests {
         let read = seg.read(Offset(0), NO_LIMIT).unwrap();
         assert2::assert!(seg.last_offset() == Offset(4));
         assert2::assert!(read == vec![b1, b2]);
+    }
+
+    #[test]
+    fn append_rejects_offset_successor_overflow_before_writing() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(i64::MAX)).unwrap();
+        let batch = sample_batch(i64::MAX, 1, 100);
+
+        let error = seg.append(&batch, DENSE_INDEX).unwrap_err();
+
+        assert2::assert!(matches!(error, LogError::InvalidArgument(_)));
+        assert2::assert!(seg.size().bytes_u64() == 0);
+        assert2::assert!(
+            std::fs::metadata(crate::name::log_path(dir.path(), i64::MAX))
+                .unwrap()
+                .len()
+                == 0
+        );
     }
 
     #[test]

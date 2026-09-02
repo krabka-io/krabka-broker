@@ -7,6 +7,7 @@ use std::{
 
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
+use krabka_verified::wal::{WalFetchAdmission, wal_fetch_admission};
 
 use super::{
     engine::WalShardEngine,
@@ -37,6 +38,7 @@ pub(crate) struct WalShardRegistry {
     principal_node_ids: HashMap<String, krabka_raft::NodeId>,
     engines: DashMap<ShardId, Arc<WalShardEngine>>,
     placements: RwLock<HashMap<ShardId, WalPlacement>>,
+    metrics: crate::metrics::BrokerMetrics,
     #[cfg(any(test, feature = "test-helpers"))]
     follower_fetchers: DashMap<ShardId, std::collections::BTreeSet<krabka_raft::NodeId>>,
 }
@@ -49,9 +51,16 @@ impl WalShardRegistry {
             principal_node_ids: HashMap::new(),
             engines: DashMap::new(),
             placements: RwLock::new(HashMap::new()),
+            metrics: crate::metrics::BrokerMetrics::new(),
             #[cfg(any(test, feature = "test-helpers"))]
             follower_fetchers: DashMap::new(),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_metrics(mut self, metrics: crate::metrics::BrokerMetrics) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     #[must_use]
@@ -85,6 +94,7 @@ impl WalShardRegistry {
             .get(&shard_id)
             .map_or(&[][..], |placement| placement.voters.as_slice());
         engine.configure_distributed(self.local_node_id, voters);
+        engine.attach_observability(shard_id, self.metrics.clone());
         self.engines.insert(shard_id, engine);
     }
 
@@ -159,7 +169,10 @@ impl WalShardRegistry {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         placements.remove(&shard_id);
-        self.engines.remove(&shard_id).map(|(_, engine)| engine)
+        self.engines.remove(&shard_id).map(|(_, engine)| {
+            engine.clear_observability();
+            engine
+        })
     }
 
     pub(crate) fn route_fetch_request(
@@ -194,12 +207,20 @@ impl WalShardRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&shard)
             .cloned();
-        let authorized = placement.as_ref().is_some_and(|placement| {
-            Some(request.from) == authenticated_from
-                && placement.voters.first() == Some(&self.local_node_id)
-                && placement.voters.contains(&request.from)
+        let voters = placement.as_ref().map_or_else(Vec::new, |placement| {
+            placement.voters.iter().map(|voter| voter.0).collect()
         });
-        if !authorized {
+        let admission = wal_fetch_admission(
+            authenticated_from.map(|node| node.0),
+            request.from.0,
+            self.local_node_id.0,
+            &voters,
+            request.current_leader_epoch,
+            placement
+                .as_ref()
+                .map_or(0, |placement| placement.leader_epoch),
+        );
+        if admission == WalFetchAdmission::Denied {
             return Some(Ok(unknown_shard_fetch_response(request.group)));
         }
         #[cfg(any(test, feature = "test-helpers"))]
@@ -210,13 +231,12 @@ impl WalShardRegistry {
         let Some(engine) = self.get(shard) else {
             return Some(Ok(unknown_shard_fetch_response(request.group)));
         };
-        let leader_epoch = placement.expect("authorized WAL placement").leader_epoch;
-        if request.current_leader_epoch >= 0 && request.current_leader_epoch != leader_epoch {
-            let error_code = if request.current_leader_epoch < leader_epoch {
-                FENCED_LEADER_EPOCH
-            } else {
-                UNKNOWN_LEADER_EPOCH
-            };
+        let epoch_error = match admission {
+            WalFetchAdmission::FencedLeaderEpoch => Some(FENCED_LEADER_EPOCH),
+            WalFetchAdmission::UnknownLeaderEpoch => Some(UNKNOWN_LEADER_EPOCH),
+            WalFetchAdmission::Denied | WalFetchAdmission::Serve => None,
+        };
+        if let Some(error_code) = epoch_error {
             return Some(Ok(fetch_response(
                 request.group,
                 0,
@@ -595,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn wal_shard_registry_fences_a_stale_leader_epoch_before_acknowledging() {
+    fn wal_shard_registry_fences_mismatched_leader_epochs_before_acknowledging() {
         let dir = tempdir().unwrap();
         let source = Arc::new(Mutex::new(
             Log::open(dir.path(), LogConfig::default()).unwrap(),
@@ -623,23 +643,23 @@ mod tests {
             8,
         )});
         registry.insert(shard, Arc::clone(&engine));
-        let stale = fetch_request(
-            QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-            krabka_raft::NodeId(2),
-            7,
-            7,
-            1,
-            krabka_units::mebibytes(1),
-        );
+        for (epoch, expected) in [(7, FENCED_LEADER_EPOCH), (9, UNKNOWN_LEADER_EPOCH)] {
+            let request = fetch_request(
+                QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                krabka_raft::NodeId(2),
+                epoch,
+                epoch,
+                1,
+                krabka_units::mebibytes(1),
+            );
+            let response = registry
+                .route_fetch_request(&request, krabka_raft::NodeId(2))
+                .unwrap()
+                .unwrap();
 
-        let response = registry
-            .route_fetch_request(&stale, krabka_raft::NodeId(2))
-            .unwrap()
-            .unwrap();
-        let partition = &response.responses[0].partitions[0];
-
-        assert2::assert!((partition.error_code) == (FENCED_LEADER_EPOCH));
-        assert2::assert!((engine.durable_watermark()) == (Offset(0)));
+            assert2::assert!((response.responses[0].partitions[0].error_code) == (expected));
+            assert2::assert!((engine.durable_watermark()) == (Offset(0)));
+        }
     }
 
     #[test]

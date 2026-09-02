@@ -1,0 +1,123 @@
+(* #"/proof-work-239/crates/verified/src/stamp.rs" 84 0 89 18 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sstamp = "/proof-work-239/crates/verified/src/stamp.rs" 90 20 90 26
+let%span sstamp'0 = "/proof-work-239/crates/verified/src/stamp.rs" 95 14 95 35
+let%span sstamp'1 = "/proof-work-239/crates/verified/src/stamp.rs" 96 18 96 29
+let%span sstamp'2 = "/proof-work-239/crates/verified/src/stamp.rs" 93 16 94 64
+let%span sstamp'3 = "/proof-work-239/crates/verified/src/stamp.rs" 92 16 92 44
+let%span sstamp'4 = "/proof-work-239/crates/verified/src/stamp.rs" 91 16 91 38
+let%span sstamp'5 = "/proof-work-239/crates/verified/src/stamp.rs" 97 11 97 23
+let%span sstamp'6 = "/proof-work-239/crates/verified/src/stamp.rs" 97 42 97 54
+let%span sstamp'7 = "/proof-work-239/crates/verified/src/stamp.rs" 100 17 100 18
+let%span sstamp'8 = "/proof-work-239/crates/verified/src/stamp.rs" 100 8 100 18
+let%span sstamp'9 = "/proof-work-239/crates/verified/src/stamp.rs" 73 11 73 39
+let%span sstamp'10 = "/proof-work-239/crates/verified/src/stamp.rs" 74 10 82 1
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let exact_stamp_range_index [#"/proof-work-239/crates/verified/src/stamp.rs" 84 0 89 18] (bases: Slice64.slice Int64.t)
+  (lasts: Slice64.slice Int64.t) (target_base: Int64.t) (target_last: Int64.t) (return (x: t_Option_usize)) =
+{[@stop_split] [@expl:exact_stamp_range_index requires] [%#sstamp'9] Seq.length (Slice64.view bases)
+  = Seq.length (Slice64.view lasts)}
+  (! bb0
+  [ bb0 = s0 [ s0 = [ &index <- [%#sstamp] (0: UInt64.t) ] s1 | s1 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sstamp'0] Seq.length (Slice64.view bases)
+      - UInt64.t'int index)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sstamp'4] UInt64.t'int index <= Seq.length (Slice64.view bases)}
+      {[@expl:loop invariant #1] [%#sstamp'3] Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)}
+      {[@expl:loop invariant #2] [%#sstamp'2] forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view bases) i) <> Int64.to_int target_base
+        \/ Int64.to_int (Seq.get (Slice64.view lasts) i) <> Int64.to_int target_last}
+      (! [ &variant_old_bb1 <- [%#sstamp'0] Seq.length (Slice64.view bases) - UInt64.t'int index ] s0)
+      [ s0 = len_i64 [%#sstamp'1] {bases} (fun (_x: UInt64.t) -> [ &_34 <- _x ] s1)
+      | s1 = [ &_32 <- UInt64.lt index _34 ] s2
+      | s2 = any [ br0 -> {_32 = false} (! bb12) | br1 -> {_32} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_39 <- index ] s1
+        | s1 = [ &_40 <- Slice64.length bases ] s2
+        | s2 = [ &_41 <- UInt64.lt _39 _40 ] s3
+        | s3 = {[@expl:index in bounds] [%#sstamp'5] _41} s4
+        | s4 = Slice64.get [%#sstamp'5] <Int64.t> {bases} {_39} (fun (r: Int64.t) -> [ &_38 <- r ] s5)
+        | s5 = [ &_37 <- _38 = target_base ] s6
+        | s6 = any [ br0 -> {_37 = false} (! bb11) | br1 -> {_37} (! bb6) ] ]
+      | bb6 = s0
+        [ s0 = [ &_45 <- index ] s1
+        | s1 = [ &_46 <- Slice64.length lasts ] s2
+        | s2 = [ &_47 <- UInt64.lt _45 _46 ] s3
+        | s3 = {[@expl:index in bounds] [%#sstamp'6] _47} s4
+        | s4 = Slice64.get [%#sstamp'6] <Int64.t> {lasts} {_45} (fun (r: Int64.t) -> [ &_44 <- r ] s5)
+        | s5 = [ &_43 <- _44 = target_last ] s6
+        | s6 = any [ br0 -> {_43 = false} (! bb11) | br1 -> {_43} (! bb8) ] ]
+      | bb11 = s0
+        [ s0 = UInt64.add [%#sstamp'8] {index} {[%#sstamp'7] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &index <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- Some index ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & bases: Slice64.slice Int64.t = bases
+  | & lasts: Slice64.slice Int64.t = lasts
+  | & target_base: Int64.t = target_base
+  | & target_last: Int64.t = target_last
+  | & index: UInt64.t = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _38: Int64.t = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _44: Int64.t = Any.any_l ()
+  | & _45: UInt64.t = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:exact_stamp_range_index ensures] [%#sstamp'10] match result with
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view bases)
+      /\ Int64.to_int (Seq.get (Slice64.view bases) (UInt64.t'int index)) = Int64.to_int target_base
+      /\ Int64.to_int (Seq.get (Slice64.view lasts) (UInt64.t'int index)) = Int64.to_int target_last
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view bases) i) <> Int64.to_int target_base
+        \/ Int64.to_int (Seq.get (Slice64.view lasts) i) <> Int64.to_int target_last)
+      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view bases)
+        -> Int64.to_int (Seq.get (Slice64.view bases) i) <> Int64.to_int target_base
+        \/ Int64.to_int (Seq.get (Slice64.view lasts) i) <> Int64.to_int target_last
+      end}
+    (! return {result}) ]

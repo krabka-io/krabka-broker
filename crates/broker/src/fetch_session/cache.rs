@@ -14,7 +14,7 @@ use std::{
     },
 };
 
-use qubit_clock::{NanoClock, NanoMonotonicClock};
+use qubit_clock::{MonotonicClock, StdMonotonicClock};
 
 use super::{
     epoch::{FIRST_SESSION_ID, FetchSessionEpoch, FetchSessionId},
@@ -59,25 +59,26 @@ pub struct FetchSessionCache {
     pub(super) num_partitions: AtomicUsize,
     /// Monotonic time source that the cache stamps onto each session's entry
     /// in the recency order for LRU eviction. It is injectable, so tests drive
-    /// the eviction order with a [`qubit_clock::MockClock`] instead of
-    /// `thread::sleep`.
-    pub(super) clock: Arc<dyn NanoClock>,
+    /// the eviction order with a [`qubit_clock::ManualMonotonicClock`] instead
+    /// of `thread::sleep`.
+    pub(super) clock: Arc<dyn MonotonicClock>,
 }
 
 impl FetchSessionCache {
     #[must_use]
     pub fn new(max_slots: usize) -> Self {
-        Self::with_clock(max_slots, Arc::new(NanoMonotonicClock::new()))
+        Self::with_clock(max_slots, Arc::new(StdMonotonicClock::new()))
     }
 
-    /// Constructs a cache with a caller-supplied monotonic [`NanoClock`].
+    /// Constructs a cache with a caller-supplied [`MonotonicClock`].
     ///
     /// Production uses [`FetchSessionCache::new`], which supplies a
-    /// [`NanoMonotonicClock`]. Tests pass a [`qubit_clock::MockClock`], so
-    /// that successive allocations land on distinct, deterministic points in
-    /// the recency order without a sleep between them.
+    /// [`StdMonotonicClock`]. Tests pass a
+    /// [`qubit_clock::ManualMonotonicClock`], so that successive allocations
+    /// land on distinct, deterministic points in the recency order without a
+    /// sleep between them.
     #[must_use]
-    pub fn with_clock(max_slots: usize, clock: Arc<dyn NanoClock>) -> Self {
+    pub fn with_clock(max_slots: usize, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 sessions: HashMap::new(),

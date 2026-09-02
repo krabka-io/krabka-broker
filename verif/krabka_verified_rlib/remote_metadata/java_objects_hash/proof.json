@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_java_long_hash": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_java_objects_hash": { "prover": "alt-ergo", "time": 0.018 },
+      "vc_wrapping_add": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_wrapping_mul": { "prover": "alt-ergo", "time": 0.016 }
+    }
+  }
+}

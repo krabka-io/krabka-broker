@@ -1,0 +1,51 @@
+(* #"/proof-work-228/crates/verified/src/broker.rs" 137 0 143 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/proof-work-228/crates/verified/src/broker.rs" 144 23 144 24
+let%span sbroker'0 = "/proof-work-228/crates/verified/src/broker.rs" 145 30 145 31
+let%span sbroker'1 = "/proof-work-228/crates/verified/src/broker.rs" 144 4 149 24
+let%span sbroker'2 = "/proof-work-228/crates/verified/src/broker.rs" 128 10 135 1
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let preferred_rebalance_admission [#"/proof-work-228/crates/verified/src/broker.rs" 137 0 143 9]
+  (total_partitions: UInt64.t) (selected_changes: UInt64.t) (changes_unique: bool) (all_preferred_eligible: bool)
+  (threshold_met: bool) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_12 <- UInt64.gt total_partitions ([%#sbroker] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb9) | br1 -> {_12} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_14 <- UInt64.gt selected_changes ([%#sbroker'0] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb9) | br1 -> {_14} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_16 <- UInt64.le selected_changes total_partitions ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb9) | br1 -> {_16} (! bb3) ] ]
+  | bb3 = any [ br0 -> {changes_unique = false} (! bb9) | br1 -> {changes_unique} (! bb4) ]
+  | bb4 = any [ br0 -> {all_preferred_eligible = false} (! bb9) | br1 -> {all_preferred_eligible} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- threshold_met ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- [%#sbroker'1] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & total_partitions: UInt64.t = total_partitions
+  | & selected_changes: UInt64.t = selected_changes
+  | & changes_unique: bool = changes_unique
+  | & all_preferred_eligible: bool = all_preferred_eligible
+  | & threshold_met: bool = threshold_met
+  | & _12: bool = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _16: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:preferred_rebalance_admission ensures] [%#sbroker'2] result
+    = (gt_log_Int (UInt64.t'int total_partitions) 0
+    /\ gt_log_Int (UInt64.t'int selected_changes) 0
+    /\ UInt64.t'int selected_changes <= UInt64.t'int total_partitions
+    /\ changes_unique /\ all_preferred_eligible /\ threshold_met)}
+    (! return {result}) ]

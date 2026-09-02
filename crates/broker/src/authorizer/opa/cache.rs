@@ -20,5 +20,53 @@ pub(super) struct CacheKey {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct CachedDecision {
     pub(super) decision: AuthorizationResult,
-    pub(super) expires_at_ms: i64,
+    pub(super) expires_at_ms: i128,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use krabka_metadata::{AclOperation, ResourceType};
+
+    use super::CacheKey;
+
+    fn key() -> CacheKey {
+        CacheKey {
+            principal: "User:alice".to_string(),
+            operation: AclOperation::Read,
+            resource_type: ResourceType::Topic,
+            resource_name: "orders".to_string(),
+            host: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
+        }
+    }
+
+    #[test]
+    fn every_opa_input_axis_is_part_of_the_cache_key() {
+        let expected = key();
+        for changed in [
+            CacheKey {
+                principal: "User:bob".to_string(),
+                ..key()
+            },
+            CacheKey {
+                operation: AclOperation::Write,
+                ..key()
+            },
+            CacheKey {
+                resource_type: ResourceType::Group,
+                ..key()
+            },
+            CacheKey {
+                resource_name: "payments".to_string(),
+                ..key()
+            },
+            CacheKey {
+                host: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)),
+                ..key()
+            },
+        ] {
+            assert2::check!(changed != expected);
+        }
+    }
 }

@@ -1,0 +1,76 @@
+(* #"/proof-work-225b/crates/verified/src/quorum_state.rs" 34 0 42 29 *)
+
+let%span squorum_state = "/proof-work-225b/crates/verified/src/quorum_state.rs" 43 23 43 24
+let%span squorum_state'0 = "/proof-work-225b/crates/verified/src/quorum_state.rs" 44 26 44 39
+let%span squorum_state'1 = "/proof-work-225b/crates/verified/src/quorum_state.rs" 45 38 45 51
+let%span squorum_state'2 = "/proof-work-225b/crates/verified/src/quorum_state.rs" 46 35 46 48
+let%span squorum_state'3 = "/proof-work-225b/crates/verified/src/quorum_state.rs" 47 29 47 30
+let%span squorum_state'4 = "/proof-work-225b/crates/verified/src/quorum_state.rs" 19 10 25 1
+let%span squorum_state'5 = "/proof-work-225b/crates/verified/src/quorum_state.rs" 26 10 32 1
+
+use creusot.int.UInt16
+use creusot.int.UInt32
+use creusot.int.UInt64
+use creusot.prelude.Any
+use creusot.int.Int32
+use int.Int
+
+type t_QuorumStateWriteDecision = Reject | Accept
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let quorum_state_write_decision [#"/proof-work-225b/crates/verified/src/quorum_state.rs" 34 0 42 29]
+  (kraft_version: UInt16.t) (leader_epoch: UInt32.t) (has_leader: bool) (leader_id: UInt64.t) (has_vote: bool)
+  (voted_id: UInt64.t) (all_voter_ids_fit: bool) (return (x: t_QuorumStateWriteDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_24 <- UInt16.gt kraft_version ([%#squorum_state] (1: UInt16.t)) ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb2) | br1 -> {_24} (! bb14) ] ]
+  | bb2 = s0
+    [ s0 = [ &_26 <- UInt32.gt leader_epoch ([%#squorum_state'0] (2147483647: UInt32.t)) ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb4) | br1 -> {_26} (! bb14) ] ]
+  | bb4 = any [ br0 -> {has_leader = false} (! bb8) | br1 -> {has_leader} (! bb5) ]
+  | bb5 = s0
+    [ s0 = [ &_29 <- UInt64.gt leader_id ([%#squorum_state'1] (2147483647: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb8) | br1 -> {_29} (! bb14) ] ]
+  | bb8 = any [ br0 -> {has_vote = false} (! bb12) | br1 -> {has_vote} (! bb9) ]
+  | bb9 = s0
+    [ s0 = [ &_32 <- UInt64.gt voted_id ([%#squorum_state'2] (2147483647: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb12) | br1 -> {_32} (! bb14) ] ]
+  | bb12 = s0
+    [ s0 = [ &_34 <- kraft_version = ([%#squorum_state'3] (0: UInt16.t)) ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb16) | br1 -> {_34} (! bb13) ] ]
+  | bb13 = any [ br0 -> {all_voter_ids_fit = false} (! bb14) | br1 -> {all_voter_ids_fit} (! bb16) ]
+  | bb14 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb16 = s0 [ s0 = [ &_ret <- Accept ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_QuorumStateWriteDecision = Any.any_l ()
+  | & kraft_version: UInt16.t = kraft_version
+  | & leader_epoch: UInt32.t = leader_epoch
+  | & has_leader: bool = has_leader
+  | & leader_id: UInt64.t = leader_id
+  | & has_vote: bool = has_vote
+  | & voted_id: UInt64.t = voted_id
+  | & all_voter_ids_fit: bool = all_voter_ids_fit
+  | & _24: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: bool = Any.any_l () ])
+  [ return (result: t_QuorumStateWriteDecision) ->
+  {[@stop_split] [@expl:quorum_state_write_decision ensures] ([@stop_split] [@expl:quorum_state_write_decision ensures #0] [%#squorum_state'4] (result
+        = Accept)
+      = (UInt16.t'int kraft_version <= 1
+      /\ UInt32.t'int leader_epoch <= Int32.to_int const_MAX
+      /\ (not has_leader \/ UInt64.t'int leader_id <= Int32.to_int const_MAX)
+      /\ (not has_vote \/ UInt64.t'int voted_id <= Int32.to_int const_MAX)
+      /\ (UInt16.t'int kraft_version = 1 \/ all_voter_ids_fit)))
+    /\ ([@stop_split] [@expl:quorum_state_write_decision ensures #1] [%#squorum_state'5] (result = Reject)
+    = (not (UInt16.t'int kraft_version <= 1
+    /\ UInt32.t'int leader_epoch <= Int32.to_int const_MAX
+    /\ (not has_leader \/ UInt64.t'int leader_id <= Int32.to_int const_MAX)
+    /\ (not has_vote \/ UInt64.t'int voted_id <= Int32.to_int const_MAX)
+    /\ (UInt16.t'int kraft_version = 1 \/ all_voter_ids_fit))))}
+    (! return {result}) ]

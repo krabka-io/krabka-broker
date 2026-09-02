@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_restore_batch_filter_decision": {
+        "prover": "alt-ergo",
+        "time": 0.013
+      }
+    }
+  }
+}

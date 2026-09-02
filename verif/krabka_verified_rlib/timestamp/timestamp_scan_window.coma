@@ -1,0 +1,54 @@
+(* #"/proof-work-238/crates/verified/src/timestamp.rs" 111 0 111 56 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span stimestamp = "/proof-work-238/crates/verified/src/timestamp.rs" 112 17 112 18
+let%span stimestamp'0 = "/proof-work-238/crates/verified/src/timestamp.rs" 115 23 115 24
+let%span stimestamp'1 = "/proof-work-238/crates/verified/src/timestamp.rs" 115 4 115 25
+let%span stimestamp'2 = "/proof-work-238/crates/verified/src/timestamp.rs" 106 10 109 1
+
+use creusot.int.UInt32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_u32 = None | Some UInt32.t
+
+constant const_MIN: UInt32.t = (0: UInt32.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: UInt32.t = (4294967295: UInt32.t)
+
+let checked_mul (self_: UInt32.t) (rhs: UInt32.t) (return (x: t_Option_u32)) = any
+  [ return (result: t_Option_u32) ->
+  {[@stop_split] [@expl:checked_mul ensures] ([@stop_split] [@expl:checked_mul ensures #0] [%#snum] (result = None)
+      = (UInt32.t'int self_ * UInt32.t'int rhs < UInt32.t'int const_MIN
+      \/ gt_log_Int (UInt32.t'int self_ * UInt32.t'int rhs) (UInt32.t'int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_mul ensures #1] [%#snum'0] forall r: UInt32.t. result = Some r
+      -> UInt32.t'int r = UInt32.t'int self_ * UInt32.t'int rhs)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let timestamp_scan_window [#"/proof-work-238/crates/verified/src/timestamp.rs" 111 0 111 56] (window: UInt32.t)
+  (return (x: t_Option_u32)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_5 <- window = ([%#stimestamp] (0: UInt32.t)) ] s1
+    | s1 = any [ br0 -> {_5 = false} (! bb2) | br1 -> {_5} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = checked_mul [%#stimestamp'1] {window} {[%#stimestamp'0] (2: UInt32.t)}
+        (fun (_x: t_Option_u32) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_u32 = Any.any_l () | & window: UInt32.t = window | & _5: bool = Any.any_l () ])
+  [ return (result: t_Option_u32) ->
+  {[@stop_split] [@expl:timestamp_scan_window ensures] [%#stimestamp'2] match result with
+      | Some next -> UInt32.t'int next = UInt32.t'int window * 2 /\ gt_log_Int (UInt32.t'int next) (UInt32.t'int window)
+      | None -> UInt32.t'int window = 0 \/ gt_log_Int (UInt32.t'int window * 2) (UInt32.t'int const_MAX)
+      end}
+    (! return {result}) ]
