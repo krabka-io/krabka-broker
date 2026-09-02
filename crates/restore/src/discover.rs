@@ -90,6 +90,29 @@ pub struct ArchiveInventory {
     pub unrecognized: Vec<Path>,
 }
 
+impl ArchiveInventory {
+    /// Whether the scan found `topic`-`partition`.
+    ///
+    /// Compared by topic name and partition index, the pair a bound is
+    /// written against, not by the archive's internal topic id.
+    #[must_use]
+    pub fn holds(&self, topic: &str, partition: i32) -> bool {
+        holds_partition(&self.partitions, topic, partition)
+    }
+}
+
+/// Whether `partitions` names `topic`-`partition`, by topic name and
+/// partition index rather than by the archive's internal topic id.
+///
+/// Shared by [`ArchiveInventory::holds`] and by [`inventory`]'s own bound
+/// check, which runs against the partitions built so far before they are
+/// wrapped in an [`ArchiveInventory`].
+fn holds_partition(partitions: &[PartitionInventory], topic: &str, partition: i32) -> bool {
+    partitions
+        .iter()
+        .any(|entry| entry.partition.topic == topic && entry.partition.partition == partition)
+}
+
 /// One artifact of a segment, as [`inventory`] is still accumulating it.
 ///
 /// Distinguishes the segment's `.log` data from its indexes so the artifact a
@@ -134,6 +157,8 @@ fn empty_segment(segment_id: Uuid, base_offset: Offset) -> SegmentInventory {
 /// # Errors
 ///
 /// Returns [`RestoreError::ObjectStore`] when the listing fails,
+/// [`RestoreError::UnknownPartition`] when a `--to-offset` or
+/// `--exclude-offset` bound names a topic partition the scan did not find,
 /// [`RestoreError::EmptyArchive`] when no selected topic has a segment, and
 /// [`RestoreError::MetadataDisagreement`] when `--rlmm-snapshot` contradicts
 /// the scan.
@@ -234,6 +259,25 @@ pub async fn inventory(
         (a.partition.topic.as_str(), a.partition.partition)
             .cmp(&(b.partition.topic.as_str(), b.partition.partition))
     });
+
+    // Checked against the raw scan, before the RLMM reconciliation and the
+    // empty-archive check below: a bound that names a partition the scan
+    // never saw is a typo the operator needs to hear about specifically,
+    // not the more general "nothing selected" of `EmptyArchive`, and not
+    // masked by a `--rlmm-snapshot` disagreement on some other partition.
+    for partition in args
+        .to_offset
+        .iter()
+        .map(|bound| &bound.partition)
+        .chain(args.exclude_offset.iter().map(|range| &range.partition))
+    {
+        if !holds_partition(&partitions, &partition.topic, partition.partition) {
+            return Err(RestoreError::UnknownPartition {
+                topic: partition.topic.clone(),
+                partition: partition.partition,
+            });
+        }
+    }
 
     if let Some(snapshot_path) = &args.archive.rlmm_snapshot {
         reconcile_with_snapshot(&mut partitions, args, snapshot_path)?;

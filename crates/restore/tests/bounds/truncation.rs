@@ -5,15 +5,16 @@
 //! inclusivity of the boundary itself and that everything after it is absent
 //! from the restored log.
 
-use assert2::check;
+use assert2::{assert, check};
 use krabka_ids::Offset;
 use krabka_log::LogConfig;
 use krabka_protocol::records::RecordBatch;
+use krabka_restore::{RestoreError, restore};
 
 use crate::{
     archive::build_archive,
     fixtures::{BASE_TIMESTAMP, plain_batch, timestamped_record, value_record},
-    harness::{reopen, run_restore},
+    harness::{reopen, restore_args, run_restore},
 };
 
 // ---------------------------------------------------------------------
@@ -58,6 +59,53 @@ async fn to_offset_filters_records_past_a_bound_inside_one_batch() {
         ..fixture[0].clone()
     }];
     check!(read.batches == expected);
+}
+
+// ---------------------------------------------------------------------
+// Scenario 1b: a bound naming a partition the archive lacks is rejected.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_bound_on_a_partition_the_archive_does_not_hold_is_rejected() {
+    let mut fixture = vec![plain_batch(vec![value_record(0, "v0")])];
+    let archive = build_archive("orders", 0, &mut fixture);
+
+    let target = tempfile::tempdir().expect("target tempdir");
+    let target_dir = target.path().join("restored");
+    let args = restore_args(
+        archive.path(),
+        &target_dir,
+        &["--to-offset", "orders:3=100"],
+    );
+
+    let error = restore(&args).await.expect_err("unknown partition");
+    assert!(let RestoreError::UnknownPartition { topic, partition } = error);
+    check!(topic == "orders");
+    check!(partition == 3);
+}
+
+#[tokio::test]
+async fn a_bound_on_a_topic_absent_from_the_archive_is_unknown_partition_not_empty_archive() {
+    // `--topic` selects only `payments`, which the archive holds nothing
+    // for, so the scan finds no partition at all under that restriction.
+    // `UnknownPartition` must still win over the more general
+    // `EmptyArchive`, because it names the actual mistake: the bound, not
+    // the archive prefix.
+    let mut fixture = vec![plain_batch(vec![value_record(0, "v0")])];
+    let archive = build_archive("orders", 0, &mut fixture);
+
+    let target = tempfile::tempdir().expect("target tempdir");
+    let target_dir = target.path().join("restored");
+    let args = restore_args(
+        archive.path(),
+        &target_dir,
+        &["--topic", "payments", "--to-offset", "payments:0=10"],
+    );
+
+    let error = restore(&args).await.expect_err("unknown partition");
+    assert!(let RestoreError::UnknownPartition { topic, partition } = error);
+    check!(topic == "payments");
+    check!(partition == 0);
 }
 
 // ---------------------------------------------------------------------

@@ -140,7 +140,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`RestoreError`] for a bad bound, a target that is not empty, an
+/// Returns [`RestoreError`] for a bad bound, a bound that names a topic
+/// partition the archive does not hold, a target that is not empty, an
 /// archive that cannot be read, a segment that fails verification, or a target
 /// that rejects a write. `--continue-on-corrupt` turns a verification failure
 /// into a skipped segment in the report instead of an error.
