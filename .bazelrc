@@ -50,7 +50,9 @@ coverage --instrumentation_filter=^//crates[:/]
 # Profiling instrumentation slows every test enough to trip the wall-clock
 # assertions in the consensus and replication suites -- they pass in the test
 # run and fail here, which is a statement about the instrumentation rather than
-# the code. They gate in `bazel test`; this run exists for the report.
+# the code. They gate in the `ci` job's `test` step
+# (`bazel test --test_tag_filters=timing-sensitive //crates/...`), not here;
+# this run exists for the report.
 # Both exclusions, because `--test_tag_filters` is last-wins rather than
 # additive: naming only `-timing-sensitive` here replaced the `-docker` set for
 # `test` above, and the coverage run started trying to drive containers.

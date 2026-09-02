@@ -139,12 +139,18 @@ equivalent, so the CLI is a convenience rather than a requirement:
 | | Aspect CLI | Plain Bazel |
 | --- | --- | --- |
 | Build | `aspect build //...` | `bazel build //...` |
-| Test | `aspect test //...` | `bazel test //...` |
+| Test\* | `aspect test //...` | `bazel test //...` |
 | Lint | `aspect lint` | `bazel build --config=lint //...` |
 | Format | `aspect format` | `bazel run //tools/format` |
 | Coverage | `aspect test --coverage` | `bazel coverage //crates/...` |
 | Docs | — | `bazel build //crates/audit:audit_doc` |
 | Delivery | `aspect delivery` | `bazel run //packaging:push -- --tag dev` |
+
+\* No single CI job runs this command. `coverage` executes `bazel coverage
+//crates/...` (`--test_tag_filters=-docker,-timing-sensitive`), and the `ci`
+job's `test` step covers the rest: the six suites that filter excludes as
+timing-sensitive, plus `//packaging:image_binaries_test`, which sits outside
+`//crates`. Together they are what `bazel test //...` runs locally.
 
 Formatting and linting are Bazel targets rather than a separate `cargo fmt` /
 `cargo clippy` pass, so they see exactly the files and crates the build sees. A
