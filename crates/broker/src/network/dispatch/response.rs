@@ -148,7 +148,7 @@ pub(super) fn apply_request_quota(
 // out of the comparison on both and the reported saving is an upper bound:
 //
 //     body       copy    chained     saved
-//     1 KiB     67 ns      32 ns     35 ns   (52%)
+//     1 KiB     57 ns      32 ns     25 ns   (43%)
 //     64 KiB  1557 ns      32 ns    1.5 us   (98%)
 //     1 MiB     31 us      32 ns     31 us   (99.9%)
 //
@@ -160,7 +160,7 @@ pub(super) fn apply_request_quota(
 // costs under 100 ns against a request that takes tens of microseconds to
 // serve. Note the old price estimate of "~50 `framed.send` call sites" is
 // stale — the dispatch tree has since funnelled its responses through three —
-// but a custom codec is still the wrong trade for ~35 ns a response. Revisit
+// but a custom codec is still the wrong trade for ~25 ns a response. Revisit
 // only if a non-Fetch response becomes both large and hot; a Metadata response
 // for a very large cluster is the plausible candidate, and clients refresh it
 // on the order of minutes.
