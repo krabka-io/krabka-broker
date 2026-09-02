@@ -28,12 +28,34 @@ impl QuorumStateMachine {
         }
         self.state.voters = voters;
 
-        if let Role::Leader { replicas, .. } = &mut self.role {
+        if let Role::Leader {
+            replicas,
+            fetched_voters,
+            ..
+        } = &mut self.role
+        {
             replicas.retain(|id, _| self.state.voters.contains(*id) && *id != self.me);
             for id in self.state.voters.ids() {
                 if id != self.me {
                     replicas.entry(id).or_default();
                 }
+            }
+            // Start a fresh check-quorum window against the new configuration,
+            // tally and deadline together. Re-arming matters because a sole
+            // voter arms nothing at promotion, so without it the leader of a
+            // cluster that has just grown past one voter would never run
+            // check-quorum again for its epoch; it also gives an added voter a
+            // full window to make its first Fetch rather than deposing the
+            // leader the instant the record applies. Emptying the tally is the
+            // other half: a contact counted before the change belongs to the
+            // window that just ended, and carrying it over would let one stale
+            // fetch plus one fresh one re-arm a window no majority reached.
+            fetched_voters.clear();
+            if self.runs_check_quorum() {
+                return vec![Action::ResetTimer {
+                    kind: TimerKind::CheckQuorum,
+                    deadline: self.check_quorum_deadline(now),
+                }];
             }
             return Vec::new();
         }

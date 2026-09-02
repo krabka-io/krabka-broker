@@ -78,7 +78,7 @@ async fn restart_recovers_image() {
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),
         MetadataRaftFetchMax::default(),
-        Arc::new(net.clone()),
+        Arc::new(net.as_peer(victim)),
         0,
         MetadataSnapshotFetchMax::default(),
     )

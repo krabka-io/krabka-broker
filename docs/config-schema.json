@@ -2483,7 +2483,7 @@
     },
     "controller_election_timeout": {
       "default": null,
-      "description": "Controller election timeout. Absent leaves the `BrokerConfig` default intact.",
+      "description": "Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`.\nIt is the follower fetch watchdog, and 1.5x of it is the leader's\ncheck-quorum window: a leader that has not been fetched from by a\nmajority of the voters within that window resigns its epoch. Absent\nleaves the `BrokerConfig` default intact.",
       "format": "duration",
       "type": [
         "string",

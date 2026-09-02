@@ -80,6 +80,18 @@ pub struct ModelState {
     /// volatile-state loss on restart is out of scope for this phase, because
     /// there is no public reset API.
     pub crashed: BTreeSet<NodeId>,
+    /// Latched when a check-quorum expiry left its node still leading.
+    ///
+    /// Check-quorum is a property of a *transition*, not of a single state: the
+    /// timer is only ever re-armed once a majority has fetched, so reaching its
+    /// deadline is itself the proof that contact was lost, and the leader must
+    /// be gone by the time the transition ends. The transition records the
+    /// verdict here so the `check_quorum_expiry_ends_leadership` property can
+    /// read it out of the fingerprinted state.
+    pub check_quorum_violation: bool,
+    /// Set once some node has actually reached [`Role::Resigned`], which is the
+    /// witness that the resignation path is reachable at all.
+    pub leader_resigned: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

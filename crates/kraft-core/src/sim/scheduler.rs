@@ -20,14 +20,15 @@ use crate::{
 
 /// Harness-level timer kinds.
 ///
-/// This enum extends the core's `TimerKind`, which holds `Election` and
-/// `Fetch`, with the leader `Heartbeat`. The core does not model the heartbeat
-/// on a timer.
+/// This enum extends the core's `TimerKind`, which holds `Election`, `Fetch`
+/// and `CheckQuorum`, with the leader `Heartbeat`. The core does not model the
+/// heartbeat on a timer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SimTimer {
     Election,
     Fetch,
     Heartbeat,
+    CheckQuorum,
 }
 
 fn consider(
@@ -106,6 +107,9 @@ impl Sim {
             if let Some(d) = node.heartbeat_deadline {
                 consider(&mut best, d, node.id, SimTimer::Heartbeat);
             }
+            if let Some(d) = node.check_quorum_deadline {
+                consider(&mut best, d, node.id, SimTimer::CheckQuorum);
+            }
         }
         let Some((deadline, id, kind)) = best else {
             return false;
@@ -119,6 +123,7 @@ impl Sim {
                 SimTimer::Election => node.election_deadline = None,
                 SimTimer::Fetch => node.fetch_deadline = None,
                 SimTimer::Heartbeat => node.heartbeat_deadline = None,
+                SimTimer::CheckQuorum => node.check_quorum_deadline = None,
             }
         }
         match kind {
@@ -169,6 +174,17 @@ impl Sim {
                 self.step(id, Event::ElectionTimeout);
                 true
             }
+            SimTimer::CheckQuorum => {
+                self.record(
+                    TraceAction::Timeout {
+                        node: id.0,
+                        kind: "check-quorum".to_string(),
+                    },
+                    format!("N{id} has not heard from a majority of voters and resigns"),
+                );
+                self.step(id, Event::CheckQuorumTimeout);
+                true
+            }
         }
     }
 
@@ -196,6 +212,7 @@ impl Sim {
             Role::Follower { .. } | Role::Observer { .. } => {
                 node.election_deadline = None;
                 node.heartbeat_deadline = None;
+                node.check_quorum_deadline = None;
             }
             Role::Unattached { .. }
             | Role::Voted { .. }
@@ -204,6 +221,7 @@ impl Sim {
             | Role::Resigned => {
                 node.fetch_deadline = None;
                 node.heartbeat_deadline = None;
+                node.check_quorum_deadline = None;
             }
         }
     }

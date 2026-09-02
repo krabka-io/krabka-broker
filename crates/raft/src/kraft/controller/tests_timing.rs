@@ -136,6 +136,7 @@ fn following_leader_for_role_reports_followed_leader_only() {
         (
             Role::Leader {
                 replicas: std::collections::BTreeMap::new(),
+                fetched_voters: std::collections::BTreeSet::new(),
                 high_watermark: 0,
                 epoch_start_offset: 0,
             },

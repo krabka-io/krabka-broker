@@ -172,6 +172,9 @@ struct Engine {
     /// Pending timer deadlines as `tokio::time::Instant`s. `None` = disarmed.
     election_at: Option<Instant>,
     fetch_at: Option<Instant>,
+    /// Leader-side check-quorum deadline. Only a leader over a multi-voter
+    /// quorum arms it; every other role runs with it disarmed.
+    check_quorum_at: Option<Instant>,
     /// Consecutive fetch misses while still believing in a leader.
     fetch_misses: u32,
     /// Outstanding `submit_change` waiters keyed by the end offset they need

@@ -134,6 +134,7 @@ impl<L: SimNodeLog> Sim<L> {
                 match kind {
                     TimerKind::Election => node.election_deadline = Some(deadline),
                     TimerKind::Fetch => node.fetch_deadline = Some(deadline),
+                    TimerKind::CheckQuorum => node.check_quorum_deadline = Some(deadline),
                 }
             }
             // Pure bookkeeping signals with no cross-node effect in the sim.

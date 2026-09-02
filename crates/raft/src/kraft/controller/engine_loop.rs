@@ -1,7 +1,7 @@
 //! The single owning engine task: its `select!` loop over the command mpsc and
-//! the election, fetch and heartbeat timers, the dispatch of each core
-//! [`Action`] it produces, and the timer reconciliation that follows a role
-//! change.
+//! the election, fetch, check-quorum and heartbeat timers, the dispatch of each
+//! core [`Action`] it produces, and the timer reconciliation that follows a
+//! role change.
 
 use krabka_ids::Offset;
 use krabka_units::prelude::TimeExt as _;
@@ -56,8 +56,10 @@ impl Engine {
             // Build the timer futures fresh each turn from the current deadlines.
             let election_sleep = sleep_until_opt(self.election_at);
             let fetch_sleep = sleep_until_opt(self.fetch_at);
+            let check_quorum_sleep = sleep_until_opt(self.check_quorum_at);
             tokio::pin!(election_sleep);
             tokio::pin!(fetch_sleep);
+            tokio::pin!(check_quorum_sleep);
 
             tokio::select! {
                 cmd = cmd_rx.recv() => {
@@ -73,6 +75,10 @@ impl Engine {
                 () = &mut fetch_sleep => {
                     self.fetch_at = None;
                     self.on_timer(TimerTick::Fetch);
+                }
+                () = &mut check_quorum_sleep => {
+                    self.check_quorum_at = None;
+                    self.on_timer(TimerTick::CheckQuorum);
                 }
                 _ = heartbeat.tick() => {
                     self.on_timer(TimerTick::Heartbeat);
@@ -182,6 +188,14 @@ impl Engine {
                     self.arm_fetch_timer();
                 }
             }
+            TimerTick::CheckQuorum => {
+                // Only a leader runs this watchdog. The core re-arms it from
+                // every Fetch/FetchSnapshot that completes a majority, so
+                // reaching the deadline means the quorum has gone quiet.
+                if self.core.role().is_leader() {
+                    self.on_event(Event::CheckQuorumTimeout);
+                }
+            }
             TimerTick::Heartbeat => {
                 if self.core.role().is_leader() {
                     let epoch = self.core.quorum_state().leader_epoch;
@@ -285,6 +299,9 @@ impl Engine {
             Action::ResetTimer { kind, deadline } => match kind {
                 TimerKind::Election => self.election_at = Some(self.deadline_instant(deadline)),
                 TimerKind::Fetch => self.fetch_at = Some(self.deadline_instant(deadline)),
+                TimerKind::CheckQuorum => {
+                    self.check_quorum_at = Some(self.deadline_instant(deadline));
+                }
             },
             Action::TransitionedTo(_name) => {}
             Action::SendVoteRequest { .. }
@@ -303,6 +320,8 @@ impl Engine {
         match self.core.role() {
             Role::Leader { .. } => {
                 // A leader never elects on a timer and never fetch-watchdogs.
+                // Its liveness is the check-quorum deadline, which the core
+                // arms on promotion and re-arms from majority contact.
                 self.election_at = None;
                 self.fetch_at = None;
                 self.fetch_misses = 0;
@@ -311,6 +330,7 @@ impl Engine {
                 // A follower has no election timer; the fetch watchdog (armed by
                 // the core's ResetTimer/Fetch) covers liveness.
                 self.election_at = None;
+                self.check_quorum_at = None;
             }
             Role::Prospective { .. }
             | Role::Candidate { .. }
@@ -319,8 +339,16 @@ impl Engine {
                 // Mid-election: no leader to fetch from, election timer governs.
                 self.fetch_at = None;
                 self.fetch_misses = 0;
+                self.check_quorum_at = None;
             }
-            Role::Resigned => {}
+            Role::Resigned => {
+                // Stepped down: no leadership left to watch and no leader to
+                // fetch from. The election timer the core armed on the way in
+                // is what carries this node into its next pre-vote round.
+                self.fetch_at = None;
+                self.fetch_misses = 0;
+                self.check_quorum_at = None;
+            }
         }
         self.fail_waiters_on_leadership_loss();
     }

@@ -23,7 +23,7 @@ use stateright::{Checker, Model};
 /// true bounded count of each config, so it never truncates a real check. Such
 /// a truncation would spuriously fail a `sometimes` witness, or leave an
 /// `always` only partially verified.
-const MAX_STATES: usize = 2_000_000;
+const MAX_STATES: usize = 6_000_000;
 /// Depth backstop. It must exceed the reachable-graph diameter of each config,
 /// or the search is depth-truncated and therefore incomplete. The configs below
 /// are bounded, so their diameter sits well under this value.

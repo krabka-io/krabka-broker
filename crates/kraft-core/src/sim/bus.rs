@@ -189,6 +189,7 @@ impl Sim {
                 match kind {
                     TimerKind::Election => node.election_deadline = Some(deadline),
                     TimerKind::Fetch => node.fetch_deadline = Some(deadline),
+                    TimerKind::CheckQuorum => node.check_quorum_deadline = Some(deadline),
                 }
             }
             Action::TransitionedTo(_) | Action::PersistQuorumState => {}

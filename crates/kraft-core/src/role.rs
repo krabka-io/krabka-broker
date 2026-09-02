@@ -35,6 +35,14 @@ pub enum Role {
     /// Won the election; tracks follower progress for HWM.
     Leader {
         replicas: BTreeMap<NodeId, ReplicaProgress>,
+        /// Voters that have fetched inside the current check-quorum window.
+        ///
+        /// This is Kafka's `LeaderState.fetchedVoters`: it never contains the
+        /// leader itself, and it is emptied — and the check-quorum timer
+        /// re-armed — the moment it reaches the majority the leader needs
+        /// besides its own vote. A leader that reaches the deadline with the
+        /// set still short of that count has lost the quorum and resigns.
+        fetched_voters: BTreeSet<NodeId>,
         high_watermark: i64,
         /// Log end offset at the moment of promotion, that is, where this
         /// leader's `LeaderChange` record sits. That record is the first
@@ -45,10 +53,13 @@ pub enum Role {
         /// majority-replicated before commit.
         epoch_start_offset: i64,
     },
-    /// Steps down and emits `EndQuorumEpoch`.
-    // `Resigned` (and `Action::SendEndQuorumEpoch`) are produced by
-    // transport-facing paths; the core also receives `EndQuorumEpoch`, so there
-    // is intentionally no transition into this variant yet.
+    /// Stepped down: told the voters to elect, and waits for its own election
+    /// timer to start a pre-vote round.
+    ///
+    /// A leader reaches this variant when its check-quorum window expires. It
+    /// no longer serves Fetch, no longer advances the high watermark, and no
+    /// longer claims the leadership in `QuorumState`, so an isolated old leader
+    /// stops answering as leader for its epoch.
     Resigned,
     /// Not in the voter set; only ever fetches.
     Observer {

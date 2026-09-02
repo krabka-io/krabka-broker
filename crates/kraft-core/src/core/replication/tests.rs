@@ -298,3 +298,473 @@ fn follower_truncates_on_diverging_fetch_response() {
         })
     )));
 }
+
+/// Drives `m` from `Unattached` to `Role::Leader`, returning every action the
+/// pre-vote round, the vote round and the promotion emitted.
+///
+/// `peers` is the rest of the voter set. Grants past the majority are ignored
+/// by the core's own epoch/role guards, so passing all of them is safe.
+fn win_election(
+    m: &mut QuorumStateMachine,
+    log: &dyn LogView,
+    peers: &[NodeId],
+    now: SimInstant,
+) -> Vec<Action> {
+    let mut actions = m.on_event(Event::ElectionTimeout, log, now);
+    // Pre-vote grants at the pre-bump epoch, then real-vote grants at the epoch
+    // the successful pre-vote bumped us to.
+    for epoch in [0, 1] {
+        for &from in peers {
+            actions.extend(m.on_event(
+                Event::ReceiveVoteResponse {
+                    from,
+                    epoch,
+                    vote_granted: true,
+                },
+                log,
+                now,
+            ));
+        }
+    }
+    actions
+}
+
+fn armed_check_quorum(actions: &[Action]) -> Option<SimInstant> {
+    actions.iter().find_map(|a| match a {
+        Action::ResetTimer {
+            kind: TimerKind::CheckQuorum,
+            deadline,
+        } => Some(*deadline),
+        _ => None,
+    })
+}
+
+/// A new leader arms the check-quorum window at 1.5x the fetch timeout, which
+/// is Kafka's `CHECK_QUORUM_TIMEOUT_FACTOR` over the same configured extent the
+/// follower fetch deadline uses. A lone voter has nobody to hear from, so it
+/// arms nothing at all -- Kafka's `timeUntilCheckQuorumExpires` reports
+/// `Long.MAX_VALUE` for a single-voter quorum.
+#[test]
+fn promotion_arms_the_check_quorum_window_unless_the_leader_is_alone() {
+    // `TEST_ELECTION_TIMEOUT` is one second, so the window is 1500ms.
+    for (name, voter_ids, want) in [
+        (
+            "three voters",
+            &[NodeId(1), NodeId(2), NodeId(3)][..],
+            Some(SimInstant(3500)),
+        ),
+        (
+            "two voters",
+            &[NodeId(1), NodeId(2)][..],
+            Some(SimInstant(3500)),
+        ),
+        ("sole voter", &[NodeId(1)][..], None),
+    ] {
+        let mut m = machine(NodeId(1), voter_ids);
+        let log = FakeLog {
+            end: 0,
+            last_epoch: 0,
+        };
+        let peers: Vec<NodeId> = voter_ids
+            .iter()
+            .copied()
+            .filter(|&id| id != NodeId(1))
+            .collect();
+        let actions = win_election(&mut m, &log, &peers, SimInstant(2000));
+        assert2::assert!(m.role().is_leader(), "case {name}");
+        assert2::check!(armed_check_quorum(&actions) == want, "case {name}");
+    }
+}
+
+/// A fetch re-arms the window only once the leader has heard from the majority
+/// it needs *besides itself*: one follower of three voters, two of five. Every
+/// fetch below that count leaves the window running, so a leader that only ever
+/// hears from a minority still reaches its deadline and resigns.
+#[test]
+fn only_a_majority_of_followers_re_arms_the_check_quorum_window() {
+    for (name, voter_ids, fetchers, want) in [
+        (
+            "three voters, one follower is the majority",
+            &[NodeId(1), NodeId(2), NodeId(3)][..],
+            &[NodeId(2)][..],
+            vec![Some(SimInstant(3600))],
+        ),
+        (
+            "five voters, one follower is short",
+            &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)][..],
+            &[NodeId(2)][..],
+            vec![None],
+        ),
+        (
+            "five voters, two followers reach it",
+            &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)][..],
+            &[NodeId(2), NodeId(3)][..],
+            vec![None, Some(SimInstant(3600))],
+        ),
+        (
+            "a repeat fetch from one follower is not two voters",
+            &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)][..],
+            &[NodeId(2), NodeId(2)][..],
+            vec![None, None],
+        ),
+        (
+            "a non-voter observer never counts",
+            &[NodeId(1), NodeId(2), NodeId(3)][..],
+            &[NodeId(9)][..],
+            vec![None],
+        ),
+    ] {
+        let mut m = machine(NodeId(1), voter_ids);
+        let log = FakeLog {
+            end: 0,
+            last_epoch: 0,
+        };
+        let peers: Vec<NodeId> = voter_ids
+            .iter()
+            .copied()
+            .filter(|&id| id != NodeId(1))
+            .collect();
+        win_election(&mut m, &log, &peers, SimInstant(2000));
+        let got: Vec<Option<SimInstant>> = fetchers
+            .iter()
+            .map(|&from| {
+                armed_check_quorum(&m.on_event(
+                    Event::ReceiveFetch {
+                        from,
+                        fetch_epoch: 1,
+                        fetch_offset: 0,
+                    },
+                    &log,
+                    SimInstant(2100),
+                ))
+            })
+            .collect();
+        assert2::check!(got == want, "case {name}");
+    }
+}
+
+/// A `FetchSnapshot` is contact from that voter even though it moves no
+/// replication progress, so Kafka scores it for check-quorum exactly as it
+/// scores a Fetch. Without this a leader whose only reachable follower is
+/// mid-snapshot resigns under a perfectly healthy quorum.
+#[test]
+fn a_snapshot_fetch_is_check_quorum_contact() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    let actions = m.on_event(
+        Event::ReceiveFetchSnapshot { from: NodeId(2) },
+        &log,
+        SimInstant(2100),
+    );
+    assert2::assert!(
+        actions
+            == vec![Action::ResetTimer {
+                kind: TimerKind::CheckQuorum,
+                deadline: SimInstant(3600),
+            }]
+    );
+}
+
+/// A fetch that the leader answers with a truncation hint is still proof the
+/// follower is talking to us, so it re-arms the window as well. Resigning the
+/// quorum over a truncation round would cost a whole election for nothing.
+#[test]
+fn a_diverging_fetch_still_counts_as_contact() {
+    struct EpochOneLog;
+    impl LogView for EpochOneLog {
+        fn end_offset(&self) -> i64 {
+            5
+        }
+        fn last_epoch(&self) -> Epoch {
+            1
+        }
+        fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
+            (epoch <= 1).then_some(5)
+        }
+    }
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = EpochOneLog;
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    // Follower 2 claims epoch 1 out to offset 9; our epoch 1 ends at 5.
+    let actions = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 9,
+        },
+        &log,
+        SimInstant(2100),
+    );
+    assert2::assert!(
+        actions
+            == vec![
+                Action::ResetTimer {
+                    kind: TimerKind::CheckQuorum,
+                    deadline: SimInstant(3600),
+                },
+                Action::TruncateTo(LogOffsetMetadata {
+                    offset: 5,
+                    epoch: 1,
+                }),
+            ]
+    );
+}
+
+/// The window expiring is the leader losing the quorum: it drops the
+/// leadership, tells the voters to elect, persists the change, and arms the
+/// election timer that carries it into its next pre-vote round.
+///
+/// Clearing `leader_id` is the point of the whole mechanism. An isolated old
+/// leader that keeps naming itself answers `DescribeQuorum`, Metadata and
+/// `BrokerHeartbeat` as the controller leader for an epoch the rest of the
+/// cluster has already replaced.
+#[test]
+fn check_quorum_expiry_resigns_the_leader() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    assert2::assert!(m.quorum_state().leader_id == Some(NodeId(1)));
+
+    let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(3500));
+    assert2::assert!(
+        actions
+            == vec![
+                Action::SendEndQuorumEpoch { epoch: 1 },
+                Action::PersistQuorumState,
+                Action::TransitionedTo("Resigned"),
+                Action::ResetTimer {
+                    kind: TimerKind::Election,
+                    deadline: SimInstant(
+                        3500 + 1000 + crate::core::election_jitter_ms(NodeId(1), 1, 1000)
+                    ),
+                },
+            ]
+    );
+    assert2::assert!(
+        (
+            m.role().clone(),
+            m.quorum_state().leader_id,
+            m.quorum_state().leader_epoch
+        ) == (Role::Resigned, None, 1)
+    );
+}
+
+/// A resigned replica is not stuck: its election timer starts the ordinary
+/// KIP-996 pre-vote round, which is how the surviving side of a healed
+/// partition can hand it the leadership back.
+#[test]
+fn a_resigned_replica_elects_on_its_election_timer() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(3500));
+    let actions = m.on_event(Event::ElectionTimeout, &log, SimInstant(5000));
+    assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
+    assert2::assert!(actions.iter().any(|a| matches!(
+        a,
+        Action::SendVoteRequest {
+            epoch: 1,
+            pre_vote: true
+        }
+    )));
+}
+
+/// A sole voter has no quorum to lose, so the expiry is inert for it. Nothing
+/// arms the timer there, but a stray tick must not depose the only replica that
+/// can serve the cluster.
+#[test]
+fn a_sole_voter_never_resigns_on_check_quorum() {
+    let mut m = machine(NodeId(1), &[NodeId(1)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[], SimInstant(2000));
+    let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(9000));
+    assert2::assert!((actions, m.role().is_leader()) == (Vec::new(), true));
+}
+
+/// Only a leader owns a check-quorum window. A follower that somehow sees the
+/// tick keeps following its leader rather than resigning a leadership it does
+/// not hold.
+#[test]
+fn a_follower_ignores_a_check_quorum_tick() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    m.on_event(
+        Event::ReceiveBeginQuorumEpoch {
+            leader_id: NodeId(2),
+            leader_epoch: 4,
+        },
+        &log,
+        SimInstant(10),
+    );
+    let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(9000));
+    assert2::assert!((actions, m.quorum_state().leader_id) == (Vec::new(), Some(NodeId(2))));
+}
+
+/// A leader that was alone arms nothing at promotion, so the voter record that
+/// grows the cluster past one voter is what must start its first window.
+/// Without that, a leader promoted as the sole voter would never run
+/// check-quorum again for the rest of its epoch.
+#[test]
+fn growing_past_one_voter_starts_the_leader_a_window() {
+    let mut m = machine(NodeId(1), &[NodeId(1)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    let promotion = win_election(&mut m, &log, &[], SimInstant(2000));
+    assert2::assert!(armed_check_quorum(&promotion) == None);
+
+    let actions = m.apply_voter_set(
+        crate::core::test_support::voters(&[NodeId(1), NodeId(2)]),
+        SimInstant(4000),
+    );
+    assert2::assert!(
+        actions
+            == vec![Action::ResetTimer {
+                kind: TimerKind::CheckQuorum,
+                deadline: SimInstant(5500),
+            }]
+    );
+}
+
+/// A leader that an uncommitted `VotersRecord` has already removed keeps
+/// serving Fetch until that record commits, and it is exactly then that it
+/// needs the watchdog most: the one voter that can commit the record is the one
+/// voter that can keep it alive. The single-voter exemption is about a leader
+/// that IS the only voter, not about a one-voter set it has been dropped from.
+#[test]
+fn a_removed_leader_still_runs_check_quorum_over_the_remaining_voter() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[NodeId(2)], SimInstant(2000));
+    // The record that drops us leaves one voter, and we keep leading until it
+    // commits.
+    let applied = m.apply_voter_set(
+        crate::core::test_support::voters(&[NodeId(2)]),
+        SimInstant(3000),
+    );
+    assert2::assert!(m.role().is_leader());
+    assert2::check!(armed_check_quorum(&applied) == Some(SimInstant(4500)));
+
+    // That remaining voter is now the whole majority, so its fetch re-arms.
+    let fetched = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(3100),
+    );
+    assert2::check!(armed_check_quorum(&fetched) == Some(SimInstant(4600)));
+
+    // And silence from it still deposes us.
+    m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(5000));
+    assert2::assert!(!m.role().is_leader());
+}
+
+/// A membership change starts a whole new window, so the contacts tallied in
+/// the old one must not be carried into it. Otherwise one stale fetch plus one
+/// fresh fetch near the new deadline re-arms the timer even though no majority
+/// reached the leader inside the window that is actually running.
+#[test]
+fn a_membership_change_starts_the_contact_tally_over() {
+    let five = [NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)];
+    let mut m = machine(NodeId(1), &five);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &five[1..], SimInstant(2000));
+    // One of the two followers this configuration needs.
+    let first = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(2100),
+    );
+    assert2::check!(armed_check_quorum(&first) == None);
+
+    // Swap voter 5 for voter 6: still five voters, still a threshold of two,
+    // but a fresh window.
+    m.apply_voter_set(
+        crate::core::test_support::voters(&[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(6)]),
+        SimInstant(2200),
+    );
+    // A single fetch inside the new window is one voter, not two.
+    let second = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(3),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(2300),
+    );
+    assert2::assert!(armed_check_quorum(&second) == None);
+}
+
+/// A leader already removed from the voter set has no vote to elect with, and
+/// no future leader will announce itself to a node outside the voter set. It
+/// must therefore step down into observer discovery, the way
+/// `finish_local_leader_removal` does, rather than into `Resigned` — where its
+/// election timer is ignored, its fetch timer is cleared, and nothing would ever
+/// reach it again.
+#[test]
+fn a_removed_leader_resigns_into_observer_discovery() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    m.apply_voter_set(
+        crate::core::test_support::voters(&[NodeId(2), NodeId(3)]),
+        SimInstant(3000),
+    );
+    let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(5000));
+    assert2::assert!(
+        actions
+            == vec![
+                Action::SendEndQuorumEpoch { epoch: 1 },
+                Action::PersistQuorumState,
+                Action::TransitionedTo("Observer"),
+                Action::ResetTimer {
+                    kind: TimerKind::Fetch,
+                    deadline: SimInstant(6000),
+                },
+            ]
+    );
+    assert2::assert!(
+        (m.role().clone(), m.quorum_state().leader_id)
+            == (
+                Role::Observer {
+                    leader_id: None,
+                    fetch_deadline: SimInstant(6000),
+                },
+                None
+            )
+    );
+}

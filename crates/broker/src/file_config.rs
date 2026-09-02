@@ -218,7 +218,11 @@ pub struct FileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub replica_lag_time_max: Option<Time>,
-    /// Controller election timeout. Absent leaves the `BrokerConfig` default intact.
+    /// Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`.
+    /// It is the follower fetch watchdog, and 1.5x of it is the leader's
+    /// check-quorum window: a leader that has not been fetched from by a
+    /// majority of the voters within that window resigns its epoch. Absent
+    /// leaves the `BrokerConfig` default intact.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_election_timeout: Option<Time>,

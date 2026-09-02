@@ -7,6 +7,9 @@ use crate::types::{Epoch, LogOffsetMetadata, NodeId, SimInstant};
 pub enum TimerKind {
     Election,
     Fetch,
+    /// Leader-side check-quorum watchdog (KAFKA-15489). It expires when a
+    /// majority of the voters has not fetched, and the leader then resigns.
+    CheckQuorum,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -26,8 +29,6 @@ pub enum Action {
     /// New leader announces its epoch to all voters.
     SendBeginQuorumEpoch { epoch: Epoch },
     /// Resigning leader tells voters to elect.
-    // Emitted by transport-facing paths alongside `Role::Resigned`; the core
-    // also receives `EndQuorumEpoch`.
     SendEndQuorumEpoch { epoch: Epoch },
     /// The follower or observer should fetch from this leader.
     SendFetch { leader_id: NodeId },
