@@ -40,8 +40,8 @@ pub(super) async fn dispatch_prepared(
     // No offset is assigned until the writer answers with one. Every failure
     // below — the writer channel gone, the append itself erroring, the ack
     // timing out — leaves the row without an append, which Kafka answers with
-    // `UNKNOWN_LOG_APPEND_INFO`'s -1. `finalize_ack` overwrites this with the
-    // assigned offset on the one path that gets one.
+    // `UNKNOWN_LOG_APPEND_INFO`, whose `firstOffset` and `logStartOffset` are
+    // both -1. `finalize_ack` overwrites both on the one path that appends.
     let mut response = PartitionProduceResponse {
         index: context.partition_index,
         base_offset: INVALID_OFFSET,
@@ -99,7 +99,7 @@ struct CommitKey<'a> {
 /// Finalize a successful writer append.
 ///
 /// The function applies the `acks=-1` high-watermark durability gate, sets the
-/// response `error_code` and `base_offset`, and records the
+/// response `error_code`, `base_offset` and `log_start_offset`, and records the
 /// idempotent-producer commit exactly once when `pid >= 0`.
 ///
 /// The behavior per path:
@@ -144,6 +144,19 @@ async fn finalize_ack(
     }
     // Unwrap the assigned `Offset` into the wire `base_offset` response field.
     out.base_offset = base_offset.0;
+    // An appended row carries the partition's real log start offset, not the
+    // -1 that `UNKNOWN_LOG_APPEND_INFO` supplies to the pre-append refusals.
+    // Kafka fills `LogAppendInfo.logStartOffset` from `UnifiedLog`'s own
+    // pointer at append time and `ReplicaManager` copies it straight into the
+    // partition row, so the value moves whenever retention, a `DeleteRecords`
+    // or a tiering upload advances the log start. Four single-record batches
+    // into `apache/kafka:4.3.1`, then a `kafka-delete-records` to offset 3,
+    // then one more raw `Produce v8`, answers `error_code=0 base_offset=4
+    // log_append_time_ms=-1 log_start_offset=3`.
+    //
+    // The read is one brief lock on the partition's log, the same one
+    // `log_end_offset()` below takes.
+    out.log_start_offset = part.log_start_offset().0;
     // Only record the idempotent-producer commit if the appended batch is still
     // on the leader's log. A failover-rejoin divergence truncation can remove
     // the batch while the acks=all HW gate above is waiting (the gate then times

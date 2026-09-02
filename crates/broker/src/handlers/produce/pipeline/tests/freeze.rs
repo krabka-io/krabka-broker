@@ -208,6 +208,11 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 index: 0,
                 error_code: crate::codes::NONE,
                 base_offset: 1,
+                // The one accepted row in the table, so the one row that
+                // carries the partition's real log start offset. Nothing has
+                // trimmed the control topic, so it is 0 and not the -1 every
+                // refusal above keeps from `Default`.
+                log_start_offset: 0,
                 ..Default::default()
             },
         ),
