@@ -172,21 +172,21 @@ struct BlockingRead {
 /// A fetch reads its partitions one after another, so whatever this hand-off
 /// costs, a consumer subscribed to 200 partitions pays 200 times before a
 /// single byte goes out. `bench_fetch_handoff` priced the three ways of making
-/// it (microseconds per fetch, one 1 KiB record per partition, fastest of five
-/// runs):
+/// it (microseconds per fetch, one 1 KiB record per partition, fastest of
+/// eight runs of the suite's own fastest-of-five):
 ///
 /// | partitions | per-partition `spawn_blocking` | one batched `spawn_blocking` | `block_in_place` |
 /// |-----------:|-------------------------------:|-----------------------------:|-----------------:|
-/// |          1 |                            6.7 |                          6.3 |              0.6 |
-/// |         16 |                          109.7 |                         16.1 |              9.9 |
-/// |        200 |                         1324.5 |                        120.2 |            115.9 |
+/// |          1 |                            5.4 |                          5.5 |              0.6 |
+/// |         16 |                           95.0 |                         14.9 |              9.7 |
+/// |        200 |                         1303.5 |                        127.8 |            123.3 |
 ///
 /// A task allocation, a queue push, a pool wakeup and a `JoinHandle` await per
-/// partition dominate a warm read: dropping them is worth 12x at one partition
+/// partition dominate a warm read: dropping them is worth 9x at one partition
 /// and 11x at two hundred. Batching the whole pending set into one hand-off
 /// buys the same order of magnitude and no more, and never beats keeping the
-/// read in place: it is 10x behind at one partition, 1.6x behind at sixteen
-/// and level at two hundred -- while it would additionally cost the
+/// read in place: it is 9x behind at one partition, 1.5x behind at sixteen and
+/// 4% behind at two hundred -- while it would additionally cost the
 /// per-partition remote-tier and diskless fallbacks, which are async and
 /// cannot run inside one blocking closure. So the read side lands where the
 /// append side did in [`crate::partition_writer`]: `block_in_place`, called

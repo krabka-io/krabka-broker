@@ -30,9 +30,10 @@ type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 /// partition, which `bench_fetch_handoff` measured at a tenth of the cost;
 /// [`super::read::run_blocking_read`] carries the numbers and the trade.
 ///
-/// The per-partition step stays a step, because the remote-tier and diskless
-/// fallbacks a partition falls through to are async and cannot run inside one
-/// blocking closure covering the whole pending set.
+/// The per-partition step stays a step, because the cold-tier fallback a
+/// partition falls through to -- [`serve_from_cold_tier`], covering the
+/// remote tier and diskless -- is async and cannot run inside one blocking
+/// closure covering the whole pending set.
 pub(super) async fn execute_pending_reads(
     broker: &Broker,
     mut pending: Vec<PendingRead>,
