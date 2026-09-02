@@ -56,19 +56,22 @@ pub fn relative_offset_floor_for_timestamp(
     entries: &[TimeIndexEntry],
     target_ts: TimestampMs,
 ) -> RelativeOffset {
-    let mut floor = 0;
-    let mut previous_relative_offset = None;
+    let mut decoded = Vec::new();
     for entry in entries {
         let relative_offset = entry.relative_offset.get();
-        if previous_relative_offset.is_some_and(|previous| relative_offset <= previous)
-            || entry.timestamp.get() >= target_ts
-        {
+        let previous_relative_offset = decoded.last().map(|&(_, offset)| offset);
+        if !krabka_verified::remote_time_index_offset_usable(
+            previous_relative_offset,
+            relative_offset,
+        ) {
             break;
         }
-        floor = relative_offset;
-        previous_relative_offset = Some(relative_offset);
+        decoded.push((entry.timestamp.get(), relative_offset));
     }
-    floor
+    let candidate_count = krabka_verified::remote_time_index_candidate_count(&decoded, target_ts);
+    candidate_count
+        .checked_sub(1)
+        .map_or(0, |index| decoded[index].1)
 }
 
 #[cfg(test)]
@@ -103,21 +106,22 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_floor_stays_before_sparse_match() {
-        let entries = time_entries(&[(1_000, 0), (2_000, 10), (3_000, 20)]);
-        let cases: [(&[TimeIndexEntry], i64, u32); 4] = [
-            (&entries, 1_000, 0), // exact match scans from the segment start
-            (&entries, 1_500, 0), // between entries scans from the lower hint
-            (&entries, 4_000, 20),
-            (&[], 1_000, 0),
-        ];
-        for (entries, ts, want) in cases {
+    fn timestamp_floor_covers_strict_predecessor_boundaries() {
+        let entries = time_entries(&[(1_000, 0), (2_000, 10), (2_000, 20), (3_000, 30)]);
+        for (ts, want) in [
+            (500, 0),   // before first
+            (1_000, 0), // exact first match scans from the segment start
+            (1_500, 0), // between entries uses the strict predecessor
+            (2_000, 0), // duplicate exact matches are both excluded
+            (2_500, 20),
+            (4_000, 30), // after last
+        ] {
             assert!(
-                relative_offset_floor_for_timestamp(entries, ts) == want,
-                "ts {ts} entries_len {}",
-                entries.len()
+                relative_offset_floor_for_timestamp(&entries, ts) == want,
+                "ts {ts}"
             );
         }
+        assert!(relative_offset_floor_for_timestamp(&[], 1_000) == 0);
     }
 
     #[test]

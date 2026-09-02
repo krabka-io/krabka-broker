@@ -18,13 +18,17 @@ load("@rules_rust//rust:defs.bzl", "rust_doc", "rust_doc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//tools/lint:linters.bzl", "clippy_test")
 
-# `[workspace.lints.rust] unsafe_code = "forbid"`. rules_rs 0.0.106 does not
+# `[workspace.lints.rust] unsafe_code = "forbid"`. rules_rs 0.0.107 does not
 # yet plumb Cargo lint tables into the Bazel build, and this is the one lint
 # in that table whose guarantee must not lapse under a second build system.
 # The clippy tables stay a Cargo-side gate: clippy runs as an aspect here, not
 # as part of a normal build.
 WORKSPACE_RUSTC_FLAGS = ["-Funsafe_code"]
-WORKSPACE_VERSION = "0.5.1"
+
+# The root `Cargo.toml`'s `[workspace.package] version`. It reaches the release
+# artifacts through the purl `crate_library` stamps below, so a release bump
+# has to land here as well as in the manifest.
+WORKSPACE_VERSION = "0.5.3"
 
 def _features():
     return DEP_DATA[native.package_name()]["crate_features"]
@@ -94,6 +98,7 @@ def crate_library(name, srcs = None, **kwargs):
     rust_doc(
         name = name + "_doc",
         crate = ":" + name,
+        rustdoc_flags = ["-Dwarnings"],
     )
 
 def crate_binary(name, crate_root, lib, tests = True, **kwargs):
@@ -150,6 +155,7 @@ def crate_tests(
         docker = {},
         env = {},
         rustc_env = {},
+        unit_rustc_env_files = [],
         manual = [],
         no_harness = [],
         doc_tests = True,
@@ -166,18 +172,26 @@ def crate_tests(
       compile_data: files reachable from `include!`/`include_str!` at compile time.
       env: runtime environment for every test target in the package.
       rustc_env: extra compile-time environment, e.g. `CARGO_MANIFEST_DIR`.
+      unit_rustc_env_files: `NAME=value` files whose contents become compile-time
+        environment for the unit-test target only -- the Bazel counterpart of a
+        `cargo::rustc-env` line from a build script. Unit tests alone, because
+        the values a build produces are for `src/`; an integration suite that
+        needs one can be given `rustc_env` instead.
       manual: test stems to tag `manual` — Docker-driven or otherwise
         non-hermetic suites, the Bazel equivalent of their `#[ignore]`.
       no_harness: test stems declared `harness = false` in Cargo.toml.
       doc_tests: whether to emit a `rust_doc_test`. `cargo test` runs rustdoc
         examples; without this they are simply not run.
-      mutants: whether to emit a `cargo_mutants_test` over the unit tests.
+      mutants: whether to emit a `cargo_mutants_test` over unit and ordinary
+        integration tests.
       mutants_jobs: mutants built and tested concurrently within one shard.
       mutants_shards: Bazel shards the sweep is split across.
       mutants_timeout: Bazel timeout for one shard of the sweep.
       unit_tags: extra tags for the unit-test target.
     """
     unit = lib + "_test"
+    integration_srcs = native.glob(["tests/*.rs"], allow_empty = True)
+    integration_stems = [src[len("tests/"):-len(".rs")] for src in integration_srcs]
     rust_test(
         name = unit,
         aliases = _aliases(["deps", "dev_deps"]),
@@ -188,6 +202,7 @@ def crate_tests(
         edition = edition(),
         env = env,
         rustc_env = rustc_env,
+        rustc_env_files = unit_rustc_env_files,
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         tags = unit_tags,
         deps = all_crate_deps(normal_dev = True),
@@ -202,7 +217,7 @@ def crate_tests(
 
     if mutants:
         # `manual`: a full sweep rebuilds the crate once per mutant, so it runs
-        # from the nightly job rather than on every `bazel test //...`.
+        # from the dedicated workflow rather than on every `bazel test //...`.
         cargo_mutants_test(
             name = lib + "_mutants",
             # Every mutant is a full rebuild of the crate plus a test run, so a
@@ -211,7 +226,13 @@ def crate_tests(
             # all, it is an hour of a runner before anyone learns something is
             # wrong. `long` is 900s; crates that legitimately need more say so.
             timeout = mutants_timeout,
+            integration_tests = [
+                ":" + stem + "_test"
+                for stem in integration_stems
+                if stem not in manual and stem not in docker
+            ],
             jobs = mutants_jobs,
+            library = ":" + lib,
             shard_count = mutants_shards,
             tags = ["manual"],
             test = ":" + unit,
@@ -226,7 +247,7 @@ def crate_tests(
         allow_empty = True,
     )
 
-    for src in native.glob(["tests/*.rs"], allow_empty = True):
+    for src in integration_srcs:
         stem = src[len("tests/"):-len(".rs")]
         rust_test(
             name = stem + "_test",

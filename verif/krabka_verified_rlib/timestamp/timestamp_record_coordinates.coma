@@ -1,0 +1,167 @@
+(* #"/proof-work-238/crates/verified/src/timestamp.rs" 73 0 78 23 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span stimestamp = "/proof-work-238/crates/verified/src/timestamp.rs" 80 31 80 54
+let%span stimestamp'0 = "/proof-work-238/crates/verified/src/timestamp.rs" 80 8 80 55
+let%span stimestamp'1 = "/proof-work-238/crates/verified/src/timestamp.rs" 80 8 80 56
+let%span stimestamp'2 = "/proof-work-238/crates/verified/src/timestamp.rs" 81 8 81 52
+let%span stimestamp'3 = "/proof-work-238/crates/verified/src/timestamp.rs" 81 8 81 53
+let%span stimestamp'4 = "/proof-work-238/crates/verified/src/timestamp.rs" 64 10 71 1
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'0 | Some'0 ()
+
+type t_ControlFlow_Option_Infallible_i64 = Continue Int64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'0 -> true
+      | Some'0 f0 -> inv_Infallible f0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue f0 -> true
+      | Break f0 -> inv_Option_Infallible f0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'0)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0: t_Option_Infallible)) = any
+  [ _k (f0: t_Option_Infallible) -> {Break f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None'1 | Some'1 tup2_i64_i64
+
+let from_residual_Option_tup2_i64_i64 (residual: t_Option_Infallible) (return (x: t_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup2_i64_i64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None'1}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let timestamp_record_coordinates [#"/proof-work-238/crates/verified/src/timestamp.rs" 73 0 78 23] (batch_base: Int64.t)
+  (offset_delta: Int32.t) (batch_timestamp: Int64.t) (timestamp_delta: Int64.t) (return (x: t_Option_tup2_i64_i64)) =
+(! bb0
+  [ bb0 = s0
+    [ s0 = from_i64 [%#stimestamp] {offset_delta} (fun (_x: Int64.t) -> [ &_15 <- _x ] s1)
+    | s1 = checked_add [%#stimestamp'0] {batch_base} {_15} (fun (_x: t_Option_i64) -> [ &_13 <- _x ] s2)
+    | s2 = branch_Option_i64 [%#stimestamp'1] {_13} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_12 <- _x ] s3)
+    | s3 = any
+      [ br0 (x0: Int64.t) -> {_12 = Continue x0} (! bb6) | br1 (x0: t_Option_Infallible) -> {_12 = Break x0} (! bb7) ] ]
+  | bb7 = s0
+    [ s0 = elim_Break {_12} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_i64 [%#stimestamp'1] {residual}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = elim_Continue {_12} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+    | s1 = checked_add [%#stimestamp'2] {batch_timestamp} {timestamp_delta}
+        (fun (_x: t_Option_i64) -> [ &_24 <- _x ] s2)
+    | s2 = branch_Option_i64 [%#stimestamp'3] {_24} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_23 <- _x ] s3)
+    | s3 = any
+      [ br0 (x0: Int64.t) -> {_23 = Continue x0} (! bb13)
+      | br1 (x0: t_Option_Infallible) -> {_23 = Break x0} (! bb14) ] ]
+  | bb14 = s0
+    [ s0 = elim_Break {_23} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_i64 [%#stimestamp'3] {residual'0}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = elim_Continue {_23} (fun (r0: Int64.t) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &_10 <- { f0 = val'; f1 = val''0 } ] s2
+    | s2 = [ &_ret <- Some'1 _10 ] s3
+    | s3 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & batch_base: Int64.t = batch_base
+  | & offset_delta: Int32.t = offset_delta
+  | & batch_timestamp: Int64.t = batch_timestamp
+  | & timestamp_delta: Int64.t = timestamp_delta
+  | & _10: tup2_i64_i64 = Any.any_l ()
+  | & _12: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _13: t_Option_i64 = Any.any_l ()
+  | & _15: Int64.t = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': Int64.t = Any.any_l ()
+  | & _23: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _24: t_Option_i64 = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: Int64.t = Any.any_l () ])
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:timestamp_record_coordinates ensures] [%#stimestamp'4] match result with
+      | Some'1 {f0 = offset; f1 = timestamp} -> Int64.to_int offset
+        = Int64.to_int batch_base + Int32.to_int offset_delta
+      /\ Int64.to_int timestamp = Int64.to_int batch_timestamp + Int64.to_int timestamp_delta
+      | None'1 -> Int64.to_int batch_base + Int32.to_int offset_delta < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int batch_base + Int32.to_int offset_delta) (Int64.to_int const_MAX)
+      \/ Int64.to_int batch_timestamp + Int64.to_int timestamp_delta < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int batch_timestamp + Int64.to_int timestamp_delta) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]

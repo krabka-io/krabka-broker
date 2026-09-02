@@ -1,0 +1,55 @@
+(* #"/proof-work-226/crates/verified/src/voter_set.rs" 87 0 91 25 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span svoter_set = "/proof-work-226/crates/verified/src/voter_set.rs" 92 25 92 26
+let%span svoter_set'0 = "/proof-work-226/crates/verified/src/voter_set.rs" 94 29 94 30
+let%span svoter_set'1 = "/proof-work-226/crates/verified/src/voter_set.rs" 76 10 77 29
+let%span svoter_set'2 = "/proof-work-226/crates/verified/src/voter_set.rs" 78 10 79 50
+let%span svoter_set'3 = "/proof-work-226/crates/verified/src/voter_set.rs" 80 10 82 1
+let%span svoter_set'4 = "/proof-work-226/crates/verified/src/voter_set.rs" 83 10 85 1
+
+use creusot.int.Int16
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_VoterSetWireDecision = UnsupportedRecordVersion | Empty | DuplicateId | Accept
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let voter_set_wire_decision [#"/proof-work-226/crates/verified/src/voter_set.rs" 87 0 91 25] (record_version: Int16.t)
+  (voter_count: UInt64.t) (voter_ids_unique: bool) (return (x: t_VoterSetWireDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_17 <- record_version <> ([%#svoter_set] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb2) | br1 -> {_17} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- UnsupportedRecordVersion ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &_19 <- voter_count = ([%#svoter_set'0] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb4) | br1 -> {_19} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- Empty ] s1 | s1 = return {_ret} ]
+  | bb4 = any [ br0 -> {voter_ids_unique = false} (! bb5) | br1 -> {voter_ids_unique} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- Accept ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- DuplicateId ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterSetWireDecision = Any.any_l ()
+  | & record_version: Int16.t = record_version
+  | & voter_count: UInt64.t = voter_count
+  | & voter_ids_unique: bool = voter_ids_unique
+  | & _17: bool = Any.any_l ()
+  | & _19: bool = Any.any_l () ])
+  [ return (result: t_VoterSetWireDecision) ->
+  {[@stop_split] [@expl:voter_set_wire_decision ensures] ([@stop_split] [@expl:voter_set_wire_decision ensures #0] [%#svoter_set'1] (result
+        = UnsupportedRecordVersion)
+      = (Int16.to_int record_version <> 0))
+    /\ ([@stop_split] [@expl:voter_set_wire_decision ensures #1] [%#svoter_set'2] (result = Empty)
+      = (Int16.to_int record_version = 0 /\ UInt64.t'int voter_count = 0))
+    /\ ([@stop_split] [@expl:voter_set_wire_decision ensures #2] [%#svoter_set'3] (result = DuplicateId)
+      = (Int16.to_int record_version = 0 /\ gt_log_Int (UInt64.t'int voter_count) 0 /\ not voter_ids_unique))
+    /\ ([@stop_split] [@expl:voter_set_wire_decision ensures #3] [%#svoter_set'4] (result = Accept)
+    = (Int16.to_int record_version = 0 /\ gt_log_Int (UInt64.t'int voter_count) 0 /\ voter_ids_unique))}
+    (! return {result}) ]

@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_first_unstable_offset": { "prover": "alt-ergo", "time": 0.047 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.004 }
+    }
+  }
+}

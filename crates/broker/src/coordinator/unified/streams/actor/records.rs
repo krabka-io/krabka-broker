@@ -135,7 +135,7 @@ pub(super) async fn flush_pending(
 
 /// Snapshots the full actor state into a `StreamsGroupSeed` for the cache and
 /// for a respawned actor. The result matches what bootstrap replay produces.
-fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
+pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
     let state = &actor.state;
     let mut members = std::collections::HashMap::new();
     let mut target_per_member = std::collections::HashMap::new();
@@ -198,16 +198,28 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
         }
     }
     for (mid, tv) in seed.target_per_member {
-        state.target.active.insert(mid.clone(), tv.active);
-        state.target.standby.insert(mid.clone(), tv.standby);
-        state.target.warmup.insert(mid, tv.warmup);
+        if !tv.active.is_empty() {
+            state.target.active.insert(mid.clone(), tv.active);
+        }
+        if !tv.standby.is_empty() {
+            state.target.standby.insert(mid.clone(), tv.standby);
+        }
+        if !tv.warmup.is_empty() {
+            state.target.warmup.insert(mid, tv.warmup);
+        }
     }
     state.phase = if state.members.is_empty() {
         StreamsGroupStatePhase::Empty
-    } else if actor.topology.is_some() {
-        StreamsGroupStatePhase::Stable
-    } else {
+    } else if actor.topology.is_none() {
         StreamsGroupStatePhase::NotReady
+    } else if state
+        .members
+        .values()
+        .any(|member| member.assignment_state != StreamsMemberAssignmentState::Stable)
+    {
+        StreamsGroupStatePhase::Reconciling
+    } else {
+        StreamsGroupStatePhase::Stable
     };
     state.dirty = false;
 }

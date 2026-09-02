@@ -1,0 +1,17 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 9 27 9 32 *)
+
+(* <wal::WalFetchAdmission as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_WalFetchAdmission = Denied | FencedLeaderEpoch | UnknownLeaderEpoch | Serve
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_WalFetchAdmission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 9 27 9 32]
+  (self: t_WalFetchAdmission) (return (x: t_WalFetchAdmission)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_WalFetchAdmission = Any.any_l () | & self: t_WalFetchAdmission = self ])
+  [ return (result: t_WalFetchAdmission) -> (! return {result}) ]

@@ -16,7 +16,6 @@ use super::{
 use crate::{broker::Broker, codes, error::BrokerError};
 
 const LATEST_TIMESTAMP: i64 = -1;
-const EARLIEST_TIMESTAMP: i64 = -2;
 
 struct Request {
     replica_id: i32,
@@ -97,7 +96,9 @@ async fn resolve_partition(
     request: PartitionRequest,
     replica_id: i32,
 ) -> PartitionResponse {
-    if request.timestamp < EARLIEST_TIMESTAMP {
+    if krabka_verified::list_offsets_kind(request.timestamp, 0)
+        == krabka_verified::ListOffsetsKind::Unsupported
+    {
         return error_response(request.index, codes::UNSUPPORTED_VERSION);
     }
     let Ok(max_num_offsets) = usize::try_from(request.max_num_offsets) else {
@@ -121,7 +122,10 @@ async fn resolve_partition(
     let Ok(mut offsets) = offsets else {
         return error_response(request.index, codes::KAFKA_STORAGE_ERROR);
     };
-    let mut upper = last_fetchable_offset(&partition, fetch_bound(replica_id, 0), local_end).await;
+    let Some(mut upper) = last_fetchable_offset(&partition, fetch_bound(replica_id, 0)).await
+    else {
+        return error_response(request.index, codes::KAFKA_STORAGE_ERROR);
+    };
     if request.timestamp == LATEST_TIMESTAMP {
         upper = upper.min(latest_offset(&partition, policy, local_end));
     }

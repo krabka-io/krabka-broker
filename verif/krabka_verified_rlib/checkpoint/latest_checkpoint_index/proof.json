@@ -1,0 +1,10 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_checkpoint_id_newer": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_latest_checkpoint_index": { "prover": "alt-ergo", "time": 0.044 },
+      "vc_len_tup2_i64_i32": { "prover": "alt-ergo", "time": 0.004 }
+    }
+  }
+}

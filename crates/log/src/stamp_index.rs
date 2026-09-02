@@ -89,6 +89,19 @@ impl StampIndex {
                         stamp: raw.stamp.get(),
                     });
                 }
+                entries.sort_unstable_by_key(|entry| {
+                    (entry.base_offset.0, entry.last_offset.0, entry.stamp)
+                });
+                // A write followed by an uncertain sync can be retried and
+                // leave an exact duplicate on disk. Canonicalize that retry,
+                // but reject a duplicate range with a different stamp below.
+                entries.dedup();
+                if !Self::entries_valid(&entries) {
+                    return Err(LogError::Corrupt(format!(
+                        "stampindex {} contains inverted or overlapping ranges",
+                        path.display()
+                    )));
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(LogError::Io(e)),
@@ -101,7 +114,8 @@ impl StampIndex {
     ///
     /// Entries need not arrive in offset order. Transactional ranges are
     /// added when their commit marker lands, and two interleaved transactions
-    /// can commit in either order. Ranges themselves must not overlap.
+    /// can commit in either order. The in-memory index is kept in canonical
+    /// offset order, and ranges themselves must not overlap.
     #[instrument(
         level = "debug",
         skip(self),
@@ -111,27 +125,42 @@ impl StampIndex {
     /// # Errors
     /// Returns an error when appending to or syncing the file fails.
     pub fn append(&mut self, entry: StampEntry) -> Result<(), LogError> {
-        if entry.last_offset < entry.base_offset {
-            return Err(LogError::InvalidArgument(format!(
-                "stamp range {}..={} is inverted",
-                entry.base_offset, entry.last_offset
-            )));
-        }
-        if let Some(existing) = self.entries.iter().find(|existing| {
-            existing.base_offset <= entry.last_offset && entry.base_offset <= existing.last_offset
-        }) {
-            if *existing == entry {
+        let (bases, lasts) = Self::coordinates(&self.entries);
+        if let Some(position) = krabka_verified::exact_stamp_range_index(
+            &bases,
+            &lasts,
+            entry.base_offset.0,
+            entry.last_offset.0,
+        ) {
+            if self.entries[position] == entry {
                 return Ok(());
             }
             return Err(LogError::Corrupt(format!(
-                "stamp range {}..={} overlaps existing range {}..={} in {}",
+                "stamp range {}..={} conflicts with its existing stamp in {}",
                 entry.base_offset,
                 entry.last_offset,
-                existing.base_offset,
-                existing.last_offset,
                 self.path.display()
             )));
         }
+        let Some(position) = krabka_verified::stamp_range_insertion_index(
+            &bases,
+            &lasts,
+            entry.base_offset.0,
+            entry.last_offset.0,
+        ) else {
+            if entry.last_offset < entry.base_offset {
+                return Err(LogError::InvalidArgument(format!(
+                    "stamp range {}..={} is inverted",
+                    entry.base_offset, entry.last_offset
+                )));
+            }
+            return Err(LogError::Corrupt(format!(
+                "stamp range {}..={} overlaps an existing range in {}",
+                entry.base_offset,
+                entry.last_offset,
+                self.path.display()
+            )));
+        };
         let mut f = OpenOptions::new()
             .create(true)
             .append(true)
@@ -144,7 +173,7 @@ impl StampIndex {
         };
         f.write_all(raw.as_bytes()).map_err(LogError::Io)?;
         f.sync_data().map_err(LogError::Io)?;
-        self.entries.push(entry);
+        self.entries.insert(position, entry);
         Ok(())
     }
 
@@ -156,9 +185,13 @@ impl StampIndex {
     /// Returns an error for a partial overlap or when rewriting the sidecar
     /// fails.
     pub fn upsert(&mut self, entry: StampEntry) -> Result<(), LogError> {
-        if let Some(position) = self.entries.iter().position(|existing| {
-            existing.base_offset == entry.base_offset && existing.last_offset == entry.last_offset
-        }) {
+        let (bases, lasts) = Self::coordinates(&self.entries);
+        if let Some(position) = krabka_verified::exact_stamp_range_index(
+            &bases,
+            &lasts,
+            entry.base_offset.0,
+            entry.last_offset.0,
+        ) {
             if self.entries[position] != entry {
                 let mut entries = self.entries.clone();
                 entries[position] = entry;
@@ -197,16 +230,15 @@ impl StampIndex {
     /// # Errors
     /// Returns an error when rewriting or syncing the sidecar fails.
     pub fn remove_ranges(&mut self, ranges: &[(Offset, Offset)]) -> Result<(), LogError> {
-        let entries: Vec<_> = self
-            .entries
-            .iter()
-            .copied()
-            .filter(|entry| {
-                !ranges
-                    .iter()
-                    .any(|range| range.0 == entry.base_offset && range.1 == entry.last_offset)
-            })
-            .collect();
+        let mut entries = self.entries.clone();
+        for &(base, last) in ranges {
+            let (bases, lasts) = Self::coordinates(&entries);
+            if let Some(position) =
+                krabka_verified::exact_stamp_range_index(&bases, &lasts, base.0, last.0)
+            {
+                entries.remove(position);
+            }
+        }
         if entries.len() == self.entries.len() {
             return Ok(());
         }
@@ -238,14 +270,25 @@ impl StampIndex {
         &self.entries
     }
 
+    fn coordinates(entries: &[StampEntry]) -> (Vec<i64>, Vec<i64>) {
+        entries
+            .iter()
+            .map(|entry| (entry.base_offset.0, entry.last_offset.0))
+            .unzip()
+    }
+
+    fn entries_valid(entries: &[StampEntry]) -> bool {
+        let (bases, lasts) = Self::coordinates(entries);
+        krabka_verified::stamp_ranges_valid(&bases, &lasts)
+    }
+
     /// The stamp of the entry whose inclusive `[base_offset, last_offset]`
     /// range contains `offset`, or `None` when no entry covers it.
     #[must_use]
     pub fn stamp_for_offset(&self, offset: Offset) -> Option<u64> {
-        self.entries
-            .iter()
-            .find(|e| e.base_offset <= offset && offset <= e.last_offset)
-            .map(|e| e.stamp)
+        let (bases, lasts) = Self::coordinates(&self.entries);
+        krabka_verified::covering_stamp_range_index(&bases, &lasts, offset.0)
+            .map(|index| self.entries[index].stamp)
     }
 }
 
@@ -255,6 +298,19 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn write_entries(path: &std::path::Path, entries: &[StampEntry]) {
+        let mut bytes = Vec::with_capacity(entries.len() * ENTRY_BYTES);
+        for entry in entries {
+            let raw = StampEntryRaw {
+                base_offset: I64::new(entry.base_offset.0),
+                last_offset: I64::new(entry.last_offset.0),
+                stamp: U64::new(entry.stamp),
+            };
+            bytes.extend_from_slice(raw.as_bytes());
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
 
     #[test]
     fn stamp_empty_file_yields_empty_entries() {
@@ -318,6 +374,126 @@ mod tests {
         std::fs::write(&path, [0_u8; ENTRY_BYTES + 1]).unwrap();
         let err = StampIndex::open(path).unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = err);
+    }
+
+    #[test]
+    fn open_canonicalizes_retries_and_rejects_malformed_ranges() {
+        let dir = TempDir::new().unwrap();
+        let first = StampEntry {
+            base_offset: Offset(0),
+            last_offset: Offset(2),
+            stamp: 100,
+        };
+        let second = StampEntry {
+            base_offset: Offset(10),
+            last_offset: Offset(12),
+            stamp: 200,
+        };
+        let path = dir.path().join("retries.stampindex");
+        write_entries(&path, &[second, first, second]);
+        assert2::assert!(StampIndex::open(path).unwrap().entries() == [first, second]);
+
+        for (name, entries) in [
+            (
+                "inverted",
+                vec![StampEntry {
+                    base_offset: Offset(7),
+                    last_offset: Offset(6),
+                    stamp: 1,
+                }],
+            ),
+            (
+                "overlap",
+                vec![
+                    StampEntry {
+                        base_offset: Offset(0),
+                        last_offset: Offset(4),
+                        stamp: 1,
+                    },
+                    StampEntry {
+                        base_offset: Offset(4),
+                        last_offset: Offset(8),
+                        stamp: 2,
+                    },
+                ],
+            ),
+            (
+                "conflicting-retry",
+                vec![
+                    StampEntry {
+                        base_offset: Offset(0),
+                        last_offset: Offset(4),
+                        stamp: 1,
+                    },
+                    StampEntry {
+                        base_offset: Offset(0),
+                        last_offset: Offset(4),
+                        stamp: 2,
+                    },
+                ],
+            ),
+        ] {
+            let path = dir.path().join(format!("{name}.stampindex"));
+            write_entries(&path, &entries);
+            assert2::assert!(let LogError::Corrupt(_) = StampIndex::open(path).unwrap_err());
+        }
+    }
+
+    #[test]
+    fn out_of_order_append_stays_canonical_across_reopen() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.stampindex");
+        let mut idx = StampIndex::open(path.clone()).unwrap();
+        let first = StampEntry {
+            base_offset: Offset(0),
+            last_offset: Offset(2),
+            stamp: 100,
+        };
+        let second = StampEntry {
+            base_offset: Offset(10),
+            last_offset: Offset(12),
+            stamp: 200,
+        };
+        idx.append(second).unwrap();
+        idx.append(first).unwrap();
+        assert2::assert!(idx.entries() == [first, second]);
+        assert2::assert!(StampIndex::open(path).unwrap().entries() == [first, second]);
+    }
+
+    #[test]
+    fn mutation_io_failures_leave_the_in_memory_index_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.stampindex");
+        let original = StampEntry {
+            base_offset: Offset(0),
+            last_offset: Offset(2),
+            stamp: 100,
+        };
+        let mut idx = StampIndex::open(path.clone()).unwrap();
+        idx.append(original).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        let replacement = StampEntry {
+            stamp: 200,
+            ..original
+        };
+        assert2::assert!(let LogError::Io(_) = idx.upsert(replacement).unwrap_err());
+        assert2::assert!(idx.entries() == [original]);
+        assert2::assert!(
+            let LogError::Io(_) = idx.remove_ranges(&[(Offset(0), Offset(2))]).unwrap_err()
+        );
+        assert2::assert!(idx.entries() == [original]);
+        assert2::assert!(
+            let LogError::Io(_) = idx
+                .append(StampEntry {
+                    base_offset: Offset(4),
+                    last_offset: Offset(5),
+                    stamp: 300,
+                })
+                .unwrap_err()
+        );
+        assert2::assert!(idx.entries() == [original]);
     }
 
     #[test]

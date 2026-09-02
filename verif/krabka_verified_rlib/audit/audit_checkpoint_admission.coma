@@ -1,0 +1,64 @@
+(* #"/workspace/crates/verified/src/audit.rs" 48 0 53 29 *)
+
+let%span saudit = "/workspace/crates/verified/src/audit.rs" 58 30 58 31
+let%span saudit'0 = "/workspace/crates/verified/src/audit.rs" 58 73 58 74
+let%span saudit'1 = "/workspace/crates/verified/src/audit.rs" 58 58 58 74
+let%span saudit'2 = "/workspace/crates/verified/src/audit.rs" 38 10 40 53
+let%span saudit'3 = "/workspace/crates/verified/src/audit.rs" 41 10 41 83
+let%span saudit'4 = "/workspace/crates/verified/src/audit.rs" 42 10 43 41
+let%span saudit'5 = "/workspace/crates/verified/src/audit.rs" 44 10 46 77
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_AuditCheckpointAdmission = Admit | RejectSignature | RejectHead | RejectSequence
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let audit_checkpoint_admission [#"/workspace/crates/verified/src/audit.rs" 48 0 53 29] (signature_valid: bool)
+  (head_matches: bool) (expected_seq: UInt64.t) (checkpoint_seq_high: UInt64.t)
+  (return (x: t_AuditCheckpointAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {signature_valid = false} (! bb1) | br1 -> {signature_valid} (! bb2) ]
+  | bb2 = any [ br0 -> {head_matches = false} (! bb3) | br1 -> {head_matches} (! bb4) ]
+  | bb4 = s0
+    [ s0 = [ &_22 <- expected_seq = ([%#saudit] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb6) | br1 -> {_22} (! bb8) ] ]
+  | bb6 = s0
+    [ s0 = UInt64.sub [%#saudit'1] {expected_seq} {[%#saudit'0] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &_26 <- _x ] s1)
+    | s1 = [ &_24 <- checkpoint_seq_high <> _26 ] s2
+    | s2 = any [ br0 -> {_24 = false} (! bb9) | br1 -> {_24} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- RejectSequence ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- RejectHead ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- RejectSignature ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AuditCheckpointAdmission = Any.any_l ()
+  | & signature_valid: bool = signature_valid
+  | & head_matches: bool = head_matches
+  | & expected_seq: UInt64.t = expected_seq
+  | & checkpoint_seq_high: UInt64.t = checkpoint_seq_high
+  | & _22: bool = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _26: UInt64.t = Any.any_l () ])
+  [ return (result: t_AuditCheckpointAdmission) ->
+  {[@stop_split] [@expl:audit_checkpoint_admission ensures] ([@stop_split] [@expl:audit_checkpoint_admission ensures #0] [%#saudit'2] (result
+        = Admit)
+      = (signature_valid
+      /\ head_matches
+      /\ gt_log_Int (UInt64.t'int expected_seq) 0 /\ UInt64.t'int checkpoint_seq_high + 1 = UInt64.t'int expected_seq))
+    /\ ([@stop_split] [@expl:audit_checkpoint_admission ensures #1] [%#saudit'3] (result = RejectSignature)
+      = (not signature_valid))
+    /\ ([@stop_split] [@expl:audit_checkpoint_admission ensures #2] [%#saudit'4] (result = RejectHead)
+      = (signature_valid /\ not head_matches))
+    /\ ([@stop_split] [@expl:audit_checkpoint_admission ensures #3] [%#saudit'5] (result = RejectSequence)
+    = (signature_valid
+    /\ head_matches
+    /\ (UInt64.t'int expected_seq = 0 \/ UInt64.t'int checkpoint_seq_high + 1 <> UInt64.t'int expected_seq)))}
+    (! return {result}) ]

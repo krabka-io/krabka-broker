@@ -1,0 +1,105 @@
+(* #"/proof-work-246/crates/verified/src/worm.rs" 92 0 92 83 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sworm = "/proof-work-246/crates/verified/src/worm.rs" 93 29 93 30
+let%span sworm'0 = "/proof-work-246/crates/verified/src/worm.rs" 71 10 71 77
+let%span sworm'1 = "/proof-work-246/crates/verified/src/worm.rs" 72 10 73 53
+let%span sworm'2 = "/proof-work-246/crates/verified/src/worm.rs" 74 10 75 59
+let%span sworm'3 = "/proof-work-246/crates/verified/src/worm.rs" 76 10 77 54
+let%span sworm'4 = "/proof-work-246/crates/verified/src/worm.rs" 78 10 79 100
+let%span sworm'5 = "/proof-work-246/crates/verified/src/worm.rs" 80 10 82 53
+let%span sworm'6 = "/proof-work-246/crates/verified/src/worm.rs" 83 10 86 55
+let%span sworm'7 = "/proof-work-246/crates/verified/src/worm.rs" 87 10 90 54
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_WormObjectSetFacts = {
+  object_count: UInt64.t;
+  listed_count: UInt64.t;
+  unique_keys: bool;
+  coordinates_match: bool;
+  all_present: bool;
+  sizes_match: bool;
+  require_digests: bool;
+  digests_match: bool }
+
+type t_WormObjectSetDecision =
+  | Empty
+  | DuplicateKey
+  | CoordinateMismatch
+  | MissingObject
+  | CountMismatch
+  | SizeMismatch
+  | DigestMismatch
+  | Admit
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let worm_object_set_decision [#"/proof-work-246/crates/verified/src/worm.rs" 92 0 92 83] (facts: t_WormObjectSetFacts)
+  (return (x: t_WormObjectSetDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_47 <- facts.object_count = ([%#sworm] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_47 = false} (! bb2) | br1 -> {_47} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Empty ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {facts.unique_keys = false} (! bb3) | br1 -> {facts.unique_keys} (! bb4) ]
+  | bb4 = any [ br0 -> {facts.coordinates_match = false} (! bb5) | br1 -> {facts.coordinates_match} (! bb6) ]
+  | bb6 = any [ br0 -> {facts.all_present = false} (! bb7) | br1 -> {facts.all_present} (! bb8) ]
+  | bb8 = s0
+    [ s0 = [ &_52 <- facts.object_count <> facts.listed_count ] s1
+    | s1 = any [ br0 -> {_52 = false} (! bb10) | br1 -> {_52} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- CountMismatch ] s1 | s1 = return {_ret} ]
+  | bb10 = any [ br0 -> {facts.sizes_match = false} (! bb11) | br1 -> {facts.sizes_match} (! bb12) ]
+  | bb12 = any [ br0 -> {facts.require_digests = false} (! bb15) | br1 -> {facts.require_digests} (! bb13) ]
+  | bb13 = any [ br0 -> {facts.digests_match = false} (! bb14) | br1 -> {facts.digests_match} (! bb15) ]
+  | bb14 = s0 [ s0 = [ &_ret <- DigestMismatch ] s1 | s1 = return {_ret} ]
+  | bb15 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- SizeMismatch ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- MissingObject ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- CoordinateMismatch ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- DuplicateKey ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_WormObjectSetDecision = Any.any_l ()
+  | & facts: t_WormObjectSetFacts = facts
+  | & _47: bool = Any.any_l ()
+  | & _52: bool = Any.any_l () ])
+  [ return (result: t_WormObjectSetDecision) ->
+  {[@stop_split] [@expl:worm_object_set_decision ensures] ([@stop_split] [@expl:worm_object_set_decision ensures #0] [%#sworm'0] UInt64.t'int facts.object_count
+        = 0 -> result = Empty)
+    /\ ([@stop_split] [@expl:worm_object_set_decision ensures #1] [%#sworm'1] gt_log_Int (UInt64.t'int facts.object_count) 0
+        /\ not facts.unique_keys -> result = DuplicateKey)
+    /\ ([@stop_split] [@expl:worm_object_set_decision ensures #2] [%#sworm'2] gt_log_Int (UInt64.t'int facts.object_count) 0
+        /\ facts.unique_keys /\ not facts.coordinates_match -> result = CoordinateMismatch)
+    /\ ([@stop_split] [@expl:worm_object_set_decision ensures #3] [%#sworm'3] gt_log_Int (UInt64.t'int facts.object_count) 0
+        /\ facts.unique_keys /\ facts.coordinates_match /\ not facts.all_present -> result = MissingObject)
+    /\ ([@stop_split] [@expl:worm_object_set_decision ensures #4] [%#sworm'4] gt_log_Int (UInt64.t'int facts.object_count) 0
+        /\ facts.unique_keys
+        /\ facts.coordinates_match
+        /\ facts.all_present /\ UInt64.t'int facts.object_count <> UInt64.t'int facts.listed_count
+      -> result = CountMismatch)
+    /\ ([@stop_split] [@expl:worm_object_set_decision ensures #5] [%#sworm'5] gt_log_Int (UInt64.t'int facts.object_count) 0
+        /\ facts.unique_keys
+        /\ facts.coordinates_match
+        /\ facts.all_present
+        /\ UInt64.t'int facts.object_count = UInt64.t'int facts.listed_count /\ not facts.sizes_match
+      -> result = SizeMismatch)
+    /\ ([@stop_split] [@expl:worm_object_set_decision ensures #6] [%#sworm'6] gt_log_Int (UInt64.t'int facts.object_count) 0
+        /\ facts.unique_keys
+        /\ facts.coordinates_match
+        /\ facts.all_present
+        /\ UInt64.t'int facts.object_count = UInt64.t'int facts.listed_count
+        /\ facts.sizes_match /\ facts.require_digests /\ not facts.digests_match -> result = DigestMismatch)
+    /\ ([@stop_split] [@expl:worm_object_set_decision ensures #7] [%#sworm'7] result = Admit
+    -> gt_log_Int (UInt64.t'int facts.object_count) 0
+    /\ facts.unique_keys
+    /\ facts.coordinates_match
+    /\ facts.all_present
+    /\ UInt64.t'int facts.object_count = UInt64.t'int facts.listed_count
+    /\ facts.sizes_match /\ (not facts.require_digests \/ facts.digests_match))}
+    (! return {result}) ]

@@ -10,7 +10,10 @@
 use tracing::instrument;
 
 use super::TopicBasedRemoteLogMetadataManager;
-use crate::log::PartitionStart;
+use crate::{
+    error::{CodecError, SnapshotError},
+    log::PartitionStart,
+};
 
 impl TopicBasedRemoteLogMetadataManager {
     /// Capture the pump's committed offsets together with a cache export
@@ -46,8 +49,8 @@ impl TopicBasedRemoteLogMetadataManager {
         Ok(max)
     }
 
-    /// Canonical resume-from-snapshot computation, shared by `start()` and
-    /// the resume tests.
+    /// Build startup state from the same proved cursor adapter used by
+    /// dynamic assignment.
     ///
     /// Given an already-loaded snapshot, or `None` for a missing or corrupt
     /// one, and the metadata-partition count `n`, this function produces:
@@ -58,25 +61,40 @@ impl TopicBasedRemoteLogMetadataManager {
     /// - the metadata-consumer assignment that resumes each partition at
     ///   `committed + 1`.
     ///
-    /// This is the ONLY place the `committed + 1` resume policy lives. Do
-    /// not recompute it elsewhere.
+    /// Invalid committed offsets reject the snapshot before its cache dump is
+    /// imported. [`Self::resume_start_offset`] is the only place the
+    /// `committed + 1` policy lives; do not recompute it elsewhere.
     pub(super) fn resume_from_snapshot(
         snapshot: Option<&crate::snapshot::Snapshot>,
         n: usize,
-    ) -> (Vec<i64>, Vec<PartitionStart>) {
+    ) -> Result<(Vec<i64>, Vec<PartitionStart>), SnapshotError> {
         let mut committed = vec![-1i64; n];
         if let Some(snap) = snapshot {
             for (i, &off) in snap.committed_offsets.iter().take(n).enumerate() {
+                Self::resume_start_offset(off)?;
                 committed[i] = off;
             }
         }
         let assignment = (0..n)
             .map(|i| PartitionStart {
-                partition: i32::try_from(i).expect("partition fits in i32"),
-                start_offset: committed[i] + 1,
+                partition: i32::try_from(i).expect("metadata partition count came from i32"),
+                start_offset: Self::resume_start_offset(committed[i])
+                    .expect("committed offsets were validated above"),
             })
             .collect();
-        (committed, assignment)
+        Ok((committed, assignment))
+    }
+
+    /// The one adapter from a stored committed offset to an inclusive
+    /// consumer cursor. Startup and dynamic assignment both call this exact
+    /// function, so their sentinel and overflow rules cannot drift.
+    pub(super) fn resume_start_offset(committed: i64) -> Result<i64, SnapshotError> {
+        krabka_verified::remote_metadata_resume_cursor(committed).ok_or_else(|| {
+            CodecError::Domain(format!(
+                "invalid remote-metadata committed offset {committed}"
+            ))
+            .into()
+        })
     }
 
     /// Committed offset loaded from the snapshot for a single metadata
@@ -98,7 +116,7 @@ mod tests {
 
     use assert2::{assert, check};
     use krabka_ids::LeaderEpoch;
-    use krabka_remote_storage::RemoteLogMetadataManager;
+    use krabka_remote_storage::{PartitionDump, RemoteLogMetadataManager, RlmmCacheDump};
     use tokio::runtime::Handle;
 
     use super::*;
@@ -106,6 +124,139 @@ mod tests {
         log::{InProcessMetadataEventLog, MetadataEventLog},
         manager::test_support::{finish, on_blocking, snapshot_test_dir, started, tp},
     };
+
+    fn snapshot_with_offsets(committed_offsets: Vec<i64>) -> crate::snapshot::Snapshot {
+        crate::snapshot::Snapshot {
+            committed_offsets,
+            dump: RlmmCacheDump::default(),
+        }
+    }
+
+    #[test]
+    fn startup_and_dynamic_resume_share_exact_cursor_rules() {
+        let snapshot = snapshot_with_offsets(vec![4]);
+        let first = TopicBasedRemoteLogMetadataManager::resume_from_snapshot(Some(&snapshot), 3)
+            .expect("valid cursors");
+        let retry = TopicBasedRemoteLogMetadataManager::resume_from_snapshot(Some(&snapshot), 3)
+            .expect("retry is deterministic");
+        check!(first == retry);
+        check!(first.0 == vec![4, -1, -1]);
+        check!(first.1.iter().map(|p| p.start_offset).collect::<Vec<_>>() == vec![5, 0, 0]);
+
+        for (committed, expected) in [(-1, 0), (4, 5), (i64::MAX - 1, i64::MAX)] {
+            check!(
+                TopicBasedRemoteLogMetadataManager::resume_start_offset(committed).unwrap()
+                    == expected
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_and_overflowing_snapshot_cursors_are_rejected() {
+        for committed in [i64::MIN, -2, i64::MAX] {
+            let snapshot = snapshot_with_offsets(vec![committed]);
+            check!(
+                TopicBasedRemoteLogMetadataManager::resume_from_snapshot(Some(&snapshot), 1)
+                    .is_err()
+            );
+            check!(TopicBasedRemoteLogMetadataManager::resume_start_offset(committed).is_err());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invalid_snapshot_cursor_discards_stale_dump_and_replays_from_zero() {
+        let dir = snapshot_test_dir("invalid-cursor");
+        let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
+        let mp = crate::partitioning::metadata_partition_for(&tp(), log.partition_count());
+        let mut committed_offsets = vec![-1; 4];
+        committed_offsets[usize::try_from(mp).unwrap()] = i64::MAX;
+        let snapshot = crate::snapshot::Snapshot {
+            committed_offsets,
+            dump: RlmmCacheDump {
+                partitions: vec![PartitionDump {
+                    topic_id_partition: tp(),
+                    segments: vec![started(99, 0, 99)],
+                    delete_state: None,
+                }],
+            },
+        };
+        snapshot
+            .write_atomic(&dir.join(crate::snapshot::SNAPSHOT_FILE_NAME))
+            .expect("write invalid semantic snapshot");
+
+        let manager = TopicBasedRemoteLogMetadataManager::start(
+            log,
+            Handle::current(),
+            dir.clone(),
+            std::time::Duration::from_hours(1),
+        )
+        .expect("invalid cursor falls back to full replay");
+        check!(manager.committed_offset(mp) == -1);
+        manager.reconcile_assignment(&[mp]).await;
+        check!(manager.metadata_partition_ready(mp));
+        check!(manager.list_remote_log_segments(&tp()).unwrap().is_empty());
+        manager.shutdown();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_snapshot_cursor_replays_the_exact_lifecycle_suffix() {
+        let dir = snapshot_test_dir("stale-cursor");
+        let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
+        let mp = crate::partitioning::metadata_partition_for(&tp(), log.partition_count());
+
+        let writer = TopicBasedRemoteLogMetadataManager::start(
+            log.clone(),
+            Handle::current(),
+            dir.clone(),
+            std::time::Duration::from_hours(1),
+        )
+        .unwrap();
+        writer.reconcile_assignment(&[mp]).await;
+        let writer_for_add = writer.clone();
+        on_blocking(move || {
+            writer_for_add
+                .add_remote_log_segment_metadata(started(10, 0, 99))
+                .unwrap();
+        })
+        .await;
+        writer.shutdown_and_flush().await;
+
+        let suffix_offset = log
+            .publish(
+                mp,
+                crate::serde::MetadataEvent::UpdateSegment(finish(10)).encode(),
+            )
+            .await
+            .expect("append lifecycle suffix");
+        check!(suffix_offset == 1);
+
+        let resumed = TopicBasedRemoteLogMetadataManager::start(
+            log,
+            Handle::current(),
+            dir.clone(),
+            std::time::Duration::from_hours(1),
+        )
+        .unwrap();
+        check!(resumed.committed_offset(mp) == 0);
+        resumed.reconcile_assignment(&[mp]).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !resumed.metadata_partition_ready(mp) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "stale snapshot did not consume its exact suffix"
+            );
+            tokio::task::yield_now().await;
+        }
+        check!(
+            resumed
+                .highest_offset_for_epoch(&tp(), LeaderEpoch(0))
+                .unwrap()
+                == Some(99)
+        );
+        resumed.shutdown();
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn shutdown_flushes_a_snapshot_covering_applied_events() {
@@ -196,7 +347,8 @@ mod tests {
         // The canonical resume computation resumes the orders partition at
         // committed + 1 (same path start() uses).
         let (resumed_committed, assignment) =
-            TopicBasedRemoteLogMetadataManager::resume_from_snapshot(Some(&snap), 4);
+            TopicBasedRemoteLogMetadataManager::resume_from_snapshot(Some(&snap), 4)
+                .expect("valid snapshot cursor");
         let orders_start = assignment
             .iter()
             .find(|s| s.partition == p)

@@ -1,0 +1,69 @@
+(* #"/proof-work-221/crates/verified/src/retention.rs" 17 0 17 93 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sretention = "/proof-work-221/crates/verified/src/retention.rs" 18 24 18 25
+let%span sretention'0 = "/proof-work-221/crates/verified/src/retention.rs" 19 15 19 20
+let%span sretention'1 = "/proof-work-221/crates/verified/src/retention.rs" 21 24 21 48
+let%span sretention'2 = "/proof-work-221/crates/verified/src/retention.rs" 22 25 22 33
+let%span sretention'3 = "/proof-work-221/crates/verified/src/retention.rs" 22 25 22 49
+let%span sretention'4 = "/proof-work-221/crates/verified/src/retention.rs" 23 15 23 20
+let%span sretention'5 = "/proof-work-221/crates/verified/src/retention.rs" 25 18 25 49
+let%span sretention'6 = "/proof-work-221/crates/verified/src/retention.rs" 13 10 15 56
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let barrier_cut_expired [#"/proof-work-221/crates/verified/src/retention.rs" 17 0 17 93] (published_epoch: Int64.t)
+  (retained_cuts: Int32.t) (held_epoch: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int32.le retained_cuts ([%#sretention] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#sretention'0] false ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = from_i64 [%#sretention'1] {retained_cuts} (fun (_x: Int64.t) -> [ &retained_cuts'0 <- _x ] s1)
+    | s1 = Int64.add [%#sretention'3] {[%#sretention'2] const_MIN} {retained_cuts'0}
+        (fun (_x: Int64.t) -> [ &_17 <- _x ] s2)
+    | s2 = [ &_15 <- Int64.lt published_epoch _17 ] s3
+    | s3 = any [ br0 -> {_15 = false} (! bb5) | br1 -> {_15} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#sretention'4] false ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = Int64.sub [%#sretention'5] {published_epoch} {retained_cuts'0} (fun (_x: Int64.t) -> [ &_21 <- _x ] s1)
+    | s1 = [ &_ret <- Int64.le held_epoch _21 ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & published_epoch: Int64.t = published_epoch
+  | & retained_cuts: Int32.t = retained_cuts
+  | & held_epoch: Int64.t = held_epoch
+  | & _9: bool = Any.any_l ()
+  | & retained_cuts'0: Int64.t = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & _17: Int64.t = Any.any_l ()
+  | & _21: Int64.t = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:barrier_cut_expired ensures] [%#sretention'6] result
+    = (gt_log_Int (Int32.to_int retained_cuts) 0
+    /\ ge_log_Int (Int64.to_int published_epoch - Int32.to_int retained_cuts) (Int64.to_int const_MIN)
+    /\ Int64.to_int held_epoch <= Int64.to_int published_epoch - Int32.to_int retained_cuts)}
+    (! return {result}) ]

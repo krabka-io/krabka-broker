@@ -6,14 +6,16 @@ use bytes::Bytes;
 use krabka_ids::ApiKey;
 use tokio::sync::oneshot;
 
-use super::metadata_rpc::{dispatch_metadata_fetch, dispatch_submit_change};
+use super::metadata_rpc::{
+    dispatch_delegation_token_mutation, dispatch_metadata_fetch, dispatch_submit_change,
+};
 use crate::{
     error::RaftError,
     kraft::{
         KraftController,
         transport::{Inbound, api_key},
     },
-    wire::{API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
+    wire::{API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
 };
 
 /// APIs owned by the Raft listener itself rather than its KIP-919 Admin
@@ -30,6 +32,7 @@ pub(super) fn is_native_raft_api(api_key: i16) -> bool {
             | api_key::FETCH_SNAPSHOT
             | API_KEY_SUBMIT_CHANGE
             | API_KEY_METADATA_FETCH
+            | API_KEY_DELEGATION_TOKEN_MUTATION
     )
 }
 
@@ -85,6 +88,9 @@ pub(super) async fn dispatch_with_router(
         }
         ApiKey(API_KEY_SUBMIT_CHANGE) => dispatch_submit_change(&body, engine).await,
         ApiKey(API_KEY_METADATA_FETCH) => dispatch_metadata_fetch(&body, engine).await,
+        ApiKey(API_KEY_DELEGATION_TOKEN_MUTATION) => {
+            dispatch_delegation_token_mutation(&body, engine).await
+        }
         _ => Err(RaftError::Protocol(
             krabka_protocol::ProtocolError::InvalidValue("unknown controller api key"),
         )),
@@ -134,18 +140,31 @@ mod tests {
         wait_for_leader(&engine).await;
 
         let vote = PeerRequest::Vote {
+            cluster_id: None,
             voter_id: NodeId(1),
+            voter_directory_id: uuid::Uuid::nil(),
             candidate_epoch: 1,
             candidate: NodeId(2),
+            candidate_directory_id: uuid::Uuid::nil(),
             last_epoch: 0,
             last_offset: 0,
             pre_vote: false,
         }
         .encode();
+        let mut malformed_vote = vote.to_vec();
+        malformed_vote.push(0);
         let vote_resp = super::dispatch(ApiKey(api_key::VOTE), vote, &engine)
             .await
             .expect("vote dispatch");
         assert2::assert!(PeerResponse::decode_vote(&vote_resp).is_some());
+        let malformed_vote_resp =
+            super::dispatch(ApiKey(api_key::VOTE), Bytes::from(malformed_vote), &engine)
+                .await
+                .expect("malformed vote dispatch returns a denial");
+        assert2::assert!(matches!(
+            PeerResponse::decode_vote(&malformed_vote_resp),
+            Some(PeerResponse::Vote { granted: false, .. })
+        ));
 
         let fetch = PeerRequest::Fetch {
             from: NodeId(2),

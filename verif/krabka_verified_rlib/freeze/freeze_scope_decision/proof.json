@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Prefix": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_freeze_scope_decision": { "prover": "alt-ergo", "time": 0.012 }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_java_string_hash_prefix_model": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      }
+    }
+  }
+}

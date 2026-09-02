@@ -126,7 +126,7 @@ pub(super) async fn reconcile(
 /// The function bumps the group epoch and installs the target, which computes
 /// the active revoke-split. It sets the phase to `Reconciling` while any
 /// member still owns un-revoked active tasks, and to `Stable` otherwise.
-fn compute_and_install_target(
+pub(super) fn compute_and_install_target(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
     topology: &StreamsGroupTopologyValue,
@@ -170,15 +170,19 @@ fn compute_and_install_target(
         standby: assignment.standby,
         warmup: assignment.warmup,
     };
-    actor.state.bump_epoch();
+    if !actor.state.bump_epoch() {
+        return;
+    }
     actor.state.install_target(target);
 
-    let pending_revocation = actor
+    let pending_reconciliation = actor
         .state
         .members
         .values()
-        .any(|m| m.assignment_state == StreamsMemberAssignmentState::UnrevokedActiveTasks);
-    actor.state.phase = if pending_revocation {
+        .any(|m| m.assignment_state != StreamsMemberAssignmentState::Stable);
+    actor.state.phase = if actor.state.members.is_empty() {
+        StreamsGroupStatePhase::Empty
+    } else if pending_reconciliation {
         StreamsGroupStatePhase::Reconciling
     } else {
         StreamsGroupStatePhase::Stable
@@ -190,7 +194,9 @@ fn compute_and_install_target(
 /// group to `phase`. Members still advance to the new, empty assignment epoch
 /// on their next `advance_member_epoch`. The function clears `dirty`.
 fn install_empty_target(state: &mut StreamsGroupState, phase: StreamsGroupStatePhase) {
-    state.bump_epoch();
+    if !state.bump_epoch() {
+        return;
+    }
     state.install_target(StreamsTargetAssignment::default());
     state.phase = phase;
     state.dirty = false;

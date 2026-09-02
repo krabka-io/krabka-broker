@@ -1,0 +1,23 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 148 27 148 32 *)
+
+(* <list_offsets::ListOffsetsEarliestFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_ListOffsetsEarliestFacts = {
+  local: Int64.t;
+  has_remote: bool;
+  remote: Int64.t;
+  has_diskless: bool;
+  diskless: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ListOffsetsEarliestFacts [#"/workspace/crates/verified/src/list_offsets.rs" 148 27 148 32]
+  (self: t_ListOffsetsEarliestFacts) (return (x: t_ListOffsetsEarliestFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsEarliestFacts = Any.any_l () | & self: t_ListOffsetsEarliestFacts = self ])
+  [ return (result: t_ListOffsetsEarliestFacts) -> (! return {result}) ]

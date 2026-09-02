@@ -55,6 +55,15 @@ coverage --instrumentation_filter=^//crates[:/]
 # additive: naming only `-timing-sensitive` here replaced the `-docker` set for
 # `test` above, and the coverage run started trying to drive containers.
 coverage --test_tag_filters=-docker,-timing-sensitive
+# `--test_tag_filters` excludes a test from the *run*, not from the build, so
+# without this the excluded suites are still linked. That is not free here: each
+# one is a separately linked, instrumented copy of the whole broker, and the 22
+# `*_docker_test` wrappers each drag in a second copy of their suite as a
+# `*_docker_bin`. Building the 27 suites this run never executes is what filled
+# the CI runner's disk. `--build_tests_only` narrows the build to the tests the
+# filters above leave behind; the shippable non-test targets are covered by the
+# separate `bazel build` in CI.
+coverage --build_tests_only
 
 # Download a JDK rather than resolving the machine's. `jvm_tiered_storage` runs
 # a small Java probe against Kafka's own storage classes; without this the

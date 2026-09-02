@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_wal_reservation_epoch_ready": {
+        "prover": "alt-ergo",
+        "time": 0.005
+      }
+    }
+  }
+}

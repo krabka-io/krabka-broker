@@ -15,7 +15,7 @@
 // The state machines are reused verbatim, relocated under `unified/`. These
 // aliases give the unified surface its types without renaming the moved code
 // (the classic file keeps its internal `Group`/`GroupState` names).
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) use crate::coordinator::unified::{
     classic_state::{ClassicGroup as ClassicState, OffsetEntry},
@@ -45,6 +45,81 @@ pub struct CoordinatorGroup {
     /// change, in slices C to E, can therefore carry the committed offsets
     /// through a conversion untouched.
     pub committed_offsets: HashMap<(String, i32), OffsetEntry>,
+    /// Wall-clock millisecond at which the group last lost its final member,
+    /// and `None` while it still has one.
+    ///
+    /// This is Kafka's `currentStateTimestamp` narrowed to the one question
+    /// the offset-retention sweep asks: how long has this group been empty?
+    /// The actor restamps it once per mailbox turn through
+    /// [`observe_membership`](Self::observe_membership), so no membership
+    /// transition has to remember to maintain it. A group that has never had a
+    /// member — the "simple consumer" that only commits offsets — is empty
+    /// from the moment its actor first runs, which is why the retention sweep
+    /// reads this stamp only for a classic group that carries a protocol type:
+    /// that is the one kind whose k2 snapshot persists the moment it emptied,
+    /// so the stamp means the same thing after a restart as before one.
+    pub empty_since_ms: Option<i64>,
+    /// KIP-447: the `(topic, partition)` keys a transaction has written an
+    /// offset commit for and that no commit or abort marker has resolved yet,
+    /// grouped by the producer whose transaction wrote them.
+    ///
+    /// The offsets themselves are not here: they live in the log below the
+    /// partition's LSO until the marker lands, and `WriteTxnMarkers`
+    /// materializes them into `committed_offsets` only for a commit. These
+    /// keys are what makes an `OffsetFetch` with `require_stable = true`
+    /// answer `UNSTABLE_OFFSET_COMMIT` instead of the older stable offset.
+    ///
+    /// Grouping by producer is what lets one producer's marker resolve its own
+    /// keys while another producer's in-flight transaction keeps its own.
+    pending_txn_offsets: HashMap<i64, ProducerTxnOffsets>,
+}
+
+/// One producer's KIP-447 state on this group: the keys of its open
+/// transaction, and the offsets-log position of the newest marker that has
+/// already resolved a transaction of the same producer.
+///
+/// The watermark is what puts two out-of-band updates back into the log order
+/// that decides them. `TxnOffsetCommit` records its mark only once its records
+/// are durable, so the producer's marker can be appended -- and resolved on
+/// this actor -- in the window between that append and that mark. The log
+/// settles which came first: records written below a marker belong to the
+/// transaction the marker ends, so a mark whose records sit at or below
+/// `resolved_through` is already resolved and is dropped. Without the
+/// watermark such a mark would never be cleared and the partition would answer
+/// `UNSTABLE_OFFSET_COMMIT` for ever.
+///
+/// A resolved producer keeps its (empty) entry, because the watermark is what
+/// rejects the late mark. That is one `i64` per producer that has ever
+/// committed transactional offsets to this group.
+#[derive(Debug, Clone)]
+struct ProducerTxnOffsets {
+    keys: HashSet<(String, i32)>,
+    /// Offsets-log position of the newest marker resolved for this producer,
+    /// or `-1` when no marker has been. Log offsets start at zero, so `-1`
+    /// accepts every mark.
+    resolved_through: i64,
+}
+
+impl Default for ProducerTxnOffsets {
+    fn default() -> Self {
+        Self {
+            keys: HashSet::new(),
+            resolved_through: -1,
+        }
+    }
+}
+
+/// A group's offset state as `OffsetFetch` needs to see it: the stable
+/// committed offsets, plus the keys an unresolved transaction has written.
+///
+/// The two travel together because a `require_stable` fetch has to decide per
+/// partition between them. Reading them in two actor turns would let a
+/// transaction marker land in between and produce a row that is neither the
+/// pre-transaction offset nor the post-transaction one.
+#[derive(Debug, Default, Clone)]
+pub struct GroupOffsets {
+    pub committed: HashMap<(String, i32), OffsetEntry>,
+    pub pending_txn: HashSet<(String, i32)>,
 }
 
 impl CoordinatorGroup {
@@ -55,6 +130,8 @@ impl CoordinatorGroup {
             kind: GroupKind::Classic(ClassicState::new(group_id.clone())),
             group_id,
             committed_offsets: HashMap::new(),
+            pending_txn_offsets: HashMap::new(),
+            empty_since_ms: None,
         }
     }
 
@@ -65,6 +142,51 @@ impl CoordinatorGroup {
             kind: GroupKind::Consumer(ConsumerState::new(group_id.clone())),
             group_id,
             committed_offsets: HashMap::new(),
+            pending_txn_offsets: HashMap::new(),
+            empty_since_ms: None,
+        }
+    }
+
+    /// A group rebuilt from state that already exists: a replayed or
+    /// hand-built state machine together with the committed offsets that go
+    /// with it. No transaction is open on a group built this way; a replay
+    /// that recovered one re-registers it with `add_pending_txn_offsets`.
+    pub fn seeded(
+        group_id: impl Into<String>,
+        kind: GroupKind,
+        committed_offsets: HashMap<(String, i32), OffsetEntry>,
+    ) -> Self {
+        Self {
+            group_id: group_id.into(),
+            kind,
+            committed_offsets,
+            pending_txn_offsets: HashMap::new(),
+            empty_since_ms: None,
+        }
+    }
+
+    /// `true` while the group has at least one member, whichever protocol
+    /// they speak.
+    #[must_use]
+    pub fn has_members(&self) -> bool {
+        match &self.kind {
+            GroupKind::Classic(state) => !state.members.is_empty(),
+            GroupKind::Consumer(state) => !state.members.is_empty(),
+        }
+    }
+
+    /// Record whether the group has members as of `now_ms`.
+    ///
+    /// The actor calls this once per mailbox turn. A group that has members
+    /// clears [`empty_since_ms`](Self::empty_since_ms); a group that has none
+    /// stamps it, and a group that was already empty keeps the earlier stamp,
+    /// so the sweep measures from the moment the last member left rather than
+    /// from the most recent turn.
+    pub fn observe_membership(&mut self, now_ms: i64) {
+        if self.has_members() {
+            self.empty_since_ms = None;
+        } else if self.empty_since_ms.is_none() {
+            self.empty_since_ms = Some(now_ms);
         }
     }
 
@@ -112,6 +234,51 @@ impl CoordinatorGroup {
     pub fn kind_mut(&mut self) -> &mut GroupKind {
         &mut self.kind
     }
+
+    /// Marks `keys` as written by `producer_id`'s open transaction at
+    /// offsets-log position `written_at`.
+    ///
+    /// The caller must have made the offset-commit records durable first, so
+    /// that the transaction's marker can always find the same keys again and
+    /// clear them. `written_at` is the offset those records landed at, and a
+    /// marker already resolved at or above it has resolved them: the mark is
+    /// stale and is dropped rather than left behind for ever.
+    pub fn add_pending_txn_offsets(
+        &mut self,
+        producer_id: i64,
+        written_at: i64,
+        keys: impl IntoIterator<Item = (String, i32)>,
+    ) {
+        let entry = self.pending_txn_offsets.entry(producer_id).or_default();
+        if written_at <= entry.resolved_through {
+            return;
+        }
+        entry.keys.extend(keys);
+    }
+
+    /// Drops every pending mark `producer_id`'s transaction holds, whether its
+    /// marker committed or aborted, and records the marker's offsets-log
+    /// position so that a mark for records below it cannot come back.
+    /// Publishing the committed offsets is a separate step, because an abort
+    /// publishes nothing.
+    pub fn resolve_pending_txn_offsets(&mut self, producer_id: i64, resolved_through: i64) {
+        let entry = self.pending_txn_offsets.entry(producer_id).or_default();
+        entry.keys.clear();
+        entry.resolved_through = entry.resolved_through.max(resolved_through);
+    }
+
+    /// The group's offset state for `OffsetFetch`, with every open
+    /// transaction's pending keys flattened into one set.
+    pub fn offsets(&self) -> GroupOffsets {
+        GroupOffsets {
+            committed: self.committed_offsets.clone(),
+            pending_txn: self
+                .pending_txn_offsets
+                .values()
+                .flat_map(|producer| producer.keys.iter().cloned())
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,6 +299,39 @@ mod tests {
     }
 
     #[test]
+    fn empty_since_stamps_once_and_clears_while_members_are_present() {
+        use std::time::Duration;
+
+        use crate::coordinator::unified::classic_state::Member;
+
+        let mut group = CoordinatorGroup::new_classic("g");
+        check!(!group.has_members());
+
+        // First observation of an empty group stamps it; later ones keep the
+        // first stamp, so the sweep measures from when it emptied.
+        group.observe_membership(100);
+        check!(group.empty_since_ms == Some(100));
+        group.observe_membership(500);
+        check!(group.empty_since_ms == Some(100));
+
+        group.as_classic_mut().unwrap().add_member(Member::new(
+            "m1",
+            "client",
+            "host",
+            Duration::from_secs(30),
+            Duration::from_mins(1),
+            vec![("range".into(), bytes::Bytes::new())],
+        ));
+        group.observe_membership(600);
+        check!(group.has_members());
+        check!(group.empty_since_ms == None);
+
+        group.as_classic_mut().unwrap().members.clear();
+        group.observe_membership(900);
+        check!(group.empty_since_ms == Some(900));
+    }
+
+    #[test]
     fn consumer_container_exposes_consumer_state_only() {
         let mut g = CoordinatorGroup::new_consumer("g");
         check!(g.is_consumer());
@@ -140,5 +340,59 @@ mod tests {
         check!(g.as_classic().is_none());
         check!(g.as_consumer_mut().is_some());
         check!(g.group_id == "g");
+    }
+
+    #[test]
+    fn pending_txn_offsets_flatten_across_producers_and_clear_per_producer() {
+        let mut g = CoordinatorGroup::new_classic("g");
+        check!(g.offsets().pending_txn.is_empty());
+
+        g.add_pending_txn_offsets(
+            7,
+            10,
+            [("orders".to_string(), 0), ("orders".to_string(), 1)],
+        );
+        g.add_pending_txn_offsets(9, 11, [("payments".to_string(), 3)]);
+        check!(
+            g.offsets().pending_txn
+                == HashSet::from([
+                    ("orders".to_string(), 0),
+                    ("orders".to_string(), 1),
+                    ("payments".to_string(), 3),
+                ])
+        );
+
+        g.resolve_pending_txn_offsets(7, 12);
+        check!(g.offsets().pending_txn == HashSet::from([("payments".to_string(), 3)]));
+
+        g.resolve_pending_txn_offsets(9, 13);
+        check!(g.offsets().pending_txn.is_empty());
+    }
+
+    /// `TxnOffsetCommit` marks its keys only after the append is durable, so
+    /// the producer's marker can resolve on this group in between. The log
+    /// order decides: a mark for records below an applied marker belongs to
+    /// the transaction that marker ended, and taking it would leave the
+    /// partition answering `UNSTABLE_OFFSET_COMMIT` with nothing left to
+    /// clear it. Records above the marker are a new transaction and still
+    /// count.
+    #[test]
+    fn a_mark_for_records_below_an_applied_marker_is_dropped() {
+        let mut g = CoordinatorGroup::new_classic("g");
+
+        // The abort marker for the producer's records at offset 40 lands at
+        // offset 55 while its `TxnOffsetCommit` is still in flight.
+        g.resolve_pending_txn_offsets(7, 55);
+        g.add_pending_txn_offsets(7, 40, [("orders".to_string(), 0)]);
+        check!(g.offsets().pending_txn.is_empty());
+
+        // The producer's next transaction writes above the marker and is
+        // pending as usual.
+        g.add_pending_txn_offsets(7, 60, [("orders".to_string(), 1)]);
+        check!(g.offsets().pending_txn == HashSet::from([("orders".to_string(), 1)]));
+
+        // Another producer's marker cannot resolve it.
+        g.resolve_pending_txn_offsets(9, 70);
+        check!(g.offsets().pending_txn == HashSet::from([("orders".to_string(), 1)]));
     }
 }

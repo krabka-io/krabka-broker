@@ -8,6 +8,7 @@ use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::records::{
     Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
 };
+use krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission};
 
 use super::{framing::PartitionPayload, owned_decode::decode_owned_batch};
 use crate::codes;
@@ -70,6 +71,56 @@ impl PreparedBatch {
             source: PreparedSource::Owned(batch),
         }
     }
+
+    /// Wire length of this batch as the writer will store it, when storing it
+    /// means encoding it afresh.
+    ///
+    /// `None` is the verbatim path. Those bytes are the producer's own, byte
+    /// for byte, so the length that arrived is the length that lands and the
+    /// `max.message.bytes` gate already measured it before `prepare_batch`
+    /// ran.
+    ///
+    /// The owned path re-encodes, and re-encoding moves the number. A batch
+    /// the producer compressed that the topic stores under a different
+    /// `compression.type` changes by the whole ratio between the two codecs,
+    /// and `uncompressed` is the direction that grows: a 2 KiB gzip batch of
+    /// repeated bytes is hundreds of kilobytes once the writer expands it. A
+    /// legacy `MessageSet` moves too, by the v2 up-conversion.
+    ///
+    /// Kafka measures exactly this, in the same place. `message.max.bytes` is
+    /// documented in `ServerConfigs` as "The largest record batch size allowed
+    /// by Kafka (after compression if compression is enabled)", and
+    /// `UnifiedLog.append` re-runs its per-batch size check over the
+    /// *validated* records whenever `LogValidator` reports
+    /// `messageSizeMaybeChanged`, throwing the same `RecordTooLargeException`
+    /// its pre-append check throws.
+    ///
+    /// `None` also answers an encode this measurement cannot perform, because
+    /// that is an encode the writer cannot perform either: the append fails on
+    /// its own and reports its own error rather than borrowing this gate's.
+    pub(super) fn stored_len(
+        &self,
+        topic_compression: Option<krabka_compression::CompressionType>,
+    ) -> Option<usize> {
+        let PreparedSource::Owned(batch) = &self.source else {
+            return None;
+        };
+        match topic_compression {
+            Some(target) if target != batch.attributes.compression() => {
+                let mut stored = batch.clone();
+                stored.attributes = stored.attributes.with_compression(target);
+                encoded_len(&stored)
+            }
+            _ => encoded_len(batch),
+        }
+    }
+}
+
+/// Bytes that [`RecordBatch::encode`] writes, which for a compressed batch
+/// only an encode can answer.
+fn encoded_len(batch: &RecordBatch) -> Option<usize> {
+    let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
+    batch.encode(&mut buf).ok().map(|()| buf.len())
 }
 
 /// Decide the append shape for one partition's records and extract the header
@@ -114,28 +165,12 @@ pub(super) fn prepare_batch(
         PartitionPayload::Slice(b) => b,
     };
 
-    // Owned fallback for a v≥3 records slice that the verbatim predicate
-    // rejects. Routes the raw field bytes through `RecordsPayload::from_bytes`
-    // — which dispatches v2 (parse every batch) vs legacy (v0/v1 `MessageSet`,
-    // kept opaque) by the magic byte — then through `decode_owned_batch`, the
-    // SAME pipeline the request decoder used before this change. This is what
-    // up-converts a v1 `MessageSet` carried over a v≥3 produce (older
-    // message-format clients) and surfaces INVALID_RECORD on malformed bytes.
-    let owned_fallback = |bytes: Bytes| -> Result<PreparedBatch, i16> {
-        match RecordsPayload::from_bytes_with_policy(bytes, policy) {
-            Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
-                validate_owned_client_batch(&batch)?;
-                Ok(PreparedBatch::from_owned(batch))
-            }),
-            Err(_) => Err(codes::INVALID_RECORD),
-        }
-    };
     // Extract the header fields into owned values up front so the borrow of
     // `bytes` (via the `ValidatedBatch`) ends before any `owned_fallback(bytes)`
     // move or the final `Verbatim(bytes)` construction.
     let validated = match validate_one_v2_batch(&bytes) {
         Ok(batch) if batch.total_len == bytes.len() => batch,
-        _ => return owned_fallback(bytes),
+        _ => return owned_fallback(bytes, topic_name, metrics, policy),
     };
     let header = ValidatedHeader::from(&validated);
     let attributes = header.attributes;
@@ -145,13 +180,37 @@ pub(super) fn prepare_batch(
     if let Some(target) = topic_compression
         && target != attributes.compression()
     {
-        return owned_fallback(bytes);
+        return owned_fallback(bytes, topic_name, metrics, policy);
     }
     validated
         .validate_records(policy)
         .map_err(|_| codes::INVALID_RECORD)?;
 
     Ok(PreparedBatch::from_header(header, bytes))
+}
+
+/// The owned-decode fallback for a v≥3 records slice that the verbatim
+/// predicate rejects.
+///
+/// Routes the raw field bytes through `RecordsPayload::from_bytes` — which
+/// dispatches v2 (parse every batch) vs legacy (v0/v1 `MessageSet`, kept
+/// opaque) by the magic byte — then through [`decode_owned_batch`], the same
+/// pipeline the request decoder used before the verbatim path existed. This is
+/// what up-converts a v1 `MessageSet` carried over a v≥3 produce (older
+/// message-format clients) and surfaces `INVALID_RECORD` on malformed bytes.
+pub(super) fn owned_fallback(
+    bytes: Bytes,
+    topic_name: &str,
+    metrics: &crate::metrics::BrokerMetrics,
+    policy: RecordDecompressionPolicy,
+) -> Result<PreparedBatch, i16> {
+    match RecordsPayload::from_bytes_with_policy(bytes, policy) {
+        Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
+            validate_owned_client_batch(&batch)?;
+            Ok(PreparedBatch::from_owned(batch))
+        }),
+        Err(_) => Err(codes::INVALID_RECORD),
+    }
 }
 
 /// The v2 batch header fields that the gates need, copied out of a borrowed
@@ -218,19 +277,19 @@ fn validate_client_batch_fields(
     producer_id: i64,
     base_sequence: i32,
 ) -> Result<(), i16> {
-    let offset_count = last_offset_delta.checked_add(1);
-    if base_offset != 0
-        || offset_count.is_none_or(|count| count <= 0 || count != records_count)
-        || records_count <= 0
-        || attributes.is_control_batch()
-        || (producer_id >= 0 && base_sequence < 0)
-    {
-        return Err(codes::INVALID_RECORD);
+    match produce_batch_admission(
+        base_offset,
+        last_offset_delta,
+        records_count,
+        attributes.is_control_batch(),
+        producer_id,
+        base_sequence,
+        attributes.timestamp_type() == TimestampType::CreateTime,
+    ) {
+        ProduceBatchAdmission::Admit => Ok(()),
+        ProduceBatchAdmission::InvalidRecord => Err(codes::INVALID_RECORD),
+        ProduceBatchAdmission::InvalidTimestamp => Err(codes::INVALID_TIMESTAMP),
     }
-    if attributes.timestamp_type() != TimestampType::CreateTime {
-        return Err(codes::INVALID_TIMESTAMP);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

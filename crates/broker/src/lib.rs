@@ -117,7 +117,7 @@
 //! `acks=all` produces survive arbitrary single-broker failures with
 //! no data loss and no zombie writes.
 
-#![doc(html_root_url = "https://docs.rs/krabka-broker/0.5.1")]
+#![doc(html_root_url = "https://docs.rs/krabka-broker/0.5.3")]
 
 /// Emit the wrapped item(s) only on platforms with a usable file→socket
 /// `sendfile(2)` for the zero-copy fetch path: Linux, the Apple targets, and
@@ -165,6 +165,7 @@ pub use barrier::marker::{BarrierMarker, parse_barrier_marker};
 pub mod bootstrap;
 pub(crate) mod break_glass;
 mod broker;
+pub(crate) mod clean_shutdown;
 pub(crate) mod cleaner;
 mod client_metrics;
 /// Client-visible failover model: producer retry/routing composed with broker
@@ -176,6 +177,7 @@ pub mod config;
 pub(crate) mod config_keys;
 pub mod config_value;
 mod controller_admin;
+pub(crate) mod controller_endpoint;
 pub mod coordinator;
 /// Compositional end-to-end data-path verification model (produce → replicate →
 /// commit → fetch across clean and unclean failover). It wraps the real
@@ -189,6 +191,8 @@ pub mod disk_scanner;
 mod diskless;
 #[cfg(test)]
 mod diskless_crash_model;
+pub(crate) mod elr;
+mod envelope;
 mod error;
 mod features;
 pub mod fetch_session;
@@ -199,6 +203,7 @@ mod handlers;
 pub(crate) mod heartbeat;
 pub(crate) mod host_port;
 pub(crate) mod incarnation;
+pub(crate) mod internal_topics;
 pub(crate) mod isr_maintenance;
 pub(crate) mod kafka_hash;
 pub(crate) mod lag;
@@ -207,6 +212,7 @@ pub mod leader_rebalance;
 mod log_dir;
 pub mod log_dir_id;
 mod log_dir_status;
+pub(crate) mod metadata_epoch;
 pub mod metadata_observer;
 pub mod metadata_source;
 pub mod metrics;
@@ -259,4 +265,7 @@ pub use broker::{Broker, BrokerHandle};
 pub use config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
 pub use config_keys::{TopicConfigDoc, topic_config_docs};
 pub use error::BrokerError;
+/// Benchmark seam over the produce hot path, driven by `benches/produce.rs`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub use handlers::produce::hot_path as produce_hot_path;
 pub use krabka_raft::NodeId;

@@ -17,7 +17,11 @@ use krabka_log::Offset;
 /// `None` when there are no keys, so there is nothing to prune.
 #[must_use]
 pub fn redundant_offset(per_key_last_snapshot: &[Offset]) -> Option<Offset> {
-    per_key_last_snapshot.iter().copied().min()
+    let offsets = per_key_last_snapshot
+        .iter()
+        .map(|offset| offset.0)
+        .collect::<Vec<_>>();
+    krabka_verified::share_prune_frontier(&offsets).map(Offset)
 }
 
 #[cfg(test)]
@@ -46,6 +50,13 @@ mod tests {
 
     #[test]
     fn min_includes_zero() {
+        // A live key with no folded snapshot retains the default offset 0 and
+        // pins pruning at the log start.
         assert!(redundant_offset(&[Offset(0), Offset(5), Offset(9)]) == Some(Offset(0)));
+    }
+
+    #[test]
+    fn partial_key_input_uses_only_the_keys_supplied() {
+        assert!(redundant_offset(&[Offset(20), Offset(15)]) == Some(Offset(15)));
     }
 }

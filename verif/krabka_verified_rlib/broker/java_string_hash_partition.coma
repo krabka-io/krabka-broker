@@ -1,0 +1,181 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 296 0 296 85 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 297 26 297 27
+let%span sbroker'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 301 19 301 24
+let%span sbroker'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 302 20 302 27
+let%span sbroker'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 305 18 305 29
+let%span sbroker'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 304 34 304 87
+let%span sbroker'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 303 16 303 38
+let%span sbroker'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 306 33 306 35
+let%span sbroker'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 306 15 306 36
+let%span sbroker'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 306 60 306 72
+let%span sbroker'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 306 50 306 73
+let%span sbroker'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 306 15 306 74
+let%span sbroker'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 307 17 307 18
+let%span sbroker'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 307 8 307 18
+let%span sbroker'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 309 30 309 38
+let%span sbroker'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 310 8 310 9
+let%span sbroker'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 311 21 311 22
+let%span sbroker'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 316 9 316 35
+let%span sbroker'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 287 12 289 86
+let%span sbroker'17 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 291 10 291 50
+let%span sbroker'18 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 292 10 292 50
+let%span sbroker'19 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 293 10 294 52
+let%span sbroker'20 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 243 10 243 15
+let%span sbroker'21 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 242 11 242 45
+let%span sbroker'22 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 246 8 251 9
+let%span sbroker'23 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 271 11 271 31
+let%span sbroker'24 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 274 8 275 30
+let%span sbroker'25 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 259 8 265 9
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+
+use creusot.int.Int32
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.int.UInt16
+use seq.Seq
+use creusot.prelude.Bool
+use creusot.prelude.Any
+use int.ComputerDivision
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+let len_u16 (self_: Slice64.slice UInt16.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+function java_string_hash_prefix_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 244 0 244 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
+
+axiom java_string_hash_prefix_model_def:
+  forall units: Seq.seq UInt16.t, limit: int [java_string_hash_prefix_model units limit]. ([%#sbroker'21] 0 <= limit
+      /\ limit <= Seq.length units)
+    -> java_string_hash_prefix_model units limit
+    = ([%#sbroker'22] if limit <= 0 then
+      (0: Int32.t)
+    else
+      Int32.add (Int32.mul (java_string_hash_prefix_model units (limit
+      - 1)) (31: Int32.t)) (Int32.of_int (UInt16.t'int (Seq.get units (limit - 1))))
+    )
+
+let wrapping_mul (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:wrapping_mul ensures] [%#snum] result = Int32.mul self_ rhs}
+    (! return {result}) ]
+
+let from_i32 (small: UInt16.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int32.of_int (UInt16.t'int small)}
+    (! return {result}) ]
+
+let wrapping_add (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:wrapping_add ensures] [%#snum'0] result = Int32.add self_ rhs}
+    (! return {result}) ]
+
+constant const_MIN: Int32.t = (-2147483648: Int32.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function java_string_abs_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 257 0 257 42] (hash: Int32.t) : Int32.t
+ = [%#sbroker'25] if hash = const_MIN then (0: Int32.t) else if Int32.lt hash (0: Int32.t) then Int32.neg hash else hash
+
+function java_string_hash_partition_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 272 0 272 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
+ =
+  [%#sbroker'24] ComputerDivision.mod (Int32.to_int (java_string_abs_model (java_string_hash_prefix_model units (Seq.length units)))) (Int32.to_int partition_count)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let java_string_hash_partition [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 296 0 296 85]
+  (units: Slice64.slice UInt16.t) (partition_count: Int32.t) (return (x: t_Option_i32)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_13 <- Int32.le partition_count ([%#sbroker] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb2) | br1 -> {_13} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &hash <- [%#sbroker'0] (0: Int32.t) ] s1 | s1 = [ &index <- [%#sbroker'1] (0: UInt64.t) ] s2 | s2 = bb3 ]
+  | bb3 = bb3
+    [ bb3 = {[@expl:loop invariant #0] [%#sbroker'4] UInt64.t'int index <= Seq.length (Slice64.view units)}
+      {[@expl:loop invariant #1] [%#sbroker'3] hash
+      = java_string_hash_prefix_model (Slice64.view units) (UInt64.t'int index)}
+      (! s0)
+      [ s0 = len_u16 [%#sbroker'2] {units} (fun (_x: UInt64.t) -> [ &_30 <- _x ] s1)
+      | s1 = [ &_28 <- UInt64.lt index _30 ] s2
+      | s2 = any [ br0 -> {_28 = false} (! bb11) | br1 -> {_28} (! bb6) ] ]
+      [ bb6 = s0
+        [ s0 = wrapping_mul [%#sbroker'6] {hash} {[%#sbroker'5] (31: Int32.t)} (fun (_x: Int32.t) -> [ &_33 <- _x ] s1)
+        | s1 = [ &_37 <- index ] s2
+        | s2 = [ &_38 <- Slice64.length units ] s3
+        | s3 = [ &_39 <- UInt64.lt _37 _38 ] s4
+        | s4 = {[@expl:index in bounds] [%#sbroker'7] _39} s5
+        | s5 = Slice64.get [%#sbroker'7] <UInt16.t> {units} {_37} (fun (r: UInt16.t) -> [ &_36 <- r ] s6)
+        | s6 = from_i32 [%#sbroker'8] {_36} (fun (_x: Int32.t) -> [ &_35 <- _x ] s7)
+        | s7 = wrapping_add [%#sbroker'9] {_33} {_35} (fun (_x: Int32.t) -> [ &_32 <- _x ] s8)
+        | s8 = [ &hash <- _32 ] s9
+        | s9 = UInt64.add [%#sbroker'11] {index} {[%#sbroker'10] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &index <- _x ] s10)
+        | s10 = bb3 ] ] ]
+  | bb11 = s0
+    [ s0 = [ &_42 <- hash = ([%#sbroker'12] const_MIN) ] s1
+    | s1 = any [ br0 -> {_42 = false} (! bb13) | br1 -> {_42} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &positive <- [%#sbroker'13] (0: Int32.t) ] s1 | s1 = bb17 ]
+  | bb13 = s0
+    [ s0 = [ &_44 <- Int32.lt hash ([%#sbroker'14] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_44 = false} (! bb15) | br1 -> {_44} (! bb14) ] ]
+  | bb14 = s0 [ s0 = Int32.neg {hash} (fun (_x: Int32.t) -> [ &positive <- _x ] s1) | s1 = bb17 ]
+  | bb15 = s0 [ s0 = [ &positive <- hash ] s1 | s1 = bb17 ]
+  | bb17 = s0
+    [ s0 = [ &_48 <- positive ] s1
+    | s1 = [ &_49 <- partition_count ] s2
+    | s2 = [ &_50 <- _49 = ([%#sbroker'15] (0: Int32.t)) ] s3
+    | s3 = {[@expl:remainder by zero] [%#sbroker'15] not _50} s4
+    | s4 = [ &_51 <- _49 = ([%#sbroker'15] (-1: Int32.t)) ] s5
+    | s5 = [ &_52 <- _48 = ([%#sbroker'15] (-2147483648: Int32.t)) ] s6
+    | s6 = [ &_53 <- Bool.bw_and _51 _52 ] s7
+    | s7 = {[@expl:Rem overflow] [%#sbroker'15] not _53} s8
+    | s8 = Int32.rem [%#sbroker'15] {_48} {_49} (fun (_x: Int32.t) -> [ &_47 <- _x ] s9)
+    | s9 = [ &_ret <- Some _47 ] s10
+    | s10 = return {_ret} ] ]
+  [ & _ret: t_Option_i32 = Any.any_l ()
+  | & units: Slice64.slice UInt16.t = units
+  | & partition_count: Int32.t = partition_count
+  | & _13: bool = Any.any_l ()
+  | & hash: Int32.t = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _30: UInt64.t = Any.any_l ()
+  | & _32: Int32.t = Any.any_l ()
+  | & _33: Int32.t = Any.any_l ()
+  | & _35: Int32.t = Any.any_l ()
+  | & _36: UInt16.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & positive: Int32.t = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _47: Int32.t = Any.any_l ()
+  | & _48: Int32.t = Any.any_l ()
+  | & _49: Int32.t = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _53: bool = Any.any_l () ])
+  [ return (result: t_Option_i32) ->
+  {[@stop_split] [@expl:java_string_hash_partition ensures] ([@stop_split] [@expl:java_string_hash_partition ensures #0] [%#sbroker'16] gt_log_Int (Int32.to_int partition_count) 0
+      -> (exists partition: Int32.t. result = Some partition
+        /\ Int32.to_int partition = java_string_hash_partition_model (Slice64.view units) partition_count))
+    /\ ([@stop_split] [@expl:java_string_hash_partition ensures #1] [%#sbroker'17] result = None
+      -> Int32.to_int partition_count <= 0)
+    /\ ([@stop_split] [@expl:java_string_hash_partition ensures #2] [%#sbroker'18] Int32.to_int partition_count <= 0
+      -> result = None)
+    /\ ([@stop_split] [@expl:java_string_hash_partition ensures #3] [%#sbroker'19] forall partition: Int32.t. result
+        = Some partition -> 0 <= Int32.to_int partition /\ Int32.to_int partition < Int32.to_int partition_count)}
+    (! return {result}) ]

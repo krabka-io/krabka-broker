@@ -1,0 +1,19 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 206 27 206 32 *)
+
+(* <list_offsets::ListOffsetsSelectionDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_ListOffsetsSelectionDecision = RejectMalformed | Unknown | Resolved Int64.t Int64.t Int32.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ListOffsetsSelectionDecision [#"/workspace/crates/verified/src/list_offsets.rs" 206 27 206 32]
+  (self: t_ListOffsetsSelectionDecision) (return (x: t_ListOffsetsSelectionDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsSelectionDecision = Any.any_l () | & self: t_ListOffsetsSelectionDecision = self ])
+  [ return (result: t_ListOffsetsSelectionDecision) -> (! return {result}) ]

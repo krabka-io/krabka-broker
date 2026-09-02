@@ -85,7 +85,7 @@ pub struct TopicPartition {
     pub partition: PartitionIndex,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxnEntry {
     pub transactional_id: String,
     pub producer_id: ProducerId,

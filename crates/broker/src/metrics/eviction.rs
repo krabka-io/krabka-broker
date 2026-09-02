@@ -10,27 +10,58 @@
 //!
 //! The rule is the one the metadata image already states. A partition's series
 //! live while this broker sits in that partition's replica set, and a topic's
-//! series live while the topic exists. The mechanism is the one
-//! `share_partition::backlog_poller` uses for the share-group backlog gauge:
-//! remember the label sets the last image justified, then remove the ones the
-//! next image no longer does.
+//! series -- along with the series of every partition that topic held -- live
+//! while that topic exists, where "that topic" means the incarnation carrying
+//! the topic id the image named and not merely the name. The mechanism is the
+//! one `share_partition::backlog_poller` uses for the share-group backlog
+//! gauge: remember the label sets the last image justified, then remove the
+//! ones the next image no longer does.
 //!
-//! The two lag families of `metrics::lag` join in here rather than keeping
-//! their own rule. Their samplers already release what a pass stops naming,
-//! but a reassignment or a topic delete must not wait for the next pass, and a
-//! group that leaves this coordinator is never named by a pass again. Each
-//! entry point below reaches the families its own rule justifies: the
-//! per-partition one covers replica lag, because "this broker left the replica
-//! set" is exactly what ends a follower's series, while consumer-group lag
-//! follows the group rather than the host and so is reached only by the
-//! per-topic entry point and by `evict_group_series`, which gives group
-//! removal — an event no image records — its own one call to make.
+//! A deleted topic releases the series of partitions this broker never
+//! replicated, because a produce or fetch that this broker rejected as
+//! misrouted is accounted for under the partition the client asked for. That
+//! keeps such a series bounded by the partitions the cluster holds. It leaves
+//! one case unbounded: a label set no image ever named, which a client
+//! produces by naming a topic or a partition index that does not exist.
+//! Releasing those needs eviction driven by series creation rather than by the
+//! image diff, which is issue #199.
+//!
+//! Five further families are keyed by a partition without taking a
+//! [`PartitionLabel`], and each is left to a narrower owner that releases it
+//! sooner than this diff could. `share_group_backlog` is pruned by
+//! `share_partition::backlog_poller` on its own tick. The four diskless WAL
+//! gauges -- `diskless_wal_durable_watermark`,
+//! `diskless_wal_index_projection_lag`, `diskless_wal_trim_frontier` and
+//! `diskless_wal_voter_lag` -- are keyed by topic id and released by
+//! `wal::quorum::registry::WalShardRegistry`, whose `replace_placements`
+//! reconfigures every live shard engine against the newest image and whose
+//! `remove` clears a shard the supervisor tore down. Routing those through
+//! [`BrokerMetrics::evict_partition_series`] would be wrong as well as
+//! redundant: a shard's voters are selected from the registered brokers rather
+//! than from the partition's replica set, so this broker can still vote on --
+//! and still report lag for -- a shard whose replicas no longer name it.
+//!
+//! The two lag families of `metrics::lag` are keyed that way too, and they
+//! join in here rather than being left to a narrower owner. Their samplers
+//! already release what a pass stops naming, but a reassignment or a topic
+//! delete must not wait for the next pass, and a group that leaves this
+//! coordinator is never named by a pass again. Each entry point below reaches
+//! the families its own rule justifies: the per-partition one covers replica
+//! lag, because "this broker left the replica set" is exactly what ends a
+//! follower's series, while consumer-group lag follows the group rather than
+//! the host and so is reached only by the per-topic entry point and by
+//! `evict_group_series`, which gives group removal -- an event no image
+//! records -- its own one call to make.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use krabka_metadata::{MetadataImage, NodeId};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use super::{BrokerMetrics, PartitionLabel, SchemaRejectionLabel, TopicLabel};
 use crate::schema_validation::RejectReason;
@@ -98,6 +129,26 @@ impl BrokerMetrics {
     }
 }
 
+/// One topic as the last image described it: which incarnation it was, and
+/// which partition indexes it held.
+///
+/// The id is what separates a topic from a same-named topic created after it
+/// was deleted. A `watch` channel publishes only the newest image, so a delete
+/// and a recreate that land between two of this evictor's passes arrive as one
+/// image in which the name never disappeared; without the id the old
+/// incarnation's counters would carry over into the new one.
+///
+/// The partition indexes are every partition the image named, not only the
+/// ones this broker replicates. Produce and fetch account for a partition the
+/// broker rejected as well as one it served, so a misrouted request
+/// materialises a series for a partition this broker does not host, and the
+/// topic going away is what releases it.
+#[derive(Debug, PartialEq, Eq)]
+struct TrackedTopic {
+    id: Uuid,
+    partitions: Vec<i32>,
+}
+
 /// Reconciles the live metric series against the newest metadata image.
 ///
 /// It holds the `(topic, partition)` pairs whose replica set named this broker
@@ -108,7 +159,7 @@ pub(crate) struct MetricSeriesEvictor {
     node_id: NodeId,
     metrics: BrokerMetrics,
     hosted: HashSet<PartitionLabel>,
-    topics: HashSet<String>,
+    topics: HashMap<String, TrackedTopic>,
 }
 
 impl MetricSeriesEvictor {
@@ -119,7 +170,7 @@ impl MetricSeriesEvictor {
             node_id,
             metrics,
             hosted: HashSet::new(),
-            topics: HashSet::new(),
+            topics: HashMap::new(),
         }
     }
 
@@ -147,10 +198,37 @@ impl MetricSeriesEvictor {
         }
         self.hosted = hosted;
 
-        let topics: HashSet<String> = image.topics().map(|topic| topic.name.clone()).collect();
-        for topic in self.topics.difference(&topics) {
-            tracing::debug!(topic, "evicting topic metric series");
-            self.metrics.evict_topic_series(topic);
+        let topics: HashMap<String, TrackedTopic> = image
+            .topics()
+            .map(|topic| {
+                let partitions = image
+                    .partitions_of(&topic.name)
+                    .map(|partition| partition.partition)
+                    .collect();
+                (
+                    topic.name.clone(),
+                    TrackedTopic {
+                        id: topic.topic_id,
+                        partitions,
+                    },
+                )
+            })
+            .collect();
+        for (name, gone) in &self.topics {
+            // A name the new image still holds under a different id is a
+            // different topic, and the series belong to the incarnation that
+            // left.
+            if topics.get(name).is_some_and(|live| live.id == gone.id) {
+                continue;
+            }
+            tracing::debug!(topic = name, "evicting topic metric series");
+            self.metrics.evict_topic_series(name);
+            for partition in &gone.partitions {
+                self.metrics.evict_partition_series(&PartitionLabel {
+                    topic: name.clone(),
+                    partition: *partition,
+                });
+            }
         }
         self.topics = topics;
     }
@@ -217,9 +295,15 @@ mod tests {
     /// Records for `TOPIC`, one partition per entry of `partitions` and
     /// indexed from zero, each with that entry as its replica set.
     fn topic_records(partitions: &[&[NodeId]]) -> Vec<MetadataRecord> {
+        topic_records_with_id(Uuid::from_u128(1), partitions)
+    }
+
+    /// [`topic_records`] under an explicit topic id, for the delete-and-
+    /// recreate case where the name stays put and only the id changes.
+    fn topic_records_with_id(topic_id: Uuid, partitions: &[&[NodeId]]) -> Vec<MetadataRecord> {
         let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
             name: TOPIC.into(),
-            topic_id: uuid::Uuid::from_u128(1),
+            topic_id,
             partitions: i32::try_from(partitions.len()).expect("partition count fits"),
             replication_factor: 1,
         })];
@@ -388,6 +472,76 @@ mod tests {
         check!(after.contains(&partition_pair(TOPIC, 0)));
         check!(!after.contains(&evicted));
         shutdown.cancel();
+    }
+
+    /// A misrouted produce or fetch is accounted for under the partition the
+    /// client named, so a partition this broker does not replicate still gets
+    /// series here. Deleting the topic has to take those with it, or a
+    /// deleted topic leaves behind exactly the partitions the eviction rule
+    /// never tracked.
+    #[tokio::test]
+    async fn deleting_a_topic_evicts_partition_series_this_broker_never_hosted() {
+        let metrics = BrokerMetrics::new();
+        let shutdown = CancellationToken::new();
+        // Partition 0 lives here; partition 1 is replicated only on the other
+        // broker, and this broker never hosts it.
+        let live = topic_records(&[&[THIS_BROKER], &[OTHER_BROKER]]);
+        let source = evicting_source(&metrics, &live, &shutdown);
+
+        create_partition_series(&metrics, TOPIC, 0);
+        create_partition_series(&metrics, TOPIC, 1);
+        let unhosted = partition_pair(TOPIC, 1);
+        assert!(scrape(&metrics).contains(&unhosted));
+
+        let mut deleted = live;
+        deleted.push(MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
+            name: TOPIC.into(),
+        }));
+        source.set_records(&deleted);
+
+        let after = scrape_until(&metrics, |body| !body.contains(TOPIC)).await;
+        check!(!after.contains(&partition_pair(TOPIC, 0)));
+        check!(!after.contains(&unhosted));
+        shutdown.cancel();
+    }
+
+    /// A `watch` channel publishes only the newest image, so a delete and a
+    /// recreate under the same name can arrive as one image in which the name
+    /// never disappeared. The topic id is what makes that a removal, and
+    /// without it the new topic would inherit the old one's counters.
+    #[test]
+    fn a_topic_recreated_under_the_same_name_does_not_inherit_the_old_series() {
+        let metrics = BrokerMetrics::new();
+        let mut evictor = MetricSeriesEvictor::new(THIS_BROKER, metrics.clone());
+
+        let first = Uuid::from_u128(1);
+        evictor.apply(&MetadataImage::from_records(
+            Uuid::nil(),
+            &topic_records_with_id(first, &[&[THIS_BROKER]]),
+        ));
+        create_partition_series(&metrics, TOPIC, 0);
+        create_topic_series(&metrics, TOPIC);
+        assert!(scrape(&metrics).contains(&partition_pair(TOPIC, 0)));
+
+        // Same name, same partition, different topic id: a different topic.
+        let second = Uuid::from_u128(2);
+        evictor.apply(&MetadataImage::from_records(
+            Uuid::nil(),
+            &topic_records_with_id(second, &[&[THIS_BROKER]]),
+        ));
+
+        let after = scrape(&metrics);
+        check!(!after.contains(&partition_pair(TOPIC, 0)));
+        check!(!after.contains(TOPIC));
+
+        // The new incarnation is now tracked in its own right: series it
+        // creates survive an image that repeats it, and go when it goes.
+        create_topic_series(&metrics, TOPIC);
+        evictor.apply(&MetadataImage::from_records(
+            Uuid::nil(),
+            &topic_records_with_id(second, &[&[THIS_BROKER]]),
+        ));
+        check!(scrape(&metrics).contains(TOPIC));
     }
 
     /// The first image an evictor sees is a baseline, never a reason to

@@ -6,6 +6,7 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
 use krabka_remote_storage_topic::MetadataEventLog;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -46,6 +47,7 @@ pub(super) struct DisklessFlusherStartup {
     pub(super) object_store: Arc<dyn object_store::ObjectStore>,
     pub(super) node_id: krabka_metadata::NodeId,
     pub(super) broker_id: i32,
+    pub(super) metrics: crate::metrics::BrokerMetrics,
     pub(super) flush_config: crate::diskless::flusher::FlushConfig,
     pub(super) ready: Arc<AtomicBool>,
 }
@@ -56,14 +58,33 @@ pub(super) async fn bootstrap_diskless_index_log(
     flusher: DisklessFlusherStartup,
     shutdown: CancellationToken,
 ) {
-    let mut log_config = metadata_log_config(
-        &config.cfg,
-        crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC.to_owned(),
-        format!("krabka-diskless-index-broker-{}", config.broker_id),
-    );
-    log_config.compacted = true;
-    let source = KafkaIndexLogSource { log_config };
+    let source = KafkaIndexLogSource {
+        log_config: index_log_config(&config.cfg, config.broker_id),
+    };
     bootstrap_from_source(&source, cache, &config, &flusher, &shutdown).await;
+}
+
+fn index_event_max_bytes(config: &crate::config::KafkaRlmmConfig) -> usize {
+    // Leave the other half of the frame for Kafka's request envelope.
+    (config.frame_max.bytes() / 2).max(1)
+}
+
+fn index_log_config(
+    config: &crate::config::KafkaRlmmConfig,
+    broker_id: i32,
+) -> krabka_remote_storage_topic::KafkaMetadataLogConfig {
+    let mut log_config = metadata_log_config(
+        config,
+        crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC.to_owned(),
+        format!("krabka-diskless-index-broker-{broker_id}"),
+    );
+    let fetch_max =
+        ByteSize::from_bytes(u64::try_from(index_event_max_bytes(config)).unwrap_or(u64::MAX));
+    if log_config.fetch_max_bytes > fetch_max {
+        log_config.fetch_max_bytes = fetch_max;
+    }
+    log_config.compacted = true;
+    log_config
 }
 
 async fn bootstrap_from_source(
@@ -106,6 +127,7 @@ async fn bootstrap_from_source(
                         index_log,
                         node_id: flusher.node_id,
                         broker_id: flusher.broker_id,
+                        metrics: flusher.metrics.clone(),
                         ready: Arc::clone(&flusher.ready),
                     },
                     flusher.flush_config.clone(),
@@ -151,6 +173,7 @@ mod tests {
             object_store: Arc::new(object_store::memory::InMemory::new()),
             node_id: krabka_raft::NodeId(7),
             broker_id: 1,
+            metrics: crate::metrics::BrokerMetrics::new(),
             flush_config: crate::diskless::flusher::FlushConfig {
                 interval: std::time::Duration::from_millis(1),
                 index_projection_timeout: std::time::Duration::from_millis(50),
@@ -168,6 +191,20 @@ mod tests {
             bootstrap_backoff_max: std::time::Duration::from_millis(5),
             reconcile_tick: std::time::Duration::from_secs(1),
         }
+    }
+
+    #[test]
+    fn index_replay_fetch_stays_within_the_event_frame_budget() {
+        let mut config = crate::config::KafkaRlmmConfig {
+            frame_max: krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32))
+                .unwrap(),
+            ..crate::config::KafkaRlmmConfig::default()
+        };
+
+        assert!(index_log_config(&config, 1).fetch_max_bytes == krabka_units::kibibytes(16));
+
+        config.fetch_max_bytes = krabka_units::kibibytes(4);
+        assert!(index_log_config(&config, 1).fetch_max_bytes == krabka_units::kibibytes(4));
     }
 
     /// Hands out a silent-but-open replay first, then a healthy one, and
@@ -291,6 +328,7 @@ mod tests {
             object_store: Arc::new(object_store::memory::InMemory::new()),
             node_id: krabka_raft::NodeId(7),
             broker_id: 1,
+            metrics: crate::metrics::BrokerMetrics::new(),
             flush_config: crate::diskless::flusher::FlushConfig::default(),
             ready: Arc::new(AtomicBool::new(false)),
         };

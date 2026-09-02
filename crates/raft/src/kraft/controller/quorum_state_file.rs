@@ -13,6 +13,7 @@ use crate::{
 
 /// One entry of schema v0's `currentVoters` array.
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct QuorumStateVoter {
     #[serde(rename = "voterId")]
     voter_id: i32,
@@ -23,6 +24,7 @@ struct QuorumStateVoter {
 /// directory id instead. The `skip_serializing_if` markers keep each version's
 /// field set (and their Kafka field order) byte-exact.
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct QuorumStateJson {
     #[serde(rename = "clusterId", skip_serializing_if = "Option::is_none")]
     cluster_id: Option<String>,
@@ -47,15 +49,34 @@ struct QuorumStateJson {
 pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(), RaftError> {
     use std::io::Write as _;
 
+    let voter_ids = state.voters.ids();
+    let all_voter_ids_fit = voter_ids.iter().all(|id| i32::try_from(id.0).is_ok());
+    let leader_id_value = state.leader_id.map_or(0, |id| id.0);
+    let voted_id_value = state.voted_key.map_or(0, |key| key.id.0);
+    if krabka_verified::quorum_state_write_decision(
+        state.kraft_version,
+        state.leader_epoch,
+        state.leader_id.is_some(),
+        leader_id_value,
+        state.voted_key.is_some(),
+        voted_id_value,
+        all_voter_ids_fit,
+    ) == krabka_verified::QuorumStateWriteDecision::Reject
+    {
+        return Err(RaftError::Storage(krabka_log::LogError::InvalidArgument(
+            "quorum-state cannot be represented exactly by schema v0 or v1".into(),
+        )));
+    }
     let leader_id = state
         .leader_id
-        .and_then(|id| i32::try_from(id.0).ok())
-        .unwrap_or(-1);
-    let leader_epoch = i32::try_from(state.leader_epoch).unwrap_or(i32::MAX);
+        .map_or(Ok(-1), |id| i32::try_from(id.0))
+        .expect("write admission proves the leader id fits i32");
+    let leader_epoch =
+        i32::try_from(state.leader_epoch).expect("write admission proves the epoch fits i32");
     let voted_id = state
         .voted_key
-        .and_then(|key| i32::try_from(key.id.0).ok())
-        .unwrap_or(-1);
+        .map_or(Ok(-1), |key| i32::try_from(key.id.0))
+        .expect("write admission proves the voted id fits i32");
     let data = if state.kraft_version == 0 {
         QuorumStateJson {
             cluster_id: Some(state.cluster_id.to_string()),
@@ -65,12 +86,11 @@ pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(
             voted_directory_id: None,
             applied_offset: Some(0),
             current_voters: Some(
-                state
-                    .voters
-                    .ids()
+                voter_ids
                     .into_iter()
                     .map(|id| QuorumStateVoter {
-                        voter_id: i32::try_from(id.0).unwrap_or(i32::MAX),
+                        voter_id: i32::try_from(id.0)
+                            .expect("write admission proves every v0 voter id fits i32"),
                     })
                     .collect(),
             ),
@@ -123,23 +143,61 @@ pub fn load_quorum_state(
         return Ok(None);
     };
     let data_version = data.data_version;
-    if !(0..=1).contains(&data_version) {
-        return Ok(None);
-    }
-    let leader_epoch = u32::try_from(data.leader_epoch).unwrap_or(0);
-    let voted_id = data.voted_id;
-    let voted_key = (voted_id >= 0).then(|| ReplicaKey {
-        id: NodeId(u64::try_from(voted_id).unwrap_or(0)),
-        directory_id: if data_version == 1 {
-            data.voted_directory_id
-                .as_deref()
-                .and_then(|id| URL_SAFE_NO_PAD.decode(id).ok())
-                .and_then(|raw| <[u8; 16]>::try_from(raw).ok())
-                .map_or_else(Uuid::nil, Uuid::from_bytes)
-        } else {
-            Uuid::nil()
-        },
+    let voted_directory_id = data
+        .voted_directory_id
+        .as_deref()
+        .and_then(|id| URL_SAFE_NO_PAD.decode(id).ok())
+        .and_then(|raw| <[u8; 16]>::try_from(raw).ok())
+        .map(Uuid::from_bytes);
+    let configured_voter_ids = voters.ids();
+    let v0_voters_match = data.current_voters.as_ref().is_some_and(|persisted| {
+        persisted.len() == configured_voter_ids.len()
+            && persisted
+                .iter()
+                .zip(&configured_voter_ids)
+                .all(|(stored, configured)| {
+                    stored.voter_id >= 0
+                        && u64::try_from(stored.voter_id).ok() == Some(configured.0)
+                })
     });
+    let version_fields_valid = if data_version == 0 {
+        data.cluster_id.as_deref() == Some(cluster_id.to_string().as_str())
+            && data.voted_directory_id.is_none()
+            && data.applied_offset == Some(0)
+            && v0_voters_match
+    } else if data_version == 1 {
+        data.cluster_id.is_none()
+            && data.voted_directory_id.is_some()
+            && data.applied_offset.is_none()
+            && data.current_voters.is_none()
+    } else {
+        false
+    };
+    let decision = krabka_verified::quorum_state_load_decision(
+        data_version,
+        data.leader_epoch,
+        data.voted_id,
+        version_fields_valid,
+        voted_directory_id.is_some(),
+        voted_directory_id == Some(Uuid::nil()),
+    );
+    let voted_key = match decision {
+        krabka_verified::QuorumStateLoadDecision::Reject => return Ok(None),
+        krabka_verified::QuorumStateLoadDecision::RestoreNoVote => None,
+        krabka_verified::QuorumStateLoadDecision::RestoreVote => Some(ReplicaKey {
+            id: NodeId(
+                u64::try_from(data.voted_id)
+                    .expect("load admission proves the voted id is nonnegative"),
+            ),
+            directory_id: if data_version == 1 {
+                voted_directory_id.expect("load admission proves the v1 directory id is valid")
+            } else {
+                Uuid::nil()
+            },
+        }),
+    };
+    let leader_epoch =
+        u32::try_from(data.leader_epoch).expect("load admission proves the epoch is nonnegative");
     // Leadership is VOLATILE, not durable: Raft persists only currentTerm
     // (`leader_epoch`) and votedFor (`voted_key`), never the current leader. A
     // restarted node must NOT trust a persisted `leader_id` — especially an
@@ -154,6 +212,7 @@ pub fn load_quorum_state(
         leader_id: None,
         voted_key,
         voters: voters.clone(),
-        kraft_version: u16::try_from(data_version).unwrap_or(0),
+        kraft_version: u16::try_from(data_version)
+            .expect("load admission proves the schema version is zero or one"),
     }))
 }

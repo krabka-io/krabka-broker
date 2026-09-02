@@ -17,7 +17,7 @@ use crate::{
         config::BarrierConfig,
         metrics::NoBarrierMetrics,
         state::GroupSpec,
-        test_support::{open_partition, topic_records},
+        test_support::{metadata_source, open_partition, topic_records},
     },
     metadata_source::MetadataSource,
     partition_registry::PartitionRegistry,
@@ -83,16 +83,22 @@ impl Fixture {
         Self {
             _dir: dir,
             registry,
-            source: Arc::new(
-                FakeMetadataSource::builder()
-                    .records(&cluster_records())
-                    .build(),
-            ),
+            source: Arc::new(metadata_source(&cluster_records())),
             config: config(),
         }
     }
 
     pub(super) async fn coordinator(&self) -> BarrierCoordinator {
+        for (topic, count) in [("orders", 2), ("payments", 1)] {
+            for partition in 0..count {
+                if let Some(handle) = self
+                    .registry
+                    .get(topic, krabka_ids::PartitionIndex(partition))
+                {
+                    handle.install_leader_change(NodeId(1).get(), 3).await;
+                }
+            }
+        }
         let controller: Arc<dyn MetadataSource> = Arc::clone(&self.source) as _;
         let coordinator = BarrierCoordinator::new(
             NodeId(1),

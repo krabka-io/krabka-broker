@@ -272,7 +272,12 @@ pub(crate) fn outcome_to_code(
             codes::REQUEST_TIMED_OUT,
             Some("another reconfiguration is in progress".into()),
         ),
-        Err(RaftError::ReconfigRejected(why)) => (codes::INVALID_REQUEST, Some(why)),
+        // Kafka has no "invalid voter update" code, so a rejected change and a
+        // malformed one land on the same `INVALID_REQUEST` that
+        // `UpdateVoterHandler` and `KafkaRaftClient` return.
+        Err(RaftError::ReconfigRejected(why) | RaftError::InvalidVoterUpdate(why)) => {
+            (codes::INVALID_REQUEST, Some(why))
+        }
         Err(RaftError::DuplicateVoter(id)) => (
             codes::DUPLICATE_VOTER,
             Some(format!("voter {id} already exists")),
@@ -281,7 +286,6 @@ pub(crate) fn outcome_to_code(
             codes::VOTER_NOT_FOUND,
             Some(format!("voter {id} was not found")),
         ),
-        Err(RaftError::InvalidVoterUpdate(why)) => (codes::INVALID_UPDATE, Some(why)),
         Err(RaftError::UnsupportedKraftVersion(_)) => (
             codes::UNSUPPORTED_VERSION,
             Some("dynamic voter changes require kraft.version 1".into()),

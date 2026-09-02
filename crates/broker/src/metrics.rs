@@ -25,10 +25,12 @@ use tokio::sync::Mutex;
 mod auth;
 mod break_glass;
 mod delivery;
+mod diskless;
 mod eviction;
 mod labels;
 mod lag;
 mod log_cleaner;
+mod phases;
 mod registration;
 mod replication;
 mod request;
@@ -37,11 +39,14 @@ mod traffic;
 
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, ClientSoftwareLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel,
-    ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    BreakGlassStateLabel, ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel,
+    ConsumerGroupLabel, DirectoryLabel, PartitionLabel, QuotaType, QuotaTypeLabel, ReplicaLagLabel,
+    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
+    WalVoterLabel,
 };
 pub(crate) use self::{
     eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, lag::LagSeriesIndex,
+    phases::RequestPhases,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -186,6 +191,19 @@ pub struct BrokerMetrics {
     /// on `rate(controller_leader_changes_total[5m]) > 0` for sustained
     /// periods to spot flapping raft leadership.
     pub controller_leader_changes_total: Counter,
+    /// Cumulative count of completed broker-fencing publication passes run
+    /// by this broker while it holds the controller leadership — one
+    /// increment per liveness tick that ran
+    /// `heartbeat::fencing::publish_fencing_changes` to completion, whether
+    /// or not that pass had a difference to write.
+    ///
+    /// The pass awaits its own `submit_change`, so an increment means any
+    /// fencing record that pass decided on is committed and applied rather
+    /// than still in flight. That is what lets a test tell "nobody is fenced"
+    /// apart from "a `broker.fenced=true` is on its way", which the image
+    /// alone cannot distinguish. Mirrors the intent of
+    /// [`Self::log_cleaner_runs_total`].
+    pub controller_fencing_publications_total: Counter,
     pub isr_shrinks_total: Counter,
     pub isr_expands_total: Counter,
     /// KIP-227: current count of live incremental-fetch sessions across the
@@ -240,6 +258,68 @@ pub struct BrokerMetrics {
     /// per api to spot handler tail-latency regressions, and use `_count`
     /// as a request-rate stream that pairs with `api_requests`.
     pub request_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Per-Kafka-API seconds one request spent on this broker's own log
+    /// (`krabka_broker_request_local_duration_seconds{api_key}`). It is the
+    /// Produce writer round-trip — the enqueue plus the append acknowledgement
+    /// — summed over the request's partitions, and the Fetch read of every
+    /// planned partition, including the re-read a long poll performs. Mirrors
+    /// Kafka's `RequestMetrics.LocalTimeMs`.
+    ///
+    /// It is one of the three phase families that partition
+    /// [`Self::request_duration_seconds`]. See the family's rustdoc on
+    /// [`Self::request_throttle_duration_seconds`] for what the three do and
+    /// do not sum to.
+    pub request_local_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Per-Kafka-API seconds one request spent waiting on something that is
+    /// not this broker's own log
+    /// (`krabka_broker_request_remote_duration_seconds{api_key}`). For Produce
+    /// it is the `acks=all` high-watermark gate, summed over the request's
+    /// partitions: the wait for every in-sync replica to take the append. For
+    /// Fetch it is the long poll that parks a `min_bytes`-unsatisfied read on
+    /// the partitions' notifiers, plus the object-store round trip a KIP-405
+    /// tiered read or a diskless WAL cold read makes when the local log no
+    /// longer holds the offset. Mirrors Kafka's `RequestMetrics.RemoteTimeMs`,
+    /// which covers the tiered read for the same reason: Kafka serves it out
+    /// of a `DelayedRemoteFetch` in the purgatory, and the purgatory wait is
+    /// what that metric measures.
+    ///
+    /// This is the series that separates a lagging follower or a slow object
+    /// store from a slow local disk: a produce that is slow here and fast in
+    /// [`Self::request_local_duration_seconds`] is waiting on replication, not
+    /// on this broker, and a fetch that is slow here on a tiered topic is
+    /// waiting on the tier.
+    pub request_remote_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Per-Kafka-API seconds one request spent asleep in the KIP-219 quota
+    /// throttle (`krabka_broker_request_throttle_duration_seconds{api_key}`).
+    /// Mirrors Kafka's `RequestMetrics.ThrottleTimeMs`. It is observed once
+    /// per request whose quota the broker accounts for, with an explicit zero
+    /// when no quota applied, so a throttled fleet is visible as a shift in
+    /// the distribution rather than as an appearing series. The apis the
+    /// dispatch registry marks quota-exempt are observed only where they
+    /// resolve a throttle of their own — the KIP-599 sleep on `CreateTopics`,
+    /// `CreatePartitions` and `DeleteTopics` — and not at all otherwise, so
+    /// this `_count` is at most [`Self::request_duration_seconds`]'s.
+    ///
+    /// The three phase families are disjoint: a request is in exactly one of
+    /// them at a time, and each interval is charged to exactly one. They do
+    /// **not** cover the total. `local + remote + throttle <=
+    /// request_duration_seconds`, and the remainder is the work no phase
+    /// names — request decode, authorization, record validation, response
+    /// encode. An operator checks the phases against the total by comparing
+    /// `_sum` streams; a remainder that grows is handler-side CPU, not disk
+    /// and not replication.
+    pub request_throttle_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Seconds of throttle this broker actually applied, by the quota that
+    /// caused it (`krabka_broker_quota_throttle_duration_seconds{quota_type}`).
+    ///
+    /// A request charges several quotas and sleeps for the largest delay of
+    /// them, so the sample lands under the [`QuotaType`] that produced that
+    /// largest delay — the quota an operator would have to raise to make the
+    /// throttle stop. Requests that no quota delayed are not observed here, so
+    /// unlike [`Self::request_throttle_duration_seconds`] the `_count` of this
+    /// family is the number of throttled requests, and `_sum` is the wall
+    /// time the broker held clients back.
+    pub quota_throttle_duration_seconds: Family<QuotaTypeLabel, Histogram>,
     /// Number of requests currently being handled by this
     /// broker (gauge). Incremented on dispatch entry, decremented on exit
     /// (including the error/close path). A sustained climb signals handler
@@ -251,6 +331,16 @@ pub struct BrokerMetrics {
     /// (EOF, error, or SASL-session expiry). Mirrors Kafka's
     /// `kafka.network:type=Acceptor` connection-count intent.
     pub active_connections: Gauge,
+    /// Cumulative count of client connections the broker closed for one of the
+    /// bounded [`ConnectionCloseReason`]s, which are the ways a connection ends
+    /// on its own rather than as the tail of a request the request counters
+    /// already saw. Kafka has no one counterpart; the closest are
+    /// `kafka.network:type=Selector,name=connection-close-total` and the
+    /// `expired-connections-killed-count` that only counts the idle arm.
+    /// `rate(connection_closes_total{reason="idle"}[5m])` is the signal that a
+    /// peer is opening connections and then sending nothing, which the
+    /// `max.connections`/`max.connections.per.ip` caps alone do not surface.
+    pub connection_closes: Family<ConnectionCloseReasonLabel, Counter>,
     /// Per-Kafka-API counter of requests whose handler
     /// returned an error (the dispatcher closed the connection). Labelled
     /// by the `ApiKey` variant name; disjoint from
@@ -291,9 +381,12 @@ pub struct BrokerMetrics {
     /// leader because the topic had
     /// `unclean.leader.election.enable=true` and the ISR was empty
     /// at failover time. Mirrors Kafka's
-    /// `ControllerStats.UncleanLeaderElectionsPerSec`. An operator
-    /// alert on `rate(unclean_leader_elections_total[5m]) > 0`
-    /// flags the data-loss footgun.
+    /// `ControllerStats.UncleanLeaderElectionsPerSec`, which counts the
+    /// elections Kafka's `ElectionResult` marks `unclean`. KIP-966
+    /// recovery from a surviving eligible leader replica loses no
+    /// committed record and is not one of them. An operator alert on
+    /// `rate(unclean_leader_elections_total[5m]) > 0` flags the
+    /// data-loss footgun.
     pub unclean_leader_elections_total: Counter,
     /// `FedRAMP` MLA: cumulative audit records successfully written to the
     /// audit topic. Incremented by the audit subsystem on each successful
@@ -469,6 +562,25 @@ pub struct BrokerMetrics {
     /// two-person rule, and an operator should read the audit log for the
     /// partition it names.
     pub break_glass_bypassed: Family<BreakGlassActionLabel, Counter>,
+    /// Quorum-durable offset for each diskless WAL shard led by this broker.
+    pub diskless_wal_durable_watermark: Family<WalShardLabel, Gauge>,
+    /// Leader log-end minus each WAL voter's durable offset.
+    pub diskless_wal_voter_lag: Family<WalVoterLabel, Gauge>,
+    /// Leader-side attempts that could not form a WAL quorum.
+    pub diskless_wal_quorum_loss_events_total: Counter,
+    /// Non-empty WAL objects submitted to object storage.
+    pub diskless_wal_flush_attempts_total: Counter,
+    /// Bytes successfully written as WAL objects.
+    pub diskless_wal_flush_bytes_total: Counter,
+    /// WAL object flushes that failed after an attempt began.
+    pub diskless_wal_flush_failures_total: Counter,
+    /// Durable offsets not yet represented by the committed object index.
+    pub diskless_wal_index_projection_lag: Family<WalShardLabel, Gauge>,
+    /// Local WAL log-start offset after trimming.
+    pub diskless_wal_trim_frontier: Family<WalShardLabel, Gauge>,
+    pub diskless_wal_cold_read_hits_total: Counter,
+    pub diskless_wal_cold_read_misses_total: Counter,
+    pub diskless_wal_cold_read_errors_total: Counter,
     /// The label sets [`Self::replica_lag`] and [`Self::consumer_group_lag`]
     /// currently carry, so that a caller holding only part of a lag label set
     /// can still release the series. See [`LagSeriesIndex`].

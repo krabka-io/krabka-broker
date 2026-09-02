@@ -1,0 +1,183 @@
+(* #"/proof-work-242/crates/verified/src/producer_snapshot.rs" 20 0 20 85 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sproducer_snapshot = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 22 16 22 22
+let%span sproducer_snapshot'0 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 34 14 34 33
+let%span sproducer_snapshot'1 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 35 14 35 27
+let%span sproducer_snapshot'2 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 24 16 33 5
+let%span sproducer_snapshot'3 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 23 16 23 36
+let%span sproducer_snapshot'4 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 36 23 36 33
+let%span sproducer_snapshot'5 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 36 37 36 38
+let%span sproducer_snapshot'6 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 36 42 36 52
+let%span sproducer_snapshot'7 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 36 23 36 63
+let%span sproducer_snapshot'8 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 40 34 40 44
+let%span sproducer_snapshot'9 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 40 47 40 64
+let%span sproducer_snapshot'10 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 44 13 44 14
+let%span sproducer_snapshot'11 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 44 8 44 14
+let%span sproducer_snapshot'12 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 7 10 9 55
+let%span sproducer_snapshot'13 = "/proof-work-242/crates/verified/src/producer_snapshot.rs" 10 10 18 1
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let producer_snapshot_latest_index [#"/proof-work-242/crates/verified/src/producer_snapshot.rs" 20 0 20 85]
+  (offsets: Slice64.slice Int64.t) (log_end: Int64.t) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &i <- [%#sproducer_snapshot] (0: UInt64.t) ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sproducer_snapshot'0] Seq.length (Slice64.view offsets)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sproducer_snapshot'3] UInt64.t'int i
+      <= Seq.length (Slice64.view offsets)}
+      {[@expl:loop invariant #1] [%#sproducer_snapshot'2] match best with
+        | None -> forall j: int. 0 <= j /\ j < UInt64.t'int i
+          -> Int64.to_int (Seq.get (Slice64.view offsets) j) < 0
+          \/ gt_log_Int (Int64.to_int (Seq.get (Slice64.view offsets) j)) (Int64.to_int log_end)
+        | Some selected'1 -> UInt64.t'int selected'1 < UInt64.t'int i
+        /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected'1))) 0
+        /\ Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected'1)) <= Int64.to_int log_end
+        /\ (forall j: int. 0 <= j
+            /\ j < UInt64.t'int i
+            /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view offsets) j)) 0
+            /\ Int64.to_int (Seq.get (Slice64.view offsets) j) <= Int64.to_int log_end
+          -> Int64.to_int (Seq.get (Slice64.view offsets) j)
+          <= Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected'1)))
+        end}
+      (! [ &variant_old_bb1 <- [%#sproducer_snapshot'0] Seq.length (Slice64.view offsets) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#sproducer_snapshot'1] {offsets} (fun (_x: UInt64.t) -> [ &_27 <- _x ] s1)
+      | s1 = [ &_25 <- UInt64.lt i _27 ] s2
+      | s2 = any [ br0 -> {_25 = false} (! bb23) | br1 -> {_25} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_32 <- i ] s1
+        | s1 = [ &_33 <- Slice64.length offsets ] s2
+        | s2 = [ &_34 <- UInt64.lt _32 _33 ] s3
+        | s3 = {[@expl:index in bounds] [%#sproducer_snapshot'4] _34} s4
+        | s4 = Slice64.get [%#sproducer_snapshot'4] <Int64.t> {offsets} {_32} (fun (r: Int64.t) -> [ &_31 <- r ] s5)
+        | s5 = [ &_30 <- Int64.ge _31 ([%#sproducer_snapshot'5] (0: Int64.t)) ] s6
+        | s6 = any [ br0 -> {_30 = false} (! bb7) | br1 -> {_30} (! bb6) ] ]
+      | bb6 = s0
+        [ s0 = [ &_36 <- i ] s1
+        | s1 = [ &_37 <- Slice64.length offsets ] s2
+        | s2 = [ &_38 <- UInt64.lt _36 _37 ] s3
+        | s3 = {[@expl:index in bounds] [%#sproducer_snapshot'6] _38} s4
+        | s4 = Slice64.get [%#sproducer_snapshot'6] <Int64.t> {offsets} {_36} (fun (r: Int64.t) -> [ &_35 <- r ] s5)
+        | s5 = [ &eligible <- Int64.le _35 log_end ] s6
+        | s6 = bb9 ]
+      | bb7 = s0 [ s0 = [ &eligible <- [%#sproducer_snapshot'7] false ] s1 | s1 = bb9 ]
+      | bb9 = any [ br0 -> {eligible = false} (! bb22) | br1 -> {eligible} (! bb10) ]
+      | bb10 = any [ br0 -> {best = None} (! bb16) | br1 (x0: UInt64.t) -> {best = Some x0} (! bb15) ]
+      | bb15 = s0
+        [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &selected'0 <- r0 ] s1)
+        | s1 = [ &_50 <- i ] s2
+        | s2 = [ &_51 <- Slice64.length offsets ] s3
+        | s3 = [ &_52 <- UInt64.lt _50 _51 ] s4
+        | s4 = {[@expl:index in bounds] [%#sproducer_snapshot'8] _52} s5
+        | s5 = Slice64.get [%#sproducer_snapshot'8] <Int64.t> {offsets} {_50} (fun (r: Int64.t) -> [ &_49 <- r ] s6)
+        | s6 = [ &_54 <- selected'0 ] s7
+        | s7 = [ &_55 <- Slice64.length offsets ] s8
+        | s8 = [ &_56 <- UInt64.lt _54 _55 ] s9
+        | s9 = {[@expl:index in bounds] [%#sproducer_snapshot'9] _56} s10
+        | s10 = Slice64.get [%#sproducer_snapshot'9] <Int64.t> {offsets} {_54} (fun (r: Int64.t) -> [ &_53 <- r ] s11)
+        | s11 = [ &_48 <- Int64.gt _49 _53 ] s12
+        | s12 = any [ br0 -> {_48 = false} (! bb22) | br1 -> {_48} (! bb19) ] ]
+      | bb19 = s0
+        [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &selected <- r0 ] s1)
+        | s1 = [ &_57 <- Some i ] s2
+        | s2 = [ &best <- _57 ] s3
+        | s3 = bb22 ]
+      | bb16 = s0 [ s0 = [ &_44 <- Some i ] s1 | s1 = [ &best <- _44 ] s2 | s2 = bb22 ]
+      | bb22 = s0
+        [ s0 = UInt64.add [%#sproducer_snapshot'11] {i} {[%#sproducer_snapshot'10] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb23 = s0 [ s0 = [ &_ret <- best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & offsets: Slice64.slice Int64.t = offsets
+  | & log_end: Int64.t = log_end
+  | & best: t_Option_usize = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: UInt64.t = Any.any_l ()
+  | & eligible: bool = Any.any_l ()
+  | & _30: bool = Any.any_l ()
+  | & _31: Int64.t = Any.any_l ()
+  | & _32: UInt64.t = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _35: Int64.t = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _44: t_Option_usize = Any.any_l ()
+  | & selected: UInt64.t = Any.any_l ()
+  | & selected'0: UInt64.t = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _49: Int64.t = Any.any_l ()
+  | & _50: UInt64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _53: Int64.t = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _55: UInt64.t = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _57: t_Option_usize = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:producer_snapshot_latest_index ensures] ([@stop_split] [@expl:producer_snapshot_latest_index ensures #0] [%#sproducer_snapshot'12] result
+        = None
+      -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view offsets)
+        -> Int64.to_int (Seq.get (Slice64.view offsets) i) < 0
+        \/ gt_log_Int (Int64.to_int (Seq.get (Slice64.view offsets) i)) (Int64.to_int log_end)))
+    /\ ([@stop_split] [@expl:producer_snapshot_latest_index ensures #1] [%#sproducer_snapshot'13] match result with
+      | Some selected -> UInt64.t'int selected < Seq.length (Slice64.view offsets)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected))) 0
+      /\ Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected)) <= Int64.to_int log_end
+      /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view offsets)
+          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view offsets) i)) 0
+          /\ Int64.to_int (Seq.get (Slice64.view offsets) i) <= Int64.to_int log_end
+        -> Int64.to_int (Seq.get (Slice64.view offsets) i)
+        <= Int64.to_int (Seq.get (Slice64.view offsets) (UInt64.t'int selected)))
+      | None -> true
+      end)}
+    (! return {result}) ]

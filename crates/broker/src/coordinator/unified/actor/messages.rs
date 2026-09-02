@@ -2,24 +2,29 @@
 //! the structured results the parking classic RPCs reply with, kept together
 //! because every handler module speaks this one protocol.
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
-use krabka_protocol::owned::{
-    consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-    consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-    heartbeat_request::HeartbeatRequest, join_group_request::JoinGroupRequest,
-    leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
-    sync_group_request::SyncGroupRequest,
+use krabka_protocol::{
+    owned::{
+        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
+        heartbeat_request::HeartbeatRequest, join_group_request::JoinGroupRequest,
+        leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
+        sync_group_request::SyncGroupRequest,
+    },
+    records::RecordBatch,
 };
 use tokio::sync::oneshot;
 
-use super::{ClassicView, DescribeView, ErrorCode};
+use super::{ClassicView, DescribeView, ErrorCode, ReapOutcome};
 use crate::{
     codes,
     coordinator::{
         DeleteGroupError, GroupSnapshot,
-        unified::{GroupSeed, classic_state::OffsetEntry, group::CoordinatorGroup},
+        unified::{
+            GroupSeed,
+            classic_state::OffsetEntry,
+            group::{CoordinatorGroup, GroupOffsets},
+        },
     },
 };
 
@@ -90,15 +95,77 @@ pub enum GroupActorMessage {
     },
 
     // ── committed offsets (protocol-agnostic; on `Group.committed_offsets`) ──
+    /// Append one `OffsetCommit`'s records to `__consumer_offsets` and apply
+    /// them to the group, both inside the actor.
+    ///
+    /// The append cannot happen outside the mailbox. The KIP-211 sweep decides
+    /// what to tombstone from the in-memory map and appends its tombstones in
+    /// the same turn, so a commit that wrote its record first and queued the
+    /// in-memory update afterwards could have the sweep read the stale map,
+    /// tombstone the offset it had just acknowledged, and stop the actor
+    /// before the update was ever applied. One message keeps the two appends
+    /// in one order.
+    CommitOffsets {
+        batch: RecordBatch,
+        entries: Vec<((String, i32), OffsetEntry)>,
+        reply: oneshot::Sender<Result<(), ErrorCode>>,
+    },
     UpdateCommitted {
         entries: Vec<((String, i32), OffsetEntry)>,
         reply: oneshot::Sender<()>,
     },
-    FetchCommitted {
-        reply: oneshot::Sender<HashMap<(String, i32), OffsetEntry>>,
+    /// Read the group's stable offsets and its unresolved transactional keys
+    /// in one turn, for `OffsetFetch`.
+    FetchOffsets {
+        reply: oneshot::Sender<GroupOffsets>,
     },
     RemoveCommitted {
         keys: Vec<(String, i32)>,
+        reply: oneshot::Sender<()>,
+    },
+    /// KIP-211: tombstone every committed offset that has fallen out of
+    /// retention, and the group with them when it keeps none. The sweep in
+    /// `coordinator::retention` sends it to each group whose
+    /// `__consumer_offsets` partition this broker leads.
+    ReapExpiredOffsets {
+        /// The sweep's clock reading, shared by every group in one pass.
+        now_ms: i64,
+        /// `offsets.retention.minutes` in milliseconds.
+        retention_ms: i64,
+        /// How long a group must have been memberless before the sweep may
+        /// delete it for holding no offsets at all —
+        /// `offsets.retention.check.interval.ms`, so a group an actor has just
+        /// been spawned for gets its first message in before it is judged.
+        empty_grace_ms: i64,
+        reply: oneshot::Sender<ReapOutcome>,
+    },
+
+    // ── in-flight transactional offsets (KIP-447) ──
+    /// Record that `producer_id`'s open transaction has durably written
+    /// offset commits for `keys` at offsets-log position `written_at`. Until
+    /// its marker arrives, an `OffsetFetch` with `require_stable = true`
+    /// answers `UNSTABLE_OFFSET_COMMIT` for them.
+    ///
+    /// `written_at` orders the mark against the producer's markers, which the
+    /// sender cannot do for itself: it marks after its append is durable, so a
+    /// marker for the very transaction it is marking can be resolved here in
+    /// between.
+    AddPendingTxnOffsets {
+        producer_id: i64,
+        written_at: i64,
+        keys: Vec<(String, i32)>,
+        reply: oneshot::Sender<()>,
+    },
+    /// Resolve `producer_id`'s transaction, whose marker is at offsets-log
+    /// position `resolved_through`: publish `committed` and drop the
+    /// producer's pending marks in the same turn. An abort marker sends an
+    /// empty `committed`, which leaves the group's stable offsets as they
+    /// were. Doing both in one message is what stops a `require_stable` fetch
+    /// from seeing a partition that is neither pending nor yet updated.
+    ResolveTxnOffsets {
+        producer_id: i64,
+        resolved_through: i64,
+        committed: Vec<((String, i32), OffsetEntry)>,
         reply: oneshot::Sender<()>,
     },
 
@@ -112,6 +179,19 @@ pub enum GroupActorMessage {
     /// place. This exercises the tick's dispatch on the live `group.kind`.
     #[cfg(test)]
     TestForceConsumerKind,
+
+    /// Test-only: read back the moment the actor stamped this group
+    /// memberless.
+    ///
+    /// The actor maintains `empty_since_ms` at the end of every turn, so a
+    /// retention test that wants to sweep exactly one grace period after that
+    /// stamp cannot read the wall clock for it — the stamp lands whenever the
+    /// actor next runs, which on a loaded machine is after any instant the
+    /// test read. Asking the actor orders the two.
+    #[cfg(test)]
+    TestEmptySinceMs {
+        reply: oneshot::Sender<Option<i64>>,
+    },
 }
 
 /// Structured `JoinGroup` result for the handler, which encodes it for the

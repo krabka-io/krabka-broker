@@ -297,6 +297,9 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         log_dir,
         log,
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: notify,
         replica_state,
         hw_advance_notify,

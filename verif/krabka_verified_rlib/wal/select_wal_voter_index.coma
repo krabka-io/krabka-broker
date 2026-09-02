@@ -1,0 +1,147 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 75 0 81 18 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span swal = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 82 16 82 22
+let%span swal'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 90 14 90 36
+let%span swal'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 91 14 91 30
+let%span swal'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 84 16 89 60
+let%span swal'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 83 16 83 39
+let%span swal'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 92 24 92 37
+let%span swal'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 93 12 93 51
+let%span swal'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 94 16 94 55
+let%span swal'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 99 13 99 14
+let%span swal'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 99 8 99 14
+let%span swal'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 52 11 53 45
+let%span swal'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 54 10 73 1
+let%span swal'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 34 10 35 54
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+let len_tup2_u64_u64 (self_: Slice64.slice tup2_u64_u64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let contains_voter (voters: Slice64.slice UInt64.t) (node: UInt64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:contains_voter ensures] [%#swal'11] result
+    = (exists i: int. 0 <= i /\ i < Seq.length (Slice64.view voters) /\ Seq.get (Slice64.view voters) i = node)}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let select_wal_voter_index [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 75 0 81 18]
+  (candidates: Slice64.slice tup2_u64_u64) (used_nodes: Slice64.slice UInt64.t) (used_racks: Slice64.slice UInt64.t)
+  (local_node: UInt64.t) (require_local: bool) (return (x: t_Option_usize)) =
+{[@stop_split] [@expl:select_wal_voter_index requires] [%#swal'9] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view candidates)
+    -> UInt64.t'int (Seq.get (Slice64.view candidates) i).f0 < UInt64.t'int (Seq.get (Slice64.view candidates) j).f0}
+  (! bb0
+  [ bb0 = s0 [ s0 = [ &i <- [%#swal] (0: UInt64.t) ] s1 | s1 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#swal'0] Seq.length (Slice64.view candidates)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#swal'3] UInt64.t'int i <= Seq.length (Slice64.view candidates)}
+      {[@expl:loop invariant #1] [%#swal'2] forall k: int. 0 <= k /\ k < UInt64.t'int i
+        -> (exists j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view used_nodes)
+            /\ Seq.get (Slice64.view used_nodes) j = (Seq.get (Slice64.view candidates) k).f0)
+        \/ (exists j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view used_racks)
+            /\ Seq.get (Slice64.view used_racks) j = (Seq.get (Slice64.view candidates) k).f1)
+        \/ require_local /\ (Seq.get (Slice64.view candidates) k).f0 <> local_node}
+      (! [ &variant_old_bb1 <- [%#swal'0] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_u64_u64 [%#swal'1] {candidates} (fun (_x: UInt64.t) -> [ &_33 <- _x ] s1)
+      | s1 = [ &_31 <- UInt64.lt i _33 ] s2
+      | s2 = any [ br0 -> {_31 = false} (! bb17) | br1 -> {_31} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_36 <- i ] s1
+        | s1 = [ &_37 <- Slice64.length candidates ] s2
+        | s2 = [ &_38 <- UInt64.lt _36 _37 ] s3
+        | s3 = {[@expl:index in bounds] [%#swal'4] _38} s4
+        | s4 = Slice64.get [%#swal'4] <tup2_u64_u64> {candidates} {_36}
+            (fun (r: tup2_u64_u64) -> [ &candidate <- r ] s5)
+        | s5 = contains_voter [%#swal'5] {used_nodes} {candidate.f0} (fun (_x: bool) -> [ &_40 <- _x ] s6)
+        | s6 = any [ br0 -> {_40 = false} (! bb8) | br1 -> {_40} (! bb16) ] ]
+      | bb8 = s0
+        [ s0 = contains_voter [%#swal'6] {used_racks} {candidate.f1} (fun (_x: bool) -> [ &_43 <- _x ] s1)
+        | s1 = any [ br0 -> {_43 = false} (! bb11) | br1 -> {_43} (! bb16) ] ]
+      | bb11 = any [ br0 -> {require_local = false} (! bb14) | br1 -> {require_local} (! bb12) ]
+      | bb12 = s0
+        [ s0 = [ &_47 <- candidate.f0 = local_node ] s1
+        | s1 = any [ br0 -> {_47 = false} (! bb16) | br1 -> {_47} (! bb14) ] ]
+      | bb16 = s0
+        [ s0 = UInt64.add [%#swal'8] {i} {[%#swal'7] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- Some i ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & candidates: Slice64.slice tup2_u64_u64 = candidates
+  | & used_nodes: Slice64.slice UInt64.t = used_nodes
+  | & used_racks: Slice64.slice UInt64.t = used_racks
+  | & local_node: UInt64.t = local_node
+  | & require_local: bool = require_local
+  | & i: UInt64.t = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & candidate: tup2_u64_u64 = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:select_wal_voter_index ensures] [%#swal'10] match result with
+      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
+        -> (exists j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view used_nodes)
+            /\ Seq.get (Slice64.view used_nodes) j = (Seq.get (Slice64.view candidates) i).f0)
+        \/ (exists j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view used_racks)
+            /\ Seq.get (Slice64.view used_racks) j = (Seq.get (Slice64.view candidates) i).f1)
+        \/ require_local /\ (Seq.get (Slice64.view candidates) i).f0 <> local_node
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view candidates)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view used_nodes)
+          -> Seq.get (Slice64.view used_nodes) j <> (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view used_racks)
+          -> Seq.get (Slice64.view used_racks) j <> (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+      /\ (not require_local \/ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0 = local_node)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> (exists j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view used_nodes)
+            /\ Seq.get (Slice64.view used_nodes) j = (Seq.get (Slice64.view candidates) i).f0)
+        \/ (exists j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view used_racks)
+            /\ Seq.get (Slice64.view used_racks) j = (Seq.get (Slice64.view candidates) i).f1)
+        \/ require_local /\ (Seq.get (Slice64.view candidates) i).f0 <> local_node)
+      end}
+    (! return {result}) ]

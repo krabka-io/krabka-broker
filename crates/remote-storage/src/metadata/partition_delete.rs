@@ -30,15 +30,18 @@ impl RemotePartitionDeleteState {
     /// A `from` of `None` means the partition was never marked.
     #[must_use]
     pub fn is_valid_transition(from: Option<Self>, target: Self) -> bool {
-        use RemotePartitionDeleteState::{
-            DeletePartitionFinished, DeletePartitionMarked, DeletePartitionStarted,
-        };
-        matches!(
-            (from, target),
-            (None, DeletePartitionMarked)
-                | (Some(DeletePartitionMarked), DeletePartitionStarted)
-                | (Some(DeletePartitionStarted), DeletePartitionFinished)
+        krabka_verified::remote_partition_delete_transition(
+            from.map_or(0, Self::proof_tag),
+            target.proof_tag(),
         )
+    }
+
+    const fn proof_tag(self) -> u8 {
+        match self {
+            Self::DeletePartitionMarked => 1,
+            Self::DeletePartitionStarted => 2,
+            Self::DeletePartitionFinished => 3,
+        }
     }
 }
 
@@ -62,23 +65,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn partition_delete_transitions() {
+    fn partition_delete_transition_matrix_is_exhaustive() {
         use RemotePartitionDeleteState::{
             DeletePartitionFinished, DeletePartitionMarked, DeletePartitionStarted,
         };
-        for (from, to, want) in [
-            (None, DeletePartitionMarked, true),
-            (Some(DeletePartitionMarked), DeletePartitionStarted, true),
-            (Some(DeletePartitionStarted), DeletePartitionFinished, true),
-            // Invalid: skipping, restarting, or marking twice.
-            (None, DeletePartitionStarted, false),
-            (Some(DeletePartitionMarked), DeletePartitionMarked, false),
-            (Some(DeletePartitionFinished), DeletePartitionStarted, false),
-        ] {
-            check!(
-                RemotePartitionDeleteState::is_valid_transition(from, to) == want,
-                "{from:?} -> {to:?}"
-            );
+        let from_states = [
+            None,
+            Some(DeletePartitionMarked),
+            Some(DeletePartitionStarted),
+            Some(DeletePartitionFinished),
+        ];
+        let targets = [
+            DeletePartitionMarked,
+            DeletePartitionStarted,
+            DeletePartitionFinished,
+        ];
+        let expected = [
+            [true, false, false],
+            [false, true, false],
+            [false, false, true],
+            [false, false, false],
+        ];
+        for (from_index, from) in from_states.into_iter().enumerate() {
+            for (to_index, to) in targets.into_iter().enumerate() {
+                check!(
+                    RemotePartitionDeleteState::is_valid_transition(from, to)
+                        == expected[from_index][to_index],
+                    "{from:?} -> {to:?}"
+                );
+            }
         }
     }
 }

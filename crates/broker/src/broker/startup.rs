@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use krabka_units::convert::TimeExt as _;
+use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
 use crate::{
     broker::{
@@ -110,9 +110,16 @@ impl Broker {
             ktls_enabled,
             inter_broker_client,
         } = prepare_startup_transport(&config).await?;
+        let metrics = crate::metrics::BrokerMetrics::new();
         let diskless_runtime = DisklessRuntime::new(
             config.node_id,
             config.inter_broker_principal_node_ids.clone(),
+            config
+                .diskless_wal_hot_tail_max_size
+                .bytes_u64()
+                .try_into()
+                .unwrap_or(usize::MAX),
+            metrics.clone(),
         );
 
         // 1. Bring up the metadata quorum BEFORE the client listener so
@@ -190,7 +197,6 @@ impl Broker {
         // The barrier coordinator reports through the process registry, and it
         // is built here rather than inside the runtime because the coordinators
         // start first. BrokerMetrics clones cheaply.
-        let metrics = crate::metrics::BrokerMetrics::new();
         let CoordinatorStartup {
             txn_coordinator,
             barrier_coordinator,
@@ -229,6 +235,18 @@ impl Broker {
             Arc::clone(&controller),
             Arc::clone(&partitions),
             Arc::clone(&group_coordinator),
+            runtime.supervisor_shutdown.child_token(),
+        );
+
+        // KIP-211. Every broker sweeps the groups whose offsets partition it
+        // leads, and the tombstones are idempotent, so the sweep needs no
+        // config gate of its own.
+        crate::coordinator::retention::spawn(
+            config.node_id,
+            Arc::clone(&controller),
+            Arc::clone(&group_coordinator),
+            config.offsets_retention_check_interval(),
+            config.offsets_retention(),
             runtime.supervisor_shutdown.child_token(),
         );
 
