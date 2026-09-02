@@ -335,7 +335,7 @@ async fn partition_level_metrics_and_disk_gauge_render() {
         .wait_for_metrics("partition_disk_bytes > 0", |m| {
             m.partition_disk_bytes
                 .get_or_create(&PartitionLabel {
-                    topic: TOPIC.to_string(),
+                    topic: TOPIC.into(),
                     partition: 0,
                 })
                 .get()

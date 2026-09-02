@@ -23,6 +23,7 @@
 
 use std::{
     cell::RefCell,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -70,7 +71,7 @@ const WARMUP: u64 = 8;
 
 fn settings(metrics: &BrokerMetrics) -> HotPathSettings<'_> {
     HotPathSettings {
-        topic_name: "bench-topic",
+        topic_name: Arc::from("bench-topic"),
         // Producer pass-through: the topic asks for no recompression, which is
         // the configuration the verbatim path needs.
         topic_compression: None,

@@ -182,7 +182,7 @@ mod tests {
             .set_stamp_source(stamp_source)
             .expect("source stamp index");
         append_records(&part, 3);
-        partitions.insert("t".to_string(), PartitionIndex(0), part.clone());
+        partitions.insert("t".into(), PartitionIndex(0), part.clone());
 
         let future_path = log_dir::future_partition_dir(target.path(), "t", 0);
         std::fs::create_dir_all(&future_path).unwrap();
@@ -230,7 +230,7 @@ mod tests {
         for _ in 0..4 {
             append_value_batch(&part, 400 * 1024);
         }
-        partitions.insert("t".to_string(), PartitionIndex(0), part.clone());
+        partitions.insert("t".into(), PartitionIndex(0), part.clone());
 
         let future_path = log_dir::future_partition_dir(target.path(), "t", 0);
         std::fs::create_dir_all(&future_path).unwrap();

@@ -12,6 +12,8 @@
 //! [`append_one_batch`] applies the writer's compression rewrite in the same
 //! place [`crate::partition_writer`] applies it.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use krabka_compression::{CompressionType, RecordDecompressionPolicy};
 use krabka_log::Log;
@@ -52,8 +54,10 @@ pub enum PathChoice {
 /// too.
 pub struct HotPathSettings<'a> {
     /// Names the topic for the message-conversion metric that a legacy
-    /// up-convert increments.
-    pub topic_name: &'a str,
+    /// up-convert increments. An `Arc<str>` because that is what the metric
+    /// label set holds, and what the pipeline resolves once per topic — see
+    /// [`crate::metrics::TopicLabel`].
+    pub topic_name: Arc<str>,
     /// The topic's `compression.type`. `None` is producer pass-through, which
     /// is what keeps a batch on the verbatim path.
     pub topic_compression: Option<CompressionType>,
@@ -83,13 +87,13 @@ pub fn append_one_batch(
         PathChoice::Dispatch => prepare_batch(
             PartitionPayload::Slice(records),
             settings.topic_compression,
-            settings.topic_name,
+            &settings.topic_name,
             settings.metrics,
             settings.decompression_policy,
         )?,
         PathChoice::ForceOwned => owned_fallback(
             records,
-            settings.topic_name,
+            &settings.topic_name,
             settings.metrics,
             settings.decompression_policy,
         )?,

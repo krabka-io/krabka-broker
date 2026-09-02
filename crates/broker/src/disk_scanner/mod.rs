@@ -57,7 +57,10 @@ impl DiskScanner {
             let path = log_dir::partition_dir(&owning_dir, &topic, partition);
             match scan::sum_partition_dir(&path) {
                 Ok(bytes) => {
-                    let lbl = PartitionLabel { topic, partition };
+                    let lbl = PartitionLabel {
+                        topic: std::sync::Arc::from(topic.as_str()),
+                        partition,
+                    };
                     self.metrics
                         .partition_disk_bytes
                         .get_or_create(&lbl)

@@ -139,7 +139,7 @@ pub(super) async fn recover_storage_and_groups(
                 },
                 initial_target,
             )?;
-            partitions.insert(topic, PartitionIndex(partition_id), partition);
+            partitions.insert(Arc::from(topic), PartitionIndex(partition_id), partition);
         }
     }
     let offsets_log = Arc::new(

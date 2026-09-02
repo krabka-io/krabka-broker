@@ -52,7 +52,7 @@ pub(crate) fn open_partition(registry: &PartitionRegistry, dir: &Path, topic: &s
         Arc::new(crate::producer_state::ProducerState::new()),
         false,
     );
-    registry.insert(topic.to_owned(), PartitionIndex(index), partition);
+    registry.insert(topic.into(), PartitionIndex(index), partition);
 }
 
 /// A metadata source over `records` that fails the test if the code under test

@@ -113,7 +113,7 @@ async fn compaction_dedupes_via_native_client() {
         .metrics()
         .log_compactions_total
         .get_or_create(&PartitionLabel {
-            topic: "compacted".to_string(),
+            topic: "compacted".into(),
             partition: 0,
         })
         .get();
@@ -121,7 +121,7 @@ async fn compaction_dedupes_via_native_client() {
         .wait_for_metrics("compaction pass ran on sealed segments", |m| {
             m.log_compactions_total
                 .get_or_create(&PartitionLabel {
-                    topic: "compacted".to_string(),
+                    topic: "compacted".into(),
                     partition: 0,
                 })
                 .get()
@@ -167,7 +167,7 @@ async fn compaction_dedupes_via_native_client() {
         .metrics()
         .log_compactions_total
         .get_or_create(&PartitionLabel {
-            topic: "compacted".to_string(),
+            topic: "compacted".into(),
             partition: 0,
         })
         .get();
@@ -175,7 +175,7 @@ async fn compaction_dedupes_via_native_client() {
         .wait_for_metrics("compaction pass ran on newly-sealed segments", |m| {
             m.log_compactions_total
                 .get_or_create(&PartitionLabel {
-                    topic: "compacted".to_string(),
+                    topic: "compacted".into(),
                     partition: 0,
                 })
                 .get()

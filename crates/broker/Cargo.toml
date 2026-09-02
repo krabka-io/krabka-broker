@@ -218,6 +218,13 @@ harness = false
 name = "fetch_session"
 harness = false
 
+# The fetch read loop's thread-pool hand-off: one `spawn_blocking` per
+# partition against one covering the whole pending set, and against
+# `block_in_place`, over the partition counts a wide subscription reaches.
+[[bench]]
+name = "fetch_handoff"
+harness = false
+
 # The zero-copy fetch drain: `sendfile(2)` against the `pread` + write copy,
 # swept across response size to locate the crossover `sendfile_min` encodes.
 [[bench]]
@@ -229,4 +236,10 @@ harness = false
 # against the `replicate_batch` it precedes.
 [[bench]]
 name = "perf_deferrals"
+harness = false
+
+# The label a metric observation builds: the `String` copy per call that the
+# `Arc<str>` label sets replaced, against the `Arc` clone that replaced it.
+[[bench]]
+name = "metric_labels"
 harness = false

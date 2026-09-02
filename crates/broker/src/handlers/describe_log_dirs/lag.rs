@@ -147,7 +147,7 @@ mod tests {
         let reg = crate::partition_registry::PartitionRegistry::new();
         let part = partition_with_leo(dir.path(), "t", krabka_ids::PartitionIndex(0), 5);
         assert!(part.log_end_offset() == krabka_log::Offset(5));
-        reg.insert("t".to_string(), krabka_ids::PartitionIndex(0), part);
+        reg.insert("t".into(), krabka_ids::PartitionIndex(0), part);
         // Fresh partition HW is 0 → lag == LEO == 5 (not -1, not 0).
         assert!(offset_lag_for(&reg, "t", 0).await == 5);
     }
@@ -197,7 +197,7 @@ mod tests {
         let reg = crate::partition_registry::PartitionRegistry::new();
         let part = partition_with_leo(cur_dir.path(), "t", krabka_ids::PartitionIndex(3), 5);
         assert!(part.log_end_offset() == krabka_log::Offset(5));
-        reg.insert("t".to_string(), krabka_ids::PartitionIndex(3), part);
+        reg.insert("t".into(), krabka_ids::PartitionIndex(3), part);
 
         let future_logs = dashmap::DashMap::new();
         future_logs.insert(

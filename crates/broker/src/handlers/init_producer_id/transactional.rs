@@ -236,7 +236,7 @@ mod tests {
             false,
         );
         assert!(part.log_end_offset() == 0);
-        partitions.insert("orders".to_string(), PartitionIndex(0), Arc::clone(&part));
+        partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&part));
 
         // Build a txn entry that names this partition.
         let mut entry = TxnEntry::new_empty("tx-1".to_string(), ProducerId(1000), 3, 60_000, 0);
@@ -321,7 +321,7 @@ mod tests {
         let partitions = Arc::new(PartitionRegistry::new());
         let part = transaction_state_partition(dir);
         partitions.insert(
-            bootstrap::TOPIC.to_string(),
+            bootstrap::TOPIC.into(),
             PartitionIndex(0),
             Arc::clone(&part),
         );

@@ -2,6 +2,8 @@
 //! registry under the `krabka_broker` prefix, and that the families with no
 //! recorder method of their own start at their documented default.
 
+use std::sync::Arc;
+
 use assert2::assert;
 use krabka_metadata::BreakGlassAction as GatedAction;
 use krabka_units::{convert::TimeExt as _, millis, secs};
@@ -47,14 +49,15 @@ async fn declared_clock_bound_is_exported_in_seconds() {
 #[tokio::test]
 async fn registry_has_broker_prefix_and_all_metrics() {
     let m = BrokerMetrics::new();
-    m.record_produce("topic-a", 100);
-    m.record_produce_messages("topic-a", 5);
-    m.record_fetch("topic-a", 50);
-    m.record_partition_produce("topic-a", 0, 100);
-    m.record_partition_fetch("topic-a", 0, 50);
-    m.record_partition_cpu_micros("topic-a", 0, 250);
-    m.record_replication_in("topic-a", 0, 4096);
-    m.record_replication_out("topic-a", 0, 8192);
+    let topic_a: Arc<str> = Arc::from("topic-a");
+    m.record_produce(&topic_a, 100);
+    m.record_produce_messages(&topic_a, 5);
+    m.record_fetch(&topic_a, 50);
+    m.record_partition_produce(&topic_a, 0, 100);
+    m.record_partition_fetch(&topic_a, 0, 50);
+    m.record_partition_cpu_micros(&topic_a, 0, 250);
+    m.record_replication_in(&topic_a, 0, 4096);
+    m.record_replication_out(&topic_a, 0, 8192);
     m.record_cleaner_run();
     m.record_compaction("topic-a", 0);
     let barrier_group = BarrierGroupLabel {
@@ -79,10 +82,10 @@ async fn registry_has_broker_prefix_and_all_metrics() {
         })
         .inc_by(3);
     m.barrier_groups_coordinated.set(1);
-    m.record_produce_message_conversion("topic-a");
-    m.record_fetch_message_conversion("topic-a");
-    m.record_failed_produce("topic-a");
-    m.record_failed_fetch("topic-a");
+    m.record_produce_message_conversion(&topic_a);
+    m.record_fetch_message_conversion(&topic_a);
+    m.record_failed_produce(&topic_a);
+    m.record_failed_fetch(&topic_a);
     m.record_schema_validation_rejection("topic-a", "unknown_id");
     m.record_schema_cache_hit();
     m.record_schema_cache_miss();

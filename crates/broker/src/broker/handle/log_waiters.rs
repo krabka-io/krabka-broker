@@ -254,7 +254,7 @@ mod tests {
             .expect("helper partition log lock")
             .set_config(helper_config.clone());
         broker.partitions.insert(
-            helper_topic.to_string(),
+            helper_topic.into(),
             PartitionIndex(0),
             Arc::clone(&helper_part),
         );

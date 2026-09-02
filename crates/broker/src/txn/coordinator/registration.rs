@@ -324,7 +324,7 @@ mod tests {
         );
         coordinator
             .partitions
-            .insert(bootstrap::TOPIC.to_string(), index, Arc::clone(&opened));
+            .insert(bootstrap::TOPIC.into(), index, Arc::clone(&opened));
         opened
     }
 

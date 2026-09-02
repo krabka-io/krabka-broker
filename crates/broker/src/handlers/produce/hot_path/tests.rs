@@ -5,6 +5,8 @@
 //! that both paths actually land their records in the log. A seam that
 //! silently stopped appending would still produce a plausible-looking number.
 
+use std::sync::Arc;
+
 use assert2::assert;
 use bytes::Bytes;
 use krabka_compression::{CompressionType, RecordDecompressionPolicy};
@@ -43,7 +45,7 @@ fn settings(
     topic_compression: Option<CompressionType>,
 ) -> HotPathSettings<'_> {
     HotPathSettings {
-        topic_name: "bench-topic",
+        topic_name: Arc::from("bench-topic"),
         topic_compression,
         decompression_policy: RecordDecompressionPolicy::default(),
         metrics,

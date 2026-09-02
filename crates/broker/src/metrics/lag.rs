@@ -102,7 +102,7 @@ impl BrokerMetrics {
     /// which is not filtered by hosting.
     pub(super) fn evict_partition_lag_series(&self, partition: &PartitionLabel) {
         self.retain_replica_lag(|label| {
-            label.topic != partition.topic || label.partition != partition.partition
+            label.topic.as_str() != &*partition.topic || label.partition != partition.partition
         });
     }
 

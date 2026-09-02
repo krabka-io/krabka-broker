@@ -108,7 +108,7 @@ impl BarrierMetrics for BrokerBarrierMetrics {
         self.metrics
             .barrier_markers_written_total
             .get_or_create(&crate::metrics::TopicLabel {
-                topic: topic.to_owned(),
+                topic: std::sync::Arc::from(topic),
             })
             .inc();
     }

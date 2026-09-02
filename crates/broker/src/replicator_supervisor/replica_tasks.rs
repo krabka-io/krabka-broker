@@ -10,7 +10,7 @@ use crate::replicator;
 impl ReplicatorSupervisor {
     pub(super) fn replicator_config(
         &self,
-        key: TopicPartition,
+        key: &TopicPartition,
         topic: &krabka_metadata::TopicRecord,
         partition: &krabka_metadata::PartitionRecord,
         broker: &krabka_metadata::BrokerRegistrationRecord,
@@ -20,7 +20,10 @@ impl ReplicatorSupervisor {
             resolve_leader_endpoint(broker, &self.inter_broker_listener_name);
         replicator::Config {
             node_id: self.node_id,
-            topic: key.0,
+            // The registry already owns one copy of the name, and the task
+            // records a per-batch metric under it; take that copy rather than
+            // the one this key carries.
+            topic: self.partitions.shared_topic_name(&key.0),
             topic_id: krabka_protocol::primitives::uuid::Uuid(topic.topic_id.into_bytes()),
             partition: krabka_ids::PartitionIndex(key.1),
             leader_node_id: partition.leader,
@@ -89,7 +92,7 @@ mod tests {
         let topic = image.topic("t").expect("topic");
 
         let config = supervisor.replicator_config(
-            ("t".into(), 0),
+            &("t".into(), 0),
             topic,
             image.partition("t", 0).expect("partition"),
             broker,

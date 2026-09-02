@@ -327,7 +327,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .append(&mut batch_delivered_at(now_ms + 600_000))
         .expect("seed the partition schedule");
-    partitions.insert("sched".to_string(), krabka_ids::PartitionIndex(0), part);
+    partitions.insert("sched".into(), krabka_ids::PartitionIndex(0), part);
 
     // The accepted case appends, so it comes last.
     let accepted_delivery_ms = now_ms + 900_000;
