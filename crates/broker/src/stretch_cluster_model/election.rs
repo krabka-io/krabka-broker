@@ -32,6 +32,7 @@ impl StretchModel {
                         replica,
                         &alive,
                         &self.witnesses,
+                        &[],
                         RecoveryStrategy::None,
                         false,
                     ),
@@ -51,6 +52,7 @@ impl StretchModel {
             dead,
             &alive,
             &self.witnesses,
+            &[],
             RecoveryStrategy::None,
             false,
         );

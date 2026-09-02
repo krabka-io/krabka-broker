@@ -1,0 +1,13 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_freeze_timestamp_in_window": {
+        "prover": "alt-ergo",
+        "time": 0.015
+      },
+      "vc_saturating_add": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.005 }
+    }
+  }
+}

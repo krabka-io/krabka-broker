@@ -7,7 +7,7 @@
 //! survives.
 
 use assert2::check;
-use krabka_ids::Offset;
+use krabka_ids::{Offset, ProducerId};
 use krabka_log::LogConfig;
 use krabka_protocol::records::RecordBatch;
 
@@ -66,6 +66,8 @@ async fn exclude_producer_id_never_drops_a_control_batch() {
     let (_target, target_dir) = run_restore(archive.path(), &["--exclude-producer-id", "77"]).await;
 
     let log = reopen(&target_dir, "orders", 0);
+    check!(log.pending_transaction_start(ProducerId(77)) == None);
+    check!(log.lso() == log.log_end_offset());
     let read = log
         .read(Offset(0), LogConfig::default().segment_size)
         .expect("read back");

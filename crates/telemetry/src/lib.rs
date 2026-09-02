@@ -45,6 +45,7 @@ mod config;
 mod error;
 mod exporter;
 mod heartbeat;
+mod log_levels;
 mod subscriber;
 
 #[cfg(test)]
@@ -61,5 +62,6 @@ pub use krabka_trace_context as propagation;
 pub use self::{
     config::{OtlpConfig, OtlpProtocol},
     error::TelemetryError,
+    log_levels::{LogLevel, LogLevelController, LogLevelFilter, ROOT_LOGGER, VALID_LOG_LEVELS},
     subscriber::{TelemetryGuard, init},
 };

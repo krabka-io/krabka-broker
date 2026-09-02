@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   schedule:
-    # Nightly, 05:00 UTC: the full container run and the mutation sweep.
+    # Nightly, 05:00 UTC: the full container run.
     - cron: "0 5 * * *"
   workflow_dispatch:
 
@@ -22,11 +22,16 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # Build, test, lint and format. The Aspect CLI narrows each of these to what
-  # the change actually touched; `bazel build|test //...` is the equivalent for
-  # anyone without the CLI, and is what the nightly job runs.
+  # Format, lint, build and render rustdoc in one Bazel output tree.
+  #
+  # Coverage is a sibling job rather than a step here. Both configurations build
+  # the same ~140 broker integration tests as separate statically linked
+  # binaries, and Bazel writes every one of them to `bazel-out` *and* to the
+  # disk cache -- so running them on one runner put roughly 300 such binaries on
+  # a 145 GB disk and filled it, which surfaced as a linker `Bus error` partway
+  # through coverage. On two runners each configuration gets its own disk.
   ci:
-    name: build · test · lint · format
+    name: build · lint · format · docgen
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -35,11 +40,16 @@ jobs:
         with:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+
+      - uses: ./.github/actions/reclaim-disk
+
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: false
+          # Share the one output tree across format, lint, build and docgen,
+          # and restore it in the `coverage` and `delivery` jobs.
+          disk-cache: ${{ github.workflow }}
           repository-cache: true
 
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
@@ -59,26 +69,100 @@ jobs:
       - name: build
         run: aspect build --bazel-flag=--build_tag_filters=-docker //...
 
-      - name: test
-        run: aspect test --bazel-flag=--test_tag_filters=-docker //...
+      # `aspect build` renders docs for impacted crates. Build the complete set
+      # here for the artifact, reusing this runner's Bazel output tree.
+      - name: docgen
+        run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rustdoc
+          path: bazel-bin/crates/**/*.rustdoc
+          if-no-files-found: error
 
-  # LCOV over the first-party crates. Separate from `ci` because instrumented
-  # binaries are a different build, so sharing that job's cache would only
-  # evict it.
+      # Impact analysis may omit a model when its source did not change. Run
+      # every Stateright-bearing target explicitly so the verification catalog
+      # remains a merge gate on every pull request.
+      - name: stateright models
+        run: |
+          bazel test \
+            //crates/audit:audit_test \
+            //crates/broker:broker_test \
+            //crates/log:log_test \
+            //crates/raft:kraft_model_test \
+            //crates/throttle:bucket_model_test
+
+  # Build and execute the tests with LLVM instrumentation, and upload the merged
+  # LCOV report.
+  #
+  # `--build_tests_only` (set on the `coverage` command in `.bazelrc`) is what
+  # keeps this to the tests it actually runs. `//crates/...` reaches the 22
+  # `*_docker_test` wrappers, each of which links its suite a second time as a
+  # `*_docker_bin`, and `--test_tag_filters` alone excludes a test from the run
+  # but still builds it. Those 22 plus the 5 timing-sensitive suites are 27
+  # instrumented broker binaries this job would otherwise link and discard.
+  #
+  # It takes no `--disk_cache`, which is the whole of the disk budget fix. That
+  # cache was the job's largest consumer by a wide margin: on run 33567157672
+  # `~/.cache/bazel-disk` held 61 GB next to a 19 GB output tree, and the job
+  # ended with 33 GB free on a 145 GB disk. About 19 GB of the 61 is what this
+  # build wrote into it -- run 33569559769 restored a 1.2 GB entry and still
+  # finished with 22 GB there -- and none of those writes has a reader. The
+  # `build · lint · format · docgen` job never looks up an instrumented action,
+  # and the key hashes `MODULE.bazel` and every `BUILD.bazel`, so the next
+  # coverage run asks for a different one.
+  #
+  # Nor do the writes stay on the runner. That same key misses whenever a
+  # `BUILD.bazel` changes, and setup-aspect's post step saves on a miss: run
+  # 33569559769 saved a 22 GB instrumented tree under the `ci` namespace, which
+  # `build · lint · format · docgen` and `delivery` then restore and cannot use.
+  # That is the growth #337 measured, and it is why the paragraph this replaces
+  # -- "a restore is an exact hit and the post step skips the save" -- was wrong.
+  #
+  # Bazel 9 has no read-only disk cache to reach for instead:
+  # `--noremote_upload_local_results` and the `no-remote-cache` and
+  # `no-remote-cache-upload` execution tags are defined against remote caches
+  # and leave `--disk_cache` writable (measured on 9.2.0). Not having one is the
+  # only way not to write one.
+  #
+  # The price is the third-party closure, which this job now compiles instead of
+  # restoring: about 17 minutes rather than about 7.5, beside a sibling job that
+  # takes 14 to 21. `repository-cache` stays -- it holds fetched archives rather
+  # than build outputs, so coverage neither bloats it nor diverges from `ci`.
   coverage:
     name: coverage
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      # No `fetch-depth: 0`: nothing here reads the merge base -- the report
+      # covers every target under //crates/..., not the impacted ones.
       - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+
+      - uses: ./.github/actions/reclaim-disk
+
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-coverage
+          disk-cache: false
           repository-cache: true
-      - run: bazel coverage //crates/...
+
+      - name: coverage
+        run: bazel coverage //crates/...
+
+      # `if: always()`, and the three directories by name: when this job does
+      # run the disk out, the failure arrives as a linker `Bus error` or a bare
+      # `No space left on device` that names no consumer. This says which of the
+      # output tree, the repository cache and the disk cache took the space --
+      # together they are the job's whole footprint. `bazel-disk` stays on the
+      # list although this job no longer configures one, because a line
+      # reappearing there is the signal that it has come back.
+      - name: disk usage after coverage
+        if: always()
+        run: |
+          df -h /
+          du -sh ~/.cache/bazel ~/.cache/bazel-repo ~/.cache/bazel-disk 2>/dev/null || true
+
       - uses: codecov/codecov-action@v7
         with:
           use_oidc: true
@@ -97,12 +181,10 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
-  # rustdoc for every crate, kept as an artifact. The `ci` job already builds
-  # these -- a `rust_doc` per crate is an ordinary target -- so this exists to
-  # publish the output, and to keep rendering the whole set even when `aspect
-  # build` narrowed to the crates a change touched.
+  # Documentation source checks do not use Bazel, so they can stay parallel
+  # while the `ci` job renders and uploads rustdoc from its warm output tree.
   docs:
-    name: docgen
+    name: docs checks
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -118,18 +200,6 @@ jobs:
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: --offline --no-progress --root-dir "${{ github.workspace }}" './**/*.md'
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-docs
-          repository-cache: true
-      - run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rustdoc
-          path: bazel-bin/crates/**/*.rustdoc
-          if-no-files-found: error
 
   # Re-discharge the Creusot proof sessions under `verif/`.
   #
@@ -149,69 +219,86 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # setup-aspect's log and BEP uploads, as in every other Bazel job.
+      id-token: write
+      # Publishing the proof image, on the runs that build one.
+      packages: write
+    env:
+      # What the proof step runs, and what `image_load` writes locally.
+      LOCAL_IMAGE: docker.io/krabka-io/creusot:0.13.0
+      # Must match `image_push`'s registry and repository in //tools/creusot.
+      REGISTRY_IMAGE: ghcr.io/krabka-io/creusot
     steps:
       - uses: actions/checkout@v7
 
-      # `why3-ide` is a hard dependency of the `creusot-deps` opam package and
-      # needs GTK. opam syncs its local pin with `rsync`, and fails the whole
-      # install without it.
-      - name: system dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            opam ocaml-nox build-essential pkg-config libgmp-dev libmpfr-dev \
-            m4 unzip autoconf rsync libgtk-3-dev libgtksourceview-3.0-dev
+      # A digest of everything that decides the image's contents. See
+      # //tools/creusot for why the registry, and not the Bazel disk cache, is
+      # what keeps CI from reinstalling Creusot on every run.
+      - id: image
+        name: resolve the proof image tag
+        run: echo "tag=$(tools/creusot/image-tag.sh)" >>"${GITHUB_OUTPUT}"
 
-      - name: read the pinned Creusot version
-        id: creusot
-        run: echo "version=$(cat .creusot-version)" >>"${GITHUB_OUTPUT}"
-
-      # The opam switch builds why3 from source, which is the slow part of a
-      # cold run. Key the cache on the Creusot pin and the prover profile, so a
-      # bump of either rebuilds and nothing else does.
-      - uses: actions/cache@v4
+      - uses: docker/login-action@v4
         with:
-          path: |
-            ~/.opam
-            ~/.local/share/creusot
-          key: creusot-${{ runner.os }}-${{ hashFiles('.creusot-version', 'why3find.json') }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: opam
-        run: opam init --disable-sandboxing --bare -y --no-setup
-
-      # `creusot-rustc` links against the compiler internals of one exact
-      # nightly, which Creusot pins in its own repository, so the toolchain
-      # comes from there rather than from this repository's pin. Its installer
-      # places every component, including the Why3 prelude package and the four
-      # provers `why3find.json` names.
-      - name: creusot toolchain
+      # A miss is a normal outcome, not a failure: the tag is new, or this is a
+      # fork whose token cannot read the package. Either way the job falls
+      # through to building the image, which is what it always used to do.
+      - id: cached
+        name: reuse the published proof image
         env:
-          OPAMYES: "1"
-          OPAMCONFIRMLEVEL: unsafe-yes
+          IMAGE: ${{ env.REGISTRY_IMAGE }}:${{ steps.image.outputs.tag }}
         run: |
-          git clone --depth 1 --branch "${{ steps.creusot.outputs.version }}" \
-            https://github.com/creusot-rs/creusot /tmp/creusot
-          rustup toolchain install \
-            "$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/creusot/rust-toolchain)" \
-            --component rustfmt --component rustc-dev --component llvm-tools \
-            --profile minimal
-          cd /tmp/creusot
-          cargo run --bin creusot-install -- \
-            prelude why3 provers why3-conf cargo-creusot creusot-rustc \
-            cargo-creusot-config
+          set -euo pipefail
+          if docker pull "${IMAGE}"; then
+            docker tag "${IMAGE}" "${LOCAL_IMAGE}"
+            echo "hit=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "hit=false" >>"${GITHUB_OUTPUT}"
+          fi
 
-      # A non-zero exit or any unproved goal fails the job. Check the explicit
-      # proof list first so adding a contract-bearing crate cannot silently
-      # leave it outside this gate.
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        if: steps.cached.outputs.hit != 'true'
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          # Reached only when the registry has no image for this tree, so this
+          # namespace is a bonus on the apko base and the repository rules, not
+          # what keeps the Creusot installation from being rebuilt.
+          disk-cache: ${{ github.workflow }}-images
+          repository-cache: true
+
+      # `--verbose_failures`: the toolchain layer is built by a genrule that
+      # shells out to Docker, and when it fails Bazel otherwise reports only
+      # "Target //tools/creusot:image_load failed to build" with no command and
+      # no output. The flag is what makes that action's failure diagnosable
+      # from the log alone.
+      - name: build the pinned proof image
+        if: steps.cached.outputs.hit != 'true'
+        run: bazel run --verbose_failures //tools/creusot:image_load
+
+      # Before the proofs, not after: the image is valid whether or not the
+      # proofs it runs pass, and publishing it here means a failing run's retry
+      # already has it. A fork's token is read-only, so it keeps its build.
+      - name: publish the proof image
+        if: steps.cached.outputs.hit != 'true' && github.event.pull_request.head.repo.fork != true
+        run: bazel run //tools/creusot:push -- --tag "${IMAGE_TAG}"
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+
+      # The runner supplies only the Docker kernel boundary and the checkout.
+      # Rust, OCaml, opam, Why3, the provers, Python and native libraries all
+      # come from the apko/rules_img image.
       - name: prove
         run: |
-          export PATH="${HOME}/.local/share/creusot/bin:${PATH}"
-          python3 tools/test_creusot_packages.py
-          packages=(krabka-verified)
-          python3 tools/creusot_packages.py "${packages[@]}"
-          for package in "${packages[@]}"; do
-            cargo creusot --package "${package}"
-          done
+          docker run --rm \
+            --mount type=bind,source="${GITHUB_WORKSPACE}",target=/workspace \
+            "${LOCAL_IMAGE}"
 
   # Container suites, one runner each.
   #
@@ -222,11 +309,10 @@ jobs:
   # suite rather than the sum of all of them.
   #
   # `aspect test` does not narrow to impacted targets -- that is an Aspect
-  # Workflows feature, not part of the open-source CLI -- so the set is computed
-  # here: reverse dependencies of the files a change touched, intersected with
-  # the targets tagged `docker`. A scheduled or manual run takes every suite
-  # instead, because a green impacted run says "nothing impacted broke", not
-  # "the container suites pass".
+  # Workflows feature, not part of the open-source CLI. The custom `aspect
+  # container-suites` task owns the selection: scheduled/manual runs take every
+  # suite, while PRs use Bazel rdeps outside the broker and an explicit broker
+  # feature map so one Rust target does not become the entire JVM matrix.
   docker-select:
     name: select container suites
     runs-on: ubuntu-latest
@@ -239,7 +325,7 @@ jobs:
         with:
           # rdeps needs the merge base, not just the tip.
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -247,61 +333,16 @@ jobs:
           repository-cache: true
 
       - id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
-          all() { bazel query 'attr(tags, "docker", //crates/...)'; }
-
-          event="${{ github.event_name }}"
-          if [ "${event}" = "schedule" ] || [ "${event}" = "workflow_dispatch" ]; then
-            targets="$(all)"
+          if [ "${FULL_MATRIX}" = "true" ]; then
+            aspect container-suites
           else
-            base="${{ github.event.pull_request.base.sha || github.event.before }}"
-            if [ -z "${base}" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-              # No usable base (first push on a branch, force-push): run them all
-              # rather than silently skipping.
-              targets="$(all)"
-            else
-              changed="$(git diff --name-only "${base}...HEAD")"
-
-              # Build-wide inputs reach every target, and most are not Bazel
-              # targets at all -- `rdeps` takes a target set, and `//:MODULE.bazel`
-              # is a source file no rule exports. Treat them as "everything"
-              # rather than trying to name them.
-              if grep -qE '^(MODULE\.bazel|\.bazelrc|Cargo\.lock|Cargo\.toml|bazel/|tools/)' <<<"${changed}"; then
-                targets="$(all)"
-              else
-                # `rdeps` takes a target set, so every path here must be a
-                # target Bazel knows. A crate README is not one: no rule globs
-                # it and no crate pulls one in with `include_str!`. Feeding it
-                # to `set(...)` fails the whole query, so a documentation-only
-                # change would kill the suite selection rather than select
-                # nothing.
-                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" |
-                  grep -vE '\.md$' | while read -r f; do
-                  [ -e "${f}" ] && printf '%s\n' "${f}"
-                done)
-                if [ "${#files[@]}" -eq 0 ]; then
-                  targets=""
-                else
-                  targets="$(bazel query "attr(tags, 'docker', rdeps(//crates/..., set(${files[*]})))")"
-                fi
-              fi
-            fi
+            aspect container-suites --base "${BASE_SHA}"
           fi
-
-          # One matrix entry per target, `name` being the bare suite for the job
-          # label -- the full label is too long to read in the checks list.
-          # `grep` finding nothing is the empty selection, not an error, and a
-          # bare `[ ] && x` would exit under `set -e` whenever the test is false.
-          suites="$(
-            printf '%s\n' "${targets}" | { grep -E '^//' || true; } |
-              jq -R -s -c 'split("\n") | map(select(length > 0)) |
-                map({target: ., name: (. | split(":")[1] | sub("_docker_test$"; ""))})'
-          )"
-          if [ -z "${suites}" ]; then suites='[]'; fi
-          echo "suites=${suites}" >>"${GITHUB_OUTPUT}"
-          echo "any=$([ "${suites}" = '[]' ] && echo false || echo true)" >>"${GITHUB_OUTPUT}"
-          echo "Selected: ${suites}"
 
   docker:
     name: container · ${{ matrix.suite.name }}
@@ -317,7 +358,7 @@ jobs:
         suite: ${{ fromJSON(needs.docker-select.outputs.suites) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -330,12 +371,27 @@ jobs:
       # `--add-host=host.docker.internal:host-gateway`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
-      - run: bazel test --config=docker ${{ matrix.suite.target }}
+      # `aspect container-suites` selects by touched path, so the matrix can
+      # name a container target that is not a test rule -- the KDC fixture's
+      # `image` and `seed_layer` are built, not run. `bazel test` exits 4 on a
+      # label with no test targets ("No test targets were found, yet testing was
+      # requested"), which failed every suite in the matrix regardless of the
+      # code under review. Dispatch on the rule kind instead.
+      - run: |
+          set -euo pipefail
+          target='${{ matrix.suite.target }}'
+          kind=$(bazel query --output=label_kind "${target}" | awk '{ print $1 }')
+          case "${kind}" in
+            # `--config=docker` is defined for `test` only (it swaps the
+            # `--test_tag_filters` set), so passing it to `build` fails with
+            # "Config value 'docker' is not defined in any .rc file".
+            *_test) bazel test --config=docker "${target}" ;;
+            *) bazel build "${target}" ;;
+          esac
 
-  # The KDC fixture builds Debian packages and writes fresh keytabs through a
-  # bind mount, so it cannot be loaded as one of //bazel/images' immutable
-  # tarballs. Keep the two Kerberos acceptance cases visible in their own
-  # scheduled lane instead of leaving them permanently #[ignore]d.
+  # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
+  # Kerberos acceptance cases visible in their own scheduled lane instead of
+  # leaving them permanently #[ignore]d.
   gssapi:
     name: container · gssapi
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -343,7 +399,15 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-images
+          repository-cache: true
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+      - name: load KDC image
+        run: bazel run //crates/broker/tests/fixtures/security/kdc:image_load
       - name: run GSSAPI acceptance suites
         env:
           KRB5_CONFIG: ${{ github.workspace }}/crates/broker/tests/fixtures/security/kdc/krb5.conf
@@ -353,55 +417,9 @@ jobs:
           set -euo pipefail
           fixture=crates/broker/tests/fixtures/security/kdc/docker-compose.yml
           trap 'docker compose -f "${fixture}" down' EXIT
-          docker compose -f "${fixture}" up --build -d
+          docker compose -f "${fixture}" up -d
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
-
-  # The mutation rule runs unit tests only. Scope the blocking sweep to the
-  # consensus engine, whose decision logic is pure and unit-tested; the checked
-  # in `.cargo/mutants-baseline.txt` makes any survivor-set change blocking.
-  mutants-select:
-    name: select mutants targets
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      crates: ${{ steps.select.outputs.crates }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-mutants
-          repository-cache: true
-      - id: select
-        run: |
-          set -euo pipefail
-          crates='[{"target":"//crates/raft:raft_mutants","name":"raft","minutes":60}]'
-          echo "crates=${crates}" >>"${GITHUB_OUTPUT}"
-          echo "Selected: ${crates}"
-
-  mutants:
-    name: mutants · ${{ matrix.crate.name }}
-    needs: mutants-select
-    runs-on: ubuntu-latest
-    # A bound, not an estimate. A crate that cannot finish inside it is saying
-    # its shard count is too low, and that is worth being told.
-    timeout-minutes: ${{ matrix.crate.minutes }}
-    strategy:
-      fail-fast: false
-      matrix:
-        crate: ${{ fromJSON(needs.mutants-select.outputs.crates) }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-mutants
-          repository-cache: true
-      - run: bash tools/check-mutants.sh ${{ matrix.crate.target }}
 
   # Push the broker image.
   #
@@ -416,7 +434,7 @@ jobs:
   delivery:
     name: delivery
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [ci, supply-chain]
+    needs: [ci, coverage, supply-chain]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -426,13 +444,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}
           repository-cache: true
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

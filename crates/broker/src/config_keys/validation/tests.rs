@@ -2,7 +2,14 @@
 
 use assert2::assert;
 
-use super::*;
+use super::{
+    super::{
+        DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS,
+        REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES,
+        delivery::DELIVERY_MODE_IMMEDIATE,
+    },
+    *,
+};
 
 #[test]
 fn validate_retention_ms_boundary_cases() {
@@ -92,6 +99,30 @@ fn parse_compression_type_maps_codecs() {
 #[test]
 fn validate_min_isr_positive_accepted() {
     assert!(validate_topic_config(MIN_INSYNC_REPLICAS, "2").is_ok());
+}
+
+#[test]
+fn an_int_key_refuses_what_kafkas_int_cannot_hold() {
+    // `DescribeConfigs` reports both keys as `ConfigType::Int`, and
+    // `apache/kafka:4.3.1` refuses a value past `i32::MAX` on both:
+    // `Invalid value 2147483648 for configuration segment.bytes: Not a number
+    // of type INT`. A value the broker accepts must fit the type it
+    // advertises, so the largest accepted value is `i32::MAX`.
+    let cases = [
+        (SEGMENT_BYTES, "2147483647", true),
+        (SEGMENT_BYTES, "2147483648", false),
+        (SEGMENT_BYTES, "9223372036854775807", false),
+        (MIN_INSYNC_REPLICAS, "2147483647", true),
+        (MIN_INSYNC_REPLICAS, "2147483648", false),
+        (MIN_INSYNC_REPLICAS, "0", false),
+        (MIN_INSYNC_REPLICAS, "-1", false),
+    ];
+    for (key, value, want_ok) in cases {
+        assert!(
+            validate_topic_config(key, value).is_ok() == want_ok,
+            "{key}={value}"
+        );
+    }
 }
 
 #[test]

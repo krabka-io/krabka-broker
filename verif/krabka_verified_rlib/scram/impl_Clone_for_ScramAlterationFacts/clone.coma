@@ -1,0 +1,32 @@
+(* #"/workspace/crates/verified/src/scram.rs" 28 27 28 32 *)
+
+(* <scram::ScramAlterationFacts as std::clone::Clone> *)
+
+use creusot.int.Int8
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_ScramAlterationKind = Delete | Upsert
+
+type t_ScramPriorState = Unseen | Accepted | Rejected
+
+type t_ScramAlterationFacts = {
+  kind: t_ScramAlterationKind;
+  prior: t_ScramPriorState;
+  authorized: bool;
+  name_empty: bool;
+  mechanism: Int8.t;
+  iterations: Int32.t;
+  min_iterations: Int32.t;
+  max_iterations: Int32.t;
+  deletion_target_exists: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ScramAlterationFacts [#"/workspace/crates/verified/src/scram.rs" 28 27 28 32] (self: t_ScramAlterationFacts)
+  (return (x: t_ScramAlterationFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ScramAlterationFacts = Any.any_l () | & self: t_ScramAlterationFacts = self ])
+  [ return (result: t_ScramAlterationFacts) -> (! return {result}) ]

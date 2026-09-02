@@ -11,8 +11,16 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::Instrument as _;
 
-use super::{response::encode_response, session::principal_or_anonymous};
-use crate::{broker::Broker, error::BrokerError};
+use super::{AfterResponse, response::encode_response, session::principal_or_anonymous};
+use crate::{broker::Broker, error::BrokerError, network::fetch_writer::WriteOp};
+
+/// A finished fetch: the ordered write plan for its response, and the KIP-219
+/// window the fetch quotas charged. The connection loop writes the plan first
+/// and mutes for the window afterwards.
+struct FetchPlan {
+    operations: Vec<WriteOp>,
+    throttle: krabka_units::Time,
+}
 
 pub(super) async fn dispatch_fetch<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
@@ -21,7 +29,7 @@ pub(super) async fn dispatch_fetch<S>(
     auth: &crate::network::auth::ConnectionAuth,
     peer: &SocketAddr,
     request_span: tracing::Span,
-) -> bool
+) -> AfterResponse
 where
     S: AsyncRead + AsyncWrite + Unpin + crate::network::fetch_writer::SendfileSink,
 {
@@ -31,23 +39,28 @@ where
         .instrument(request_span)
         .await
     {
-        Ok(operations) => {
+        Ok(FetchPlan {
+            operations,
+            throttle,
+        }) => {
             if let Err(error) = SinkExt::<Bytes>::flush(framed).await {
                 tracing::warn!(%error, "framed.flush error before fetch plan, closing");
-                return false;
+                return AfterResponse::Close;
             }
             if let Err(error) =
                 crate::network::fetch_writer::write_fetch_plan(framed.get_mut(), operations).await
             {
                 tracing::warn!(%error, "fetch plan write error, closing");
-                return false;
+                return AfterResponse::Close;
             }
-            true
+            // KIP-219: the records are on the wire; the KIP-13 consumer and
+            // KIP-124 request quotas are enforced by muting from here.
+            AfterResponse::Mute(throttle)
         }
         Err(error) => {
             broker.metrics.record_request_error(parsed.api_key);
             tracing::warn!(%error, "Fetch dispatch error, closing connection");
-            false
+            AfterResponse::Close
         }
     }
 }
@@ -73,14 +86,18 @@ where
 /// The legacy v0 to v3 path down-converts and has no canonical write plan.
 /// The function encodes it the old way and returns it as a single `Inline` op,
 /// which is the existing copy path expressed as a one-element plan.
+///
+/// It returns the plan together with the KIP-219 throttle window the fetch
+/// quotas charged, which the caller applies by muting the connection once the
+/// plan is written.
 async fn handle_fetch_frame_from_parsed(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
     peer: &SocketAddr,
     sendfile_capable: bool,
-) -> Result<Vec<crate::network::fetch_writer::WriteOp>, BrokerError> {
-    use crate::network::fetch_writer::{WriteOp, build_fetch_plan};
+) -> Result<FetchPlan, BrokerError> {
+    use crate::network::fetch_writer::build_fetch_plan;
 
     assert2::assert!((parsed.api_key) == (1));
 
@@ -102,6 +119,9 @@ async fn handle_fetch_frame_from_parsed(
         &ctx,
     )
     .await?;
+    // Drained before the plan is built: the connection loop mutes for this
+    // window only once the whole plan has been written (KIP-219).
+    let throttle = ctx.take_throttle();
 
     if version < 4 {
         // Legacy down-conversion path: encode the whole body the old way and
@@ -122,7 +142,10 @@ async fn handle_fetch_frame_from_parsed(
             ))
         })?);
         framed_with_len.put_slice(&framed);
-        return Ok(vec![WriteOp::Inline(framed_with_len.freeze())]);
+        return Ok(FetchPlan {
+            operations: vec![WriteOp::Inline(framed_with_len.freeze())],
+            throttle,
+        });
     }
 
     // On plaintext connections (SENDFILE alias: Linux + Apple + FreeBSD/
@@ -148,7 +171,11 @@ async fn handle_fetch_frame_from_parsed(
                 parsed.body_flexible,
                 broker.config.socket_request_max.bytes_usize(),
                 crate::network::fetch_writer::resolve_records_sendfile,
-            );
+            )
+            .map(|operations| FetchPlan {
+                operations,
+                throttle,
+            });
         }
     }
 
@@ -160,4 +187,8 @@ async fn handle_fetch_frame_from_parsed(
         broker.config.socket_request_max.bytes_usize(),
         crate::network::fetch_writer::resolve_records_inline,
     )
+    .map(|operations| FetchPlan {
+        operations,
+        throttle,
+    })
 }

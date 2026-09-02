@@ -1,0 +1,32 @@
+(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 106 0 108 34 *)
+
+let%span sbreak_glass_persistence = "/workspace/crates/verified/src/break_glass_persistence.rs" 100 10 104 1
+
+use creusot.prelude.Any
+
+type t_BreakGlassLocalSpendState = Ungated | MissingOrMismatched | Pending | Committed
+
+type t_BreakGlassLocalActionFacts = { spend: t_BreakGlassLocalSpendState; commit_succeeded: bool }
+
+type t_BreakGlassLocalActionDecision = Reject | Apply
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let break_glass_local_action_decision [#"/workspace/crates/verified/src/break_glass_persistence.rs" 106 0 108 34]
+  (facts: t_BreakGlassLocalActionFacts) (return (x: t_BreakGlassLocalActionDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {facts.spend = Ungated} (! bb6)
+    | br1 -> {facts.spend = MissingOrMismatched} (! bb4)
+    | br2 -> {facts.spend = Pending} (! bb5)
+    | br3 -> {facts.spend = Committed} (! bb6) ]
+  | bb5 = any [ br0 -> {facts.commit_succeeded = false} (! bb4) | br1 -> {facts.commit_succeeded} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- Apply ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- Apply ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassLocalActionDecision = Any.any_l () | & facts: t_BreakGlassLocalActionFacts = facts ])
+  [ return (result: t_BreakGlassLocalActionDecision) ->
+  {[@stop_split] [@expl:break_glass_local_action_decision ensures] [%#sbreak_glass_persistence] (result = Apply)
+    = (facts.spend = Ungated \/ facts.spend = Committed \/ facts.spend = Pending /\ facts.commit_succeeded)}
+    (! return {result}) ]

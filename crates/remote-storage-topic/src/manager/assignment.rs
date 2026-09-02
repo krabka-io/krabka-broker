@@ -185,7 +185,8 @@ impl TopicBasedRemoteLogMetadataManager {
         for mp in needs_add {
             // `committed_offset` is `-1` when there is no committed event
             // (full replay), so `+ 1` lands on the resume start offset (0).
-            let start_offset = self.committed_offset(mp) + 1;
+            let start_offset = Self::resume_start_offset(self.committed_offset(mp))
+                .expect("snapshot committed offsets were validated before manager startup");
             self.assignment.add(PartitionStart {
                 partition: mp,
                 start_offset,

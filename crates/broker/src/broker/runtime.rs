@@ -142,6 +142,15 @@ fn start_runtime_watchers(
             shutdown.child_token(),
         ));
     }
+    if config.txn_id_expiration_cleanup_interval > <Time as TimeExt>::ZERO {
+        tokio::spawn(crate::txn::id_expiration::run(
+            Arc::clone(txn_coordinator),
+            Arc::clone(controller),
+            config.txn_id_expiration_cleanup_interval,
+            config.txn_id_expiration,
+            shutdown.child_token(),
+        ));
+    }
     RuntimeCaches {
         fetch_sessions,
         quota_buckets,

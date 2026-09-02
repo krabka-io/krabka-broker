@@ -86,6 +86,23 @@ impl KraftController {
         rx.await.map_err(|_| RaftError::Shutdown)?
     }
 
+    /// Submit generation-bound delegation-token mutations.
+    ///
+    /// # Errors
+    ///
+    /// Returns a leadership, shutdown, or mutation-rejection error.
+    pub async fn submit_delegation_token_mutations(
+        &self,
+        mutations: Vec<crate::DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(Command::SubmitDelegationTokenMutations { mutations, reply })
+            .await
+            .map_err(|_| RaftError::Shutdown)?;
+        rx.await.map_err(|_| RaftError::Shutdown)?
+    }
+
     /// Submit one KIP-853 voter or kraft-version control operation.
     pub(crate) async fn reconfigure(
         &self,

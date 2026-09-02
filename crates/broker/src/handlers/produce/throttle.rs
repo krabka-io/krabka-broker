@@ -32,7 +32,7 @@ pub(super) fn produce_bytes_by_qos_tier(
     out
 }
 
-pub(super) async fn finish_produce_response(
+pub(super) fn finish_produce_response(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
@@ -70,15 +70,26 @@ pub(super) async fn finish_produce_response(
         elapsed_micros,
         broker.config.quota_throttle_max,
     );
-    let delay = data_delay.max(request_delay);
+    // KIP-219: the connection is muted for the larger of the two delays.
+    // Resolving it through the metric records the throttle phase and the quota
+    // that caused it, and hands back the delay the response reports and the
+    // mute below honors.
+    let delay = broker.metrics.record_applied_throttle(
+        super::PRODUCE_API_KEY,
+        &[
+            (crate::metrics::QuotaType::Produce, data_delay),
+            (crate::metrics::QuotaType::Request, request_delay),
+        ],
+    );
     let response = ProduceResponse {
         responses: topic_results,
         throttle_time_ms: crate::quota::throttle_time_ms(delay),
         ..Default::default()
     };
-    if delay > <Time as TimeExt>::ZERO {
-        tokio::time::sleep(delay.to_std()).await;
-    }
+    // KIP-219: report the window in the response and hand it to the connection
+    // loop, which mutes the connection once these bytes are written. Sleeping
+    // here would hold the response back past the client's request timeout.
+    context.record_throttle(delay);
     let mut encoded = BytesMut::new();
     if (0..3).contains(&version) {
         let legacy: krabka_protocol::kafka_3_6_2::owned::produce_response::ProduceResponse =

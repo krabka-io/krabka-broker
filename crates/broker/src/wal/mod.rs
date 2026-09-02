@@ -28,6 +28,9 @@ pub trait WalStore: Send + Sync {
     /// Discard the durable prefix below `new_start` after the object index has
     /// committed it. Returns the resulting local log start offset.
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, BrokerError>;
+
+    /// Drop advisory cached bytes after a log rewrite or role change.
+    fn invalidate_hot_tail(&self) {}
 }
 
 /// Convenience alias for an injected WAL medium (present only for diskless topics).

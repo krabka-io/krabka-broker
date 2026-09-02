@@ -19,6 +19,7 @@ enum Category {
     Missing,
     Chain,
     Signature,
+    ObjectSet,
     Format,
     Digest,
     Tip,
@@ -32,7 +33,18 @@ impl Category {
             Category::Chain => {
                 reason.contains("chain sequence gap") || reason.contains("chain head mismatch")
             }
-            Category::Signature => reason.contains("signature does not verify"),
+            Category::Signature => {
+                reason.contains("unsigned")
+                    || reason.contains("untrusted")
+                    || reason.contains("does not verify")
+            }
+            Category::ObjectSet => {
+                reason.contains("not named by any manifest")
+                    || reason.contains("named more than once")
+                    || reason.contains("segment coordinates or suffix")
+                    || reason.contains("archive holds")
+                    || reason.contains("names no segment objects")
+            }
             Category::Format => reason.contains("format version"),
             Category::Digest => reason.contains("hashes to"),
             Category::Tip => reason.contains("does not match the expected head"),
@@ -43,6 +55,7 @@ impl Category {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
     Ok,
+    Incomplete,
     Break(Category),
 }
 
@@ -51,6 +64,7 @@ enum Outcome {
 enum Orphans {
     None,
     Stray,
+    Object(usize, usize),
     /// Every object of one segment, which is what deleting its manifest
     /// leaves behind.
     Segment(usize),
@@ -61,6 +75,9 @@ impl Orphans {
         match self {
             Orphans::None => Vec::new(),
             Orphans::Stray => vec![format!("{}/{STRAY}", archive.dir)],
+            Orphans::Object(segment, object) => {
+                vec![archive.segments[segment].entries[object].key.clone()]
+            }
             Orphans::Segment(i) => {
                 let mut keys: Vec<String> = archive.segments[i]
                     .entries
@@ -141,8 +158,8 @@ fn tamper_matrix() -> Vec<Row> {
             ..row(
                 "delete the newest manifest",
                 Tamper::DeleteManifest(2),
-                Outcome::Ok,
-                Outcome::Ok,
+                Outcome::Incomplete,
+                Outcome::Incomplete,
             )
         },
         Row {
@@ -172,22 +189,47 @@ fn tamper_matrix() -> Vec<Row> {
         ),
         Row {
             untrusted: 1,
-            epoch_spans: Some(1),
             ..row(
                 "unknown key_id",
                 Tamper::SignWithUnknownKeyId(1),
-                Outcome::Ok,
-                Outcome::Ok,
+                Outcome::Incomplete,
+                Outcome::Incomplete,
             )
         },
         Row {
             unsigned: 1,
-            epoch_spans: Some(1),
             ..row(
                 "unsigned manifest",
                 Tamper::Unsign(1),
-                Outcome::Ok,
-                Outcome::Ok,
+                Outcome::Incomplete,
+                Outcome::Incomplete,
+            )
+        },
+        row(
+            "embedded public key rewritten",
+            Tamper::RewritePublicKey(1),
+            Outcome::Break(Category::Signature),
+            Outcome::Break(Category::Signature),
+        ),
+        row(
+            "duplicate object entry",
+            Tamper::DuplicateObject(1),
+            Outcome::Break(Category::ObjectSet),
+            Outcome::Break(Category::ObjectSet),
+        ),
+        row(
+            "object suffix does not match its key",
+            Tamper::WrongObjectCoordinates(1),
+            Outcome::Break(Category::ObjectSet),
+            Outcome::Break(Category::ObjectSet),
+        ),
+        Row {
+            orphans: Orphans::Object(1, 1),
+            ..row(
+                "manifest drops one existing object",
+                Tamper::DropObjectEntry(1),
+                Outcome::Break(Category::ObjectSet),
+                Outcome::Break(Category::ObjectSet),
             )
         },
         Row {
@@ -201,8 +243,8 @@ fn tamper_matrix() -> Vec<Row> {
             ..row(
                 "stray object under the prefix",
                 Tamper::StrayObject,
-                Outcome::Ok,
-                Outcome::Ok,
+                Outcome::Incomplete,
+                Outcome::Incomplete,
             )
         },
         Row {
@@ -243,6 +285,13 @@ async fn run_row(row: &Row, depth: VerifyDepth, expected: Outcome) {
                 "{label}"
             );
             check!(partition.ok, "{label}");
+        }
+        Outcome::Incomplete => {
+            check!(
+                partition.first_break.is_none(),
+                "{label}: incomplete is not a chain break"
+            );
+            check!(!partition.ok, "{label}");
         }
         Outcome::Break(category) => {
             check!(!partition.ok, "{label}");

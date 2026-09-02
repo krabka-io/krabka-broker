@@ -47,20 +47,14 @@ pub(in crate::wal::quorum) fn read_log_batches_exact(
     exact_batches(split_batches(&raw.bytes)?, start, target)
 }
 
-fn exact_batches(
+pub(super) fn exact_batches(
     batches: Vec<BatchBytes>,
     start: Offset,
     target: Offset,
 ) -> Result<Vec<BatchBytes>, BrokerError> {
-    if start == target {
-        return Ok(Vec::new());
-    }
-    let first = batches.first().map(|batch| batch.base_offset);
-    let end = batches
-        .last()
-        .and_then(|batch| batch.last_offset.0.checked_add(1))
-        .map(Offset);
-    if (first, end) != (Some(start), Some(target)) {
+    let bases: Vec<i64> = batches.iter().map(|batch| batch.base_offset.0).collect();
+    let lasts: Vec<i64> = batches.iter().map(|batch| batch.last_offset.0).collect();
+    if !krabka_verified::exact_wal_batch_range(&bases, &lasts, start.0, target.0) {
         return Err(BrokerError::Replication(format!(
             "wal source does not contain the complete range {}..{}",
             start.0, target.0

@@ -16,8 +16,8 @@
 //! outage. Entries expire on TTL, so an OPA recovery is observable.
 //!
 //! The JSON envelope this module sends, and the mapping from Kafka's ACL
-//! vocabulary onto the OPA wire strings, live in [`self::wire`]. The decision
-//! cache's key and entry types live in [`self::cache`].
+//! vocabulary onto the OPA wire strings, live in the private `wire` module. The
+//! decision cache's key and entry types live in the private `cache` module.
 
 use std::{
     collections::HashSet,
@@ -27,7 +27,12 @@ use std::{
 
 use krabka_authz::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
 use krabka_units::{Time, convert::TimeExt as _, fmt::Human as _};
+use krabka_verified::{
+    OpaAuthorizationDecision, OpaCacheAdmission, OpaCacheExpiry, opa_cache_admission,
+    opa_cache_expiry, opa_error_decision,
+};
 use lru::LruCache;
+use qubit_clock::WallClock as _;
 
 mod cache;
 #[cfg(test)]
@@ -65,11 +70,11 @@ pub struct OpaAuthorizer {
     expire_after: Time,
     runtime: tokio::runtime::Handle,
     /// Clock backing the decision-cache TTL (the `expires_at_ms` stamp and its
-    /// expiry comparison). Production uses [`qubit_clock::SystemClock`], which
-    /// is wall time. Tests inject a [`qubit_clock::MockClock`] so cache entries
-    /// expire on a controlled timeline instead of a real `sleep`. The clock
-    /// governs *only* cache freshness, never the authorization decision.
-    clock: Arc<dyn qubit_clock::Clock>,
+    /// expiry comparison). Production uses [`qubit_clock::StdWallClock`], which
+    /// is wall time. Tests inject a [`qubit_clock::ManualWallClock`] so cache
+    /// entries expire on a controlled timeline instead of a real `sleep`. The
+    /// clock governs *only* cache freshness, never the authorization decision.
+    clock: Arc<dyn qubit_clock::WallClock>,
 }
 
 impl std::fmt::Debug for OpaAuthorizer {
@@ -101,6 +106,7 @@ impl OpaAuthorizer {
     /// * [`OpaConfigError::Http`] if the constructor cannot build the
     ///   `reqwest::Client`. A TLS misconfig is the realistic failure.
     /// * [`OpaConfigError::ZeroCache`] if `max_cache_size == 0`.
+    /// * [`OpaConfigError::InvalidCacheTtl`] if the cache TTL is not positive.
     /// * [`OpaConfigError::NoTokioRuntime`] if no tokio runtime is
     ///   active on the current thread.
     pub fn new(
@@ -118,16 +124,17 @@ impl OpaAuthorizer {
             max_cache_size,
             expire_after,
             http_timeout,
-            Arc::new(qubit_clock::SystemClock::new()),
+            Arc::new(qubit_clock::StdWallClock::new()),
         )
     }
 
     /// Same as [`OpaAuthorizer::new`] but with a caller-supplied
-    /// [`qubit_clock::Clock`] backing the decision-cache TTL. Production uses
-    /// [`OpaAuthorizer::new`] with a [`qubit_clock::SystemClock`]. Tests pass a
-    /// [`qubit_clock::MockClock`] so cached decisions expire on a controlled
-    /// timeline without a real `sleep`. The clock affects *only* cache
-    /// freshness, never the authorization decision.
+    /// [`qubit_clock::WallClock`] backing the decision-cache TTL. Production
+    /// uses [`OpaAuthorizer::new`] with a [`qubit_clock::StdWallClock`]. Tests
+    /// pass a [`qubit_clock::ManualWallClock`], which a
+    /// [`qubit_clock::ManualMonotonicClock`] hands out, so cached decisions
+    /// expire on a controlled timeline without a real `sleep`. The clock
+    /// affects *only* cache freshness, never the authorization decision.
     ///
     /// # Errors
     ///
@@ -139,13 +146,16 @@ impl OpaAuthorizer {
         max_cache_size: usize,
         expire_after: Time,
         http_timeout: Time,
-        clock: Arc<dyn qubit_clock::Clock>,
+        clock: Arc<dyn qubit_clock::WallClock>,
     ) -> Result<Self, OpaConfigError> {
         let http_client = reqwest::Client::builder()
             .timeout(http_timeout.to_std())
             .build()
             .map_err(|e| OpaConfigError::Http(e.to_string()))?;
         let capacity = NonZeroUsize::new(max_cache_size).ok_or(OpaConfigError::ZeroCache)?;
+        if expire_after.millis_i64() <= 0 {
+            return Err(OpaConfigError::InvalidCacheTtl);
+        }
         let cache = Mutex::new(LruCache::new(capacity));
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| OpaConfigError::NoTokioRuntime)?;
@@ -168,11 +178,14 @@ impl OpaAuthorizer {
     /// duration of an OPA outage, and it is only for environments where
     /// a block during that outage is strictly worse than over-permission.
     fn error_decision(&self) -> AuthorizationResult {
-        if self.allow_on_error {
-            AuthorizationResult::Allow
-        } else {
-            AuthorizationResult::Deny
-        }
+        authorization_result(opa_error_decision(self.allow_on_error))
+    }
+}
+
+fn authorization_result(decision: OpaAuthorizationDecision) -> AuthorizationResult {
+    match decision {
+        OpaAuthorizationDecision::Allow => AuthorizationResult::Allow,
+        OpaAuthorizationDecision::Deny => AuthorizationResult::Deny,
     }
 }
 
@@ -197,14 +210,20 @@ impl Authorizer for OpaAuthorizer {
             host: req.host.ip(),
         };
         // Cache-freshness timestamp only — read from the injected clock so tests
-        // can expire entries on a mock timeline. Not part of the decision.
-        let now = self.clock.millis();
+        // can expire entries on a manual timeline. Not part of the decision.
+        let now = i128::from(crate::time_util::epoch_millis(self.clock.now()));
         {
             let mut cache = self.cache.lock().expect("OPA cache mutex poisoned");
-            if let Some(cached) = cache.get(&key)
-                && cached.expires_at_ms > now
-            {
-                return cached.decision;
+            if let Some(cached) = cache.get(&key) {
+                let cached_decision = match cached.decision {
+                    AuthorizationResult::Allow => OpaAuthorizationDecision::Allow,
+                    AuthorizationResult::Deny => OpaAuthorizationDecision::Deny,
+                };
+                if let OpaCacheAdmission::Hit(decision) =
+                    opa_cache_admission(true, now, cached.expires_at_ms, cached_decision)
+                {
+                    return authorization_result(decision);
+                }
             }
         }
         // 3. Sync→async bridge. `block_in_place` releases the current
@@ -214,14 +233,19 @@ impl Authorizer for OpaAuthorizer {
         // 4. Cache the decision — both successes AND errors. Negative
         //    caching keeps OPA outages from amplifying broker load;
         //    TTL expiry lets recovery propagate naturally.
-        let mut cache = self.cache.lock().expect("OPA cache mutex poisoned");
-        cache.put(
-            key,
-            CachedDecision {
-                decision,
-                expires_at_ms: now + self.expire_after.millis_i64(),
-            },
-        );
+        let completed_at_ms = i128::from(crate::time_util::epoch_millis(self.clock.now()));
+        if let OpaCacheExpiry::CacheUntil { expires_at_ms } =
+            opa_cache_expiry(completed_at_ms, self.expire_after.millis_i64())
+        {
+            let mut cache = self.cache.lock().expect("OPA cache mutex poisoned");
+            cache.put(
+                key,
+                CachedDecision {
+                    decision,
+                    expires_at_ms,
+                },
+            );
+        }
         decision
     }
 }
@@ -238,6 +262,9 @@ pub enum OpaConfigError {
     /// an invariant violation, not a useful "disable cache" knob.
     #[error("OPA cache size must be > 0")]
     ZeroCache,
+    /// A nonpositive TTL could never produce a reusable cache entry.
+    #[error("OPA cache TTL must be greater than zero")]
+    InvalidCacheTtl,
     /// `OpaAuthorizer::new` MUST run inside a tokio runtime, because it
     /// captures the current `Handle` for the sync→async bridge in
     /// `authorize`.

@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 99 27 99 32 *)
+
+(* <list_offsets::ListOffsetsBoundDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_ListOffsetsBoundDecision = RejectMalformed | Bound Int64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ListOffsetsBoundDecision [#"/workspace/crates/verified/src/list_offsets.rs" 99 27 99 32]
+  (self: t_ListOffsetsBoundDecision) (return (x: t_ListOffsetsBoundDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsBoundDecision = Any.any_l () | & self: t_ListOffsetsBoundDecision = self ])
+  [ return (result: t_ListOffsetsBoundDecision) -> (! return {result}) ]

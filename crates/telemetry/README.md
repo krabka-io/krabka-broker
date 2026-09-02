@@ -37,6 +37,32 @@ guard.shutdown();
 # }
 ```
 
+## Runtime log levels
+
+`init` returns a guard that hands out a `LogLevelController`. It reads and
+retargets the stdout layer's filter while the process runs, which is what a
+Kafka broker exposes as the `BROKER_LOGGER` config resource so
+`kafka-configs --entity-type broker-loggers` can raise a level without a
+restart. A change applies to the process that served it and is not persisted.
+
+```rust,no_run
+use krabka_telemetry::{init, LogLevel};
+
+# fn run() -> Result<(), Box<dyn std::error::Error>> {
+let guard = init(None, "krabka_broker=info,info", "info", "krabka-broker")?;
+let levels = guard.log_levels();
+
+// Every logger this process knows, with its effective level.
+for (logger, level) in levels.loggers() {
+    println!("{logger}={}", level.kafka_name());
+}
+
+// Raise one target. `krabka_broker` covers the targets below it.
+levels.set_level("krabka_broker", LogLevel::Debug);
+# Ok(())
+# }
+```
+
 ## Documentation
 
 Read the API documentation at [docs.rs/krabka-telemetry](https://docs.rs/krabka-telemetry). The repository README contains the project-wide setup, development, and release notes.

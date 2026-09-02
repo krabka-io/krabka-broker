@@ -75,11 +75,20 @@ impl TxnIndex {
                     .expect("length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned");
                 entries.reserve(raws.len());
                 for raw in raws {
-                    entries.push(AbortedTxn {
+                    let entry = AbortedTxn {
                         start_offset: Offset(raw.start_offset.get()),
                         last_offset: Offset(raw.last_offset.get()),
                         producer_id: ProducerId(raw.producer_id.get()),
-                    });
+                    };
+                    if !Self::entry_valid(entry) {
+                        return Err(LogError::Corrupt(format!(
+                            "txnindex {} contains an invalid aborted interval",
+                            path.display()
+                        )));
+                    }
+                    if !entries.contains(&entry) {
+                        entries.push(entry);
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -99,6 +108,15 @@ impl TxnIndex {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn append(&mut self, entry: AbortedTxn) -> Result<(), LogError> {
+        if !Self::entry_valid(entry) {
+            return Err(LogError::InvalidArgument(format!(
+                "invalid aborted transaction {}..={} for producer {}",
+                entry.start_offset, entry.last_offset, entry.producer_id
+            )));
+        }
+        if self.entries.contains(&entry) {
+            return Ok(());
+        }
         let mut f = OpenOptions::new()
             .create(true)
             .append(true)
@@ -115,9 +133,53 @@ impl TxnIndex {
         Ok(())
     }
 
+    /// Remove entries whose inclusive end reaches the truncated suffix and
+    /// rewrite the sidecar before it is reused as the active transaction index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the transaction-index sidecar cannot be
+    /// rewritten or synchronized.
+    pub fn truncate_from(&mut self, offset: Offset) -> Result<(), LogError> {
+        let entries: Vec<_> = self
+            .entries
+            .iter()
+            .copied()
+            .filter(|entry| entry.last_offset < offset)
+            .collect();
+        if entries.len() == self.entries.len() {
+            return Ok(());
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.path)
+            .map_err(LogError::Io)?;
+        for entry in &entries {
+            let raw = AbortedTxnRaw {
+                start_offset: I64::new(entry.start_offset.0),
+                last_offset: I64::new(entry.last_offset.0),
+                producer_id: I64::new(entry.producer_id.0),
+            };
+            file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
+        }
+        file.sync_data().map_err(LogError::Io)?;
+        self.entries = entries;
+        Ok(())
+    }
+
     #[must_use]
     pub fn entries(&self) -> &[AbortedTxn] {
         &self.entries
+    }
+
+    fn entry_valid(entry: AbortedTxn) -> bool {
+        krabka_verified::aborted_transaction_interval(
+            Some(entry.start_offset.0),
+            entry.last_offset.0,
+            entry.producer_id.get(),
+        ) == Some((entry.start_offset.0, entry.last_offset.0))
     }
 
     /// Aborted transactions whose offset range overlaps `[start, end)`.
@@ -126,9 +188,13 @@ impl TxnIndex {
         start: Offset,
         end: Offset,
     ) -> impl Iterator<Item = &AbortedTxn> {
-        self.entries.iter().filter(move |e| {
-            // Overlap test: [e.start, e.last] intersects [start, end-1]?
-            e.start_offset < end && e.last_offset >= start
+        self.entries.iter().filter(move |entry| {
+            krabka_verified::aborted_transaction_overlaps(
+                entry.start_offset.0,
+                entry.last_offset.0,
+                start.0,
+                end.0,
+            )
         })
     }
 }
@@ -139,6 +205,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn write_entry(path: &std::path::Path, entry: AbortedTxn) {
+        let raw = AbortedTxnRaw {
+            start_offset: I64::new(entry.start_offset.0),
+            last_offset: I64::new(entry.last_offset.0),
+            producer_id: I64::new(entry.producer_id.0),
+        };
+        std::fs::write(path, raw.as_bytes()).unwrap();
+    }
 
     /// The range end is exclusive: an aborted transaction that begins exactly
     /// where the fetch ends is not in it.
@@ -175,6 +250,123 @@ mod tests {
     }
 
     #[test]
+    fn malformed_intervals_fail_closed_at_append_and_open() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let mut index = TxnIndex::open(path).unwrap();
+        for entry in [
+            AbortedTxn {
+                start_offset: Offset(8),
+                last_offset: Offset(7),
+                producer_id: ProducerId(1),
+            },
+            AbortedTxn {
+                start_offset: Offset(7),
+                last_offset: Offset(8),
+                producer_id: ProducerId(-1),
+            },
+        ] {
+            assert2::assert!(let LogError::InvalidArgument(_) = index.append(entry).unwrap_err());
+        }
+        assert2::assert!(index.entries().is_empty());
+
+        let partial = dir.path().join("partial.txnindex");
+        std::fs::write(&partial, [0_u8]).unwrap();
+        assert2::assert!(let LogError::Corrupt(_) = TxnIndex::open(partial).unwrap_err());
+
+        for (name, entry) in [
+            (
+                "inverted",
+                AbortedTxn {
+                    start_offset: Offset(8),
+                    last_offset: Offset(7),
+                    producer_id: ProducerId(1),
+                },
+            ),
+            (
+                "negative-producer",
+                AbortedTxn {
+                    start_offset: Offset(7),
+                    last_offset: Offset(8),
+                    producer_id: ProducerId(-1),
+                },
+            ),
+        ] {
+            let path = dir.path().join(format!("{name}.txnindex"));
+            write_entry(&path, entry);
+            assert2::assert!(let LogError::Corrupt(_) = TxnIndex::open(path).unwrap_err());
+        }
+    }
+
+    #[test]
+    fn exact_aborted_interval_retry_is_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let entry = AbortedTxn {
+            start_offset: Offset(5),
+            last_offset: Offset(7),
+            producer_id: ProducerId(1000),
+        };
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+        index.append(entry).unwrap();
+        index.append(entry).unwrap();
+        assert2::assert!(index.entries() == [entry]);
+
+        let raw = AbortedTxnRaw {
+            start_offset: I64::new(entry.start_offset.0),
+            last_offset: I64::new(entry.last_offset.0),
+            producer_id: I64::new(entry.producer_id.0),
+        };
+        let mut bytes = raw.as_bytes().to_vec();
+        bytes.extend_from_slice(raw.as_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        assert2::assert!(TxnIndex::open(path).unwrap().entries() == [entry]);
+    }
+
+    #[test]
+    fn mutation_io_failures_leave_the_in_memory_index_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let original = AbortedTxn {
+            start_offset: Offset(5),
+            last_offset: Offset(7),
+            producer_id: ProducerId(1000),
+        };
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+        index.append(original).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        assert2::assert!(
+            let LogError::Io(_) = index
+                .append(AbortedTxn {
+                    start_offset: Offset(10),
+                    last_offset: Offset(12),
+                    producer_id: ProducerId(1000),
+                })
+                .unwrap_err()
+        );
+        assert2::assert!(index.entries() == [original]);
+        assert2::assert!(let LogError::Io(_) = index.truncate_from(Offset(0)).unwrap_err());
+        assert2::assert!(index.entries() == [original]);
+    }
+
+    #[test]
+    fn empty_or_inverted_fetch_range_matches_no_aborted_interval() {
+        let dir = TempDir::new().unwrap();
+        let mut index = TxnIndex::open(dir.path().join("00.txnindex")).unwrap();
+        index
+            .append(AbortedTxn {
+                start_offset: Offset(10),
+                last_offset: Offset(20),
+                producer_id: ProducerId(1),
+            })
+            .unwrap();
+        assert2::assert!(index.aborted_in_range(Offset(10), Offset(10)).count() == 0);
+        assert2::assert!(index.aborted_in_range(Offset(20), Offset(10)).count() == 0);
+    }
+
+    #[test]
     fn append_round_trips_through_disk() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("00.txnindex");
@@ -208,6 +400,30 @@ mod tests {
                     },
                 ]
         );
+    }
+
+    #[test]
+    fn truncate_from_removes_overlapping_tail_entries_and_is_retryable() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+        for (start, last) in [(0, 4), (5, 9)] {
+            index
+                .append(AbortedTxn {
+                    start_offset: Offset(start),
+                    last_offset: Offset(last),
+                    producer_id: ProducerId(1),
+                })
+                .unwrap();
+        }
+
+        for _ in 0..2 {
+            index.truncate_from(Offset(5)).unwrap();
+            assert2::assert!(index.entries().len() == 1);
+            assert2::assert!(index.entries()[0].last_offset == Offset(4));
+        }
+        let reopened = TxnIndex::open(path).unwrap();
+        assert2::assert!(reopened.entries() == index.entries());
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! when the group is dirty and then writes the resulting records as one batch,
 //! so a failed log write ends the actor.
 
-use std::{sync::Arc, time::Instant};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use krabka_protocol::owned::{
     streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
@@ -110,6 +110,12 @@ pub(super) async fn handle_heartbeat(
         apply_shutdown_application(actor, req);
         reconcile(actor, config, metadata_source).await;
         actor.state.advance_member_epoch(&new_member_id);
+        let reported = req
+            .active_tasks
+            .as_ref()
+            .map(|active| task_ids_to_map(active))
+            .unwrap_or_default();
+        actor.state.reconcile_member(&new_member_id, &reported);
         let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&new_member_id));
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
         return Ok(build_assignment_resp(&actor.state, &new_member_id, config));
@@ -157,6 +163,25 @@ pub(super) async fn handle_heartbeat(
         actor.state.advance_member_epoch(&req.member_id);
         changed = true;
     }
+    let reported = req.active_tasks.as_ref().map_or_else(
+        || {
+            let Some(member) = actor.state.members.get(&req.member_id) else {
+                return BTreeMap::new();
+            };
+            let mut reported = member.active.clone();
+            for (subtopology, partitions) in &member.active_pending_revocation {
+                reported
+                    .entry(subtopology.clone())
+                    .or_default()
+                    .extend(partitions.iter().copied());
+            }
+            reported
+        },
+        |active| task_ids_to_map(active),
+    );
+    if actor.state.reconcile_member(&req.member_id, &reported) {
+        changed = true;
+    }
 
     if changed {
         let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
@@ -189,27 +214,6 @@ fn update_member_steady_state(
         changed = true;
     }
 
-    if let Some(active) = &req.active_tasks {
-        let map = task_ids_to_map(active);
-        if map != m.active {
-            m.active = map;
-            changed = true;
-        }
-    }
-    if let Some(standby) = &req.standby_tasks {
-        let map = task_ids_to_map(standby);
-        if map != m.standby {
-            m.standby = map;
-            changed = true;
-        }
-    }
-    if let Some(warmup) = &req.warmup_tasks {
-        let map = task_ids_to_map(warmup);
-        if map != m.warmup {
-            m.warmup = map;
-            changed = true;
-        }
-    }
     if let Some(offsets) = &req.task_offsets {
         let map = task_offsets_to_map(offsets);
         if map != m.task_offsets {

@@ -11,13 +11,20 @@
 //!
 //! It also holds [`FakeMetadataSource`], the one metadata authority every
 //! suite in this crate fakes with.
+//!
+//! [`BrokenTimer`] is the one fixture here that is not handler scaffolding.
+//! Every broker cadence loop takes its ticker through an injectable field, and
+//! every one of them stops when that ticker gives out, so the fake that makes a
+//! ticker give out is shared rather than copied into each of their test
+//! modules.
 
 use std::{
     collections::BTreeSet,
+    io,
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{self, AtomicUsize},
+        atomic::{self, AtomicUsize, Ordering},
     },
 };
 
@@ -29,6 +36,10 @@ use krabka_raft::{
     SubmitChangeResult, UpdateVoter,
 };
 use krabka_security::{AuthMethod, Principal};
+use qubit_clock::{
+    MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, Timer, TimerFuture,
+    TimerUnavailableError,
+};
 use tokio::sync::watch;
 
 use crate::{
@@ -89,6 +100,8 @@ pub(crate) fn request_context<'a>(
         connection_id: "test-connection",
         sendfile_capable: false,
         connection_listener_name: "PLAINTEXT",
+        throttle: crate::quota::ThrottleSlot::default(),
+        listener_authorized_cluster_action: false,
     }
 }
 
@@ -283,11 +296,16 @@ type SubmitOutcome =
 /// outcome, [`FakeMetadataSourceBuilder::stall_submits`] models a raft commit
 /// that never returns, and
 /// [`FakeMetadataSourceBuilder::controller_bound_addr`] sets the listener
-/// address a test dials or asserts on.
+/// address a test dials or asserts on, and
+/// [`FakeMetadataSourceBuilder::term`] with
+/// [`FakeMetadataSourceBuilder::without_controller_epoch`] set the controller
+/// epoch a caller fences its writes against.
 pub(crate) struct FakeMetadataSource {
     image_tx: watch::Sender<Arc<MetadataImage>>,
     leader_tx: watch::Sender<Option<NodeId>>,
     controller_bound_addr: SocketAddr,
+    term: u64,
+    owns_controller_epoch: bool,
     submitted: Mutex<Vec<Vec<MetadataRecord>>>,
     on_submit: SubmitOutcome,
     stall_submits: bool,
@@ -304,6 +322,8 @@ impl FakeMetadataSource {
             image: Arc::new(MetadataImage::new(uuid::Uuid::nil())),
             leader: None,
             controller_bound_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+            term: 0,
+            owns_controller_epoch: true,
             on_submit: None,
             stall_submits: false,
         }
@@ -368,6 +388,8 @@ pub(crate) struct FakeMetadataSourceBuilder {
     image: Arc<MetadataImage>,
     leader: Option<NodeId>,
     controller_bound_addr: SocketAddr,
+    term: u64,
+    owns_controller_epoch: bool,
     on_submit: Option<SubmitOutcome>,
     stall_submits: bool,
 }
@@ -394,6 +416,23 @@ impl FakeMetadataSourceBuilder {
     /// Report `addr` as the controller listener's bound address.
     pub(crate) fn controller_bound_addr(mut self, addr: SocketAddr) -> Self {
         self.controller_bound_addr = addr;
+        self
+    }
+
+    /// Report `term` as the quorum's current term, and -- unless
+    /// [`FakeMetadataSourceBuilder::without_controller_epoch`] is set -- as
+    /// the current controller epoch, which is what the trait's own default
+    /// does with the term.
+    pub(crate) fn term(mut self, term: u64) -> Self {
+        self.term = term;
+        self
+    }
+
+    /// Report no controller epoch at all, as a broker-only observer does: it
+    /// tracks the leader id but does not own the controller's term state, so
+    /// `current_controller_epoch` is `None` however the quorum's term reads.
+    pub(crate) fn without_controller_epoch(mut self) -> Self {
+        self.owns_controller_epoch = false;
         self
     }
 
@@ -425,6 +464,8 @@ impl FakeMetadataSourceBuilder {
             image_tx,
             leader_tx,
             controller_bound_addr: self.controller_bound_addr,
+            term: self.term,
+            owns_controller_epoch: self.owns_controller_epoch,
             submitted: Mutex::new(Vec::new()),
             on_submit: self
                 .on_submit
@@ -460,16 +501,24 @@ impl MetadataSource for FakeMetadataSource {
 
     /// A quorum that has committed nothing and knows no voters. Its leader
     /// comes from the fake's leader channel, so `watch_leader` and
-    /// `quorum_state` cannot disagree.
+    /// `quorum_state` cannot disagree, and its term is
+    /// [`FakeMetadataSourceBuilder::term`].
     fn quorum_state(&self) -> QuorumState {
         QuorumState {
-            current_term: 0,
+            current_term: self.term,
             last_applied_index: 0,
             current_leader: *self.leader_tx.borrow(),
             voters: Vec::new(),
             voter_nodes: std::collections::BTreeMap::new(),
             per_voter_matched_index: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// The quorum's term, unless the fake stands in for a source that owns no
+    /// quorum view -- see
+    /// [`FakeMetadataSourceBuilder::without_controller_epoch`].
+    fn current_controller_epoch(&self) -> Option<u64> {
+        self.owns_controller_epoch.then_some(self.term)
     }
 
     /// No fake has voted in a controller election.
@@ -526,5 +575,233 @@ impl MetadataSource for FakeMetadataSource {
         Err(unsupported())
     }
 
+    /// Finalizing `kraft.version` is a reconfiguration too, so it rejects with
+    /// the others rather than falling through to the trait's `NotLeader`,
+    /// which would send a caller down a leadership branch the fake never
+    /// models.
+    async fn finalize_kraft_version(&self, _version: u16) -> Result<ReconfigOutcome, RaftError> {
+        Err(unsupported())
+    }
+
     async fn cancel(&self) {}
+}
+
+/// The point in a deadline's life at which a [`BrokenTimer`] fails.
+///
+/// [`Timer`] reports the two separately — the outer `Result` of `at` covers
+/// registration, and the [`TimerFuture`] it hands back covers everything after
+/// — and so do [`crate::time_util::arm`] and [`crate::time_util::fired`], which
+/// is why a cadence loop has two ways to lose its ticker rather than one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TimerFailure {
+    /// The registration is refused outright, so `arm` reports `None`.
+    Registration,
+    /// The registration is accepted and the deadline it yields then resolves
+    /// to an error, so `fired` reports `false`.
+    Completion,
+}
+
+/// A timer whose backend gives out, for the tests that assert a cadence loop
+/// stops instead of spinning once it has no ticker left.
+///
+/// The first `healthy` deadlines are honoured, and each of them completes the
+/// moment it is armed whatever duration it was asked for, so a loop takes that
+/// many ticks and no more real time passes than the test needs. Every deadline
+/// after them fails, at [`TimerFailure`].
+///
+/// This is hand-rolled rather than taken from
+/// `qubit_clock::test_util::FaultInjectingTimer`, because that fixture honours
+/// a deadline that is already due, and the start-up deadline of every cadence
+/// loop here but the group actor's is `Duration::ZERO` — exactly the
+/// registration these tests need to see refused.
+pub(crate) struct BrokenTimer {
+    /// The domain every deadline handed to [`Self::at`] is validated against.
+    /// Nothing here reads the time; the clock exists to give the timer a
+    /// domain, as the [`Timer`] contract requires.
+    clock: StdMonotonicClock,
+    /// Where in a deadline's life the failure surfaces.
+    failure: TimerFailure,
+    /// How many leading deadlines are honoured before the failures start.
+    healthy: usize,
+    /// How many deadlines have been asked for so far.
+    registrations: AtomicUsize,
+}
+
+impl BrokenTimer {
+    /// A timer that fails every deadline, including the start-up one.
+    pub(crate) fn dead(failure: TimerFailure) -> Arc<Self> {
+        Self::dead_after(0, failure)
+    }
+
+    /// A timer that honours `healthy` deadlines — each completing at once, so
+    /// the loop takes that many ticks — and fails every deadline after them.
+    pub(crate) fn dead_after(healthy: usize, failure: TimerFailure) -> Arc<Self> {
+        Arc::new(Self {
+            clock: StdMonotonicClock::new(),
+            failure,
+            healthy,
+            registrations: AtomicUsize::new(0),
+        })
+    }
+
+    /// This timer as the trait object a cadence loop's config holds, leaving
+    /// the caller its own handle to read [`Self::registrations`] from.
+    pub(crate) fn injectable(self: &Arc<Self>) -> Arc<dyn Timer> {
+        Arc::clone(self) as Arc<dyn Timer>
+    }
+
+    /// How many deadlines the loop under test has asked this timer for.
+    ///
+    /// A loop that stopped asked for exactly one more than it was given; a
+    /// loop that re-armed through the failure keeps climbing.
+    pub(crate) fn registrations(&self) -> usize {
+        self.registrations.load(Ordering::Relaxed)
+    }
+}
+
+impl Timer for BrokenTimer {
+    fn clock(&self) -> &dyn MonotonicClock {
+        &self.clock
+    }
+
+    fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
+        let nth = self.registrations.fetch_add(1, Ordering::Relaxed);
+        if nth < self.healthy {
+            return Ok(Box::pin(std::future::ready(Ok(()))));
+        }
+        let error = TimeError::TimerUnavailable {
+            source: TimerUnavailableError::BackendUnavailable {
+                backend: "krabka-broker test",
+                source: Box::new(io::Error::other("the timer backend is gone")),
+            },
+        };
+        match self.failure {
+            TimerFailure::Registration => Err(error),
+            TimerFailure::Completion => Ok(Box::pin(std::future::ready(Err(error)))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use assert2::assert;
+    use krabka_metadata::{KRaftVersionRange, MetadataRecord, Voter};
+    use krabka_raft::{
+        AddVoter, Node, NodeId, QuorumState, RaftError, RemoveVoter, SnapshotRange,
+        SubmitChangeResult, UpdateVoter,
+    };
+
+    use super::FakeMetadataSource;
+    use crate::metadata_source::MetadataSource;
+
+    fn voter() -> Voter {
+        Voter {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::from_u128(1),
+            endpoints: Vec::new(),
+            kraft_version: KRaftVersionRange::default(),
+        }
+    }
+
+    /// Every reconfiguration path rejects the same way, `finalize_kraft_version`
+    /// included: the fake has no raft log to reconfigure, and a caller that
+    /// reached one should see that rather than a leadership error the fake
+    /// never models.
+    #[tokio::test]
+    async fn every_reconfiguration_path_rejects_as_unsupported() {
+        let source = FakeMetadataSource::builder().build();
+
+        assert!(let Err(RaftError::Unsupported(_)) =
+            source.change_membership(BTreeSet::from([NodeId(1)])).await);
+        assert!(let Err(RaftError::Unsupported(_)) =
+            source.add_learner(NodeId(1), Node::default()).await);
+        assert!(let Err(RaftError::Unsupported(_)) = source.trigger_snapshot().await);
+        assert!(let Err(RaftError::Unsupported(_)) = source
+            .add_voter(AddVoter {
+                voter: voter(),
+                ack_when_committed: true,
+            })
+            .await);
+        assert!(let Err(RaftError::Unsupported(_)) = source
+            .remove_voter(RemoveVoter {
+                id: NodeId(1),
+                directory_id: uuid::Uuid::from_u128(1),
+            })
+            .await);
+        assert!(let Err(RaftError::Unsupported(_)) =
+            source.update_voter(UpdateVoter { voter: voter() }).await);
+        assert!(let Err(RaftError::Unsupported(_)) = source.finalize_kraft_version(1).await);
+    }
+
+    /// The controller epoch is the quorum's term by default, as the trait's
+    /// own default makes it, and is `None` for a source that owns no quorum
+    /// view -- which is what a broker-only observer reports.
+    #[test]
+    fn the_controller_epoch_follows_the_term_unless_the_fake_owns_no_quorum() {
+        let controller = FakeMetadataSource::builder().term(7).build();
+        assert!(controller.quorum_state().current_term == 7);
+        assert!(controller.current_controller_epoch() == Some(7));
+
+        let observer = FakeMetadataSource::builder()
+            .term(7)
+            .without_controller_epoch()
+            .build();
+        assert!(observer.quorum_state().current_term == 7);
+        assert!(observer.current_controller_epoch().is_none());
+    }
+
+    /// The quorum has committed nothing and knows no voters, and its leader is
+    /// whatever the leader channel last published, so `watch_leader` and
+    /// `quorum_state` cannot disagree.
+    #[test]
+    fn quorum_state_reports_the_leader_channel_over_an_empty_quorum() {
+        let source = FakeMetadataSource::builder()
+            .leader(Some(NodeId(2)))
+            .build();
+
+        let QuorumState {
+            current_term,
+            last_applied_index,
+            current_leader,
+            voters,
+            voter_nodes,
+            per_voter_matched_index,
+        } = source.quorum_state();
+        assert!(current_term == 0);
+        assert!(last_applied_index == 0);
+        assert!(current_leader == Some(NodeId(2)));
+        assert!(voters.is_empty());
+        assert!(voter_nodes.is_empty());
+        assert!(per_voter_matched_index.is_empty());
+        assert!(source.current_metadata_offset() == -1);
+
+        source.set_leader(None);
+        assert!(source.quorum_state().current_leader.is_none());
+    }
+
+    /// The fake keeps no checkpoint to serve and has cast no vote.
+    #[test]
+    fn the_fake_serves_no_snapshot_and_records_no_vote() {
+        let source = FakeMetadataSource::builder().build();
+
+        assert!(matches!(
+            source.read_snapshot_range(0, 1024),
+            SnapshotRange::NoSnapshot
+        ));
+        assert!(source.voted_directory_id().is_none());
+    }
+
+    /// `cancel` has no background work to stop, and leaves the source serving.
+    #[tokio::test]
+    async fn cancel_leaves_the_source_serving() {
+        let source = FakeMetadataSource::builder().build();
+
+        source.cancel().await;
+
+        assert!(let Ok(result) = source.submit_change(Vec::new()).await);
+        assert!(result == SubmitChangeResult::default());
+        assert!(source.submitted() == vec![Vec::<MetadataRecord>::new()]);
+    }
 }

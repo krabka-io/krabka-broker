@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_clone_BreakGlassLocalActionFacts": {
+        "prover": "alt-ergo",
+        "time": 0.004
+      }
+    }
+  }
+}

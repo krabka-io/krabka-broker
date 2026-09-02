@@ -14,7 +14,7 @@ use std::sync::{
 use krabka_metadata::MetadataImage;
 use krabka_raft::{NodeId, OutboundDialer};
 use krabka_units::{ByteSize, Time};
-use qubit_clock::sleep::AsyncSleeper;
+use qubit_clock::Timer;
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -48,11 +48,12 @@ pub struct ObserverConfig {
     pub max_bytes: ByteSize,
     /// Idle poll interval once caught up to the high watermark.
     pub poll_interval: Time,
-    /// Relative sleeper that drives the idle poll cadence. Production uses
-    /// [`qubit_clock::sleep::SystemSleeper`], which follows real time. Tests
-    /// inject a [`qubit_clock::sleep::MockSleeper`], so the poll interval
-    /// fires on a controlled mock timeline instead of wall-clock time.
-    pub sleeper: Arc<dyn AsyncSleeper>,
+    /// Timer that drives the idle poll cadence. Production uses
+    /// [`qubit_clock::StdTimer`], which follows real time. Tests inject a
+    /// timer from a [`qubit_clock::ManualMonotonicClock`], so the poll
+    /// interval fires on a controlled manual timeline instead of wall-clock
+    /// time.
+    pub timer: Arc<dyn Timer>,
 }
 
 /// Handle to a running observer. It holds the image watch and the background
@@ -68,20 +69,30 @@ pub struct MetadataObserver {
 }
 
 impl MetadataObserver {
+    /// The observer state alone, with no fetch loop behind it yet: an empty
+    /// image for `cluster_id`, no leader hint, and no applied offset.
+    ///
+    /// [`Self::start`] spawns the loop over it. A test that drives
+    /// [`run_loop`] itself, so that it can await the loop's own return rather
+    /// than cancelling it, starts from this instead.
+    fn new(cluster_id: uuid::Uuid, shutdown: CancellationToken) -> Arc<Self> {
+        let (image_tx, _) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
+        let (leader_tx, _) = watch::channel(None);
+        Arc::new(Self {
+            image: image_tx,
+            leader: leader_tx,
+            metadata_offset: AtomicI64::new(-1),
+            shutdown,
+            task: tokio::sync::Mutex::new(None),
+        })
+    }
+
     /// Starts the observer loop. The image watch begins at an empty image for
     /// `cluster_id`. Callers subscribe with [`Self::watch_image`].
     #[must_use]
     pub fn start(config: ObserverConfig) -> Arc<Self> {
-        let (image_tx, _) = watch::channel(Arc::new(MetadataImage::new(config.cluster_id)));
-        let (leader_tx, _) = watch::channel(None);
         let shutdown = CancellationToken::new();
-        let observer = Arc::new(Self {
-            image: image_tx,
-            leader: leader_tx,
-            metadata_offset: AtomicI64::new(-1),
-            shutdown: shutdown.clone(),
-            task: tokio::sync::Mutex::new(None),
-        });
+        let observer = Self::new(config.cluster_id, shutdown.clone());
         let task = tokio::spawn(run_loop(config, observer.clone(), shutdown));
         if let Ok(mut guard) = observer.task.try_lock() {
             *guard = Some(task);
@@ -131,7 +142,7 @@ mod tests {
     use krabka_metadata::{MetadataRecord, TopicRecord};
     use krabka_raft::{BootstrapMode, Controller, ControllerConfig};
     use krabka_units::{millis, minutes};
-    use qubit_clock::sleep::SystemSleeper;
+    use qubit_clock::StdTimer;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -172,7 +183,7 @@ mod tests {
             cluster_id: Uuid::nil(),
             max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: minutes(1),
-            sleeper: Arc::new(SystemSleeper::new()),
+            timer: Arc::new(StdTimer::new()),
         });
 
         assert!(observer.current_metadata_offset() == -1);
@@ -217,7 +228,7 @@ mod tests {
             cluster_id: Uuid::nil(),
             max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: millis(50),
-            sleeper: Arc::new(SystemSleeper::new()),
+            timer: Arc::new(StdTimer::new()),
         });
 
         let mut img_rx = observer.watch_image();

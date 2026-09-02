@@ -12,8 +12,8 @@ use crate::{
     io::LogIo,
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        sample_batch, sample_batch_with_epoch, test_batch_at, test_log, transactional_batch,
-        verbatim_from,
+        abort_marker, sample_batch, sample_batch_with_epoch, test_batch_at, test_log,
+        transactional_batch, verbatim_from,
     },
     stamp_index::{StampEntry, StampIndex},
 };
@@ -42,6 +42,36 @@ impl LogIo for FailFirstSync {
     fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
         if self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
             Err(std::io::Error::other("injected sync_data failure"))
+        } else {
+            file.sync_data()
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CountSync(std::sync::atomic::AtomicUsize);
+
+impl LogIo for CountSync {
+    fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        file.sync_data()
+    }
+}
+
+#[derive(Debug)]
+struct FailSyncAt {
+    calls: std::sync::atomic::AtomicUsize,
+    fail_at: usize,
+}
+
+impl LogIo for FailSyncAt {
+    fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
+        let call = self
+            .calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if call == self.fail_at {
+            Err(std::io::Error::other("injected ordered sync failure"))
         } else {
             file.sync_data()
         }
@@ -240,6 +270,166 @@ fn append_at_uses_reconciled_frontier_floor() {
     log.append_at(&mut gap_batch, Offset(3)).unwrap();
     assert!(log.log_end_offset() == Offset(4));
     drop(dir);
+}
+
+#[test]
+fn assigned_append_uses_reconciled_frontier_floor() {
+    let (_dir, mut log) = test_log();
+    log.append(&mut test_batch_at(0)).unwrap();
+    log.reconcile_next_offset(Offset(3));
+
+    let mut batch = test_batch_at(0);
+    let assigned = log.append(&mut batch).unwrap();
+
+    assert!(assigned == Offset(3));
+    assert!(batch.base_offset == 3);
+    assert!(log.log_end_offset() == Offset(4));
+}
+
+#[test]
+fn invalid_interval_is_write_free_and_a_corrected_retry_succeeds() {
+    let (_dir, mut log) = test_log();
+    let mut invalid = sample_batch(1);
+    invalid.last_offset_delta = -1;
+
+    let error = log.append(&mut invalid).unwrap_err();
+
+    assert!(matches!(error, LogError::InvalidArgument(_)));
+    assert!(log.log_end_offset() == Offset(0));
+    assert!(log.lso() == Offset(0));
+    assert!(log.producer_state_snapshot().is_empty());
+
+    let mut retry = sample_batch(1);
+    assert!(log.append(&mut retry).unwrap() == Offset(0));
+    assert!(log.log_end_offset() == Offset(1));
+}
+
+#[test]
+fn successor_overflow_is_rejected_before_log_mutation() {
+    let (_dir, mut log) = test_log();
+    log.reconcile_next_offset(Offset(i64::MAX));
+    let mut batch = sample_batch(1);
+
+    let error = log.append(&mut batch).unwrap_err();
+
+    assert!(matches!(error, LogError::InvalidArgument(_)));
+    assert!(log.log_end_offset() == Offset(0));
+    assert!(log.lso() == Offset(0));
+    assert!(log.producer_state_snapshot().is_empty());
+}
+
+#[test]
+fn sidecar_failure_rolls_back_bytes_frontiers_and_allows_retry() {
+    let (_dir, mut log) = test_log();
+    log.set_stamp_source(std::sync::Arc::new(
+        crate::stamp_source::MonotonicStampSource::new(100, 1),
+    ))
+    .unwrap();
+    log.stamp_indexes.clear();
+
+    let error = log.append(&mut sample_batch(1)).unwrap_err();
+
+    assert!(matches!(error, LogError::Corrupt(_)));
+    assert!(log.log_end_offset() == Offset(0));
+    assert!(log.lso() == Offset(0));
+    assert!(log.producer_state_snapshot().is_empty());
+    assert!(log.active_txn_index.entries().is_empty());
+    assert!(log.stamp_for_offset(Offset(0)).is_none());
+
+    assert!(log.append(&mut sample_batch(1)).unwrap() == Offset(0));
+    assert!(log.log_end_offset() == Offset(1));
+    assert!(log.lso() == Offset(1));
+    assert!(log.stamp_for_offset(Offset(0)).is_some());
+}
+
+#[test]
+fn segment_bytes_are_synced_before_durable_sidecars() {
+    let (_dir, mut stamped_log) = test_log();
+    stamped_log
+        .set_stamp_source(std::sync::Arc::new(
+            crate::stamp_source::MonotonicStampSource::new(100, 1),
+        ))
+        .unwrap();
+    let stamp_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
+    stamped_log.test_set_io(stamp_syncs.clone());
+
+    stamped_log.append(&mut sample_batch(1)).unwrap();
+    assert!(stamp_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 1);
+
+    let (_dir, mut transaction_log) = test_log();
+    let txn_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
+    transaction_log.test_set_io(txn_syncs.clone());
+    transaction_log
+        .append(&mut transactional_batch(7, 0, &["value"]))
+        .unwrap();
+    assert!(txn_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 0);
+
+    transaction_log.append(&mut abort_marker(7, 0)).unwrap();
+    assert!(txn_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 1);
+}
+
+#[test]
+fn post_roll_failure_restores_the_previous_active_segment() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(
+        dir.path(),
+        LogConfig {
+            segment_size: bytes(1),
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    log.append(&mut sample_batch(1)).unwrap();
+    log.set_stamp_source(std::sync::Arc::new(
+        crate::stamp_source::MonotonicStampSource::new(100, 1),
+    ))
+    .unwrap();
+    let io = std::sync::Arc::new(FailSyncAt {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        fail_at: 2,
+    });
+    log.test_set_io(io.clone());
+
+    let error = log.append(&mut sample_batch(1)).unwrap_err();
+
+    assert!(matches!(error, LogError::Io(_)));
+    assert!(io.calls.load(std::sync::atomic::Ordering::Relaxed) == 3);
+    assert!(log.log_end_offset() == Offset(1));
+    assert!(log.lso() == Offset(1));
+    assert!(log.segments.is_empty());
+    assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
+    assert!(log.stamp_for_offset(Offset(1)).is_none());
+
+    assert!(log.append(&mut sample_batch(1)).unwrap() == Offset(1));
+    assert!(log.log_end_offset() == Offset(2));
+}
+
+#[test]
+fn post_roll_partial_write_restores_the_previous_active_segment() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(
+        dir.path(),
+        LogConfig {
+            segment_size: bytes(1),
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    log.append(&mut sample_batch(1)).unwrap();
+    log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
+        16,
+    ))));
+
+    let error = log.append(&mut sample_batch(2)).unwrap_err();
+
+    assert!(matches!(error, LogError::Io(_)));
+    assert!(log.log_end_offset() == Offset(1));
+    assert!(log.segments.is_empty());
+    assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
+
+    log.test_set_io(std::sync::Arc::new(crate::io::FileIo));
+    assert!(log.append(&mut sample_batch(1)).unwrap() == Offset(1));
+    assert!(log.log_end_offset() == Offset(2));
 }
 
 #[test]

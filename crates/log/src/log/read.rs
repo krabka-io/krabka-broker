@@ -299,7 +299,7 @@ impl Log {
     ///
     /// This method walks sealed segments and then the active segment exactly
     /// as `read_raw` does. It collects one [`krabka_protocol::records::FileRegion`] for each contributing segment
-    /// through [`Segment::read_raw_desc`], instead of owned `Bytes`.
+    /// through `Segment::read_raw_desc`, instead of owned `Bytes`.
     /// Multi-segment fetches are **not** coalesced. Each region goes out in
     /// its own `sendfile` call, so the cross-segment copy disappears.
     ///

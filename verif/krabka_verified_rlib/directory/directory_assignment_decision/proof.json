@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_directory_assignment_decision": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.009 }
+    }
+  }
+}

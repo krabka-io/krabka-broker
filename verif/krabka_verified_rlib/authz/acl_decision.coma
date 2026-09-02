@@ -1,0 +1,37 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 24 0 24 85 *)
+
+let%span sauthz = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 19 10 19 62
+let%span sauthz'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 20 10 20 73
+let%span sauthz'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 21 10 21 83
+let%span sauthz'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 22 10 22 87
+
+use creusot.prelude.Any
+
+type t_AclDecision = AllowSuperuser | AllowAcl | DenyExplicit | DenyDefault
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let acl_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 24 0 24 85]
+  (super_user: bool) (saw_allow: bool) (saw_deny: bool) (return (x: t_AclDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {super_user = false} (! bb2) | br1 -> {super_user} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- AllowSuperuser ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {saw_deny = false} (! bb4) | br1 -> {saw_deny} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- DenyExplicit ] s1 | s1 = return {_ret} ]
+  | bb4 = any [ br0 -> {saw_allow = false} (! bb6) | br1 -> {saw_allow} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- AllowAcl ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- DenyDefault ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AclDecision = Any.any_l ()
+  | & super_user: bool = super_user
+  | & saw_allow: bool = saw_allow
+  | & saw_deny: bool = saw_deny ])
+  [ return (result: t_AclDecision) ->
+  {[@stop_split] [@expl:acl_decision ensures] ([@stop_split] [@expl:acl_decision ensures #0] [%#sauthz] super_user
+      -> result = AllowSuperuser)
+    /\ ([@stop_split] [@expl:acl_decision ensures #1] [%#sauthz'0] not super_user /\ saw_deny -> result = DenyExplicit)
+    /\ ([@stop_split] [@expl:acl_decision ensures #2] [%#sauthz'1] not super_user /\ not saw_deny /\ saw_allow
+      -> result = AllowAcl)
+    /\ ([@stop_split] [@expl:acl_decision ensures #3] [%#sauthz'2] not super_user /\ not saw_deny /\ not saw_allow
+    -> result = DenyDefault)}
+    (! return {result}) ]

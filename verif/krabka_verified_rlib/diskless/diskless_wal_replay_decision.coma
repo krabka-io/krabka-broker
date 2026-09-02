@@ -1,0 +1,76 @@
+(* #"/proof-work-246/crates/verified/src/diskless.rs" 74 0 79 30 *)
+
+let%span sdiskless = "/proof-work-246/crates/verified/src/diskless.rs" 97 25 97 30
+let%span sdiskless'0 = "/proof-work-246/crates/verified/src/diskless.rs" 92 25 92 29
+let%span sdiskless'1 = "/proof-work-246/crates/verified/src/diskless.rs" 93 30 93 35
+let%span sdiskless'2 = "/proof-work-246/crates/verified/src/diskless.rs" 51 10 58 1
+let%span sdiskless'3 = "/proof-work-246/crates/verified/src/diskless.rs" 59 10 65 1
+let%span sdiskless'4 = "/proof-work-246/crates/verified/src/diskless.rs" 66 10 72 1
+
+use creusot.int.UInt8
+use creusot.prelude.Any
+
+type t_DisklessWalReplayAction = Ignore | Store | Remove
+
+type t_DisklessWalReplayDecision = { action: t_DisklessWalReplayAction; keyed_range: bool; replay_tombstone: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let diskless_wal_replay_decision [#"/proof-work-246/crates/verified/src/diskless.rs" 74 0 79 30] (event: UInt8.t)
+  (current_keyed: bool) (current_tombstone: bool) (legacy_replay_finished: bool)
+  (return (x: t_DisklessWalReplayDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {event = (0: UInt8.t)} (! bb7)
+    | br1 -> {event = (1: UInt8.t)} (! bb6)
+    | br2 -> {event = (2: UInt8.t)} (! bb5)
+    | default -> -{event <> (0: UInt8.t) /\ event <> (1: UInt8.t) /\ event <> (2: UInt8.t)}- (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_25 <- Ignore ] s1
+    | s1 = [ &_ret <- { action = _25; keyed_range = current_keyed; replay_tombstone = current_tombstone } ] s2
+    | s2 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_22 <- Remove ] s1
+    | s1 = [ &_23 <- not legacy_replay_finished ] s2
+    | s2 = [ &_ret <- { action = _22; keyed_range = ([%#sdiskless] false); replay_tombstone = _23 } ] s3
+    | s3 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = [ &_21 <- Store ] s1
+    | s1 = [ &_ret <- { action = _21;
+                        keyed_range = ([%#sdiskless'0] true);
+                        replay_tombstone = ([%#sdiskless'1] false) } ] s2
+    | s2 = return {_ret} ]
+  | bb7 = any [ br0 -> {current_keyed = false} (! bb8) | br1 -> {current_keyed} (! bb9) ]
+  | bb8 = any [ br0 -> {current_tombstone = false} (! bb10) | br1 -> {current_tombstone} (! bb9) ]
+  | bb9 = s0 [ s0 = [ &_16 <- Ignore ] s1 | s1 = bb11 ]
+  | bb10 = s0 [ s0 = [ &_16 <- Store ] s1 | s1 = bb11 ]
+  | bb11 = s0
+    [ s0 = [ &_ret <- { action = _16; keyed_range = current_keyed; replay_tombstone = current_tombstone } ] s1
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_DisklessWalReplayDecision = Any.any_l ()
+  | & event: UInt8.t = event
+  | & current_keyed: bool = current_keyed
+  | & current_tombstone: bool = current_tombstone
+  | & legacy_replay_finished: bool = legacy_replay_finished
+  | & _16: t_DisklessWalReplayAction = Any.any_l ()
+  | & _21: t_DisklessWalReplayAction = Any.any_l ()
+  | & _22: t_DisklessWalReplayAction = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _25: t_DisklessWalReplayAction = Any.any_l () ])
+  [ return (result: t_DisklessWalReplayDecision) ->
+  {[@stop_split] [@expl:diskless_wal_replay_decision ensures] ([@stop_split] [@expl:diskless_wal_replay_decision ensures #0] [%#sdiskless'2] result.action
+      = (if UInt8.t'int event = 1 \/ UInt8.t'int event = 0 /\ not current_keyed /\ not current_tombstone then
+        Store
+      else
+        if UInt8.t'int event = 2 then Remove else Ignore
+      ))
+    /\ ([@stop_split] [@expl:diskless_wal_replay_decision ensures #1] [%#sdiskless'3] result.keyed_range
+      = (if UInt8.t'int event = 1 then true else if UInt8.t'int event = 2 then false else current_keyed))
+    /\ ([@stop_split] [@expl:diskless_wal_replay_decision ensures #2] [%#sdiskless'4] result.replay_tombstone
+    = (if UInt8.t'int event = 1 then
+      false
+    else
+      if UInt8.t'int event = 2 then not legacy_replay_finished else current_tombstone
+    ))}
+    (! return {result}) ]

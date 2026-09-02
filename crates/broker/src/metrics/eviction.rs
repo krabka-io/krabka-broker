@@ -25,6 +25,21 @@
 //! produces by naming a topic or a partition index that does not exist.
 //! Releasing those needs eviction driven by series creation rather than by the
 //! image diff, which is issue #199.
+//!
+//! Five further families are keyed by a partition without taking a
+//! [`PartitionLabel`], and each is left to a narrower owner that releases it
+//! sooner than this diff could. `share_group_backlog` is pruned by
+//! `share_partition::backlog_poller` on its own tick. The four diskless WAL
+//! gauges -- `diskless_wal_durable_watermark`,
+//! `diskless_wal_index_projection_lag`, `diskless_wal_trim_frontier` and
+//! `diskless_wal_voter_lag` -- are keyed by topic id and released by
+//! `wal::quorum::registry::WalShardRegistry`, whose `replace_placements`
+//! reconfigures every live shard engine against the newest image and whose
+//! `remove` clears a shard the supervisor tore down. Routing those through
+//! [`BrokerMetrics::evict_partition_series`] would be wrong as well as
+//! redundant: a shard's voters are selected from the registered brokers rather
+//! than from the partition's replica set, so this broker can still vote on --
+//! and still report lag for -- a shard whose replicas no longer name it.
 
 use std::{
     collections::{HashMap, HashSet},

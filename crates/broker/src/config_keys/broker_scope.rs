@@ -1,6 +1,6 @@
-//! The broker-scoped dynamic config keys: the controller-managed witness and
-//! stretch-site roles that `DescribeConfigs` reports read-only, and the
-//! KIP-1075 deadline for remote `ListOffsets` work.
+//! The broker-scoped dynamic config keys: the controller-managed witness
+//! role, broker fencing state and stretch-site role that `DescribeConfigs`
+//! reports read-only, and the KIP-1075 deadline for remote `ListOffsets` work.
 
 use std::time::Duration;
 
@@ -28,14 +28,60 @@ pub(crate) const BROKER_WITNESS: &str = "broker.witness";
 /// The key is controller-managed and read-only, like [`BROKER_WITNESS`].
 pub(crate) const STRETCH_PREFERRED_LEADER_SITE: &str = "stretch.preferred.leader.site";
 
+/// KIP-211: how long a committed offset outlives the group that owns it, in
+/// whole minutes. The value is static for the life of the process, so
+/// `DescribeConfigs` reports it read-only against `STATIC_BROKER_CONFIG`.
+pub(crate) const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
+
+/// Cadence of the offset-retention sweep, in milliseconds. Static and
+/// read-only for the same reason as [`OFFSETS_RETENTION_MINUTES`].
+pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
+
+/// How long a client connection may go without a complete frame before the
+/// broker closes it. The process reads it from its static configuration at
+/// startup, so `DescribeConfigs` reports it read-only, at
+/// `STATIC_BROKER_CONFIG` when an operator named it and `DEFAULT_CONFIG` when
+/// they did not.
+///
+/// A per-listener override is spelled
+/// `listener.name.<name>.connections.max.idle.ms`, which is a key per listener
+/// rather than a registry row. `DescribeConfigs` reports each override under
+/// this row's type and documentation, because it is the same config under
+/// Kafka's `ListenerName.configPrefix`.
+pub(crate) const CONNECTIONS_MAX_IDLE_MS: &str = "connections.max.idle.ms";
+
 /// The value krabka writes for [`BROKER_WITNESS`] on a witness node.
 pub(crate) const WITNESS_TRUE: &str = "true";
+
+/// Marks a node the controller currently treats as fenced: it is past its
+/// KIP-500 heartbeat deadline, or it has not yet proved metadata catch-up.
+/// This is Kafka's `BrokerRegistration.fenced()`, which the JVM controller
+/// keeps in the metadata image and every broker reads back out of it.
+///
+/// `BrokerRegistrationRecord` lives in the protocol crate and carries no
+/// fencing flag, so krabka publishes the state as a per-broker config
+/// instead, exactly as it publishes the witness role. The controller leader
+/// is the only writer; it republishes the state whenever its heartbeat
+/// registry changes, and tombstones the key when the broker becomes
+/// available again.
+///
+/// Replicating it is what lets a `Metadata` or `DescribeTopicPartitions`
+/// request served by *any* node report the same `offline_replicas` as the
+/// controller: `KRaftMetadataCache.isReplicaOffline` is
+/// `fenced() || !hasOnlineDir(...)`, and only the second half of that was
+/// quorum-replicated before this key existed.
+///
+/// The key is controller-managed and read-only, like [`BROKER_WITNESS`].
+pub(crate) const BROKER_FENCED: &str = "broker.fenced";
+
+/// The value krabka writes for [`BROKER_FENCED`] on a fenced node.
+pub(crate) const FENCED_TRUE: &str = "true";
 
 /// Broker-scoped config keys that only the controller writes. `AlterConfigs`
 /// and `IncrementalAlterConfigs` must reject every key in this list, and
 /// `DescribeConfigs` must report each one as read-only.
-pub(crate) const CONTROLLER_MANAGED_BROKER_CONFIGS: [&str; 2] =
-    [BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE];
+pub(crate) const CONTROLLER_MANAGED_BROKER_CONFIGS: [&str; 3] =
+    [BROKER_WITNESS, BROKER_FENCED, STRETCH_PREFERRED_LEADER_SITE];
 
 /// `true` when `key` is a broker config that only the controller writes.
 pub(crate) fn is_controller_managed_broker_config(key: &str) -> bool {
@@ -71,6 +117,35 @@ pub(crate) fn witness_node_ids(
         .collect()
 }
 
+/// Resolve [`BROKER_FENCED`] for one node. Anything but the published
+/// `true` resolves to "not fenced", so a node the controller has never
+/// fenced reads as available on every broker.
+pub(crate) fn resolve_broker_fenced(
+    image: &krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
+) -> bool {
+    image
+        .broker_config(node_id)
+        .and_then(|configs| configs.get(BROKER_FENCED))
+        .map(String::as_str)
+        == Some(FENCED_TRUE)
+}
+
+/// Every registered node the controller has published as fenced.
+///
+/// This is the replicated half of the offline-replica projection, so it is
+/// the same set on every node that holds the image, controller leader or
+/// not. One walk over the image builds it, as [`witness_node_ids`] does.
+pub(crate) fn fenced_node_ids(
+    image: &krabka_metadata::MetadataImage,
+) -> std::collections::HashSet<u64> {
+    image
+        .brokers()
+        .filter(|broker| resolve_broker_fenced(image, broker.node_id))
+        .map(|broker| broker.node_id.0)
+        .collect()
+}
+
 /// Resolve [`STRETCH_PREFERRED_LEADER_SITE`] from the cluster defaults.
 /// `None` means the cluster pins leadership to no site.
 pub(crate) fn resolve_preferred_leader_site(
@@ -81,6 +156,22 @@ pub(crate) fn resolve_preferred_leader_site(
         .get(STRETCH_PREFERRED_LEADER_SITE)
         .map(String::as_str)
 }
+
+/// KIP-98: how long a transactional id may sit in a terminal or idle state
+/// before the transaction coordinator tombstones it out of
+/// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).
+///
+/// The key is static in Kafka: `kafka-configs --alter` refuses it with
+/// `Cannot update these configs dynamically`, and `DescribeConfigs` reports it
+/// read-only from the node's own configuration. krabka reports it the same
+/// way, out of [`crate::config::BrokerConfig::txn_id_expiration`].
+pub(crate) const TRANSACTIONAL_ID_EXPIRATION_MS: &str = "transactional.id.expiration.ms";
+
+/// KIP-98: how often the transactional-id expiry sweep runs. Kafka defaults it
+/// to 3600000 ms (1 hour). Static and read-only, like
+/// [`TRANSACTIONAL_ID_EXPIRATION_MS`].
+pub(crate) const TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS: &str =
+    "transaction.remove.expired.transaction.cleanup.interval.ms";
 
 /// KIP-1075: server-side deadline for remote `ListOffsets` work when an older
 /// request does not carry `timeout_ms`. Kafka exposes this as a dynamic broker
@@ -231,5 +322,40 @@ mod tests {
         assert!(is_controller_managed_broker_config(BROKER_WITNESS));
         assert!(!is_recognized(BROKER_WITNESS));
         assert!(validate_topic_config(BROKER_WITNESS, WITNESS_TRUE).is_err());
+    }
+
+    #[test]
+    fn broker_fenced_is_controller_managed_and_not_a_topic_config() {
+        assert!(is_controller_managed_broker_config(BROKER_FENCED));
+        assert!(!is_recognized(BROKER_FENCED));
+        assert!(validate_topic_config(BROKER_FENCED, FENCED_TRUE).is_err());
+    }
+
+    /// Publish `broker.fenced` for `node_id`, the way the controller does.
+    fn set_fenced(img: &mut krabka_metadata::MetadataImage, node_id: u64, value: Option<&str>) {
+        use krabka_metadata::{BrokerConfigRecord, MetadataRecord, NodeId};
+        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: NodeId(node_id),
+            config_name: BROKER_FENCED.into(),
+            config_value: value.map(Into::into),
+        }));
+    }
+
+    #[test]
+    fn fenced_nodes_are_the_registered_ones_the_controller_published() {
+        let mut img = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        register_node(&mut img, 1, None);
+        register_node(&mut img, 2, None);
+        register_node(&mut img, 3, None);
+        set_fenced(&mut img, 2, Some(FENCED_TRUE));
+        // A tombstone means available again, and an unregistered node is
+        // already offline by the registration rule.
+        set_fenced(&mut img, 3, Some(FENCED_TRUE));
+        set_fenced(&mut img, 3, None);
+        set_fenced(&mut img, 9, Some(FENCED_TRUE));
+
+        assert!(fenced_node_ids(&img) == maplit::hashset! {2});
+        assert!(resolve_broker_fenced(&img, krabka_metadata::NodeId(2)));
+        assert!(!resolve_broker_fenced(&img, krabka_metadata::NodeId(3)));
     }
 }

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_barrier_cut_classification": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      }
+    }
+  }
+}

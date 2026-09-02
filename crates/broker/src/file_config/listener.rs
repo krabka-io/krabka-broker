@@ -71,6 +71,12 @@ pub struct FileListener {
     pub protocol: ListenerProtocol,
     pub tls_config: Option<FileTlsConfig>,
     pub sasl_config: Option<FileListenerSaslConfig>,
+    /// Per-listener `connections.max.idle.ms`. Absent leaves this listener on
+    /// the broker-wide `connections_max_idle`. Maps to an entry in
+    /// [`crate::BrokerConfig::connections_max_idle_overrides`].
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub connections_max_idle: Option<krabka_units::Time>,
 }
 
 impl FileListener {
@@ -228,6 +234,7 @@ protocol = "Plaintext"
             protocol: ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_config: None,
+            connections_max_idle: None,
         };
         let spec = fl.into_spec();
         check!(spec.name == "X");

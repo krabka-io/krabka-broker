@@ -56,11 +56,14 @@ pub(crate) fn headered_record(
 pub(crate) fn producer_batch(producer_id: i64, records: Vec<Record>) -> RecordBatch {
     let last_offset_delta = records.iter().map(|r| r.offset_delta).max().unwrap_or(0);
     let max_delta = records.iter().map(|r| r.timestamp_delta).max().unwrap_or(0);
+    let (producer_epoch, base_sequence) = if producer_id >= 0 { (0, 0) } else { (-1, -1) };
     RecordBatch {
         last_offset_delta,
         base_timestamp: BASE_TIMESTAMP,
         max_timestamp: BASE_TIMESTAMP + max_delta,
         producer_id,
+        producer_epoch,
+        base_sequence,
         records,
         ..RecordBatch::default()
     }
@@ -99,6 +102,8 @@ fn control_value(coordinator_epoch: i32) -> Bytes {
 /// shape `crates/log/src/log.rs`'s own `commit_marker` test helper builds.
 pub(crate) fn commit_marker(producer_id: i64) -> RecordBatch {
     RecordBatch {
+        producer_epoch: 0,
+        base_sequence: -1,
         attributes: Attributes::default()
             .with_transactional(true)
             .with_control(true),

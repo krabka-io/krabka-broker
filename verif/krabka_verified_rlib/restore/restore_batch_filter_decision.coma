@@ -1,0 +1,28 @@
+(* #"/proof-work-244/crates/verified/src/restore.rs" 66 0 66 93 *)
+
+let%span srestore = "/proof-work-244/crates/verified/src/restore.rs" 60 10 64 1
+
+use creusot.prelude.Any
+
+type t_RestoreFilterDecision = Keep | Empty | Filter
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_batch_filter_decision [#"/proof-work-244/crates/verified/src/restore.rs" 66 0 66 93] (saw_keep: bool)
+  (saw_drop: bool) (return (x: t_RestoreFilterDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {saw_keep = false} (! bb3) | br1 -> {saw_keep} (! bb1) ]
+  | bb1 = any [ br0 -> {saw_drop = false} (! bb3) | br1 -> {saw_drop} (! bb2) ]
+  | bb2 = s0 [ s0 = [ &_ret <- Filter ] s1 | s1 = return {_ret} ]
+  | bb3 = any [ br0 -> {saw_drop = false} (! bb5) | br1 -> {saw_drop} (! bb4) ]
+  | bb4 = s0 [ s0 = [ &_ret <- Empty ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- Keep ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RestoreFilterDecision = Any.any_l () | & saw_keep: bool = saw_keep | & saw_drop: bool = saw_drop ])
+  [ return (result: t_RestoreFilterDecision) ->
+  {[@stop_split] [@expl:restore_batch_filter_decision ensures] [%#srestore] match result with
+      | Keep -> not saw_drop
+      | Empty -> saw_drop /\ not saw_keep
+      | Filter -> saw_keep /\ saw_drop
+      end}
+    (! return {result}) ]

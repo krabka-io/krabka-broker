@@ -26,9 +26,13 @@ pub enum RejectReason {
     /// [`ValidationMode::Full`][crate::schema_validation::ValidationMode::Full]
     /// can produce this.
     BodyMismatch { id: u32, detail: String },
-    /// The registry could not be reached or did not answer usefully, and
-    /// `fail_open` is off.
+    /// The registry could not provide an authoritative answer yet.
     RegistryUnavailable(String),
+    /// The registry provided a permanent or malformed response.
+    RegistryRejected {
+        kind: krabka_verified::SchemaFailureKind,
+        detail: String,
+    },
 }
 
 impl RejectReason {
@@ -54,7 +58,7 @@ impl RejectReason {
             Self::UnknownId(_) => "unknown_id",
             Self::WrongSubject { .. } => "wrong_subject",
             Self::BodyMismatch { .. } => "body_mismatch",
-            Self::RegistryUnavailable(_) => "registry_unavailable",
+            Self::RegistryUnavailable(_) | Self::RegistryRejected { .. } => "registry_unavailable",
         }
     }
 }
@@ -75,7 +79,7 @@ impl std::fmt::Display for RejectReason {
             Self::BodyMismatch { id, detail } => {
                 write!(f, "body does not match schema id {id}: {detail}")
             }
-            Self::RegistryUnavailable(detail) => {
+            Self::RegistryUnavailable(detail) | Self::RegistryRejected { detail, .. } => {
                 write!(f, "schema registry unavailable: {detail}")
             }
         }
@@ -84,6 +88,8 @@ impl std::fmt::Display for RejectReason {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use assert2::check;
 
     use super::*;
@@ -111,14 +117,34 @@ mod tests {
                 RejectReason::RegistryUnavailable("timeout".into()),
                 "registry_unavailable",
             ),
+            (
+                RejectReason::RegistryRejected {
+                    kind: krabka_verified::SchemaFailureKind::Malformed,
+                    detail: "not json".into(),
+                },
+                "registry_unavailable",
+            ),
         ];
-        check!(cases.len() == RejectReason::LABELS.len());
-        for (reason, label) in cases {
-            check!(reason.label() == label);
+        for (reason, label) in &cases {
+            check!(reason.label() == *label);
             check!(!reason.to_string().is_empty(), "{label}");
-            // Metric eviction names every label from `LABELS`, so a label a
-            // variant can return but `LABELS` omits would leak a series.
-            check!(RejectReason::LABELS.contains(&label), "{label}");
+            // A variant added to the enum without a case above stops this
+            // arm compiling, which is what keeps `cases` -- and through it
+            // `LABELS` -- honest. Without it a new variant returning a new
+            // label would leave `LABELS` short and this test green.
+            match reason {
+                RejectReason::Unframed(_)
+                | RejectReason::UnknownId(_)
+                | RejectReason::WrongSubject { .. }
+                | RejectReason::BodyMismatch { .. }
+                | RejectReason::RegistryUnavailable(_)
+                | RejectReason::RegistryRejected { .. } => {}
+            }
         }
+        // Metric eviction for a deleted topic names exactly `LABELS`, so a
+        // label a variant returns but `LABELS` omits leaks a series, and one
+        // `LABELS` carries but no variant returns evicts nothing.
+        let returned: BTreeSet<&str> = cases.iter().map(|(reason, _)| reason.label()).collect();
+        check!(returned == RejectReason::LABELS.into_iter().collect::<BTreeSet<_>>());
     }
 }

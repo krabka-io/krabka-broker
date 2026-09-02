@@ -13,6 +13,10 @@ use std::{
 use krabka_protocol::{
     Decode, owned::consumer_protocol_subscription::ConsumerProtocolSubscription,
 };
+use krabka_verified::{
+    GroupMigrationDirection, GroupMigrationRecordAction, classic_upgrade_epoch,
+    group_migration_record_plan,
+};
 
 use crate::coordinator::unified::{
     actor::{PendingRecords, full_pending_records},
@@ -54,15 +58,19 @@ pub(crate) fn decode_consumer_subscription(
 /// `ConsumerGroup.fromClassicGroup`. The group must use the `"consumer"`
 /// protocol type. **Every** current member's selected `protocol_metadata` must
 /// decode as a valid `ConsumerProtocolSubscription`, so that each subscription
-/// survives translation. An empty group is always convertible.
+/// survives translation. An empty group with the consumer protocol type is
+/// convertible.
 pub(crate) fn classic_is_convertible(state: &ClassicState) -> bool {
-    if state.protocol_type.as_deref() != Some("consumer") {
-        return false;
-    }
-    state
+    let every_subscription_decodable = state
         .members
         .values()
-        .all(|m| decode_consumer_subscription(&m.protocol_metadata).is_some())
+        .all(|m| decode_consumer_subscription(&m.protocol_metadata).is_some());
+    classic_upgrade_epoch(
+        state.protocol_type.as_deref() == Some("consumer"),
+        every_subscription_decodable,
+        state.generation_id,
+    )
+    .is_some()
 }
 
 /// Converts a classic group into a consumer group that **hosts its classic
@@ -82,7 +90,15 @@ pub(crate) fn convert_classic_to_consumer(classic: &ClassicState) -> ConsumerSta
     let mut state = ConsumerState::new(classic.group_id.clone());
     // Seed the group epoch from the classic generation so epochs stay
     // monotonic across the flip; the first reconcile bumps it.
-    state.group_epoch = classic.generation_id.max(0);
+    state.group_epoch = classic_upgrade_epoch(
+        classic.protocol_type.as_deref() == Some("consumer"),
+        classic
+            .members
+            .values()
+            .all(|member| decode_consumer_subscription(&member.protocol_metadata).is_some()),
+        classic.generation_id,
+    )
+    .expect("upgrade precondition: classic group is representable");
     for m in classic.members.values() {
         let names: HashSet<String> = decode_consumer_subscription(&m.protocol_metadata)
             .map(|s| s.topics.into_iter().collect())
@@ -122,8 +138,15 @@ pub(crate) fn convert_classic_to_consumer(classic: &ClassicState) -> ConsumerSta
 /// `GroupMetadata` and writes the full next-gen record set for the converted
 /// group. Both go into one batch, so the flip is all-or-nothing.
 pub(crate) fn upgrade_pending_records(state: &ConsumerState) -> PendingRecords {
+    let plan = group_migration_record_plan(GroupMigrationDirection::Upgrade, state.members.len());
     let mut pending = full_pending_records(state);
-    pending.classic_group_metadata_tombstone = true;
+    pending.classic_group_metadata_tombstone =
+        plan.classic_group == GroupMigrationRecordAction::Tombstone;
+    assert2::debug_assert!(pending.group_metadata.is_some());
+    assert2::debug_assert!(pending.target_metadata.is_some());
+    assert2::debug_assert!(pending.member_metadata.len() == plan.member_count);
+    assert2::debug_assert!(pending.target_per_member.len() == plan.member_count);
+    assert2::debug_assert!(pending.current_per_member.len() == plan.member_count);
     pending
 }
 
@@ -131,7 +154,7 @@ pub(crate) fn upgrade_pending_records(state: &ConsumerState) -> PendingRecords {
 mod tests {
     use std::time::Duration;
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use bytes::{BufMut, Bytes, BytesMut};
     use krabka_protocol::Encode;
 
@@ -218,7 +241,10 @@ mod tests {
         let mut g = ClassicGroup::new("g");
         g.protocol_type = Some("consumer".into());
         g.generation_id = 3;
-        g.add_member(consumer_member("m1", subscription_blob(&["t1"])));
+        let mut source_m1 = consumer_member("m1", subscription_blob(&["t1"]));
+        source_m1.group_instance_id = Some("instance-1".into());
+        source_m1.assignment = Some(Bytes::from_static(b"last-assignment"));
+        g.add_member(source_m1.clone());
         g.add_member(consumer_member("m2", subscription_blob(&["t1", "t2"])));
 
         let state = convert_classic_to_consumer(&g);
@@ -228,13 +254,39 @@ mod tests {
         let m1 = &state.members["m1"];
         assert!(m1.is_classic());
         assert!(m1.subscribed_topic_names.contains("t1"));
+        assert!(m1.instance_id == source_m1.group_instance_id);
+        assert!(m1.client_id == source_m1.client_id);
+        assert!(m1.client_host == source_m1.host);
+        assert!(m1.rebalance_timeout == source_m1.rebalance_timeout);
         let facade = m1.classic.as_ref().unwrap();
         assert!(facade.generation_id == 3);
+        assert!(facade.supported_protocols == source_m1.protocols);
+        assert!(facade.session_timeout == source_m1.session_timeout);
+        assert!(facade.last_synced_assignment == source_m1.assignment.unwrap());
         assert!(facade.awaiting_sync);
         // m2 subscribed to both topics.
         let m2 = &state.members["m2"];
         assert!(m2.subscribed_topic_names.len() == 2);
         // Marked dirty so the next reconcile computes the unified target.
         assert!(state.dirty);
+    }
+
+    #[test]
+    fn conversion_clamps_only_negative_epochs_and_retry_is_byte_identical() {
+        let mut g = ClassicGroup::new("g");
+        g.protocol_type = Some("consumer".into());
+        g.generation_id = -1;
+        g.add_member(consumer_member("m1", subscription_blob(&["t1"])));
+
+        let first = convert_classic_to_consumer(&g);
+        let second = convert_classic_to_consumer(&g);
+        check!(first.group_epoch == 0);
+        let first_batch = upgrade_pending_records(&first).to_batch("g", 7);
+        let second_batch = upgrade_pending_records(&second).to_batch("g", 7);
+        check!(first_batch.records.len() == 6);
+        assert!(first_batch.records == second_batch.records);
+
+        g.generation_id = i32::MAX;
+        assert!(convert_classic_to_consumer(&g).group_epoch == i32::MAX);
     }
 }

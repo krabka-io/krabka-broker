@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_local_recovery_sealed_last": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      }
+    }
+  }
+}

@@ -1,0 +1,157 @@
+(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 67 0 74 16 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 75 44 75 45
+let%span soffset_allocator'0 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 78 24 78 26
+let%span soffset_allocator'1 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 79 28 79 29
+let%span soffset_allocator'2 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 83 14 83 15
+let%span soffset_allocator'3 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 83 28 83 29
+let%span soffset_allocator'4 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 86 4 86 27
+let%span soffset_allocator'5 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 86 4 86 41
+let%span soffset_allocator'6 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 45 10 65 1
+let%span soffset_allocator'7 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 86 32 86 35
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+type closure0 = { c0: Int64.t }
+
+let closure0 [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 86 32 86 35] [@coma:extspec] (self: closure0)
+  (_0: Int64.t) (return (x: Int64.t)) = bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self.c0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l () | & self: closure0 = self ] [ return (result: Int64.t) -> return {result} ]
+
+meta "rewrite_def" predicate closure0'pre
+
+meta "rewrite_def" predicate closure0'post'return
+
+predicate precondition_closure0 (self: closure0) (args: Int64.t) =
+  [%#soffset_allocator'7] let _0 = args in closure0'pre self _0
+
+meta "rewrite_def" predicate precondition_closure0
+
+predicate resolve_closure0 [@inline:trivial] (_1: closure0) = true
+
+meta "rewrite_def" predicate resolve_closure0
+
+predicate postcondition_once_closure0 (self: closure0) (args: Int64.t) (result: Int64.t) =
+  [%#soffset_allocator'7] let _0 = args in closure0'post'return self _0 result
+
+meta "rewrite_def" predicate postcondition_once_closure0
+
+let map_i64 (self_: t_Option_i64) (f: closure0) (return (x: t_Option_i64)) =
+{[@stop_split] [@expl:map requires] [%#soption] match self_ with
+    | None -> true
+    | Some t -> precondition_closure0 f t
+    end}
+  any
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:map ensures] [%#soption'0] match self_ with
+      | None -> resolve_closure0 f /\ result = None
+      | Some t -> exists r: Int64.t. result = Some r /\ postcondition_once_closure0 f t r
+      end}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let wal_reservation_response [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 67 0 74 16]
+  (request_matches: bool) (request_epoch: Int64.t) (observed_epoch: Int64.t) (response_epoch: Int64.t) (base: Int64.t)
+  (count: Int64.t) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = any [ br0 -> {request_matches = false} (! bb3) | br1 -> {request_matches} (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_16 <- Int64.lt response_epoch ([%#soffset_allocator] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb4) | br1 -> {_16} (! bb3) ] ]
+  | bb4 = s0
+    [ s0 = [ &_20 <- request_epoch <> ([%#soffset_allocator'0] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb14) | br1 -> {_20} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = [ &_22 <- Int64.lt request_epoch ([%#soffset_allocator'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb8) | br1 -> {_22} (! bb12) ] ]
+  | bb8 = s0
+    [ s0 = [ &_24 <- observed_epoch <> request_epoch ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb10) | br1 -> {_24} (! bb12) ] ]
+  | bb10 = s0
+    [ s0 = [ &_27 <- response_epoch <> request_epoch ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb14) | br1 -> {_27} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb14 = s0
+    [ s0 = [ &_32 <- Int64.lt base ([%#soffset_allocator'2] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb16) | br1 -> {_32} (! bb19) ] ]
+  | bb16 = s0
+    [ s0 = [ &_34 <- Int64.le count ([%#soffset_allocator'3] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb18) | br1 -> {_34} (! bb19) ] ]
+  | bb19 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb18 = s0
+    [ s0 = checked_add [%#soffset_allocator'4] {base} {count} (fun (_x: t_Option_i64) -> [ &_37 <- _x ] s1)
+    | s1 = [ &_40 <- { c0 = base } ] s2
+    | s2 = map_i64 [%#soffset_allocator'5] {_37} {_40} (fun (_x: t_Option_i64) -> [ &_ret <- _x ] s3)
+    | s3 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & request_matches: bool = request_matches
+  | & request_epoch: Int64.t = request_epoch
+  | & observed_epoch: Int64.t = observed_epoch
+  | & response_epoch: Int64.t = response_epoch
+  | & base: Int64.t = base
+  | & count: Int64.t = count
+  | & _16: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _37: t_Option_i64 = Any.any_l ()
+  | & _40: closure0 = Any.any_l () ])
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:wal_reservation_response ensures] [%#soffset_allocator'6] match result with
+      | Some admitted_base -> request_matches
+      /\ ge_log_Int (Int64.to_int response_epoch) 0
+      /\ (Int64.to_int request_epoch = - 1
+        \/ ge_log_Int (Int64.to_int request_epoch) 0
+        /\ Int64.to_int observed_epoch = Int64.to_int request_epoch
+        /\ Int64.to_int response_epoch = Int64.to_int request_epoch)
+      /\ ge_log_Int (Int64.to_int base) 0
+      /\ gt_log_Int (Int64.to_int count) 0
+      /\ Int64.to_int admitted_base = Int64.to_int base
+      /\ Int64.to_int base + Int64.to_int count <= Int64.to_int const_MAX
+      | None -> not request_matches
+      \/ Int64.to_int response_epoch < 0
+      \/ Int64.to_int request_epoch <> - 1
+        /\ (Int64.to_int request_epoch < 0
+        \/ Int64.to_int observed_epoch <> Int64.to_int request_epoch
+        \/ Int64.to_int response_epoch <> Int64.to_int request_epoch)
+      \/ Int64.to_int base < 0
+      \/ Int64.to_int count <= 0 \/ gt_log_Int (Int64.to_int base + Int64.to_int count) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]

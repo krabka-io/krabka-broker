@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_java_objects_hash": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_kafka_murmur2_i32": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_kafka_to_positive": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_remote_metadata_partition": { "prover": "z3", "time": 0.012 }
+    }
+  }
+}

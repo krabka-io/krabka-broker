@@ -2,7 +2,7 @@
 //! [`plan_consume`](krabka_verified::throttle::plan_consume) arithmetic.
 //!
 //! This module holds the atomics, the seqlock generation protocol, and the
-//! injected [`NanoClock`].
+//! injected [`MonotonicClock`].
 //!
 //! The bucket's own operations live in submodules that each add an
 //! `impl TokenBucket` block: [`self::rate`] holds the rate and burst
@@ -17,7 +17,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering::Relaxed},
 };
 
-use qubit_clock::{NanoClock, NanoMonotonicClock};
+use qubit_clock::{MonotonicClock, StdMonotonicClock};
 
 mod consume;
 mod rate;
@@ -25,14 +25,17 @@ mod state;
 
 pub use self::state::ThrottleState;
 
-/// Reads the injected clock's current epoch-nanoseconds as a `u64`.
+/// Reads the injected clock's nanoseconds elapsed since its origin as a `u64`.
 ///
 /// The refill arithmetic uses **differences** of this value only, so the
-/// absolute anchor does not matter. A wall-clock-anchored epoch, about 1.75e18
-/// ns today, and a mock timeline anchored at the Unix epoch both fit in `u64`.
+/// absolute anchor does not matter. The span starts at zero when the clock is
+/// created and needs about 584 years to overflow `u64`, so it is a strictly
+/// safer anchor than the wall-clock epoch it replaces, which already stood at
+/// about 1.75e18 ns.
 #[inline]
-fn clock_nanos(clock: &dyn NanoClock) -> u64 {
-    u64::try_from(clock.nanos()).expect("clock nanoseconds must fit in u64")
+fn clock_nanos(clock: &dyn MonotonicClock) -> u64 {
+    u64::try_from(clock.now().elapsed_since_origin().as_nanos())
+        .expect("nanoseconds elapsed since the clock's origin must fit in u64")
 }
 
 pub struct TokenBucket {
@@ -50,10 +53,10 @@ pub struct TokenBucket {
     /// Seqlock writers must be serialized; overlapping writers can publish an
     /// even generation while a reset is still in flight.
     writer: Mutex<()>,
-    /// Monotonic nanosecond time source. The caller injects it, so tests can
-    /// drive refills deterministically with a [`qubit_clock::MockClock`]
+    /// Monotonic time source. The caller injects it, so tests can drive
+    /// refills deterministically with a [`qubit_clock::ManualMonotonicClock`]
     /// instead of sleeping.
-    clock: Arc<dyn NanoClock>,
+    clock: Arc<dyn MonotonicClock>,
 }
 
 impl std::fmt::Debug for TokenBucket {
@@ -71,17 +74,17 @@ impl std::fmt::Debug for TokenBucket {
 impl TokenBucket {
     #[must_use]
     pub fn new() -> Self {
-        Self::with_clock(Arc::new(NanoMonotonicClock::new()))
+        Self::with_clock(Arc::new(StdMonotonicClock::new()))
     }
 
-    /// Constructs a bucket backed by a caller-supplied [`NanoClock`].
+    /// Constructs a bucket backed by a caller-supplied [`MonotonicClock`].
     ///
     /// Production code uses [`TokenBucket::new`], which supplies a
-    /// [`NanoMonotonicClock`]. Tests pass a [`qubit_clock::MockClock`], so
-    /// refill windows advance by an exact, controlled amount instead of by
-    /// wall-clock sleeping.
+    /// [`StdMonotonicClock`]. Tests pass a
+    /// [`qubit_clock::ManualMonotonicClock`], so refill windows advance by an
+    /// exact, controlled amount instead of by wall-clock sleeping.
     #[must_use]
-    pub fn with_clock(clock: Arc<dyn NanoClock>) -> Self {
+    pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
         let last_refill_nanos = AtomicU64::new(clock_nanos(&*clock));
         Self {
             rate_per_sec: AtomicU64::new(0),

@@ -1,0 +1,80 @@
+(* #"/workspace/crates/verified/src/barrier.rs" 79 0 79 98 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sbarrier = "/workspace/crates/verified/src/barrier.rs" 81 34 81 35
+let%span sbarrier'0 = "/workspace/crates/verified/src/barrier.rs" 82 31 82 32
+let%span sbarrier'1 = "/workspace/crates/verified/src/barrier.rs" 83 33 83 34
+let%span sbarrier'2 = "/workspace/crates/verified/src/barrier.rs" 68 10 77 1
+
+use creusot.int.UInt64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_BarrierMarkerFenceFacts = {
+  image_present: bool;
+  expected_leader: UInt64.t;
+  expected_epoch: Int32.t;
+  image_leader: UInt64.t;
+  image_epoch: Int32.t;
+  current_leader: UInt64.t;
+  current_epoch: Int32.t }
+
+type t_BarrierMarkerFenceDecision = Malformed | NotLeader | FencedEpoch | Append
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let barrier_marker_fence_decision [#"/workspace/crates/verified/src/barrier.rs" 79 0 79 98]
+  (facts: t_BarrierMarkerFenceFacts) (return (x: t_BarrierMarkerFenceDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {facts.image_present = false} (! bb7) | br1 -> {facts.image_present} (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_12 <- Int32.lt facts.expected_epoch ([%#sbarrier] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb3) | br1 -> {_12} (! bb7) ] ]
+  | bb3 = s0
+    [ s0 = [ &_14 <- Int32.lt facts.image_epoch ([%#sbarrier'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb5) | br1 -> {_14} (! bb7) ] ]
+  | bb5 = s0
+    [ s0 = [ &_16 <- Int32.lt facts.current_epoch ([%#sbarrier'1] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb8) | br1 -> {_16} (! bb7) ] ]
+  | bb8 = s0
+    [ s0 = [ &_20 <- facts.image_leader <> facts.expected_leader ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb10) | br1 -> {_20} (! bb13) ] ]
+  | bb10 = s0
+    [ s0 = [ &_23 <- facts.current_leader <> facts.expected_leader ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb12) | br1 -> {_23} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- NotLeader ] s1 | s1 = return {_ret} ]
+  | bb12 = s0
+    [ s0 = [ &_28 <- facts.image_epoch <> facts.expected_epoch ] s1
+    | s1 = any [ br0 -> {_28 = false} (! bb15) | br1 -> {_28} (! bb18) ] ]
+  | bb15 = s0
+    [ s0 = [ &_31 <- facts.current_epoch <> facts.expected_epoch ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb17) | br1 -> {_31} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- FencedEpoch ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- Malformed ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierMarkerFenceDecision = Any.any_l ()
+  | & facts: t_BarrierMarkerFenceFacts = facts
+  | & _12: bool = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _31: bool = Any.any_l () ])
+  [ return (result: t_BarrierMarkerFenceDecision) ->
+  {[@stop_split] [@expl:barrier_marker_fence_decision ensures] [%#sbarrier'2] (result = Append)
+    = (facts.image_present
+    /\ ge_log_Int (Int32.to_int facts.expected_epoch) 0
+    /\ ge_log_Int (Int32.to_int facts.image_epoch) 0
+    /\ ge_log_Int (Int32.to_int facts.current_epoch) 0
+    /\ UInt64.t'int facts.image_leader = UInt64.t'int facts.expected_leader
+    /\ UInt64.t'int facts.current_leader = UInt64.t'int facts.expected_leader
+    /\ Int32.to_int facts.image_epoch = Int32.to_int facts.expected_epoch
+    /\ Int32.to_int facts.current_epoch = Int32.to_int facts.expected_epoch)}
+    (! return {result}) ]

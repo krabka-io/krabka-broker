@@ -218,14 +218,22 @@ pub(crate) fn build_join_result(state: &ClassicState, member_id: &str) -> JoinRe
 /// completed, or if there was nothing to complete. It returns `Err(())` if the
 /// protocol intersection was empty, which is `INCONSISTENT_GROUP_PROTOCOL`.
 /// Mirrors `join_group.rs` block 5.
-pub(crate) fn try_complete(state: &mut ClassicState) -> Result<(), ()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompleteError {
+    InconsistentProtocol,
+    EpochExhausted,
+}
+
+pub(crate) fn try_complete(state: &mut ClassicState) -> Result<(), CompleteError> {
     if matches!(state.state, GroupState::PreparingRebalance) && !state.members.is_empty() {
         if let Some(chosen) = select_protocol(&state.members) {
             state.resolve_selected_protocol_metadata(&chosen);
-            state.complete_rebalance(chosen);
-            Ok(())
+            state
+                .complete_rebalance(chosen)
+                .then_some(())
+                .ok_or(CompleteError::EpochExhausted)
         } else {
-            Err(())
+            Err(CompleteError::InconsistentProtocol)
         }
     } else {
         Ok(())
