@@ -6,7 +6,7 @@
 # starting point for the operator to tune. Each rule names the runbook that
 # says what to do when it fires.
 #
-# `tools/check-metrics-contract.py` and the `metrics_contract` suite in
+# `aspect check-metrics-contract` and the `metrics_contract` suite in
 # `crates/broker/tests/` check that every series an `expr` names is one the
 # broker exports. Load the file with `promtool check rules`.
 groups:

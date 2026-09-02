@@ -67,6 +67,35 @@ need a formatted log directory call `krabka_format::run_from_args` in process
 rather than spawning it, because a subprocess needs a Cargo working tree and a
 Bazel test sandbox has none.
 
+## Repository tasks
+
+Every check and generator that runs on a developer's or a runner's machine is an
+Aspect CLI task under `.aspect/`, written in AXL, with unit tests beside it.
+
+```
+aspect --help            # the whole task surface
+aspect axl-tests         # every task's unit tests
+aspect check-scripts     # the ratchet below
+```
+
+A task is `.aspect/<name>.axl`: the pure functions the check is made of, and a
+thin `task(...)` that does the IO around them. Its tests are
+`.aspect/<name>_test.axl`, exporting a suite that `.aspect/axl_tests.axl` runs
+and an `aspect tests <name>` command of its own. `.aspect/repo.axl` holds the
+guarded filesystem walk `ctx.std.fs` does not provide; `.aspect/testing.axl`
+holds the assertions, the suite type and the runner.
+
+**Do not add a shell script or a Python script.** `aspect check-scripts` fails
+on a new `.sh` or `.py`, and its `ALLOWED` table is not a list of exceptions to
+taste: every row names a file that runs inside a Bazel action, a Bazel test
+sandbox, or a container image built from an apko base -- somewhere the Aspect
+CLI is not, and a task cannot reach. A new file that genuinely runs in one of
+those gets a row saying which. Everything else is a task.
+
+AXL is Starlark: no regular expressions, no `while`, no recursion. A port from
+`re` or `awk` becomes explicit string scanning, and the unit tests are what say
+it still means the same thing.
+
 ## Code & Documentation Style
 
 Follow the style guides in [`docs/style_guides/`](docs/style_guides/README.md):

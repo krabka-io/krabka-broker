@@ -1,16 +1,42 @@
 """Run every `.axl` unit-test suite in this repository.
 
+Each task under `.aspect/` keeps its tests in a `_test.axl` beside it, which
+exports one suite and an `aspect tests <name>` command of its own. This is the
+whole set, which is what CI runs.
+
     aspect axl-tests
     aspect axl-tests --suite check-scripts
 """
 
+load("./check_crate_changelogs_test.axl", "check_crate_changelogs_tests")
 load("./check_crate_readmes_test.axl", "check_crate_readmes_tests")
+load("./check_creusot_packages_test.axl", "check_creusot_packages_tests")
+load("./check_creusot_skip_test.axl", "check_creusot_skip_tests")
+load("./check_design_docs_test.axl", "check_design_docs_tests")
+load("./check_kfcs_test.axl", "check_kfcs_tests")
+load("./check_metrics_contract_test.axl", "check_metrics_contract_tests")
+load("./check_mutants_config_test.axl", "check_mutants_config_tests")
 load("./check_scripts_test.axl", "check_scripts_tests")
+load("./creusot_image_tag_test.axl", "creusot_image_tag_tests")
+load("./generate_config_reference_test.axl", "generate_config_reference_tests")
+load("./mutants_shard_test.axl", "mutants_shard_tests")
+load("./rustdoc_site_test.axl", "rustdoc_site_tests")
 load("./testing.axl", "run_suites")
 
 SUITES = [
+    check_crate_changelogs_tests,
     check_crate_readmes_tests,
+    check_creusot_packages_tests,
+    check_creusot_skip_tests,
+    check_design_docs_tests,
+    check_kfcs_tests,
+    check_metrics_contract_tests,
+    check_mutants_config_tests,
     check_scripts_tests,
+    creusot_image_tag_tests,
+    generate_config_reference_tests,
+    mutants_shard_tests,
+    rustdoc_site_tests,
 ]
 
 def _impl(ctx: TaskContext) -> int:

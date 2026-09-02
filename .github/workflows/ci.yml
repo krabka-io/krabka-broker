@@ -200,6 +200,30 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
+  # Every check and generator this repository runs on a runner is an AXL task
+  # under `.aspect/`, and this job is their unit tests. It is also where the
+  # "check the check" steps that used to sit beside three of them now live:
+  # `aspect axl-tests` runs every suite, so a check and its tests no longer have
+  # to be invoked as a pair from the job that uses the check.
+  #
+  # `aspect check-scripts` is the ratchet beside them. A new `.sh` or `.py`
+  # fails it unless a row in that task's allowlist says where the file runs and
+  # why a task cannot go there.
+  axl:
+    name: axl tasks
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+      - name: the tasks' own tests
+        run: aspect axl-tests
+      - name: no new shell or Python script
+        run: aspect check-scripts
+
   # Krabka tags and releases the whole workspace as one unit, so the root
   # CHANGELOG.md is the only record of what shipped. The twelve crate
   # changelogs this repository inherited said otherwise: they documented
@@ -212,10 +236,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: check the check
-        run: python3 tools/lint/test_crate_changelogs.py
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: no crate changelog records a release
-        run: python3 tools/lint/crate_changelogs.py
+        run: aspect check-crate-changelogs
 
   # cargo-mutants generates mutants syntactically and does not evaluate
   # #[cfg], so every #[cfg(creusot)] fn in crates/verified/src/ is mutated
@@ -229,10 +254,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: check the check
-        run: python3 tools/lint/test_creusot_skip.py
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: every #[cfg(creusot)] fn skips mutation testing
-        run: python3 tools/lint/creusot_skip.py
+        run: aspect check-creusot-skip
 
   # Documentation source checks do not use Bazel, so they can stay parallel
   # while the `ci` job renders and uploads rustdoc from its warm output tree.
@@ -243,36 +269,37 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: generated KIP matrix
         run: |
           generated="$(mktemp)"
           trap 'rm -f "${generated}"' EXIT
-          python3 tools/generate-kip-matrix.py "${generated}"
+          aspect generate-kip-matrix --output "${generated}"
           diff -u docs/KIP_MATRIX.md "${generated}"
       # docs/config-reference.md is rendered from docs/config-schema.json; a schema change without a regeneration fails here (the schema itself is compared against FileConfig by //crates/broker:config_reference_test).
       - name: generated config reference
         run: |
           generated="$(mktemp)"
           trap 'rm -f "${generated}"' EXIT
-          python3 tools/generate-config-reference.py "${generated}"
+          aspect generate-config-reference --output "${generated}"
           diff -u docs/config-reference.md "${generated}"
-      # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the self-test proves the check fails on a missing heading or a status mismatch.
+      # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the `axl tasks` job runs the unit tests that prove the check fails on a missing heading or a status mismatch.
       - name: KFC template
-        run: |
-          tools/check-kfcs.sh
-          tools/check-kfcs-test.sh
+        run: aspect check-kfcs
       # Design-doc index, required headings, README links, and #fragment anchors (lychee below does not follow fragments).
       - name: design docs
-        run: python3 tools/check-design-docs.py
+        run: aspect check-design-docs
       # Every series the reference dashboard and the alert rules name must be one the broker exports; the metrics_contract suite keeps the body file fresh.
       - name: metrics contract
-        run: python3 tools/check-metrics-contract.py docs/operations/metrics-body.txt
+        run: aspect check-metrics-contract
       # An exclude_re entry pinned to a path that a refactor moved or renamed stops matching anything, and the mutant it used to suppress comes back as an unexplained survivor.
       - name: mutants config
-        run: python3 tools/check-mutants-config.py
+        run: aspect check-mutants-config
       # Every crate has a README and the root README crate table names it.
       - name: crate READMEs
-        run: tools/check-crate-readmes.sh
+        run: aspect check-crate-readmes
       - name: markdown links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
@@ -310,12 +337,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The CLI alone, and unconditionally: the tag below is what decides
+      # whether this job builds anything, so it has to be resolved before the
+      # cache-warming setup further down knows whether it is wanted. The Bazel
+      # caches stay on that second step, on the path that actually runs Bazel.
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+
+      # The proved-package list and what the proof image actually proves cannot
+      # drift apart. This ran inside the image until the checks moved to AXL
+      # tasks; the image has no Aspect CLI, so it runs here, before the image
+      # does anything.
+      - name: the proofs job covers every Creusot package
+        run: aspect check-creusot-packages
+
       # A digest of everything that decides the image's contents. See
       # //tools/creusot for why the registry, and not the Bazel disk cache, is
       # what keeps CI from reinstalling Creusot on every run.
       - id: image
         name: resolve the proof image tag
-        run: echo "tag=$(tools/creusot/image-tag.sh)" >>"${GITHUB_OUTPUT}"
+        run: echo "tag=$(aspect creusot-image-tag)" >>"${GITHUB_OUTPUT}"
 
       - uses: docker/login-action@v4
         with:

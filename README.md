@@ -77,7 +77,7 @@ on each push to `main`.
 
 - [KIP compatibility matrix](docs/KIP_MATRIX.md): generated per-KIP status,
   owner, tests, Kafka image and client evidence. Regenerate with
-  `python3 tools/generate-kip-matrix.py`; CI diffs it.
+  `aspect generate-kip-matrix`; CI diffs it.
 
 ## Configuration
 
@@ -333,7 +333,7 @@ The operator guide lives in [docs/operations/](docs/operations/README.md):
 [capacity](docs/operations/capacity.md), the
 [metrics contract](docs/operations/metrics.md) with the JMX names each series
 replaces, a reference Grafana dashboard, Prometheus alert rules, and one
-runbook per alert. `tools/check-metrics-contract.py` and the
+runbook per alert. `aspect check-metrics-contract` and the
 `metrics_contract` suite fail the build when the dashboard or the rules name
 a series the registry does not export.
 
@@ -382,7 +382,7 @@ creates the GitHub release. [`CHANGELOG.md`](CHANGELOG.md) records what each tag
 contains, and [releasing](docs/releasing.md) gives the commands that cut one.
 
 The workspace is versioned and tagged as one unit, so no crate has a release of
-its own and no crate changelog records one. `tools/lint/crate_changelogs.py`
+its own and no crate changelog records one. `aspect check-crate-changelogs`
 holds that rule in CI. Each crate changelog keeps an `[Unreleased]` heading and
 points at robot-head/crabka for the history before the extraction.
 
