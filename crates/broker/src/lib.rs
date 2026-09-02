@@ -263,4 +263,7 @@ pub use broker::{Broker, BrokerHandle};
 pub use config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
 pub use config_keys::{TopicConfigDoc, topic_config_docs};
 pub use error::BrokerError;
+/// Benchmark seam over the produce hot path, driven by `benches/produce.rs`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub use handlers::produce::hot_path as produce_hot_path;
 pub use krabka_raft::NodeId;

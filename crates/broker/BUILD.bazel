@@ -5,6 +5,13 @@ package(default_visibility = ["//visibility:public"])
 # Consumed by `crate.from_cargo` (see //MODULE.bazel).
 exports_files(["Cargo.toml"])
 
+# No rule claims a bench source: benches are a Cargo-only concern here, declared
+# by a `[[bench]]` section and nothing else. CI's container-suite selection still
+# feeds the change's touched `crates/**` paths to `rdeps`, which takes a target
+# set, and one path Bazel does not know fails the whole query. Exporting them
+# makes them targets that reach nothing, which is the true answer.
+exports_files(glob(["benches/*.rs"]))
+
 crate_library(name = "broker")
 
 # The broker server. `bazel run //crates/broker:krabka-broker -- --help`.
