@@ -117,6 +117,7 @@ pub(crate) fn convert_consumer_to_classic(
 pub(crate) fn downgrade_pending_records(
     consumer: &ConsumerState,
     classic: &ClassicState,
+    now_ms: i64,
 ) -> PendingRecords {
     let plan =
         group_migration_record_plan(GroupMigrationDirection::Downgrade, consumer.members.len());
@@ -126,7 +127,7 @@ pub(crate) fn downgrade_pending_records(
         next_gen_target_metadata_tombstone: plan.next_gen_target
             == GroupMigrationRecordAction::Tombstone,
         classic_group_metadata: (plan.classic_group == GroupMigrationRecordAction::Write)
-            .then(|| classic_group_metadata_record(classic)),
+            .then(|| classic_group_metadata_record(classic, now_ms)),
         ..Default::default()
     };
     if plan.member_metadata == GroupMigrationRecordAction::Tombstone {
@@ -270,8 +271,8 @@ mod tests {
         check!(classic.protocol_name.as_deref() == Some("range"));
         check!(classic.leader_id.as_deref() == Some("m1"));
 
-        let first = downgrade_pending_records(&state, &classic).to_batch("g", 7);
-        let second = downgrade_pending_records(&state, &classic).to_batch("g", 7);
+        let first = downgrade_pending_records(&state, &classic, 7).to_batch("g", 7);
+        let second = downgrade_pending_records(&state, &classic, 7).to_batch("g", 7);
         check!(first.records.len() == 6);
         assert!(first.records == second.records);
     }

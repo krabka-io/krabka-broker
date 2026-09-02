@@ -54,11 +54,12 @@ pub(super) async fn maybe_downgrade(
 
     // The leave or expiration path already reconciled the surviving members,
     // so the target covers the departed native member's partitions.
+    let now_ms = chrono_now_ms();
     let state = group.as_consumer().expect("consumer-kind verified above");
     let classic = migration::convert_consumer_to_classic(state, &image);
-    let pending = migration::downgrade_pending_records(state, &classic);
+    let pending = migration::downgrade_pending_records(state, &classic, now_ms);
     let group_id = group.group_id.clone();
-    let batch = pending.to_batch(&group_id, chrono_now_ms());
+    let batch = pending.to_batch(&group_id, now_ms);
     offsets_log.append(&group_id, batch).await?;
     coordinator.mark_classic_after_downgrade(&group_id);
     *group.kind_mut() = GroupKind::Classic(classic);
