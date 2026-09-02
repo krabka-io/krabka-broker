@@ -34,6 +34,11 @@
 //! session. Only another privileged session evicts a privileged session, which
 //! is a follower fetch with `replica_id >= 0`.
 //!
+//! Finding that victim is O(1). The cache carries an explicit recency order
+//! beside the map — see the `order` submodule — so a full cache costs an
+//! allocation two list-head reads rather than a scan of every live session
+//! with the cache mutex held. `benches/fetch_session.rs` measures it.
+//!
 //! When there is no eligible victim, `try_allocate` returns
 //! `INVALID_SESSION_ID` and the caller falls back to a sessionless response.
 //! This matches Apache Kafka. That case arises when the cache is full of
@@ -44,6 +49,7 @@ mod classify;
 mod diff;
 mod epoch;
 mod eviction;
+mod order;
 mod state;
 #[cfg(test)]
 mod test_support;

@@ -284,3 +284,11 @@ pub mod fetch_drain {
 pub use handlers::produce::hot_path as produce_hot_path;
 pub use health::{HealthState, NotReady};
 pub use krabka_raft::NodeId;
+/// Benchmark seam over the response-framing deferral, driven by
+/// `benches/perf_deferrals.rs`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub use network::dispatch::response_framing;
+/// Benchmark seam over the replicated-batch deferral, driven by
+/// `benches/perf_deferrals.rs`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub use replicator::hot_path as replicate_hot_path;

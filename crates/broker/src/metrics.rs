@@ -26,6 +26,7 @@ mod auth;
 mod break_glass;
 mod delivery;
 mod diskless;
+mod eviction;
 mod fetch_drain;
 mod labels;
 mod log_cleaner;
@@ -43,7 +44,9 @@ pub use self::labels::{
     SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
     WalVoterLabel,
 };
-pub(crate) use self::{labels::UNKNOWN_LABEL, phases::RequestPhases};
+pub(crate) use self::{
+    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, phases::RequestPhases,
+};
 
 /// Shared registry owning every metric the broker emits. Wrapped in
 /// `Arc<Mutex<…>>` because `prometheus-client` requires `&mut Registry`

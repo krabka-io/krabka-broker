@@ -20,6 +20,10 @@ use tracing::{info, warn};
 mod connection;
 mod fetch_loop;
 mod follower_throttle;
+/// Benchmark seam over the replicator's per-batch work, driven by
+/// `benches/perf_deferrals.rs`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod hot_path;
 mod response;
 #[cfg(test)]
 mod test_support;

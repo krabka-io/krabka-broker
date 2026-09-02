@@ -36,6 +36,19 @@ pub enum RejectReason {
 }
 
 impl RejectReason {
+    /// Every value [`RejectReason::label`] can return.
+    ///
+    /// The `schema_validation_rejections` family keys on the topic paired with
+    /// one of these, so evicting a deleted topic's series has to name each of
+    /// them; there is no way to enumerate a `Family`'s live label sets.
+    pub const LABELS: [&'static str; 5] = [
+        "unframed",
+        "unknown_id",
+        "wrong_subject",
+        "body_mismatch",
+        "registry_unavailable",
+    ];
+
     /// The metric label for this reason. Low cardinality by construction: it
     /// carries none of the ids or subjects the message does.
     #[must_use]
@@ -75,6 +88,8 @@ impl std::fmt::Display for RejectReason {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use assert2::check;
 
     use super::*;
@@ -102,10 +117,34 @@ mod tests {
                 RejectReason::RegistryUnavailable("timeout".into()),
                 "registry_unavailable",
             ),
+            (
+                RejectReason::RegistryRejected {
+                    kind: krabka_verified::SchemaFailureKind::Malformed,
+                    detail: "not json".into(),
+                },
+                "registry_unavailable",
+            ),
         ];
-        for (reason, label) in cases {
-            check!(reason.label() == label);
+        for (reason, label) in &cases {
+            check!(reason.label() == *label);
             check!(!reason.to_string().is_empty(), "{label}");
+            // A variant added to the enum without a case above stops this
+            // arm compiling, which is what keeps `cases` -- and through it
+            // `LABELS` -- honest. Without it a new variant returning a new
+            // label would leave `LABELS` short and this test green.
+            match reason {
+                RejectReason::Unframed(_)
+                | RejectReason::UnknownId(_)
+                | RejectReason::WrongSubject { .. }
+                | RejectReason::BodyMismatch { .. }
+                | RejectReason::RegistryUnavailable(_)
+                | RejectReason::RegistryRejected { .. } => {}
+            }
         }
+        // Metric eviction for a deleted topic names exactly `LABELS`, so a
+        // label a variant returns but `LABELS` omits leaks a series, and one
+        // `LABELS` carries but no variant returns evicts nothing.
+        let returned: BTreeSet<&str> = cases.iter().map(|(reason, _)| reason.label()).collect();
+        check!(returned == RejectReason::LABELS.into_iter().collect::<BTreeSet<_>>());
     }
 }
