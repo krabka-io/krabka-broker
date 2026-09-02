@@ -190,30 +190,37 @@ async fn actor_loop(
     // how often we check, never the outcome.
     //
     // Driven through the injected `Timer` (production: real time; tests: a
-    // controlled manual timeline). A zero-duration first deadline reproduces
-    // `tokio::time::interval`'s immediate t=0 tick; each subsequent deadline is
-    // armed to the configured interval only after the tick body runs
-    // (`MissedTickBehavior::Delay` semantics — a slow tick never bursts). The
-    // future is held across loop iterations so an inbound-message stream never
-    // resets the tick schedule (matching the persistent `Interval`). It owns
-    // its registration outright instead of borrowing the timer, so nothing
-    // has to be cloned out of `config` to keep it alive across the arms.
-    let Some(mut tick) = time_util::arm(&*config.timer, Duration::ZERO, TICK_TASK) else {
+    // controlled manual timeline). Each deadline is armed to the configured
+    // interval only after the tick body runs (`MissedTickBehavior::Delay`
+    // semantics — a slow tick never bursts). The future is held across loop
+    // iterations so an inbound-message stream never resets the tick schedule
+    // (matching the persistent `Interval`). It owns its registration outright
+    // instead of borrowing the timer, so nothing has to be cloned out of
+    // `config` to keep it alive across the arms.
+    //
+    // The FIRST deadline is a full interval, not the zero-duration one that
+    // would reproduce `tokio::time::interval`'s t=0 tick. A sweep at t=0 can
+    // only read `last_seen` values that predate this actor, which is exactly
+    // the just-replayed group whose members were restored from the log: it
+    // evicts every one of them, empties the group, and reaps the actor before
+    // it has served a single request. Deferring the first sweep by one
+    // interval costs nothing, because as the paragraph above says the cadence
+    // "only changes how often we check, never the outcome" -- a member that is
+    // genuinely past its session timeout is still past it one interval later.
+    //
+    // The previous sleeper hid this. Its `tokio::time::sleep(Duration::ZERO)`
+    // still went through the runtime's timer driver, so the "immediate" tick
+    // actually landed a driver tick later — enough of a window that a caller
+    // reliably got in first. `Timer::after(Duration::ZERO)` returns an
+    // already-complete future instead, which turned that window into a coin
+    // flip against `tokio::select!`'s randomised branch order.
+    let Some(mut tick) = time_util::arm(&*config.timer, config.session_expiry_tick, TICK_TASK)
+    else {
         // No ticker, no actor. Take the same exit the loop body takes below,
         // so the offset-retention clock is stamped once before we go away.
         group.observe_membership(chrono_now_ms());
         return;
     };
-    // A zero-duration deadline is already due, so `Timer` hands back a future
-    // that is ready on its first poll. `tokio::select!` polls its branches in a
-    // random order, so without this yield the t=0 tick wins roughly half the
-    // races against a mailbox that spawn already filled -- and a replayed group
-    // whose `last_seen` values predate this actor is then swept before it
-    // answers a single request. Yielding once lets those queued messages land
-    // first, which is the ordering this loop has always had: the sleeper it
-    // used before returned a `tokio::time::sleep`, and even a zero-duration one
-    // goes through the runtime and polls `Pending` once.
-    tokio::task::yield_now().await;
     loop {
         let deadline = classic_deadline(&group);
         let keep_running = tokio::select! {
