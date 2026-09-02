@@ -4,13 +4,14 @@ load(
     "./creusot_image_tag.axl",
     "DIGEST_LENGTH",
     "digest_input",
+    "image_inputs",
     "label_path",
     "lock_label",
     "missing_pins",
     "pin_lines",
     "tag",
 )
-load("./testing.axl", "check_eq", "suite", "suite_task")
+load("./testing.axl", "check_eq", "suite", "suite_task", "temp_tree")
 
 _MODULE = [
     'bazel_dep(name = "rules_img", version = "0.3.19")',
@@ -94,6 +95,46 @@ def _test_digest_input_is_the_layout_an_operator_can_reproduce(_ctx):
         "pin one\npin two\naaaa  a.txt\nbbbb  b/c.txt\n",
     )
 
+def _test_the_sweep_reaches_a_hidden_directory(ctx):
+    # `find tools/creusot -type f` reached one, and the digest has to cover no
+    # less than the shell script's did: an input the sweep stops seeing leaves
+    # the tag unchanged while the image's contents move, which is the one
+    # direction this task's header says it must never fail in.
+    root = temp_tree(ctx, {
+        ".creusot-version": "v0.13.0\n",
+        "tools/creusot/BUILD.bazel": "# the package\n",
+        "tools/creusot/prove.sh": "# the entrypoint\n",
+        "tools/creusot/.config/creusot.toml": "# hidden, and still an input\n",
+        "tools/creusot/nested/deep/file.txt": "deep\n",
+        "packaging/base.apko.lock.json": "{}\n",
+    })
+    check_eq(
+        "the swept inputs",
+        image_inputs(ctx.std.fs, root, "packaging/base.apko.lock.json"),
+        [
+            ".creusot-version",
+            "packaging/base.apko.lock.json",
+            "tools/creusot/.config/creusot.toml",
+            "tools/creusot/BUILD.bazel",
+            "tools/creusot/nested/deep/file.txt",
+            "tools/creusot/prove.sh",
+        ],
+    )
+
+def _test_the_sweep_names_each_input_once(ctx):
+    # The lock lives outside `tools/creusot` today, but a repoint could move it
+    # inside; hashing it twice would change the tag for no reason.
+    root = temp_tree(ctx, {
+        ".creusot-version": "v0.13.0\n",
+        "tools/creusot/BUILD.bazel": "# the package\n",
+        "tools/creusot/image.apko.lock.json": "{}\n",
+    })
+    check_eq(
+        "no duplicate",
+        image_inputs(ctx.std.fs, root, "tools/creusot/image.apko.lock.json"),
+        [".creusot-version", "tools/creusot/BUILD.bazel", "tools/creusot/image.apko.lock.json"],
+    )
+
 def _test_tag_truncates_the_digest(_ctx):
     check_eq("tag", tag("v0.13.0", "0123456789abcdef0123456789abcdef"), "v0.13.0-0123456789abcdef")
     check_eq("digest length", DIGEST_LENGTH, 16)
@@ -108,6 +149,8 @@ creusot_image_tag_tests = suite("creusot-image-tag", [
     _test_label_path_resolves_a_root_anchored_label,
     _test_label_path_rejects_a_shape_it_cannot_read,
     _test_digest_input_is_the_layout_an_operator_can_reproduce,
+    _test_the_sweep_reaches_a_hidden_directory,
+    _test_the_sweep_names_each_input_once,
     _test_tag_truncates_the_digest,
 ])
 

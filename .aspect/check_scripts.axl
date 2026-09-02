@@ -63,6 +63,32 @@ def has_script_suffix(path):
             return True
     return False
 
+# The `env` options whose operand is the next word rather than attached to
+# them. `--unset=NAME` and `--chdir=DIR` carry theirs, so only the bare forms
+# swallow a word; `-S` does not, because in a `#!` line the kernel hands `env`
+# the whole tail as one string and `-S` is what asks it to split that string.
+ENV_OPTIONS_TAKING_AN_OPERAND = ["-u", "--unset", "-C", "--chdir"]
+
+def env_program(words):
+    """The program `env` runs, given the words that follow it.
+
+    `env` accepts options and `NAME=value` assignments before the program, and
+    two of its options take the next word. Treating that word as the program is
+    how `#!/usr/bin/env -S -u PYTHONPATH python3` would slip past this check.
+    """
+    index = 0
+    for _ in range(len(words)):
+        if index >= len(words):
+            return ""
+        word = words[index]
+        if word in ENV_OPTIONS_TAKING_AN_OPERAND:
+            index += 2
+        elif word.startswith("-") or "=" in word:
+            index += 1
+        else:
+            return word
+    return ""
+
 def shebang_interpreter(first_line):
     """The interpreter a `#!` line selects, or "" when the line is not one.
 
@@ -71,11 +97,12 @@ def shebang_interpreter(first_line):
     """
     if not first_line.startswith("#!"):
         return ""
-    words = first_line[2:].strip().split(" ")
+    words = [word for word in first_line[2:].strip().split(" ") if word]
+    if not words:
+        return ""
     program = words[0].rsplit("/", 1)[-1]
     if program == "env":
-        rest = [word for word in words[1:] if word and not word.startswith("-")]
-        program = rest[0].rsplit("/", 1)[-1] if rest else ""
+        program = env_program(words[1:]).rsplit("/", 1)[-1]
     return program
 
 def is_script(path, read_first_line):

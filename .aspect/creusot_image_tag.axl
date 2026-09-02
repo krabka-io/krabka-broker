@@ -128,6 +128,24 @@ def label_path(label):
         return ""
     return package + "/" + name
 
+def image_inputs(fs, root, lock_path):
+    """Every file whose contents the tag covers, sorted, relative to `root`.
+
+    The directory is swept rather than listed, so a file added to it is hashed
+    without anyone remembering to say so. The sweep steps over nothing:
+    `walk`'s default predicate skips a hidden directory, and this one must not,
+    because a file under `tools/creusot/.config/` that quietly stopped being
+    hashed would leave the tag unchanged while the image's contents moved.
+    Under-approximating is the failure this task's header calls out.
+    """
+    swept = walk(
+        fs,
+        root + "/" + CREUSOT_DIR,
+        relative_to = root,
+        skip_dir = lambda _name: False,
+    )
+    return sorted({path: True for path in [VERSION_FILE, lock_path] + swept})
+
 def digest_input(pins, hashed):
     """The exact bytes the tag's digest is taken over.
 
@@ -175,8 +193,7 @@ def _impl(ctx: TaskContext) -> int:
         )
         return 1
 
-    swept = walk(fs, root + "/" + CREUSOT_DIR, relative_to = root)
-    inputs = sorted({p: True for p in [VERSION_FILE, path] + swept})
+    inputs = image_inputs(fs, root, path)
     if SENTINEL_INPUT not in inputs:
         ctx.std.io.stderr.write("the input sweep did not reach %s\n" % CREUSOT_DIR)
         return 1

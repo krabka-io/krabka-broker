@@ -1,6 +1,6 @@
 """Unit tests for `check_scripts.axl`."""
 
-load("./check_scripts.axl", "ALLOWED", "audit", "is_script", "shebang_interpreter")
+load("./check_scripts.axl", "ALLOWED", "audit", "env_program", "is_script", "shebang_interpreter")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _unreadable(path):
@@ -23,8 +23,27 @@ def _test_shebang_interpreter(_ctx):
         ("// not a shebang", ""),
         ("", ""),
         ("#!/usr/bin/env", ""),
+        # `env` takes options and `NAME=value` assignments before the program,
+        # and `-u` and `-C` take the next word with them. Reading that word as
+        # the program is how a Python script would walk past this check.
+        ("#!/usr/bin/env -S -u PYTHONPATH python3", "python3"),
+        ("#!/usr/bin/env -u PYTHONPATH -C /tmp bash", "bash"),
+        ("#!/usr/bin/env --unset PYTHONPATH python3", "python3"),
+        ("#!/usr/bin/env --unset=PYTHONPATH python3", "python3"),
+        ("#!/usr/bin/env FOO=bar python3", "python3"),
+        ("#!/usr/bin/env -i FOO=bar /usr/bin/python3", "python3"),
+        ("#!/usr/bin/env  -S  python3", "python3"),
+        ("#!/usr/bin/env -u PYTHONPATH", ""),
     ]:
         check_eq("shebang %r" % line, shebang_interpreter(line), want)
+
+def _test_env_program_skips_options_and_assignments(_ctx):
+    check_eq("bare program", env_program(["python3"]), "python3")
+    check_eq("an option's operand is not the program", env_program(["-u", "PATH", "sh"]), "sh")
+    check_eq("an attached operand takes no word", env_program(["--unset=PATH", "sh"]), "sh")
+    check_eq("an assignment", env_program(["FOO=bar", "sh"]), "sh")
+    check_eq("nothing left", env_program(["-u", "PATH"]), "")
+    check_eq("no words", env_program([]), "")
 
 def _test_suffixes_settle_it(_ctx):
     for path in ["tools/x.sh", "a/b/c.py", "x.bash", "x.zsh", "stubs/x.pyi"]:
@@ -73,6 +92,7 @@ def _test_every_reason_says_where_it_runs(_ctx):
 
 check_scripts_tests = suite("check-scripts", [
     _test_shebang_interpreter,
+    _test_env_program_skips_options_and_assignments,
     _test_suffixes_settle_it,
     _test_suffixless_files_are_read,
     _test_a_suffixed_file_is_never_read,

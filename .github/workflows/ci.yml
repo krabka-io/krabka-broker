@@ -606,6 +606,7 @@ jobs:
       - ci
       - coverage
       - supply-chain
+      - axl
       - changelogs
       - creusot-skip
       - docs
