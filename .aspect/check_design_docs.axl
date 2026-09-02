@@ -1,0 +1,373 @@
+"""The subsystem design documents match the design-doc style guide.
+
+Every `crates/<crate>/docs/*design*.md` has to be named by the index table in
+`docs/style_guides/design_doc_style_guide.md`, carry the six section headings
+the guide's template mandates, and be linked from its crate's `README.md`.
+On top of that, every relative link and every `#fragment` anchor in those
+documents, in the guide itself, and in the doc comment of
+`crates/broker/src/diskless_crash_model.rs` has to resolve.
+
+The repository-wide link checker in CI does not follow fragments, so the
+anchor check here is what keeps `Slice 5` and `Slice 6` in
+`crates/broker/src/diskless_crash_model.rs` pointing at real sections.
+
+    aspect check-design-docs
+"""
+
+load("./repo.axl", "dirname", "starts_with_any")
+
+# The guide holding the index table, and the one Rust file whose doc comment
+# carries reference-style links into a design document.
+GUIDE = "docs/style_guides/design_doc_style_guide.md"
+
+CRASH_MODEL = "crates/broker/src/diskless_crash_model.rs"
+
+# The section headings the guide's template mandates, in the guide's order.
+REQUIRED_HEADINGS = [
+    "## Design Goals",
+    "## Architecture Overview",
+    "## Key Design Decisions",
+    "## Integration",
+    "## Kafka / KIP Compliance",
+    "## Testing",
+]
+
+# Link schemes that name something outside the tree, so nothing here can say
+# whether they resolve.
+_EXTERNAL_PREFIXES = ["http://", "https://", "mailto:"]
+
+# The opening of a reference-style link definition inside a `//!` doc comment.
+# Exactly one space separates the comment marker from the label's bracket.
+_REFERENCE_PREFIX = "//! ["
+
+# The characters a GitHub anchor keeps. Everything else is dropped, and a space
+# then becomes a hyphen.
+_SLUG_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789 _-"
+
+_WHITESPACE = " \t\n\r"
+
+def _has_whitespace(value):
+    for char in _WHITESPACE.elems():
+        if char in value:
+            return True
+    return False
+
+def slug(heading):
+    """The GitHub-style anchor for a Markdown heading's text.
+
+    The heading is trimmed and lowercased, then everything outside
+    `[a-z0-9 _-]` is dropped and the surviving spaces become hyphens. Backticks
+    and asterisks fall out of that filter, so the emphasis a heading carries
+    leaves no trace in its anchor. Lowercasing happens before the filter, which
+    is why an accented or otherwise non-ASCII letter is dropped rather than
+    folded onto its ASCII neighbour.
+    """
+    kept = []
+    for char in heading.strip().lower().elems():
+        if char in _SLUG_ALPHABET:
+            kept.append("-" if char == " " else char)
+    return "".join(kept)
+
+def heading_text(line):
+    """The text of a Markdown ATX heading line, or `None` when it is not one.
+
+    A heading opens with a run of `#` and then at least one space or tab; the
+    text is what follows, with its leading whitespace removed. `## ` with
+    nothing after it is a heading whose text is empty, but `##` on its own is
+    not a heading at all.
+    """
+    hashes = 0
+    for char in line.elems():
+        if char != "#":
+            break
+        hashes += 1
+    if hashes == 0:
+        return None
+    rest = line[hashes:]
+    body = rest.lstrip()
+    if body == rest:
+        return None
+    return body
+
+def anchors(text):
+    """The anchors of every heading in `text`, deduplicated and sorted."""
+    found = {}
+    for line in text.splitlines():
+        body = heading_text(line)
+        if body != None:
+            found[slug(body)] = True
+    return sorted(found)
+
+def inline_links(text):
+    """Every Markdown inline link target in `text`, in document order.
+
+    A target opens with `](`, runs to the next `)`, and holds neither
+    whitespace nor a closing parenthesis; an empty target is not one. A
+    candidate that fails those tests is not a link, and the scan resumes just
+    inside its `](` -- a nested `](` further along the candidate can still open
+    a link of its own, which is what the original regex's backtracking did.
+    """
+    found = []
+    index = 0
+
+    # Starlark has no `while`, so the scan is a bounded sweep. Each pass moves
+    # `index` on by at least two, so two passes per character is more than the
+    # text can ever need and exhaustion means the scan itself is broken.
+    for _ in range(len(text) + 2):
+        open_at = text.find("](", index)
+        if open_at < 0:
+            return found
+        close_at = text.find(")", open_at + 2)
+        if close_at < 0:
+            return found
+        candidate = text[open_at + 2:close_at]
+        if candidate and not _has_whitespace(candidate):
+            found.append(candidate)
+            index = close_at + 1
+        else:
+            index = open_at + 2
+    fail("inline_links: %d characters is more than this scan can reach" % len(text))
+
+def reference_links(text):
+    """Every reference-style link target defined in a `//!` doc comment.
+
+    The definition is a whole line: `//! [label]: target`, with a non-empty
+    label, exactly one space after the colon, and a target that runs to the end
+    of the line without any whitespace in it.
+    """
+    found = []
+    for line in text.splitlines():
+        target = _reference_link(line)
+        if target:
+            found.append(target)
+    return found
+
+def _reference_link(line):
+    if not line.startswith(_REFERENCE_PREFIX):
+        return ""
+    rest = line[len(_REFERENCE_PREFIX):]
+    label_end = rest.find("]")
+    if label_end < 1:
+        return ""
+    target = rest[label_end + 1:]
+    if not target.startswith(": "):
+        return ""
+    target = target[2:]
+    if not target or _has_whitespace(target):
+        return ""
+    return target
+
+def normalize(path):
+    """`path` with its `.` and `..` segments collapsed lexically.
+
+    This stands in for the `Path.resolve` the Python script used, which also
+    resolved symlinks. The documentation tree holds no symlinks, so the lexical
+    form is the same answer here. A `..` that would climb above an absolute
+    root is dropped, which is what the kernel does; above a relative root it is
+    kept, because there is nothing yet to climb out of.
+    """
+    absolute = path.startswith("/")
+    parts = []
+    for part in path.split("/"):
+        if part == "" or part == ".":
+            continue
+        if part != "..":
+            parts.append(part)
+        elif parts and parts[-1] != "..":
+            parts.pop()
+        elif not absolute:
+            parts.append("..")
+    joined = "/".join(parts)
+    return "/" + joined if absolute else joined
+
+def join(base, part):
+    """`part` resolved against the directory `base`, normalized.
+
+    An absolute `part` replaces `base` outright, as joining a path onto an
+    absolute one does everywhere.
+    """
+    if part.startswith("/") or not base:
+        return normalize(part)
+    return normalize(base + "/" + part)
+
+def is_markdown(path):
+    """Whether `path` names a Markdown file.
+
+    A bare `.md` is a hidden file with no extension rather than a Markdown one,
+    which is the distinction the Python script's `Path.suffix` drew.
+    """
+    name = path.rsplit("/", 1)[-1]
+    return name.endswith(".md") and name != ".md"
+
+def has_heading(text, heading):
+    """Whether some line of `text` is exactly `heading`, trailing space aside."""
+    for line in text.splitlines():
+        if line.rstrip() == heading:
+            return True
+    return False
+
+def check_links(source, links, base, exists, anchors_of):
+    """Every complaint about the `links` that `source` carries, in report order.
+
+    `source` and `base` are repository-relative paths: the document the links
+    were read from, and the directory a relative target resolves against. The
+    filesystem arrives as two callables so this stays testable without a tree:
+    `exists(path)` says whether a repository-relative path is there, and
+    `anchors_of(path)` gives the anchors of the Markdown file at one.
+
+    A link that is a bare `#fragment` points into `source` itself, and a
+    fragment on anything but a Markdown file is left alone -- a line number in
+    a source file is not an anchor this can check.
+    """
+    problems = []
+    for link in links:
+        if starts_with_any(link, _EXTERNAL_PREFIXES):
+            continue
+        target_part, _, fragment = link.partition("#")
+        target = join(base, target_part) if target_part else source
+        if not exists(target):
+            problems.append("%s: missing link target %s" % (source, link))
+        elif fragment and is_markdown(target) and fragment not in anchors_of(target):
+            problems.append("%s: missing anchor %s" % (source, link))
+    return problems
+
+def linked_documents(text, base):
+    """The repository-relative targets of every non-`http` link in `text`.
+
+    The result is a set-like dict keyed by the normalized target, which is what
+    both the guide's index and a crate README are read for. The `http` test is
+    a bare prefix rather than the scheme test `check_links` uses, matching the
+    Python script.
+    """
+    found = {}
+    for link in inline_links(text):
+        if not link.startswith("http"):
+            found[join(base, link.partition("#")[0])] = True
+    return found
+
+def indexed_documents(guide_text):
+    """The design documents the guide's index table links to, sorted.
+
+    Only Markdown files under `crates/` count: the guide links to plenty else
+    besides, and a link that climbs out of the repository is not an index row.
+    """
+    return sorted([
+        target
+        for target in linked_documents(guide_text, dirname(GUIDE))
+        if target.startswith("crates/") and is_markdown(target)
+    ])
+
+def design_documents(fs, root):
+    """Every `crates/*/docs/*design*.md`, repository-relative and sorted.
+
+    This is the `crates/*/docs/*design*.md` glob the Python script used, so a
+    directory whose name begins with a dot is stepped over the way a glob's `*`
+    steps over one.
+    """
+    found = []
+    crates = root + "/crates"
+    if not fs.exists(crates):
+        return found
+    for crate in sorted([entry.path for entry in fs.read_dir(crates) if entry.is_dir]):
+        if crate.startswith("."):
+            continue
+        docs = crates + "/" + crate + "/docs"
+        if not fs.exists(docs) or not fs.metadata(docs).is_dir:
+            continue
+        for name in sorted([entry.path for entry in fs.read_dir(docs) if entry.is_file]):
+            if not name.startswith(".") and name.endswith(".md") and name.find("design") >= 0:
+                found.append("crates/%s/docs/%s" % (crate, name))
+    return found
+
+def resolve(root, path):
+    """The path `path` names in the tree at `root`.
+
+    An absolute path is left alone. No link in this tree opens with `/`, but
+    joining one onto a directory yields an absolute filesystem path rather than
+    something under the repository, and that is what the Python script this
+    replaces resolved and then looked for -- so a stray absolute link keeps
+    being judged the same way here.
+    """
+    return path if path.startswith("/") else root + "/" + path
+
+def report(fs, root):
+    """The check's outcome for the tree at `root`, as `struct(code, problems, count)`.
+
+    `code` is the exit status, `problems` every complaint in report order, and
+    `count` the number of design documents read. Nothing stops at the first
+    problem: a run reports all of them.
+    """
+    def exists(path):
+        return fs.exists(resolve(root, path))
+
+    def read(path):
+        return fs.read_to_string(resolve(root, path))
+
+    def anchors_of(path):
+        return anchors(read(path))
+
+    if not exists(GUIDE):
+        return struct(code = 1, problems = ["%s: not found" % GUIDE], count = 0)
+
+    problems = []
+    documents = design_documents(fs, root)
+    if not documents:
+        problems.append("no design documents found under crates/*/docs/")
+
+    guide_text = read(GUIDE)
+    indexed = indexed_documents(guide_text)
+    for document in indexed:
+        if not exists(document):
+            problems.append("%s: index names missing file %s" % (GUIDE, document))
+
+    for document in documents:
+        if document not in indexed:
+            problems.append("%s: not listed in %s" % (document, GUIDE))
+        text = read(document)
+        for heading in REQUIRED_HEADINGS:
+            if not has_heading(text, heading):
+                problems.append("%s: missing required heading '%s'" % (document, heading))
+        crate = dirname(dirname(document))
+        readme = crate + "/README.md"
+        if not exists(readme):
+            problems.append("%s: crate has no README.md to link it from" % document)
+        elif document not in linked_documents(read(readme), crate):
+            problems.append("%s: not linked from %s" % (document, readme))
+        problems.extend(check_links(
+            document,
+            inline_links(text),
+            dirname(document),
+            exists,
+            anchors_of,
+        ))
+
+    problems.extend(check_links(GUIDE, inline_links(guide_text), dirname(GUIDE), exists, anchors_of))
+
+    if exists(CRASH_MODEL):
+        links = reference_links(read(CRASH_MODEL))
+        if not links:
+            problems.append("%s: doc comment has no design-doc reference links" % CRASH_MODEL)
+        problems.extend(check_links(
+            CRASH_MODEL,
+            links,
+            dirname(CRASH_MODEL),
+            exists,
+            anchors_of,
+        ))
+
+    return struct(code = 1 if problems else 0, problems = problems, count = len(documents))
+
+def _impl(ctx: TaskContext) -> int:
+    outcome = report(ctx.std.fs, ctx.std.env.bazel_root_dir())
+    for problem in outcome.problems:
+        ctx.std.io.stderr.write(problem + "\n")
+    if outcome.code:
+        return outcome.code
+    ctx.std.io.stdout.write("design docs ok: %d documents checked\n" % outcome.count)
+    return 0
+
+check_design_docs = task(
+    summary = "Check the subsystem design documents against the design-doc style guide",
+    implementation = _impl,
+    args = {},
+)

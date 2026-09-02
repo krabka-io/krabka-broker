@@ -1,0 +1,527 @@
+"""Unit tests for `check_design_docs.axl`."""
+
+load(
+    "./check_design_docs.axl",
+    "anchors",
+    "check_links",
+    "design_documents",
+    "has_heading",
+    "heading_text",
+    "indexed_documents",
+    "inline_links",
+    "is_markdown",
+    "join",
+    "linked_documents",
+    "normalize",
+    "reference_links",
+    "report",
+    "resolve",
+    "slug",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task", "temp_tree")
+
+def _test_slug_lowercases_and_hyphenates(_ctx):
+    check_eq("plain heading", slug("Design Goals"), "design-goals")
+    check_eq("digits survive", slug("Slice 5 Crash Windows"), "slice-5-crash-windows")
+    check_eq("underscores and hyphens survive", slug("a_b-c"), "a_b-c")
+
+def _test_slug_drops_emphasis_and_punctuation(_ctx):
+    check_eq("backticks and asterisks", slug("`Slice 5`: The **Thing**"), "slice-5-the-thing")
+    check_eq("a slash leaves its spaces behind", slug("Kafka / KIP Compliance"), "kafka--kip-compliance")
+    check_eq("a run of spaces becomes a run of hyphens", slug("Multi   Space"), "multi---space")
+
+def _test_slug_trims_before_it_filters(_ctx):
+    check_eq("surrounding whitespace", slug("  Hi  "), "hi")
+    check_eq("nothing left", slug("***"), "")
+    check_eq("empty heading", slug(""), "")
+
+def _test_slug_drops_non_ascii_letters(_ctx):
+    # The Python lowercased before filtering, so an accented letter was never
+    # folded onto its ASCII neighbour -- it was simply dropped.
+    check_eq("an accented letter", slug("Café"), "caf")
+
+def _test_heading_text_needs_hashes_then_whitespace(_ctx):
+    check_eq("one hash", heading_text("# Title"), "Title")
+    check_eq("leading whitespace is eaten", heading_text("###   Deep"), "Deep")
+    check_eq("a tab counts as the separator", heading_text("#\tTab"), "Tab")
+    check_eq("no separator", heading_text("#NoSpace"), None)
+    check_eq("hashes alone", heading_text("###"), None)
+    check_eq("a single hash alone", heading_text("#"), None)
+    check_eq("no hashes", heading_text("Not a heading"), None)
+    check_eq("an empty heading is still a heading", heading_text("## "), "")
+
+def _test_anchors_are_sorted_and_deduplicated(_ctx):
+    check_eq(
+        "the headings of a document",
+        anchors("# Top\n\ntext\n\n## Design Goals\n### Design Goals\nnot a heading\n"),
+        ["design-goals", "top"],
+    )
+    check_eq("no headings", anchors("just prose\n"), [])
+
+def _test_inline_links_reads_a_target(_ctx):
+    check_eq("one link", inline_links("[a](b.md)"), ["b.md"])
+    check_eq("two links", inline_links("[a](b)[c](d)"), ["b", "d"])
+    check_eq("a fragment is part of the target", inline_links("[x](#anchor)"), ["#anchor"])
+    check_eq("an absolute url", inline_links("[x](https://x.test/a)"), ["https://x.test/a"])
+
+def _test_inline_links_rejects_whitespace_and_emptiness(_ctx):
+    check_eq("a space in the target", inline_links("[a](b c)"), [])
+    check_eq("a newline in the target", inline_links("[a](b\nc)"), [])
+    check_eq("an empty target", inline_links("[a]()"), [])
+    check_eq("no closing parenthesis", inline_links("[a](b"), [])
+    check_eq("a space before the parenthesis", inline_links("[a] (b)"), [])
+
+def _test_inline_links_stops_at_the_first_parenthesis(_ctx):
+    check_eq("a trailing parenthesised aside", inline_links("[a](b)(c)"), ["b"])
+    check_eq("an opening parenthesis is part of the target", inline_links("]((a)"), ["(a"])
+    check_eq("so is a nested bracket pair", inline_links("](a](b)"), ["a](b"])
+
+def _test_inline_links_resumes_inside_a_rejected_candidate(_ctx):
+    # `](a ](b)` holds no link up to the first `)`, but the `](` inside that
+    # rejected span opens one that does resolve. The original regex found it by
+    # backtracking; the scan finds it by resuming just past the outer `](`.
+    check_eq("a nested opening survives the rejection", inline_links("](a ](b)"), ["b"])
+    check_eq("adjacent links", inline_links("](x)](y)"), ["x", "y"])
+
+def _test_reference_links_reads_a_doc_comment_definition(_ctx):
+    check_eq(
+        "a slice definition",
+        reference_links("//! [Slice 5]: ../docs/x.md#slice-5\n"),
+        ["../docs/x.md#slice-5"],
+    )
+    check_eq(
+        "only the definition lines",
+        reference_links("//! text\n//! [a]: one.md\nlet x = 1;\n//! [b]: two.md\n"),
+        ["one.md", "two.md"],
+    )
+
+def _test_reference_links_rejects_a_malformed_definition(_ctx):
+    check_eq("a whitespace-bearing target", reference_links("//! [a]: b c"), [])
+    check_eq("an empty label", reference_links("//! []: b"), [])
+    check_eq("two spaces after the marker", reference_links("//!  [a]: b"), [])
+    check_eq("an outer doc comment", reference_links("// [a]: b"), [])
+    check_eq("no space after the colon", reference_links("//! [a]:b"), [])
+    check_eq("no target", reference_links("//! [a]: "), [])
+    check_eq("a trailing space", reference_links("//! [a]: b "), [])
+    check_eq("a second bracket pair before the colon", reference_links("//! [a][b]: c"), [])
+
+def _test_normalize_collapses_dot_segments(_ctx):
+    check_eq("a parent segment", normalize("a/b/../c"), "a/c")
+    check_eq("a current segment", normalize("a/./b"), "a/b")
+    check_eq("the guide's climb out of docs/", normalize("docs/style_guides/../../crates/x.md"), "crates/x.md")
+    check_eq("a doubled separator", normalize("a//b"), "a/b")
+    check_eq("a trailing separator", normalize("a/"), "a")
+    check_eq("nothing to collapse", normalize("a/b"), "a/b")
+
+def _test_normalize_keeps_a_relative_climb_but_not_an_absolute_one(_ctx):
+    check_eq("above a relative root", normalize("../a"), "../a")
+    check_eq("further above one", normalize("a/b/../../.."), "..")
+    check_eq("above an absolute root", normalize("/.."), "/")
+    check_eq("an absolute path", normalize("/a/b/../c"), "/a/c")
+    check_eq("the root itself", normalize("/"), "/")
+    check_eq("nothing at all", normalize(""), "")
+
+def _test_join_resolves_against_a_directory(_ctx):
+    check_eq("a sibling", join("crates/log/docs", "design.md"), "crates/log/docs/design.md")
+    check_eq("a climb", join("crates/log/docs", "../README.md"), "crates/log/README.md")
+    check_eq("an empty part is the directory itself", join("crates/log", ""), "crates/log")
+    check_eq("an empty base", join("", "README.md"), "README.md")
+    check_eq("an absolute part wins", join("crates/log", "/etc/hosts"), "/etc/hosts")
+
+def _test_is_markdown(_ctx):
+    check_eq("a document", is_markdown("crates/log/docs/design.md"), True)
+    check_eq("a source file", is_markdown("crates/broker/src/x.rs"), False)
+    check_eq("a hidden file with no extension", is_markdown(".md"), False)
+    check_eq("a hidden file with one", is_markdown("dir/.hidden.md"), True)
+
+def _test_has_heading_matches_a_whole_line(_ctx):
+    check_eq("exactly", has_heading("intro\n## Design Goals\n", "## Design Goals"), True)
+    check_eq("with trailing whitespace", has_heading("## Design Goals   \n", "## Design Goals"), True)
+    check_eq("indented", has_heading("  ## Design Goals\n", "## Design Goals"), False)
+    check_eq("with more text", has_heading("## Design Goals x\n", "## Design Goals"), False)
+    check_eq("absent", has_heading("## Testing\n", "## Design Goals"), False)
+
+def _links_fixture():
+    """A stand-in filesystem: what exists, and the anchors of each Markdown file."""
+    present = {
+        "docs/guide.md": ["intro", "slice-5"],
+        "docs/other.md": ["top"],
+        "docs/image.png": [],
+        "src/model.rs": [],
+    }
+
+    def exists(path):
+        return path in present
+
+    def anchors_of(path):
+        return present[path]
+
+    return exists, anchors_of
+
+def _test_check_links_skips_external_schemes(_ctx):
+    exists, anchors_of = _links_fixture()
+    check_eq(
+        "http, https and mailto are nobody's business here",
+        check_links(
+            "docs/guide.md",
+            ["http://x.test/a", "https://x.test/b", "mailto:a@x.test"],
+            "docs",
+            exists,
+            anchors_of,
+        ),
+        [],
+    )
+
+def _test_check_links_reports_a_missing_target(_ctx):
+    exists, anchors_of = _links_fixture()
+    check_eq(
+        "a target that is not there",
+        check_links("docs/guide.md", ["gone.md", "other.md"], "docs", exists, anchors_of),
+        ["docs/guide.md: missing link target gone.md"],
+    )
+
+def _test_check_links_resolves_a_relative_target(_ctx):
+    exists, anchors_of = _links_fixture()
+    check_eq(
+        "a climb out of the directory and back in",
+        check_links("docs/guide.md", ["../docs/other.md", "../src/model.rs"], "docs", exists, anchors_of),
+        [],
+    )
+
+def _test_check_links_checks_a_fragment_against_the_target(_ctx):
+    exists, anchors_of = _links_fixture()
+    check_eq(
+        "an anchor that is there",
+        check_links("docs/other.md", ["guide.md#slice-5"], "docs", exists, anchors_of),
+        [],
+    )
+    check_eq(
+        "an anchor that is not",
+        check_links("docs/other.md", ["guide.md#slice-9"], "docs", exists, anchors_of),
+        ["docs/other.md: missing anchor guide.md#slice-9"],
+    )
+
+def _test_check_links_leaves_a_fragment_on_a_non_markdown_target_alone(_ctx):
+    exists, anchors_of = _links_fixture()
+    check_eq(
+        "a line number in a source file is not an anchor",
+        check_links("docs/guide.md", ["../src/model.rs#L10", "image.png#x"], "docs", exists, anchors_of),
+        [],
+    )
+
+def _test_check_links_resolves_a_bare_fragment_against_the_source(_ctx):
+    exists, anchors_of = _links_fixture()
+    check_eq(
+        "a section of the document itself",
+        check_links("docs/guide.md", ["#slice-5"], "docs", exists, anchors_of),
+        [],
+    )
+    check_eq(
+        "a section the document does not carry",
+        check_links("docs/guide.md", ["#nowhere"], "docs", exists, anchors_of),
+        ["docs/guide.md: missing anchor #nowhere"],
+    )
+
+def _test_check_links_reports_a_missing_target_only_once(_ctx):
+    exists, anchors_of = _links_fixture()
+    check_eq(
+        "a missing target ends the checks for that link",
+        check_links("docs/guide.md", ["gone.md#anchor"], "docs", exists, anchors_of),
+        ["docs/guide.md: missing link target gone.md#anchor"],
+    )
+
+_INDEX = """# Guide
+
+| Document | Summary |
+| --- | --- |
+| [`crates/log/docs/design.md`](../../crates/log/docs/design.md) | The log. |
+| [`crates/raft/docs/design.md`](../../crates/raft/docs/design.md) | Consensus. |
+
+See [the readme style guide](readme_style_guide.md) and
+[Kafka](https://kafka.apache.org/) and [a section](#guide).
+"""
+
+def _test_indexed_documents_keeps_only_crate_markdown(_ctx):
+    check_eq(
+        "the index rows and nothing else",
+        indexed_documents(_INDEX),
+        ["crates/log/docs/design.md", "crates/raft/docs/design.md"],
+    )
+
+def _test_linked_documents_normalizes_every_non_http_target(_ctx):
+    check_eq(
+        "a crate README's links",
+        sorted(linked_documents("[d](docs/design.md) [x](https://x.test) [s](#top)", "crates/log")),
+        ["crates/log", "crates/log/docs/design.md"],
+    )
+
+_HEADINGS = """## Design Goals
+
+## Architecture Overview
+
+## Key Design Decisions
+
+## Integration
+
+## Kafka / KIP Compliance
+
+## Testing
+"""
+
+_GUIDE_TEXT = """# Design doc style guide
+
+| Document | Summary |
+| --- | --- |
+| [log](../../crates/log/docs/design.md) | The log. |
+"""
+
+def _tree(extra = {}, drop = []):
+    """The smallest tree this check passes on, with `extra` merged over it."""
+    files = {
+        "docs/style_guides/design_doc_style_guide.md": _GUIDE_TEXT,
+        "crates/log/README.md": "See the [design](docs/design.md).\n",
+        "crates/log/docs/design.md": "# Log design\n\n" + _HEADINGS,
+    }
+    for path in drop:
+        files.pop(path)
+    for path, content in extra.items():
+        files[path] = content
+    return files
+
+def _run(ctx, files):
+    return report(ctx.std.fs, temp_tree(ctx, files))
+
+def _test_a_conforming_tree_passes(ctx):
+    outcome = _run(ctx, _tree())
+    check_eq("no problems", outcome.problems, [])
+    check_eq("exit code", outcome.code, 0)
+    check_eq("documents read", outcome.count, 1)
+
+def _test_a_document_missing_from_the_index_is_reported(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "docs/style_guides/design_doc_style_guide.md": "# Design doc style guide\n",
+    }))
+    check_eq(
+        "unindexed",
+        outcome.problems,
+        ["crates/log/docs/design.md: not listed in docs/style_guides/design_doc_style_guide.md"],
+    )
+    check_eq("exit code", outcome.code, 1)
+
+def _test_an_index_row_naming_a_missing_file_is_reported(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "docs/style_guides/design_doc_style_guide.md": _GUIDE_TEXT +
+                                                       "| [gone](../../crates/log/docs/gone.md) | Nothing. |\n",
+    }))
+    check_eq(
+        "an index row with no file behind it",
+        outcome.problems,
+        [
+            "docs/style_guides/design_doc_style_guide.md: index names missing file " +
+            "crates/log/docs/gone.md",
+            "docs/style_guides/design_doc_style_guide.md: missing link target " +
+            "../../crates/log/docs/gone.md",
+        ],
+    )
+
+def _test_a_missing_required_heading_is_reported(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "crates/log/docs/design.md": "# Log design\n\n" +
+                                     _HEADINGS.replace("## Testing", "## Tests"),
+    }))
+    check_eq(
+        "the template's last section is gone",
+        outcome.problems,
+        ["crates/log/docs/design.md: missing required heading '## Testing'"],
+    )
+
+def _test_a_crate_without_a_readme_is_reported(ctx):
+    outcome = _run(ctx, _tree(drop = ["crates/log/README.md"]))
+    check_eq(
+        "nothing to link the document from",
+        outcome.problems,
+        ["crates/log/docs/design.md: crate has no README.md to link it from"],
+    )
+
+def _test_a_document_the_readme_does_not_link_is_reported(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "crates/log/README.md": "See the [design](docs/other.md).\n",
+    }))
+    # A crate README is read for the documents it names and nothing else, so
+    # the dangling link it carries is not itself a complaint here.
+    check_eq(
+        "the README links elsewhere",
+        outcome.problems,
+        ["crates/log/docs/design.md: not linked from crates/log/README.md"],
+    )
+
+def _test_a_broken_link_inside_a_document_is_reported(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "crates/log/docs/design.md": "# Log design\n\nSee [gone](gone.md).\n\n" + _HEADINGS,
+    }))
+    check_eq(
+        "a target that is not there",
+        outcome.problems,
+        ["crates/log/docs/design.md: missing link target gone.md"],
+    )
+
+def _test_a_broken_anchor_inside_a_document_is_reported(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "crates/log/docs/design.md": "# Log design\n\nSee [it](#nowhere).\n\n" + _HEADINGS,
+    }))
+    check_eq(
+        "a fragment naming no section",
+        outcome.problems,
+        ["crates/log/docs/design.md: missing anchor #nowhere"],
+    )
+
+def _test_an_anchor_that_resolves_is_accepted(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "crates/log/docs/design.md": "# Log design\n\nSee [it](#kafka--kip-compliance).\n\n" + _HEADINGS,
+    }))
+    check_eq("the slug of a heading with punctuation in it", outcome.problems, [])
+
+def _test_a_tree_with_no_design_documents_is_reported(ctx):
+    outcome = _run(ctx, _tree(drop = ["crates/log/docs/design.md"], extra = {
+        "docs/style_guides/design_doc_style_guide.md": "# Design doc style guide\n",
+    }))
+    check_eq(
+        "an empty sweep",
+        outcome.problems,
+        ["no design documents found under crates/*/docs/"],
+    )
+
+def _test_a_missing_guide_is_reported_on_its_own(ctx):
+    outcome = _run(ctx, _tree(drop = ["docs/style_guides/design_doc_style_guide.md"]))
+    check_eq(
+        "there is nothing to check against",
+        outcome.problems,
+        ["docs/style_guides/design_doc_style_guide.md: not found"],
+    )
+    check_eq("exit code", outcome.code, 1)
+
+def _test_a_crash_model_without_reference_links_is_reported(ctx):
+    outcome = _run(ctx, _tree(extra = {
+        "crates/broker/src/diskless_crash_model.rs": "//! No links here.\n",
+        "crates/broker/README.md": "The broker.\n",
+    }))
+    check_eq(
+        "a doc comment that points nowhere",
+        outcome.problems,
+        [
+            "crates/broker/src/diskless_crash_model.rs: doc comment has no design-doc " +
+            "reference links",
+        ],
+    )
+
+def _test_a_crash_model_anchor_is_followed(ctx):
+    files = _tree(extra = {
+        "crates/broker/README.md": "See the [design](docs/broker-design.md).\n",
+        "crates/broker/docs/broker-design.md": "# Broker\n\n## Slice 5: Crash Windows\n\n" + _HEADINGS,
+        "crates/broker/src/diskless_crash_model.rs":
+            "//! [Slice 5]: ../docs/broker-design.md#slice-5-crash-windows\n",
+        "docs/style_guides/design_doc_style_guide.md": _GUIDE_TEXT +
+                                                       "| [broker](../../crates/broker/docs/broker-design.md) | The broker. |\n",
+    })
+    check_eq("a reference link that resolves", _run(ctx, files).problems, [])
+
+    files["crates/broker/src/diskless_crash_model.rs"] = \
+        "//! [Slice 5]: ../docs/broker-design.md#slice-9-gone\n"
+    check_eq(
+        "a reference link that does not",
+        _run(ctx, files).problems,
+        [
+            "crates/broker/src/diskless_crash_model.rs: missing anchor " +
+            "../docs/broker-design.md#slice-9-gone",
+        ],
+    )
+
+def _test_an_absolute_link_target_is_read_as_an_absolute_path(ctx):
+    root = temp_tree(ctx, _tree())
+    document = root + "/crates/log/docs/design.md"
+    ctx.std.fs.write(
+        document,
+        "# Log design\n\nSee [absolute](%s).\n\n%s" % (document, _HEADINGS),
+    )
+    check_eq("a target outside the tree that is there", report(ctx.std.fs, root).problems, [])
+
+    ctx.std.fs.write(
+        document,
+        "# Log design\n\nSee [absolute](%s/gone.md).\n\n%s" % (root, _HEADINGS),
+    )
+    check_eq(
+        "one that is not",
+        report(ctx.std.fs, root).problems,
+        ["crates/log/docs/design.md: missing link target %s/gone.md" % root],
+    )
+
+def _test_resolve_leaves_an_absolute_path_alone(_ctx):
+    check_eq("a relative path", resolve("/tree", "crates/log"), "/tree/crates/log")
+    check_eq("an absolute one", resolve("/tree", "/etc/hosts"), "/etc/hosts")
+
+def _test_design_documents_globs_crates_only(ctx):
+    root = temp_tree(ctx, {
+        "crates/log/docs/design.md": "",
+        "crates/log/docs/segment-design.md": "",
+        "crates/log/docs/overview.md": "",
+        "crates/log/docs/design.txt": "",
+        "crates/log/design.md": "",
+        "crates/broker/docs/a-design.md": "",
+        "docs/design.md": "",
+    })
+    check_eq(
+        "one level of crate, one docs directory, one name test",
+        design_documents(ctx.std.fs, root),
+        [
+            "crates/broker/docs/a-design.md",
+            "crates/log/docs/design.md",
+            "crates/log/docs/segment-design.md",
+        ],
+    )
+
+check_design_docs_tests = suite("check-design-docs", [
+    _test_slug_lowercases_and_hyphenates,
+    _test_slug_drops_emphasis_and_punctuation,
+    _test_slug_trims_before_it_filters,
+    _test_slug_drops_non_ascii_letters,
+    _test_heading_text_needs_hashes_then_whitespace,
+    _test_anchors_are_sorted_and_deduplicated,
+    _test_inline_links_reads_a_target,
+    _test_inline_links_rejects_whitespace_and_emptiness,
+    _test_inline_links_stops_at_the_first_parenthesis,
+    _test_inline_links_resumes_inside_a_rejected_candidate,
+    _test_reference_links_reads_a_doc_comment_definition,
+    _test_reference_links_rejects_a_malformed_definition,
+    _test_normalize_collapses_dot_segments,
+    _test_normalize_keeps_a_relative_climb_but_not_an_absolute_one,
+    _test_join_resolves_against_a_directory,
+    _test_is_markdown,
+    _test_has_heading_matches_a_whole_line,
+    _test_check_links_skips_external_schemes,
+    _test_check_links_reports_a_missing_target,
+    _test_check_links_resolves_a_relative_target,
+    _test_check_links_checks_a_fragment_against_the_target,
+    _test_check_links_leaves_a_fragment_on_a_non_markdown_target_alone,
+    _test_check_links_resolves_a_bare_fragment_against_the_source,
+    _test_check_links_reports_a_missing_target_only_once,
+    _test_indexed_documents_keeps_only_crate_markdown,
+    _test_linked_documents_normalizes_every_non_http_target,
+    _test_a_conforming_tree_passes,
+    _test_a_document_missing_from_the_index_is_reported,
+    _test_an_index_row_naming_a_missing_file_is_reported,
+    _test_a_missing_required_heading_is_reported,
+    _test_a_crate_without_a_readme_is_reported,
+    _test_a_document_the_readme_does_not_link_is_reported,
+    _test_a_broken_link_inside_a_document_is_reported,
+    _test_a_broken_anchor_inside_a_document_is_reported,
+    _test_an_anchor_that_resolves_is_accepted,
+    _test_a_tree_with_no_design_documents_is_reported,
+    _test_a_missing_guide_is_reported_on_its_own,
+    _test_a_crash_model_without_reference_links_is_reported,
+    _test_a_crash_model_anchor_is_followed,
+    _test_an_absolute_link_target_is_read_as_an_absolute_path,
+    _test_resolve_leaves_an_absolute_path_alone,
+    _test_design_documents_globs_crates_only,
+])
+
+test_check_design_docs = suite_task(check_design_docs_tests)
