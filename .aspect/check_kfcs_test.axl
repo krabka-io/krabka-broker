@@ -1,0 +1,455 @@
+"""Unit tests for `check_kfcs.axl`."""
+
+load(
+    "./check_kfcs.axl",
+    "index_rows",
+    "is_kfc",
+    "level_two_headings",
+    "problems",
+    "report",
+    "required_sections",
+    "status_value",
+)
+load("./testing.axl", "check_contains", "check_eq", "suite", "suite_task", "temp_tree")
+
+# The seven sections the checked-in README mandates, in its order.
+SECTIONS = [
+    "Status",
+    "Motivation",
+    "Public Interfaces",
+    "Proposed Changes",
+    "Compatibility, Deprecation, and Migration Plan",
+    "Test Plan",
+    "Rejected Alternatives",
+]
+
+def _readme(rows, sections = SECTIONS):
+    """A README carrying `sections` as its template and `rows` as its index.
+
+    A row is `(file name, status)`. The prose around the two tables is what a
+    real README carries, so a parser that runs past a table's end is caught.
+    """
+    lines = [
+        "# KFCs",
+        "",
+        "A KFC is a Kall for Comment.",
+        "",
+        "## Required Sections",
+        "",
+        "| Section | Content |",
+        "| :--- | :--- |",
+    ]
+    for section in sections:
+        lines.append("| %s | What the section carries. |" % section)
+    lines.extend([
+        "",
+        "## Status Values",
+        "",
+        "| Status | Meaning |",
+        "| :--- | :--- |",
+        "| `Adopted` | The project accepted the design. |",
+        "",
+        "## Index",
+        "",
+        "| KFC | Title | Status |",
+        "| :--- | :--- | :--- |",
+    ])
+    for number, row in enumerate(rows):
+        lines.append("| [KFC-%d](%s) | A title | %s |" % (number + 1, row[0], row[1]))
+    lines.extend(["", "## Style", "", "A KFC follows the design doc style guide."])
+    return "\n".join(lines) + "\n"
+
+def _kfc(status = "Adopted", sections = SECTIONS, tail = None):
+    """A KFC whose Status section opens with `status` in bold."""
+    lines = ["# KFC-1: A Title", ""]
+    for section in sections:
+        lines.append("## %s" % section)
+        lines.append("")
+        lines.append("**%s.** On branch `x`." % status if section == "Status" else "Prose.")
+        lines.append("")
+    return "\n".join(lines + (tail if tail else [])) + "\n"
+
+def _tree(ctx, files):
+    """The report the check makes of a temporary directory holding `files`."""
+    return report(ctx.std.fs, temp_tree(ctx, files))
+
+def _test_required_sections(_ctx):
+    check_eq(
+        "the seven sections of a README",
+        required_sections(_readme([]).splitlines()),
+        SECTIONS,
+    )
+    check_eq(
+        "a table with no rows but its header",
+        required_sections(_readme([], sections = []).splitlines()),
+        [],
+    )
+
+def _test_required_sections_reads_only_its_own_table(_ctx):
+    # The README carries three level-two tables. Only the one under "Required
+    # Sections" is the template, and the section ends at the next heading.
+    lines = [
+        "## Required Sections",
+        "| Section | Content |",
+        "| :--- | :--- |",
+        "| Status | The status. |",
+        "## Index",
+        "| KFC | Title | Status |",
+        "| :--- | :--- | :--- |",
+        "| [KFC-1](KFC-1-a.md) | A title | Adopted |",
+    ]
+    check_eq("only the template's rows", required_sections(lines), ["Status"])
+
+def _test_required_sections_ignores_padding_and_rules(_ctx):
+    for rule in ["| --- | --- |", "| :--- | :--- |", "| ---: | :---: |", "| :-: | :-: |"]:
+        check_eq(
+            "the rule %r is not a section" % rule,
+            required_sections(["## Required Sections", rule]),
+            [],
+        )
+    check_eq(
+        "a padded cell is the name it pads",
+        required_sections(["## Required Sections", "|   Test Plan   | Content |"]),
+        ["Test Plan"],
+    )
+    check_eq(
+        "a line that is not a row of the table",
+        required_sections(["## Required Sections", "Every KFC carries these headings."]),
+        [],
+    )
+
+def _test_index_rows(_ctx):
+    check_eq(
+        "the index of a README",
+        index_rows(_readme([("KFC-1-a.md", "Adopted"), ("KFC-2-b.md", "Under discussion")]).splitlines()),
+        {"KFC-1-a.md": "Adopted", "KFC-2-b.md": "Under discussion"},
+    )
+
+def _test_index_rows_takes_the_link_target_and_the_last_cell(_ctx):
+    check_eq(
+        "the target of the link, not the label",
+        index_rows(["## Index", "| [KFC-12](KFC-12-a-slug.md) | A title | Draft |"]),
+        {"KFC-12-a-slug.md": "Draft"},
+    )
+    check_eq(
+        "the header and the rule of the same table are not rows",
+        index_rows(["## Index", "| KFC | Title | Status |", "| :--- | :--- | :--- |"]),
+        {},
+    )
+    check_eq(
+        "a row whose link carries no number",
+        index_rows(["## Index", "| [KFC-x](KFC-x.md) | A title | Draft |"]),
+        {},
+    )
+    check_eq(
+        "a status cell that is not the last cell",
+        index_rows(["## Index", "| [KFC-1](KFC-1-a.md) | A title | Adopted | 2026-01-01 |"]),
+        {"KFC-1-a.md": "2026-01-01"},
+    )
+
+def _test_level_two_headings(_ctx):
+    check_eq(
+        "the headings of a KFC",
+        level_two_headings(_kfc().splitlines()),
+        SECTIONS,
+    )
+    check_eq(
+        "a heading of another level is not one",
+        level_two_headings(["# Title", "## Status", "### Deeper", "#### Deeper still"]),
+        ["Status"],
+    )
+    check_eq(
+        "a hash run with no space after it is not a heading",
+        level_two_headings(["##Status", "## Status"]),
+        ["Status"],
+    )
+
+def _test_level_two_headings_steps_over_fenced_code(_ctx):
+    lines = [
+        "## Status",
+        "```markdown",
+        "## Not A Heading",
+        "```",
+        "## Motivation",
+        "```rust",
+        "// A KFC shows its own markup, and a heading in that example is code.",
+        "```",
+        "## Test Plan",
+    ]
+    check_eq(
+        "headings outside the fences",
+        level_two_headings(lines),
+        ["Status", "Motivation", "Test Plan"],
+    )
+
+    # A fence line toggles whatever its info string says, so an opening fence
+    # with no closing one leaves everything after it code.
+    check_eq("an unclosed fence", level_two_headings(["```", "## Status"]), [])
+
+def _test_status_value(_ctx):
+    check_eq("the value of a KFC's Status section", status_value(_kfc().splitlines()), "Adopted")
+    check_eq(
+        "a multi-word value keeps its words",
+        status_value(_kfc(status = "Under discussion").splitlines()),
+        "Under discussion",
+    )
+    check_eq(
+        "the section ends at the next heading",
+        status_value(["## Status", "Prose.", "## Motivation", "**Adopted.**"]),
+        "",
+    )
+
+def _test_status_value_wants_a_bold_run_at_the_line_opening(_ctx):
+    for line, want in [
+        ("**Adopted.**", "Adopted"),
+        ("**Adopted.** On branch `x`.", "Adopted"),
+        ("**Adopted**", "Adopted"),
+        ("**Superseded by KFC-4.**", "Superseded by KFC-4"),
+        ("The status is **Adopted.**", ""),
+        ("*Adopted.*", ""),
+        ("**Adopted", ""),
+        ("****", ""),
+        ("**.**", ""),
+        ("**Ad*opted.**", ""),
+    ]:
+        check_eq("status from %r" % line, status_value(["## Status", line]), want)
+
+def _test_the_first_bold_line_settles_the_status(_ctx):
+    # `**.**` is a bold run, so the section did open with one; that its value
+    # is empty once the full stop comes off is the complaint, not a reason to
+    # read on to the next line.
+    check_eq(
+        "the line after the first bold run is not read",
+        status_value(["## Status", "**.**", "**Adopted.**"]),
+        "",
+    )
+
+def _test_is_kfc(_ctx):
+    for name in ["KFC-1-a.md", "KFC-12-a-longer-slug.md"]:
+        check_eq("%s is a KFC" % name, is_kfc(name), True)
+    for name in ["README.md", "KFC-1-a.txt", "kfc-1-a.md", "NOTES.md"]:
+        check_eq("%s is not a KFC" % name, is_kfc(name), False)
+
+def _kfc_record(name, headings = SECTIONS, status = "Adopted"):
+    return struct(name = name, headings = headings, status = status)
+
+def _test_a_matching_kfc_has_no_problems(_ctx):
+    check_eq(
+        "a KFC that matches the template",
+        problems(
+            [_kfc_record("KFC-1-a.md")],
+            SECTIONS,
+            {"KFC-1-a.md": "Adopted"},
+            ["KFC-1-a.md", "README.md"],
+            "docs/KFCs",
+        ),
+        [],
+    )
+
+def _test_an_empty_directory_is_a_problem(_ctx):
+    check_eq(
+        "no KFCs at all",
+        problems([], SECTIONS, {}, ["README.md"], "docs/KFCs"),
+        ["no KFC-*.md files under docs/KFCs"],
+    )
+
+def _test_every_kfc_is_reported_not_just_the_first(_ctx):
+    found = problems(
+        [_kfc_record("KFC-1-a.md", status = "Draft"), _kfc_record("KFC-2-b.md", status = "Draft")],
+        SECTIONS,
+        {"KFC-1-a.md": "Adopted", "KFC-2-b.md": "Adopted"},
+        ["KFC-1-a.md", "KFC-2-b.md", "README.md"],
+        "docs/KFCs",
+    )
+    check_eq(
+        "both mismatches",
+        found,
+        [
+            "KFC-1-a.md: Status section says 'Draft', the README index says 'Adopted'",
+            "KFC-2-b.md: Status section says 'Draft', the README index says 'Adopted'",
+        ],
+    )
+
+def _test_an_index_row_naming_a_missing_file_is_reported(_ctx):
+    check_eq(
+        "a row with no file under it",
+        problems(
+            [_kfc_record("KFC-1-a.md")],
+            SECTIONS,
+            {"KFC-1-a.md": "Adopted", "KFC-9-gone.md": "Adopted"},
+            ["KFC-1-a.md", "README.md"],
+            "docs/KFCs",
+        ),
+        ["README index names KFC-9-gone.md, which does not exist"],
+    )
+
+def _test_a_missing_readme_is_an_input_the_task_cannot_read(ctx):
+    result = _tree(ctx, {"KFC-1-a.md": _kfc()})
+    check_eq("the exit code", result.code, 2)
+    check_contains("the complaint", result.problems[0], "README.md not found")
+
+def _test_a_readme_with_the_wrong_section_count_is_an_input_the_task_cannot_read(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted")], sections = SECTIONS[:6]),
+        "KFC-1-a.md": _kfc(),
+    })
+    check_eq("the exit code", result.code, 2)
+    check_contains("the complaint", result.problems[0], "expected 7 required sections")
+    check_contains("the count found", result.problems[0], "found 6")
+
+def _test_the_checked_in_shape_of_a_tree_passes(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted"), ("KFC-2-b.md", "Under discussion")]),
+        "KFC-1-a.md": _kfc(),
+        "KFC-2-b.md": _kfc(status = "Under discussion"),
+    })
+    check_eq("the problems", result.problems, [])
+    check_eq("the exit code", result.code, 0)
+    check_eq("the KFCs read", result.count, 2)
+
+def _test_a_directory_with_no_kfcs_fails(ctx):
+    result = _tree(ctx, {"README.md": _readme([])})
+    check_eq("the exit code", result.code, 1)
+    check_contains("the complaint", result.problems[0], "no KFC-*.md files under ")
+
+def _test_dropping_any_one_required_heading_fails(ctx):
+    # The self-test this replaces deleted each of the seven headings from each
+    # KFC in turn; the rule is per heading, so one KFC covers all seven.
+    for dropped in SECTIONS:
+        kept = [section for section in SECTIONS if section != dropped]
+        result = _tree(ctx, {
+            "README.md": _readme([("KFC-1-a.md", "Adopted")]),
+            "KFC-1-a.md": _kfc(sections = kept),
+        })
+        check_eq("the exit code without %r" % dropped, result.code, 1)
+        check_contains(
+            "the complaint without %r" % dropped,
+            result.problems[0],
+            "KFC-1-a.md: level-two headings are [",
+        )
+
+def _test_swapping_two_headings_fails(ctx):
+    swapped = [
+        "Status",
+        "Public Interfaces",
+        "Motivation",
+        "Proposed Changes",
+        "Compatibility, Deprecation, and Migration Plan",
+        "Test Plan",
+        "Rejected Alternatives",
+    ]
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted")]),
+        "KFC-1-a.md": _kfc(sections = swapped),
+    })
+    check_eq("the exit code", result.code, 1)
+    check_contains("the order is part of the rule", result.problems[0], "in that order")
+
+def _test_an_extra_heading_fails(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted")]),
+        "KFC-1-a.md": _kfc(sections = SECTIONS + ["Open Questions"]),
+    })
+    check_eq("the exit code", result.code, 1)
+    check_contains("the complaint", result.problems[0], "Open Questions")
+
+def _test_a_heading_inside_fenced_code_is_not_a_heading(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted")]),
+        "KFC-1-a.md": _kfc(tail = ["```markdown", "## Open Questions", "```", ""]),
+    })
+    check_eq("the problems", result.problems, [])
+    check_eq("the exit code", result.code, 0)
+
+def _test_a_status_the_index_contradicts_fails(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted")]),
+        "KFC-1-a.md": _kfc(status = "Withdrawn"),
+    })
+    check_eq(
+        "the complaint names both",
+        result.problems,
+        ["KFC-1-a.md: Status section says 'Withdrawn', the README index says 'Adopted'"],
+    )
+    check_eq("the exit code", result.code, 1)
+
+def _test_an_index_row_the_status_contradicts_fails(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Withdrawn")]),
+        "KFC-1-a.md": _kfc(status = "Adopted"),
+    })
+    check_eq(
+        "the same mismatch seen from the README side",
+        result.problems,
+        ["KFC-1-a.md: Status section says 'Adopted', the README index says 'Withdrawn'"],
+    )
+
+def _test_a_kfc_with_no_index_row_fails(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted")]),
+        "KFC-1-a.md": _kfc(),
+        "KFC-999-unindexed.md": _kfc(),
+    })
+    check_eq(
+        "the unindexed KFC",
+        result.problems,
+        ["KFC-999-unindexed.md: no row in the README index names it"],
+    )
+
+def _test_a_kfc_with_no_bold_status_fails(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted")]),
+        "KFC-1-a.md": _kfc().replace("**Adopted.** On branch `x`.", "It is adopted."),
+    })
+    check_eq(
+        "the complaint says what the section should open with",
+        result.problems,
+        [
+            "KFC-1-a.md: the Status section does not open with a bold status " +
+            "value such as **Adopted.**",
+        ],
+    )
+
+def _test_an_index_row_naming_a_file_that_is_not_there_fails(ctx):
+    result = _tree(ctx, {
+        "README.md": _readme([("KFC-1-a.md", "Adopted"), ("KFC-2-gone.md", "Adopted")]),
+        "KFC-1-a.md": _kfc(),
+    })
+    check_eq(
+        "the row with no file under it",
+        result.problems,
+        ["README index names KFC-2-gone.md, which does not exist"],
+    )
+
+check_kfcs_tests = suite("check-kfcs", [
+    _test_required_sections,
+    _test_required_sections_reads_only_its_own_table,
+    _test_required_sections_ignores_padding_and_rules,
+    _test_index_rows,
+    _test_index_rows_takes_the_link_target_and_the_last_cell,
+    _test_level_two_headings,
+    _test_level_two_headings_steps_over_fenced_code,
+    _test_status_value,
+    _test_status_value_wants_a_bold_run_at_the_line_opening,
+    _test_the_first_bold_line_settles_the_status,
+    _test_is_kfc,
+    _test_a_matching_kfc_has_no_problems,
+    _test_an_empty_directory_is_a_problem,
+    _test_every_kfc_is_reported_not_just_the_first,
+    _test_an_index_row_naming_a_missing_file_is_reported,
+    _test_a_missing_readme_is_an_input_the_task_cannot_read,
+    _test_a_readme_with_the_wrong_section_count_is_an_input_the_task_cannot_read,
+    _test_the_checked_in_shape_of_a_tree_passes,
+    _test_a_directory_with_no_kfcs_fails,
+    _test_dropping_any_one_required_heading_fails,
+    _test_swapping_two_headings_fails,
+    _test_an_extra_heading_fails,
+    _test_a_heading_inside_fenced_code_is_not_a_heading,
+    _test_a_status_the_index_contradicts_fails,
+    _test_an_index_row_the_status_contradicts_fails,
+    _test_a_kfc_with_no_index_row_fails,
+    _test_a_kfc_with_no_bold_status_fails,
+    _test_an_index_row_naming_a_file_that_is_not_there_fails,
+])
+
+test_check_kfcs = suite_task(check_kfcs_tests)

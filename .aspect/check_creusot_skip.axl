@@ -1,0 +1,210 @@
+"""Every `#[cfg(creusot)]` `fn` in `crates/verified/src/` skips mutation testing.
+
+cargo-mutants generates mutants syntactically and does not evaluate `#[cfg]`,
+so a `#[cfg(creusot)]` function -- compiled only under the Creusot proof
+toolchain, never in a normal build or test run -- is mutated anyway and
+reported as a survivor: no test can tell, because the mutated code never runs.
+`.cargo/mutants.toml`'s own header says the sweep has no survivor baseline, so
+one of these fails `//crates/verified:verified_mutants`.
+
+The fix lives on the function itself: `#[cfg_attr(test, mutants::skip)]`
+directly under `#[cfg(creusot)]`. cargo-mutants reads that attribute from
+source, so it works on a function a normal build never compiles, and unlike a
+path-and-line regex in `exclude_re` it cannot rot when the function moves.
+
+    aspect check-creusot-skip
+"""
+
+load("./repo.axl", "walk_suffix")
+
+# The attribute that pairs with `#[cfg(creusot)]`, and the attribute it pairs
+# with. Both are matched whole, against a stripped line.
+SKIP = "#[cfg_attr(test, mutants::skip)]"
+CFG = "#[cfg(creusot)]"
+
+# The subtree this check is about, relative to the repository root.
+VERIFIED_SRC = "crates/verified/src"
+
+# The characters a Rust identifier is made of, and the whitespace that can sit
+# between the tokens of a `fn` declaration on one line.
+_IDENT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+_SPACE_CHARS = " \t"
+
+# The openings that make a line something to step over on the way from a
+# `#[cfg(creusot)]` to the item it decorates.
+_DOC_PREFIXES = ["///", "//!"]
+
+def _lead(text, chars):
+    """The length of the run of `chars` that opens `text`."""
+    for index in range(len(text)):
+        if text[index] not in chars:
+            return index
+    return len(text)
+
+def _is_doc(stripped):
+    for prefix in _DOC_PREFIXES:
+        if stripped.startswith(prefix):
+            return True
+    return False
+
+def fn_name(line):
+    """The name of the `fn` that `line` declares, or "" when it declares none.
+
+    A declaration is an optional visibility -- `pub`, or `pub(crate)` and its
+    `pub(super)` kin -- and then `fn` and the name, each pair separated by at
+    least one space. Anything else on the line is the signature, which this
+    does not care about. A visibility this does not understand, such as
+    `pub(in crate::log)`, leaves the line looking like no declaration at all,
+    which is what the check wants: the report is about functions it can name.
+    """
+    rest = line[_lead(line, _SPACE_CHARS):]
+    if rest.startswith("pub"):
+        after = rest[len("pub"):]
+        if after.startswith("("):
+            close = after.find(")")
+            scope = after[1:close] if close > 0 else ""
+            if scope and _lead(scope, _IDENT_CHARS) == len(scope):
+                after = after[close + 1:]
+            else:
+                after = ""
+        gap = _lead(after, _SPACE_CHARS)
+        if gap:
+            rest = after[gap:]
+    if not rest.startswith("fn"):
+        return ""
+    after_fn = rest[len("fn"):]
+    gap = _lead(after_fn, _SPACE_CHARS)
+    if not gap:
+        return ""
+    name = after_fn[gap:]
+    return name[:_lead(name, _IDENT_CHARS)]
+
+def _past_attribute(lines, start):
+    """The index just past the attribute or doc comment at `lines[start]`.
+
+    An attribute's `[...]` can span lines -- an `#[ensures(...)]` with a
+    multi-line predicate, for instance -- so this tracks bracket depth rather
+    than assuming one line closes it.
+    """
+    if _is_doc(lines[start].strip()):
+        return start + 1
+    depth = 0
+    index = start
+    for _ in range(len(lines) - start):
+        depth += lines[index].count("[") - lines[index].count("]")
+        index += 1
+        if depth <= 0:
+            break
+    return index
+
+def creusot_fns(text):
+    """`(line, name)` for every `#[cfg(creusot)]` attribute that sits on a `fn`.
+
+    `line` is the 1-based line of the `#[cfg(creusot)]` itself, so the line it
+    has to be followed by is the one at that index into the file's lines.
+
+    This steps forward over any other attributes and doc comments between the
+    `#[cfg(creusot)]` and the item it decorates, so a `#[logic]` or a
+    `#[requires(...)]` stack in between does not hide the function underneath.
+    An item that is not a `fn` -- a `use`, a statement inside a function body,
+    a `mod` -- is not this check's concern and is passed over.
+    """
+    lines = text.splitlines()
+    found = []
+    index = 0
+
+    # Each pass either steps over one line or lands on the item a
+    # `#[cfg(creusot)]` decorates, which is always further down, so the file's
+    # own length bounds the sweep.
+    for _ in range(len(lines) + 1):
+        if index >= len(lines):
+            break
+        if lines[index].strip() != CFG:
+            index += 1
+            continue
+        cursor = index + 1
+        for _ in range(len(lines) + 1):
+            if cursor >= len(lines):
+                break
+            stripped = lines[cursor].strip()
+            if stripped == "":
+                cursor += 1
+                continue
+            if stripped.startswith("#[") or _is_doc(stripped):
+                cursor = _past_attribute(lines, cursor)
+                continue
+            break
+        if cursor < len(lines):
+            name = fn_name(lines[cursor])
+            if name:
+                found.append((index + 1, name))
+        index = cursor
+    return found
+
+def unskipped(sources):
+    """`(path, line, name)` for every `#[cfg(creusot)]` `fn` that lacks the skip.
+
+    A source is `struct(path, text)`: the path the report names, and the file's
+    contents. The skip has to sit on the line directly under the
+    `#[cfg(creusot)]`, because that is where cargo-mutants reads a function's
+    attributes from, and it is where a reader looks for the pairing.
+    """
+    offenders = []
+    for source in sources:
+        lines = source.text.splitlines()
+        for line, name in creusot_fns(source.text):
+            under = lines[line].strip() if line < len(lines) else ""
+            if under != SKIP:
+                offenders.append((source.path, line, name))
+    return offenders
+
+def read_sources(fs, root):
+    """Every `.rs` file under `root`'s `crates/verified/src/`, as `unskipped` wants them.
+
+    Paths are repository-relative whatever `root` is, so the report reads the
+    same from a checkout as from a fixture tree.
+    """
+    directory = root + "/" + VERIFIED_SRC
+    return [
+        struct(
+            path = VERIFIED_SRC + "/" + relative,
+            text = fs.read_to_string(directory + "/" + relative),
+        )
+        for relative in walk_suffix(fs, directory, ".rs")
+    ]
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.args.root if ctx.args.root else ctx.std.env.bazel_root_dir()
+    if not ctx.std.fs.exists(root + "/" + VERIFIED_SRC):
+        ctx.std.io.stderr.write("%s/%s does not exist\n" % (root, VERIFIED_SRC))
+        return 1
+
+    sources = read_sources(ctx.std.fs, root)
+    found = unskipped(sources)
+    if found:
+        ctx.std.io.stderr.write(
+            "Every #[cfg(creusot)] fn in %s/ needs `%s` directly under %s, " % (VERIFIED_SRC, SKIP, CFG) +
+            "or cargo-mutants reports it as an unexplained survivor:\n",
+        )
+        for path, line, name in found:
+            ctx.std.io.stderr.write("  %s:%d: %s\n" % (path, line, name))
+        return 1
+
+    skipped = 0
+    for source in sources:
+        skipped += len(creusot_fns(source.text))
+    ctx.std.io.stdout.write(
+        "check-creusot-skip: %d #[cfg(creusot)] fns, all of them skipped\n" % skipped,
+    )
+    return 0
+
+check_creusot_skip = task(
+    summary = "Check that every #[cfg(creusot)] fn skips mutation testing",
+    implementation = _impl,
+    args = {
+        "root": args.string(
+            default = "",
+            description = "The repository to check. Defaults to the workspace root.",
+        ),
+    },
+)

@@ -1,0 +1,286 @@
+"""Unit tests for `check_crate_changelogs.axl`."""
+
+load("./check_crate_changelogs.axl", "crate_changelogs", "offenders", "version_headings")
+load("./testing.axl", "check_eq", "suite", "suite_task", "temp_tree")
+
+# The tree the original self-test built: one truthful crate, two that record a
+# release, one nested a level deeper, and a root changelog that records one and
+# is allowed to.
+_TREE = {
+    "CHANGELOG.md": "## [Unreleased]\n\n## [0.5.1] - 2026-08-30\n",
+    "crates/truthful/CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n",
+    "crates/extracted/CHANGELOG.md": "## [Unreleased]\n## [0.3.8] - 2026-06-23\n",
+    "crates/indented/CHANGELOG.md": "## [Unreleased]\n\n  ## [0.6.0] - 2026-08-31\n",
+    "crates/nested/deeper/CHANGELOG.md": "## [0.1.0]\n",
+}
+
+def _changelog(path, text):
+    return struct(path = path, text = text)
+
+def _test_an_unreleased_changelog_records_nothing(_ctx):
+    check_eq(
+        "prose and [Unreleased]",
+        version_headings("# Changelog\n\n## [Unreleased]\n"),
+        [],
+    )
+
+def _test_a_version_heading_is_a_release_record(_ctx):
+    check_eq(
+        "a dated heading",
+        version_headings("## [Unreleased]\n\n## [0.3.8] - 2026-06-23\n\n### Added\n"),
+        ["## [0.3.8] - 2026-06-23"],
+    )
+
+def _test_a_heading_above_unreleased_still_counts(_ctx):
+    # The rule is stricter than "no version heading below `[Unreleased]`": the
+    # position of the `[Unreleased]` heading does not excuse a release record.
+    check_eq(
+        "above [Unreleased]",
+        version_headings("## [1.0.0]\n\n## [Unreleased]\n"),
+        ["## [1.0.0]"],
+    )
+
+def _test_a_v_prefix_is_a_version(_ctx):
+    check_eq(
+        "the v form",
+        version_headings("## [v2.1] - 2026-01-01\n"),
+        ["## [v2.1] - 2026-01-01"],
+    )
+
+def _test_a_bare_version_needs_no_brackets(_ctx):
+    check_eq("no link brackets", version_headings("## 0.1.0\n"), ["## 0.1.0"])
+
+def _test_prose_that_names_a_version_is_not_a_heading(_ctx):
+    check_eq(
+        "a version in a bullet",
+        version_headings("## [Unreleased]\n\n- The 1.2.3 wire format is unchanged.\n"),
+        [],
+    )
+
+def _test_one_component_is_not_a_version(_ctx):
+    # `## 1` and `## 2026 in review` are headings, but neither names a version:
+    # a version carries at least two numeric components.
+    check_eq("a lone number", version_headings("## 1\n"), [])
+    check_eq("a year", version_headings("## 2026 in review\n"), [])
+    check_eq("a trailing dot", version_headings("## 1.\n"), [])
+    check_eq("an empty component", version_headings("## 1..2\n"), [])
+
+def _test_a_seventh_hash_is_not_a_heading(_ctx):
+    check_eq("six levels", version_headings("###### 1.0.0\n"), ["###### 1.0.0"])
+    check_eq("seven of them", version_headings("####### 1.0.0\n"), [])
+
+def _test_the_hash_run_needs_whitespace_after_it(_ctx):
+    check_eq("no space", version_headings("##1.0.0\n"), [])
+    check_eq("a tab", version_headings("##\t1.0.0\n"), ["##\t1.0.0"])
+
+def _test_a_fenced_heading_is_an_example(_ctx):
+    check_eq(
+        "inside a backtick fence",
+        version_headings("## [Unreleased]\n\n```\n## [0.1.0]\n```\n"),
+        [],
+    )
+
+def _test_three_spaces_of_indent_still_make_a_heading(_ctx):
+    # Markdown renders a heading under up to three leading spaces, so a heading
+    # that carries them is a release record like any other.
+    check_eq(
+        "one space",
+        version_headings(" ## [0.6.0] - 2026-08-31\n"),
+        ["## [0.6.0] - 2026-08-31"],
+    )
+    check_eq("three spaces", version_headings("   ### 0.6.0\n"), ["### 0.6.0"])
+
+def _test_a_fourth_space_makes_an_indented_code_block(_ctx):
+    check_eq(
+        "four spaces",
+        version_headings("## [Unreleased]\n\n    ## [0.1.0]\n"),
+        [],
+    )
+
+def _test_a_tab_is_not_indentation(_ctx):
+    # Only spaces indent a heading. A tab opens an indented code block whatever
+    # its width, so what follows it is an example.
+    check_eq("a leading tab", version_headings("\t## [0.1.0]\n"), [])
+
+def _test_a_tilde_fence_hides_a_heading(_ctx):
+    check_eq(
+        "a tilde fence",
+        version_headings("## [Unreleased]\n\n~~~markdown\n## [0.1.0]\n~~~\n"),
+        [],
+    )
+
+def _test_an_indented_fence_opens_a_block(_ctx):
+    check_eq(
+        "three spaces of indent",
+        version_headings("## [Unreleased]\n\n   ```\n## [0.1.0]\n   ```\n"),
+        [],
+    )
+
+def _test_a_fourth_space_does_not_open_a_fence(_ctx):
+    # The fence itself is then an indented code block, and the heading under it
+    # is a heading again.
+    check_eq(
+        "four spaces before the backticks",
+        version_headings("    ```\n## [0.1.0]\n    ```\n"),
+        ["## [0.1.0]"],
+    )
+
+def _test_a_block_closes_only_on_its_own_delimiter(_ctx):
+    # The inner runs leave the block open over the heading.
+    check_eq("tildes in a backtick block", version_headings("```\n~~~\n## [0.1.0]\n~~~\n```\n"), [])
+    check_eq("backticks in a tilde block", version_headings("~~~\n```\n## [0.1.0]\n```\n~~~\n"), [])
+
+def _test_a_block_closes_only_on_a_run_as_long(_ctx):
+    check_eq("three inside four", version_headings("````\n```\n## [0.1.0]\n```\n````\n"), [])
+    check_eq(
+        "four closing three",
+        version_headings("```\n## [0.1.0]\n````\n\n## [0.2.0]\n"),
+        ["## [0.2.0]"],
+    )
+
+def _test_a_closing_fence_carries_no_info_string(_ctx):
+    check_eq(
+        "text after the run",
+        version_headings("```\n``` still open\n## [0.1.0]\n```\n"),
+        [],
+    )
+    check_eq(
+        "trailing whitespace still closes",
+        version_headings("```\n## [0.1.0]\n```   \n\n## [0.2.0]\n"),
+        ["## [0.2.0]"],
+    )
+
+def _test_a_backtick_fence_with_a_backtick_info_string_opens_nothing(_ctx):
+    # A line of inline code spans is not a fence; the heading under it stands.
+    check_eq(
+        "inline code spans",
+        version_headings("``` `x` ```\n## [0.1.0]\n"),
+        ["## [0.1.0]"],
+    )
+    check_eq(
+        "a tilde fence takes any info string",
+        version_headings("~~~ `x` ~\n## [0.1.0]\n~~~\n"),
+        [],
+    )
+
+def _test_a_closed_block_stops_covering_what_follows(_ctx):
+    check_eq(
+        "after the fence",
+        version_headings("~~~\n## [0.1.0]\n~~~\n\n## [0.2.0]\n"),
+        ["## [0.2.0]"],
+    )
+
+def _test_headings_come_back_in_file_order(_ctx):
+    check_eq(
+        "two records",
+        version_headings("## [0.2.0]\n\n## [0.1.0]\n"),
+        ["## [0.2.0]", "## [0.1.0]"],
+    )
+
+def _test_offenders_names_every_crate_and_heading(_ctx):
+    check_eq(
+        "one pair per heading",
+        offenders([
+            _changelog("crates/extracted/CHANGELOG.md", "## [0.3.8]\n\n## [0.2.0]\n"),
+            _changelog("crates/truthful/CHANGELOG.md", "## [Unreleased]\n"),
+        ]),
+        [
+            ("crates/extracted/CHANGELOG.md", "## [0.3.8]"),
+            ("crates/extracted/CHANGELOG.md", "## [0.2.0]"),
+        ],
+    )
+
+def _test_offenders_reports_in_path_order(_ctx):
+    check_eq(
+        "sorted by path",
+        offenders([
+            _changelog("crates/nested/deeper/CHANGELOG.md", "## [0.1.0]\n"),
+            _changelog("crates/extracted/CHANGELOG.md", "## [0.3.8]\n"),
+        ]),
+        [
+            ("crates/extracted/CHANGELOG.md", "## [0.3.8]"),
+            ("crates/nested/deeper/CHANGELOG.md", "## [0.1.0]"),
+        ],
+    )
+
+def _test_a_truthful_tree_has_no_offenders(_ctx):
+    check_eq(
+        "nothing to report",
+        offenders([
+            _changelog("crates/truthful/CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n"),
+        ]),
+        [],
+    )
+
+def _test_the_walk_takes_every_crate_changelog(ctx):
+    files = dict(_TREE)
+    files["crates/silent/Cargo.toml"] = "[package]\n"
+    files["crates/decoy/OLD_CHANGELOG.md"] = "## [0.1.0]\n"
+    root = temp_tree(ctx, files)
+    check_eq(
+        "the crate changelogs, and not the root one or the decoy",
+        [changelog.path for changelog in crate_changelogs(ctx.std.fs, root)],
+        [
+            "crates/extracted/CHANGELOG.md",
+            "crates/indented/CHANGELOG.md",
+            "crates/nested/deeper/CHANGELOG.md",
+            "crates/truthful/CHANGELOG.md",
+        ],
+    )
+
+def _test_the_walk_reads_what_offenders_reports_on(ctx):
+    root = temp_tree(ctx, _TREE)
+    check_eq(
+        "the offenders of the tree",
+        offenders(crate_changelogs(ctx.std.fs, root)),
+        [
+            ("crates/extracted/CHANGELOG.md", "## [0.3.8] - 2026-06-23"),
+            ("crates/indented/CHANGELOG.md", "## [0.6.0] - 2026-08-31"),
+            ("crates/nested/deeper/CHANGELOG.md", "## [0.1.0]"),
+        ],
+    )
+
+def _test_a_fixed_tree_passes(ctx):
+    # The same tree with the records moved out: one deleted heading, one turned
+    # into a fenced example, one file gone.
+    fixed = dict(_TREE)
+    fixed["crates/extracted/CHANGELOG.md"] = "## [Unreleased]\n"
+    fixed["crates/indented/CHANGELOG.md"] = (
+        "## [Unreleased]\n\n~~~markdown\n## [0.6.0] - 2026-08-31\n~~~\n"
+    )
+    fixed.pop("crates/nested/deeper/CHANGELOG.md")
+    root = temp_tree(ctx, fixed)
+    check_eq("nothing to report", offenders(crate_changelogs(ctx.std.fs, root)), [])
+
+check_crate_changelogs_tests = suite("check-crate-changelogs", [
+    _test_an_unreleased_changelog_records_nothing,
+    _test_a_version_heading_is_a_release_record,
+    _test_a_heading_above_unreleased_still_counts,
+    _test_a_v_prefix_is_a_version,
+    _test_a_bare_version_needs_no_brackets,
+    _test_prose_that_names_a_version_is_not_a_heading,
+    _test_one_component_is_not_a_version,
+    _test_a_seventh_hash_is_not_a_heading,
+    _test_the_hash_run_needs_whitespace_after_it,
+    _test_a_fenced_heading_is_an_example,
+    _test_three_spaces_of_indent_still_make_a_heading,
+    _test_a_fourth_space_makes_an_indented_code_block,
+    _test_a_tab_is_not_indentation,
+    _test_a_tilde_fence_hides_a_heading,
+    _test_an_indented_fence_opens_a_block,
+    _test_a_fourth_space_does_not_open_a_fence,
+    _test_a_block_closes_only_on_its_own_delimiter,
+    _test_a_block_closes_only_on_a_run_as_long,
+    _test_a_closing_fence_carries_no_info_string,
+    _test_a_backtick_fence_with_a_backtick_info_string_opens_nothing,
+    _test_a_closed_block_stops_covering_what_follows,
+    _test_headings_come_back_in_file_order,
+    _test_offenders_names_every_crate_and_heading,
+    _test_offenders_reports_in_path_order,
+    _test_a_truthful_tree_has_no_offenders,
+    _test_the_walk_takes_every_crate_changelog,
+    _test_the_walk_reads_what_offenders_reports_on,
+    _test_a_fixed_tree_passes,
+])
+
+test_check_crate_changelogs = suite_task(check_crate_changelogs_tests)
