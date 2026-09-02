@@ -25,7 +25,7 @@ path = "src/main.rs"
 [dependencies]
 # `parse_barrier_marker` reads a marker back out of a fetched batch. The decoder
 # lives with the injector so the two cannot drift.
-krabka-broker = { version = "0.5.2", path = "../broker" }
+krabka-broker = { version = "0.5.3", path = "../broker" }
 krabka-client-core = { version = "0.4.0" }
 krabka-protocol = { version = "0.4.0" }
 krabka-units = { workspace = true }
@@ -41,5 +41,5 @@ assert2 = { workspace = true }
 krabka-client-admin = { version = "0.4.0" }
 # BrokerConfig::for_tests lives behind the broker's own test-helpers feature
 # now that the facade crate is gone.
-krabka-broker = { version = "0.5.2", path = "../broker", features = ["test-helpers"] }
+krabka-broker = { version = "0.5.3", path = "../broker", features = ["test-helpers"] }
 tempfile = { workspace = true }
