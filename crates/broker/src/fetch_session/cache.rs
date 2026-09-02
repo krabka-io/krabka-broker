@@ -12,13 +12,13 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use qubit_clock::{MonotonicClock, StdMonotonicClock};
 
 use super::{
     epoch::{FIRST_SESSION_ID, FetchSessionEpoch, FetchSessionId},
+    order::SessionOrder,
     state::{CachedPartitionState, FetchSessionKey},
 };
 
@@ -31,21 +31,15 @@ pub struct FetchSession {
     pub privileged: bool,
     pub creator_principal: String,
     pub partitions: HashMap<FetchSessionKey, CachedPartitionState>,
-    /// Time elapsed since the origin of the cache's clock at the last use of
-    /// this session, read from the cache's injected [`MonotonicClock`]. Only
-    /// the *order* of these values matters: the smallest one names the LRU
-    /// eviction victim. Every stamp in one cache comes from that one cache's
-    /// own injected clock, so they all share a single clock domain — and that
-    /// is what makes an elapsed-since-origin [`Duration`] a total order over
-    /// exactly the values the eviction scan compares. A
-    /// [`qubit_clock::MonotonicInstant`] could not serve here: it is
-    /// `PartialOrd` but not `Ord`, because instants from different clock
-    /// domains do not compare.
-    pub last_used: Duration,
 }
 
 pub(super) struct Inner {
     pub(super) sessions: HashMap<FetchSessionId, FetchSession>,
+    /// Recency order over `sessions`, split by privilege. It carries each
+    /// session's last-use stamp and is what makes victim selection O(1). The
+    /// two must be updated together under this lock, which is why they share
+    /// one `Inner`.
+    pub(super) order: SessionOrder,
 }
 
 pub struct FetchSessionCache {
@@ -63,10 +57,10 @@ pub struct FetchSessionCache {
     /// them on forget, evict, and close. `total_partitions_cached()` reads it
     /// lock-free.
     pub(super) num_partitions: AtomicUsize,
-    /// Monotonic time source that the cache stamps onto
-    /// `FetchSession::last_used` for LRU eviction. It is injectable, so tests
-    /// drive the eviction order with a [`qubit_clock::ManualMonotonicClock`]
-    /// instead of `thread::sleep`.
+    /// Monotonic time source that the cache stamps onto each session's entry
+    /// in the recency order for LRU eviction. It is injectable, so tests drive
+    /// the eviction order with a [`qubit_clock::ManualMonotonicClock`] instead
+    /// of `thread::sleep`.
     pub(super) clock: Arc<dyn MonotonicClock>,
 }
 
@@ -81,13 +75,14 @@ impl FetchSessionCache {
     /// Production uses [`FetchSessionCache::new`], which supplies a
     /// [`StdMonotonicClock`]. Tests pass a
     /// [`qubit_clock::ManualMonotonicClock`], so that successive allocations
-    /// get distinct, deterministic `last_used` stamps without a sleep between
-    /// them.
+    /// land on distinct, deterministic points in the recency order without a
+    /// sleep between them.
     #[must_use]
     pub fn with_clock(max_slots: usize, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 sessions: HashMap::new(),
+                order: SessionOrder::new(),
             }),
             // Id allocation starts at FIRST_SESSION_ID — id 0 is reserved
             // as the INVALID_SESSION_ID sentinel.
@@ -163,6 +158,7 @@ impl FetchSessionCache {
     pub fn close(&self, session_id: FetchSessionId) {
         let mut guard = self.inner.lock().expect("poisoned");
         if let Some(session) = guard.sessions.remove(&session_id) {
+            guard.order.remove(session_id, session.privileged);
             self.num_sessions.fetch_sub(1, Ordering::Relaxed);
             self.num_partitions
                 .fetch_sub(session.partitions.len(), Ordering::Relaxed);

@@ -199,15 +199,23 @@ temp-env = "0.3"
 # Mock OPA server for OpaAuthorizer unit tests — wiremock
 # answers HTTP on a random local port and lets us assert call counts.
 wiremock = "0.6"
-# Drives `benches/produce.rs`. The `codspeed-criterion-compat` shim is the one
-# `krabka-log` already uses: criterion's API under a name that also runs under
-# CodSpeed's instrumented walltime.
+# Drives `benches/produce.rs` and `benches/fetch_session.rs`. The
+# `codspeed-criterion-compat` shim is the one `krabka-log` already uses:
+# criterion's API under a name that also runs under CodSpeed's instrumented
+# walltime.
 criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
 
 # The produce hot path: `prepare_batch`'s verbatim-versus-owned decision and
 # the log append behind it, over the record shapes a real producer sends.
 [[bench]]
 name = "produce"
+harness = false
+
+# The KIP-227 session cache: `classify` + `try_allocate` across cache
+# occupancy and concurrent callers, which is where a full cache's eviction sits
+# on everybody else's fetch path.
+[[bench]]
+name = "fetch_session"
 harness = false
 
 # The zero-copy fetch drain: `sendfile(2)` against the `pread` + write copy,
