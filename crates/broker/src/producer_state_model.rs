@@ -4,7 +4,7 @@
 //! and asserts, with per-transition checks, that `check_pure`'s classification
 //! keeps the accepted-append log a gap-free, duplicate-free, monotonic prefix
 //! per producer epoch, with epoch fencing. See the design spec
-//! `docs/superpowers/specs/2026-06-14-krabka-data-plane-safety-models-design.md`.
+//! `crates/broker/docs/transaction-coordinator-design.md`.
 //!
 //! Offset *values* are irrelevant to the safety properties, because this model
 //! does not use the `Duplicate` echo. So the fingerprinted state does NOT hold

@@ -60,6 +60,75 @@ pub use self::{
     schema_registry::FileSchemaRegistryConfig,
 };
 
+/// Schema-only stand-ins for the `krabka_units` value types.
+///
+/// A `Time`, `ByteSize`, or `Ratio` field is a human-readable string in the
+/// TOML file, so its JSON Schema is `type: string`. That alone loses the unit,
+/// and the generated reference page has a units column. Each marker type here
+/// keeps the string type and adds a `format` that names the unit. A field
+/// opts in with `#[schemars(with = "Option<crate::file_config::schema_units::Duration>")]`
+/// beside its `serde(with = "...human::option_time")` attribute.
+pub mod schema_units {
+    use std::borrow::Cow;
+
+    use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+
+    macro_rules! unit_marker {
+        ($name:ident, $format:literal, $doc:literal) => {
+            #[doc = $doc]
+            pub struct $name;
+
+            impl JsonSchema for $name {
+                fn schema_name() -> Cow<'static, str> {
+                    Cow::Borrowed(stringify!($name))
+                }
+
+                fn inline_schema() -> bool {
+                    true
+                }
+
+                fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+                    json_schema!({ "type": "string", "format": $format })
+                }
+            }
+        };
+    }
+
+    unit_marker!(
+        Duration,
+        "duration",
+        "A `krabka_units::Time` written with a unit suffix, such as `\"500ms\"` or `\"30s\"`."
+    );
+    unit_marker!(
+        ByteSize,
+        "byte-size",
+        "A `krabka_units::ByteSize` written with a unit suffix, such as `\"1MiB\"`."
+    );
+    unit_marker!(
+        Ratio,
+        "ratio",
+        "A `krabka_units::Ratio` written as a percentage or a fraction, such as `\"10%\"`."
+    );
+}
+
+/// The JSON Schema for [`FileConfig`], as a JSON value.
+///
+/// `krabka-broker --print-config-schema` prints this document, the checked-in
+/// copy is `docs/config-schema.json`, and `tools/generate-config-reference.py`
+/// renders `docs/config-reference.md` from it. `crabka-docgen` builds the same
+/// value in process. Every `///` comment on a config field becomes the
+/// `description` of that field, so the doc comments are the reference text.
+///
+/// # Panics
+///
+/// Panics if the generated schema cannot be represented as JSON, which would
+/// be a bug in the `schemars` derive rather than in any input.
+#[must_use]
+pub fn config_schema() -> serde_json::Value {
+    let schema = schemars::schema_for!(FileConfig);
+    serde_json::to_value(schema).expect("FileConfig schema serializes")
+}
+
 /// Failures surfaced by [`FileConfig::apply_to`]. Each variant
 /// corresponds to a specific misconfiguration the broker can diagnose
 /// at startup; the variants exist (rather than a single `String`
@@ -137,25 +206,25 @@ pub struct FileConfig {
     /// How often this broker sends `BrokerHeartbeat` to the controller leader.
     /// Absent leaves the `BrokerConfig` default intact.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub heartbeat_interval: Option<Time>,
     /// Controller-side session timeout for broker heartbeats. Absent leaves the
     /// `BrokerConfig` default intact.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub heartbeat_timeout: Option<Time>,
     /// Maximum follower lag before the leader proposes ISR shrink. Absent
     /// leaves the `BrokerConfig` default intact.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub replica_lag_time_max: Option<Time>,
     /// Controller election timeout. Absent leaves the `BrokerConfig` default intact.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_election_timeout: Option<Time>,
     /// Controller heartbeat interval. Absent leaves the `BrokerConfig` default intact.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_heartbeat_interval: Option<Time>,
     pub inter_broker_listener_name: Option<String>,
 
@@ -176,7 +245,7 @@ pub struct FileConfig {
     /// `[[listeners]]` entry may carry its own `connections_max_idle`, which
     /// wins for that listener.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_idle: Option<Time>,
 
     /// KIP-595 static controller quorum voter set. Each entry is

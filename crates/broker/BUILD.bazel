@@ -56,7 +56,22 @@ crate_tests(
         "leader_election",
         "sharegroup_backlog",
     ],
-    data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
+    # The generated config schema and reference, and the example configs, are
+    # checked in under //docs. `config_reference`, `docgen_contract` and
+    # `example_broker_toml` read them back and compare or parse them, so a
+    # schema change that is not regenerated fails here as well as in the docs
+    # job.
+    data = glob(["tests/fixtures/**"]) + [
+        ":krabka-broker",
+        "//docs:config-reference.md",
+        "//docs:config-schema.json",
+        "//docs:examples/broker-single-node.toml",
+        "//docs:examples/broker-three-node-quorum.toml",
+        # `metrics_contract` reads the published dashboard, the alert rules and
+        # the checked-in `/metrics` body; `support::manifest_dir()` resolves
+        # them under `$TEST_SRCDIR/$TEST_WORKSPACE/docs/operations`.
+        "//docs/operations:contract",
+    ],
     docker = {
         # One image, used twice: as the client that reads krabka's advertised
         # table and as the Kafka broker that table is compared against.

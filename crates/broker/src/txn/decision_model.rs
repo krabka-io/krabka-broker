@@ -6,7 +6,7 @@
 //! split, so a concurrent `InitProducerId` can interleave in the window and
 //! fence the in-flight transaction. `InitProducerId` bumps the producer epoch.
 //! Design:
-//! `docs/superpowers/specs/2026-06-14-krabka-txn-coordinator-model-design.md`.
+//! `crates/broker/docs/transaction-coordinator-design.md`.
 //!
 //! Headline safety: a producer fenced by an epoch bump during the window can
 //! never finalize. The transaction of a given producer epoch is finalized at

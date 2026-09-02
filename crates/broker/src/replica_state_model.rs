@@ -6,7 +6,7 @@
 //! The BFS checker explores every interleaving of leader append, follower
 //! fetch, and ISR shrink/expand. It asserts that the partition-replication
 //! safety invariants never break, above all no-committed-data-loss. Design:
-//! `docs/superpowers/specs/2026-06-13-krabka-isr-replica-state-model-design.md`.
+//! `crates/broker/docs/replication-isr-design.md`.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! this module fences each run with `within_boundary` + `target_state_count`.

@@ -106,6 +106,33 @@ DIVERGENCE_RE = re.compile(
 THROTTLE_AUDIT_TEST = "throttle_echo_divergences_are_the_recorded_ones"
 THROTTLE_REACH_TEST = "recorded_reach_matches_the_dispatch_registry"
 
+# The per-KIP rows. `KIP_ANNOTATIONS` in the API catalog is the source of
+# truth; this file parses it as text between the two marker comments and never
+# compiles Rust. The inventory it is checked against is every `KIP-<n>` under
+# `crates/`, except the crate CHANGELOGs (history, not a claim about the tree)
+# and the annotation block itself (which would keep a stale row alive).
+CRATES = ROOT / "crates"
+API_CATALOG = ROOT / "crates/broker/src/api_catalog.rs"
+ANNOTATION_BEGIN = "// BEGIN KIP_ANNOTATIONS"
+ANNOTATION_END = "// END KIP_ANNOTATIONS"
+ENTRY_RE = re.compile(r"KipAnnotation\s*\{(.*?)\n\s*\},", re.DOTALL)
+KIP_RE = re.compile(r"\bKIP-\d+\b")
+CITATION_RE = re.compile(r"\b(crates/[\w./-]+\.rs):(\d+)\b")
+STATUS = {
+    "Implemented": "Implemented",
+    "Partial": "Partial",
+    "OutOfScope": "Out of scope",
+}
+# The one non-JVM client suite, and what it drives.
+LIBRDKAFKA = ROOT / "crates/broker/tests/librdkafka_conformance.rs"
+LIBRDKAFKA_TEST = "round_trip_group_join_and_api_versions_with_kcat"
+CLIENT_EVIDENCE = {"NotCovered", "Kcat"}
+# The scope decision the out-of-scope rows cite, and the words the cited line
+# has to still say.
+MIXED_QUORUM_WORDS = "Mixed JVM and Krabka controller quorums"
+# Image keys that are a Kafka broker, as opposed to a client or object store.
+KAFKA_IMAGE_PREFIXES = ("apache_kafka_", "cp_kafka_")
+
 
 def parse_divergences(audit: str) -> list[tuple[int, str, str]]:
     """Read `THROTTLE_ECHO_DIVERGENCES` out of the audit module.
@@ -246,7 +273,227 @@ def throttle_echo() -> str:
     )
 
 
+def rust_const(source: str, name: str) -> str:
+    """The value of a `pub const NAME: &str = "...";` line in `source`."""
+    return match(rf'^pub const {re.escape(name)}: &str = "([^"]+)";', source, API_CATALOG)
+
+
+def annotation_field(body: str, name: str, pattern: str) -> str:
+    found = re.search(rf"\b{name}:\s*{pattern}", body, re.DOTALL)
+    if not found:
+        raise SystemExit(f"KipAnnotation entry without a parsable `{name}` in {API_CATALOG}")
+    return found.group(1)
+
+
+def parse_annotations(catalog: str) -> list[dict]:
+    """Read `KIP_ANNOTATIONS` out of the API catalog, one dict per row."""
+    start = catalog.find(ANNOTATION_BEGIN)
+    end = catalog.find(ANNOTATION_END)
+    if start < 0 or end < start:
+        raise SystemExit(f"missing {ANNOTATION_BEGIN}/{ANNOTATION_END} markers in {API_CATALOG}")
+    rows = []
+    for body in ENTRY_RE.findall(catalog[start:end]):
+        status = annotation_field(body, "status", r"KipStatus::(\w+)")
+        clients = annotation_field(body, "clients", r"ClientEvidence::(\w+)")
+        if status not in STATUS:
+            raise SystemExit(f"unknown KipStatus variant {status} in {API_CATALOG}")
+        if clients not in CLIENT_EVIDENCE:
+            raise SystemExit(f"unknown ClientEvidence variant {clients} in {API_CATALOG}")
+        rows.append(
+            {
+                "key": annotation_field(body, "key", r'"([^"]*)"'),
+                "claim": annotation_field(body, "claim", r'"([^"]*)"'),
+                "status": status,
+                "module": annotation_field(body, "module", r'"([^"]*)"'),
+                "tests": re.findall(r'"([^"]*)"', annotation_field(body, "tests", r"&\[(.*?)\]")),
+                "clients": clients,
+                "note": annotation_field(body, "note", r'"([^"]*)"'),
+            }
+        )
+    if not rows:
+        raise SystemExit(f"KIP_ANNOTATIONS parsed empty in {API_CATALOG}")
+    keys = [row["key"] for row in rows]
+    if len(set(keys)) != len(keys):
+        raise SystemExit(f"duplicate KIP_ANNOTATIONS keys in {API_CATALOG}")
+    return rows
+
+
+def kip_inventory(catalog: str) -> set[str]:
+    """Every `KIP-<n>` a file under `crates/` names."""
+    found = set()
+    for path in sorted(CRATES.rglob("*")):
+        if not path.is_file() or path.name == "CHANGELOG.md" or "target" in path.parts:
+            continue
+        if path == API_CATALOG:
+            start = catalog.find(ANNOTATION_BEGIN)
+            end = catalog.find(ANNOTATION_END)
+            text = catalog[:start] + catalog[end:]
+        else:
+            text = path.read_text(errors="ignore")
+        found.update(KIP_RE.findall(text))
+    return found
+
+
+def kip_order(key: str) -> tuple[int, int | str]:
+    """KIP rows first, by number; the scope-only rows after them, by name."""
+    if key.startswith("KIP-"):
+        return (0, int(key[len("KIP-") :]))
+    return (1, key)
+
+
+def docker_map(build: Path) -> dict[str, list[str]]:
+    """The `docker = {...}` map of a crate's `crate_tests` call: stem to image keys."""
+    text = build.read_text()
+    start = text.find("docker = {")
+    if start < 0:
+        return {}
+    begin = start + len("docker = ")
+    depth = 0
+    for index in range(begin, len(text)):
+        depth += text[index] == "{"
+        depth -= text[index] == "}"
+        if depth == 0:
+            block = re.sub(r"#[^\n]*", "", text[begin : index + 1])
+            return {
+                stem: re.findall(r'"(\w+)"', images)
+                for stem, images in re.findall(r'"(\w+)":\s*\[([^\]]*)\]', block)
+            }
+    raise SystemExit(f"unbalanced docker map in {build}")
+
+
+def suite_images(path: str) -> list[str]:
+    """The Kafka image keys the suite that `path` belongs to runs against.
+
+    `crates/<crate>/tests/<stem>.rs` and `crates/<crate>/tests/<stem>/<file>.rs`
+    both belong to suite `<stem>`. Anything under `src/` runs in process.
+    """
+    parts = Path(path).parts
+    if len(parts) < 4 or parts[0] != "crates" or parts[2] != "tests":
+        return []
+    stem = parts[3][: -len(".rs")] if len(parts) == 4 else parts[3]
+    images = docker_map(ROOT / "crates" / parts[1] / "BUILD.bazel").get(stem, [])
+    return [key for key in images if key.startswith(KAFKA_IMAGE_PREFIXES)]
+
+
+def check_test(key: str, test: str) -> str:
+    """Confirm the file (and function, if named) behind a test entry exists."""
+    path, _, function = test.partition("::")
+    file = ROOT / path
+    if not file.is_file():
+        raise SystemExit(f"{key} names a test file that does not exist: {path}")
+    if function and not re.search(rf"\bfn {re.escape(function)}\s*[(<]", file.read_text()):
+        raise SystemExit(f"{key} names a test that {path} does not define: {function}")
+    return path
+
+
+def link_citations(note: str) -> str:
+    """Turn `crates/x.rs:<line>` in a note into a link, after checking the line exists."""
+
+    def link(found: re.Match) -> str:
+        path, line = found.group(1), int(found.group(2))
+        lines = (ROOT / path).read_text().splitlines()
+        if line > len(lines):
+            raise SystemExit(f"citation {path}:{line} is past the end of the file")
+        return f"[`{path}:{line}`](../{path}#L{line})"
+
+    return CITATION_RE.sub(link, note)
+
+
+def librdkafka_evidence() -> str:
+    """What the librdkafka suite establishes, for the client-family column."""
+    suite = LIBRDKAFKA.read_text()
+    match(rf"^async fn ({re.escape(LIBRDKAFKA_TEST)})\(\)", suite, LIBRDKAFKA)
+    image, program, library = re.search(
+        r'CLIENTS: \[\(&str, &str, &str\); 1\] = \[\(\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",?\s*\)\]',
+        suite,
+        re.DOTALL,
+    ).groups()
+    image_key = docker_map(BROKER_BUILD).get("librdkafka_conformance", [None])[0]
+    if image_key is None or image_for(image_key) != image:
+        raise SystemExit(f"librdkafka client image {image} is not the one Bazel loads")
+    digest_for(image_key)
+    return (
+        f"{program} {image.rsplit(':', 1)[1]} ({library}): "
+        f"[`{LIBRDKAFKA_TEST}`](../crates/broker/tests/librdkafka_conformance.rs)"
+    )
+
+
+def kip_rows() -> tuple[str, str]:
+    """The per-KIP rows, and the image legend they refer to."""
+    catalog = API_CATALOG.read_text()
+    rows = parse_annotations(catalog)
+    citation = rust_const(catalog, "OUT_OF_SCOPE_CITATION")
+    mixed_quorum = rust_const(catalog, "MIXED_QUORUM_KEY")
+
+    cited_path, cited_line = citation.rsplit(":", 1)
+    cited = (ROOT / cited_path).read_text().splitlines()[int(cited_line) - 1]
+    if MIXED_QUORUM_WORDS not in cited:
+        raise SystemExit(f"{citation} no longer says '{MIXED_QUORUM_WORDS}': {cited}")
+
+    annotated = {row["key"] for row in rows}
+    claimed = kip_inventory(catalog)
+    unannotated = sorted(claimed - annotated, key=kip_order)
+    if unannotated:
+        raise SystemExit(
+            "KIPs named under crates/ without a KIP_ANNOTATIONS row in "
+            f"{API_CATALOG}: {', '.join(unannotated)}"
+        )
+    stale = sorted(key for key in annotated - claimed if key.startswith("KIP-"))
+    if stale:
+        raise SystemExit(f"KIP_ANNOTATIONS rows for KIPs nothing under crates/ names: {', '.join(stale)}")
+    if mixed_quorum not in annotated:
+        raise SystemExit(f"KIP_ANNOTATIONS has no {mixed_quorum} row")
+    ordered = [row["key"] for row in rows]
+    if ordered != sorted(ordered, key=kip_order):
+        raise SystemExit("KIP_ANNOTATIONS is not in KIP order")
+
+    kcat = librdkafka_evidence()
+    used_images: set[str] = set()
+    rendered = []
+    for row in rows:
+        key = row["key"]
+        if not (ROOT / row["module"]).is_file():
+            raise SystemExit(f"{key} names an owner that does not exist: {row['module']}")
+        if row["status"] == "OutOfScope":
+            if row["tests"] or not row["note"]:
+                raise SystemExit(f"{key} is out of scope; it needs a note and no tests")
+        elif not row["tests"]:
+            raise SystemExit(f"{key} is {row['status']} without a test")
+        if key in (mixed_quorum, "KIP-590") and citation not in row["note"]:
+            raise SystemExit(f"{key} does not cite {citation}")
+        if row["clients"] == "Kcat" and not any(
+            test == f"crates/broker/tests/librdkafka_conformance.rs::{LIBRDKAFKA_TEST}"
+            for test in row["tests"]
+        ):
+            raise SystemExit(f"{key} claims kcat evidence without listing {LIBRDKAFKA_TEST}")
+
+        images: list[str] = []
+        tests = []
+        for test in row["tests"]:
+            path = check_test(key, test)
+            images.extend(image for image in suite_images(path) if image not in images)
+            shown = test[len("crates/") :]
+            tests.append(f"[`{shown}`](../{path})")
+        used_images.update(images)
+
+        owner = row["module"][len("crates/") :]
+        image_column = ", ".join("`" + image + "`" for image in images) or "in process"
+        note = link_citations(row["note"]).replace("|", "\\|")
+        rendered.append(
+            f"| {key} | {STATUS[row['status']]} | {row['claim']} | "
+            f"[`{owner}`](../{row['module']}) | "
+            f"{'<br>'.join(tests) or 'none'} | {image_column} | "
+            f"{kcat if row['clients'] == 'Kcat' else 'none'} | {note} |"
+        )
+
+    legend = "\n".join(
+        f"| `{key}` | `{image_for(key)}@{digest_for(key)}` |" for key in sorted(used_images)
+    )
+    return "\n".join(rendered), legend
+
+
 def render() -> str:
+    kip_table, image_legend = kip_rows()
     log_rows, log_image = log_contract()
     api_rows, api_image = api_versions()
     throttle_rows = throttle_echo()
@@ -254,9 +501,42 @@ def render() -> str:
 
 <!-- Generated by tools/generate-kip-matrix.py; do not edit by hand. -->
 
-This matrix records the repository's JVM differential evidence: the Kafka
-on-disk log contract, and the `ApiVersions` table every client negotiates
+This matrix records what the tree claims about Kafka compatibility and where
+the evidence for each claim is: one row per KIP that any file under `crates/`
+names, then the repository's JVM differential evidence, which is the Kafka
+on-disk log contract and the `ApiVersions` table every client negotiates
 against.
+
+## KIP status
+
+Every row comes from `KIP_ANNOTATIONS` in
+[`api_catalog`](../crates/broker/src/api_catalog.rs). The generator scans
+`crates/` for `KIP-<n>` mentions, except the crate CHANGELOGs, and fails when a
+KIP is named without a row here or a row names a KIP that nothing mentions, so a
+compatibility claim cannot enter `src/` without evidence beside it. It also
+fails when a row's owner or test does not exist, or when a `path::function`
+entry names a function the file does not define.
+
+- **Status** is `Implemented`, `Partial` (the note says what is missing), or
+  `Out of scope` (the note cites the decision).
+- **Owner** is the module that holds the behavior.
+- **Tests** establish the status. A test under `src/` is a unit or model test.
+- **Kafka image** is what the listed suites run against, read from each crate's
+  `BUILD.bazel` `docker` map and pinned below; `in process` means no suite in
+  the row starts a Kafka container.
+- **librdkafka** is the non-JVM client evidence:
+  [`librdkafka_conformance`](../crates/broker/tests/librdkafka_conformance.rs)
+  drives the stock `kcat` image against the broker.
+
+| KIP | Status | Contract | Owner | Tests | Kafka image | librdkafka | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+{kip_table}
+
+### Kafka images
+
+| Key | Image |
+| :--- | :--- |
+{image_legend}
 
 ## On-disk log contract
 

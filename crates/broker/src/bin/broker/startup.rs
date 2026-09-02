@@ -17,6 +17,12 @@ use crate::{
 pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
 
+    if args.print_config_schema {
+        let schema = krabka_broker::file_config::config_schema();
+        println!("{}", serde_json::to_string_pretty(&schema)?);
+        return Ok(());
+    }
+
     // Install the tracing subscriber — stdout `fmt` plus an
     // optional OTLP export layer. OTLP stays off unless the environment
     // opts in (see `krabka_broker::telemetry`). Built here, inside the

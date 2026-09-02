@@ -1,0 +1,255 @@
+# One node of a three-node krabka-broker cluster with a static KRaft quorum.
+#
+# This is the file for node 1. Nodes 2 and 3 differ in `broker_id`, in the
+# `advertised` address of each listener, and in `rack`. Every node was
+# formatted with `krabka-format --initial-controllers` naming the same three
+# voters. Every key here is documented in docs/config-reference.md, which is
+# generated from the same schema this file is checked against.
+#
+# Comment conventions: a line that starts with `# ` is prose. A line that
+# starts with `#` and no space is a disabled setting, kept in the file because
+# it needs a key file, a keytab, or a service that this example does not ship.
+# `crates/broker/tests/example_broker_toml.rs` parses this file as written
+# and again with every disabled setting turned on, so both forms stay valid.
+
+broker_id = 1
+log_dir = "/var/lib/krabka/data"
+rack = "zone-a"
+replica_selector = "rack-aware"
+
+# KIP-595 static quorum. Each entry is `<node_id>@<host>:<port>` and points at
+# that node's controller listener. Hosts are resolved on every dial, so a pod
+# that comes back on a new IP is reached again without a restart.
+controller_quorum_voters = [
+    "1@krabka-0.krabka.default.svc:9093",
+    "2@krabka-1.krabka.default.svc:9093",
+    "3@krabka-2.krabka.default.svc:9093",
+]
+# KIP-853 discovery endpoints for a node that joins later, and whether it
+# promotes itself to a voter once it has caught up.
+bootstrap_servers = [
+    "krabka-0.krabka.default.svc:9093",
+    "krabka-1.krabka.default.svc:9093",
+    "krabka-2.krabka.default.svc:9093",
+]
+auto_join = false
+
+# Broker liveness and replication timing.
+heartbeat_interval = "2s"
+heartbeat_timeout = "18s"
+replica_lag_time_max = "30s"
+controller_election_timeout = "1s"
+controller_heartbeat_interval = "500ms"
+
+# Connection limits.
+max_connections = 20000
+max_connections_per_ip = 2000
+connections_max_idle = "10m"
+
+# The controller listener terminates TLS with `[tls_config]` and demands a
+# client certificate from its peers. `controller_server_name` is the SNI name
+# every peer's certificate carries, so a dial to any pod IP validates.
+inter_broker_listener_name = "INTERNAL"
+controller_listener_protocol = "Ssl"
+controller_server_name = "krabka.default.svc"
+
+# TLS material for the controller listener and for every TLS listener that
+# carries no `tls_config` of its own. `trust_roots_path` is the CA this node
+# trusts when it dials a peer.
+[tls_config]
+cert_path = "/etc/krabka/tls/node.crt"
+key_path = "/etc/krabka/tls/node.key"
+trust_roots_path = "/etc/krabka/tls/cluster-ca.crt"
+client_ca_path = "/etc/krabka/tls/cluster-ca.crt"
+client_auth = "Required"
+
+# Diskless WAL follower fetches: the authenticated principal of each peer and
+# the node id it may fetch as.
+[inter_broker_principal_node_ids]
+"CN=krabka-0.krabka.default.svc" = 1
+"CN=krabka-1.krabka.default.svc" = 2
+"CN=krabka-2.krabka.default.svc" = 3
+
+[[listeners]]
+name = "INTERNAL"
+bind_addr = "0.0.0.0:9092"
+advertised = "krabka-0.krabka.default.svc:9092"
+protocol = "Ssl"
+
+[[listeners]]
+name = "CLIENT"
+bind_addr = "0.0.0.0:9094"
+advertised = "krabka-0.example.com:9094"
+protocol = "SaslSsl"
+
+[listeners.tls_config]
+cert_path = "/etc/krabka/tls/client-listener.crt"
+key_path = "/etc/krabka/tls/client-listener.key"
+client_auth = "Disabled"
+
+[listeners.sasl_config]
+enabled_mechanisms = ["SCRAM-SHA-512", "OAUTHBEARER"]
+
+[server_properties]
+"log.retention.hours" = "168"
+"num.partitions" = "6"
+"default.replication.factor" = "3"
+
+[process]
+roles = ["controller", "broker"]
+
+# A three-site stretch layout: two data sites and a witness site. Each site
+# name is a `rack` value some node reports. Every node in the cluster carries
+# the same table.
+[stretch]
+sites = ["zone-a", "zone-b", "zone-witness"]
+witness_site = "zone-witness"
+preferred_leader_site = "zone-a"
+
+[runtime]
+controlled_shutdown_drain_timeout = "60s"
+log_segment_bytes = "1GiB"
+message_max_bytes = "1MiB"
+default_min_insync_replicas = 2
+offsets_topic_replication_factor = 3
+transaction_state_replication_factor = 3
+metadata_max_snapshot_interval = "1h"
+partition_disk_scan_interval = "1m"
+tls_reload_interval = "30s"
+# The diskless WAL: how often the hot tail flushes to the object store, how
+# large a flush and the hot tail may grow, how many local replicas hold the
+# tail (an odd count), and how far the trim point may lag the flushed offset.
+diskless_wal_flush_interval = "50ms"
+diskless_wal_flush_max_size = "4MiB"
+diskless_wal_hot_tail_max_size = "64MiB"
+diskless_wal_local_replica_count = 3
+diskless_wal_trim_safety_lag = 1000
+diskless_wal_index_projection_timeout = "5s"
+# KIP-932 share groups and KIP-1071 streams groups.
+share_group_enable = true
+share_group_isolation_level = "read-committed"
+streams_group_enable = true
+streams_group_assignor = "sticky"
+
+# Tiered storage on an S3-compatible object store. Credentials come from the
+# AWS credential chain when `access_key_id` and `secret_access_key` are
+# absent. `allow_http` is for a MinIO endpoint without TLS.
+[remote_storage]
+
+[remote_storage.s3]
+bucket = "krabka-tier"
+region = "us-east-1"
+prefix = "cluster-a"
+endpoint = "https://s3.example.com"
+allow_http = false
+#access_key_id = "minioadmin"
+#secret_access_key = "minioadmin"
+
+# The durable remote log metadata topic. `bootstrap` may stay empty; the
+# broker derives it from the inter-broker listener.
+[remote_storage.kafka_metadata]
+bootstrap = ""
+num_partitions = 50
+replication = 3
+topic_create_timeout = "30s"
+
+# WORM archive mode signs each segment manifest with a PKCS#8 Ed25519 key.
+#[remote_storage.worm]
+#signing_key_path = "/etc/krabka/worm/manifest.pk8"
+#signing_key_id = "worm-2026"
+#write_only = false
+
+# Open Policy Agent authorization. The URL is the decision endpoint. The
+# broker calls it per request and caches decisions; `allow_on_error = false`
+# fails closed while OPA is unreachable.
+[authorization]
+type = "opa"
+super_users = ["User:admin", "CN=krabka-0.krabka.default.svc"]
+
+[authorization.opa]
+url = "http://opa.default.svc:8181/v1/data/kafka/authz/allow"
+allow_on_error = false
+maximum_cache_size = 50000
+expire_after_ms = 3600000
+
+# KFC-7 broker-side schema validation against a Confluent-compatible registry.
+[schema_registry]
+url = "http://schema-registry.default.svc:8081"
+fail_open = false
+maximum_cache_size = 50000
+expire_after_ms = 300000
+
+# SASL/OAUTHBEARER validation against an identity provider. Setting
+# `jwks_endpoint_uri` starts a background JWKS refresher at boot.
+#[oauthbearer]
+#jwks_endpoint_uri = "https://idp.example.com/.well-known/jwks.json"
+#valid_issuer_uri = "https://idp.example.com/"
+#expected_audience = "krabka"
+#principal_claim_name = "sub"
+#jwks_refresh_interval_ms = 300000
+#jwks_expiry_seconds = 360
+#allowable_clock_skew_ms = 30000
+#idp_tls_trust = "/etc/krabka/tls/idp-ca.crt"
+
+# SASL/GSSAPI (Kerberos) needs a keytab and a reachable KDC.
+#[gssapi]
+#keytab_path = "/etc/krabka/krb5/kafka.keytab"
+#service_name = "kafka"
+#realm = "EXAMPLE.COM"
+#kdc = "tcp://kdc.example.com:88"
+#principal_to_local_rules = ["RULE:[1:$1@$0](.*@EXAMPLE.COM)s/@.*//", "DEFAULT"]
+
+# Credentials this node presents when it dials a peer over SASL.
+#[inter_broker_credentials]
+#type = "gssapi"
+#keytab_path = "/etc/krabka/krb5/kafka.keytab"
+#client_principal = "kafka/krabka-0.krabka.default.svc@EXAMPLE.COM"
+#kdc_url = "tcp://kdc.example.com:88"
+
+[delegation_token]
+max_lifetime_ms = 604800000
+default_renew_period_ms = 86400000
+expiry_check_interval_ms = 3600000
+
+[audit]
+enabled = true
+failure_mode = "fail-closed"
+topic = "__krabka_audit"
+
+[audit.spool]
+dir = "/var/lib/krabka/audit-spool"
+max_bytes = 4294967296
+sync_every_n = 1
+
+[audit.checkpoint]
+every_n = 1000
+every_secs = 60
+
+#[audit.signing]
+#key_path = "/etc/krabka/audit/checkpoint.pk8"
+#key_id = "audit-2026"
+
+[freeze]
+max_entries = 1000
+signature_max_skew = "5m"
+#require_signature = true
+
+# With operator keys provisioned, `signed_actions` can name the irreversible
+# actions whose approvals must carry a detached signature. Without keys the
+# list must be empty.
+[break_glass]
+approvers = ["User:alice", "User:bob", "User:carol"]
+required_approvals = 2
+proposal_ttl = "30m"
+signed_actions = []
+background_unclean_recovery = "require"
+
+#[[operator_keys]]
+#key_id = "alice-2026"
+#principal = "User:alice"
+#public_key_path = "/etc/krabka/operator-keys/alice.pub"
+
+#[[operator_keys]]
+#key_id = "bob-2026"
+#principal = "User:bob"
+#public_key_path = "/etc/krabka/operator-keys/bob.pub"

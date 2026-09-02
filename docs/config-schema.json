@@ -1,0 +1,2769 @@
+{
+  "$defs": {
+    "AuthzType": {
+      "description": "Which [`crate::authorizer::Authorizer`] impl to instantiate.\n`snake_case` to match the spec's `type = \"allow_all\" | \"simple\" |\n\"opa\"` wire shape.",
+      "enum": [
+        "allow_all",
+        "simple",
+        "opa"
+      ],
+      "type": "string"
+    },
+    "BackgroundUncleanRecovery": {
+      "description": "What the background unclean-recovery path does when it cannot ask anybody\nfor a break-glass approval.\n\nThe controller starts unclean recovery from leader election and from the\nbroker-heartbeat path. Neither carries a request context, so neither has a\ncaller to refuse. An operator who types an unclean election can be asked\nfor a second signature; a controller that reacts to a dead broker at 03:00\ncannot.\n\nThe TOML spelling is `off | audit-only | require`, so the serde rename is\n`kebab-case`.",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "Recovery runs and writes no break-glass audit event.",
+          "type": "string"
+        },
+        {
+          "const": "audit-only",
+          "description": "Recovery runs and writes a bypassed break-glass audit event naming the\npartition and the strategy. An operator can then prove after the fact\nthat a data-losing election happened with no approval.",
+          "type": "string"
+        },
+        {
+          "const": "require",
+          "description": "Recovery does not run. The partition stays leaderless and visibly\noffline, and the refusal is audited.",
+          "type": "string"
+        }
+      ]
+    },
+    "FileAuditCheckpointConfig": {
+      "additionalProperties": false,
+      "description": "`[audit.checkpoint]` — checkpoint cadence.",
+      "properties": {
+        "every_n": {
+          "default": 1000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "every_secs": {
+          "default": 60,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FileAuditConfig": {
+      "additionalProperties": false,
+      "description": "`[audit]` section of `broker.toml` (`FedRAMP` 20x MLA).",
+      "properties": {
+        "checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileAuditCheckpointConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Checkpoint emission cadence. `None` → use defaults."
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether the audit subsystem is active.",
+          "type": "boolean"
+        },
+        "failure_mode": {
+          "description": "Whether privileged operations continue when audit processing fails.",
+          "type": "string"
+        },
+        "signing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileAuditSigningConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Ed25519 checkpoint signing key. `None` → chaining only, no checkpoints."
+        },
+        "spool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileAuditSpoolConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Durable spool for the AU-5 degraded path. `None` → use defaults."
+        },
+        "topic": {
+          "default": "__krabka_audit",
+          "description": "Internal topic name for audit records. It has to start with `__`: the\nbroker reports it internal on `Metadata` and refuses to freeze it by\nthat prefix, and a name outside the convention would satisfy only the\nfirst of the two.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FileAuditSigningConfig": {
+      "additionalProperties": false,
+      "description": "`[audit.signing]` — Ed25519 checkpoint signing key.",
+      "properties": {
+        "key_id": {
+          "type": "string"
+        },
+        "key_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_path",
+        "key_id"
+      ],
+      "type": "object"
+    },
+    "FileAuditSpoolConfig": {
+      "additionalProperties": false,
+      "description": "`[audit.spool]` — durable spool for the AU-5 degraded path.",
+      "properties": {
+        "dir": {
+          "default": "audit-spool",
+          "type": "string"
+        },
+        "max_bytes": {
+          "default": 1073741824,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sync_every_n": {
+          "default": 1,
+          "description": "Number of appended records between durable file syncs.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FileAuthorizationConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[authorization]`. `type` (renamed to `authz_type` on\nthe Rust side to avoid shadowing the keyword) defaults to\n`AllowAll`; `super_users` is the principal bypass list consulted by\nevery concrete authorizer impl.\n\n`deny_unknown_fields` so a misspelled `super_user` typo at the top\nof the `[authorization]` block is rejected at parse time rather\nthan silently producing the wrong authorizer.",
+      "properties": {
+        "opa": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileOpaConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`Some` iff `authz_type == Opa`. Required in that case;\n`apply_to` returns\n[`FileConfigError::MissingSection`][crate::file_config::FileConfigError::MissingSection]\nwhen omitted."
+        },
+        "super_users": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/$defs/AuthzType"
+        }
+      },
+      "type": "object"
+    },
+    "FileBreakGlassConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[break_glass]`. Maps to\n[`crate::config::BreakGlassConfig`].\n\nEvery field is `Option`, so `approvers = []` and `signed_actions = []` are\neach a written choice and are distinct from omitting the key.\n`deny_unknown_fields` so a misspelled key is rejected at parse time.",
+      "properties": {
+        "approvers": {
+          "description": "Principals that may approve a proposal. Omitted leaves the\n`BrokerConfig` value, which is empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "background_unclean_recovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BackgroundUncleanRecovery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the background unclean-recovery path does, where there is no\ncaller to ask for an approval. Default\n[`BackgroundUncleanRecovery::AuditOnly`]."
+        },
+        "proposal_ttl": {
+          "default": null,
+          "description": "How long a proposal stays usable. Default\n[`crate::config::DEFAULT_BREAK_GLASS_PROPOSAL_TTL`].",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required_approvals": {
+          "description": "Distinct approving principals a proposal needs. Default\n[`crate::config::DEFAULT_BREAK_GLASS_REQUIRED_APPROVALS`]. Values below\n[`crate::config::MIN_BREAK_GLASS_REQUIRED_APPROVALS`] are a startup\nerror: a two-person rule with one approval is one person.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signed_actions": {
+          "description": "Actions whose approvals must also carry a detached operator signature.\nOmitted inside a present `[break_glass]` section selects\n[`crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS`], the irreversible\nset. Naming any action with no `[[operator_keys]]` entry is a startup\nerror; write `signed_actions = []` to demand no signature.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "FileClientAuthMode": {
+      "enum": [
+        "Disabled",
+        "Optional",
+        "Required"
+      ],
+      "type": "string"
+    },
+    "FileDelegationTokenConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`\nfields on [`crate::BrokerConfig`].",
+      "properties": {
+        "default_renew_period_ms": {
+          "description": "Default renew period — the initial `expiry_timestamp_ms` offset\nat create time and the implicit renew period when\n`RenewDelegationToken.renew_period_ms == -1`. Distinct from\n`max_lifetime_ms` (the absolute ceiling). Default 24 hours.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expiry_check_interval_ms": {
+          "description": "Background sweep cadence, ms. Default 1 hour.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_lifetime_ms": {
+          "description": "Hard upper bound on token lifetime, ms. Default 7 days.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "secret_key": {
+          "description": "HMAC master key. Overridden by `KRABKA_DELEGATION_TOKEN_SECRET_KEY`\nwhen set. Bytes are wrapped in\n[`krabka_security::SecretBytes`] before reaching `BrokerConfig`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "FileFreezeConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[freeze]`. Maps to [`crate::config::FreezeConfig`].\n\nEvery field is `Option`: a present value replaces the current broker value,\nan absent one retains it. `deny_unknown_fields` so a misspelled\n`require_signature` is rejected at parse time rather than leaving the\nbroker on the opposite policy to the one the operator wrote.",
+      "properties": {
+        "max_entries": {
+          "description": "Ceiling on live freeze registry entries. Default\n[`crate::config::DEFAULT_FREEZE_MAX_ENTRIES`]. Must be at least 1.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "require_signature": {
+          "description": "**Security-sensitive.** Demand a detached operator signature on a\nfreeze as well as on a thaw. Default `false`, which keeps a freeze\navailable in one command during an incident on a cluster with no key\nmaterial yet. A thaw is signed either way.\n\nSetting this to `true` with no `[[operator_keys]]` entry is a startup\nerror: there would be no key to verify the demanded signature against.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "signature_max_skew": {
+          "default": null,
+          "description": "How far a signed freeze record's timestamp may sit from the\ncontroller's clock. Default\n[`crate::config::DEFAULT_FREEZE_SIGNATURE_MAX_SKEW`].",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "FileGssapiConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[gssapi]`. Maps to\n[`krabka_security::gssapi::GssapiConfig`]. `principal_to_local_rules`\nare parsed into `name::Rule` at `apply_to` time.",
+      "properties": {
+        "kdc": {
+          "description": "KDC endpoint (e.g. `tcp://kdc:88`) that bypasses krb5.conf discovery;\nfalls back to krb5.conf when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keytab_path": {
+          "type": "string"
+        },
+        "max_time_skew": {
+          "default": null,
+          "description": "Maximum tolerated difference between client and broker clocks.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "principal_to_local_rules": {
+          "default": [],
+          "description": "`auth_to_local` rule specs, applied in order (first match wins).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "realm": {
+          "description": "Default Kerberos realm, used for principals that omit their realm.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service_name": {
+          "description": "`sasl.kerberos.service.name`. Defaults to `\"kafka\"` when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "keytab_path"
+      ],
+      "type": "object"
+    },
+    "FileInterBrokerCredentials": {
+      "description": "TOML shape of `[inter_broker_credentials]`. A `type` discriminator\nselects the variant. PLAIN/SCRAM inter-broker over TOML remain\nintentionally unexposed.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "client_principal": {
+              "type": "string"
+            },
+            "kdc_url": {
+              "type": "string"
+            },
+            "keytab_path": {
+              "type": "string"
+            },
+            "service_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "gssapi",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "keytab_path",
+            "client_principal",
+            "kdc_url"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "token_path": {
+              "description": "File containing the bearer token. A trailing newline is ignored.\nThe token itself never appears in the parsed config's `Debug` form.",
+              "type": "string"
+            },
+            "type": {
+              "const": "oauth-bearer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "token_path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FileKafkaRlmmConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[remote_storage.kafka_metadata]`. Maps to\n[`crate::config::KafkaRlmmConfig`].",
+      "properties": {
+        "bootstrap": {
+          "default": "",
+          "description": "`host:port` the manager dials to reach its own broker.\nMay be empty; the broker derives the address from the inter-broker\nlistener at startup.",
+          "type": "string"
+        },
+        "event_queue_capacity": {
+          "description": "Capacity of the shared metadata-event delivery queue.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fetch_max_bytes": {
+          "default": null,
+          "description": "Maximum bytes returned by each per-partition metadata fetch.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fetch_max_wait": {
+          "default": null,
+          "description": "Maximum wait for each per-partition metadata fetch.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fetch_retry_backoff": {
+          "default": null,
+          "description": "Backoff after a failed metadata fetch.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "in_memory": {
+          "default": false,
+          "description": "Explicit opt-out: run the non-durable in-memory RLMM instead of the\ntopic-backed default. Tests / single-node dev only.",
+          "type": "boolean"
+        },
+        "num_partitions": {
+          "description": "Partition count for `__remote_log_metadata` on first creation.\nDefaults to 50 (Kafka's\n`remote.log.metadata.topic.num.partitions`).",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "replication": {
+          "description": "Replication factor for `__remote_log_metadata` on first\ncreation. Defaults to 3 (Kafka's\n`remote.log.metadata.topic.replication.factor`).",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "snapshot_interval": {
+          "default": null,
+          "description": "RLMM cache snapshot cadence.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "topic_create_timeout": {
+          "default": null,
+          "description": "Timeout for provisioning each internal metadata topic.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "FileListener": {
+      "properties": {
+        "advertised": {
+          "type": "string"
+        },
+        "bind_addr": {
+          "type": "string"
+        },
+        "connections_max_idle": {
+          "default": null,
+          "description": "Per-listener `connections.max.idle.ms`. Absent leaves this listener on\nthe broker-wide `connections_max_idle`. Maps to an entry in\n[`crate::BrokerConfig::connections_max_idle_overrides`].",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "sasl_config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileListenerSaslConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tls_config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileTlsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "bind_addr",
+        "advertised",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "FileListenerSaslConfig": {
+      "properties": {
+        "enabled_mechanisms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "FileOAuthBearerConfig": {
+      "description": "TOML shape of `[oauthbearer]`. Maps to\n[`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`\nselects the signed-JWT validator; setting\n`introspection_endpoint_uri` selects the RFC 7662 introspection\nvalidator; the two endpoint URIs are mutually\nexclusive. With neither set, the unsecured-JWS validator\n(development only) is used.",
+      "properties": {
+        "allowable_clock_skew_ms": {
+          "description": "Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`.\nDefault 30000.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "custom_claim_check": {
+          "description": "Optional `JsonPath` expression (RFC 9535, via\njsonpath-rust) evaluated against the token claim set. Token is\nrejected when the expression yields empty/null/false. Compiled\nonce at broker startup; malformed expressions panic with a\ndescriptive error.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_audience": {
+          "description": "When set, the token `aud` claim must contain this. Signed\nvalidator only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback_user_name_claim": {
+          "description": "Alternate claim name for principal-name fallback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback_user_name_prefix": {
+          "description": "Prepended on fallback only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "groups_claim": {
+          "description": "`JsonPath` expression (RFC 9535) extracting groups.\nCompiled once at broker startup; malformed expression panics\nwith descriptive error.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "groups_claim_delimiter": {
+          "description": "When `groups_claim` resolves to a string, split on\nthis delimiter.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idp_tls_trust": {
+          "description": "PEM file containing the CA\ncertificate(s) used to verify the `IdP`'s TLS certificate on ALL\noutbound HTTPS to the `IdP` — JWKS endpoint, introspection\nendpoint, and userinfo endpoint. When set, these are\nthe *only* trust roots used for the outbound HTTPS (replaces the\ndefault webpki-roots — Strimzi-shaped). When unset, the broker\nuses reqwest's default rustls webpki-roots.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "introspection_client_id": {
+          "description": "`client_id` the broker uses to authenticate (HTTP Basic\nAuth) against the introspection endpoint. Required when\n`introspection_endpoint_uri` is set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "introspection_client_secret_path": {
+          "description": "Filesystem path to a file containing the client\nsecret the broker uses to authenticate against the introspection\nendpoint. Required when `introspection_endpoint_uri` is set.\nFile-based (not literal) so secret material doesn't sit in the\nTOML; operator mounts a `Secret` and writes the mount path here.\nThe file's trailing newline (if any) is stripped at config-load.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "introspection_endpoint_uri": {
+          "description": "RFC 7662 introspection endpoint URL. When set,\nselects the introspection validator (mutually exclusive with\n`jwks_endpoint_uri`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "introspection_http_timeout_ms": {
+          "description": "Timeout for the introspection (and userinfo) HTTP\nrequests, in milliseconds. Default 10 000 (10 s).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "jwks_endpoint_uri": {
+          "description": "JWKS endpoint URL. When set, tokens are validated as signed\nJWTs (RS256 / ES256) against the keys fetched from this URL, and the\nbroker spawns a background refresher. When unset, the unsecured-JWS\n(`alg:none`) development validator is used.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jwks_expiry_seconds": {
+          "description": "Maximum age (seconds) of the cached JWKS before validators\nreject tokens until the next successful refresh. Strimzi default 360\n(6 minutes). Unset = no expiry check. Fails\nclosed on prolonged `IdP` outage. Signed validator only.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "jwks_ignore_key_use": {
+          "description": "When true, the JWKS parser keeps keys regardless of `use`\nfield. Default false (filter out `use=enc`). Some identity providers\npublish signing keys with `use=\"enc\"` by mistake; operators set this\nto true to accept them. Signed validator only.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "jwks_min_refresh_pause_seconds": {
+          "description": "Minimum pause (seconds) between on-demand JWKS refreshes\ntriggered by validator signals (unknown-kid / bad-signature tokens).\nDefaults to 1 (Strimzi parity). Signed validator only.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "jwks_refresh_interval_ms": {
+          "description": "JWKS re-fetch interval, in milliseconds. Default 300000\n(5 minutes). Signed validator only.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_session_lifetime_seconds": {
+          "description": "Optional ceiling on OAUTHBEARER session lifetime, in\nseconds. When set, the broker clamps `session_lifetime_ms` to\n`min(token_exp_ms - now_ms, cap * 1000)`. When unset, sessions\nlast until the token's natural `exp`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "principal_claim_name": {
+          "description": "Claim whose value becomes the principal name. Default `sub`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userinfo_endpoint_uri": {
+          "description": "Optional OIDC userinfo endpoint URL. When set, the\nintrospection validator calls `GET userinfo` after a successful\nintrospection and merges the profile claims over the\nintrospection claims (introspection wins for `active`, `exp`,\n`iat`, `nbf`, `scope`, `client_id`, `sub`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "valid_issuer_uri": {
+          "description": "When set, the token `iss` claim must equal this. Signed\nvalidator only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "valid_token_type": {
+          "description": "Optional JWT `typ` header check. When set, JWT-mode\nvalidators (unsecured + signed JWS) require the JWT header's\n`typ` field to equal this string. Introspection-mode skips\n(no JWT header). Ignored when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "FileOpaConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[authorization.opa]`. Mirrors the constructor\narguments of [`crate::authorizer::opa::OpaAuthorizer::new`]. Defaults\nare picked to match Strimzi's `KafkaAuthorizationOpa` (`50_000` LRU\nentries, 1 h TTL, fail-closed on OPA error).",
+      "properties": {
+        "allow_on_error": {
+          "default": false,
+          "description": "**Security-sensitive.** Permit the operation when the OPA call\nfails (timeout, 5xx, parse error). When `true`, an OPA outage\nauthorizes *every* request (fail-open). Default `false`\n(fail-closed) — omitting this field denies on error, matching the\nupstream Open Policy Agent Kafka plugin's `allow.on.error = false`.",
+          "type": "boolean"
+        },
+        "expire_after_ms": {
+          "default": 3600000,
+          "description": "Decision TTL, in milliseconds. Default `3_600_000` (1 h).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "maximum_cache_size": {
+          "default": 50000,
+          "description": "LRU cache capacity, in entries. Default `50_000`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "OPA decision endpoint URL — must include the data-API path,\ne.g. `http://opa:8181/v1/data/kafka/authz/allow`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "FileOperatorKey": {
+      "additionalProperties": false,
+      "description": "TOML shape of one `[[operator_keys]]` entry. Maps to\n[`crate::operator_keys::OperatorKeyEntry`].\n\n`deny_unknown_fields` so a misspelled key is rejected at parse time. An\nignored `principal` typo would leave a key bound to nobody, and the\nprincipal binding is what stops one operator's key signing in another\noperator's name.",
+      "properties": {
+        "key_id": {
+          "description": "Stable identifier that a signed freeze record or break-glass approval\nnames. Must be unique across the array.",
+          "type": "string"
+        },
+        "principal": {
+          "description": "The principal this key speaks for, e.g. `\"User:alice\"`. Must be unique\nacross the array. The broker refuses a signed record whose claimed\nauthor is not this principal.",
+          "type": "string"
+        },
+        "public_key_path": {
+          "description": "Path to the raw 32-byte Ed25519 public key, the bytes an\n[`krabka_audit::FileEd25519Signer`] reports as its public key. It is\nread at startup, so a bad path stops the broker at boot and not in the\nmiddle of an incident.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_id",
+        "principal",
+        "public_key_path"
+      ],
+      "type": "object"
+    },
+    "FileProcessConfig": {
+      "additionalProperties": false,
+      "description": "`[process]` TOML section — `KRaft` `process.roles`.",
+      "properties": {
+        "roles": {
+          "default": [],
+          "description": "Role strings: `\"controller\"`, `\"broker\"`, `\"witness\"`\n(case-insensitive). Empty or absent leaves the `BrokerConfig` default\n`[Controller, Broker]`. A `\"witness\"` entry is a modifier: it must\ncome with both of the other two roles.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "FileRemoteStorageConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[remote_storage]`. Maps to\n[`crate::BrokerConfig::remote_storage_backend`].\n\nExactly one of `storage_dir` (local filesystem), `[remote_storage.s3]`\n(S3-compatible object store), or `[remote_storage.gcs]` (native Google\nCloud Storage) should be set. Setting more than one errors at load time.",
+      "properties": {
+        "gcs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileRemoteStorageGcsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Native Google Cloud Storage backend parameters. Omit to use\n`storage_dir` or `[remote_storage.s3]`."
+        },
+        "kafka_metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileKafkaRlmmConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Opt-in to the topic-backed `RemoteLogMetadataManager`.\nWhen absent, the broker uses the in-memory fixture."
+        },
+        "s3": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileRemoteStorageS3Config"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "S3-compatible backend parameters. Omit to use `storage_dir`."
+        },
+        "storage_dir": {
+          "description": "Root directory for the local `LocalTieredStorage` backend.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileWormConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "WORM archive mode for whichever object-store backend is selected.\nPresence of the table turns it on; omit it (the default) for\nordinary mutable tiered storage. Requires `[remote_storage.s3]` or\n`[remote_storage.gcs]` — `storage_dir` cannot enforce write-once."
+        }
+      },
+      "type": "object"
+    },
+    "FileRemoteStorageGcsConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[remote_storage.gcs]`. Maps to\n[`krabka_remote_storage::GcsConfig`].\n\nOmitting all credential fields (`service_account_path`,\n`service_account_key`, `application_credentials_path`) selects GKE\nWorkload Identity / Application Default Credentials (keyless) — the\nprimary production path.",
+      "properties": {
+        "allow_http": {
+          "default": false,
+          "description": "Allow plaintext HTTP (off-by-default; required by emulators\nrunning without TLS).",
+          "type": "boolean"
+        },
+        "application_credentials_path": {
+          "description": "Path to an Application Default Credentials JSON file. Omit (along\nwith the other credential fields) to use Workload Identity / ADC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bucket": {
+          "description": "GCS bucket name.",
+          "type": "string"
+        },
+        "endpoint": {
+          "description": "Optional custom GCS API base URL (for emulators / fakes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "multipart_chunk_size": {
+          "description": "Optional override of the per-part multipart chunk size (bytes).\nWhen `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]\napplies.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "multipart_threshold": {
+          "description": "Optional override of the multipart-upload threshold (bytes). When\n`None`, [`krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]\napplies. Operators typically leave this alone; lower it to force\nmultipart on smaller segments for testing.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefix": {
+          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service_account_key": {
+          "description": "Inline service-account JSON key. Omit (along with the other\ncredential fields) to use Workload Identity / ADC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service_account_path": {
+          "description": "Path to a service-account JSON key file. Omit (along with the\nother credential fields) to use Workload Identity / ADC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "bucket"
+      ],
+      "type": "object"
+    },
+    "FileRemoteStorageS3Config": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[remote_storage.s3]`. Maps to\n[`krabka_remote_storage::S3Config`].",
+      "properties": {
+        "access_key_id": {
+          "description": "Explicit access key id. Falls back to the AWS credential chain\n(env vars, instance profile, …) when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allow_http": {
+          "default": false,
+          "description": "Allow plaintext HTTP (off-by-default; required by `MinIO` running\nwithout TLS).",
+          "type": "boolean"
+        },
+        "bucket": {
+          "description": "S3 bucket name.",
+          "type": "string"
+        },
+        "checksum_sha256": {
+          "default": null,
+          "description": "Optional override of the `x-amz-checksum-sha256` header, which has the\nserver verify each object on ingest. When `None`, the\n[`krabka_remote_storage::S3Config`] default of `true` applies.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "conditional_put": {
+          "default": null,
+          "description": "Optional override of conditional puts (`If-None-Match`), which make a\ncreate-mode write fail on an existing key instead of overwriting it.\nWhen `None`, the [`krabka_remote_storage::S3Config`] default of `true`\napplies. Turn it off only for an S3-compatible store that mishandles\nthe header; WORM archive mode relies on it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "description": "Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "multipart_chunk_size": {
+          "description": "Optional override of the per-part multipart chunk size (bytes).\nWhen `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]\napplies. AWS requires parts ≥ 5 MiB except the last; `MinIO`\ntolerates smaller values.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "multipart_threshold": {
+          "description": "Optional override of the multipart-upload threshold (bytes). When\n`None`, [`krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]\napplies. Operators typically leave this alone; lower it to force\nmultipart on smaller segments for testing.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefix": {
+          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "description": "AWS region. Required even for non-AWS endpoints (use any value).",
+          "type": "string"
+        },
+        "secret_access_key": {
+          "description": "Explicit secret access key. Falls back to the AWS credential chain\nwhen omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "bucket",
+        "region"
+      ],
+      "type": "object"
+    },
+    "FileSchemaRegistryConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[schema_registry]`. Mirrors the constructor arguments of\n[`crate::schema_validation::SchemaValidator::new`], the one registry client\neach broker holds.\n\n`deny_unknown_fields` so a misspelled key is rejected at parse time. A\nsilently ignored `fail_open` would leave the operator with the opposite of\nthe policy they wrote.",
+      "properties": {
+        "expire_after_ms": {
+          "default": 300000,
+          "description": "Schema-cache entry TTL, in milliseconds. Default `300_000`, which is\n5 minutes.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "fail_open": {
+          "default": false,
+          "description": "**Security-sensitive.** Admit a record that the broker could not\nvalidate because the registry was unreachable. When `true`, a validated\ntopic accepts whatever it is sent for the length of a registry outage.\nThat is fail-open. Default `false`, which fails the produce instead.\n\nAn unknown schema id, or a body that does not match its schema, is a\nrejection under either setting. This field governs only the case where\nthe broker could not get an answer at all.",
+          "type": "boolean"
+        },
+        "maximum_cache_size": {
+          "default": 50000,
+          "description": "Schema-cache capacity, in entries. Default `50_000`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "Base URL of the Confluent-compatible schema registry, e.g.\n`http://schema-registry:8081`. The registry API path is appended to it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "FileStretchConfig": {
+      "additionalProperties": false,
+      "description": "`[stretch]` TOML section — the three-site stretch deployment.\n\nThe table is all-or-nothing. When it is present, all three fields must\nbe, because a half-built profile would let the broker start with a site\nlayout that no node agrees on.",
+      "properties": {
+        "preferred_leader_site": {
+          "description": "The site that partition leadership prefers while both data sites are\nup. It must not be the witness site.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sites": {
+          "description": "The three site names. Each one is a `rack` value that some node of\nthe cluster reports.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "witness_site": {
+          "description": "The site that holds the witness nodes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "FileTlsConfig": {
+      "properties": {
+        "cert_path": {
+          "type": "string"
+        },
+        "client_auth": {
+          "$ref": "#/$defs/FileClientAuthMode"
+        },
+        "client_ca_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key_path": {
+          "type": "string"
+        },
+        "trust_roots_path": {
+          "description": "PEM file of CA(s) this broker trusts when validating a PEER's server\ncert as an outbound inter-broker / controller-quorum dialer. The\noperator renders the cluster CA here so KIP-595 controller peers can\nmutually authenticate over the controller listener. Maps to\n[`krabka_security::TlsConfig::trust_roots_path`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cert_path",
+        "key_path"
+      ],
+      "type": "object"
+    },
+    "FileWormConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[remote_storage.worm]`. Maps to\n[`krabka_remote_storage::WormConfig`]. Presence of the table enables WORM\narchive mode.\n\nUnlike [`FileRemoteStorageS3Config`] this derives `Debug` plainly, and that\nis deliberate: it holds a *path* to a signing key and the key's public id,\nneither of which is credential material, and an operator debugging a chain\nneeds to see which key signed it. Do not \"fix\" this into a redacting impl.",
+      "properties": {
+        "signing_key_id": {
+          "default": null,
+          "description": "Stable identifier recorded in every manifest signature, so a chain\nstays verifiable across a key rotation.\n\nDefault: unset. Setting this requires `signing_key_path` as well.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signing_key_path": {
+          "default": null,
+          "description": "Path to the `PKCS#8` Ed25519 key that signs each segment manifest.\n\nDefault: unset. Manifests then carry no signature, and the archive\nkeeps only the per-object digests and the hash chain. Setting this\nrequires `signing_key_id` as well.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "write_only": {
+          "default": false,
+          "description": "Refuse every remote fetch from this archive.\n\nDefault: `false`. When `true`, remote fetch is unavailable: a consumer\nthat asks for an offset whose local segment has already been evicted\ngets an error, not a slow read. The archive is then a compliance sink,\nnot a storage tier.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RuntimeFileConfig": {
+      "additionalProperties": false,
+      "description": "Validated operational policy loaded from `[runtime]`.",
+      "properties": {
+        "acl_max_principal": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acl_max_resource_name": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_event_queue_capacity": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "audit_partition_wait_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_spool_replay_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_stats_poll_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_tail_read_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_tail_window_offsets": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "auto_join_retry_backoff": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "auto_join_voter_request_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "barrier_injection_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "barrier_max_groups": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "barrier_max_topics_per_group": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "barrier_min_injection_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "barrier_recovery_read_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "barrier_retained_cuts": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "barrier_state_num_partitions": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "barrier_state_replication_factor": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "classic_group_initial_rebalance_delay": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cleaner_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_metrics_default_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_metrics_eviction_tick": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_metrics_otlp_queue_capacity": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_snapshot_ttl": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_metrics_stale_floor": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_metrics_stale_push_intervals": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_telemetry_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connection_creation_throttle_max": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consumer_group_heartbeat_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consumer_group_max_heartbeat_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consumer_group_max_session_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consumer_group_max_size": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "consumer_group_min_heartbeat_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consumer_group_min_session_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consumer_group_session_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "controlled_shutdown_drain_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "controller_election_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "controller_fetch_miss_limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "controller_heartbeat_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "controller_mutation_quota_window": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coordinator_actor_mailbox_capacity": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "coordinator_session_expiry_tick": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coordinator_shutdown_ack_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_min_insync_replicas": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "delegation_token_default_renew_period": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delegation_token_expiry_check_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delegation_token_max_lifetime": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diskless_wal_flush_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diskless_wal_flush_max_size": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diskless_wal_hot_tail_max_size": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diskless_wal_index_projection_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diskless_wal_local_replica_count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "diskless_wal_trim_safety_lag": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "future_log_move_read_chunk": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "future_log_move_retry_backoff": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gauge_poll_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heartbeat_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heartbeat_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inter_broker_server_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isr_scan_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "leader_imbalance_check_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "leader_imbalance_per_broker": {
+          "default": null,
+          "format": "ratio",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "liveness_tick_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_delivery_clock_uncertainty": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_read_buffer_cap": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_segment_bytes": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_timestamp_scan_window": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_connections": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_connections_per_ip": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_incremental_fetch_session_cache_slots": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_produce_group": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message_max_bytes": {
+          "default": null,
+          "description": "Kafka's broker-wide `message.max.bytes`: the largest record batch a\ntopic that sets no `max.message.bytes` accepts.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_max_between_snapshots": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_max_snapshot_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_raft_command_queue_capacity": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metadata_raft_fetch_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_snapshot_fetch_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_snapshot_interval_records": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "oauth_jwks_http_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observer_fetch_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observer_lag_bound": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observer_poll_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offsets_retention": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offsets_retention_check_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offsets_topic_metadata_wait_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offsets_topic_num_partitions": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offsets_topic_replication_factor": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "opa_http_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operator_recovery_deadline": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "partition_disk_scan_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "partition_writer_queue_depth": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "producer_id_expiration": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "producer_id_expiration_scan_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quota_throttle_max": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "record_decompression_max_ratio": {
+          "default": null,
+          "format": "ratio",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "record_decompression_output_ceiling": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "record_decompression_output_floor": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote_log_manager_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replica_lag_time_max": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_epoch_fence_backoff": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_fetch_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_fetch_max_wait": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_fetch_min": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_reconnect_delay_cap": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_reconnect_initial_delay": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_send_error_backoff": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_throttle_exhausted_backoff": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_unexpected_error_backoff": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_unknown_topic_retry_delay": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rlmm_bootstrap_backoff_initial": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rlmm_bootstrap_backoff_max": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rlmm_reconcile_tick": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_registry_http_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_registration_backoff_max": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_registration_backoff_min": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_registration_max_attempts": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sendfile_min": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_backlog_poll_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_enable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "share_group_heartbeat_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_isolation_level": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_max_delivery_attempts": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_group_max_inflight_records": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_group_max_size": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_group_record_lock_duration": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_session_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_recovery_read_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_session_cache_max_when_unlimited": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_state_num_partitions": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_state_replication_factor": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "socket_receive_buffer": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "socket_request_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "socket_send_buffer": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "startup_leader_wait_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "streams_group_acceptable_recovery_lag": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "streams_group_assignor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "streams_group_enable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "streams_group_heartbeat_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "streams_group_max_size": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "streams_group_num_standby_replicas": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "streams_group_num_warmup_replicas": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "streams_group_session_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "streams_group_task_offset_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "streams_internal_topic_replication_factor": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sync_group_follower_wait": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "telemetry_decompressed_output_ceiling": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "telemetry_decompressed_output_floor": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "telemetry_max_decompression_ratio": {
+          "default": null,
+          "format": "ratio",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_reload_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transaction_max_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transaction_min_timeout": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transaction_recovery_read_max": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transaction_state_num_partitions": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "transaction_state_replication_factor": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "txn_abort_cleanup_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "txn_id_expiration": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "txn_id_expiration_cleanup_interval": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unclean_recovery_aggressive_deadline": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unclean_recovery_balanced_deadline": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unclean_recovery_queue_capacity": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Top-level shape of `broker.toml`. `serde(deny_unknown_fields)` is\noff — new fields may be added and old binaries should warn rather\nthan refuse to start.",
+  "properties": {
+    "audit": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileAuditConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`FedRAMP` 20x MLA audit subsystem configuration.\nAbsent → secure default (enabled, standard internal topic name)."
+    },
+    "authorization": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileAuthorizationConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Pluggable cluster authorizer + super-user list.\n`None` ⇒ [`crate::authorizer::AllowAllAuthorizer`] with empty\nsuper-users (default-on-no-config behavior). When `Some`, the\n`type` field selects the authorizer implementation; for\n`type = \"opa\"`, the `[authorization.opa]` subtable is required."
+    },
+    "auto_join": {
+      "description": "Enable automatic dynamic controller enrollment.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "bootstrap_servers": {
+      "default": [],
+      "description": "KIP-853 controller discovery endpoints. Hosts remain unresolved so DNS\nnames can be refreshed on each retry.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "break_glass": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileBreakGlassConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`[break_glass]` section — the two-person rule over the privileged\ntransitions. Absent leaves the `BrokerConfig` defaults, which run no\nbreak-glass workflow."
+    },
+    "broker_id": {
+      "format": "int32",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "connections_max_idle": {
+      "default": null,
+      "description": "How long a connection may go without a complete request frame before\nthe broker closes it (Kafka `connections.max.idle.ms`). Absent leaves\nthe `BrokerConfig` default of ten minutes, which is Kafka's 600000. A\n`[[listeners]]` entry may carry its own `connections_max_idle`, which\nwins for that listener.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "controller_election_timeout": {
+      "default": null,
+      "description": "Controller election timeout. Absent leaves the `BrokerConfig` default intact.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "controller_heartbeat_interval": {
+      "default": null,
+      "description": "Controller heartbeat interval. Absent leaves the `BrokerConfig` default intact.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "controller_listener_protocol": {
+      "description": "Controller listener security protocol. When `Some(Ssl)`\nthe controller listener terminates TLS using `tls_config`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "controller_quorum_voters": {
+      "default": [],
+      "description": "KIP-595 static controller quorum voter set. Each entry is\n`<node_id>@<host>:<port>` pointing at a broker's controller listener\n(port 9093). At apply time each entry is parsed (NOT DNS-resolved) and\nits `<host>:<port>` is carried verbatim into\n`BrokerConfig::controller_quorum_voters`. The inter-broker dialer\nre-resolves the host on every (re)connect (`TcpStream::connect`), so a\npeer that restarts on a new pod IP (a `StatefulSet` pod keeps its stable\nDNS name but gets a fresh A record) is reached again without restarting\nthis broker — pre-resolving here would freeze the peer's boot-time IP\nand strand a rejoining voter. Empty leaves the single self-voter the\nbinary seeds (standalone).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "controller_server_name": {
+      "description": "TLS server name (SNI) presented when dialing a PEER's controller\nlistener for the KIP-595 quorum. The operator renders the shared\nheadless-Service FQDN here — a SAN on every broker's serving cert —\nso mTLS validation succeeds no matter which peer (resolved to a pod\nIP) is dialed. Absent falls back to `\"localhost\"`. Maps to\n[`crate::BrokerConfig::controller_server_name`].",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "delegation_token": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileDelegationTokenConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "KIP-48: delegation-token master key + lifetime knobs.\nEnv var `KRABKA_DELEGATION_TOKEN_SECRET_KEY` wins over `secret_key`\nhere. When neither source provides a key, the broker disables\ndelegation-token auth."
+    },
+    "extra_log_dirs": {
+      "default": [],
+      "description": "Additional JBOD data directories (KIP-113). Maps to\n[`crate::BrokerConfig::extra_log_dirs`].",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "freeze": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileFreezeConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`[freeze]` section — the topic write-freeze registry's bounds and its\nsignature requirement. Absent leaves the `BrokerConfig` defaults."
+    },
+    "gssapi": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileGssapiConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "SASL/GSSAPI (Kerberos) accept-path config. Broker-global —\nthere is one `[gssapi]` block per broker. Relevant when a listener\nenables the `GSSAPI` mechanism."
+    },
+    "heartbeat_interval": {
+      "default": null,
+      "description": "How often this broker sends `BrokerHeartbeat` to the controller leader.\nAbsent leaves the `BrokerConfig` default intact.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "heartbeat_timeout": {
+      "default": null,
+      "description": "Controller-side session timeout for broker heartbeats. Absent leaves the\n`BrokerConfig` default intact.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "inter_broker_credentials": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileInterBrokerCredentials"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Credentials this broker uses to authenticate *to* peer brokers and\ncontroller listeners (inter-broker initiate path)."
+    },
+    "inter_broker_listener_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "inter_broker_principal_node_ids": {
+      "additionalProperties": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": "Exact authenticated principal name to broker node ID bindings for\ndiskless WAL follower fetches.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "listeners": {
+      "items": {
+        "$ref": "#/$defs/FileListener"
+      },
+      "type": "array"
+    },
+    "log_dir": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "max_connections": {
+      "description": "Maximum number of live broker connections across all listeners\n(Kafka `max.connections`). Connections accepted past this ceiling\nare closed immediately. Absent leaves the `BrokerConfig` default\n`usize::MAX` (unlimited), matching Kafka's `Integer.MAX_VALUE`.",
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "max_connections_per_ip": {
+      "description": "Maximum number of live connections from any single client IP\n(Kafka `max.connections.per.ip`). Absent leaves the `BrokerConfig`\ndefault `usize::MAX` (unlimited).",
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "oauthbearer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileOAuthBearerConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "SASL/OAUTHBEARER validator tuning. Only relevant when a\nlistener enables the `OAUTHBEARER` mechanism."
+    },
+    "operator_keys": {
+      "description": "`[[operator_keys]]` — the shared operator key trust set.\n\nTop-level rather than nested under `[break_glass]`, because two\nsubsystems verify against it: a freeze record's detached signature and\na break-glass approval's. One provisioning step covers both. Empty is\nthe default and means no operator key is configured.",
+      "items": {
+        "$ref": "#/$defs/FileOperatorKey"
+      },
+      "type": "array"
+    },
+    "process": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileProcessConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`[process]` section — `KRaft` `process.roles`. Absent / empty leaves\nthe `BrokerConfig` default `[Controller, Broker]`."
+    },
+    "rack": {
+      "description": "KIP-392: this broker's rack id. Maps to `BrokerConfig::rack`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "remote_storage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileRemoteStorageConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "KIP-405: tiered-storage enablement. Setting\n`storage_dir` turns tiered storage on broker-wide and roots the\nlocal reference `RemoteStorageManager` there."
+    },
+    "replica_lag_time_max": {
+      "default": null,
+      "description": "Maximum follower lag before the leader proposes ISR shrink. Absent\nleaves the `BrokerConfig` default intact.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "replica_selector": {
+      "description": "KIP-392: replica selector name (`\"leader\"` | `\"rack-aware\"`).\nMaps to `BrokerConfig::replica_selector`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runtime": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeFileConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Operational runtime policy. Present values replace the current broker\nvalue; absent values retain it."
+    },
+    "schema_registry": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileSchemaRegistryConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`[schema_registry]` section — the Confluent-compatible registry that\nsupplies the schemas for KFC-7 broker-side validation. `None` means no\ntopic can turn schema validation on."
+    },
+    "server_properties": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "type": "object"
+    },
+    "stretch": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileStretchConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`[stretch]` section — the three-site stretch deployment this node\nbelongs to. Maps to `BrokerConfig::stretch`. Absent leaves the\n`BrokerConfig` default `None`, an ordinary non-stretched cluster."
+    },
+    "super_users": {
+      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`. The\noperator emits `super_users = [\"ANONYMOUS\"]` when\n`Kafka.spec.delegationToken` is set so its PLAINTEXT\ninter-broker reconcile loop can mint per-`KafkaUser` tokens.\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "tls_config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileTlsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "TLS material for the controller listener (and any\nlistener whose `protocol` is TLS-bearing)."
+    }
+  },
+  "title": "FileConfig",
+  "type": "object"
+}

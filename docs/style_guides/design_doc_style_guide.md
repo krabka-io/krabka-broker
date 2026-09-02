@@ -6,7 +6,19 @@ This guide defines the style and content expectations for design documents in Kr
 
 Design documents capture **architectural decisions and rationale**, the "why" behind the code. They are for engineers who need to understand a subsystem conceptually before they read the implementation details.
 
-A subsystem can carry a `docs/design.md` inside its crate when it needs a durable design reference. Link that file from the crate README.
+A design document lives inside the crate it describes, under that crate's `docs/` directory, and the crate README links to it. A crate with one subsystem carries `crates/<crate>/docs/design.md`. The broker carries several subsystems, so each broker subsystem carries its own `crates/broker/docs/<subsystem>-design.md`. Do not put design documents under the repository-level `docs/` tree, which holds the KFCs, the verification catalog, and these style guides.
+
+## Current Design Documents
+
+| Document | Subsystem |
+| :--- | :--- |
+| [`crates/broker/docs/diskless-wal-design.md`](../../crates/broker/docs/diskless-wal-design.md) | The diskless data path: the quorum WAL, controller-assigned offsets, the object flusher, and the cold-read path. |
+| [`crates/raft/docs/design.md`](../../crates/raft/docs/design.md) | KRaft consensus and the metadata controller, including the sans-IO `krabka-kraft-core` state machine. |
+| [`crates/broker/docs/replication-isr-design.md`](../../crates/broker/docs/replication-isr-design.md) | Follower replication, the high watermark, ISR maintenance, and leader failover. |
+| [`crates/log/docs/design.md`](../../crates/log/docs/design.md) | The on-disk log and segment format. |
+| [`crates/broker/docs/transaction-coordinator-design.md`](../../crates/broker/docs/transaction-coordinator-design.md) | The transaction coordinator and exactly-once semantics. |
+
+Add a row here when you add a design document.
 
 ## What Belongs in Design Docs
 

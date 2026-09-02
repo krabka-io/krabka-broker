@@ -2,7 +2,7 @@
 //! contract, driving the pure decision cores in [`super`]
 //! ([`super::retain_decision`], [`super::should_index_key`],
 //! [`super::compute_horizon`]). See the design spec
-//! `docs/superpowers/specs/2026-06-14-krabka-data-plane-safety-models-design.md`
+//! `crates/log/docs/design.md`
 //! and [KIP-534](https://cwiki.apache.org/confluence/display/KAFKA/KIP-534).
 //!
 //! # The control-batch dedup bug

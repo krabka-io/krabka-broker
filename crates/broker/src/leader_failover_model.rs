@@ -1,6 +1,6 @@
 //! Exhaustive stateright models of the controller leader-failover decision
 //! (`failover_one`) and the KIP-966 winner selection (`select_leader`). See
-//! `docs/superpowers/specs/2026-06-13-krabka-failover-recovery-model-design.md`.
+//! `crates/broker/docs/replication-isr-design.md`.
 //!
 //! Each failover configuration also runs with a data-bearing witness in the
 //! replica set. The witness stays in every emitted ISR, and no reachable state

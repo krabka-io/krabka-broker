@@ -4,8 +4,997 @@
 //! (`api_key` 18) response and the generated protocol-API reference page. The
 //! handler in `handlers::api_versions` calls [`supported_apis`]. `crabka-docgen`
 //! reads the same list and does not spawn the broker binary.
+//!
+//! It is also the source of truth for the per-KIP rows of the generated
+//! `docs/KIP_MATRIX.md`. [`KIP_ANNOTATIONS`] holds one [`KipAnnotation`] per
+//! KIP that any file under `crates/` names. `tools/generate-kip-matrix.py`
+//! parses that table as text, between the `BEGIN KIP_ANNOTATIONS` and
+//! `END KIP_ANNOTATIONS` marker comments, and fails when a KIP appears in
+//! `crates/` without a row here, when a row names a KIP that no file mentions,
+//! or when a row points at a module or test that does not exist. Keep each
+//! entry in the literal shape the existing ones use: the generator does not
+//! compile Rust.
 
 use krabka_protocol::owned::api_versions_response::ApiVersion;
+
+/// How far the broker takes one KIP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KipStatus {
+    /// The KIP's behavior is in the tree and the listed tests establish it.
+    Implemented,
+    /// Part of the KIP is in the tree. `note` says which part is not.
+    Partial,
+    /// The KIP is deliberately not implemented. `note` cites the decision.
+    OutOfScope,
+}
+
+/// Which non-JVM client family a suite drives against the KIP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClientEvidence {
+    /// No non-JVM client suite exercises the KIP.
+    NotCovered,
+    /// The stock kcat of `tests/librdkafka_conformance.rs` exercises it.
+    Kcat,
+}
+
+/// One row of the generated KIP matrix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KipAnnotation {
+    /// `KIP-<n>`, or a non-KIP key for a scope decision that has no KIP.
+    pub key: &'static str,
+    /// The Kafka behavior the row is about, in a few words.
+    pub claim: &'static str,
+    /// How far the tree takes it.
+    pub status: KipStatus,
+    /// The module that owns the behavior, as a path from the repository root.
+    pub module: &'static str,
+    /// The tests that establish the status, as `path` or `path::function`
+    /// from the repository root. A container-driven suite carries its Kafka
+    /// image into the matrix through its crate's `BUILD.bazel` `docker` map.
+    pub tests: &'static [&'static str],
+    /// The non-JVM client suite that also exercises the KIP.
+    pub clients: ClientEvidence,
+    /// What the status leaves out, or the citation for a scope decision.
+    pub note: &'static str,
+}
+
+/// The key of the row that records mixed JVM and Krabka controller quorums
+/// as out of scope. It is not a KIP, so the generator does not look for it in
+/// `crates/`.
+pub const MIXED_QUORUM_KEY: &str = "mixed-quorum";
+
+/// Where the out-of-scope decision for mixed quorums and JVM-side forwarding
+/// is written down. The generator checks that this line still says so.
+pub const OUT_OF_SCOPE_CITATION: &str = "crates/raft/src/lib.rs:52";
+
+/// The per-KIP rows of `docs/KIP_MATRIX.md`, in ascending KIP order, with the
+/// non-KIP scope rows last.
+// BEGIN KIP_ANNOTATIONS
+pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
+    KipAnnotation {
+        key: "KIP-13",
+        claim: "Producer and consumer byte-rate quotas",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/mod.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas.rs",
+            "crates/broker/tests/client_quotas/throttling.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-32",
+        claim: "Message timestamps in the v1 message set and the v2 batch",
+        status: KipStatus::Implemented,
+        module: "crates/records-legacy/src/lib.rs",
+        tests: &[
+            "crates/log/tests/integration.rs::read_jvm_produced_log_dir",
+            "crates/log/tests/integration.rs::jvm_consumes_rust_written_log_dir",
+            "crates/broker/tests/legacy_fetch.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-48",
+        claim: "Delegation tokens: create, renew, expire, describe and SCRAM token auth",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_delegation_token.rs",
+        tests: &[
+            "crates/broker/tests/delegation_tokens.rs",
+            "crates/broker/tests/jvm_acceptance_quotas/delegation_tokens.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-62",
+        claim: "Classic group state machine with the AwaitingSync stage",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_state/group.rs",
+        tests: &[
+            "crates/broker/tests/group_protocol_negotiation.rs",
+            "crates/broker/tests/unit/consumer_group.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-73",
+        claim: "Replication throttling through the leader and follower throttle keys",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/throttle/mod.rs",
+        tests: &["crates/broker/tests/throttle.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-98",
+        claim: "Transactions and idempotent producers, with transactional-id expiry",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/coordinator.rs",
+        tests: &[
+            "crates/broker/tests/transactions.rs",
+            "crates/broker/tests/transactions/txn_fencing.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-101",
+        claim: "Leader-epoch based truncation for followers",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/replicator/truncation.rs",
+        tests: &[
+            "crates/broker/tests/leader_epoch.rs",
+            "crates/broker/tests/leader_epoch/epoch_diverge_leader.rs",
+            "crates/broker/tests/leader_epoch/epoch_fencing.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-107",
+        claim: "DeleteRecords admin request",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/delete_records.rs",
+        tests: &[
+            "crates/broker/tests/client_admin_delete_records.rs",
+            "crates/broker/tests/admin_handlers/admin_delete_records.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-108",
+        claim: "POLICY_VIOLATION as the answer to a request a policy refuses",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/create_topics.rs",
+        tests: &["crates/broker/tests/topic_freeze/wire.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "The broker answers a frozen topic with error 44 and a message that names the freeze. There is no pluggable `CreateTopicPolicy`.",
+    },
+    KipAnnotation {
+        key: "KIP-110",
+        claim: "Zstandard compression in the v2 record batch",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/fetch_downconvert.rs",
+        tests: &[
+            "crates/broker/tests/recompression.rs",
+            "crates/broker/tests/legacy_fetch.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "A zstd batch is re-compressed as snappy for a v0 or v1 fetch, because those formats never carried zstd.",
+    },
+    KipAnnotation {
+        key: "KIP-112",
+        claim: "JBOD: a broker with an offline log directory stays registered",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/broker_heartbeat/failover.rs",
+        tests: &[
+            "crates/broker/tests/jbod_disk_failure.rs",
+            "crates/broker/tests/offline_replicas.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-113",
+        claim: "AlterReplicaLogDirs and DescribeLogDirs: replica moves between log directories",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/future_log.rs",
+        tests: &[
+            "crates/broker/tests/alter_replica_log_dirs.rs",
+            "crates/broker/tests/jbod.rs",
+            "crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-124",
+        claim: "Request-rate quotas as a percentage of handler time",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/request.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas/throttling.rs",
+            "crates/broker/src/network/dispatch/tests/throttle_mute.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-207",
+        claim: "The high watermark a new leader reports may regress after an election",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/data_path_model/model.rs",
+        tests: &["crates/broker/src/data_path_model/model.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "The exhaustive data-path model checks durability without a watermark monotonicity assertion, which is what the KIP allows.",
+    },
+    KipAnnotation {
+        key: "KIP-211",
+        claim: "Committed-offset retention measured from the group's last activity",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/retention.rs",
+        tests: &["crates/broker/tests/offsets_retention.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-219",
+        claim: "Respond first, then mute the channel for the throttle time",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/network/dispatch/response.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas/throttling.rs",
+            "crates/broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The dispatch loop echoes a request-quota delay by patching a leading `ThrottleTimeMs`. The throttle-echo section below lists the APIs whose schema puts the field elsewhere.",
+    },
+    KipAnnotation {
+        key: "KIP-226",
+        claim: "DescribeConfigs reports the source of every value",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_configs.rs",
+        tests: &["crates/broker/tests/jvm_acceptance_cli/configs.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-227",
+        claim: "Incremental fetch sessions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/fetch_session.rs",
+        tests: &["crates/broker/tests/fetch_session.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-255",
+        claim: "SASL/OAUTHBEARER",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/auth/oauthbearer.rs",
+        tests: &["crates/broker/tests/auth_handlers/oauthbearer.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-257",
+        claim: "Quota entities keyed by user, client id, or both",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/lookup.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas.rs",
+            "crates/broker/tests/tuple_quota_enforcement.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-290",
+        claim: "Prefixed ACL patterns and the MATCH filter",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/acl_wire.rs",
+        tests: &["crates/broker/tests/acl_handlers.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-320",
+        claim: "Leader epochs in Fetch and ListOffsets, and OffsetForLeaderEpoch for consumers",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_for_leader_epoch.rs",
+        tests: &[
+            "crates/broker/tests/jvm_kip320_divergence.rs",
+            "crates/broker/tests/jvm_kip320_divergence/wire_conformance.rs",
+            "crates/broker/tests/consumer_proactive_validation.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-345",
+        claim: "Static consumer-group membership",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_state/membership.rs",
+        tests: &[
+            "crates/broker/tests/static_membership.rs",
+            "crates/broker/tests/jvm_acceptance_cli/console_groups.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-360",
+        claim: "Epoch bump when a transactional producer re-initialises",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/init_producer_id/identity.rs",
+        tests: &[
+            "crates/broker/tests/transactions/txn_fencing.rs::fenced_producer_cannot_commit",
+            "crates/broker/tests/transaction_version/txnver_full_cycle.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "`InitProducerId` reads the request's current `producer_id` and `producer_epoch` only for a KIP-939 recovery (crates/broker/src/handlers/init_producer_id.rs:157), so a re-initialisation that carries a stale epoch is not answered with `PRODUCER_FENCED`.",
+    },
+    KipAnnotation {
+        key: "KIP-368",
+        claim: "SASL re-authentication and session expiry",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/dispatch/session.rs",
+        tests: &["crates/broker/tests/auth_handlers/oauthbearer_sessions.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-392",
+        claim: "Fetch from the closest replica",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/replica_selector.rs",
+        tests: &["crates/broker/tests/kip_392_fetch_from_follower.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-394",
+        claim: "JoinGroup member-id bootstrap with MEMBER_ID_REQUIRED",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_ops/join.rs",
+        tests: &["crates/broker/tests/group_protocol_negotiation.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-405",
+        claim: "Tiered storage: remote segment copy, read, retention and metadata",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager.rs",
+        tests: &[
+            "crates/broker/tests/jvm_acceptance_tiered.rs",
+            "crates/remote-storage/tests/jvm_tiered_storage.rs",
+            "crates/restore/tests/roundtrip.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-412",
+        claim: "Dynamic broker log levels through the BROKER_LOGGER resource",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/incremental_alter_configs.rs",
+        tests: &[
+            "crates/broker/tests/jvm_broker_loggers.rs",
+            "crates/broker/tests/broker_logger_config.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-429",
+        claim: "Cooperative rebalance protocol negotiation in JoinGroup",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_ops/join.rs",
+        tests: &[
+            "crates/broker/tests/group_protocol_negotiation.rs",
+            "crates/broker/tests/jvm_acceptance_cli/console_groups.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-430",
+        claim: "Authorized-operations bitfields in Metadata, DescribeGroups and DescribeCluster",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/authorized_operations.rs",
+        tests: &["crates/broker/tests/authorized_operations.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-447",
+        claim: "OffsetFetch require_stable and the UNSTABLE_OFFSET_COMMIT answer",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_fetch/unstable.rs",
+        tests: &[
+            "crates/broker/tests/txn_offset_commit_materialize.rs",
+            "crates/broker/src/handlers/offset_fetch/tests.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-455",
+        claim: "AlterPartitionReassignments and ListPartitionReassignments",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/reassignment.rs",
+        tests: &[
+            "crates/broker/tests/partition_reassignment.rs",
+            "crates/broker/tests/jvm_acceptance_reassign.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-460",
+        claim: "ElectLeaders with unclean election, and automatic preferred-leader rebalance",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/leader_rebalance.rs",
+        tests: &[
+            "crates/broker/tests/elect_leaders.rs",
+            "crates/broker/tests/elect_leaders/auto_rebalance.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-467",
+        claim: "Per-record error indices and messages in the Produce response",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/produce/schema.rs",
+        tests: &["crates/broker/tests/schema_validation/rejected.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-482",
+        claim: "Flexible versions and tagged fields, with the v2 request header",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/dispatch.rs",
+        tests: &[
+            "crates/broker/src/network/dispatch/tests.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
+        ],
+        clients: ClientEvidence::Kcat,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-496",
+        claim: "OffsetDelete for consumer groups",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_delete.rs",
+        tests: &[
+            "crates/broker/tests/offset_delete.rs",
+            "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-500",
+        claim: "KRaft mode: broker heartbeats, fencing and controlled shutdown",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/broker_heartbeat.rs",
+        tests: &[
+            "crates/broker/tests/controlled_shutdown.rs",
+            "crates/broker/tests/advertised_controller_liveness.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-511",
+        claim: "Client software name and version in ApiVersions v3",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/api_versions/client_info.rs",
+        tests: &[
+            "crates/broker/tests/client_software_versions.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
+        ],
+        clients: ClientEvidence::Kcat,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-516",
+        claim: "Topic identifiers in Metadata, Produce, Fetch, offsets and DeleteTopics",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/topic_resolve.rs",
+        tests: &[
+            "crates/broker/tests/kip516_metadata.rs",
+            "crates/broker/tests/kip516_produce.rs",
+            "crates/broker/tests/kip516_fetch.rs",
+            "crates/broker/tests/kip516_offsets.rs",
+            "crates/broker/tests/kip516_delete_topics.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-525",
+        claim: "CreateTopics v5 returns the created topic's configuration",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/create_topics.rs",
+        tests: &["crates/broker/tests/admin_handlers.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "The response carries an empty `configs` list, so a client that reads it does not fail. The list does not carry the topic's values.",
+    },
+    KipAnnotation {
+        key: "KIP-534",
+        claim: "Compaction retains the last tombstone and transaction marker for a delay",
+        status: KipStatus::Implemented,
+        module: "crates/log/src/compact.rs",
+        tests: &[
+            "crates/log/src/compact/retention_fuzz.rs",
+            "crates/log/src/compact_model/pass.rs",
+            "crates/broker/tests/compaction.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-546",
+        claim: "DescribeClientQuotas and AlterClientQuotas",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_client_quotas.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas.rs",
+            "crates/broker/tests/jvm_acceptance_quotas/client_quotas.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-554",
+        claim: "SCRAM credentials through AlterUserScramCredentials and DescribeUserScramCredentials",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/alter_user_scram_credentials.rs",
+        tests: &[
+            "crates/broker/tests/describe_user_scram_credentials.rs",
+            "crates/broker/tests/auth_handlers/alter_scram.rs",
+            "crates/broker/tests/jvm_acceptance_sasl/scram.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-559",
+        claim: "protocol_type and protocol_name in JoinGroup v7 and SyncGroup v5",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/sync_group.rs",
+        tests: &["crates/broker/tests/kip559_l7_proxy_fields.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-584",
+        claim: "Feature versioning: UpdateFeatures and the finalized features in ApiVersions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/update_features.rs",
+        tests: &[
+            "crates/broker/tests/feature_finalization.rs",
+            "crates/broker/tests/api_versions_features.rs",
+            "crates/broker/tests/jvm_features.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-590",
+        claim: "Envelope: a broker forwards admin writes to the active controller",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/envelope.rs",
+        tests: &[
+            "crates/broker/tests/kip590_envelope.rs",
+            "crates/broker/tests/jvm_role_separated_admin.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The controller listener serves `Envelope`, and a Krabka broker-only node forwards through it. Forwarding into or out of a JVM controller is out of scope: crates/raft/src/lib.rs:52.",
+    },
+    KipAnnotation {
+        key: "KIP-595",
+        claim: "The KRaft controller quorum: Vote, BeginQuorumEpoch, EndQuorumEpoch, Fetch and DescribeQuorum",
+        status: KipStatus::Implemented,
+        module: "crates/kraft-core/src/core.rs",
+        tests: &[
+            "crates/raft/tests/kraft_sim.rs",
+            "crates/raft/tests/kraft_engine_sim.rs",
+            "crates/broker/tests/jvm_static_quorum_spike.rs",
+            "crates/broker/tests/admin_handlers/admin_describe_quorum.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-599",
+        claim: "Controller mutation quotas on CreateTopics, CreatePartitions and DeleteTopics",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/controller_mutation.rs",
+        tests: &["crates/broker/tests/controller_mutation_quota.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-612",
+        claim: "Per-IP connection creation rate quotas",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/broker/accept.rs",
+        tests: &["crates/broker/tests/ip_quotas.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-630",
+        claim: "Metadata snapshots: the checkpoint file and FetchSnapshot",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/snapshot.rs",
+        tests: &[
+            "crates/raft/tests/snapshot.rs",
+            "crates/raft/tests/kraft_checkpoint_jvm.rs",
+            "crates/broker/tests/fetch_snapshot.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-631",
+        claim: "The KRaft metadata records and broker registration",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/broker_registration.rs",
+        tests: &[
+            "crates/raft/tests/kraft_checkpoint_jvm.rs",
+            "crates/broker/tests/unregister_broker.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-642",
+        claim: "Multi-node quorum reassignment in one operation",
+        status: KipStatus::OutOfScope,
+        module: "crates/raft/src/controller/membership.rs",
+        tests: &[],
+        clients: ClientEvidence::NotCovered,
+        note: "Voter changes go one node at a time through KIP-853. `change_membership` rejects a batch that adds or removes more than one voter.",
+    },
+    KipAnnotation {
+        key: "KIP-664",
+        claim: "DescribeProducers, DescribeTransactions and ListTransactions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_producers.rs",
+        tests: &[
+            "crates/broker/tests/describe_producers.rs",
+            "crates/broker/tests/list_describe_transactions.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-714",
+        claim: "Client metrics push: GetTelemetrySubscriptions and PushTelemetry",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/client_metrics/mod.rs",
+        tests: &[
+            "crates/broker/tests/client_telemetry.rs",
+            "crates/broker/tests/client_metrics_config.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-734",
+        claim: "ListOffsets MAX_TIMESTAMP",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/timestamp.rs",
+        tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-778",
+        claim: "metadata.version as a finalized feature that `krabka format` bootstraps",
+        status: KipStatus::Implemented,
+        module: "crates/format/src/format/features.rs",
+        tests: &[
+            "crates/format/tests/format_smoke.rs",
+            "crates/broker/tests/format_features.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-827",
+        claim: "DescribeLogDirs v4 reports total and usable bytes per directory",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_log_dirs/dirs.rs",
+        tests: &["crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-841",
+        claim: "Unclean leader election when the ISR is empty and the topic allows it",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/leader_election.rs",
+        tests: &[
+            "crates/broker/tests/leader_election.rs",
+            "crates/broker/src/leader_election/scan/dead_broker_tests.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-848",
+        claim: "The next-generation consumer group protocol",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/consumer_state.rs",
+        tests: &[
+            "crates/broker/tests/consumer_group_next_gen.rs",
+            "crates/broker/tests/jvm_consumer_group_next_gen.rs",
+            "crates/broker/tests/group_version.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-853",
+        claim: "Dynamic controller quorum: AddRaftVoter, RemoveRaftVoter, UpdateRaftVoter and auto-join",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/kraft/controller/reconfiguration.rs",
+        tests: &[
+            "crates/broker/tests/dynamic_voters.rs",
+            "crates/raft/tests/reconfig.rs",
+            "crates/broker/tests/jvm_features.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-858",
+        claim: "Directory identifiers: AssignReplicasToDirs and directory ids in heartbeats",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/assign_dirs.rs",
+        tests: &[
+            "crates/broker/tests/jbod_disk_failure.rs",
+            "crates/broker/tests/offline_replicas.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-890",
+        claim: "Transactions v2: verify-only AddPartitionsToTxn and epoch bumps on completion",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/version.rs",
+        tests: &[
+            "crates/broker/tests/transaction_version.rs",
+            "crates/broker/tests/transaction_version/txnver_verify_only.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-903",
+        claim: "Broker epochs fence stale replicas in AlterPartition",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/alter_partition/isr_update.rs",
+        tests: &[
+            "crates/raft/src/kraft/controller/tests_broker_registration.rs",
+            "crates/broker/src/elr/tests.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-919",
+        claim: "Admin clients bootstrap from controllers: ControllerRegistration, DescribeCluster and UnregisterBroker",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/controller_admin.rs",
+        tests: &[
+            "crates/broker/tests/jvm_bootstrap_controller.rs",
+            "crates/broker/tests/client_admin_controller_bootstrap.rs",
+            "crates/broker/tests/unregister_broker.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-932",
+        claim: "Share groups: membership, ShareFetch, ShareAcknowledge, the share coordinator and admin offsets",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/share_partition/mod.rs",
+        tests: &[
+            "crates/broker/tests/share_groups.rs",
+            "crates/broker/tests/share_consume.rs",
+            "crates/broker/tests/share_admin_offsets.rs",
+            "crates/broker/tests/jvm_share_groups.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-939",
+        claim: "Two-phase commit transactions with the KIP-939 timeout rules",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/two_pc.rs",
+        tests: &[
+            "crates/broker/tests/transactions_2pc.rs",
+            "crates/broker/src/txn/two_pc_model.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-951",
+        claim: "Leader hints in the Produce and Fetch responses",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/produce/pipeline.rs",
+        tests: &[
+            "crates/broker/tests/produce_leader_gate.rs",
+            "crates/broker/tests/producer_leader_routing.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-966",
+        claim: "Eligible leader replicas, unclean recovery and DescribeTopicPartitions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/elr.rs",
+        tests: &[
+            "crates/broker/tests/unclean_recovery.rs",
+            "crates/broker/tests/describe_topic_partitions.rs",
+            "crates/broker/tests/jvm_acceptance_cli/elr_columns.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-996",
+        claim: "Pre-vote before a KRaft election",
+        status: KipStatus::Implemented,
+        module: "crates/kraft-core/src/core/election.rs",
+        tests: &[
+            "crates/kraft-core/src/core/election/tests.rs",
+            "crates/raft/tests/kraft_engine_sim/failover.rs",
+            "crates/broker/tests/jvm_static_quorum_spike/contested_election.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1005",
+        claim: "ListOffsets LATEST_TIERED_TIMESTAMP",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/sentinels.rs",
+        tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1022",
+        claim: "Feature flags with dependency checks at format and upgrade time",
+        status: KipStatus::Implemented,
+        module: "crates/format/src/format/features.rs",
+        tests: &[
+            "crates/broker/tests/format_features.rs",
+            "crates/broker/tests/jvm_features.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1023",
+        claim: "ListOffsets EARLIEST_PENDING_UPLOAD_TIMESTAMP",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/resolve.rs",
+        tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1071",
+        claim: "Streams groups: StreamsGroupHeartbeat and StreamsGroupDescribe",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/streams/mod.rs",
+        tests: &[
+            "crates/broker/tests/streams_groups.rs",
+            "crates/broker/tests/streams_classic_upgrade.rs",
+            "crates/broker/tests/jvm_streams_groups.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1073",
+        claim: "DescribeCluster hides fenced brokers from clients",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_cluster.rs",
+        tests: &["crates/broker/tests/role_separation_observer.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1075",
+        claim: "A server-side timeout for remote ListOffsets work",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/remote.rs",
+        tests: &["crates/broker/src/config_keys/registry/tests.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1142",
+        claim: "ListConfigResources",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_config_resources.rs",
+        tests: &["crates/broker/tests/admin_handlers/admin_listings.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1155",
+        claim: "A checkpoint at every metadata.version downgrade",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/kraft/controller/snapshotting.rs",
+        tests: &[
+            "crates/raft/src/kraft/controller/tests_downgrade.rs",
+            "crates/broker/tests/jvm_kip320_divergence/metadata_version_downgrade.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1186",
+        claim: "kraft.version upgrade and the last-voter check that the Kafka 4.3 quorum tools drive",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/server/voter_admin.rs",
+        tests: &["crates/broker/tests/jvm_features.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1242",
+        claim: "ApiVersions v5 routing identity and REBOOTSTRAP_REQUIRED",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/api_versions.rs",
+        tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1319",
+        claim: "Transactions v2 producer-id rotation and verification on Produce",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/coordinator/pid_index.rs",
+        tests: &[
+            "crates/broker/tests/transaction_version.rs",
+            "crates/broker/tests/transactions.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "",
+    },
+    KipAnnotation {
+        key: "mixed-quorum",
+        claim: "A controller quorum with both JVM and Krabka voters",
+        status: KipStatus::OutOfScope,
+        module: "crates/raft/src/lib.rs",
+        tests: &[],
+        clients: ClientEvidence::NotCovered,
+        note: "Outside the raft crate's compatibility target: crates/raft/src/lib.rs:52.",
+    },
+];
+// END KIP_ANNOTATIONS
 
 macro_rules! v {
     ($mod:ident) => {
@@ -187,6 +1176,8 @@ fn admin_apis() -> Vec<ApiVersion> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use assert2::assert;
 
     use super::*;
@@ -236,5 +1227,153 @@ mod tests {
         for a in &apis {
             assert!(a.min_version <= a.max_version, "api {} min>max", a.api_key);
         }
+    }
+
+    /// The KIP number of a `KIP-<n>` key, or `None` for a scope-only key.
+    fn kip_number(key: &str) -> Option<u32> {
+        key.strip_prefix("KIP-")?.parse().ok()
+    }
+
+    #[test]
+    fn kip_annotation_keys_are_unique_and_ordered() {
+        let keys: Vec<&str> = KIP_ANNOTATIONS.iter().map(|row| row.key).collect();
+        let unique: BTreeSet<&str> = keys.iter().copied().collect();
+        assert!(unique.len() == keys.len(), "duplicate keys in {keys:?}");
+
+        // KIP rows first, ascending; the scope-only rows after them.
+        let numbers: Vec<u32> = keys.iter().filter_map(|key| kip_number(key)).collect();
+        let mut sorted = numbers.clone();
+        sorted.sort_unstable();
+        assert!(numbers == sorted, "KIP rows are not in ascending order");
+        let first_scope_row = keys.iter().position(|key| kip_number(key).is_none());
+        if let Some(index) = first_scope_row {
+            assert!(
+                keys[index..].iter().all(|key| kip_number(key).is_none()),
+                "a KIP row follows a scope-only row in {keys:?}"
+            );
+        }
+        assert!(keys.contains(&MIXED_QUORUM_KEY));
+    }
+
+    /// Whether `path` is a Rust source file named from the repository root.
+    fn is_rust_source_path(path: &str) -> bool {
+        path.starts_with("crates/")
+            && std::path::Path::new(path).extension() == Some(std::ffi::OsStr::new("rs"))
+    }
+
+    #[test]
+    fn kip_annotation_rows_are_complete() {
+        for row in KIP_ANNOTATIONS {
+            assert!(!row.claim.is_empty(), "{} has no claim", row.key);
+            assert!(
+                is_rust_source_path(row.module),
+                "{} owner {} is not a Rust source path from the repository root",
+                row.key,
+                row.module
+            );
+            for test in row.tests {
+                let path = test.split_once("::").map_or(*test, |(path, _)| path);
+                assert!(
+                    is_rust_source_path(path),
+                    "{} test {test} is not a Rust source path from the repository root",
+                    row.key
+                );
+            }
+            match row.status {
+                KipStatus::Implemented => {
+                    assert!(
+                        !row.tests.is_empty(),
+                        "{} is Implemented without a test",
+                        row.key
+                    );
+                }
+                KipStatus::Partial => {
+                    assert!(
+                        !row.tests.is_empty(),
+                        "{} is Partial without a test",
+                        row.key
+                    );
+                    assert!(
+                        !row.note.is_empty(),
+                        "{} is Partial without a note",
+                        row.key
+                    );
+                }
+                KipStatus::OutOfScope => {
+                    assert!(row.tests.is_empty(), "{} is OutOfScope with tests", row.key);
+                    assert!(
+                        !row.note.is_empty(),
+                        "{} is OutOfScope without a note",
+                        row.key
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_quorum_and_forwarding_rows_cite_the_raft_decision() {
+        for key in ["KIP-590", MIXED_QUORUM_KEY] {
+            let row = KIP_ANNOTATIONS
+                .iter()
+                .find(|row| row.key == key)
+                .unwrap_or_else(|| panic!("{key} has no annotation"));
+            assert!(
+                row.note.contains(OUT_OF_SCOPE_CITATION),
+                "{key} does not cite {OUT_OF_SCOPE_CITATION}"
+            );
+        }
+        let mixed = KIP_ANNOTATIONS
+            .iter()
+            .find(|row| row.key == MIXED_QUORUM_KEY)
+            .expect("mixed-quorum row");
+        assert!(mixed.status == KipStatus::OutOfScope);
+    }
+
+    /// Every module and test path an annotation names is a file in the tree.
+    ///
+    /// Cargo exports `CARGO_MANIFEST_DIR`, from which the repository root is
+    /// two levels up. Bazel stages no source tree for a unit test, so there
+    /// the check has nothing to look at and returns; `tools/generate-kip-matrix.py`
+    /// makes the same check in CI's docs job, against the checked-out tree,
+    /// and also checks that a `path::function` entry names a function the
+    /// file defines.
+    #[test]
+    fn kip_annotation_paths_exist() {
+        // A Bazel sandbox stages only this crate's sources, so the paths the
+        // rows cite in other crates are absent there even though the
+        // directory exists; `TEST_SRCDIR` is how Bazel announces itself. The
+        // generator in the docs CI job is the hermetic gate for these paths.
+        if std::env::var_os("TEST_SRCDIR").is_some() {
+            return;
+        }
+        let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") else {
+            return;
+        };
+        let root = std::path::Path::new(&manifest_dir).join("../..");
+        if !root.join("crates").is_dir() {
+            return;
+        }
+        for row in KIP_ANNOTATIONS {
+            assert!(
+                root.join(row.module).is_file(),
+                "{} owner {} is missing",
+                row.key,
+                row.module
+            );
+            for test in row.tests {
+                let path = test.split_once("::").map_or(*test, |(path, _)| path);
+                assert!(
+                    root.join(path).is_file(),
+                    "{} test {path} is missing",
+                    row.key
+                );
+            }
+        }
+        let (path, _) = OUT_OF_SCOPE_CITATION.split_once(':').expect("path:line");
+        assert!(
+            root.join(path).is_file(),
+            "{OUT_OF_SCOPE_CITATION} is missing"
+        );
     }
 }

@@ -39,6 +39,8 @@ assert!(machine.is_voter());
 
 ## Documentation
 
+- [Design](docs/design.md) — the sans-IO consensus core, the single-owner engine, submission and commit, snapshots, KIP-853 reconfiguration, and how the broker's controller logic plugs in.
+
 Read the API documentation at [docs.rs/krabka-raft](https://docs.rs/krabka-raft). The repository README contains the project-wide setup, development, and release notes.
 
 ## License

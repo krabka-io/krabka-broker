@@ -213,6 +213,27 @@ jobs:
           trap 'rm -f "${generated}"' EXIT
           python3 tools/generate-kip-matrix.py "${generated}"
           diff -u docs/KIP_MATRIX.md "${generated}"
+      # docs/config-reference.md is rendered from docs/config-schema.json; a schema change without a regeneration fails here (the schema itself is compared against FileConfig by //crates/broker:config_reference_test).
+      - name: generated config reference
+        run: |
+          generated="$(mktemp)"
+          trap 'rm -f "${generated}"' EXIT
+          python3 tools/generate-config-reference.py "${generated}"
+          diff -u docs/config-reference.md "${generated}"
+      # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the self-test proves the check fails on a missing heading or a status mismatch.
+      - name: KFC template
+        run: |
+          tools/check-kfcs.sh
+          tools/check-kfcs-test.sh
+      # Design-doc index, required headings, README links, and #fragment anchors (lychee below does not follow fragments).
+      - name: design docs
+        run: python3 tools/check-design-docs.py
+      # Every series the reference dashboard and the alert rules name must be one the broker exports; the metrics_contract suite keeps the body file fresh.
+      - name: metrics contract
+        run: python3 tools/check-metrics-contract.py docs/operations/metrics-body.txt
+      # Every crate has a README and the root README crate table names it.
+      - name: crate READMEs
+        run: tools/check-crate-readmes.sh
       - name: markdown links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:

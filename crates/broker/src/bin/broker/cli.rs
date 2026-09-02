@@ -42,6 +42,13 @@ pub struct Args {
     #[arg(long)]
     pub config_file: Option<PathBuf>,
 
+    /// Print the JSON Schema of the `--config-file` document to stdout and
+    /// exit. Every other flag is ignored. `docs/config-schema.json` is a
+    /// checked-in copy of this output, and `docs/config-reference.md` is
+    /// generated from it.
+    #[arg(long)]
+    pub print_config_schema: bool,
+
     /// Primary log directory. Holds the cluster-metadata raft log and is
     /// the default partition data directory.
     #[arg(long, default_value = "./krabka-data")]
@@ -457,6 +464,16 @@ mod tests {
             s.contains("config-file") && s.contains("advertised-listener"),
             "expected clap conflict, got: {s}"
         );
+    }
+
+    #[test]
+    fn print_config_schema_parses_and_defaults_off() {
+        let _guard = env_guard();
+
+        let args = Args::try_parse_from(["krabka-broker", "--print-config-schema"]).unwrap();
+        assert!(args.print_config_schema);
+        let defaults = Args::try_parse_from(["krabka-broker"]).unwrap();
+        assert!(!defaults.print_config_schema);
     }
 
     #[test]
