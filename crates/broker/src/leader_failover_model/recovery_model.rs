@@ -92,7 +92,10 @@ fn most_complete(candidates: &[ReplicaLogInfo]) -> Option<NodeId> {
 /// The election `select_leader` actually returns, in the same reduced form
 /// [`RecoveryModel::expected`] states.
 fn actual(model: &RecoveryModel, responses: &[ReplicaLogInfo]) -> Outcome {
-    select_leader(responses, &model.eligible, &model.witnesses)
+    // `RecoveryModel` has no ISR of its own -- it states the ELR-over-longest-log
+    // ranking. An empty in-sync set skips `select_leader`'s first rung, which is
+    // what keeps this model checking exactly the property it was written for.
+    select_leader(responses, &[], &model.eligible, &model.witnesses)
         .map(|election| (election.leader, election.basis.loses_data()))
 }
 

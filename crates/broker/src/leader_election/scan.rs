@@ -14,7 +14,7 @@ use crate::{
         RecoveryStrategy, resolve_recovery_strategy, resolve_unclean_leader_election_enabled,
         witness_node_ids,
     },
-    elr::ElrPublisher,
+    elr::{ElrPublisher, TopicElr},
     heartbeat::controller_state::ControllerLivenessState,
 };
 
@@ -24,6 +24,27 @@ mod dead_broker_tests;
 mod offline_dir_tests;
 #[cfg(test)]
 mod unclean_restart_tests;
+
+/// The published eligible-leader-replica sets a scan reads, parsed once per
+/// topic rather than once per partition.
+///
+/// [`TopicElr::of_topic`] hits the topic's config map and parses the whole
+/// value, which holds every partition of the topic that carries ELR state. A
+/// scan walks partitions, not topics, so without this a thousand-partition
+/// topic would parse that value a thousand times.
+#[derive(Default)]
+struct ScanElr(std::collections::HashMap<String, TopicElr>);
+
+impl ScanElr {
+    /// The eligible-leader-replica set `image` publishes for one partition.
+    fn eligible(&mut self, image: &MetadataImage, topic: &str, partition: i32) -> Vec<i32> {
+        self.0
+            .entry(topic.to_owned())
+            .or_insert_with(|| TopicElr::of_topic(image, topic))
+            .partition(partition)
+            .eligible_leader_replicas
+    }
+}
 
 /// Compute the failover `MetadataRecord` changes for `dead` against
 /// `image`. Pure: no I/O beyond `liveness.is_alive` lookups. This function is
@@ -49,6 +70,9 @@ pub(crate) async fn compute_failover_changes(
     // Witness nodes never lead a partition. Build the set once, next to the
     // alive snapshot, so the scan stays one walk over the image.
     let witnesses = witness_node_ids(image);
+    // KIP-966: the replicas that are known to hold every committed record.
+    // `failover_one` elects one of them, cleanly, when the live ISR empties.
+    let mut elr = ScanElr::default();
     // Single O(P) walk over every partition in the image.
     for pr in image.all_partitions() {
         if !pr.replicas.contains(&dead) && !pr.isr.contains(&dead) {
@@ -56,7 +80,16 @@ pub(crate) async fn compute_failover_changes(
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        match failover_one(pr, dead, &alive, &witnesses, strategy, unclean_enabled) {
+        let eligible = elr.eligible(image, &pr.topic, pr.partition);
+        match failover_one(
+            pr,
+            dead,
+            &alive,
+            &witnesses,
+            &eligible,
+            strategy,
+            unclean_enabled,
+        ) {
             FailoverDecision::Elect {
                 leader,
                 isr,
@@ -144,6 +177,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
         .map(NodeId)
         .collect();
     let witnesses = witness_node_ids(image);
+    let mut elr = ScanElr::default();
     for pr in image.all_partitions() {
         let Some(slot) = pr.replicas.iter().position(|n| *n == broker) else {
             continue;
@@ -157,7 +191,16 @@ pub(crate) async fn compute_offline_dir_failover_changes(
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        match failover_one(pr, broker, &alive, &witnesses, strategy, unclean_enabled) {
+        let eligible = elr.eligible(image, &pr.topic, pr.partition);
+        match failover_one(
+            pr,
+            broker,
+            &alive,
+            &witnesses,
+            &eligible,
+            strategy,
+            unclean_enabled,
+        ) {
             FailoverDecision::Elect {
                 leader,
                 isr,
@@ -242,13 +285,23 @@ pub(crate) async fn compute_unclean_restart_changes(
         .map(NodeId)
         .collect();
     let witnesses = witness_node_ids(image);
+    let mut elr = ScanElr::default();
     for pr in image.all_partitions() {
         if pr.leader != returning && !pr.isr.contains(&returning) {
             continue;
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        match unclean_restart_one(pr, returning, &alive, &witnesses, strategy, unclean_enabled) {
+        let eligible = elr.eligible(image, &pr.topic, pr.partition);
+        match unclean_restart_one(
+            pr,
+            returning,
+            &alive,
+            &witnesses,
+            &eligible,
+            strategy,
+            unclean_enabled,
+        ) {
             FailoverDecision::Elect {
                 leader,
                 isr,

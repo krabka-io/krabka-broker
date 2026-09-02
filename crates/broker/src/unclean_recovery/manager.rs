@@ -135,6 +135,11 @@ impl UncleanRecoveryManager {
         let eligible = crate::elr::TopicElr::of_topic(&image, &job.topic)
             .partition(job.partition)
             .eligible_leader_replicas;
+        // KIP-966's other lossless rule, and the first disjunct of Kafka's
+        // `isValidNewLeader`. The failover scan that enqueued this recovery
+        // left the ISR alone, so a member liveness called dead is still named
+        // here and may yet answer the poll below; electing it loses nothing.
+        let in_sync = pr.isr.clone();
         // KFC-9: the recovery is needed from here on, so this is where the
         // fail-closed rule bites. What it guards is a data-losing election, and
         // a partition with an eligible leader replica may yet have a lossless
@@ -198,7 +203,7 @@ impl UncleanRecoveryManager {
         if has_newer_leader(&collected, known_epoch.0) {
             return RecoveryOutcome::Stale;
         }
-        let Some(election) = Self::elect_from(&image, &eligible, &collected) else {
+        let Some(election) = Self::elect_from(&image, &in_sync, &eligible, &collected) else {
             return RecoveryOutcome::NoEligibleReplica;
         };
         // KFC-9 again: the ELR did not save this one, so the rule applies.
@@ -239,20 +244,24 @@ impl UncleanRecoveryManager {
     /// The leader this recovery elects out of the poll it collected, and the
     /// rule that chose it. `None` when nothing that may lead answered.
     ///
-    /// Both rules are pure and live in [`select_leader`]. What the image adds
-    /// is the `broker.witness` set: a witness replicates the partition and can
-    /// be published as an eligible leader replica, and it must still never
-    /// lead, because it serves no client. The poll above queries it anyway --
-    /// its `current_leader_epoch` is what tells this recovery that a newer
-    /// leader has already superseded it -- so the exclusion belongs here,
-    /// between the staleness check and the election.
+    /// Every rule is pure and lives in [`select_leader`]. `in_sync` is the ISR
+    /// the partition record still names, which this recovery has not rewritten
+    /// and which a returning member can therefore still be in. What the image
+    /// adds is the `broker.witness` set: a witness replicates the partition
+    /// and can sit in both the ISR and the eligible-leader-replica set, and it
+    /// must still never lead, because it serves no client. The poll above
+    /// queries it anyway -- its `current_leader_epoch` is what tells this
+    /// recovery that a newer leader has already superseded it -- so the
+    /// exclusion belongs here, between the staleness check and the election.
     fn elect_from(
         image: &MetadataImage,
+        in_sync: &[NodeId],
         eligible: &[i32],
         responses: &[ReplicaLogInfo],
     ) -> Option<Election> {
         select_leader(
             responses,
+            in_sync,
             eligible,
             &crate::config_keys::witness_node_ids(image),
         )

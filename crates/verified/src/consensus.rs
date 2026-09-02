@@ -37,6 +37,7 @@ pub enum FailoverRecovery {
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum FailoverAction {
     ElectClean,
+    ElectFromElr,
     Recover(FailoverRecovery),
     ElectUnclean,
     Unavailable,
@@ -45,24 +46,44 @@ pub enum FailoverAction {
 }
 
 /// Select the only safe failover class, preserving clean-election precedence.
+///
+/// `has_electable_elr` is the KIP-966 rung between the clean election and
+/// everything that risks data: a replica that left the ISR while the partition
+/// still held `min.insync.replicas` members holds every committed record, so
+/// electing it is lossless and neither the `unclean.leader.election.enable`
+/// toggle nor `unclean.recovery.strategy` gates it. It is reachable only once
+/// the live ISR is empty, which is the same guard Apache Kafka's
+/// `isValidNewLeader` puts on its `targetElr` disjunct.
+///
+/// `unclean_election_available` is the KIP-841 out-of-ISR election being both
+/// permitted and possible. The two halves -- the topic's toggle, and a replica
+/// that can serve -- are one fact here because the classification never
+/// separates them: an election that is allowed with nobody to elect and one
+/// that has a candidate and no permission are the same unavailable partition.
 #[ensures(match result {
     FailoverAction::ElectClean => leader_dead && has_electable_isr,
+    FailoverAction::ElectFromElr => leader_dead
+        && !has_electable_isr
+        && alive_isr_empty
+        && has_electable_elr,
     FailoverAction::Recover(selected) => leader_dead
         && !has_electable_isr
         && alive_isr_empty
+        && !has_electable_elr
         && recovery != FailoverRecovery::None
         && selected == recovery,
     FailoverAction::ElectUnclean => leader_dead
         && !has_electable_isr
         && alive_isr_empty
+        && !has_electable_elr
         && recovery == FailoverRecovery::None
-        && unclean_enabled
-        && has_unclean_candidate,
+        && unclean_election_available,
     FailoverAction::Unavailable => leader_dead
         && !has_electable_isr
         && (!alive_isr_empty
-            || (recovery == FailoverRecovery::None
-                && (!unclean_enabled || !has_unclean_candidate))),
+            || (!has_electable_elr
+                && recovery == FailoverRecovery::None
+                && !unclean_election_available)),
     FailoverAction::ShrinkIsr => !leader_dead && isr_shrunk,
     FailoverAction::NoChange => !leader_dead && !isr_shrunk,
 })]
@@ -75,9 +96,9 @@ pub fn failover_action(
     leader_dead: bool,
     has_electable_isr: bool,
     alive_isr_empty: bool,
+    has_electable_elr: bool,
     recovery: FailoverRecovery,
-    unclean_enabled: bool,
-    has_unclean_candidate: bool,
+    unclean_election_available: bool,
     isr_shrunk: bool,
 ) -> FailoverAction {
     if !leader_dead {
@@ -93,13 +114,14 @@ pub fn failover_action(
     if !alive_isr_empty {
         return FailoverAction::Unavailable;
     }
+    if has_electable_elr {
+        return FailoverAction::ElectFromElr;
+    }
     match recovery {
         FailoverRecovery::Balanced | FailoverRecovery::Aggressive => {
             FailoverAction::Recover(recovery)
         }
-        FailoverRecovery::None if unclean_enabled && has_unclean_candidate => {
-            FailoverAction::ElectUnclean
-        }
+        FailoverRecovery::None if unclean_election_available => FailoverAction::ElectUnclean,
         FailoverRecovery::None => FailoverAction::Unavailable,
     }
 }
@@ -716,18 +738,36 @@ mod tests {
 
     #[test]
     fn failover_action_covers_clean_unclean_recovery_and_shrink_paths() {
-        use FailoverAction::{ElectClean, ElectUnclean, NoChange, Recover, ShrinkIsr, Unavailable};
+        use FailoverAction::{
+            ElectClean, ElectFromElr, ElectUnclean, NoChange, Recover, ShrinkIsr, Unavailable,
+        };
         use FailoverRecovery::{Aggressive, Balanced, None};
 
-        for (leader_dead, electable, empty, strategy, unclean, candidate, shrunk, expected) in [
-            (true, true, false, None, false, false, true, ElectClean),
+        // (leader_dead, has_electable_isr, alive_isr_empty, has_electable_elr,
+        //  recovery, unclean_election_available, isr_shrunk) -> action.
+        for (dead, isr, empty, elr, recovery, unclean, shrunk, expected) in [
+            (true, true, false, false, None, false, true, ElectClean),
+            // An electable ELR member outranks every offset-aware strategy and
+            // the KIP-841 election, and never reaches either.
+            (true, false, true, true, None, false, false, ElectFromElr),
+            (true, false, true, true, None, true, false, ElectFromElr),
             (
                 true,
                 false,
                 true,
+                true,
                 Balanced,
                 false,
+                false,
+                ElectFromElr,
+            ),
+            (
                 true,
+                false,
+                true,
+                false,
+                Balanced,
+                false,
                 false,
                 Recover(Balanced),
             ),
@@ -735,29 +775,31 @@ mod tests {
                 true,
                 false,
                 true,
+                false,
                 Aggressive,
-                true,
                 true,
                 false,
                 Recover(Aggressive),
             ),
-            (true, false, true, None, true, true, false, ElectUnclean),
-            (true, false, true, None, false, true, false, Unavailable),
-            (true, false, false, Balanced, true, true, false, Unavailable),
-            (false, false, false, None, false, false, true, ShrinkIsr),
-            (false, false, false, None, false, false, false, NoChange),
+            (true, false, true, false, None, true, false, ElectUnclean),
+            (true, false, true, false, None, false, false, Unavailable),
+            (
+                true,
+                false,
+                false,
+                false,
+                Balanced,
+                true,
+                false,
+                Unavailable,
+            ),
+            // A live ISR that holds nothing electable is unavailable even with
+            // an ELR: the ELR rung is guarded on an empty ISR.
+            (true, false, false, true, Balanced, true, false, Unavailable),
+            (false, false, false, false, None, false, true, ShrinkIsr),
+            (false, false, false, false, None, false, false, NoChange),
         ] {
-            check!(
-                failover_action(
-                    leader_dead,
-                    electable,
-                    empty,
-                    strategy,
-                    unclean,
-                    candidate,
-                    shrunk,
-                ) == expected
-            );
+            check!(failover_action(dead, isr, empty, elr, recovery, unclean, shrunk) == expected);
         }
     }
 

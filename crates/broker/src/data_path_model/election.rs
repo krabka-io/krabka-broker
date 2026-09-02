@@ -114,6 +114,9 @@ pub(super) fn do_failover(image: Option<&MetadataImage>, s: &mut DpState, dead: 
         krabka_audit::NodeId(node(dead)),
         &alive,
         &witnesses,
+        // This model carries no ELR state: what it drives is the empty-ISR
+        // `Recover` path and the real `select_best_replica` under it.
+        &[],
         strategy,
         unclean,
     ) {
@@ -169,7 +172,14 @@ fn recover(s: &mut DpState, witnesses: &HashSet<krabka_audit::NodeId>) -> bool {
         .filter(|&b| has(s.elr, b))
         .map(i32::from)
         .collect();
-    let Some(election) = select_leader(&infos, &eligible, witnesses) else {
+    // This model does carry an ISR, so give `select_leader` the real one rather
+    // than an empty slice: its first rung elects an in-sync survivor cleanly,
+    // and feeding it nothing would hide that rung from the model entirely.
+    let in_sync: Vec<krabka_audit::NodeId> = (0..NB_U8)
+        .filter(|&b| has(s.isr, b))
+        .map(|b| krabka_audit::NodeId(node(b)))
+        .collect();
+    let Some(election) = select_leader(&infos, &in_sync, &eligible, witnesses) else {
         return false;
     };
     let winner = model_broker(election.leader.0);

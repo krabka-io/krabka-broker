@@ -1,4 +1,4 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 36 27 36 32 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 36 27 36 32 *)
 
 (* <consensus::FailoverAction as std::clone::Clone> *)
 
@@ -6,14 +6,21 @@ use creusot.prelude.Any
 
 type t_FailoverRecovery = None | Balanced | Aggressive
 
-type t_FailoverAction = ElectClean | Recover t_FailoverRecovery | ElectUnclean | Unavailable | ShrinkIsr | NoChange
+type t_FailoverAction =
+  | ElectClean
+  | ElectFromElr
+  | Recover t_FailoverRecovery
+  | ElectUnclean
+  | Unavailable
+  | ShrinkIsr
+  | NoChange
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FailoverAction [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 36 27 36 32]
-  (self: t_FailoverAction) (return (x: t_FailoverAction)) = (! bb0
+let clone_FailoverAction [#"/workspace/crates/verified/src/consensus.rs" 36 27 36 32] (self: t_FailoverAction)
+  (return (x: t_FailoverAction)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FailoverAction = Any.any_l () | & self: t_FailoverAction = self ])
   [ return (result: t_FailoverAction) -> (! return {result}) ]
