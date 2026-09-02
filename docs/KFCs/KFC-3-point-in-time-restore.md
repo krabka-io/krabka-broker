@@ -68,9 +68,7 @@ Exactly one backend is selected. A sub-flag of a backend the operator did not se
 
 Every exclude predicate is OR-combined. A record is dropped when any one of them matches it.
 
-One check that belongs here does not run yet, and this note is here because nothing in the repository will report it. A bound that names a topic partition the archive does not hold is not rejected: the bound simply never applies, and the restore reports success over the partitions it did find. So an operator who mistypes a partition index gets a restore that is not the one they asked for. The error is defined for it and no stage raises it, so closing the gap is a check in the discover stage against the inventory, and not a change to this design.
-
-Two flag combinations are rejected before the archive is read. A partition named twice by `--to-offset` is an error, because the second bound can only contradict the first. A partition whose `--exclude-offset` ranges cover every offset up to its `--to-offset` bound is an error, because the operator wrote a bound that keeps nothing. A bound that names a topic which `--topic` does not select is an error for the same reason.
+Three flag combinations are rejected. A partition named twice by `--to-offset` is an error, because the second bound can only contradict the first. A partition whose `--exclude-offset` ranges cover every offset up to its `--to-offset` bound is an error, because the operator wrote a bound that keeps nothing. A bound that names a topic which `--topic` does not select is an error for the same reason. These three are checked before the archive is read. A fourth is checked after the scan instead: a bound that names a topic partition the archive does not hold is `RestoreError::UnknownPartition`, because the discover stage is the first point that knows what the archive actually holds, and a check against the inventory cannot run any earlier. Left unreported this would silently restore the partition whole, which is the opposite of what the operator asked for.
 
 ### Behaviour
 

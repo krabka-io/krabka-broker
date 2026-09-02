@@ -18,7 +18,7 @@ use tempfile::TempDir;
 /// `--node-id` requirement -- via `Cli::try_parse_from`, the same path the
 /// binary and the crate's own tests use. `extra` carries the bound flags
 /// under test.
-fn restore_args(archive_dir: &Path, target_dir: &Path, extra: &[&str]) -> RestoreArgs {
+pub(crate) fn restore_args(archive_dir: &Path, target_dir: &Path, extra: &[&str]) -> RestoreArgs {
     let mut argv: Vec<String> = vec![
         "krabka-restore".to_owned(),
         "--archive-local".to_owned(),

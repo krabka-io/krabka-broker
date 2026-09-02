@@ -140,7 +140,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`RestoreError`] for a bad bound, a target that is not empty, an
+/// Returns [`RestoreError`] for a bad bound, a bound that names a topic
+/// partition the archive does not hold, a target that is not empty, an
 /// archive that cannot be read, a segment that fails verification, or a target
 /// that rejects a write. `--continue-on-corrupt` turns a verification failure
 /// into a skipped segment in the report instead of an error.
@@ -152,6 +153,19 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
 
     let store = open_archive(args)?;
     let archive = inventory(&store, args).await?;
+    for partition in args
+        .to_offset
+        .iter()
+        .map(|bound| &bound.partition)
+        .chain(args.exclude_offset.iter().map(|range| &range.partition))
+    {
+        if !archive.holds(&partition.topic, partition.partition) {
+            return Err(RestoreError::UnknownPartition {
+                topic: partition.topic.clone(),
+                partition: partition.partition,
+            });
+        }
+    }
     let predicates = Predicates::from_args(args)?;
     let format = format_target(args, &archive).await?;
 

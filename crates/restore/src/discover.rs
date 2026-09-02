@@ -90,6 +90,19 @@ pub struct ArchiveInventory {
     pub unrecognized: Vec<Path>,
 }
 
+impl ArchiveInventory {
+    /// Whether the scan found `topic`-`partition`.
+    ///
+    /// Compared by topic name and partition index, the pair a bound is
+    /// written against, not by the archive's internal topic id.
+    #[must_use]
+    pub fn holds(&self, topic: &str, partition: i32) -> bool {
+        self.partitions
+            .iter()
+            .any(|entry| entry.partition.topic == topic && entry.partition.partition == partition)
+    }
+}
+
 /// One artifact of a segment, as [`inventory`] is still accumulating it.
 ///
 /// Distinguishes the segment's `.log` data from its indexes so the artifact a
