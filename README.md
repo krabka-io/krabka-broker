@@ -258,8 +258,20 @@ command needs only the metadata and security crates, so it lives here as
 `krabka-format` — a library as well as a binary, so `krabka-cli` can call it
 rather than carry a second copy.
 
+## Releases
+
+A release of this repository is an annotated `vX.Y.Z` tag on `main`. Pushing
+that tag builds the image, signs it, attests its SBOM and provenance, and
+creates the GitHub release. [`CHANGELOG.md`](CHANGELOG.md) records what each tag
+contains, and [releasing](docs/releasing.md) gives the commands that cut one.
+
+The workspace is versioned and tagged as one unit, so no crate has a release of
+its own and no crate changelog records one. `tools/lint/crate_changelogs.py`
+holds that rule in CI. Each crate changelog keeps an `[Unreleased]` heading and
+points at robot-head/crabka for the history before the extraction.
+
 ## Publishing
 
 `krabka-log` and the other published names in this tree are released to crates.io
 from [`robot-head/crabka`](https://github.com/robot-head/crabka). This repository
-has no release automation; consumers pin it by git revision.
+publishes no crate; consumers pin it by git revision.
