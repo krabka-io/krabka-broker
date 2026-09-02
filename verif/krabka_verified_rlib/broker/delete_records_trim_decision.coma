@@ -1,0 +1,127 @@
+(* #"/workspace/crates/verified/src/broker.rs" 311 0 313 30 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 314 25 314 27
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 315 33 315 34
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 325 41 325 43
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 268 4 273 65
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_DeleteRecordsTrimFacts = {
+  requested: Int64.t;
+  high_watermark: Int64.t;
+  log_end: Int64.t;
+  current_start: Int64.t;
+  has_delivery_watermark: bool;
+  delivery_watermark: Int64.t }
+
+type t_DeleteRecordsTrimDecision = RejectMalformed | RejectOutOfRange | Noop Int64.t | Apply Int64.t
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let delete_records_trim_decision [#"/workspace/crates/verified/src/broker.rs" 311 0 313 30]
+  (facts: t_DeleteRecordsTrimFacts) (return (x: t_DeleteRecordsTrimDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- Int64.lt facts.requested ([%#sbroker] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb11) ] ]
+  | bb2 = s0
+    [ s0 = [ &_12 <- Int64.lt facts.current_start ([%#sbroker'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb4) | br1 -> {_12} (! bb11) ] ]
+  | bb4 = s0
+    [ s0 = [ &_14 <- Int64.lt facts.high_watermark facts.current_start ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb6) | br1 -> {_14} (! bb11) ] ]
+  | bb6 = s0
+    [ s0 = [ &_17 <- Int64.lt facts.log_end facts.high_watermark ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb8) | br1 -> {_17} (! bb11) ] ]
+  | bb8 = any [ br0 -> {facts.has_delivery_watermark = false} (! bb13) | br1 -> {facts.has_delivery_watermark} (! bb9) ]
+  | bb9 = s0
+    [ s0 = [ &_21 <- Int64.lt facts.delivery_watermark facts.current_start ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb13) | br1 -> {_21} (! bb11) ] ]
+  | bb11 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = [ &_26 <- Int64.gt facts.requested facts.log_end ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb15) | br1 -> {_26} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- RejectOutOfRange ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_31 <- facts.requested = ([%#sbroker'1] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb17) | br1 -> {_31} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &resolved <- facts.high_watermark ] s1 | s1 = bb18 ]
+  | bb17 = s0 [ s0 = [ &resolved <- facts.requested ] s1 | s1 = bb18 ]
+  | bb18 = s0
+    [ s0 = [ &_34 <- Int64.lt resolved facts.high_watermark ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb20) | br1 -> {_34} (! bb19) ] ]
+  | bb19 = s0 [ s0 = [ &committed <- resolved ] s1 | s1 = bb21 ]
+  | bb20 = s0 [ s0 = [ &committed <- facts.high_watermark ] s1 | s1 = bb21 ]
+  | bb21 = any
+    [ br0 -> {facts.has_delivery_watermark = false} (! bb26) | br1 -> {facts.has_delivery_watermark} (! bb22) ]
+  | bb22 = s0
+    [ s0 = [ &_39 <- Int64.lt committed facts.delivery_watermark ] s1
+    | s1 = any [ br0 -> {_39 = false} (! bb24) | br1 -> {_39} (! bb23) ] ]
+  | bb23 = s0 [ s0 = [ &bounded <- committed ] s1 | s1 = bb27 ]
+  | bb24 = s0 [ s0 = [ &bounded <- facts.delivery_watermark ] s1 | s1 = bb27 ]
+  | bb26 = s0 [ s0 = [ &bounded <- committed ] s1 | s1 = bb27 ]
+  | bb27 = s0
+    [ s0 = [ &_42 <- Int64.le bounded facts.current_start ] s1
+    | s1 = any [ br0 -> {_42 = false} (! bb29) | br1 -> {_42} (! bb28) ] ]
+  | bb28 = s0 [ s0 = [ &_ret <- Noop (facts.current_start) ] s1 | s1 = return {_ret} ]
+  | bb29 = s0 [ s0 = [ &_ret <- Apply bounded ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DeleteRecordsTrimDecision = Any.any_l ()
+  | & facts: t_DeleteRecordsTrimFacts = facts
+  | & _10: bool = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & resolved: Int64.t = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & committed: Int64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & bounded: Int64.t = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _42: bool = Any.any_l () ])
+  [ return (result: t_DeleteRecordsTrimDecision) ->
+  {[@stop_split] [@expl:delete_records_trim_decision ensures] [%#sbroker'2] let malformed = Int64.to_int facts.requested
+      < - 1
+    \/ Int64.to_int facts.current_start < 0
+    \/ Int64.to_int facts.high_watermark < Int64.to_int facts.current_start
+    \/ Int64.to_int facts.log_end < Int64.to_int facts.high_watermark
+    \/ facts.has_delivery_watermark
+    /\ Int64.to_int facts.delivery_watermark < Int64.to_int facts.current_start in let out_of_range = not malformed
+    /\ gt_log_Int (Int64.to_int facts.requested) (Int64.to_int facts.log_end) in let resolved = if Int64.to_int facts.requested
+    = - 1 then
+      Int64.to_int facts.high_watermark
+    else
+      Int64.to_int facts.requested
+     in let committed = if resolved < Int64.to_int facts.high_watermark then
+      resolved
+    else
+      Int64.to_int facts.high_watermark
+     in let bounded = if facts.has_delivery_watermark /\ Int64.to_int facts.delivery_watermark < committed then
+      Int64.to_int facts.delivery_watermark
+    else
+      committed
+     in match result with
+      | RejectMalformed -> malformed
+      | RejectOutOfRange -> out_of_range
+      | Noop frontier -> not malformed
+      /\ not out_of_range
+      /\ bounded <= Int64.to_int facts.current_start /\ Int64.to_int frontier = Int64.to_int facts.current_start
+      | Apply frontier -> not malformed
+      /\ not out_of_range
+      /\ gt_log_Int bounded (Int64.to_int facts.current_start)
+      /\ Int64.to_int frontier = bounded
+      /\ Int64.to_int frontier <= Int64.to_int facts.high_watermark
+      /\ Int64.to_int frontier <= Int64.to_int facts.log_end
+      /\ (not facts.has_delivery_watermark \/ Int64.to_int frontier <= Int64.to_int facts.delivery_watermark)
+      end}
+    (! return {result}) ]

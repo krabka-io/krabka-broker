@@ -6,6 +6,10 @@
 
 use std::collections::BTreeMap;
 
+use krabka_verified::{
+    BarrierRecoveryFoldAction, BarrierRecoveryRecordKind, barrier_recovery_fold_action,
+};
+
 use super::{GroupEntry, PendingInjection};
 use crate::barrier::persistence::{CutValue, GroupValue, InjectionStartValue};
 
@@ -39,25 +43,57 @@ pub(crate) enum StateRecord {
 /// a cut tombstone removes only what it names.
 pub(crate) fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: StateRecord) {
     match record {
-        StateRecord::Group { group, value } => match value {
-            Some(definition) => state.entry(group).or_default().definition = definition,
-            None => {
-                state.remove(&group);
+        StateRecord::Group { group, value } => {
+            let action = barrier_recovery_fold_action(
+                BarrierRecoveryRecordKind::Group,
+                value.is_some(),
+                0,
+                None,
+                false,
+            );
+            match action {
+                BarrierRecoveryFoldAction::DefineGroup => {
+                    state.entry(group).or_default().definition =
+                        value.expect("the verified action requires a group value");
+                }
+                BarrierRecoveryFoldAction::RemoveGroup => {
+                    state.remove(&group);
+                }
+                _ => unreachable!("the group record kind selects a group action"),
             }
-        },
+        }
         StateRecord::InjectionStart {
             group,
             epoch,
             value,
         } => {
-            let entry = state.entry(group).or_default();
-            match value {
-                Some(start) => entry.pending = Some(PendingInjection { epoch, start }),
-                None => {
-                    if entry.pending.as_ref().is_some_and(|p| p.epoch == epoch) {
+            let pending_epoch = state
+                .get(&group)
+                .and_then(|entry| entry.pending.as_ref().map(|pending| pending.epoch));
+            let epoch_already_consumed = state.get(&group).is_some_and(|entry| {
+                entry.cuts.contains_key(&epoch) || epoch <= entry.definition.last_epoch
+            });
+            let action = barrier_recovery_fold_action(
+                BarrierRecoveryRecordKind::InjectionStart,
+                value.is_some(),
+                epoch,
+                pending_epoch,
+                epoch_already_consumed,
+            );
+            match action {
+                BarrierRecoveryFoldAction::SetPending => {
+                    state.entry(group).or_default().pending = Some(PendingInjection {
+                        epoch,
+                        start: value.expect("the verified action requires an injection value"),
+                    });
+                }
+                BarrierRecoveryFoldAction::ClearPending => {
+                    if let Some(entry) = state.get_mut(&group) {
                         entry.pending = None;
                     }
                 }
+                BarrierRecoveryFoldAction::KeepPending => {}
+                _ => unreachable!("the injection record kind selects an injection action"),
             }
         }
         StateRecord::Cut {
@@ -65,18 +101,33 @@ pub(crate) fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: Sta
             epoch,
             value,
         } => {
-            let entry = state.entry(group).or_default();
-            match value {
-                Some(cut) => {
-                    entry.cuts.insert(epoch, cut);
-                    // The cut of an epoch retires its injection-start record.
-                    if entry.pending.as_ref().is_some_and(|p| p.epoch == epoch) {
+            let pending_epoch = state
+                .get(&group)
+                .and_then(|entry| entry.pending.as_ref().map(|pending| pending.epoch));
+            let action = barrier_recovery_fold_action(
+                BarrierRecoveryRecordKind::Cut,
+                value.is_some(),
+                epoch,
+                pending_epoch,
+                false,
+            );
+            match action {
+                BarrierRecoveryFoldAction::UpsertCut { retire_pending } => {
+                    let entry = state.entry(group).or_default();
+                    entry.cuts.insert(
+                        epoch,
+                        value.expect("the verified action requires a cut value"),
+                    );
+                    if retire_pending {
                         entry.pending = None;
                     }
                 }
-                None => {
-                    entry.cuts.remove(&epoch);
+                BarrierRecoveryFoldAction::RemoveCut => {
+                    if let Some(entry) = state.get_mut(&group) {
+                        entry.cuts.remove(&epoch);
+                    }
                 }
+                _ => unreachable!("the cut record kind selects a cut action"),
             }
         }
     }
@@ -84,12 +135,17 @@ pub(crate) fn apply_record(state: &mut BTreeMap<String, GroupEntry>, record: Sta
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use assert2::assert;
 
-    use super::*;
+    use super::{StateRecord, apply_record};
     use crate::barrier::{
         persistence::CutStatus,
-        state::test_support::{cut_value, group_value, start_value},
+        state::{
+            PendingInjection,
+            test_support::{cut_value, group_value, start_value},
+        },
     };
 
     #[test]
@@ -167,6 +223,102 @@ mod tests {
         let entry = &state["orders-cut"];
         assert!(entry.pending.is_none());
         assert!(entry.cuts.keys().copied().collect::<Vec<_>>() == vec![1]);
+    }
+
+    #[test]
+    fn a_retried_start_cannot_reopen_an_epoch_that_has_a_cut() {
+        let mut state = BTreeMap::new();
+        for record in [
+            StateRecord::InjectionStart {
+                group: "orders-cut".to_owned(),
+                epoch: 7,
+                value: Some(start_value(3)),
+            },
+            StateRecord::Cut {
+                group: "orders-cut".to_owned(),
+                epoch: 7,
+                value: Some(cut_value(CutStatus::Complete)),
+            },
+            StateRecord::InjectionStart {
+                group: "orders-cut".to_owned(),
+                epoch: 7,
+                value: Some(start_value(3)),
+            },
+        ] {
+            apply_record(&mut state, record);
+        }
+        assert!(state["orders-cut"].pending.is_none());
+        assert!(state["orders-cut"].cuts.contains_key(&7));
+    }
+
+    #[test]
+    fn a_retired_cut_cannot_be_reopened_below_the_group_epoch() {
+        let mut state = BTreeMap::new();
+        apply_record(
+            &mut state,
+            StateRecord::Group {
+                group: "orders-cut".to_owned(),
+                value: Some(group_value(9)),
+            },
+        );
+        apply_record(
+            &mut state,
+            StateRecord::InjectionStart {
+                group: "orders-cut".to_owned(),
+                epoch: 7,
+                value: Some(start_value(3)),
+            },
+        );
+
+        assert!(state["orders-cut"].pending.is_none());
+        assert!(state["orders-cut"].last_epoch() == 9);
+    }
+
+    #[test]
+    fn keyed_records_do_not_cross_groups_and_tombstones_do_not_create_entries() {
+        let mut state = BTreeMap::new();
+        apply_record(
+            &mut state,
+            StateRecord::InjectionStart {
+                group: "orders-cut".to_owned(),
+                epoch: 2,
+                value: Some(start_value(3)),
+            },
+        );
+        apply_record(
+            &mut state,
+            StateRecord::InjectionStart {
+                group: "payments-cut".to_owned(),
+                epoch: 4,
+                value: Some(start_value(3)),
+            },
+        );
+        apply_record(
+            &mut state,
+            StateRecord::InjectionStart {
+                group: "orders-cut".to_owned(),
+                epoch: 2,
+                value: None,
+            },
+        );
+        apply_record(
+            &mut state,
+            StateRecord::Cut {
+                group: "absent".to_owned(),
+                epoch: 1,
+                value: None,
+            },
+        );
+
+        assert!(state["orders-cut"].pending.is_none());
+        assert!(
+            state["payments-cut"]
+                .pending
+                .as_ref()
+                .map(|pending| pending.epoch)
+                == Some(4)
+        );
+        assert!(!state.contains_key("absent"));
     }
 
     #[test]

@@ -26,11 +26,13 @@ use std::{
 use krabka_metadata::NodeId;
 use krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageManager, TopicIdPartition};
 use krabka_units::{ByteSize, Time, bytes, convert::TimeExt as _, secs};
+use krabka_verified::FreezeMutationKind;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
-    freeze::resolve::resolve_topic_freeze, partition::Partition,
+    freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
+    partition::Partition,
     partition_registry::PartitionRegistry,
 };
 
@@ -169,7 +171,15 @@ async fn tick_all(
         // free precisely because it deletes nothing remote. A freeze says this
         // topic's log must not lose bytes anywhere, so it stops the local
         // eviction too.
-        if resolve_topic_freeze(&image, &partition.topic).is_some() {
+        if matches!(
+            resolve_freeze_mutation(
+                &image,
+                &partition.topic,
+                true,
+                FreezeMutationKind::Retention,
+            ),
+            FreezeMutationResolution::Frozen(_)
+        ) {
             debug!(topic = %partition.topic, partition = tp.partition,
                    "remote-log-manager: a write freeze holds both retention passes");
             continue;

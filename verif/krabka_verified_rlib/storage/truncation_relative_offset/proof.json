@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_truncation_relative_offset": {
+        "prover": "alt-ergo",
+        "time": 0.014
+      }
+    }
+  }
+}

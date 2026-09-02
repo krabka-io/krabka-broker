@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_voter_wire_decision": { "prover": "alt-ergo", "time": 0.016 }
+    }
+  }
+}

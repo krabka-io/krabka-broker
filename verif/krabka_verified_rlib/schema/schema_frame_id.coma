@@ -1,0 +1,80 @@
+(* #"/workspace/crates/verified/src/schema.rs" 83 0 83 88 *)
+
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 84 16 84 17
+let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 88 8 88 23
+let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 88 26 88 36
+let%span sschema'2 = "/workspace/crates/verified/src/schema.rs" 88 8 88 36
+let%span sschema'3 = "/workspace/crates/verified/src/schema.rs" 89 14 89 29
+let%span sschema'4 = "/workspace/crates/verified/src/schema.rs" 89 32 89 38
+let%span sschema'5 = "/workspace/crates/verified/src/schema.rs" 89 14 89 38
+let%span sschema'6 = "/workspace/crates/verified/src/schema.rs" 88 8 89 38
+let%span sschema'7 = "/workspace/crates/verified/src/schema.rs" 90 14 90 29
+let%span sschema'8 = "/workspace/crates/verified/src/schema.rs" 90 32 90 35
+let%span sschema'9 = "/workspace/crates/verified/src/schema.rs" 90 14 90 35
+let%span sschema'10 = "/workspace/crates/verified/src/schema.rs" 88 8 90 35
+let%span sschema'11 = "/workspace/crates/verified/src/schema.rs" 91 14 91 29
+let%span sschema'12 = "/workspace/crates/verified/src/schema.rs" 88 8 91 29
+let%span sschema'13 = "/workspace/crates/verified/src/schema.rs" 76 10 76 44
+let%span sschema'14 = "/workspace/crates/verified/src/schema.rs" 77 10 81 15
+
+use creusot.int.UInt8
+use creusot.int.UInt32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_u32 = None | Some UInt32.t
+
+let from_u32 (small: UInt8.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = UInt32.of_int (UInt8.t'int small)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let schema_frame_id [#"/workspace/crates/verified/src/schema.rs" 83 0 83 88] (magic: UInt8.t) (id_0: UInt8.t)
+  (id_1: UInt8.t) (id_2: UInt8.t) (id_3: UInt8.t) (return (x: t_Option_u32)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- magic <> ([%#sschema] (0: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = from_u32 [%#sschema'0] {id_0} (fun (_x: UInt32.t) -> [ &_21 <- _x ] s1)
+    | s1 = UInt32.mul [%#sschema'2] {_21} {[%#sschema'1] (16777216: UInt32.t)} (fun (_x: UInt32.t) -> [ &_20 <- _x ] s2)
+    | s2 = from_u32 [%#sschema'3] {id_1} (fun (_x: UInt32.t) -> [ &_24 <- _x ] s3)
+    | s3 = UInt32.mul [%#sschema'5] {_24} {[%#sschema'4] (65536: UInt32.t)} (fun (_x: UInt32.t) -> [ &_23 <- _x ] s4)
+    | s4 = UInt32.add [%#sschema'6] {_20} {_23} (fun (_x: UInt32.t) -> [ &_19 <- _x ] s5)
+    | s5 = from_u32 [%#sschema'7] {id_2} (fun (_x: UInt32.t) -> [ &_27 <- _x ] s6)
+    | s6 = UInt32.mul [%#sschema'9] {_27} {[%#sschema'8] (256: UInt32.t)} (fun (_x: UInt32.t) -> [ &_26 <- _x ] s7)
+    | s7 = UInt32.add [%#sschema'10] {_19} {_26} (fun (_x: UInt32.t) -> [ &_18 <- _x ] s8)
+    | s8 = from_u32 [%#sschema'11] {id_3} (fun (_x: UInt32.t) -> [ &_29 <- _x ] s9)
+    | s9 = UInt32.add [%#sschema'12] {_18} {_29} (fun (_x: UInt32.t) -> [ &_17 <- _x ] s10)
+    | s10 = [ &_ret <- Some _17 ] s11
+    | s11 = return {_ret} ] ]
+  [ & _ret: t_Option_u32 = Any.any_l ()
+  | & magic: UInt8.t = magic
+  | & id_0: UInt8.t = id_0
+  | & id_1: UInt8.t = id_1
+  | & id_2: UInt8.t = id_2
+  | & id_3: UInt8.t = id_3
+  | & _14: bool = Any.any_l ()
+  | & _17: UInt32.t = Any.any_l ()
+  | & _18: UInt32.t = Any.any_l ()
+  | & _19: UInt32.t = Any.any_l ()
+  | & _20: UInt32.t = Any.any_l ()
+  | & _21: UInt32.t = Any.any_l ()
+  | & _23: UInt32.t = Any.any_l ()
+  | & _24: UInt32.t = Any.any_l ()
+  | & _26: UInt32.t = Any.any_l ()
+  | & _27: UInt32.t = Any.any_l ()
+  | & _29: UInt32.t = Any.any_l () ])
+  [ return (result: t_Option_u32) ->
+  {[@stop_split] [@expl:schema_frame_id ensures] ([@stop_split] [@expl:schema_frame_id ensures #0] [%#sschema'13] (result
+        = None)
+      = (magic <> (0: UInt8.t)))
+    /\ ([@stop_split] [@expl:schema_frame_id ensures #1] [%#sschema'14] forall id: UInt32.t. result = Some id
+      -> UInt32.t'int id
+      = UInt8.t'int id_0 * 16777216 + UInt8.t'int id_1 * 65536 + UInt8.t'int id_2 * 256 + UInt8.t'int id_3)}
+    (! return {result}) ]

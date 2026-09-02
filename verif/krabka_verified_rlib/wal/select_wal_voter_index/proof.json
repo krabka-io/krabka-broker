@@ -1,0 +1,10 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_contains_voter": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_len_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_select_wal_voter_index": { "prover": "z3", "time": 0.023 }
+    }
+  }
+}

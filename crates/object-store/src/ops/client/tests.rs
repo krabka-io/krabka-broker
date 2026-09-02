@@ -2,7 +2,7 @@ use std::{io::Write, sync::Arc};
 
 use assert2::{assert, check};
 use object_store::{GetRange, path::Path};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 use super::*;
 use crate::ops::PutMode;

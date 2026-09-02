@@ -14,7 +14,10 @@ use tracing_subscriber::{
     EnvFilter, Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
 
-use crate::{config::OtlpConfig, error::TelemetryError, heartbeat::spawn_heartbeat_task};
+use crate::{
+    config::OtlpConfig, error::TelemetryError, heartbeat::spawn_heartbeat_task,
+    log_levels::LogLevelController,
+};
 
 /// Per-layer filter for the OTLP layer.
 ///
@@ -37,9 +40,22 @@ pub struct TelemetryGuard {
     provider: Option<SdkTracerProvider>,
     logger_provider: Option<SdkLoggerProvider>,
     heartbeat_task: Option<tokio::task::JoinHandle<()>>,
+    log_levels: LogLevelController,
 }
 
 impl TelemetryGuard {
+    /// The handle that reads and retargets the stdout layer's filter while
+    /// the process runs.
+    ///
+    /// A Kafka broker exposes this through the `BROKER_LOGGER` config
+    /// resource, so `kafka-configs --entity-type broker-loggers` can raise a
+    /// level without a restart. Clone it out before the guard is parked for
+    /// the process lifetime.
+    #[must_use]
+    pub fn log_levels(&self) -> LogLevelController {
+        self.log_levels.clone()
+    }
+
     /// Flush and shut down the OTLP exporters for traces and logs.
     ///
     /// This function does nothing when OTLP is disabled.
@@ -81,8 +97,14 @@ pub fn init(
     otel_default_filter: &str,
     tracer_name: &str,
 ) -> Result<TelemetryGuard, TelemetryError> {
-    let fmt_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(fmt_default_filter));
+    // The stdout layer's filter is the one an operator retargets at runtime,
+    // so it is a `LogLevelFilter` and not a bare `EnvFilter`. It starts from
+    // `RUST_LOG` when that is set and from `fmt_default_filter` otherwise.
+    let fmt_spec = std::env::var("RUST_LOG")
+        .ok()
+        .filter(|spec| EnvFilter::try_new(spec).is_ok())
+        .unwrap_or_else(|| fmt_default_filter.to_owned());
+    let (log_levels, fmt_filter) = LogLevelController::new(&fmt_spec);
     // Structured Cloud Logging-friendly JSON to stdout (see `krabka_logfmt`),
     // so GKE / Cloud Logging ingests fields rather than ANSI-coloured text.
     let fmt_layer = krabka_logfmt::layer(fmt_filter, std::io::stdout);
@@ -93,6 +115,7 @@ pub fn init(
             provider: None,
             logger_provider: None,
             heartbeat_task: None,
+            log_levels,
         });
     };
 
@@ -154,6 +177,7 @@ pub fn init(
         provider: Some(provider),
         logger_provider: Some(logger_provider),
         heartbeat_task,
+        log_levels,
     })
 }
 
@@ -217,6 +241,7 @@ mod tests {
             provider: Some(provider),
             logger_provider: None,
             heartbeat_task: None,
+            log_levels: LogLevelController::new("info").0,
         }
         .shutdown();
 

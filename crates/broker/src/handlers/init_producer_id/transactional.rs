@@ -145,6 +145,24 @@ pub(super) async fn handle_transactional(
             // new epoch, Empty state, cleared partitions.
             let current = coord.get(tid).unwrap_or(existing);
             let mut e3 = current.lock().await;
+            // A `Dead` entry is one the KIP-98 expiry sweep marked under this
+            // very lock before it appended the tid's tombstone. This call was
+            // parked on the lock while that happened, so its handle is no
+            // longer the coordinator's: reviving from it would persist a
+            // producer identity for a transactional id whose tombstone is
+            // already in the log, and race a second `InitProducerId` that
+            // found no entry and took the fresh-id path above. Kafka answers
+            // a metadata object mid-transition with `CONCURRENT_TRANSACTIONS`,
+            // which the client retries; the retry finds no entry and
+            // allocates cleanly.
+            if e3.state == TxnState::Dead {
+                return Ok(InitProducerIdResponse {
+                    error_code: codes::CONCURRENT_TRANSACTIONS,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                    ..Default::default()
+                });
+            }
             let (new_pid, new_epoch) = if aborted_ongoing && txnv.verified() {
                 (e3.producer_id, e3.producer_epoch)
             } else {
@@ -176,12 +194,17 @@ async fn dispatch_abort_markers(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
     use krabka_log::{Log, LogConfig, ProducerId};
+    use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 
     use super::*;
-    use crate::txn::state::TopicPartition;
+    use crate::{
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        txn::{bootstrap, state::TopicPartition, version::TxnVersion},
+    };
 
     /// `dispatch_abort_markers` appends an abort control-marker batch to each
     /// locally-led partition in the entry's partition set. Each append advances
@@ -253,5 +276,147 @@ mod tests {
             partition: PartitionIndex(0),
         });
         assert!(dispatch_abort_markers(&coord, &entry).await.is_err());
+    }
+
+    /// Kafka's `transactional.id.expiration.ms` default.
+    const EXPIRY_MS: i64 = 604_800_000;
+
+    /// Opens `__transaction_state-0` as a real log under `dir` and returns it.
+    fn transaction_state_partition(dir: &std::path::Path) -> Arc<Partition> {
+        let part_dir = crate::log_dir::partition_dir(dir, bootstrap::TOPIC, 0);
+        std::fs::create_dir_all(&part_dir).expect("create partition dir");
+        crate::broker::spawn_partition(
+            bootstrap::TOPIC.to_string(),
+            PartitionIndex(0),
+            dir.to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open log"),
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        )
+    }
+
+    /// A coordinator that leads the single `__transaction_state` partition,
+    /// with one committed transactional id already persisted into it.
+    async fn coordinator_with_completed_transaction(
+        dir: &std::path::Path,
+        tid: &str,
+    ) -> (Arc<TxnCoordinator>, Arc<Partition>) {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: bootstrap::TOPIC.to_string(),
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: bootstrap::TOPIC.to_string(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: vec![NodeId(1)],
+            isr: vec![NodeId(1)],
+            ..Default::default()
+        }));
+
+        let partitions = Arc::new(PartitionRegistry::new());
+        let part = transaction_state_partition(dir);
+        partitions.insert(
+            bootstrap::TOPIC.to_string(),
+            PartitionIndex(0),
+            Arc::clone(&part),
+        );
+        let coordinator = TxnCoordinator::new(
+            NodeId(1),
+            partitions,
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            1,
+            krabka_units::mebibytes(1),
+        );
+        coordinator.refresh_leader_partitions(&image).await;
+
+        let mut entry = TxnEntry::new_empty(tid.to_string(), ProducerId(1000), 3, 60_000, 0);
+        entry.state = TxnState::CompleteCommit;
+        entry.last_update_ms = 0;
+        coordinator
+            .put(entry, TxnVersion::Verified)
+            .await
+            .expect("seed __transaction_state");
+        (Arc::new(coordinator), part)
+    }
+
+    /// The KIP-98 expiry sweep and an `InitProducerId` already parked on the
+    /// entry's lock must never both persist an identity for one transactional
+    /// id.
+    ///
+    /// The sweep unpublishes the entry from the coordinator's map while this
+    /// call holds a clone of its `Arc`. Reviving through that detached handle
+    /// would append a producer identity for a tid whose tombstone is already
+    /// in the log, and a second `InitProducerId` that found no entry would
+    /// allocate a competing one -- two live identities for one id, with
+    /// whichever append landed last deciding the coordinator's state. The
+    /// sweep marks the entry `Dead` under the same lock, so the parked call
+    /// wakes to Kafka's `CONCURRENT_TRANSACTIONS` and retries onto the
+    /// fresh-id path.
+    ///
+    /// The runtime is single-threaded and each task is stepped to its park
+    /// with an explicit yield, so the interleaving is the same every run:
+    /// the sweep queues on the lock first, the call queues behind it.
+    #[tokio::test]
+    async fn an_init_parked_on_the_expiry_sweep_does_not_revive_the_tombstoned_id() {
+        const TID: &str = "tid-parked-init";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        assert!(part.log_end_offset() == 1);
+
+        // The test holds the entry lock, so both tasks below park on it in
+        // the order they are stepped.
+        let handle = coordinator.get(TID).expect("the seeded entry");
+        let guard = handle.lock().await;
+
+        let sweep = {
+            let coordinator = Arc::clone(&coordinator);
+            tokio::spawn(async move {
+                coordinator
+                    .expire_transactional_ids(EXPIRY_MS + 1, EXPIRY_MS)
+                    .await
+            })
+        };
+        tokio::task::yield_now().await;
+
+        let init = {
+            let coordinator = Arc::clone(&coordinator);
+            tokio::spawn(async move {
+                handle_transactional(
+                    &coordinator,
+                    TID,
+                    TxnVersion::Verified,
+                    60_000,
+                    false,
+                    false,
+                )
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+
+        drop(guard);
+        let expired = sweep.await.expect("sweep task");
+        let response = init.await.expect("init task").expect("init responds");
+
+        check!(expired == vec![TID.to_string()]);
+        check!(
+            response
+                == InitProducerIdResponse {
+                    error_code: codes::CONCURRENT_TRANSACTIONS,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                    ..Default::default()
+                }
+        );
+        // The id stays expired: nothing was published back into the map, and
+        // the log ends at the tombstone the sweep appended.
+        check!(coordinator.get(TID).is_none());
+        check!(part.log_end_offset() == 2);
     }
 }

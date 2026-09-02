@@ -9,6 +9,7 @@ use krabka_protocol::owned::{
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsResponse},
 };
 
+use super::sentinels::UNKNOWN_EPOCH;
 use crate::codes;
 
 pub(super) fn encode_request(req: &ListOffsetsRequest, version: i16) -> Bytes {
@@ -62,6 +63,18 @@ pub(super) async fn list_one(
     topic: &str,
     timestamp: i64,
 ) -> ListOffsetsPartitionResponse {
+    list_one_at_epoch(client, topic, timestamp, UNKNOWN_EPOCH).await
+}
+
+/// [`list_one`] with the KIP-320 `current_leader_epoch` the client asserts.
+/// `UNKNOWN_EPOCH` is the sentinel for "assert nothing", which is what a
+/// client sends when it holds no epoch for the partition.
+pub(super) async fn list_one_at_epoch(
+    client: &krabka_client_core::Client,
+    topic: &str,
+    timestamp: i64,
+    current_leader_epoch: i32,
+) -> ListOffsetsPartitionResponse {
     client
         .send(ListOffsetsRequest {
             replica_id: -1,
@@ -69,6 +82,7 @@ pub(super) async fn list_one(
                 name: topic.to_string(),
                 partitions: vec![ListOffsetsPartition {
                     partition_index: 0,
+                    current_leader_epoch,
                     timestamp,
                     ..Default::default()
                 }],

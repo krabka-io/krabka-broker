@@ -1,0 +1,85 @@
+(* #"/proof-work-245/crates/verified/src/restore_sidecar.rs" 121 0 127 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span srestore_sidecar = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 128 13 128 14
+let%span srestore_sidecar'0 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 129 27 129 28
+let%span srestore_sidecar'1 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 134 16 134 71
+let%span srestore_sidecar'2 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 136 20 136 24
+let%span srestore_sidecar'3 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 128 4 137 9
+let%span srestore_sidecar'4 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 111 10 119 6
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i32_i64 = { f0: Int32.t; f1: Int64.t }
+
+type t_Option_tup2_i32_i64 = None | Some tup2_i32_i64
+
+let elim_Some (_x: t_Option_tup2_i32_i64) (return (f0'0: tup2_i32_i64)) = any
+  [ _k (f0'0: tup2_i32_i64) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_leader_epoch_entry_valid [#"/proof-work-245/crates/verified/src/restore_sidecar.rs" 121 0 127 9]
+  (previous: t_Option_tup2_i32_i64) (epoch: Int32.t) (start_offset: Int64.t) (segment_base: Int64.t)
+  (segment_end: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_12 <- Int32.ge epoch ([%#srestore_sidecar] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb9) | br1 -> {_12} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_14 <- Int64.ge segment_base ([%#srestore_sidecar'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb9) | br1 -> {_14} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_16 <- Int64.le segment_base start_offset ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb9) | br1 -> {_16} (! bb3) ] ]
+  | bb3 = s0
+    [ s0 = [ &_19 <- Int64.le start_offset segment_end ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb9) | br1 -> {_19} (! bb4) ] ]
+  | bb4 = any [ br0 -> {previous = None} (! bb12) | br1 (x0: tup2_i32_i64) -> {previous = Some x0} (! bb13) ]
+  | bb13 = s0
+    [ s0 = elim_Some {previous} (fun (r0: tup2_i32_i64) -> [ &previous_epoch <- r0.f0 ] s1)
+    | s1 = elim_Some {previous} (fun (r0: tup2_i32_i64) -> [ &previous_start <- r0.f1 ] s2)
+    | s2 = [ &_25 <- Int32.lt previous_epoch epoch ] s3
+    | s3 = any [ br0 -> {_25 = false} (! bb15) | br1 -> {_25} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- Int64.lt previous_start start_offset ] s1 | s1 = return {_ret} ]
+  | bb15 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'1] false ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'2] true ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'3] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & previous: t_Option_tup2_i32_i64 = previous
+  | & epoch: Int32.t = epoch
+  | & start_offset: Int64.t = start_offset
+  | & segment_base: Int64.t = segment_base
+  | & segment_end: Int64.t = segment_end
+  | & _12: bool = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _19: bool = Any.any_l ()
+  | & previous_epoch: Int32.t = Any.any_l ()
+  | & previous_start: Int64.t = Any.any_l ()
+  | & _25: bool = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:restore_leader_epoch_entry_valid ensures] [%#srestore_sidecar'4] result
+    = (ge_log_Int (Int32.to_int epoch) 0
+    /\ ge_log_Int (Int64.to_int segment_base) 0
+    /\ Int64.to_int segment_base <= Int64.to_int start_offset
+    /\ Int64.to_int start_offset <= Int64.to_int segment_end
+    /\ match previous with
+      | Some {f0 = previous_epoch; f1 = previous_start} -> Int32.to_int previous_epoch < Int32.to_int epoch
+      /\ Int64.to_int previous_start < Int64.to_int start_offset
+      | None -> true
+      end)}
+    (! return {result}) ]

@@ -18,7 +18,10 @@ use tracing::instrument;
 
 use super::{
     Log,
-    control::{ControlBatchKind, control_batch_kind, parse_control_marker_coordinator_epoch},
+    control::{
+        ABORT_CONTROL_TYPE, COMMIT_CONTROL_TYPE, ControlBatchKind, control_batch_kind,
+        parse_control_marker_coordinator_epoch, parse_control_marker_type,
+    },
 };
 use crate::{
     config::LogConfig,
@@ -74,6 +77,11 @@ impl Log {
         }
         base_offsets.sort_unstable();
         base_offsets.dedup();
+        if !krabka_verified::local_recovery_segment_chain(&base_offsets) {
+            return Err(LogError::Corrupt(
+                "log segment bases are not a nonnegative ordered chain".into(),
+            ));
+        }
 
         let mut segments: Vec<Segment> = Vec::with_capacity(base_offsets.len());
         let mut active: Option<Segment> = None;
@@ -87,7 +95,9 @@ impl Log {
                 // doesn't skip this recovered segment and serve a later base
                 // offset — which after a restart manufactures an offset gap that
                 // strands a follower fetching from a low offset.
-                seg.seal_at(Offset(base_offsets[i + 1] - 1));
+                let last = krabka_verified::local_recovery_sealed_last(*base, base_offsets[i + 1])
+                    .ok_or_else(|| LogError::Corrupt("invalid sealed segment boundary".into()))?;
+                seg.seal_at(Offset(last));
                 // `Segment::open` also leaves `max_timestamp` unknown, and
                 // `retention::time_based_evict` reads it as "older than any
                 // cutoff". Without this the first tick after a restart deletes
@@ -95,10 +105,11 @@ impl Log {
                 seg.restore_max_timestamp()?;
                 segments.push(seg);
             } else {
-                active = Some(Segment::open_active(
+                active = Some(Segment::open_active_with_index_interval(
                     &dir,
                     Offset(*base),
                     config.validate_on_open,
+                    config.index_interval,
                 )?);
             }
         }
@@ -173,10 +184,10 @@ impl Log {
         self.coordinator_epochs.clear();
         self.producer_state.clear();
         let end = self.log_end_offset();
-        let mut next = self.log_start_offset();
-        if let Some((snapshot_offset, entries)) =
-            producer_snapshot::latest_at_or_before(&self.dir, end)?
-        {
+        let log_start = self.log_start_offset();
+        let snapshot = producer_snapshot::latest_at_or_before(&self.dir, end)?;
+        let snapshot_offset = snapshot.as_ref().map(|(offset, _)| offset.0);
+        if let Some((_, entries)) = snapshot {
             self.producer_state = entries;
             for (&producer_id, entry) in &self.producer_state {
                 if let Some(first_offset) = entry.current_txn_first_offset {
@@ -187,8 +198,13 @@ impl Log {
                         .insert(producer_id, entry.coordinator_epoch);
                 }
             }
-            next = snapshot_offset.max(next);
         }
+        let mut next =
+            krabka_verified::producer_snapshot_replay_start(log_start.0, end.0, snapshot_offset)
+                .map(Offset)
+                .ok_or_else(|| {
+                    LogError::Corrupt("invalid producer snapshot replay frontier".into())
+                })?;
 
         let mut boundaries: BTreeSet<Offset> = self
             .segments
@@ -208,8 +224,8 @@ impl Log {
             }
             let mut advanced_to = next;
             for batch in &read.batches {
+                (_, advanced_to) = Self::recovered_batch_offsets(advanced_to, end, batch)?;
                 self.apply_recovered_batch_state(batch)?;
-                (_, advanced_to) = Self::recovered_batch_offsets(advanced_to, batch)?;
                 let covered: Vec<_> = boundaries.range(..=advanced_to).copied().collect();
                 for boundary in covered {
                     producer_snapshot::write(&self.dir, boundary, &self.producer_state)?;
@@ -224,12 +240,7 @@ impl Log {
             next = advanced_to;
         }
         self.rebuild_pending_stamp_ranges()?;
-        self.lso = self
-            .pending
-            .values()
-            .copied()
-            .min()
-            .unwrap_or_else(|| self.log_end_offset());
+        self.refresh_lso()?;
         Ok(())
     }
 
@@ -245,12 +256,26 @@ impl Log {
         }
         self.update_owned_producer_entry(batch)?;
         if batch.attributes.is_control_batch() {
-            self.pending.remove(&producer_id);
-            if let Some(epoch) = batch
+            let marker_type = batch
                 .records
                 .first()
-                .and_then(|record| record.value.as_deref())
-                .and_then(parse_control_marker_coordinator_epoch)
+                .and_then(|record| record.key.as_deref())
+                .and_then(parse_control_marker_type);
+            let is_abort = marker_type == Some(ABORT_CONTROL_TYPE);
+            let is_commit = marker_type == Some(COMMIT_CONTROL_TYPE);
+            if krabka_verified::transaction_marker_closes(
+                is_abort,
+                is_commit,
+                self.pending.contains_key(&producer_id),
+            ) {
+                self.pending.remove(&producer_id);
+            }
+            if (is_abort || is_commit)
+                && let Some(epoch) = batch
+                    .records
+                    .first()
+                    .and_then(|record| record.value.as_deref())
+                    .and_then(parse_control_marker_coordinator_epoch)
             {
                 self.coordinator_epochs.insert(producer_id, epoch);
             }
@@ -278,12 +303,7 @@ impl Log {
             }
             for batch in &read.batches {
                 let producer_id = ProducerId(batch.producer_id);
-                let (last, advanced_to) = Self::recovered_batch_offsets(next, batch)?;
-                if advanced_to <= next {
-                    return Err(LogError::Corrupt(format!(
-                        "transaction-stamp recovery did not advance past offset {next}"
-                    )));
-                }
+                let (last, advanced_to) = Self::recovered_batch_offsets(next, end, batch)?;
                 match control_batch_kind(batch) {
                     // A barrier marker closes no transaction, so it clears no
                     // stamp range. The append path reaches the same result.
@@ -308,24 +328,21 @@ impl Log {
 
     fn recovered_batch_offsets(
         current: Offset,
+        end: Offset,
         batch: &RecordBatch,
     ) -> Result<(Offset, Offset), LogError> {
-        let last = batch
-            .base_offset
-            .checked_add(i64::from(batch.last_offset_delta))
-            .map(Offset)
-            .ok_or_else(|| {
-                LogError::Corrupt(format!("log recovery offset overflow at {current}"))
-            })?;
-        let advanced_to = last.0.checked_add(1).map(Offset).ok_or_else(|| {
-            LogError::Corrupt(format!("log recovery offset overflow at {current}"))
-        })?;
-        if advanced_to <= current {
-            return Err(LogError::Corrupt(format!(
-                "log recovery did not advance past offset {current}"
-            )));
+        match krabka_verified::replay_batch_cursor_decision(
+            current.0,
+            end.0,
+            Some((batch.base_offset, batch.last_offset_delta)),
+        ) {
+            krabka_verified::ReplayCursorDecision::Advance(next) => {
+                Ok((Offset(next - 1), Offset(next)))
+            }
+            krabka_verified::ReplayCursorDecision::Stop => Err(LogError::Corrupt(format!(
+                "log recovery rejected batch at offset {current} before end {end}"
+            ))),
         }
-        Ok((last, advanced_to))
     }
 
     pub(super) fn update_owned_producer_entry(
@@ -350,12 +367,20 @@ impl Log {
             }
             entry.producer_epoch = batch.producer_epoch;
             entry.timestamp = batch.max_timestamp;
-            entry.current_txn_first_offset = None;
-            if let Some(epoch) = batch
+            let marker_type = batch
                 .records
                 .first()
-                .and_then(|record| record.value.as_deref())
-                .and_then(parse_control_marker_coordinator_epoch)
+                .and_then(|record| record.key.as_deref())
+                .and_then(parse_control_marker_type);
+            if matches!(marker_type, Some(ABORT_CONTROL_TYPE | COMMIT_CONTROL_TYPE)) {
+                entry.current_txn_first_offset = None;
+            }
+            if matches!(marker_type, Some(ABORT_CONTROL_TYPE | COMMIT_CONTROL_TYPE))
+                && let Some(epoch) = batch
+                    .records
+                    .first()
+                    .and_then(|record| record.value.as_deref())
+                    .and_then(parse_control_marker_coordinator_epoch)
             {
                 entry.coordinator_epoch = epoch;
             }

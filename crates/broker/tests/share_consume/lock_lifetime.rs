@@ -30,7 +30,7 @@ async fn lock_timeout_redelivers() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 1).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
@@ -73,7 +73,7 @@ async fn delivery_limit_archives() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 1).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
@@ -134,7 +134,7 @@ async fn renew_extends_lock_not_redelivered() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 1).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
@@ -187,7 +187,7 @@ async fn no_renew_redelivers_after_lock_expiry() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 1).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;

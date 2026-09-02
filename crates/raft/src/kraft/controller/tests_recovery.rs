@@ -5,6 +5,7 @@
 use std::time::Duration as StdDuration;
 
 use assert2::{assert, check};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 use super::*;
 use crate::kraft::{
@@ -46,6 +47,33 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
     assert2::assert!(log.hwm() < log.log_end_offset());
     let mut state = QuorumState::bootstrap(uuid::Uuid::nil(), initial);
     replay_control_records(&log, &mut state, MetadataRaftFetchMax::default());
+    assert2::assert!(state.voters == committed);
+}
+
+#[test]
+fn control_replay_stops_inside_a_partially_committed_batch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let initial = voter_set(&[NodeId(1)]);
+    let committed = voter_set(&[NodeId(1), NodeId(2)]);
+    let uncommitted = voter_set(&[NodeId(1), NodeId(3)]);
+    {
+        let mut log = KraftLog::open(dir.path()).expect("open log");
+        let mut batch = typed_control_batch(
+            1,
+            &[
+                ControlRecord::Voters(voter_set_to_wire(&committed)),
+                ControlRecord::Voters(voter_set_to_wire(&uncommitted)),
+            ],
+        )
+        .expect("mixed-commit voter batch");
+        log.append(&mut batch).expect("append voter batch");
+        log.advance_hwm(Offset(1));
+    }
+
+    let log = KraftLog::open(dir.path()).expect("reopen log");
+    let mut state = QuorumState::bootstrap(uuid::Uuid::nil(), initial);
+    replay_control_records(&log, &mut state, MetadataRaftFetchMax::default());
+
     assert2::assert!(state.voters == committed);
 }
 
@@ -197,6 +225,150 @@ fn quorum_state_level_one_uses_voted_directory_and_omits_static_voters() {
         .unwrap();
     assert2::assert!(loaded.kraft_version == 1);
     assert2::assert!(loaded.voted_key == state.voted_key);
+}
+
+#[test]
+fn quorum_state_level_one_round_trips_the_no_vote_sentinel() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let voters = voter_set(&[NodeId(1)]);
+    let mut state = QuorumState::bootstrap(uuid::Uuid::from_u128(9), voters.clone());
+    state.kraft_version = 1;
+    state.leader_epoch = i32::MAX as u32;
+
+    save_quorum_state(dir.path(), &state).expect("save no-vote state");
+    let loaded = load_quorum_state(dir.path(), state.cluster_id, &voters)
+        .expect("load no-vote state")
+        .expect("present");
+
+    check!(
+        (loaded.leader_epoch, loaded.voted_key, loaded.leader_id) == (i32::MAX as u32, None, None)
+    );
+}
+
+#[test]
+fn load_quorum_state_rejects_malformed_or_version_mismatched_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(QUORUM_STATE_FILE);
+    let cluster_id = uuid::Uuid::from_u128(9);
+    let voters = voter_set(&[NodeId(1), NodeId(2)]);
+    let nil_directory = URL_SAFE_NO_PAD.encode([0_u8; 16]);
+    let non_nil_directory = URL_SAFE_NO_PAD.encode([1_u8; 16]);
+    let v0 = |epoch: i32, vote: i32, cluster: uuid::Uuid, voter_rows: &str, extra: &str| {
+        format!(
+            "{{\"clusterId\":\"{cluster}\",\"leaderId\":7,\"leaderEpoch\":{epoch},\
+             \"votedId\":{vote},\"appliedOffset\":0,\"currentVoters\":{voter_rows},\
+             \"data_version\":0{extra}}}"
+        )
+    };
+    let v1 = |epoch: i32, vote: i32, directory: &str, extra_fields: &str| {
+        format!(
+            "{{\"leaderId\":7,\"leaderEpoch\":{epoch},\"votedId\":{vote},\
+             \"votedDirectoryId\":\"{directory}\"{extra_fields},\"data_version\":1}}"
+        )
+    };
+    let cases = [
+        v0(-1, -1, cluster_id, "[{\"voterId\":1},{\"voterId\":2}]", ""),
+        v0(0, -2, cluster_id, "[{\"voterId\":1},{\"voterId\":2}]", ""),
+        v0(
+            0,
+            -1,
+            uuid::Uuid::from_u128(10),
+            "[{\"voterId\":1},{\"voterId\":2}]",
+            "",
+        ),
+        v0(0, -1, cluster_id, "[{\"voterId\":2},{\"voterId\":1}]", ""),
+        v0(
+            0,
+            -1,
+            cluster_id,
+            "[{\"voterId\":1,\"extra\":0},{\"voterId\":2}]",
+            "",
+        ),
+        v0(
+            0,
+            -1,
+            cluster_id,
+            "[{\"voterId\":1},{\"voterId\":2}]",
+            ",\"extra\":0",
+        ),
+        v1(0, 1, "not-base64", ""),
+        v1(0, -1, &non_nil_directory, ""),
+        v1(0, 1, &nil_directory, ",\"clusterId\":\"unexpected\""),
+        format!(
+            "{{\"leaderId\":7,\"leaderEpoch\":0,\"votedId\":-1,\
+             \"votedDirectoryId\":\"{nil_directory}\",\"data_version\":2}}"
+        ),
+    ];
+
+    for json in cases {
+        std::fs::write(&path, json).expect("write malformed state");
+        check!(
+            load_quorum_state(dir.path(), cluster_id, &voters)
+                .expect("malformed state is ignored")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn save_quorum_state_rejects_overflow_without_clamping() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cluster_id = uuid::Uuid::from_u128(9);
+    let overflow = u64::from(i32::MAX as u32) + 1;
+
+    let mut states = Vec::new();
+    let mut epoch = QuorumState::bootstrap(cluster_id, voter_set(&[NodeId(1)]));
+    epoch.leader_epoch = i32::MAX as u32 + 1;
+    states.push(epoch);
+    let mut leader = QuorumState::bootstrap(cluster_id, voter_set(&[NodeId(1)]));
+    leader.leader_id = Some(NodeId(overflow));
+    states.push(leader);
+    let mut vote = QuorumState::bootstrap(cluster_id, voter_set(&[NodeId(1)]));
+    vote.voted_key = Some(ReplicaKey {
+        id: NodeId(overflow),
+        directory_id: uuid::Uuid::nil(),
+    });
+    states.push(vote);
+    states.push(QuorumState::bootstrap(
+        cluster_id,
+        voter_set(&[NodeId(overflow)]),
+    ));
+    let mut version = QuorumState::bootstrap(cluster_id, voter_set(&[NodeId(1)]));
+    version.kraft_version = 2;
+    states.push(version);
+
+    for state in states {
+        check!(matches!(
+            save_quorum_state(dir.path(), &state),
+            Err(RaftError::Storage(krabka_log::LogError::InvalidArgument(_)))
+        ));
+        check!(!dir.path().join(QUORUM_STATE_FILE).exists());
+    }
+}
+
+#[test]
+fn save_quorum_state_can_retry_after_an_atomic_rename_failure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(QUORUM_STATE_FILE);
+    std::fs::create_dir(&path).expect("block final rename with a directory");
+    let voters = voter_set(&[NodeId(1)]);
+    let mut state = QuorumState::bootstrap(uuid::Uuid::from_u128(9), voters.clone());
+    state.leader_epoch = 17;
+    state.voted_key = Some(ReplicaKey {
+        id: NodeId(1),
+        directory_id: uuid::Uuid::nil(),
+    });
+
+    check!(matches!(
+        save_quorum_state(dir.path(), &state),
+        Err(RaftError::Storage(krabka_log::LogError::Io(_)))
+    ));
+    std::fs::remove_dir(&path).expect("remove rename blocker");
+    save_quorum_state(dir.path(), &state).expect("retry save");
+    let loaded = load_quorum_state(dir.path(), state.cluster_id, &voters)
+        .expect("load retried state")
+        .expect("present");
+    check!((loaded.leader_epoch, loaded.voted_key.map(|key| key.id)) == (17, Some(NodeId(1))));
 }
 
 #[test]

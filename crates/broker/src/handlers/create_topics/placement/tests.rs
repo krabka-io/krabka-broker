@@ -179,7 +179,7 @@ fn rf_one_single_broker_preserves_replica_shape() {
 fn site_broker_views_read_the_rack_and_the_witness_role() {
     let image = stretch_image(&[(3, Some("c")), (1, Some("a")), (2, None)], &[3], None);
 
-    let views = site_broker_views(&image, NodeId(9));
+    let views = site_broker_views(&image, Some(NodeId(9)));
 
     // The views come back in node-id order, whatever order the image
     // holds them in.
@@ -195,15 +195,30 @@ fn site_broker_views_read_the_rack_and_the_witness_role() {
 fn an_image_without_a_registration_places_on_this_broker_alone() {
     let image = stretch_image(&[], &[], None);
 
-    let views = site_broker_views(&image, NodeId(7));
+    let views = site_broker_views(&image, Some(NodeId(7)));
 
     assert!(view_rows(&views) == vec![(NodeId(7), None, false)]);
+}
+
+/// A node whose `process.roles` exclude `broker` hosts no replica, and it
+/// never self-registers, so the empty-image fallback must not name it. The
+/// list stays empty, the automatic placement cannot satisfy any replication
+/// factor, and the handler reports `INVALID_REPLICATION_FACTOR` -- what a
+/// Kafka controller with no registered broker returns.
+#[test]
+fn a_controller_only_node_is_not_its_own_placement_fallback() {
+    let image = stretch_image(&[], &[], None);
+
+    let views = site_broker_views(&image, None);
+
+    assert!(views.is_empty());
+    assert!(resolve_assignments(&auto_topic(1, 1), &views, None) == Ok(Vec::new()));
 }
 
 #[test]
 fn three_sites_hold_one_replica_of_every_partition() {
     let image = stretch_image(&THREE_SITES, &[], None);
-    let views = site_broker_views(&image, NodeId(1));
+    let views = site_broker_views(&image, Some(NodeId(1)));
 
     let assignments =
         resolve_assignments(&auto_topic(4, 3), &views, None).expect("automatic placement");
@@ -224,7 +239,7 @@ fn three_sites_hold_one_replica_of_every_partition() {
 #[test]
 fn the_preferred_site_leads_every_partition() {
     let image = stretch_image(&SIX_BROKERS, &[], Some("b"));
-    let views = site_broker_views(&image, NodeId(1));
+    let views = site_broker_views(&image, Some(NodeId(1)));
 
     let assignments = resolve_assignments(
         &auto_topic(6, 3),
@@ -249,7 +264,7 @@ fn the_preferred_site_leads_every_partition() {
 fn a_witness_replicates_but_leads_no_partition() {
     let brokers = [(1, Some("a")), (2, Some("b")), (3, Some("w"))];
     let image = stretch_image(&brokers, &[3], None);
-    let views = site_broker_views(&image, NodeId(1));
+    let views = site_broker_views(&image, Some(NodeId(1)));
 
     let assignments =
         resolve_assignments(&auto_topic(6, 3), &views, None).expect("automatic placement");
@@ -281,7 +296,7 @@ fn a_witness_replicates_but_leads_no_partition() {
 #[test]
 fn a_cluster_without_racks_places_like_round_robin() {
     let image = stretch_image(&[(1, None), (2, None), (3, None)], &[], None);
-    let views = site_broker_views(&image, NodeId(1));
+    let views = site_broker_views(&image, Some(NodeId(1)));
     let node_ids = vec![NodeId(1), NodeId(2), NodeId(3)];
 
     for (partitions, rf) in [(1, 1), (3, 1), (3, 2), (4, 3), (5, 2)] {
@@ -298,7 +313,7 @@ fn a_cluster_without_racks_places_like_round_robin() {
 #[test]
 fn a_manual_assignment_overrides_the_site_placement() {
     let image = stretch_image(&THREE_SITES, &[], Some("c"));
-    let views = site_broker_views(&image, NodeId(1));
+    let views = site_broker_views(&image, Some(NodeId(1)));
     let preferred_site = resolve_preferred_leader_site(&image);
     let manual = CreatableTopic {
         name: "orders".into(),
@@ -335,7 +350,7 @@ fn an_impossible_request_gives_no_assignment() {
     // The empty outer vec is what makes the handler report
     // INVALID_REPLICATION_FACTOR.
     let image = stretch_image(&THREE_SITES, &[], None);
-    let views = site_broker_views(&image, NodeId(1));
+    let views = site_broker_views(&image, Some(NodeId(1)));
 
     let too_many = resolve_assignments(&auto_topic(1, 4), &views, None).expect("no error code");
 
@@ -343,7 +358,7 @@ fn an_impossible_request_gives_no_assignment() {
 
     // A cluster of witnesses can lead no partition at all.
     let witnesses_only = stretch_image(&THREE_SITES, &[1, 2, 3], None);
-    let views = site_broker_views(&witnesses_only, NodeId(1));
+    let views = site_broker_views(&witnesses_only, Some(NodeId(1)));
 
     let unleadable = resolve_assignments(&auto_topic(1, 3), &views, None).expect("no error code");
 

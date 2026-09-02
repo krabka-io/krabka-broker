@@ -1,0 +1,70 @@
+(* #"/proof-work-232/crates/verified/src/directory.rs" 53 0 57 30 *)
+
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
+let%span sdirectory = "/proof-work-232/crates/verified/src/directory.rs" 60 14 60 57
+let%span sdirectory'0 = "/proof-work-232/crates/verified/src/directory.rs" 47 10 47 80
+let%span sdirectory'1 = "/proof-work-232/crates/verified/src/directory.rs" 48 10 49 64
+let%span sdirectory'2 = "/proof-work-232/crates/verified/src/directory.rs" 50 10 51 64
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_Option_u64 = None | Some UInt64.t
+
+type t_Option_Int = None'0 | Some'0 int
+
+function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum] UInt64.t'int self
+
+meta "rewrite_def" function deep_model_u64
+
+function deep_model_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int = [%#soption] match self with
+    | Some t -> Some'0 (deep_model_u64 t)
+    | None -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_u64
+
+function deep_model_ref_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int =
+  [%#smodel] deep_model_Option_u64 self
+
+meta "rewrite_def" function deep_model_ref_Option_u64
+
+let ne_Option_u64 (self_: t_Option_u64) (rhs: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:ne ensures] [%#scmp] result
+    = (deep_model_ref_Option_u64 self_ <> deep_model_ref_Option_u64 rhs)}
+    (! return {result}) ]
+
+type t_DirectoryResponseDecision = ControllerError | StaleController | Accept
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let directory_response_decision [#"/proof-work-232/crates/verified/src/directory.rs" 53 0 57 30] (response_ok: bool)
+  (sent_controller: UInt64.t) (current_controller: t_Option_u64) (return (x: t_DirectoryResponseDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {response_ok = false} (! bb1) | br1 -> {response_ok} (! bb2) ]
+  | bb2 = s0
+    [ s0 = [ &_18 <- Some sent_controller ] s1
+    | s1 = ne_Option_u64 [%#sdirectory] {current_controller} {_18} (fun (_x: bool) -> [ &_15 <- _x ] s2)
+    | s2 = any [ br0 -> {_15 = false} (! bb5) | br1 -> {_15} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- StaleController ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- Accept ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- ControllerError ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DirectoryResponseDecision = Any.any_l ()
+  | & response_ok: bool = response_ok
+  | & sent_controller: UInt64.t = sent_controller
+  | & current_controller: t_Option_u64 = current_controller
+  | & _15: bool = Any.any_l ()
+  | & _18: t_Option_u64 = Any.any_l () ])
+  [ return (result: t_DirectoryResponseDecision) ->
+  {[@stop_split] [@expl:directory_response_decision ensures] ([@stop_split] [@expl:directory_response_decision ensures #0] [%#sdirectory'0] (result
+        = ControllerError)
+      = (not response_ok))
+    /\ ([@stop_split] [@expl:directory_response_decision ensures #1] [%#sdirectory'1] (result = StaleController)
+      = (response_ok /\ current_controller <> Some sent_controller))
+    /\ ([@stop_split] [@expl:directory_response_decision ensures #2] [%#sdirectory'2] (result = Accept)
+    = (response_ok /\ current_controller = Some sent_controller))}
+    (! return {result}) ]

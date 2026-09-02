@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_jwks_on_demand_refresh_decision": {
+        "prover": "alt-ergo",
+        "time": 0.004
+      }
+    }
+  }
+}

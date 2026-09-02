@@ -9,7 +9,12 @@
 //! chain is the declaration order of the struct, so every field keeps the
 //! position it has always had.
 
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use krabka_log::LogConfig;
 use krabka_raft::{

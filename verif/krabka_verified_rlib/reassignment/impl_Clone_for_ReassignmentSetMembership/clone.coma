@@ -1,0 +1,17 @@
+(* #"/proof-work-229/crates/verified/src/reassignment.rs" 19 27 19 32 *)
+
+(* <reassignment::ReassignmentSetMembership as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ReassignmentSetMembership = { in_union: bool; adding: bool; removing: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ReassignmentSetMembership [#"/proof-work-229/crates/verified/src/reassignment.rs" 19 27 19 32]
+  (self: t_ReassignmentSetMembership) (return (x: t_ReassignmentSetMembership)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReassignmentSetMembership = Any.any_l () | & self: t_ReassignmentSetMembership = self ])
+  [ return (result: t_ReassignmentSetMembership) -> (! return {result}) ]

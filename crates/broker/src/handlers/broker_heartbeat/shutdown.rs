@@ -71,6 +71,10 @@ pub(super) async fn drain_leaderships_for_shutdown(
         // it either way). Do NOT count it toward the drain gate.
     }
 
+    // KIP-966: a drained leadership can shrink the ISR below min ISR, which
+    // leaves the replicas it dropped eligible to lead.
+    crate::elr::ElrPublisher::new(&image).extend(&mut changes);
+
     if !changes.is_empty()
         && let Err(e) = controller.submit_change(changes).await
     {

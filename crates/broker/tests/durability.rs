@@ -478,3 +478,89 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
         h.shutdown().await;
     }
 }
+
+/// Renders the broker's registry as the exposition text an operator scrapes,
+/// and reads one series' value out of it.
+///
+/// `Histogram::sum` and `Histogram::count` are behind prometheus-client's
+/// `test-util` feature, which this workspace does not enable, so a test reads
+/// a histogram the way Prometheus does. Missing series read as `0.0`: a
+/// `Family` emits nothing until it has an entry, and "never observed" and
+/// "observed only zeroes" mean the same thing to every assertion below.
+async fn metric_value(handle: &BrokerHandle, series: &str) -> f64 {
+    let mut rendered = String::new();
+    {
+        let registry = handle.metrics().registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut rendered, &registry)
+            .expect("encode registry");
+    }
+    rendered
+        .lines()
+        .find(|line| line.starts_with(series))
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0)
+}
+
+/// A produce that waits on a stalled follower must land in the remote-time
+/// histogram, not the local-time one.
+///
+/// This is the metric that separates a lagging follower from a slow disk. The
+/// scenario is the one `acks_all_completes_via_isr_shrink_when_follower_dead`
+/// drives: three brokers, all three in the ISR, then one is killed, so the
+/// `acks=all` high-watermark gate waits out `replica_lag_time_max` before the
+/// ISR shrinks and the produce completes. The leader's own append is a
+/// millisecond of local disk, and the seconds the client waited are all in the
+/// high-watermark gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
+    support::init_tracing();
+    let mut cluster = support::start_n_node_with_retry(3).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
+    create_topic(&cluster[0].0, &bootstrap_1, "phase-stall", 3).await;
+    cluster[0].0.wait_until_isr_len("phase-stall", 0, 3).await;
+
+    let dead = cluster.pop().expect("3rd broker");
+    dead.0.shutdown().await;
+
+    let offset = produce_acks(&bootstrap_1, "phase-stall", &["x", "y", "z"], -1, 10_000)
+        .await
+        .expect("acks=-1 success after shrink");
+    check!(offset == 0);
+
+    // The produce went to the first broker, so its registry is the one that
+    // holds this request's phases.
+    let leader = &cluster[0].0;
+    let local = metric_value(
+        leader,
+        "krabka_broker_request_local_duration_seconds_sum{api_key=\"Produce\"}",
+    )
+    .await;
+    let remote = metric_value(
+        leader,
+        "krabka_broker_request_remote_duration_seconds_sum{api_key=\"Produce\"}",
+    )
+    .await;
+
+    // The ISR shrink takes replica_lag_time_max (2s on CI). Assert well under
+    // it so a fast shrink does not fail the test, and well over any plausible
+    // local append.
+    check!(
+        remote >= 0.5,
+        "the acks=all gate waited for the dead follower, so remote time must \
+         have moved; local={local} remote={remote}"
+    );
+    // The local append is a write to a tmpfs-backed log: milliseconds, and
+    // orders of magnitude below the gate. Comparing the two rather than
+    // pinning an absolute bound keeps the assertion honest on a slow runner.
+    check!(
+        local * 4.0 < remote,
+        "the wait was on the follower, not on this broker's log; \
+         local={local} remote={remote}"
+    );
+
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+}

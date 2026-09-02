@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 149 27 149 32 *)
+
+(* <freeze::FreezeScopeDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FreezeScopeDecision = Keep | Replace
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeScopeDecision [#"/workspace/crates/verified/src/freeze.rs" 149 27 149 32] (self: t_FreezeScopeDecision)
+  (return (x: t_FreezeScopeDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeScopeDecision = Any.any_l () | & self: t_FreezeScopeDecision = self ])
+  [ return (result: t_FreezeScopeDecision) -> (! return {result}) ]

@@ -7,16 +7,23 @@
 //! recorded bytes, because that is what separates a recoverable segment from a
 //! lost one.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use futures_util::TryStreamExt as _;
+use krabka_verified::{
+    WormDigestFacts, WormObjectAvailabilityFacts, WormObjectIdentityFacts, WormObjectSetDecision,
+    WormObjectSetFacts, worm_object_set_decision,
+};
 use object_store::{GetOptions, ObjectStore, path::Path};
 use sha2::{Digest as _, Sha256};
 
 use super::{VerifyDepth, listing::DirListing};
-use crate::worm::{
-    error::WormError,
-    manifest::{ObjectEntry, SegmentManifest, Sha256Digest},
+use crate::{
+    storage_manager::parse_segment_file_name,
+    worm::{
+        error::WormError,
+        manifest::{MANIFEST_SUFFIX, ObjectEntry, SegmentManifest, Sha256Digest},
+    },
 };
 
 /// Checks every object a manifest names, to the requested depth.
@@ -30,31 +37,125 @@ pub(super) async fn check_objects(
     listing: &DirListing,
     depth: VerifyDepth,
 ) -> Result<Option<String>, WormError> {
+    let segment = &manifest.body.segment;
+    let listed_count = listing
+        .keys()
+        .filter(|key| {
+            key.rsplit('/')
+                .next()
+                .and_then(parse_segment_file_name)
+                .is_some_and(|parsed| {
+                    parsed.base_offset == segment.start_offset
+                        && parsed.segment_id == segment.segment_id
+                        && parsed.suffix != MANIFEST_SUFFIX
+                })
+        })
+        .count();
+    let mut keys = HashSet::new();
+    let mut unique_keys = true;
+    let mut coordinates_match = true;
+    let mut all_present = true;
+    let mut sizes_match = true;
+    let mut digests_match = true;
+    let mut first_duplicate = None;
+    let mut first_coordinate = None;
+    let mut first_missing = None;
+    let mut first_size = None;
+    let mut first_digest = None;
+
     for object in &manifest.body.objects {
-        let Some(&size) = listing.get(&object.key) else {
-            return Ok(Some(format!(
-                "object `{}` named by the manifest is missing from the archive",
-                object.key
-            )));
-        };
-        if size != object.size_bytes {
-            return Ok(Some(format!(
-                "object `{}` is {size} bytes, the manifest records a size of {} bytes",
-                object.key, object.size_bytes
-            )));
+        if !keys.insert(object.key.as_str()) {
+            unique_keys = false;
+            first_duplicate.get_or_insert_with(|| object.key.clone());
         }
-        if depth == VerifyDepth::Deep {
-            let digest = object_digest(store, &object.key, None).await?;
-            if digest != object.sha256 {
-                let pinned = pinned_version_note(store, object).await;
-                return Ok(Some(format!(
-                    "object `{}` hashes to {digest}, the manifest records {}{pinned}",
-                    object.key, object.sha256
-                )));
+
+        let coordinate_matches = object
+            .key
+            .rsplit('/')
+            .next()
+            .and_then(parse_segment_file_name)
+            .is_some_and(|parsed| {
+                parsed.base_offset == segment.start_offset
+                    && parsed.segment_id == segment.segment_id
+                    && parsed.suffix == object.suffix
+                    && parsed.suffix != MANIFEST_SUFFIX
+            });
+        if !coordinate_matches {
+            coordinates_match = false;
+            first_coordinate.get_or_insert_with(|| object.key.clone());
+        }
+
+        match listing.get(&object.key).copied() {
+            None => {
+                all_present = false;
+                first_missing.get_or_insert_with(|| object.key.clone());
+            }
+            Some(size) => {
+                if size != object.size_bytes {
+                    sizes_match = false;
+                    first_size.get_or_insert_with(|| {
+                        format!(
+                            "object `{}` is {size} bytes, the manifest records a size of {} bytes",
+                            object.key, object.size_bytes
+                        )
+                    });
+                }
+                if depth == VerifyDepth::Deep {
+                    let digest = object_digest(store, &object.key, None).await?;
+                    if digest != object.sha256 {
+                        digests_match = false;
+                        let pinned = pinned_version_note(store, object).await;
+                        first_digest.get_or_insert_with(|| {
+                            format!(
+                                "object `{}` hashes to {digest}, the manifest records {}{pinned}",
+                                object.key, object.sha256
+                            )
+                        });
+                    }
+                }
             }
         }
     }
-    Ok(None)
+
+    let object_count = u64::try_from(manifest.body.objects.len()).unwrap_or(u64::MAX);
+    let listed_count = u64::try_from(listed_count).unwrap_or(u64::MAX);
+    let reason = match worm_object_set_decision(WormObjectSetFacts {
+        object_count,
+        listed_count,
+        identity: WormObjectIdentityFacts {
+            unique_keys,
+            coordinates_match,
+        },
+        availability: WormObjectAvailabilityFacts {
+            all_present,
+            sizes_match,
+        },
+        digests: WormDigestFacts {
+            require_digests: depth == VerifyDepth::Deep,
+            digests_match,
+        },
+    }) {
+        WormObjectSetDecision::Empty => Some("manifest names no segment objects".to_string()),
+        WormObjectSetDecision::DuplicateKey => Some(format!(
+            "object `{}` is named more than once by the manifest",
+            first_duplicate.unwrap_or_default()
+        )),
+        WormObjectSetDecision::CoordinateMismatch => Some(format!(
+            "object `{}` does not match the manifest segment coordinates or suffix",
+            first_coordinate.unwrap_or_default()
+        )),
+        WormObjectSetDecision::MissingObject => Some(format!(
+            "object `{}` named by the manifest is missing from the archive",
+            first_missing.unwrap_or_default()
+        )),
+        WormObjectSetDecision::CountMismatch => Some(format!(
+            "manifest names {object_count} objects, but the archive holds {listed_count} objects for this segment"
+        )),
+        WormObjectSetDecision::SizeMismatch => first_size,
+        WormObjectSetDecision::DigestMismatch => first_digest,
+        WormObjectSetDecision::Admit => None,
+    };
+    Ok(reason)
 }
 
 /// Streams one object and returns its `SHA-256`.

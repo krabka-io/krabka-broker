@@ -70,6 +70,9 @@ pub(super) async fn run_inner(cfg: &Config) -> Result<(), String> {
         };
 
         let req = build_fetch_request(cfg, fetch_offset, partition_max_cap);
+        // Fence the response against the epoch that was actually sent. The
+        // metadata image may advance while this request is in flight.
+        let request_leader_epoch = req.topics[0].partitions[0].current_leader_epoch;
 
         let send = tokio::select! {
             () = cfg.shutdown.cancelled() => return Ok(()),
@@ -95,7 +98,7 @@ pub(super) async fn run_inner(cfg: &Config) -> Result<(), String> {
             }
         };
 
-        match handle_response(resp, cfg).await {
+        match handle_response(resp, cfg, request_leader_epoch).await {
             LoopAction::Continue => {}
             LoopAction::StopNotLeader => {
                 info!(topic = %cfg.topic, partition = cfg.partition.get(),

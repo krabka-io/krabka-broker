@@ -1,0 +1,100 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 121 0 127 34 *)
+
+let%span stransaction = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 36 29 36 60
+let%span stransaction'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 40 8 43 72
+let%span stransaction'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 49 8 52 50
+let%span stransaction'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 58 8 61 64
+let%span stransaction'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 67 8 73 55
+let%span stransaction'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 79 8 83 76
+let%span stransaction'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 89 8 93 83
+let%span stransaction'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 99 8 105 68
+let%span stransaction'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 111 8 117 55
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int8
+use creusot.prelude.Any
+
+type t_TransactionSnapshot = { pid: Int64.t; epoch: Int16.t; state: Int8.t }
+
+type t_TransactionIdentity = { pid'0: Int64.t; epoch'0: Int16.t }
+
+type t_TransactionCompletionDecision = Proceed | AlreadyComplete | RejectStaleIdentity | RejectState
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_completion_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 121 0 127 34]
+  (current': t_TransactionSnapshot) (expected: t_TransactionIdentity) (completion: t_TransactionIdentity)
+  (prepare_state: Int8.t) (complete_state: Int8.t) (return (x: t_TransactionCompletionDecision)) =
+{[@stop_split] [@expl:transaction_completion_decision requires] [%#stransaction] prepare_state <> complete_state}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_79 <- current'.pid = completion.pid'0 ] s1
+    | s1 = any [ br0 -> {_79 = false} (! bb7) | br1 -> {_79} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_82 <- current'.epoch = completion.epoch'0 ] s1
+    | s1 = any [ br0 -> {_82 = false} (! bb7) | br1 -> {_82} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_85 <- current'.state = complete_state ] s1
+    | s1 = any [ br0 -> {_85 = false} (! bb7) | br1 -> {_85} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- AlreadyComplete ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_90 <- current'.pid <> expected.pid'0 ] s1
+    | s1 = any [ br0 -> {_90 = false} (! bb9) | br1 -> {_90} (! bb12) ] ]
+  | bb9 = s0
+    [ s0 = [ &_93 <- current'.epoch <> expected.epoch'0 ] s1
+    | s1 = any [ br0 -> {_93 = false} (! bb11) | br1 -> {_93} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- RejectStaleIdentity ] s1 | s1 = return {_ret} ]
+  | bb11 = s0
+    [ s0 = [ &_97 <- current'.state = prepare_state ] s1
+    | s1 = any [ br0 -> {_97 = false} (! bb14) | br1 -> {_97} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- Proceed ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- RejectState ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionCompletionDecision = Any.any_l ()
+  | & current': t_TransactionSnapshot = current'
+  | & expected: t_TransactionIdentity = expected
+  | & completion: t_TransactionIdentity = completion
+  | & prepare_state: Int8.t = prepare_state
+  | & complete_state: Int8.t = complete_state
+  | & _79: bool = Any.any_l ()
+  | & _82: bool = Any.any_l ()
+  | & _85: bool = Any.any_l ()
+  | & _90: bool = Any.any_l ()
+  | & _93: bool = Any.any_l ()
+  | & _97: bool = Any.any_l () ])
+  [ return (result: t_TransactionCompletionDecision) ->
+  {[@stop_split] [@expl:transaction_completion_decision ensures] ([@stop_split] [@expl:transaction_completion_decision ensures #0] [%#stransaction'0] current'.pid
+          = completion.pid'0
+        /\ current'.epoch = completion.epoch'0 /\ current'.state = complete_state -> result = AlreadyComplete)
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #1] [%#stransaction'1] result = AlreadyComplete
+      -> current'.pid = completion.pid'0 /\ current'.epoch = completion.epoch'0 /\ current'.state = complete_state)
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #2] [%#stransaction'2] current'.pid
+          = expected.pid'0
+        /\ current'.epoch = expected.epoch'0 /\ current'.state = prepare_state -> result = Proceed)
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #3] [%#stransaction'3] result = Proceed
+      -> current'.pid = expected.pid'0
+      /\ current'.epoch = expected.epoch'0
+      /\ current'.state = prepare_state
+      /\ not (current'.pid = completion.pid'0
+      /\ current'.epoch = completion.epoch'0 /\ current'.state = complete_state))
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #4] [%#stransaction'4] not (current'.pid
+            = completion.pid'0
+          /\ current'.epoch = completion.epoch'0 /\ current'.state = complete_state)
+        /\ (current'.pid <> expected.pid'0 \/ current'.epoch <> expected.epoch'0) -> result = RejectStaleIdentity)
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #5] [%#stransaction'5] result = RejectStaleIdentity
+      -> not (current'.pid = completion.pid'0 /\ current'.epoch = completion.epoch'0 /\ current'.state = complete_state)
+      /\ (current'.pid <> expected.pid'0 \/ current'.epoch <> expected.epoch'0))
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #6] [%#stransaction'6] current'.pid
+          = expected.pid'0
+        /\ current'.epoch = expected.epoch'0
+        /\ current'.state <> prepare_state
+        /\ not (current'.pid = completion.pid'0
+        /\ current'.epoch = completion.epoch'0 /\ current'.state = complete_state) -> result = RejectState)
+    /\ ([@stop_split] [@expl:transaction_completion_decision ensures #7] [%#stransaction'7] result = RejectState
+    -> current'.pid = expected.pid'0
+    /\ current'.epoch = expected.epoch'0
+    /\ current'.state <> prepare_state
+    /\ not (current'.pid = completion.pid'0 /\ current'.epoch = completion.epoch'0 /\ current'.state = complete_state))}
+    (! return {result}) ]

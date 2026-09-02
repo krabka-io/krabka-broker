@@ -1,0 +1,86 @@
+(* #"/workspace/crates/verified/src/barrier.rs" 29 0 32 31 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbarrier = "/workspace/crates/verified/src/barrier.rs" 33 26 33 27
+let%span sbarrier'0 = "/workspace/crates/verified/src/barrier.rs" 36 16 36 42
+let%span sbarrier'1 = "/workspace/crates/verified/src/barrier.rs" 37 10 37 34
+let%span sbarrier'2 = "/workspace/crates/verified/src/barrier.rs" 20 10 27 1
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_BarrierTargetCountDecision = Malformed | Overflow | Expand Int64.t
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let barrier_target_count_decision [#"/workspace/crates/verified/src/barrier.rs" 29 0 32 31] (total: Int64.t)
+  (partition_count: Int32.t) (return (x: t_BarrierTargetCountDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_7 <- Int32.le partition_count ([%#sbarrier] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_7 = false} (! bb2) | br1 -> {_7} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Malformed ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = from_i64 [%#sbarrier'0] {partition_count} (fun (_x: Int64.t) -> [ &count <- _x ] s1)
+    | s1 = checked_add [%#sbarrier'1] {total} {count} (fun (_x: t_Option_i64) -> [ &_12 <- _x ] s2)
+    | s2 = any [ br0 -> {_12 = None} (! bb7) | br1 (x0: Int64.t) -> {_12 = Some x0} (! bb8) ] ]
+  | bb8 = s0
+    [ s0 = elim_Some {_12} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
+    | s1 = [ &_ret <- Expand next ] s2
+    | s2 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- Overflow ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierTargetCountDecision = Any.any_l ()
+  | & total: Int64.t = total
+  | & partition_count: Int32.t = partition_count
+  | & _7: bool = Any.any_l ()
+  | & count: Int64.t = Any.any_l ()
+  | & _12: t_Option_i64 = Any.any_l ()
+  | & next: Int64.t = Any.any_l () ])
+  [ return (result: t_BarrierTargetCountDecision) ->
+  {[@stop_split] [@expl:barrier_target_count_decision ensures] [%#sbarrier'2] match result with
+      | Malformed -> Int32.to_int partition_count <= 0
+      | Overflow -> gt_log_Int (Int32.to_int partition_count) 0
+      /\ gt_log_Int (Int64.to_int total) (Int64.to_int const_MAX - Int32.to_int partition_count)
+      | Expand next -> gt_log_Int (Int32.to_int partition_count) 0
+      /\ Int64.to_int total <= Int64.to_int const_MAX - Int32.to_int partition_count
+      /\ Int64.to_int next = Int64.to_int total + Int32.to_int partition_count
+      end}
+    (! return {result}) ]

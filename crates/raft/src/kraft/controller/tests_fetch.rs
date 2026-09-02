@@ -7,17 +7,48 @@ use std::time::Duration as StdDuration;
 use assert2::assert;
 
 use super::*;
-use crate::kraft::controller::{
-    records::decode_batches,
-    replication::{
-        FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
-        should_serve_fetch_records, should_start_snapshot_fetch, snapshot_fetch_response_invalid,
+use crate::kraft::{
+    controller::{
+        records::{decode_batches, encode_batches},
+        replication::{
+            FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
+            should_serve_fetch_records, should_start_snapshot_fetch,
+            snapshot_fetch_response_invalid,
+        },
+        test_support::{
+            build_engine_only, build_engine_only_with_policy, one_offset_batch, record_peer_sends,
+            recv_peer_send, recv_peer_send_with_api,
+        },
     },
-    test_support::{
-        build_engine_only, build_engine_only_with_policy, one_offset_batch, record_peer_sends,
-        recv_peer_send, recv_peer_send_with_api,
-    },
+    types::LogOffsetMetadata,
 };
+
+#[test]
+fn snapshot_install_admission_rejects_malformed_stale_and_pending_cases() {
+    use krabka_verified::{SnapshotInstallDecision, snapshot_install_decision};
+
+    for (pending, end, epoch, log_end, expected) in [
+        (false, 11, 3, 10, SnapshotInstallDecision::Install),
+        (false, 10, 3, 10, SnapshotInstallDecision::Stale),
+        (false, 9, 3, 10, SnapshotInstallDecision::Stale),
+        (true, 11, 3, 10, SnapshotInstallDecision::Reject),
+        (false, -1, 3, 10, SnapshotInstallDecision::Reject),
+        (false, 11, -1, 10, SnapshotInstallDecision::Reject),
+    ] {
+        assert2::assert!(snapshot_install_decision(pending, end, epoch, log_end) == expected);
+    }
+}
+
+fn become_follower(engine: &mut Engine, leader_id: NodeId, leader_epoch: Epoch) {
+    engine.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id,
+        leader_epoch,
+    });
+    assert2::assert!(matches!(
+        engine.core.role(),
+        Role::Follower { leader_id: active, .. } if *active == leader_id
+    ));
+}
 
 #[test]
 fn fetch_records_are_served_only_by_clean_leader_fetches() {
@@ -287,6 +318,7 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
     }
     .encode();
     let mut sends = record_peer_sends(&mut engine, fetch_snapshot_response);
+    become_follower(&mut engine, NodeId(2), 3);
 
     let body = wire::PeerResponse::Fetch {
         leader_id: NodeId(2),
@@ -340,6 +372,146 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
     engine.snapshot_fetch = None;
     engine.on_fetch_response(NodeId(2), &body);
     assert2::assert!(engine.snapshot_fetch.is_none());
+}
+
+#[tokio::test]
+async fn leaderless_observer_discovers_before_applying_fetch_content() {
+    let (mut observer, _dir) = build_engine_only(NodeId(3), &[NodeId(1), NodeId(2)]);
+    assert2::assert!(matches!(
+        observer.core.role(),
+        Role::Observer {
+            leader_id: None,
+            ..
+        }
+    ));
+
+    let body = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 1,
+        diverging: None,
+        snapshot_id: None,
+        hwm: 1,
+        records: encode_batches(&[one_offset_batch(0, 1, b"replicated")]),
+    }
+    .encode();
+
+    // The bootstrap peer redirects us to node 2. Content on this discovery
+    // response is ignored until node 2 answers under the attached fence.
+    observer.on_fetch_response(NodeId(1), &body);
+    assert2::assert!(matches!(
+        observer.core.role(),
+        Role::Observer {
+            leader_id: Some(NodeId(2)),
+            ..
+        }
+    ));
+    assert2::assert!(observer.log.log_end_offset() == Offset(0));
+    assert2::assert!(observer.log.hwm() == Offset(0));
+
+    observer.on_fetch_response(NodeId(2), &body);
+    assert2::assert!(observer.log.log_end_offset() == Offset(1));
+    assert2::assert!(observer.log.hwm() == Offset(1));
+}
+
+#[tokio::test]
+async fn rejected_fetch_responses_leave_log_watermark_and_snapshot_unchanged() {
+    let body = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: None,
+        snapshot_id: Some((11, 3)),
+        hwm: 11,
+        records: encode_batches(&[one_offset_batch(0, 3, b"foreign")]),
+    }
+    .encode();
+
+    for (case, setup, from) in [
+        ("stale epoch", 0u8, NodeId(2)),
+        ("wrong sender", 1, NodeId(3)),
+        ("changed role", 2, NodeId(2)),
+    ] {
+        let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        become_follower(&mut engine, NodeId(2), if setup == 0 { 4 } else { 3 });
+        if setup == 2 {
+            engine.on_event(Event::ReceiveEndQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 3,
+            });
+            assert2::assert!(matches!(engine.core.role(), Role::Prospective { .. }));
+        }
+
+        engine.on_fetch_response(from, &body);
+
+        assert2::assert!(engine.log.log_end_offset() == Offset(0), "{case}");
+        assert2::assert!(engine.log.hwm() == Offset(0), "{case}");
+        assert2::assert!(engine.snapshot_fetch.is_none(), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
+    // Truncation does not also append or advance the HWM.
+    let (mut truncating, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    for offset in 0..2 {
+        let mut batch = one_offset_batch(offset, 2, b"local");
+        truncating
+            .log
+            .append(&mut batch)
+            .expect("append local batch");
+    }
+    become_follower(&mut truncating, NodeId(2), 3);
+    let truncate = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: Some(LogOffsetMetadata {
+            offset: 1,
+            epoch: 2,
+        }),
+        snapshot_id: None,
+        hwm: 2,
+        records: encode_batches(&[one_offset_batch(2, 3, b"must-not-append")]),
+    }
+    .encode();
+    truncating.on_fetch_response(NodeId(2), &truncate);
+    assert2::assert!(truncating.log.log_end_offset() == Offset(1));
+    assert2::assert!(truncating.log.hwm() == Offset(0));
+
+    // Append advances the HWM only after the carried batch reaches the log.
+    let (mut appending, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    become_follower(&mut appending, NodeId(2), 3);
+    let append = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: None,
+        snapshot_id: None,
+        hwm: 1,
+        records: encode_batches(&[one_offset_batch(0, 3, b"replicated")]),
+    }
+    .encode();
+    appending.on_fetch_response(NodeId(2), &append);
+    assert2::assert!(appending.log.log_end_offset() == Offset(1));
+    assert2::assert!(appending.log.hwm() == Offset(1));
+
+    // An empty response can advance only the watermark over existing data.
+    let (mut advancing, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    let mut local = one_offset_batch(0, 2, b"already-replicated");
+    advancing
+        .log
+        .append(&mut local)
+        .expect("append local batch");
+    become_follower(&mut advancing, NodeId(2), 3);
+    let watermark = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: None,
+        snapshot_id: None,
+        hwm: 1,
+        records: bytes::Bytes::new(),
+    }
+    .encode();
+    advancing.on_fetch_response(NodeId(2), &watermark);
+    assert2::assert!(advancing.log.log_end_offset() == Offset(1));
+    assert2::assert!(advancing.log.hwm() == Offset(1));
 }
 
 #[tokio::test]

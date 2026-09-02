@@ -1,0 +1,25 @@
+(* #"/workspace/crates/verified/src/jwks.rs" 19 27 19 32 *)
+
+(* <jwks::JwksCacheFacts as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_JwksCacheFacts = {
+  generation_before: UInt64.t;
+  generation_after: UInt64.t;
+  last_successful_fetch_ms: Int64.t;
+  now_ms: Int64.t;
+  expiry_enabled: bool;
+  expiry_ms: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_JwksCacheFacts [#"/workspace/crates/verified/src/jwks.rs" 19 27 19 32] (self: t_JwksCacheFacts)
+  (return (x: t_JwksCacheFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_JwksCacheFacts = Any.any_l () | & self: t_JwksCacheFacts = self ])
+  [ return (result: t_JwksCacheFacts) -> (! return {result}) ]

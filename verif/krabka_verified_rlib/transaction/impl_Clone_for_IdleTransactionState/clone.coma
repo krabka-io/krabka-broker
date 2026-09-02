@@ -1,0 +1,17 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 22 27 22 32 *)
+
+(* <transaction::IdleTransactionState as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_IdleTransactionState = Ongoing | Other
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_IdleTransactionState [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 22 27 22 32]
+  (self: t_IdleTransactionState) (return (x: t_IdleTransactionState)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_IdleTransactionState = Any.any_l () | & self: t_IdleTransactionState = self ])
+  [ return (result: t_IdleTransactionState) -> (! return {result}) ]

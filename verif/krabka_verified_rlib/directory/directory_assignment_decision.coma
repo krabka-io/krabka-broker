@@ -1,0 +1,49 @@
+(* #"/proof-work-232/crates/verified/src/directory.rs" 25 0 28 32 *)
+
+let%span sdirectory = "/proof-work-232/crates/verified/src/directory.rs" 19 10 19 83
+let%span sdirectory'0 = "/proof-work-232/crates/verified/src/directory.rs" 20 10 21 46
+let%span sdirectory'1 = "/proof-work-232/crates/verified/src/directory.rs" 22 10 23 53
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_Option_usize = None | Some UInt64.t
+
+type t_DirectoryAssignmentDecision = Ignore | NoOp | Assign UInt64.t
+
+let elim_Some (_x: t_Option_usize) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let directory_assignment_decision [#"/proof-work-232/crates/verified/src/directory.rs" 25 0 28 32]
+  (replica_slot: t_Option_usize) (already_assigned: bool) (return (x: t_DirectoryAssignmentDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {replica_slot = None} (! bb6) | br1 (x0: UInt64.t) -> {replica_slot = Some x0} (! bb5) ]
+  | bb5 = any [ br0 -> {already_assigned = false} (! bb4) | br1 -> {already_assigned} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- NoOp ] s1 | s1 = return {_ret} ]
+  | bb4 = s0
+    [ s0 = elim_Some {replica_slot} (fun (r0: UInt64.t) -> [ &slot <- r0 ] s1)
+    | s1 = [ &_ret <- Assign slot ] s2
+    | s2 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- Ignore ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DirectoryAssignmentDecision = Any.any_l ()
+  | & replica_slot: t_Option_usize = replica_slot
+  | & already_assigned: bool = already_assigned
+  | & slot: UInt64.t = Any.any_l () ])
+  [ return (result: t_DirectoryAssignmentDecision) ->
+  {[@stop_split] [@expl:directory_assignment_decision ensures] ([@stop_split] [@expl:directory_assignment_decision ensures #0] [%#sdirectory] (result
+        = Ignore)
+      = (replica_slot = None))
+    /\ ([@stop_split] [@expl:directory_assignment_decision ensures #1] [%#sdirectory'0] (result = NoOp)
+      = (replica_slot <> None /\ already_assigned))
+    /\ ([@stop_split] [@expl:directory_assignment_decision ensures #2] [%#sdirectory'1] forall slot: UInt64.t. (result
+        = Assign slot)
+      = (replica_slot = Some slot /\ not already_assigned))}
+    (! return {result}) ]

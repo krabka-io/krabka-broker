@@ -1,0 +1,96 @@
+(* #"/workspace/crates/verified/src/jwks.rs" 42 0 42 71 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 274 30 274 115
+let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 43 47 43 48
+let%span sjwks'0 = "/workspace/crates/verified/src/jwks.rs" 43 8 43 49
+let%span sjwks'1 = "/workspace/crates/verified/src/jwks.rs" 51 25 51 26
+let%span sjwks'2 = "/workspace/crates/verified/src/jwks.rs" 52 45 52 46
+let%span sjwks'3 = "/workspace/crates/verified/src/jwks.rs" 57 7 57 52
+let%span sjwks'4 = "/workspace/crates/verified/src/jwks.rs" 31 10 40 1
+
+use creusot.int.UInt64
+use creusot.int.Int64
+use int.ComputerDivision
+use creusot.prelude.Any
+use int.Int
+
+type t_JwksCacheFacts = {
+  generation_before: UInt64.t;
+  generation_after: UInt64.t;
+  last_successful_fetch_ms: Int64.t;
+  now_ms: Int64.t;
+  expiry_enabled: bool;
+  expiry_ms: Int64.t }
+
+let is_multiple_of (self_: UInt64.t) (rhs: UInt64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_multiple_of ensures] [%#snum] if self_ = (0: UInt64.t) then
+      result = (self_ = (0: UInt64.t))
+    else
+      result = (ComputerDivision.mod (UInt64.t'int self_) (UInt64.t'int rhs) = 0)
+    }
+    (! return {result}) ]
+
+type t_JwksCacheDecision = Reject | Admit
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let jwks_cache_admission [#"/workspace/crates/verified/src/jwks.rs" 42 0 42 71] (facts: t_JwksCacheFacts)
+  (return (x: t_JwksCacheDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = is_multiple_of [%#sjwks'0] {facts.generation_before} {[%#sjwks] (2: UInt64.t)}
+        (fun (_x: bool) -> [ &_10 <- _x ] s1)
+    | s1 = any [ br0 -> {_10 = false} (! bb6) | br1 -> {_10} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_12 <- facts.generation_before <> facts.generation_after ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb5) | br1 -> {_12} (! bb6) ] ]
+  | bb5 = any [ br0 -> {facts.expiry_enabled = false} (! bb8) | br1 -> {facts.expiry_enabled} (! bb7) ]
+  | bb7 = s0
+    [ s0 = [ &_20 <- Int64.lt facts.expiry_ms ([%#sjwks'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb10) | br1 -> {_20} (! bb15) ] ]
+  | bb10 = s0
+    [ s0 = [ &_22 <- Int64.le facts.last_successful_fetch_ms ([%#sjwks'2] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb12) | br1 -> {_22} (! bb15) ] ]
+  | bb12 = s0
+    [ s0 = [ &_24 <- Int64.lt facts.now_ms facts.last_successful_fetch_ms ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb14) | br1 -> {_24} (! bb15) ] ]
+  | bb15 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb14 = s0
+    [ s0 = Int64.sub [%#sjwks'3] {facts.now_ms} {facts.last_successful_fetch_ms}
+        (fun (_x: Int64.t) -> [ &_29 <- _x ] s1)
+    | s1 = [ &_28 <- Int64.gt _29 facts.expiry_ms ] s2
+    | s2 = any [ br0 -> {_28 = false} (! bb17) | br1 -> {_28} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_JwksCacheDecision = Any.any_l ()
+  | & facts: t_JwksCacheFacts = facts
+  | & _10: bool = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _29: Int64.t = Any.any_l () ])
+  [ return (result: t_JwksCacheDecision) -> {[@stop_split] [@expl:jwks_cache_admission ensures] [%#sjwks'4] (result
+      = Admit)
+    = (ComputerDivision.mod (UInt64.t'int facts.generation_before) 2 = 0
+    /\ UInt64.t'int facts.generation_before = UInt64.t'int facts.generation_after
+    /\ (not facts.expiry_enabled
+    \/ ge_log_Int (Int64.to_int facts.expiry_ms) 0
+    /\ gt_log_Int (Int64.to_int facts.last_successful_fetch_ms) 0
+    /\ ge_log_Int (Int64.to_int facts.now_ms) (Int64.to_int facts.last_successful_fetch_ms)
+    /\ Int64.to_int facts.now_ms - Int64.to_int facts.last_successful_fetch_ms <= Int64.to_int facts.expiry_ms))}
+    (! return {result}) ]

@@ -41,13 +41,14 @@ fn next_producer_identity_with_fresh(
     epoch: i16,
     fresh: Option<ProducerId>,
 ) -> Option<(ProducerId, i16)> {
-    if !txnv.verified() {
-        Some((pid, epoch))
-    } else if epoch < i16::MAX - 1 {
-        Some((pid, epoch + 1))
-    } else {
-        fresh.map(|producer_id| (producer_id, 0))
-    }
+    krabka_verified::transaction::next_producer_identity(
+        txnv.verified(),
+        false,
+        pid.0,
+        epoch,
+        fresh.map(|producer_id| producer_id.0),
+    )
+    .map(|(producer_id, epoch)| (ProducerId(producer_id), epoch))
 }
 
 /// KIP-939 recovery identities have already moved past the original producer
@@ -75,11 +76,14 @@ fn next_recovery_producer_identity_with_fresh(
     epoch: i16,
     fresh: Option<ProducerId>,
 ) -> Option<(ProducerId, i16)> {
-    if epoch < i16::MAX {
-        Some((pid, epoch + 1))
-    } else {
-        fresh.map(|producer_id| (producer_id, 0))
-    }
+    krabka_verified::transaction::next_producer_identity(
+        true,
+        true,
+        pid.0,
+        epoch,
+        fresh.map(|producer_id| producer_id.0),
+    )
+    .map(|(producer_id, epoch)| (ProducerId(producer_id), epoch))
 }
 
 pub(crate) fn client_producer_identity(entry: &TxnEntry) -> (ProducerId, i16) {

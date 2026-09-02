@@ -1,0 +1,43 @@
+(* #"/workspace/crates/verified/src/opa.rs" 42 0 47 22 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sopa = "/workspace/crates/verified/src/opa.rs" 35 10 40 1
+
+use creusot.int.Int128
+use creusot.prelude.Any
+use int.Int
+
+type t_OpaAuthorizationDecision = Allow | Deny
+
+type t_OpaCacheAdmission = Miss | Hit t_OpaAuthorizationDecision
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let opa_cache_admission [#"/workspace/crates/verified/src/opa.rs" 42 0 47 22] (complete_key_match: bool)
+  (now_ms: Int128.t) (expires_at_ms: Int128.t) (cached_decision: t_OpaAuthorizationDecision)
+  (return (x: t_OpaCacheAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {complete_key_match = false} (! bb4) | br1 -> {complete_key_match} (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_11 <- Int128.gt expires_at_ms now_ms ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb4) | br1 -> {_11} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- Hit cached_decision ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- Miss ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OpaCacheAdmission = Any.any_l ()
+  | & complete_key_match: bool = complete_key_match
+  | & now_ms: Int128.t = now_ms
+  | & expires_at_ms: Int128.t = expires_at_ms
+  | & cached_decision: t_OpaAuthorizationDecision = cached_decision
+  | & _11: bool = Any.any_l () ])
+  [ return (result: t_OpaCacheAdmission) ->
+  {[@stop_split] [@expl:opa_cache_admission ensures] [%#sopa] match result with
+      | Miss -> not complete_key_match \/ Int128.to_int expires_at_ms <= Int128.to_int now_ms
+      | Hit decision -> complete_key_match
+      /\ gt_log_Int (Int128.to_int expires_at_ms) (Int128.to_int now_ms) /\ decision = cached_decision
+      end}
+    (! return {result}) ]

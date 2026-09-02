@@ -54,8 +54,8 @@ pub(crate) use self::{
         extract_jvm_kv, start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,
     },
     docker::{
-        ClientPropsFile, KAFKA_IMAGE, KAFKA_IMAGE_LEGACY, KAFKA_IMAGE_TIERED, KAFKA_IMAGE_TXN,
-        TRANSACTIONAL_PRODUCER_JAVA, TempFileMount, docker_run_kafka_tool,
+        ClientPropsFile, KAFKA_IMAGE, KAFKA_IMAGE_ELR, KAFKA_IMAGE_LEGACY, KAFKA_IMAGE_TIERED,
+        KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, TempFileMount, docker_run_kafka_tool,
         docker_run_kafka_tool_with_image, docker_run_kafka_tool_with_image_and_mount,
         docker_run_kafka_tool_with_image_and_mounts, docker_run_kafka_tool_with_mount,
         nc_check_connectivity, write_client_props, write_temp_file,

@@ -96,7 +96,7 @@ async fn share_group_records_replay_into_seed() {
             member_id: "m1".into(),
         }))
         .unwrap();
-    apply_tombstone(&coord, tomb_key);
+    apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
     let seed = coord.cached_share_seed("sg").expect("seed still present");
     assert!(!seed.members.contains_key("m1"), "tombstone removed member");
 }
@@ -198,9 +198,83 @@ async fn streams_group_records_replay_into_seed() {
         },
     ))
     .unwrap();
-    apply_tombstone(&coord, tomb_key);
+    apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
     let seed = coord
         .cached_streams_seed("stg")
         .expect("seed still present");
     assert!(!seed.members.contains_key("m1"), "tombstone removed member");
+}
+
+#[test]
+fn malformed_and_orphan_records_do_not_publish_type_or_state() {
+    use crate::coordinator::unified::{
+        GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
+        share::persistence as share, streams::persistence as streams,
+    };
+
+    #[derive(Debug)]
+    struct EmptyMeta;
+    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
+        fn snapshot(&self) -> ReconcileInput {
+            ReconcileInput::default()
+        }
+    }
+
+    let coord = Arc::new(GroupCoordinator::new(
+        crate::coordinator::unified::config::NextGenConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        Arc::new(EmptyMeta),
+        Arc::new(InMemoryOffsetsLog::default()),
+        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+    ));
+    let batch = RecordBatch::default();
+    let mut acc = Replayed::default();
+
+    let malformed_share = persistence::parse_key(&share::encode_share_key(
+        &share::ShareGroupKey::GroupMetadata {
+            group_id: "bad-share".into(),
+        },
+    ))
+    .unwrap();
+    check!(
+        apply_record(
+            &coord,
+            &mut acc,
+            malformed_share,
+            &bytes::Bytes::from_static(&[0]),
+            &batch,
+        )
+        .is_err()
+    );
+    check!(coord.group_type("bad-share").is_none());
+    check!(coord.cached_share_seed("bad-share").is_none());
+
+    let orphan_streams = persistence::parse_key(&streams::encode_streams_key(
+        &streams::StreamsGroupKey::MemberMetadata {
+            group_id: "orphan-streams".into(),
+            member_id: "m".into(),
+        },
+    ))
+    .unwrap();
+    apply_record(
+        &coord,
+        &mut acc,
+        orphan_streams,
+        &streams::StreamsGroupMemberMetadataValue {
+            instance_id: None,
+            rack_id: None,
+            client_id: "c".into(),
+            client_host: "h".into(),
+            process_id: "p".into(),
+            user_endpoint: None,
+            client_tags: vec![],
+            rebalance_timeout_ms: 1,
+            topology_epoch: 0,
+        }
+        .encode(),
+        &batch,
+    )
+    .unwrap();
+    check!(coord.group_type("orphan-streams").is_none());
+    assert!(coord.cached_streams_seed("orphan-streams").is_none());
 }

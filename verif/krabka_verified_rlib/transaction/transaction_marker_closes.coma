@@ -1,0 +1,26 @@
+(* #"/proof-work-240/crates/verified/src/transaction.rs" 59 0 59 92 *)
+
+let%span stransaction = "/proof-work-240/crates/verified/src/transaction.rs" 60 4 60 70
+let%span stransaction'0 = "/proof-work-240/crates/verified/src/transaction.rs" 57 10 57 88
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_marker_closes [#"/proof-work-240/crates/verified/src/transaction.rs" 59 0 59 92] (is_abort: bool)
+  (is_commit: bool) (has_pending: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {is_abort = false} (! bb1) | br1 -> {is_abort} (! bb2) ]
+  | bb1 = any [ br0 -> {is_commit = false} (! bb5) | br1 -> {is_commit} (! bb2) ]
+  | bb2 = any [ br0 -> {is_abort = false} (! bb4) | br1 -> {is_abort} (! bb3) ]
+  | bb3 = any [ br0 -> {is_commit = false} (! bb4) | br1 -> {is_commit} (! bb5) ]
+  | bb4 = s0 [ s0 = [ &_ret <- has_pending ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- [%#stransaction] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & is_abort: bool = is_abort
+  | & is_commit: bool = is_commit
+  | & has_pending: bool = has_pending ])
+  [ return (result: bool) -> {[@stop_split] [@expl:transaction_marker_closes ensures] [%#stransaction'0] result
+    = ((is_abort \/ is_commit) /\ not (is_abort /\ is_commit) /\ has_pending)}
+    (! return {result}) ]

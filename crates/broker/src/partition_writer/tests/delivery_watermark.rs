@@ -16,7 +16,7 @@ use crate::{
 async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_scheduler() {
     use crate::delivery::{
         DeliveryWaker,
-        test_support::{BOUND_MS, NOW_MS, batch_at, wait_until},
+        test_support::{BOUND_MS, NOW_MS, batch_at, wait_until, wall_at},
     };
 
     let dir = tempdir().expect("tempdir");
@@ -27,10 +27,8 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     let log = Arc::new(Mutex::new(
         Log::open(dir.path(), config).expect("open scheduled log"),
     ));
-    let time = qubit_clock::MockTime::at(
-        qubit_clock::DateTime::from_timestamp_millis(NOW_MS).expect("a representable instant"),
-    );
-    let delivery = DeliveryHandles::with_clock(Arc::new(time.clock()));
+    let timeline = qubit_clock::ManualMonotonicClock::new_shared();
+    let delivery = DeliveryHandles::with_clock(timeline.new_wall_clock(wall_at(NOW_MS)));
     // The partition is adopted, and the scheduler sleeps for a full second.
     let waker = Arc::new(DeliveryWaker::new());
     waker.arm(NOW_MS + 1_000);
@@ -86,9 +84,11 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     check!(log.lock().unwrap().log_end_offset() == Offset(4));
 
     // Past the activation instant, the writer's own refresh releases it.
-    time.advance(std::time::Duration::from_millis(
-        u64::try_from(200 + BOUND_MS).expect("positive"),
-    ));
+    timeline
+        .advance(std::time::Duration::from_millis(
+            u64::try_from(200 + BOUND_MS).expect("positive"),
+        ))
+        .expect("manual time moves forward");
     let (ack, ack_rx) = oneshot::channel();
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS - 60_000)),

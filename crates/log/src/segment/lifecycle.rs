@@ -66,8 +66,13 @@ impl Segment {
         let position = u32::try_from(position)
             .map_err(|_| LogError::BadSegmentName("position overflow".into()))?;
         self.offset_index.truncate_by_position(position)?;
-        let next_relative = u32::try_from(last_offset.0 + 1 - self.base_offset.0)
-            .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
+        let next = last_offset
+            .0
+            .checked_add(1)
+            .and_then(|next| next.checked_sub(self.base_offset.0))
+            .ok_or_else(|| LogError::BadSegmentName("offset overflow".into()))?;
+        let next_relative =
+            u32::try_from(next).map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
         self.time_index.truncate_by_relative_offset(next_relative)?;
         Ok(())
     }
@@ -100,7 +105,12 @@ impl Segment {
         let to_read = usize::try_from(read_limit).unwrap_or(usize::MAX);
         self.read_log_range(0, &mut buf, to_read)?;
 
-        let target_abs = self.base_offset + i64::from(rel);
+        let target_abs = self
+            .base_offset
+            .0
+            .checked_add(i64::from(rel))
+            .map(Offset)
+            .ok_or_else(|| LogError::BadSegmentName("offset overflow".into()))?;
         let mut cur: &[u8] = &buf;
         let mut pos: u64 = 0;
         let mut last_kept_offset = self.base_offset - 1;
@@ -110,8 +120,12 @@ impl Segment {
             let Ok(batch) = RecordBatch::decode(&mut cur) else {
                 break;
             };
-            let batch_last_offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta));
-            if batch_last_offset >= target_abs {
+            let batch_last_offset = batch
+                .base_offset
+                .checked_add(i64::from(batch.last_offset_delta))
+                .map(Offset)
+                .ok_or_else(|| LogError::Corrupt("batch last offset overflow".into()))?;
+            if !krabka_verified::truncation_batch_retained(batch_last_offset.0, target_abs.0) {
                 break;
             }
             pos += (before - cur.len()) as u64;
@@ -230,6 +244,17 @@ mod tests {
         let read = seg.read(Offset(0), NO_LIMIT).unwrap();
         assert2::assert!(seg.last_offset() == Offset(2));
         assert2::assert!(read == vec![sample_batch(0, 3, 100)]);
+    }
+
+    #[test]
+    fn truncate_to_relative_rejects_an_absolute_offset_overflow() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(i64::MAX)).unwrap();
+
+        let error = seg
+            .truncate_to_relative(1)
+            .expect_err("base plus relative cut must be checked");
+        assert2::assert!(error.to_string().contains("offset overflow"));
     }
 
     #[test]

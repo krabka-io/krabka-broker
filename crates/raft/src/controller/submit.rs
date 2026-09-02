@@ -47,6 +47,69 @@ impl ControllerHandle {
         }
     }
 
+    /// Submit token mutations whose expected records are checked by the leader
+    /// in the same engine turn as the append.
+    ///
+    /// # Errors
+    ///
+    /// Returns a leadership, transport, protocol, or mutation-rejection error.
+    pub async fn submit_delegation_token_mutations(
+        &self,
+        mutations: Vec<crate::DelegationTokenMutation>,
+    ) -> Result<crate::SubmitChangeResult, RaftError> {
+        match self
+            .engine
+            .submit_delegation_token_mutations(mutations.clone())
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(RaftError::NotLeader {
+                current_leader: Some(leader),
+            }) => {
+                if let Some(addr) = self.voter_addr(leader) {
+                    self.forward_delegation_token_mutations_to(leader, &addr, &mutations)
+                        .await
+                } else {
+                    Err(RaftError::NotLeader {
+                        current_leader: Some(leader),
+                    })
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg_attr(test, mutants::skip)]
+    async fn forward_delegation_token_mutations_to(
+        &self,
+        leader: NodeId,
+        addr: &str,
+        mutations: &[crate::DelegationTokenMutation],
+    ) -> Result<crate::SubmitChangeResult, RaftError> {
+        let body = encode_delegation_token_mutation_body(mutations)?;
+        let options = krabka_client_core::ConnectionOptions {
+            client_id: self.client_id.clone(),
+            dispatch_queue_capacity: self.client_dispatch_queue_capacity,
+            frame_max: self.client_frame_max,
+            ..krabka_client_core::ConnectionOptions::default()
+        };
+        let connection = self
+            .dialer
+            .dial(leader, addr, options)
+            .await
+            .map_err(RaftError::Network)?;
+        let response = connection
+            .raw_request(
+                crate::wire::API_KEY_DELEGATION_TOKEN_MUTATION,
+                0,
+                bytes::Bytes::from(body),
+            )
+            .await
+            .map_err(RaftError::Network)?;
+        connection.close();
+        translate_submit_change_response(&response, leader)
+    }
+
     /// Resolve a voter's controller listener `<host>:<port>` from the static
     /// voter set's CONTROLLER endpoint. See [`controller_endpoint_addr`].
     fn voter_addr(&self, node_id: NodeId) -> Option<String> {
@@ -200,6 +263,21 @@ fn encode_submit_change_body(
     };
     let mut body = Vec::with_capacity(payload.records.len() + 4);
     payload.encode_v0(&mut body)?;
+    Ok(body)
+}
+
+fn encode_delegation_token_mutation_body(
+    mutations: &[crate::DelegationTokenMutation],
+) -> Result<Vec<u8>, RaftError> {
+    let payload = <serde_wincode::SerdeCompat<Vec<crate::DelegationTokenMutation>> as wincode::Serialize>::serialize(
+        &mutations.to_vec(),
+    )
+    .map_err(RaftError::from)?;
+    let request = crate::wire::KrabkaSubmitChangeRequest {
+        records: bytes::Bytes::from(payload),
+    };
+    let mut body = Vec::with_capacity(request.records.len() + 4);
+    request.encode_v0(&mut body)?;
     Ok(body)
 }
 

@@ -10,13 +10,15 @@
 use std::time::Instant;
 
 use krabka_log::Offset;
+use krabka_metadata::MetadataImage;
 use stateright::{Model, Property};
 
 use super::{
     bounds::{MAX_EPOCH, MAX_LEN, NB, NB_U8, has, model_index, model_offset},
     election::do_failover,
+    elr,
     hwm::{real_hwm, real_wal_hwm},
-    state::{Act, DpState, isr_eligible},
+    state::{Act, DpState, ELR_BEAT_LONGER_LOG, ELR_DROPPED_GUARDED, ELR_ELECTED, isr_eligible},
     truncation::real_truncation_offset,
 };
 use crate::handlers::fetch::{FetchWatermarks, compute_visibility_window};
@@ -25,6 +27,68 @@ pub(super) struct DpModel {
     pub(super) base: Instant,
     pub(super) unclean: bool,  // false in DPC-1/2 (clean), true in DPC-3
     pub(super) diskless: bool, // true drives the WAL durability path instead of ISR-HWM
+    /// The metadata image the real controller rules read. It carries the
+    /// topic's `min.insync.replicas`, which is what decides both when the ELR
+    /// rule clears the set and which committed records the set is a claim
+    /// about.
+    image: MetadataImage,
+    /// `min.insync.replicas` as [`effective_min_insync_replicas`] resolves it
+    /// out of [`Self::image`], not a second copy of the number.
+    ///
+    /// [`effective_min_insync_replicas`]: crate::config_keys::effective_min_insync_replicas
+    min_isr: usize,
+    /// The longest log this configuration lets a broker reach, at most
+    /// [`MAX_LEN`]. Each extra record multiplies the reachable states, and the
+    /// ELR configuration carries more per-state than the others, so it buys
+    /// its ELR bookkeeping back out of its log length.
+    max_len: usize,
+}
+
+impl DpModel {
+    /// A configuration of the modelled cluster. `min_isr` is the topic's
+    /// `min.insync.replicas`: at 1 no partition can ever have a non-empty ELR,
+    /// because the rule clears the set as soon as the ISR meets the threshold
+    /// and an ISR that reached zero has no partition record left to reach it
+    /// with, so only a configuration above 1 exercises the ELR rule.
+    pub(super) fn config(
+        base: Instant,
+        unclean: bool,
+        diskless: bool,
+        min_isr: usize,
+        max_len: usize,
+    ) -> Self {
+        assert2::assert!(
+            max_len <= MAX_LEN,
+            "the cast helpers are bounded by MAX_LEN"
+        );
+        assert2::assert!(
+            min_isr == 1 || (unclean && !diskless),
+            "only the unclean replicated configuration reaches an ELR election"
+        );
+        let image = elr::image(min_isr);
+        let min_isr = elr::min_insync_replicas(&image);
+        Self {
+            base,
+            unclean,
+            diskless,
+            image,
+            min_isr,
+            max_len,
+        }
+    }
+
+    /// Whether this configuration maintains and checks KIP-966 ELR state.
+    ///
+    /// At Kafka's default `min.insync.replicas` of 1 the rule clears the set
+    /// on every change a live partition can make, so the other configurations
+    /// would carry an always-empty set and an always-equal second durability
+    /// obligation through every state they enumerate -- state identity they
+    /// pay for in the search and get nothing back from. They leave both at
+    /// their empty value instead, and the ELR properties are stated only here,
+    /// where a `sometimes` property has states that can witness it.
+    fn tracks_elr(&self) -> bool {
+        self.min_isr > 1
+    }
 }
 
 impl Model for DpModel {
@@ -43,11 +107,16 @@ impl Model for DpModel {
             // by electing a different replica that never fsynced the record.
             isr: if self.diskless { 0b001 } else { 0b111 },
             live: if self.diskless { 0b001 } else { 0b111 },
+            // A partition whose ISR meets min ISR has no eligible-leader set,
+            // and every configuration starts with a full ISR.
+            elr: 0,
             committed: vec![],
+            guarded: vec![],
             wal_acked: vec![],
             seq_next: 0,
             assigned: vec![],
             lost: false,
+            elr_trace: 0,
         }]
     }
 
@@ -55,7 +124,7 @@ impl Model for DpModel {
         let leader_live = has(s.live, s.leader);
         // Data-path actions require a live leader.
         if leader_live {
-            if s.log[usize::from(s.leader)].len() < MAX_LEN && s.leader_epoch <= MAX_EPOCH {
+            if s.log[usize::from(s.leader)].len() < self.max_len && s.leader_epoch <= MAX_EPOCH {
                 acts.push(Act::Produce);
                 if self.diskless && s.assigned.len() < 3 {
                     acts.push(Act::Assign(1));
@@ -159,6 +228,21 @@ impl Model for DpModel {
                     let off = s.committed.len();
                     s.committed.push(leader_log[off]);
                 }
+                // KIP-966's obligation, and the one an ELR election may not
+                // drop: the HWM prefix that got there while the ISR met min
+                // ISR, which is exactly what an `acks=all` produce was
+                // acknowledged for. Under min ISR the gate refuses `acks=all`,
+                // the HWM still advances over `acks=1` writes, and this stops.
+                if self.tracks_elr()
+                    && usize::try_from(u32::from(s.isr).count_ones())
+                        .expect("a bitmask over three brokers counts low")
+                        >= self.min_isr
+                {
+                    while model_offset(s.guarded.len()) < s.hwm {
+                        let off = s.guarded.len();
+                        s.guarded.push(leader_log[off]);
+                    }
+                }
             }
             Act::WalSync => {
                 // fsync makes the leader's appended prefix durable and releases
@@ -207,9 +291,21 @@ impl Model for DpModel {
                 s.live |= 1 << b;
             }
             Act::ExpandIsr(b) => {
+                let previous = elr::partition_record(s.leader, s.isr, s.leader_epoch);
                 s.isr |= 1 << b;
+                // An ISR change is a partition change, and every controller
+                // path that submits one runs the ELR publisher over it. An
+                // expansion back to min ISR is how the set empties again.
+                if self.tracks_elr() {
+                    elr::maintain(&self.image, &mut s, &previous);
+                }
             }
-            Act::Failover(dead) => do_failover(&mut s, dead, self.unclean),
+            Act::Failover(dead) => do_failover(
+                self.tracks_elr().then_some(&self.image),
+                &mut s,
+                dead,
+                self.unclean,
+            ),
         }
         Some(s)
     }
@@ -289,6 +385,55 @@ impl Model for DpModel {
                 }),
             ]);
         }
+        if self.tracks_elr() {
+            props.extend([
+                // `guarded` is the min-ISR-backed prefix of `committed`, so it
+                // is a prefix of it in the literal sense too. Both properties
+                // below read one and reason about the other, and rest on this.
+                Property::always("guarded_is_a_committed_prefix", |_, s: &DpState| {
+                    s.guarded.len() <= s.committed.len()
+                        && s.guarded
+                            .iter()
+                            .enumerate()
+                            .all(|(off, &e)| s.committed[off] == e)
+                }),
+                // THE CLAIM. `select_leader` elects a surviving eligible
+                // leader replica ahead of a longer log and reports that
+                // election as losing nothing -- the unclean-election counter
+                // does not count it, the audit reason says no committed record
+                // is lost, and KFC-9's `require` gate lets it through. All of
+                // that rests on the published set naming only replicas that
+                // hold every record the partition acknowledged while it met
+                // min ISR. This is that, stated over a set the model did not
+                // choose but computed with the real maintenance rule.
+                Property::always("elr_holds_every_guarded_record", |_, s: &DpState| {
+                    (0..NB_U8).filter(|&b| has(s.elr, b)).all(|b| {
+                        let log = &s.log[usize::from(b)];
+                        s.guarded
+                            .iter()
+                            .enumerate()
+                            .all(|(off, &e)| log.get(off) == Some(&e))
+                    })
+                }),
+                // The same claim at the moment it is cashed in: the election
+                // that took the ELR rule did not drop a guarded record.
+                Property::always(
+                    "elr_election_keeps_every_guarded_record",
+                    |_, s: &DpState| s.elr_trace & ELR_DROPPED_GUARDED == 0,
+                ),
+                // Anti-vacuity. Without these three the two `always`
+                // properties above would pass on a model that never publishes
+                // an ELR, never elects out of one, or only ever elects the
+                // replica the fallback would have picked anyway.
+                Property::sometimes("elr_published", |_, s: &DpState| s.elr != 0),
+                Property::sometimes("elr_election_taken", |_, s: &DpState| {
+                    s.elr_trace & ELR_ELECTED != 0
+                }),
+                Property::sometimes("elr_election_beat_a_longer_log", |_, s: &DpState| {
+                    s.elr_trace & ELR_BEAT_LONGER_LOG != 0
+                }),
+            ]);
+        }
         if self.unclean {
             // Loss characterization: an unclean-election data loss is reachable
             // (and `committed_durable` above still holds — `committed` is the LIVE
@@ -304,6 +449,6 @@ impl Model for DpModel {
     }
 
     fn within_boundary(&self, s: &Self::State) -> bool {
-        s.log.iter().all(|l| l.len() <= MAX_LEN) && s.leader_epoch <= MAX_EPOCH + 1
+        s.log.iter().all(|l| l.len() <= self.max_len) && s.leader_epoch <= MAX_EPOCH + 1
     }
 }
