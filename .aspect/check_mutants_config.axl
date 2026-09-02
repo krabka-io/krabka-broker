@@ -1,0 +1,346 @@
+"""Check that `.cargo/mutants.toml`'s `exclude_re` entries still name real files.
+
+Every `exclude_re` entry documents a specific mutant as equivalent or
+untestable, and most of them pin that mutant down with a literal path fragment
+-- `segment/io.rs`, `txn_index.rs:94`, and so on. A refactor that moves or
+renames the file the fragment names does not touch the regex, so the entry
+silently stops matching anything: the mutant it used to suppress goes back to
+being tested, and if it is a genuine equivalent mutant it comes back as an
+unexplained survivor. `.cargo/mutants.toml`'s own header says the sweep has no
+survivor baseline, so a single one of these fails its shard.
+
+This task extracts the literal path fragment from each `exclude_re` entry --
+the run of identifier characters and `/` immediately before a `.rs` -- and
+fails when no file under `crates/` ends with it. When the fragment is
+immediately followed by `:<line>`, it also fails when every file that matches
+the fragment is shorter than that line: a module split that leaves a thin
+facade file behind (`segment.rs` declaring `mod io;` alongside `segment/io.rs`)
+passes the bare path check while the pinned line has long since moved out from
+under it, so the two checks together catch more of the same rot than either
+alone.
+
+What this does NOT check: that the specific mutation the entry's prose
+describes (an operator, a match guard, a whole-function replacement) is still
+generated at the resolved location. A path that still exists, at a still-long
+line, but whose content changed underneath it -- the referenced function
+renamed, or moved to a different line within the same file -- passes this task
+and would need `cargo-mutants --list` against the real crate to catch. That
+check needs a Rust toolchain this task's callers do not all have; a dead path
+or a pinned line past the end of the file is the rot this repository has
+actually hit, and is what this catches.
+
+    aspect check-mutants-config
+"""
+
+load("./repo.axl", "dirname", "is_file", "read_lines", "walk_suffix")
+
+# The characters a path fragment is made of: the `[A-Za-z0-9_/]` the original
+# regex spelled as a class. `.` is deliberately not among them -- it is what
+# ends the run, and what `.rs` is found against.
+_FRAGMENT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_/"
+
+_DIGITS = "0123456789"
+
+# The two spellings of the suffix that closes a fragment. An `exclude_re`
+# entry is a regex, so the `.` is usually escaped; both forms name the same
+# file and the fragment is reported unescaped either way.
+_RS = ".rs"
+_ESCAPED_RS = "\\.rs"
+
+# The one construct `exclude_patterns` reads, and the only two escapes the
+# entries use. A TOML basic string admits `\n`, `\t` and `\uXXXX` as well;
+# decoding those is left undone rather than done wrong, so an entry carrying
+# one is reported instead of silently mangled.
+_ARRAY_OPEN = "exclude_re = ["
+_ARRAY_CLOSE = "]"
+_ESCAPES = {"\\": "\\", "\"": "\""}
+
+def _fragment_run_end(pattern, start):
+    """The index just past the run of fragment characters that begins at `start`."""
+    end = start
+    for _ in range(len(pattern) - start):
+        if pattern[end] not in _FRAGMENT_CHARS:
+            break
+        end += 1
+    return end
+
+def _digits_end(pattern, start):
+    """The index just past the run of digits that begins at `start`."""
+    end = start
+    for _ in range(len(pattern) - start):
+        if pattern[end] not in _DIGITS:
+            break
+        end += 1
+    return end
+
+def _rs_suffix_length(pattern, at):
+    """How many characters of `.rs` -- escaped or not -- sit at `at`, or 0 for none."""
+    if pattern[at:at + len(_ESCAPED_RS)] == _ESCAPED_RS:
+        return len(_ESCAPED_RS)
+    if pattern[at:at + len(_RS)] == _RS:
+        return len(_RS)
+    return 0
+
+def path_fragments(pattern):
+    """Every `(fragment, pinned_line)` pair `pattern` names, in order.
+
+    This is the scan the original's `([A-Za-z0-9_/]+\\\\?\\.rs)(?::(\\d+))?`
+    performed. A run of fragment characters is a fragment only when `.rs` --
+    escaped or not -- follows it immediately, because a shorter prefix of the
+    run cannot be followed by one; and the pinned line is read only when a `:`
+    and at least one digit follow the suffix, exactly where the optional group
+    could match. Each match consumes what it read, so the `rs` of one
+    fragment's suffix cannot open the next.
+    """
+    found = []
+    index = 0
+    for _ in range(len(pattern) + 1):
+        if index >= len(pattern):
+            break
+        if pattern[index] not in _FRAGMENT_CHARS:
+            index += 1
+            continue
+
+        end = _fragment_run_end(pattern, index)
+        suffix = _rs_suffix_length(pattern, end)
+        if not suffix:
+            index = end
+            continue
+
+        fragment = pattern[index:end] + _RS
+        index = end + suffix
+        line = None
+        if pattern[index:index + 1] == ":":
+            digits = _digits_end(pattern, index + 1)
+            if digits > index + 1:
+                line = int(pattern[index + 1:digits])
+                index = digits
+        found.append((fragment, line))
+    if index < len(pattern):
+        fail("path_fragments: %r holds more fragments than this scan can reach" % pattern)
+    return found
+
+def _string_literal(text):
+    """The TOML basic string `text` opens with, as `struct(value, rest)`, or None.
+
+    None is every shape this reader does not understand: no opening quote, no
+    closing quote, or an escape outside `_ESCAPES`.
+    """
+    if not text.startswith("\""):
+        return None
+    value = ""
+    index = 1
+    for _ in range(len(text)):
+        if index >= len(text):
+            break
+        char = text[index]
+        if char == "\"":
+            return struct(value = value, rest = text[index + 1:])
+        if char == "\\":
+            escape = text[index + 1:index + 2]
+            if escape not in _ESCAPES:
+                return None
+            value += _ESCAPES[escape]
+            index += 2
+            continue
+        value += char
+        index += 1
+    return None
+
+def _entry(text):
+    """The pattern the array line `text` holds, or None when it holds no readable one."""
+    literal = _string_literal(text)
+    if literal == None:
+        return None
+
+    # One string per line, so the only thing allowed after it is the separating
+    # comma. A trailing comment, a second string, or a bracket on the same line
+    # is a shape this reader does not claim to handle.
+    if literal.rest.strip() not in ["", ","]:
+        return None
+    return literal.value
+
+def scan_exclude_re(lines):
+    """What a sweep of `lines` for the `exclude_re` array found.
+
+    `struct(openings, closed, patterns, unparsed)`: the 1-based line numbers
+    that open an `exclude_re` array, whether a bare `]` closed the first one,
+    the strings it holds, and the `(line number, text)` pairs inside it this
+    reader does not understand. Reporting rather than failing is what lets a
+    test hold the reader to what it saw; `exclude_patterns` is what turns each
+    of these into the failure a caller gets.
+    """
+    openings = [
+        index + 1
+        for index, line in enumerate(lines)
+        if line.strip() == _ARRAY_OPEN
+    ]
+    if not openings:
+        return struct(openings = [], closed = False, patterns = [], unparsed = [])
+
+    patterns = []
+    unparsed = []
+    closed = False
+    for index in range(openings[0], len(lines)):
+        line = lines[index].strip()
+        if line == _ARRAY_CLOSE:
+            closed = True
+            break
+        if not line or line.startswith("#"):
+            continue
+        pattern = _entry(line)
+        if pattern == None:
+            unparsed.append((index + 1, line))
+        else:
+            patterns.append(pattern)
+    return struct(
+        openings = openings,
+        closed = closed,
+        patterns = patterns,
+        unparsed = unparsed,
+    )
+
+def exclude_patterns(source, lines):
+    """The strings the `exclude_re` array of the TOML file `source` holds.
+
+    AXL has no TOML decoder and this is not one: it reads the single construct
+    this check needs, a multi-line array of double-quoted strings, one per
+    line, opened by a bare `exclude_re = [`, closed by a bare `]`, with `#`
+    comment lines between. Every other shape fails the task rather than
+    reading past it, because a reader that quietly skipped a line it did not
+    understand would suppress the very rot this check exists to report.
+    """
+    found = scan_exclude_re(lines)
+    if not found.openings:
+        fail("%s: no line reads `%s`, which is the only shape this reader understands" % (source, _ARRAY_OPEN))
+    if len(found.openings) > 1:
+        fail("%s: `%s` opens on lines %s; this reader understands one array" % (
+            source,
+            _ARRAY_OPEN,
+            ", ".join([str(line) for line in found.openings]),
+        ))
+    if not found.closed:
+        fail("%s: the `%s` array opened on line %d is never closed by a `%s` line" % (
+            source,
+            _ARRAY_OPEN,
+            found.openings[0],
+            _ARRAY_CLOSE,
+        ))
+    if found.unparsed:
+        fail("%s: lines in the `%s` array that this reader cannot read as one quoted string:\n%s" % (
+            source,
+            _ARRAY_OPEN,
+            "\n".join(["  line %d: %s" % (number, text) for number, text in found.unparsed]),
+        ))
+    return found.patterns
+
+def matching_files(fragment, line_counts):
+    """Every file in `line_counts` that `fragment` names, as a path suffix."""
+    return sorted([
+        path
+        for path in line_counts
+        if path == fragment or path.endswith("/" + fragment)
+    ])
+
+def dead_fragments(patterns, line_counts):
+    """`(pattern, fragment, reason)` triples for a fragment this repository no longer supports.
+
+    `line_counts` maps a repo-root-relative `.rs` path to its line count.
+    """
+    dead = []
+    for pattern in patterns:
+        for fragment, line in path_fragments(pattern):
+            matches = matching_files(fragment, line_counts)
+            if not matches:
+                dead.append((pattern, fragment, "no file under crates/ matches this path"))
+                continue
+            if line == None:
+                continue
+            longest = max([line_counts[path] for path in matches])
+            if line > longest:
+                dead.append((
+                    pattern,
+                    fragment,
+                    "pinned to line %d, but the longest matching file has only %d lines" % (line, longest),
+                ))
+    return dead
+
+def _resolve(ctx, given, default):
+    """The path a path flag names: its default when unset, the invocation directory when relative."""
+    if not given:
+        return default
+    if not given.startswith("/"):
+        given = ctx.std.env.current_dir() + "/" + given
+
+    # `dirname` is what turns the tree's root into the prefix its files are
+    # reported under, and a trailing slash would leave it naming the tree
+    # itself.
+    return given.removesuffix("/") if len(given) > 1 else given
+
+def _line_counts(fs, crates):
+    """Every `.rs` file under `crates`, as a `crates`-parent-relative path to its line count."""
+    parent = dirname(crates)
+    counts = {}
+    for path in walk_suffix(fs, crates, ".rs", relative_to = parent):
+        counts[path] = len(fs.read_to_string(parent + "/" + path).splitlines())
+    return counts
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    config = _resolve(ctx, ctx.args.config, root + "/.cargo/mutants.toml")
+    crates = _resolve(ctx, ctx.args.crates, root + "/crates")
+
+    if not is_file(ctx.std.fs, config):
+        fail("%s: not a file" % config)
+
+    patterns = exclude_patterns(config, read_lines(ctx.std.fs, config))
+    if not patterns:
+        ctx.std.io.stderr.write("%s: no exclude_re entries found\n" % config)
+        return 1
+
+    line_counts = _line_counts(ctx.std.fs, crates)
+    if not line_counts:
+        ctx.std.io.stderr.write("%s: holds no .rs files to match against\n" % crates)
+        return 1
+
+    dead = dead_fragments(patterns, line_counts)
+    for pattern, fragment, reason in dead:
+        ctx.std.io.stderr.write(
+            "%s: exclude_re entry names a path this repository no longer supports: %r -- %s (from %r)\n" % (
+                config,
+                fragment,
+                reason,
+                pattern,
+            ),
+        )
+    if dead:
+        return 1
+
+    pinned = len([
+        line
+        for pattern in patterns
+        for _, line in path_fragments(pattern)
+        if line != None
+    ])
+    ctx.std.io.stdout.write(
+        "check-mutants-config: %d exclude_re entries, %d of them pinned to a line, all live\n" % (
+            len(patterns),
+            pinned,
+        ),
+    )
+    return 0
+
+check_mutants_config = task(
+    summary = "Check that .cargo/mutants.toml's exclude_re entries still name real files",
+    implementation = _impl,
+    args = {
+        "config": args.string(
+            default = "",
+            description = "The cargo-mutants config to read; the default is .cargo/mutants.toml.",
+        ),
+        "crates": args.string(
+            default = "",
+            description = "The tree of .rs files to match against; the default is crates/.",
+        ),
+    },
+)

@@ -1,0 +1,308 @@
+"""Every series the dashboard and the alert rules name is one the broker exports.
+
+`docs/operations/grafana-dashboard.json` and `docs/operations/alert-rules.yaml`
+spell Prometheus series names. A name the registry does not carry is not an
+error anyone sees: the panel simply stays empty and the alert never fires. This
+task reads both files, collects every `krabka_broker_*` name they mention, and
+fails on any the `/metrics` body does not export. It also checks that each
+`runbook:` an alert names is a file that exists.
+
+The body is the OpenMetrics text a broker serves on `/metrics`. The checked-in
+copy is `docs/operations/metrics-body.txt`, which the `metrics_contract` suite
+in `crates/broker/tests/` regenerates and keeps in step with the registry; the
+CI docs job has no Rust toolchain, so this task reads that copy rather than
+starting a broker.
+
+The name rules match that suite: a `# TYPE` line of kind `counter` exports
+`<name>_total`, a `gauge` exports `<name>`, and a `histogram` exports
+`<name>_bucket`, `<name>_sum` and `<name>_count`.
+
+    aspect check-metrics-contract
+"""
+
+load("./repo.axl", "is_file")
+
+# The prefix every series this repository publishes carries. A name is this
+# prefix plus at least one more name character, and the character before it
+# must not be a name character -- otherwise `x_krabka_broker_foo` would read as
+# a reference to `krabka_broker_foo`.
+SERIES_PREFIX = "krabka_broker_"
+
+# The characters a Prometheus series name is built from, which is also what
+# separates a reference from the text around it.
+_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
+# The sample names a `# TYPE <name> histogram` line stands for.
+HISTOGRAM_SUFFIXES = ["_bucket", "_sum", "_count"]
+
+_TYPE_PREFIX = "# TYPE "
+
+# Whitespace inside a line. YAML permits no other whitespace character in a
+# line it indents, so this is the whole of what the port has to recognise.
+_SPACE = " \t"
+
+# The block-scalar headers a rule field opens a multi-line value with. Their
+# indicators (`-` for chomping, and the folding `>` against the literal `|`)
+# make no difference here: the value is rejoined with single spaces either way,
+# because a PromQL expression and a runbook path are both one line of text.
+_BLOCK_SCALARS = ["|", ">", "|-", ">-"]
+
+# The dashboard is a few thousand JSON nodes. The bound is what turns a walk
+# that would not terminate into an error, the way `walk` in `repo.axl` does.
+_MAX_NODES = 1000000
+
+def _is_name_char(character):
+    return _NAME_CHARS.find(character) >= 0
+
+def _fields(text):
+    """`text` split on runs of whitespace, with the empty pieces dropped."""
+    return [field for field in text.replace("\t", " ").split(" ") if field]
+
+def _indent_width(line):
+    """How many leading whitespace characters `line` opens with."""
+    return len(line) - len(line.lstrip(_SPACE))
+
+def series_names(text):
+    """Every `krabka_broker_*` name in `text`, in the order they appear.
+
+    A name starts at the prefix only when the character before it is not one a
+    name is built from, and it has to carry at least one character past the
+    prefix -- a bare `krabka_broker_` names nothing.
+    """
+    found = []
+    index = 0
+    for _ in range(len(text) + 1):
+        at = text.find(SERIES_PREFIX, index)
+        if at < 0:
+            break
+
+        # Any further name starts at a later occurrence of the prefix, so a
+        # rejected one is skipped past rather than retried a character on.
+        index = at + len(SERIES_PREFIX)
+        if at > 0 and _is_name_char(text[at - 1]):
+            continue
+        end = index
+        for _ in range(len(text) - index):
+            if not _is_name_char(text[end]):
+                break
+            end += 1
+        if end > index:
+            found.append(text[at:end])
+            index = end
+    return found
+
+def exported_sample_names(body):
+    """Every sample name `body` can carry, expanded from its `# TYPE` lines.
+
+    A family with no live label set writes no sample line, so the `# TYPE`
+    line is the one place every registered family appears.
+    """
+    names = {}
+    for line in body.splitlines():
+        if not line.startswith(_TYPE_PREFIX):
+            continue
+        parts = _fields(line[len(_TYPE_PREFIX):])
+        if len(parts) < 2:
+            continue
+        name, kind = parts[0], parts[1]
+        if kind == "counter":
+            names[name + "_total"] = True
+        elif kind == "gauge" or kind == "unknown":
+            names[name] = True
+        elif kind == "histogram":
+            for suffix in HISTOGRAM_SUFFIXES:
+                names[name + suffix] = True
+        else:
+            # The body is generated, so a kind this does not know is a change
+            # in the encoder rather than a contract the file breaks.
+            fail("unexpected metric type %s on %s" % (kind, name))
+    return sorted(names)
+
+def dashboard_expressions(decoded):
+    """Every `expr` string in the decoded dashboard, at any nesting depth.
+
+    Grafana nests a panel's queries under `targets`, and a row's panels under
+    the row, so nothing shallower than a full walk finds them all. A key named
+    `expr` whose value is not a string is walked rather than collected, which
+    is what a future schema that wraps the expression in an object needs.
+    """
+    found = []
+    pending = [("walk", decoded)]
+
+    # Starlark forbids recursion, so the walk drains an explicit worklist. The
+    # list is a stack, and children go on in reverse so that popping visits
+    # them in document order and `found` reads top to bottom.
+    for _ in range(_MAX_NODES):
+        if not pending:
+            break
+        kind, node = pending.pop()
+        if kind == "emit":
+            found.append(node)
+            continue
+        children = []
+        if type(node) == "dict":
+            for key, value in node.items():
+                if key == "expr" and type(value) == "string":
+                    children.append(("emit", value))
+                else:
+                    children.append(("walk", value))
+        elif type(node) == "list":
+            for item in node:
+                children.append(("walk", item))
+        for child in reversed(children):
+            pending.append(child)
+    if pending:
+        fail("dashboard: more JSON nodes than this walk can reach")
+    return found
+
+def rule_fields(text, field):
+    """Every `<field>:` value in the rules text, block scalars included.
+
+    The file is plain enough that a line scan reads it: a rule field sits on
+    one line as `field: value`, or opens a `|` or `>` block whose lines are
+    indented deeper than the key. The key may carry the `- ` of a list item,
+    because the first field of a rule opens that rule's list entry.
+
+    A value is returned with its surrounding quotes removed, so `expr: "x"`
+    and `expr: x` read the same.
+    """
+    lines = text.splitlines()
+    values = []
+    index = 0
+
+    # Each pass consumes at least the line it looked at, so the line count
+    # bounds the passes.
+    for _ in range(len(lines)):
+        if index >= len(lines):
+            break
+        match = _field_on_line(lines[index], field)
+        index += 1
+        if match == None:
+            continue
+        indent, value = match.indent, match.value
+        if value in _BLOCK_SCALARS:
+            block = []
+            for _ in range(len(lines)):
+                if index >= len(lines):
+                    break
+                line = lines[index]
+
+                # A blank line belongs to the block whatever its indent; any
+                # other line ends it as soon as it is no deeper than the key.
+                if line.strip() and _indent_width(line) <= indent:
+                    break
+                block.append(line.strip())
+                index += 1
+            value = " ".join(block)
+        values.append(value.strip("\"'"))
+    return values
+
+def _field_on_line(line, field):
+    """`struct(indent, value)` when `line` sets `field`, otherwise `None`.
+
+    `indent` counts the whitespace the line opens with, which is what a block
+    scalar's body has to sit deeper than. The `- ` of a list item is not part
+    of that count, so a block a list-item field opens runs on until a line
+    reaches back out to the marker's own column.
+    """
+    prefix = field + ":"
+    indent = _indent_width(line)
+    rest = line[indent:]
+    if rest.startswith(prefix):
+        return struct(indent = indent, value = rest[len(prefix):].strip())
+    if rest.startswith("-"):
+        after = rest[1:]
+        marker = _indent_width(after)
+        if marker > 0 and after[marker:].startswith(prefix):
+            return struct(indent = indent, value = after[marker + len(prefix):].strip())
+    return None
+
+def referenced_names(expressions):
+    """The distinct `krabka_broker_*` names `expressions` mention, sorted."""
+    names = {}
+    for expression in expressions:
+        for name in series_names(expression):
+            names[name] = True
+    return sorted(names)
+
+def _resolve(root, path):
+    return path if path.startswith("/") else root + "/" + path
+
+def _read(ctx, path, label):
+    """The file's text, or `None` after reporting that there is no such file."""
+    if not is_file(ctx.std.fs, path):
+        ctx.std.io.stderr.write("%s: is not a file\n" % label)
+        return None
+    return ctx.std.fs.read_to_string(path)
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    body = _read(ctx, _resolve(root, ctx.args.body), ctx.args.body)
+    dashboard = _read(ctx, _resolve(root, ctx.args.dashboard), ctx.args.dashboard)
+    rules = _read(ctx, _resolve(root, ctx.args.rules), ctx.args.rules)
+    if body == None or dashboard == None or rules == None:
+        return 1
+
+    exported = exported_sample_names(body)
+    if not exported:
+        ctx.std.io.stderr.write(
+            "%s: no `# TYPE` lines; not a /metrics body\n" % ctx.args.body,
+        )
+        return 1
+    known = {name: True for name in exported}
+
+    failed = False
+    checked = 0
+    sources = [
+        (ctx.args.dashboard, dashboard_expressions(json.decode(dashboard))),
+        (ctx.args.rules, rule_fields(rules, "expr")),
+    ]
+    for label, expressions in sources:
+        referenced = referenced_names(expressions)
+        if not referenced:
+            # An empty result means the file stopped being read, not that it
+            # stopped naming series, so it is a failure rather than a pass.
+            ctx.std.io.stderr.write("%s: names no krabka_broker_* series\n" % label)
+            failed = True
+        checked += len(referenced)
+        for name in referenced:
+            if name not in known:
+                ctx.std.io.stderr.write(
+                    "%s: %s is not a series the broker exports\n" % (label, name),
+                )
+                failed = True
+
+    runbooks = rule_fields(rules, "runbook")
+    for runbook in runbooks:
+        if not is_file(ctx.std.fs, _resolve(root, runbook)):
+            ctx.std.io.stderr.write(
+                "%s: runbook %s does not exist\n" % (ctx.args.rules, runbook),
+            )
+            failed = True
+
+    if failed:
+        return 1
+    ctx.std.io.stdout.write(
+        "check-metrics-contract: %d series references and %d runbooks check out\n" %
+        (checked, len(runbooks)),
+    )
+    return 0
+
+check_metrics_contract = task(
+    summary = "Check the dashboard and alert rules against the exported metrics",
+    implementation = _impl,
+    args = {
+        "body": args.string(
+            default = "docs/operations/metrics-body.txt",
+            description = "A /metrics body file, relative to the repository root.",
+        ),
+        "dashboard": args.string(
+            default = "docs/operations/grafana-dashboard.json",
+            description = "The Grafana dashboard to read `expr` fields from.",
+        ),
+        "rules": args.string(
+            default = "docs/operations/alert-rules.yaml",
+            description = "The Prometheus alert rules to read `expr` fields from.",
+        ),
+    },
+)
