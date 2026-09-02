@@ -1,0 +1,65 @@
+(* #"/workspace/crates/verified/src/jwks.rs" 84 0 88 25 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 89 16 89 17
+let%span sjwks'0 = "/workspace/crates/verified/src/jwks.rs" 89 36 89 37
+let%span sjwks'1 = "/workspace/crates/verified/src/jwks.rs" 92 25 92 26
+let%span sjwks'2 = "/workspace/crates/verified/src/jwks.rs" 92 30 92 54
+let%span sjwks'3 = "/workspace/crates/verified/src/jwks.rs" 73 10 82 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_JwksOnDemandDecision = RateLimited | Refresh Int64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let jwks_on_demand_refresh_decision [#"/workspace/crates/verified/src/jwks.rs" 84 0 88 25] (now_ms: Int64.t)
+  (last_refresh_ms: Int64.t) (min_pause_ms: Int64.t) (return (x: t_JwksOnDemandDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int64.lt now_ms ([%#sjwks] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_11 <- Int64.lt min_pause_ms ([%#sjwks'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb4) | br1 -> {_11} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_13 <- Int64.lt now_ms last_refresh_ms ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb7) | br1 -> {_13} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- RateLimited ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_18 <- Int64.gt last_refresh_ms ([%#sjwks'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_18 = false} (! bb12) | br1 -> {_18} (! bb8) ] ]
+  | bb8 = s0
+    [ s0 = Int64.sub [%#sjwks'2] {now_ms} {last_refresh_ms} (fun (_x: Int64.t) -> [ &_21 <- _x ] s1)
+    | s1 = [ &_20 <- Int64.lt _21 min_pause_ms ] s2
+    | s2 = any [ br0 -> {_20 = false} (! bb12) | br1 -> {_20} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- RateLimited ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- Refresh now_ms ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_JwksOnDemandDecision = Any.any_l ()
+  | & now_ms: Int64.t = now_ms
+  | & last_refresh_ms: Int64.t = last_refresh_ms
+  | & min_pause_ms: Int64.t = min_pause_ms
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _18: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _21: Int64.t = Any.any_l () ])
+  [ return (result: t_JwksOnDemandDecision) ->
+  {[@stop_split] [@expl:jwks_on_demand_refresh_decision ensures] [%#sjwks'3] match result with
+      | RateLimited -> true
+      | Refresh next_refresh_ms -> Int64.to_int next_refresh_ms = Int64.to_int now_ms
+      /\ ge_log_Int (Int64.to_int now_ms) 0
+      /\ ge_log_Int (Int64.to_int min_pause_ms) 0
+      /\ ge_log_Int (Int64.to_int now_ms) (Int64.to_int last_refresh_ms)
+      /\ (Int64.to_int last_refresh_ms <= 0
+      \/ ge_log_Int (Int64.to_int now_ms - Int64.to_int last_refresh_ms) (Int64.to_int min_pause_ms))
+      end}
+    (! return {result}) ]

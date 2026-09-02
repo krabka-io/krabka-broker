@@ -14,7 +14,7 @@ use krabka_audit::{
 use krabka_metadata::BreakGlassAction;
 use krabka_raft::NodeId;
 
-use super::RecoveryJob;
+use super::{Election, RecoveryJob};
 use crate::{
     break_glass::{action_name, metrics as break_glass_metrics},
     config::{BackgroundUncleanRecovery, BreakGlassConfig},
@@ -26,9 +26,10 @@ use crate::{
 ///
 /// # This path has no caller to refuse
 ///
-/// Unclean recovery loses committed data exactly as an operator-typed unclean
-/// election does, so the two-person rule looks as if it belongs on both. It
-/// cannot be here. Leader election and the broker-heartbeat path start a
+/// Unclean recovery can lose committed data exactly as an operator-typed
+/// unclean election does -- whenever no eligible leader replica survives to be
+/// elected instead -- so the two-person rule looks as if it belongs on both.
+/// It cannot be here. Leader election and the broker-heartbeat path start a
 /// recovery with no request, no connection, and no principal, so a refusal has
 /// no recipient and an approval has nobody to ask. An operator who types an
 /// unclean election can be asked for a second signature, and a controller that
@@ -78,8 +79,24 @@ impl BackgroundRecovery {
     ///
     /// Only [`BackgroundUncleanRecovery::Require`] refuses, and only a job that
     /// no operator approved on a broker that runs the two-person rule.
+    ///
+    /// The manager asks only about a recovery that can lose data. A partition
+    /// that still has a surviving eligible leader replica can be recovered
+    /// without losing one, and this rule has no reason to refuse that.
     pub(super) fn refuses(&self, job: &RecoveryJob) -> bool {
         self.enabled && job.proposal.is_none() && self.mode == BackgroundUncleanRecovery::Require
+    }
+
+    /// Whether this job must not commit the election the poll settled on.
+    ///
+    /// The same rule as [`Self::refuses`], asked once the poll has said which
+    /// of the two elections the recovery reached. An eligible leader replica
+    /// holds every committed record, so electing one is not the act the rule
+    /// exists to stop and `require` lets it through; a fallback to the most
+    /// complete surviving log is that act, and `require` refuses it however
+    /// the partition's published ELR read before the poll.
+    pub(super) fn refuses_election(&self, job: &RecoveryJob, election: Election) -> bool {
+        election.basis.loses_data() && self.refuses(job)
     }
 
     /// Audit a recovery this rule refused. The partition stays leaderless and
@@ -98,23 +115,46 @@ impl BackgroundRecovery {
         );
     }
 
-    /// Account one recovery that elected a leader with no approval behind it.
+    /// Record one committed election, and account it as a bypass when it was
+    /// one.
     ///
-    /// `audit-only` is the default, so this is the ordinary path on a cluster
-    /// that turned the two-person rule on. The counter is the series to alert
-    /// on, and the event is the after-the-fact proof that a data-losing
-    /// election happened that no second person agreed to.
-    pub(super) fn audit_bypass(
+    /// A broker that runs the rule writes an event for every recovery that
+    /// reaches raft, and its reason names which rule chose the leader: an
+    /// eligible leader replica, or the most complete surviving log. The two
+    /// are worth telling apart after the fact, because only the second one can
+    /// have dropped a committed record.
+    ///
+    /// A data-losing election that no operator approved is also a bypass of
+    /// the two-person rule, and is recorded as one. `audit-only` is the
+    /// default, so that is the ordinary path on a cluster that turned the rule
+    /// on: the counter is the series to alert on, and the event is the
+    /// after-the-fact proof that a data-losing election happened that no
+    /// second person agreed to. An ELR election is not a bypass -- it loses
+    /// nothing, so there is nothing the rule would have refused.
+    ///
+    /// `off`, and a broker with no approver set, write nothing at all. KFC-9
+    /// gives `off` one meaning, the behaviour the broker had before the rule
+    /// existed with no audit event and no counter, and an `applied` event per
+    /// recovery would take it away.
+    pub(super) fn audit_election(
         &self,
         job: &RecoveryJob,
         node_id: NodeId,
-        winner: NodeId,
+        election: Election,
         metrics: &crate::metrics::BrokerMetrics,
     ) {
-        if !self.enabled
-            || job.proposal.is_some()
-            || self.mode != BackgroundUncleanRecovery::AuditOnly
-        {
+        if !self.enabled || self.mode == BackgroundUncleanRecovery::Off {
+            return;
+        }
+        let elected = format!("unclean recovery elected {}", Self::choice(election, job));
+        if !self.is_bypass(job, election) {
+            self.emit(
+                PrivilegedPhase::Applied,
+                AuditOutcome::Success,
+                job,
+                node_id,
+                elected,
+            );
             return;
         }
         break_glass_metrics::record_bypass(metrics, BreakGlassAction::UncleanRecovery);
@@ -123,30 +163,52 @@ impl BackgroundRecovery {
             AuditOutcome::Success,
             job,
             node_id,
-            format!(
-                "unclean recovery elected broker {} with no break-glass approval (strategy {:?})",
-                winner.0, job.strategy
-            ),
+            format!("{elected}, with no break-glass approval"),
         );
     }
 
-    /// Durably admit the data-losing election before it reaches raft.
+    /// Whether this election bypassed a two-person rule that was watching for
+    /// it. Only a data-losing one can: an ELR election is what the rule would
+    /// have allowed.
+    fn is_bypass(&self, job: &RecoveryJob, election: Election) -> bool {
+        self.enabled
+            && job.proposal.is_none()
+            && self.mode == BackgroundUncleanRecovery::AuditOnly
+            && election.basis.loses_data()
+    }
+
+    /// The clause naming the leader and the rule that chose it, which every
+    /// event on this path is built from.
+    fn choice(election: Election, job: &RecoveryJob) -> String {
+        format!(
+            "broker {} {} (strategy {:?})",
+            election.leader.0,
+            election.basis.describe(),
+            job.strategy
+        )
+    }
+
+    /// Durably admit the election before it reaches raft.
     pub(super) async fn require_audit(
         &self,
         job: &RecoveryJob,
         node_id: NodeId,
-        winner: NodeId,
+        election: Election,
     ) -> Result<(), AuditError> {
         if self.audit_log.mode() != AuditMode::FailClosed {
             return Ok(());
         }
+        let reason = format!(
+            "unclean recovery admitted for {}",
+            Self::choice(election, job)
+        );
         self.audit_log
             .emit_required(self.event(
                 PrivilegedPhase::Attempted,
                 AuditOutcome::Success,
                 job,
                 node_id,
-                format!("unclean recovery admitted for broker {}", winner.0),
+                reason,
             ))
             .await
     }
@@ -156,6 +218,13 @@ impl BackgroundRecovery {
     /// The event names the controller that acted rather than a person, and its
     /// source endpoint is empty, because no connection carried this recovery.
     /// That absence is the whole reason the path cannot have a gate.
+    ///
+    /// It does carry the proposal id when the job has one. An operator-typed
+    /// recovery reaches the URM with the approval its handler already spent,
+    /// and the applied event is the one that records the election as
+    /// authorized rather than a bypass; without the id, nothing joins that
+    /// record to the approval that authorized it. A background job has no
+    /// proposal and the field stays empty, which is what a refusal always is.
     fn emit(
         &self,
         phase: PrivilegedPhase,
@@ -181,7 +250,7 @@ impl BackgroundRecovery {
             phase,
             action: action_name(BreakGlassAction::UncleanRecovery).to_owned(),
             target: format!("{}-{}", job.topic, job.partition),
-            proposal_id: String::new(),
+            proposal_id: job.proposal.map(|id| id.to_string()).unwrap_or_default(),
             principal: AuditPrincipal {
                 name: format!("Controller:{}", node_id.0),
                 auth_method: "Internal".to_owned(),

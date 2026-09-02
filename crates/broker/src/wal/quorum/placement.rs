@@ -10,60 +10,78 @@ pub(crate) fn select_voters(
     local_node: NodeId,
     voters: usize,
 ) -> Vec<NodeId> {
+    let mut brokers = brokers
+        .into_iter()
+        .map(|broker| (broker.node_id, broker.rack))
+        .collect::<Vec<_>>();
+    brokers.sort_by_key(|(node_id, _)| node_id.0);
+    select_voters_from_sorted_racks(&brokers, local_node, voters)
+}
+
+/// Select voters from broker/rack pairs already sorted by node id.
+pub(crate) fn select_voters_from_sorted_racks(
+    brokers: &[(NodeId, Option<String>)],
+    local_node: NodeId,
+    voters: usize,
+) -> Vec<NodeId> {
     if voters == 0 {
         return Vec::new();
     }
-    let mut brokers = brokers.into_iter().collect::<Vec<_>>();
-    brokers.sort_by_key(|broker| broker.node_id.0);
 
-    let mut selected = Vec::with_capacity(voters);
-    let Some(local) = brokers
-        .iter()
-        .find(|broker| broker.node_id == local_node && broker.rack.is_some())
-    else {
-        return selected;
-    };
-    selected.push(local.node_id);
-
-    let rack_distinct = rack_distinct_candidates(&brokers, &selected)
-        .map(|broker| broker.node_id)
-        .collect::<Vec<_>>();
-    for node_id in rack_distinct {
-        if selected.len() == voters {
-            return selected;
-        }
-        selected.push(node_id);
+    // Map exact rack-string equality to compact primitive IDs for the verified
+    // selector. Brokers without a rack are deliberately absent.
+    let mut rack_names: Vec<&str> = Vec::new();
+    let mut candidates: Vec<(u64, u64)> = Vec::new();
+    for (node_id, rack) in brokers {
+        let Some(rack) = rack.as_deref() else {
+            continue;
+        };
+        let rack_id = rack_names
+            .iter()
+            .position(|known| *known == rack)
+            .unwrap_or_else(|| {
+                rack_names.push(rack);
+                rack_names.len() - 1
+            });
+        candidates.push((
+            node_id.0,
+            u64::try_from(rack_id).expect("rack index fits u64"),
+        ));
     }
 
-    selected
-}
+    let mut selected = Vec::with_capacity(voters);
+    let mut used_nodes = Vec::with_capacity(voters);
+    let mut used_racks = Vec::with_capacity(voters);
+    let Some(local_index) = krabka_verified::wal::select_wal_voter_index(
+        &candidates,
+        &used_nodes,
+        &used_racks,
+        local_node.0,
+        true,
+    ) else {
+        return selected;
+    };
+    let local = candidates[local_index];
+    selected.push(NodeId(local.0));
+    used_nodes.push(local.0);
+    used_racks.push(local.1);
 
-fn rack_distinct_candidates<'a>(
-    brokers: &'a [BrokerRegistrationRecord],
-    selected: &'a [NodeId],
-) -> impl Iterator<Item = &'a BrokerRegistrationRecord> {
-    let mut used_racks = selected
-        .iter()
-        .filter_map(|node_id| {
-            brokers
-                .iter()
-                .find(|broker| broker.node_id == *node_id)
-                .and_then(|broker| broker.rack.as_deref())
-        })
-        .collect::<Vec<_>>();
-    brokers.iter().filter(move |broker| {
-        if selected.contains(&broker.node_id) {
-            return false;
-        }
-        let Some(rack) = broker.rack.as_deref() else {
-            return false;
+    while selected.len() < voters {
+        let Some(index) = krabka_verified::wal::select_wal_voter_index(
+            &candidates,
+            &used_nodes,
+            &used_racks,
+            local_node.0,
+            false,
+        ) else {
+            break;
         };
-        if used_racks.contains(&rack) {
-            return false;
-        }
-        used_racks.push(rack);
-        true
-    })
+        let candidate = candidates[index];
+        selected.push(NodeId(candidate.0));
+        used_nodes.push(candidate.0);
+        used_racks.push(candidate.1);
+    }
+    selected
 }
 
 #[cfg(test)]

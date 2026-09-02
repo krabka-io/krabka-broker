@@ -42,6 +42,31 @@ async fn preferred_happy_path() {
 }
 
 #[tokio::test]
+async fn preferred_election_rejects_exhausted_metadata_epochs() {
+    for (partition_epoch, leader_epoch) in [(i32::MAX, 5), (0, i32::MAX)] {
+        let mut img = img_with_partition("foo", 0, 2, &[1, 2, 3], &[1, 2, 3]);
+        let mut record = img.partition("foo", 0).expect("seeded partition").clone();
+        record.partition_epoch = partition_epoch;
+        record.leader_epoch = LeaderEpoch(leader_epoch);
+        img.apply(&krabka_metadata::MetadataRecord::V1Partition(record));
+        let l = liveness_with_alive(&[1, 2, 3]).await;
+
+        let error = select_new_leader_for_partition(
+            &img,
+            &l,
+            &no_witnesses(),
+            "foo",
+            0,
+            ElectionType::Preferred,
+        )
+        .await
+        .expect_err("exhausted epoch must fail closed");
+
+        assert!(error == ElectError::EpochExhausted);
+    }
+}
+
+#[tokio::test]
 async fn preferred_election_error_cases() {
     // Replicas are always [1, 2, 3]; the preferred leader is replica 1.
     // (current_leader, isr, alive, expected)

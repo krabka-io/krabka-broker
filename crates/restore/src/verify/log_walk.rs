@@ -41,7 +41,8 @@ pub(super) fn walk_log(
     let mut batches: u64 = 0;
     let mut records: u64 = 0;
     let mut max_timestamp_ms: i64 = -1;
-    let mut previous_end_offset: Option<Offset> = None;
+    let mut minimum_base = segment.base_offset.0;
+    let mut end_offset: Option<Offset> = None;
 
     while !cursor.is_empty() {
         let validated = match validate_one_v2_batch(cursor) {
@@ -66,8 +67,9 @@ pub(super) fn walk_log(
         let base_offset = header.base_offset.get();
 
         // The first batch must open exactly where the archive key says the
-        // segment starts, and every later batch must start strictly after the
-        // previous one ends. Either violation means the `.log` bytes and the
+        // segment starts, and every later batch must start at or after the
+        // previous one ends. Kafka compaction can leave valid offset gaps;
+        // overlap or regression means the `.log` bytes and the
         // segment's own key name disagree about the segment's extent, which
         // is corruption or a mis-keyed archive; `TruncatedSegment` is reused
         // for it because it already carries the right shape ("the archive's
@@ -76,16 +78,7 @@ pub(super) fn walk_log(
         // available") was written for the framing case below and reads
         // awkwardly here. A dedicated variant would fit better; see the
         // implementer's report.
-        if let Some(previous) = previous_end_offset {
-            if base_offset <= previous.0 {
-                return Err(RestoreError::TruncatedSegment {
-                    key: key.to_string(),
-                    position,
-                    declared: offset_as_u64(previous.0 + 1),
-                    available: offset_as_u64(base_offset),
-                });
-            }
-        } else if base_offset != segment.base_offset.0 {
+        if end_offset.is_none() && base_offset != segment.base_offset.0 {
             return Err(RestoreError::TruncatedSegment {
                 key: key.to_string(),
                 position,
@@ -93,10 +86,21 @@ pub(super) fn walk_log(
                 available: offset_as_u64(base_offset),
             });
         }
+        let Some(next_base) = krabka_verified::restore_batch_step(
+            minimum_base,
+            base_offset,
+            header.last_offset_delta.get(),
+        ) else {
+            return Err(RestoreError::TruncatedSegment {
+                key: key.to_string(),
+                position,
+                declared: offset_as_u64(minimum_base),
+                available: offset_as_u64(base_offset),
+            });
+        };
 
-        previous_end_offset = Some(Offset(
-            base_offset + i64::from(header.last_offset_delta.get()),
-        ));
+        minimum_base = next_base;
+        end_offset = Some(Offset(next_base - 1));
         batches += 1;
         records =
             records.saturating_add(u64::try_from(header.records_count.get().max(0)).unwrap_or(0));
@@ -113,7 +117,7 @@ pub(super) fn walk_log(
     Ok(LogWalk {
         // An empty `.log` (no batches at all) has nothing to derive an end
         // offset from; it holds exactly what its base offset already states.
-        end_offset: previous_end_offset.unwrap_or(segment.base_offset),
+        end_offset: end_offset.unwrap_or(segment.base_offset),
         max_timestamp_ms,
         batches,
         records,

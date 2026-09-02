@@ -1,0 +1,165 @@
+(* #"/workspace/crates/verified/src/oauth.rs" 90 0 90 80 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span snum'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span soauth = "/workspace/crates/verified/src/oauth.rs" 103 27 103 28
+let%span soauth'0 = "/workspace/crates/verified/src/oauth.rs" 107 34 107 85
+let%span soauth'1 = "/workspace/crates/verified/src/oauth.rs" 111 36 111 71
+let%span soauth'2 = "/workspace/crates/verified/src/oauth.rs" 114 40 114 85
+let%span soauth'3 = "/workspace/crates/verified/src/oauth.rs" 67 10 88 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_OAuthExpiryPresence = Missing | Present
+
+type t_OAuthSessionCap = Disabled | Enabled
+
+type t_OAuthAuthenticationKind = Initial | Reauthentication
+
+type t_OAuthPrincipalMatch = Matches | Differs
+
+type t_OAuthSessionFacts = {
+  expiry: t_OAuthExpiryPresence;
+  token_expires_at_ms: Int64.t;
+  now_ms: Int64.t;
+  cap: t_OAuthSessionCap;
+  cap_ms: Int64.t;
+  authentication: t_OAuthAuthenticationKind;
+  principal: t_OAuthPrincipalMatch }
+
+type t_OAuthSessionDecision = Reject | Admit Int64.t Int64.t
+
+type tup2_OAuthAuthenticationKind_OAuthPrincipalMatch = { f0: t_OAuthAuthenticationKind; f1: t_OAuthPrincipalMatch }
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_sub (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_sub ensures] ([@stop_split] [@expl:checked_sub ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ - Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ - Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_sub ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ - Int64.to_int rhs)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum'3] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:min_i64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_i64 result
+      <= deep_model_i64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_i64 result <= deep_model_i64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_i64 self_ < deep_model_i64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
+    (! return {result}) ]
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum'1] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'2] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let oauth_session_admission [#"/workspace/crates/verified/src/oauth.rs" 90 0 90 80] (facts: t_OAuthSessionFacts)
+  (return (x: t_OAuthSessionDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {facts.expiry = Missing} (! bb2) | br1 -> {facts.expiry = Present} (! bb3) ]
+  | bb3 = s0
+    [ s0 = [ &_14 <- Int64.le facts.token_expires_at_ms facts.now_ms ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb5) | br1 -> {_14} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_19 <- { f0 = facts.authentication; f1 = facts.principal } ] s1
+    | s1 = any [ br0 -> {_19.f0 = Initial} (! bb6) | br1 -> {_19.f0 = Reauthentication} (! bb7) ] ]
+  | bb7 = any [ br0 -> {_19.f1 = Matches} (! bb6) | br1 -> {_19.f1 = Differs} (! bb9) ]
+  | bb6 = any [ br0 -> {facts.cap = Disabled} (! bb14) | br1 -> {facts.cap = Enabled} (! bb11) ]
+  | bb11 = s0
+    [ s0 = [ &_27 <- Int64.le facts.cap_ms ([%#soauth] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb14) | br1 -> {_27} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb14 = s0
+    [ s0 = checked_sub [%#soauth'0] {facts.token_expires_at_ms} {facts.now_ms}
+        (fun (_x: t_Option_i64) -> [ &_32 <- _x ] s1)
+    | s1 = any [ br0 -> {_32 = None} (! bb18) | br1 (x0: Int64.t) -> {_32 = Some x0} (! bb17) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb17 = s0
+    [ s0 = elim_Some {_32} (fun (r0: Int64.t) -> [ &token_lifetime_ms <- r0 ] s1)
+    | s1 = any [ br0 -> {facts.cap = Disabled} (! bb21) | br1 -> {facts.cap = Enabled} (! bb22) ] ]
+  | bb22 = s0
+    [ s0 = min_i64 [%#soauth'1] {token_lifetime_ms} {facts.cap_ms}
+        (fun (_x: Int64.t) -> [ &session_lifetime_ms <- _x ] s1)
+    | s1 = bb24 ]
+  | bb21 = s0 [ s0 = [ &session_lifetime_ms <- token_lifetime_ms ] s1 | s1 = bb24 ]
+  | bb24 = s0
+    [ s0 = checked_add [%#soauth'2] {facts.now_ms} {session_lifetime_ms} (fun (_x: t_Option_i64) -> [ &_42 <- _x ] s1)
+    | s1 = any [ br0 -> {_42 = None} (! bb28) | br1 (x0: Int64.t) -> {_42 = Some x0} (! bb27) ] ]
+  | bb28 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb27 = s0
+    [ s0 = elim_Some {_42} (fun (r0: Int64.t) -> [ &effective_expires_at_ms <- r0 ] s1)
+    | s1 = [ &_ret <- Admit session_lifetime_ms effective_expires_at_ms ] s2
+    | s2 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OAuthSessionDecision = Any.any_l ()
+  | & facts: t_OAuthSessionFacts = facts
+  | & _14: bool = Any.any_l ()
+  | & _19: tup2_OAuthAuthenticationKind_OAuthPrincipalMatch = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & token_lifetime_ms: Int64.t = Any.any_l ()
+  | & _32: t_Option_i64 = Any.any_l ()
+  | & session_lifetime_ms: Int64.t = Any.any_l ()
+  | & effective_expires_at_ms: Int64.t = Any.any_l ()
+  | & _42: t_Option_i64 = Any.any_l () ])
+  [ return (result: t_OAuthSessionDecision) ->
+  {[@stop_split] [@expl:oauth_session_admission ensures] [%#soauth'3] match result with
+      | Reject -> true
+      | Admit session_lifetime_ms effective_expires_at_ms -> facts.expiry = Present
+      /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms) (Int64.to_int facts.now_ms)
+      /\ Int64.to_int facts.token_expires_at_ms - Int64.to_int facts.now_ms <= 9223372036854775807
+      /\ (facts.cap = Disabled \/ gt_log_Int (Int64.to_int facts.cap_ms) 0)
+      /\ (facts.authentication = Initial \/ facts.principal = Matches)
+      /\ Int64.to_int session_lifetime_ms
+        = (if facts.cap = Enabled
+        /\ Int64.to_int facts.cap_ms < Int64.to_int facts.token_expires_at_ms - Int64.to_int facts.now_ms then
+          Int64.to_int facts.cap_ms
+        else
+          Int64.to_int facts.token_expires_at_ms - Int64.to_int facts.now_ms
+        )
+      /\ Int64.to_int effective_expires_at_ms = Int64.to_int facts.now_ms + Int64.to_int session_lifetime_ms
+      end}
+    (! return {result}) ]

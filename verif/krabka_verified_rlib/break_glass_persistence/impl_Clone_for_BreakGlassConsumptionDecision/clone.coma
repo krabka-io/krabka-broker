@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 29 27 29 32 *)
+
+(* <break_glass_persistence::BreakGlassConsumptionDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BreakGlassConsumptionDecision = Missing | Malformed | Stale | InFlight | Append
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BreakGlassConsumptionDecision [#"/workspace/crates/verified/src/break_glass_persistence.rs" 29 27 29 32]
+  (self: t_BreakGlassConsumptionDecision) (return (x: t_BreakGlassConsumptionDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassConsumptionDecision = Any.any_l () | & self: t_BreakGlassConsumptionDecision = self ])
+  [ return (result: t_BreakGlassConsumptionDecision) -> (! return {result}) ]

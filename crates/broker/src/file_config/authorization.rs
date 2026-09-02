@@ -24,8 +24,9 @@ pub struct FileAuthorizationConfig {
     #[serde(default)]
     pub super_users: Vec<String>,
     /// `Some` iff `authz_type == Opa`. Required in that case;
-    /// `apply_to` returns [`FileConfigError::MissingSection`] when
-    /// omitted.
+    /// `apply_to` returns
+    /// [`FileConfigError::MissingSection`][crate::file_config::FileConfigError::MissingSection]
+    /// when omitted.
     pub opa: Option<FileOpaConfig>,
 }
 

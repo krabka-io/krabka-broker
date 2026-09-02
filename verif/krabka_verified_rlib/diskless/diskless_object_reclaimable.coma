@@ -1,0 +1,20 @@
+(* #"/proof-work-246/crates/verified/src/diskless.rs" 100 0 100 87 *)
+
+let%span sdiskless = "/proof-work-246/crates/verified/src/diskless.rs" 101 4 101 32
+let%span sdiskless'0 = "/proof-work-246/crates/verified/src/diskless.rs" 98 10 98 50
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let diskless_object_reclaimable [#"/proof-work-246/crates/verified/src/diskless.rs" 100 0 100 87] (referenced: bool)
+  (grace_elapsed: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {referenced = false} (! bb1) | br1 -> {referenced} (! bb2) ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#sdiskless] false ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- grace_elapsed ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & referenced: bool = referenced | & grace_elapsed: bool = grace_elapsed ])
+  [ return (result: bool) -> {[@stop_split] [@expl:diskless_object_reclaimable ensures] [%#sdiskless'0] result
+    = (not referenced /\ grace_elapsed)}
+    (! return {result}) ]

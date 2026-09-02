@@ -7,8 +7,11 @@
 //! handlers in the sibling modules read and write these types, so they live
 //! apart from any one mechanism.
 
-use krabka_protocol::ApiKey;
-use krabka_security::{Principal, SaslMechanism, ScramServerExchange};
+use krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange};
+use krabka_verified::{
+    authz::{RequestAuthState, request_auth_admission},
+    delegation_token::{TokenApi, TokenApiAdmission, token_api_admission},
+};
 
 use crate::handlers::ApiKeyCode;
 
@@ -152,6 +155,25 @@ impl ConnectionAuth {
         }
     }
 
+    /// Apply the shared KIP-48 API admission policy to this connection.
+    #[must_use]
+    pub(crate) fn token_api_admission(&self, api: TokenApi) -> TokenApiAdmission {
+        let Self::Authenticated {
+            principal,
+            authenticated_via_token,
+            ..
+        } = self
+        else {
+            return TokenApiAdmission::Reject;
+        };
+
+        token_api_admission(
+            principal.auth_method != AuthMethod::Anonymous,
+            *authenticated_via_token,
+            api,
+        )
+    }
+
     /// Whether the broker may serve `api_key` in the current auth state.
     /// - `Anonymous` / `Negotiating`: allow the pre-auth allowlist
     ///   (ApiVersions=18, SaslHandshake=17, SaslAuthenticate=36).
@@ -161,10 +183,33 @@ impl ConnectionAuth {
     /// - `Authenticated`: allow everything.
     #[must_use]
     pub fn allows_request(&self, api_key: ApiKeyCode) -> bool {
+        let state = match self {
+            Self::Anonymous | Self::Negotiating { .. } => RequestAuthState::PreAuth,
+            Self::Reauthenticating { .. } => RequestAuthState::Reauthenticating,
+            Self::Authenticated { .. } => RequestAuthState::Authenticated,
+        };
+        request_auth_admission(state, api_key)
+    }
+
+    /// The mechanism a `SaslHandshake` named for the exchange now in flight,
+    /// or `None` when no exchange is in flight.
+    ///
+    /// Two states carry one: a `Negotiating` connection holds the mechanism
+    /// its handshake chose, and a `Reauthenticating` one holds the mechanism
+    /// of the session it is replacing. `Anonymous` has run no handshake, and
+    /// an `Authenticated` connection's exchange is over — its `mechanism` is
+    /// an unused placeholder on the mTLS and anonymous paths, so reporting it
+    /// would invent a mechanism the connection never used.
+    ///
+    /// It is what the `SaslAuthenticate` path and the pre-auth gate both
+    /// label their `failed_authentication` with, so a rejection is counted
+    /// under the mechanism the peer asked for whichever of the two saw it.
+    #[must_use]
+    pub fn negotiated_mechanism(&self) -> Option<SaslMechanism> {
         match self {
-            Self::Anonymous | Self::Negotiating { .. } => is_pre_auth_allowed(api_key),
-            Self::Reauthenticating { .. } => api_key == ApiKey::SaslAuthenticate as i16,
-            Self::Authenticated { .. } => true,
+            Self::Negotiating { mechanism, .. } => Some(*mechanism),
+            Self::Reauthenticating { previous, .. } => Some(previous.mechanism),
+            Self::Anonymous | Self::Authenticated { .. } => None,
         }
     }
 }
@@ -178,10 +223,7 @@ impl ConnectionAuth {
 /// `ILLEGAL_SASL_STATE` (34) and closes the connection.
 #[must_use]
 pub fn is_pre_auth_allowed(api_key: ApiKeyCode) -> bool {
-    matches!(
-        ApiKey::from_i16(api_key),
-        Some(ApiKey::SaslHandshake | ApiKey::SaslAuthenticate | ApiKey::ApiVersions)
-    )
+    request_auth_admission(RequestAuthState::PreAuth, api_key)
 }
 
 #[cfg(test)]
@@ -230,6 +272,96 @@ mod tests {
         for (name, a) in cases {
             assert!(!a.is_authenticated(), "{name}");
             assert!(a.principal().is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn token_api_admission_maps_connection_auth_states_exactly() {
+        use krabka_security::AuthMethod;
+
+        let apis = [
+            TokenApi::Create,
+            TokenApi::Renew,
+            TokenApi::Expire,
+            TokenApi::Describe,
+        ];
+        let authenticated =
+            |auth_method, mechanism, authenticated_via_token| ConnectionAuth::Authenticated {
+                principal: Principal {
+                    name: "alice".into(),
+                    auth_method,
+                    groups: vec![],
+                },
+                mechanism,
+                expires_at_ms: None,
+                authenticated_via_token,
+            };
+
+        let rejected = [
+            ("anonymous state", ConnectionAuth::Anonymous),
+            (
+                "negotiating state",
+                ConnectionAuth::Negotiating {
+                    mechanism: SaslMechanism::Plain,
+                    exchange: SaslExchange::Plain,
+                    pending_token_expiry_ms: None,
+                },
+            ),
+            (
+                "reauthenticating state",
+                ConnectionAuth::Reauthenticating {
+                    previous: AuthenticatedSnapshot {
+                        principal: Principal {
+                            name: "alice".into(),
+                            auth_method: AuthMethod::SaslOAuthBearer,
+                            groups: vec![],
+                        },
+                        mechanism: SaslMechanism::OAuthBearer,
+                        expires_at_ms: Some(2_000_000),
+                    },
+                    exchange: SaslExchange::OAuthBearer,
+                },
+            ),
+            (
+                "authenticated anonymous principal",
+                authenticated(AuthMethod::Anonymous, SaslMechanism::Plain, false),
+            ),
+        ];
+        for (state, auth) in rejected {
+            for api in apis {
+                check!(
+                    auth.token_api_admission(api) == TokenApiAdmission::Reject,
+                    "{state}: {api:?}"
+                );
+            }
+        }
+
+        for (method, mechanism) in [
+            (AuthMethod::SaslPlain, SaslMechanism::Plain),
+            (AuthMethod::SaslScramSha256, SaslMechanism::ScramSha256),
+            (AuthMethod::SaslScramSha512, SaslMechanism::ScramSha512),
+            (AuthMethod::SaslOAuthBearer, SaslMechanism::OAuthBearer),
+            (AuthMethod::SaslGssapi, SaslMechanism::Gssapi),
+            (AuthMethod::MTls, SaslMechanism::Plain),
+        ] {
+            let auth = authenticated(method, mechanism, false);
+            for api in apis {
+                check!(auth.token_api_admission(api) == TokenApiAdmission::Allow);
+            }
+        }
+
+        let token_auth = authenticated(
+            AuthMethod::SaslScramSha256,
+            SaslMechanism::ScramSha256,
+            true,
+        );
+        for (api, expected) in [
+            (TokenApi::Create, TokenApiAdmission::Reject),
+            (TokenApi::Renew, TokenApiAdmission::Reject),
+            (TokenApi::Expire, TokenApiAdmission::Reject),
+            (TokenApi::Describe, TokenApiAdmission::Allow),
+        ] {
+            check!(token_auth.token_api_admission(api) == expected, "{api:?}");
         }
     }
 
@@ -328,6 +460,54 @@ mod tests {
         };
         for api_key in [0, 3, 17, 36] {
             assert!(auth.allows_request(api_key), "api key {api_key}");
+        }
+    }
+
+    /// The mechanism a rejection is counted under is the one a handshake
+    /// named, and nothing else: an `Authenticated` connection's placeholder
+    /// mechanism never reaches the metric, because no exchange is in flight.
+    #[test]
+    fn negotiated_mechanism_names_only_an_exchange_in_flight() {
+        let negotiating = ConnectionAuth::Negotiating {
+            mechanism: SaslMechanism::Plain,
+            exchange: SaslExchange::Plain,
+            pending_token_expiry_ms: None,
+        };
+        let reauthenticating = ConnectionAuth::Reauthenticating {
+            previous: AuthenticatedSnapshot {
+                principal: Principal {
+                    name: "alice".to_string(),
+                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                    groups: vec![],
+                },
+                mechanism: SaslMechanism::OAuthBearer,
+                expires_at_ms: Some(2_000_000),
+            },
+            exchange: SaslExchange::OAuthBearer,
+        };
+        let authenticated = ConnectionAuth::Authenticated {
+            principal: Principal {
+                name: "ANONYMOUS".into(),
+                auth_method: krabka_security::AuthMethod::Anonymous,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::Plain,
+            expires_at_ms: None,
+            authenticated_via_token: false,
+        };
+
+        let cases = [
+            ("anonymous", &ConnectionAuth::Anonymous, None),
+            ("negotiating", &negotiating, Some(SaslMechanism::Plain)),
+            (
+                "reauthenticating uses previous",
+                &reauthenticating,
+                Some(SaslMechanism::OAuthBearer),
+            ),
+            ("authenticated placeholder", &authenticated, None),
+        ];
+        for (case, auth, want) in cases {
+            check!(auth.negotiated_mechanism() == want, "{case}");
         }
     }
 }

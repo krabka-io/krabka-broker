@@ -64,8 +64,6 @@ pub async fn write_segment(
         topic: partition.topic.clone(),
         partition: partition.partition,
     };
-    let bound = predicates.offset_bound(&partition_ref);
-
     let mut outcome = SegmentOutcome {
         segment_id: segment.facts.segment_id,
         base_offset: segment.facts.base_offset,
@@ -81,7 +79,7 @@ pub async fn write_segment(
     // Every batch in this segment starts past the keep bound: an earlier
     // segment already ended the partition's restored history, so nothing
     // here survives and the target log is never opened for it.
-    if bound.is_some_and(|b| segment.facts.base_offset > b) {
+    if predicates.batch_past_offset_bound(&partition_ref, segment.facts.base_offset) {
         return Ok(outcome);
     }
 
@@ -112,7 +110,7 @@ pub async fn write_segment(
         let header = batch.header();
         let batch_base_offset = Offset(header.base_offset.get());
 
-        if bound.is_some_and(|b| batch_base_offset > b) {
+        if predicates.batch_past_offset_bound(&partition_ref, batch_base_offset) {
             break;
         }
 
@@ -136,8 +134,8 @@ pub async fn write_segment(
                 PreparedBatch::Verbatim(verbatim) => {
                     log.append_verbatim_at(verbatim, batch_base_offset)?;
                 }
-                PreparedBatch::Owned(owned) => {
-                    log.append_at(owned, batch_base_offset)?;
+                PreparedBatch::Owned { batch, .. } => {
+                    log.append_at(batch, batch_base_offset)?;
                 }
             }
         }
@@ -208,7 +206,7 @@ fn bytes_len(len: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_protocol::records::RecordBatch;
+    use krabka_protocol::records::{Attributes, RecordBatch};
 
     use super::*;
     use crate::materialize::test_support::{
@@ -436,10 +434,12 @@ mod tests {
 
     #[tokio::test]
     async fn dry_run_matches_a_real_run_but_writes_nothing() {
-        let batches = vec![
-            batch(0, vec![record(0, "a"), record(1, "b")]),
-            batch(2, vec![record(0, "c")]),
-        ];
+        let mut compressed = batch(0, vec![record(0, "a"), record_with_key(1, "drop")]);
+        // Kafka compression attribute 1 is gzip. A compressed rewrite's
+        // encoded size cannot be predicted by `RecordBatch::encoded_len`, so
+        // this pins the pre-encode path used by both real and dry runs.
+        compressed.attributes = Attributes(1);
+        let batches = vec![compressed, batch(2, vec![record(0, "c")])];
         let partition = topic_id_partition("orders", 0);
         // One shared fixture: `SegmentOutcome::segment_id` echoes
         // `segment.facts.segment_id`, and that id is random per fixture, so
@@ -448,14 +448,22 @@ mod tests {
         let segment = verified_segment(0, &batches);
 
         let real_target = tempfile::tempdir().expect("tempdir");
-        let real_args = args_from(&[], real_target.path());
+        let real_args = args_from(&["--exclude-key", "^drop$"], real_target.path());
         let real_predicates = Predicates::from_args(&real_args).expect("predicates");
         let real_outcome = write_segment(&real_args, &partition, &segment, &real_predicates)
             .await
             .expect("real write");
+        let real_dir = name::partition_dir(&real_args.target.log_dir, "orders", 0);
+        let log_bytes: u64 = std::fs::read_dir(real_dir)
+            .expect("target partition")
+            .map(|entry| entry.expect("directory entry").path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "log"))
+            .map(|path| std::fs::metadata(path).expect("log metadata").len())
+            .sum();
+        check!(real_outcome.bytes_written == log_bytes);
 
         let dry_target = tempfile::tempdir().expect("tempdir");
-        let mut dry_args = args_from(&[], dry_target.path());
+        let mut dry_args = args_from(&["--exclude-key", "^drop$"], dry_target.path());
         dry_args.dry_run = true;
         let dry_predicates = Predicates::from_args(&dry_args).expect("predicates");
         let dry_outcome = write_segment(&dry_args, &partition, &segment, &dry_predicates)

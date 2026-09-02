@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/jwks.rs" 65 27 65 32 *)
+
+(* <jwks::JwksOnDemandDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_JwksOnDemandDecision = RateLimited | Refresh Int64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_JwksOnDemandDecision [#"/workspace/crates/verified/src/jwks.rs" 65 27 65 32] (self: t_JwksOnDemandDecision)
+  (return (x: t_JwksOnDemandDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_JwksOnDemandDecision = Any.any_l () | & self: t_JwksOnDemandDecision = self ])
+  [ return (result: t_JwksOnDemandDecision) -> (! return {result}) ]

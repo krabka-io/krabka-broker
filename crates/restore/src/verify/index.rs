@@ -27,12 +27,6 @@ const TIME_INDEX_ENTRY_LEN: usize = std::mem::size_of::<TimeIndexEntry>();
 /// [`OFFSET_INDEX_ENTRY_LEN`].
 const TXN_INDEX_ENTRY_LEN: usize = std::mem::size_of::<AbortedTxnIndexEntry>();
 
-/// The highest relative offset an index entry may legally point at: the
-/// segment's last offset, expressed relative to its base offset.
-fn max_relative_offset(base_offset: Offset, end_offset: Offset) -> u32 {
-    u32::try_from((end_offset.0 - base_offset.0).max(0)).unwrap_or(u32::MAX)
-}
-
 /// Byte position of one fixed-width index entry, for a
 /// [`RestoreError::TruncatedSegment`].
 fn index_position(entry_index: usize, entry_len: usize) -> u64 {
@@ -55,9 +49,48 @@ fn index_error(
     }
 }
 
+/// Reject a trailing partial fixed-width entry. The shared remote reader is
+/// intentionally lenient because Kafka may expose a preallocated index; an
+/// offline restore instead requires the archived object to end on an entry
+/// boundary before it trusts the sidecar.
+fn require_complete_entries(
+    key: &Path,
+    bytes: &[u8],
+    entry_len: usize,
+) -> Result<(), RestoreError> {
+    let remainder = bytes.len() % entry_len;
+    if remainder == 0 {
+        return Ok(());
+    }
+    Err(index_error(
+        key,
+        bytes.len() / entry_len,
+        entry_len,
+        u64::try_from(entry_len).unwrap_or(u64::MAX),
+        u64::try_from(remainder).unwrap_or(u64::MAX),
+    ))
+}
+
+fn index_frontier(
+    key: &Path,
+    entry_len: usize,
+    base_offset: Offset,
+    end_offset: Offset,
+) -> Result<u32, RestoreError> {
+    krabka_verified::restore_index_frontier(base_offset.0, end_offset.0).ok_or_else(|| {
+        index_error(
+            key,
+            0,
+            entry_len,
+            offset_as_u64(base_offset.0),
+            offset_as_u64(end_offset.0),
+        )
+    })
+}
+
 /// Check that `bytes`, parsed as a Kafka `.index`, is internally consistent
 /// with the segment the `.log` walk established: `relative_offset` and
-/// `position` both non-decreasing across entries, every `position` inside the
+/// `position` both strictly increasing across entries, every `position` inside the
 /// verified `.log`, and every `relative_offset` at or before the segment's
 /// last offset.
 pub(super) fn validate_offset_index(
@@ -67,44 +100,22 @@ pub(super) fn validate_offset_index(
     end_offset: Offset,
     log_bytes: u64,
 ) -> Result<(), RestoreError> {
+    require_complete_entries(key, bytes, OFFSET_INDEX_ENTRY_LEN)?;
     let entries = parse_offset_index(bytes)?;
-    let max_relative = max_relative_offset(base_offset, end_offset);
+    let max_relative = index_frontier(key, OFFSET_INDEX_ENTRY_LEN, base_offset, end_offset)?;
     let mut previous: Option<(u32, u32)> = None;
 
     for (entry_index, entry) in entries.iter().enumerate() {
         let relative_offset = entry.relative_offset.get();
         let position = entry.position.get();
 
-        if let Some((previous_relative, previous_position)) = previous {
-            if relative_offset < previous_relative {
-                return Err(index_error(
-                    key,
-                    entry_index,
-                    OFFSET_INDEX_ENTRY_LEN,
-                    u64::from(previous_relative),
-                    u64::from(relative_offset),
-                ));
-            }
-            if position < previous_position {
-                return Err(index_error(
-                    key,
-                    entry_index,
-                    OFFSET_INDEX_ENTRY_LEN,
-                    u64::from(previous_position),
-                    u64::from(position),
-                ));
-            }
-        }
-        if u64::from(position) >= log_bytes {
-            return Err(index_error(
-                key,
-                entry_index,
-                OFFSET_INDEX_ENTRY_LEN,
-                log_bytes,
-                u64::from(position),
-            ));
-        }
-        if relative_offset > max_relative {
+        if !krabka_verified::restore_offset_index_entry_valid(
+            previous,
+            relative_offset,
+            position,
+            max_relative,
+            log_bytes,
+        ) {
             return Err(index_error(
                 key,
                 entry_index,
@@ -120,8 +131,8 @@ pub(super) fn validate_offset_index(
 }
 
 /// Check that `bytes`, parsed as a Kafka `.timeindex`, is internally
-/// consistent: `relative_offset` and `timestamp` both non-decreasing across
-/// entries, and every `relative_offset` at or before the segment's last
+/// consistent: `relative_offset` strictly increases, `timestamp` never
+/// decreases, and every `relative_offset` is at or before the segment's last
 /// offset.
 ///
 /// A time-index entry has no on-disk byte position to check against
@@ -134,35 +145,21 @@ pub(super) fn validate_time_index(
     base_offset: Offset,
     end_offset: Offset,
 ) -> Result<(), RestoreError> {
+    require_complete_entries(key, bytes, TIME_INDEX_ENTRY_LEN)?;
     let entries = parse_time_index(bytes)?;
-    let max_relative = max_relative_offset(base_offset, end_offset);
+    let max_relative = index_frontier(key, TIME_INDEX_ENTRY_LEN, base_offset, end_offset)?;
     let mut previous: Option<(i64, u32)> = None;
 
     for (entry_index, entry) in entries.iter().enumerate() {
         let timestamp = entry.timestamp.get();
         let relative_offset = entry.relative_offset.get();
 
-        if let Some((previous_timestamp, previous_relative)) = previous {
-            if relative_offset < previous_relative {
-                return Err(index_error(
-                    key,
-                    entry_index,
-                    TIME_INDEX_ENTRY_LEN,
-                    u64::from(previous_relative),
-                    u64::from(relative_offset),
-                ));
-            }
-            if timestamp < previous_timestamp {
-                return Err(index_error(
-                    key,
-                    entry_index,
-                    TIME_INDEX_ENTRY_LEN,
-                    offset_as_u64(previous_timestamp),
-                    offset_as_u64(timestamp),
-                ));
-            }
-        }
-        if relative_offset > max_relative {
+        if !krabka_verified::restore_time_index_entry_valid(
+            previous,
+            timestamp,
+            relative_offset,
+            max_relative,
+        ) {
             return Err(index_error(
                 key,
                 entry_index,
@@ -178,43 +175,32 @@ pub(super) fn validate_time_index(
 }
 
 /// Check that `bytes`, parsed as a Kafka `.txnindex`, is internally
-/// consistent: `start_offset` non-decreasing across entries, `start_offset <=
+/// consistent: `start_offset` strictly increasing across entries, `start_offset <=
 /// last_offset` within each entry, and both ends of every entry inside
-/// `[base_offset, end_offset]`.
+/// `[base_offset, end_offset]`. Producer IDs must be nonnegative.
 pub(super) fn validate_txn_index(
     key: &Path,
     bytes: &[u8],
     base_offset: Offset,
     end_offset: Offset,
 ) -> Result<(), RestoreError> {
+    require_complete_entries(key, bytes, TXN_INDEX_ENTRY_LEN)?;
     let entries = parse_txn_index(bytes)?;
     let mut previous_start: Option<i64> = None;
 
     for (entry_index, entry) in entries.iter().enumerate() {
         let start_offset = entry.start_offset.get();
         let last_offset = entry.last_offset.get();
+        let producer_id = entry.producer_id.get();
 
-        if let Some(previous) = previous_start
-            && start_offset < previous
-        {
-            return Err(index_error(
-                key,
-                entry_index,
-                TXN_INDEX_ENTRY_LEN,
-                offset_as_u64(previous),
-                offset_as_u64(start_offset),
-            ));
-        }
-        if start_offset > last_offset {
-            return Err(index_error(
-                key,
-                entry_index,
-                TXN_INDEX_ENTRY_LEN,
-                offset_as_u64(last_offset),
-                offset_as_u64(start_offset),
-            ));
-        }
-        if start_offset < base_offset.0 || last_offset > end_offset.0 {
+        if !krabka_verified::restore_txn_index_entry_valid(
+            previous_start,
+            start_offset,
+            last_offset,
+            producer_id,
+            base_offset.0,
+            end_offset.0,
+        ) {
             return Err(index_error(
                 key,
                 entry_index,

@@ -1,0 +1,41 @@
+(* #"/proof-work-214/crates/verified/src/epoch.rs" 18 0 18 77 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sepoch = "/proof-work-214/crates/verified/src/epoch.rs" 20 23 20 24
+let%span sepoch'0 = "/proof-work-214/crates/verified/src/epoch.rs" 20 13 20 24
+let%span sepoch'1 = "/proof-work-214/crates/verified/src/epoch.rs" 13 12 16 5
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let exact_epoch_successor [#"/proof-work-214/crates/verified/src/epoch.rs" 18 0 18 77] (current': Int64.t)
+  (maximum: Int64.t) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- Int64.lt current' maximum ] s1 | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = Int64.add [%#sepoch'0] {current'} {[%#sepoch] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_9 <- _x ] s1)
+    | s1 = [ &_ret <- Some _9 ] s2
+    | s2 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & current': Int64.t = current'
+  | & maximum: Int64.t = maximum
+  | & _6: bool = Any.any_l ()
+  | & _9: Int64.t = Any.any_l () ])
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:exact_epoch_successor ensures] [%#sepoch'1] match result with
+      | Some next -> Int64.to_int current' < Int64.to_int maximum
+      /\ Int64.to_int next = Int64.to_int current' + 1 /\ Int64.to_int next <= Int64.to_int maximum
+      | None -> ge_log_Int (Int64.to_int current') (Int64.to_int maximum)
+      end}
+    (! return {result}) ]

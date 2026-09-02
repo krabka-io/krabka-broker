@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_earliest_max_timestamp_index": {
+        "prover": "alt-ergo",
+        "time": 0.038
+      },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.0 }
+    }
+  }
+}

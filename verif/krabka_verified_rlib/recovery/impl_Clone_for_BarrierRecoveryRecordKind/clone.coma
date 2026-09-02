@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/recovery.rs" 62 27 62 32 *)
+
+(* <recovery::BarrierRecoveryRecordKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BarrierRecoveryRecordKind = Group | InjectionStart | Cut
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BarrierRecoveryRecordKind [#"/workspace/crates/verified/src/recovery.rs" 62 27 62 32]
+  (self: t_BarrierRecoveryRecordKind) (return (x: t_BarrierRecoveryRecordKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierRecoveryRecordKind = Any.any_l () | & self: t_BarrierRecoveryRecordKind = self ])
+  [ return (result: t_BarrierRecoveryRecordKind) -> (! return {result}) ]

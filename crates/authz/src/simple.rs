@@ -12,6 +12,7 @@
 use std::collections::HashSet;
 
 use krabka_metadata::PermissionType;
+use krabka_verified::{AclDecision, acl_decision};
 
 mod matching;
 #[cfg(test)]
@@ -19,7 +20,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use self::matching::{matches_host, matches_operation, matches_principal};
+use self::matching::{matches_host, matches_operation, matches_principal, matches_resource};
 use crate::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
 
 /// Authorizer that consults the cluster's persisted ACLs.
@@ -65,36 +66,38 @@ impl Authorizer for SimpleAclAuthorizer {
         req: &AuthorizationRequest<'_>,
     ) -> AuthorizationResult {
         let span = tracing::Span::current();
-        // Super-user bypass.
-        if self.super_users.contains(&req.principal.name) {
-            span.record("decision", "allow-superuser");
-            return AuthorizationResult::Allow;
-        }
-
-        let user_pattern = format!("User:{}", req.principal.name);
-        let host_str = req.host.ip().to_string();
+        let super_user = self.super_users.contains(&req.principal.name);
         let mut saw_allow = false;
-        for entry in source.matching_acls(req.resource_type, req.resource_name) {
-            if !matches_principal(entry, &user_pattern)
-                || !matches_host(entry, &host_str)
-                || !matches_operation(entry.operation, req.operation)
-            {
-                continue;
-            }
-            match entry.permission_type {
-                PermissionType::Deny => {
-                    span.record("decision", "deny-explicit");
-                    return AuthorizationResult::Deny;
+        let mut saw_deny = false;
+        if !super_user {
+            let user_pattern = format!("User:{}", req.principal.name);
+            let host_str = req.host.ip().to_string();
+            for entry in source.matching_acls(req.resource_type, req.resource_name) {
+                if !matches_resource(entry, req.resource_type, req.resource_name)
+                    || !matches_principal(entry, &user_pattern)
+                    || !matches_host(entry, &host_str)
+                    || !matches_operation(entry.operation, req.operation)
+                {
+                    continue;
                 }
-                PermissionType::Allow => saw_allow = true,
+                match entry.permission_type {
+                    PermissionType::Allow => saw_allow = true,
+                    PermissionType::Deny => {
+                        saw_deny = true;
+                        break;
+                    }
+                }
             }
         }
-        if saw_allow {
-            span.record("decision", "allow-acl");
-            AuthorizationResult::Allow
-        } else {
-            span.record("decision", "deny-default");
-            AuthorizationResult::Deny
-        }
+        let decision = acl_decision(super_user, saw_allow, saw_deny);
+
+        let (label, result) = match decision {
+            AclDecision::AllowSuperuser => ("allow-superuser", AuthorizationResult::Allow),
+            AclDecision::AllowAcl => ("allow-acl", AuthorizationResult::Allow),
+            AclDecision::DenyExplicit => ("deny-explicit", AuthorizationResult::Deny),
+            AclDecision::DenyDefault => ("deny-default", AuthorizationResult::Deny),
+        };
+        span.record("decision", label);
+        result
     }
 }

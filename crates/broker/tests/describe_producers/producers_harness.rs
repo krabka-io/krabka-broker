@@ -10,6 +10,7 @@ use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        find_coordinator_request::FindCoordinatorRequest,
         init_producer_id_request::InitProducerIdRequest,
         metadata_request::{MetadataRequest, MetadataRequestTopic},
     },
@@ -64,6 +65,50 @@ pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
         .await
         .expect("InitProducerId");
     (init.producer_id, init.producer_epoch)
+}
+
+pub(crate) async fn init_transactional_producer(
+    p: &support::InProcess,
+    transactional_id: &str,
+) -> (i64, i16) {
+    let coordinator = p
+        .client
+        .send(FindCoordinatorRequest {
+            key: transactional_id.into(),
+            key_type: 1,
+            coordinator_keys: vec![transactional_id.into()],
+            ..Default::default()
+        })
+        .await
+        .expect("transactional FindCoordinator");
+    assert!(
+        coordinator.error_code == 0
+            || coordinator
+                .coordinators
+                .iter()
+                .all(|entry| entry.error_code == 0),
+        "transactional FindCoordinator: {coordinator:?}"
+    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let init = p
+            .client
+            .send(InitProducerIdRequest {
+                transactional_id: Some(transactional_id.into()),
+                transaction_timeout_ms: 60_000,
+                ..Default::default()
+            })
+            .await
+            .expect("transactional InitProducerId");
+        if init.error_code == 0 {
+            return (init.producer_id, init.producer_epoch);
+        }
+        assert!(
+            matches!(init.error_code, 15 | 16) && tokio::time::Instant::now() < deadline,
+            "transactional InitProducerId: {init:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 pub(crate) fn batch(pid: i64, epoch: i16, base_seq: i32, values: &[&str]) -> RecordBatch {

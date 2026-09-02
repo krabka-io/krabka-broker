@@ -69,17 +69,26 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
         })
     ));
 
-    let unsupported = controller_admin
+    // KIP-919 puts the topic lifecycle on the controller listener, so this is
+    // routed rather than refused: `CreateTopics` is tagged `controller` in
+    // Kafka's own request schema.
+    let through_controller = controller_admin
         .create_topics(
             &[CreateTopicSpec {
-                name: "not-supported-through-controller".into(),
+                name: "created-through-controller".into(),
                 partitions: 1,
                 replicas: 1,
                 configs: BTreeMap::new(),
             }],
             krabka_units::secs(5),
         )
-        .await;
+        .await
+        .unwrap();
+    check!(through_controller[0].error.is_none());
+
+    // `DescribeClientQuotas` is tagged `broker` only, so no Kafka controller
+    // advertises it and the AdminClient refuses it before the wire.
+    let unsupported = controller_admin.describe_user_quotas("alice").await;
     check!(matches!(
         unsupported,
         Err(AdminError::Broker {

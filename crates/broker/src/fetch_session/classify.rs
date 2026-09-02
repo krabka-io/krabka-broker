@@ -9,6 +9,7 @@
 use std::sync::atomic::Ordering;
 
 use krabka_protocol::owned::fetch_request::FetchRequest;
+use qubit_clock::MonotonicClock as _;
 
 use super::{
     cache::FetchSessionCache,
@@ -107,7 +108,7 @@ impl FetchSessionCache {
             };
         }
 
-        session.last_used_nanos = self.clock.nanos();
+        session.last_used = self.clock.now().elapsed_since_origin();
 
         // The forget + merge below add and drop partitions; snapshot the
         // count now so we can fold the net delta into `num_partitions`

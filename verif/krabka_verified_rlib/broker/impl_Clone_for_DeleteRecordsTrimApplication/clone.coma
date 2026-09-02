@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/broker.rs" 354 27 354 32 *)
+
+(* <broker::DeleteRecordsTrimApplication as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_DeleteRecordsTrimApplication = RejectMalformed | TrimWal Int64.t | TrimLocal Int64.t | Complete Int64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_DeleteRecordsTrimApplication [#"/workspace/crates/verified/src/broker.rs" 354 27 354 32]
+  (self: t_DeleteRecordsTrimApplication) (return (x: t_DeleteRecordsTrimApplication)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DeleteRecordsTrimApplication = Any.any_l () | & self: t_DeleteRecordsTrimApplication = self ])
+  [ return (result: t_DeleteRecordsTrimApplication) -> (! return {result}) ]

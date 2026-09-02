@@ -1,7 +1,9 @@
 //! Tunables for `Log`. Defaults match Apache Kafka 4.2.
 
 use krabka_compression::CompressionType;
-use krabka_units::prelude::{ByteSize, Time, days, gibibytes, hours, kibibytes, mebibytes, millis};
+use krabka_units::prelude::{
+    ByteSize, Time, bytes, days, gibibytes, hours, kibibytes, mebibytes, millis,
+};
 
 /// Kafka's `segment.bytes` default: roll the active segment at 1 GiB.
 const DEFAULT_SEGMENT_SIZE: ByteSize = gibibytes(1);
@@ -16,7 +18,13 @@ const DEFAULT_RETENTION: Time = days(7);
 
 /// Kafka's `index.interval.bytes` default: one sparse `.index`/`.timeindex`
 /// entry per 4 KiB of `.log`.
-const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
+pub(crate) const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
+
+/// Kafka's `max.message.bytes` default: 1 MiB of records plus the 12-byte
+/// `Records.LOG_OVERHEAD` that prefixes every batch on the wire. Kafka's
+/// broker-wide `message.max.bytes` carries the same number, and a topic that
+/// sets neither inherits it.
+pub const DEFAULT_MAX_MESSAGE_SIZE: ByteSize = bytes(1_048_588);
 
 /// Kafka's `delete.retention.ms` default: a tombstone or transaction marker
 /// stays readable for a day after it first becomes compaction-eligible.
@@ -93,6 +101,14 @@ pub struct LogConfig {
     /// `None` = unlimited. Kafka's `retention.bytes`.
     pub retention_size: Option<ByteSize>,
 
+    /// Largest single record batch this partition accepts, measured over the
+    /// batch's whole wire encoding including its 61-byte v2 header. Kafka's
+    /// `max.message.bytes`; default 1048588. A `Produce` carrying a larger
+    /// batch is refused with `MESSAGE_TOO_LARGE` (10) rather than truncated,
+    /// because a batch that lands in the log is a batch every consumer has to
+    /// fetch whole.
+    pub max_message_size: ByteSize,
+
     /// Write one `.index`/`.timeindex` entry per this much `.log`. Kafka's
     /// `index.interval.bytes`; default 4 KiB.
     pub index_interval: ByteSize,
@@ -101,7 +117,7 @@ pub struct LogConfig {
     /// separately.
     pub flush_on_append: bool,
 
-    /// On open, CRC every batch in the active segment from the last index entry to EOF.
+    /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
     pub validate_on_open: bool,
 
     /// Cleanup policy. Defaults to `Delete`. See [`CleanupPolicy`].
@@ -161,6 +177,7 @@ impl Default for LogConfig {
             segment_roll_interval: DEFAULT_SEGMENT_ROLL_INTERVAL,
             retention: Some(DEFAULT_RETENTION),
             retention_size: None,
+            max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             index_interval: DEFAULT_INDEX_INTERVAL,
             flush_on_append: false,
             validate_on_open: true,
@@ -200,6 +217,7 @@ mod tests {
                     segment_roll_interval: days(7),
                     retention: Some(days(7)),
                     retention_size: None,
+                    max_message_size: bytes(1_048_588),
                     index_interval: bytes(4096),
                     flush_on_append: false,
                     validate_on_open: true,
@@ -223,6 +241,7 @@ mod tests {
         let c = LogConfig::default();
         assert2::check!(c.segment_size.bytes_u64() == 1_073_741_824);
         assert2::check!(c.index_interval.bytes_u64() == 4_096);
+        assert2::check!(c.max_message_size.bytes_u64() == 1_048_588);
         assert2::check!(c.segment_roll_interval.millis_i64() == 604_800_000);
         assert2::check!(c.retention.map(TimeExt::millis_i64) == Some(604_800_000));
         assert2::check!(c.delete_retention.millis_i64() == 86_400_000);

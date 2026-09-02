@@ -1,0 +1,51 @@
+(* #"/proof-work-219/crates/verified/src/storage.rs" 36 0 36 73 *)
+
+let%span sstorage = "/proof-work-219/crates/verified/src/storage.rs" 37 13 37 14
+let%span sstorage'0 = "/proof-work-219/crates/verified/src/storage.rs" 37 24 37 25
+let%span sstorage'1 = "/proof-work-219/crates/verified/src/storage.rs" 37 39 37 40
+let%span sstorage'2 = "/proof-work-219/crates/verified/src/storage.rs" 37 50 37 51
+let%span sstorage'3 = "/proof-work-219/crates/verified/src/storage.rs" 37 4 37 78
+let%span sstorage'4 = "/proof-work-219/crates/verified/src/storage.rs" 37 65 37 66
+let%span sstorage'5 = "/proof-work-219/crates/verified/src/storage.rs" 37 76 37 77
+let%span sstorage'6 = "/proof-work-219/crates/verified/src/storage.rs" 37 56 37 78
+let%span sstorage'7 = "/proof-work-219/crates/verified/src/storage.rs" 30 10 34 1
+
+use creusot.int.UInt8
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_partition_delete_transition [#"/proof-work-219/crates/verified/src/storage.rs" 36 0 36 73] (from: UInt8.t)
+  (to': UInt8.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- from = ([%#sstorage] (0: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_6 = false} (! bb5) | br1 -> {_6} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_8 <- to' = ([%#sstorage'0] (1: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_8 = false} (! bb5) | br1 -> {_8} (! bb8) ] ]
+  | bb5 = s0
+    [ s0 = [ &_10 <- from = ([%#sstorage'1] (1: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb11) | br1 -> {_10} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = [ &_12 <- to' = ([%#sstorage'2] (2: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb11) | br1 -> {_12} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- [%#sstorage'3] true ] s1 | s1 = return {_ret} ]
+  | bb11 = s0
+    [ s0 = [ &_14 <- from = ([%#sstorage'4] (2: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb13) | br1 -> {_14} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- to' = ([%#sstorage'5] (3: UInt8.t)) ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- [%#sstorage'6] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & from: UInt8.t = from
+  | & to': UInt8.t = to'
+  | & _6: bool = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: bool = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _14: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:remote_partition_delete_transition ensures] [%#sstorage'7] result
+    = (UInt8.t'int from = 0 /\ UInt8.t'int to' = 1
+    \/ UInt8.t'int from = 1 /\ UInt8.t'int to' = 2 \/ UInt8.t'int from = 2 /\ UInt8.t'int to' = 3)}
+    (! return {result}) ]

@@ -29,6 +29,7 @@ use tokio::{
 
 // `std::sync::Mutex` is kept for `log` (sync hot-path callers);
 // `replica_state` uses `tokio::sync::Mutex` to avoid blocking worker threads.
+use crate::txn::handlers::write_txn_markers::CommittedOffsets;
 use crate::{delivery::DeliveryHandles, error::BrokerError, replica_state::ReplicaState};
 
 mod commands;
@@ -74,6 +75,13 @@ pub struct Partition {
     pub log_dir: Arc<ArcSwap<PathBuf>>,
     pub log: Arc<Mutex<Log>>,
     pub writer_tx: mpsc::Sender<WriterMessage>,
+    /// Serializes transaction-marker admission, append, and any committed
+    /// offset publication for this partition.
+    pub(crate) marker_materialization: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<krabka_log::ProducerId, (i64, CommittedOffsets)>,
+        >,
+    >,
     pub append_notify: Arc<Notify>,
     pub(crate) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
     pub hw_advance_notify: Arc<Notify>,
@@ -271,6 +279,9 @@ mod tests {
             log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
             log: Arc::new(Mutex::new(log)),
             writer_tx: tx,
+            marker_materialization: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::default(),
+            )),
             append_notify: Arc::new(Notify::new()),
             replica_state: Arc::new(tokio::sync::Mutex::new(
                 crate::replica_state::ReplicaState::new(),

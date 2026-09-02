@@ -12,6 +12,7 @@ use crate::{
     log::test_support::{sample_batch, sample_batch_with_epoch, test_batch_at},
     producer_snapshot::ProducerSnapshotEntry,
     stamp_index::{StampEntry, StampIndex},
+    txn_index::AbortedTxn,
 };
 
 /// Truncating to the log start is allowed; below it is not.
@@ -52,6 +53,44 @@ fn truncate_to_drops_later_records() {
     log.truncate_to(Offset(3)).unwrap();
     // First batch (offsets 0..=2) survives; last_offset == 2, end == 3.
     assert2::assert!(log.log_end_offset() == 3);
+}
+
+#[test]
+fn truncation_clamps_tail_state_to_the_actual_retained_batch_prefix() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    log.append(&mut sample_batch(3)).unwrap();
+    log.append(&mut sample_batch(3)).unwrap();
+    log.active_txn_index
+        .append(AbortedTxn {
+            start_offset: Offset(3),
+            last_offset: Offset(5),
+            producer_id: ProducerId(9),
+        })
+        .unwrap();
+    log.delivery_watermark = Offset(6);
+    log.lso = Offset(6);
+
+    // The cut lands inside the second batch, so the exact retained prefix
+    // ends at 3 rather than the requested 4.
+    log.truncate_to(Offset(4)).unwrap();
+    check!(log.log_end_offset() == Offset(3));
+    check!(log.lso() == Offset(3));
+    check!(log.delivery_watermark == Offset(3));
+    check!(log.active_txn_index.entries().is_empty());
+    check!(log.active.is_some(), "one active segment survives");
+    check!(
+        log.segments
+            .iter()
+            .all(|segment| segment.base_offset() < log.active.as_ref().unwrap().base_offset()),
+        "every sealed segment precedes the sole active segment"
+    );
+
+    log.append(&mut sample_batch(1)).unwrap();
+    check!(
+        log.delivery_watermark == Offset(3),
+        "append must not unmask the discarded tail watermark"
+    );
 }
 
 #[test]

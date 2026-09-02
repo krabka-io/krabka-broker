@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 213 27 213 32 *)
+
+(* <freeze::FreezeReplacementDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FreezeReplacementDecision = Missing | Stale | InFlight | Append
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeReplacementDecision [#"/workspace/crates/verified/src/freeze.rs" 213 27 213 32]
+  (self: t_FreezeReplacementDecision) (return (x: t_FreezeReplacementDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeReplacementDecision = Any.any_l () | & self: t_FreezeReplacementDecision = self ])
+  [ return (result: t_FreezeReplacementDecision) -> (! return {result}) ]

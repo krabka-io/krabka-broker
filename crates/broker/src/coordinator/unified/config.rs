@@ -2,7 +2,7 @@
 
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use qubit_clock::sleep::{AsyncSleeper, SystemSleeper};
+use qubit_clock::{StdTimer, Timer};
 
 use super::assignor::{Assignor, RangeAssignor, UniformAssignor};
 
@@ -86,15 +86,15 @@ pub struct NextGenConfig {
     /// `group.consumer.migration.policy` governs classic ↔ next-gen
     /// conversion. The conversion triggers consult it.
     pub migration_policy: ConsumerGroupMigrationPolicy,
-    /// Relative sleeper that drives the per-group actor's session-expiry tick
-    /// cadence. Production uses [`qubit_clock::sleep::SystemSleeper`], which is
-    /// real time. Tests inject a [`qubit_clock::sleep::MockSleeper`] so the
-    /// tick fires on a controlled mock timeline instead of wall-clock time.
-    pub sleeper: Arc<dyn AsyncSleeper>,
+    /// Timer that drives the per-group actor's session-expiry tick cadence.
+    /// Production uses [`qubit_clock::StdTimer`], which is real time. Tests
+    /// inject the timer of a [`qubit_clock::ManualMonotonicClock`] so the tick
+    /// fires on a controlled manual timeline instead of wall-clock time.
+    pub timer: Arc<dyn Timer>,
 }
 
-// Manual `Debug` (the `AsyncSleeper` trait object is not `Debug`): print every
-// operator-relevant field and elide the sleeper. Kept so the enclosing
+// Manual `Debug` (the `Timer` trait object is not `Debug`): print every
+// operator-relevant field and elide the timer. Kept so the enclosing
 // `#[derive(Debug)]` `GroupCoordinator` still derives.
 impl std::fmt::Debug for NextGenConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -181,7 +181,7 @@ impl Default for NextGenConfig {
             assignors: vec![Arc::new(UniformAssignor), Arc::new(RangeAssignor)],
             max_size: DEFAULT_MAX_GROUP_SIZE,
             migration_policy: ConsumerGroupMigrationPolicy::default(),
-            sleeper: Arc::new(SystemSleeper::new()),
+            timer: Arc::new(StdTimer::new()),
         }
     }
 }
@@ -334,9 +334,9 @@ mod tests {
     }
 
     #[test]
-    fn debug_renders_operator_fields_and_elides_sleeper() {
-        // The manual `Debug` impl exists because the `AsyncSleeper` trait object
-        // is not `Debug`. Assert on the rendered content — a stubbed-out `fmt`
+    fn debug_renders_operator_fields_and_elides_timer() {
+        // The manual `Debug` impl exists because the `Timer` trait object is
+        // not `Debug`. Assert on the rendered content — a stubbed-out `fmt`
         // body (writing nothing) must not pass. Distinctive values on a subset
         // of fields prove the real fields are emitted, not a static placeholder.
         let cfg = NextGenConfig {
@@ -369,15 +369,17 @@ mod tests {
                 "Debug output missing {needle:?}: {rendered}"
             );
         }
-        // `finish_non_exhaustive` elides the sleeper with a trailing `..`; the
-        // elided field's name must not leak into the output.
+        // `finish_non_exhaustive` elides the timer with a trailing `..`; the
+        // elided field's name must not leak into the output. No other field
+        // name or rendered value contains "timer" — the timeout fields spell
+        // "timeout" — so the needle can only match the elided field.
         assert!(
             rendered.contains(".."),
             "expected non-exhaustive marker: {rendered}"
         );
         assert!(
-            !rendered.contains("sleeper"),
-            "sleeper must be elided: {rendered}"
+            !rendered.contains("timer"),
+            "timer must be elided: {rendered}"
         );
     }
 }

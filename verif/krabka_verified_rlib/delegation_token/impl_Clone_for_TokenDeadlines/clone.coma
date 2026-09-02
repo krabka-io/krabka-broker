@@ -1,0 +1,18 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 9 27 9 32 *)
+
+(* <delegation_token::TokenDeadlines as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_TokenDeadlines = { max_timestamp_ms: Int64.t; initial_expiry_ms: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TokenDeadlines [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 9 27 9 32]
+  (self: t_TokenDeadlines) (return (x: t_TokenDeadlines)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenDeadlines = Any.any_l () | & self: t_TokenDeadlines = self ])
+  [ return (result: t_TokenDeadlines) -> (! return {result}) ]

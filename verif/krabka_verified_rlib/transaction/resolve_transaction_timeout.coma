@@ -1,0 +1,71 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 40 0 45 8 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span stransaction = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 47 8 47 33
+let%span stransaction'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 30 11 30 30
+let%span stransaction'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 31 11 31 45
+let%span stransaction'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 32 11 32 38
+let%span stransaction'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 33 10 33 45
+let%span stransaction'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 34 10 34 82
+let%span stransaction'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 35 10 35 87
+let%span stransaction'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 36 10 36 87
+let%span stransaction'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 37 10 38 32
+let%span stransaction'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 19 43 19 51
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+constant const_NO_TRANSACTION_TIMEOUT_MS: Int32.t = [%#stransaction'8] const_MAX
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let resolve_transaction_timeout [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 40 0 45 8]
+  (enable_2pc: bool) (requested_ms: Int32.t) (min_timeout_ms: Int32.t) (max_timeout_ms: Int32.t) (return (x: Int32.t)) =
+{[@stop_split] [@expl:resolve_transaction_timeout requires] ([@stop_split] [@expl:resolve_transaction_timeout requires #0] [%#stransaction'0] 0
+    < Int32.to_int min_timeout_ms)
+  /\ ([@stop_split] [@expl:resolve_transaction_timeout requires #1] [%#stransaction'1] Int32.to_int min_timeout_ms
+    <= Int32.to_int max_timeout_ms)
+  /\ ([@stop_split] [@expl:resolve_transaction_timeout requires #2] [%#stransaction'2] Int32.to_int max_timeout_ms
+  < Int32.to_int const_MAX)}
+  (! bb0
+  [ bb0 = any [ br0 -> {enable_2pc = false} (! bb2) | br1 -> {enable_2pc} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#stransaction] const_NO_TRANSACTION_TIMEOUT_MS ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &_32 <- Int32.lt requested_ms min_timeout_ms ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb4) | br1 -> {_32} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- min_timeout_ms ] s1 | s1 = return {_ret} ]
+  | bb4 = s0
+    [ s0 = [ &_35 <- Int32.gt requested_ms max_timeout_ms ] s1
+    | s1 = any [ br0 -> {_35 = false} (! bb6) | br1 -> {_35} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &_ret <- max_timeout_ms ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- requested_ms ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int32.t = Any.any_l ()
+  | & enable_2pc: bool = enable_2pc
+  | & requested_ms: Int32.t = requested_ms
+  | & min_timeout_ms: Int32.t = min_timeout_ms
+  | & max_timeout_ms: Int32.t = max_timeout_ms
+  | & _32: bool = Any.any_l ()
+  | & _35: bool = Any.any_l () ])
+  [ return (result: Int32.t) ->
+  {[@stop_split] [@expl:resolve_transaction_timeout ensures] ([@stop_split] [@expl:resolve_transaction_timeout ensures #0] [%#stransaction'3] enable_2pc
+      -> Int32.to_int result = Int32.to_int const_MAX)
+    /\ ([@stop_split] [@expl:resolve_transaction_timeout ensures #1] [%#stransaction'4] not enable_2pc
+      -> Int32.to_int min_timeout_ms <= Int32.to_int result /\ Int32.to_int result <= Int32.to_int max_timeout_ms)
+    /\ ([@stop_split] [@expl:resolve_transaction_timeout ensures #2] [%#stransaction'5] not enable_2pc
+        /\ Int32.to_int requested_ms < Int32.to_int min_timeout_ms -> Int32.to_int result = Int32.to_int min_timeout_ms)
+    /\ ([@stop_split] [@expl:resolve_transaction_timeout ensures #3] [%#stransaction'6] not enable_2pc
+        /\ gt_log_Int (Int32.to_int requested_ms) (Int32.to_int max_timeout_ms)
+      -> Int32.to_int result = Int32.to_int max_timeout_ms)
+    /\ ([@stop_split] [@expl:resolve_transaction_timeout ensures #4] [%#stransaction'7] not enable_2pc
+      /\ Int32.to_int min_timeout_ms <= Int32.to_int requested_ms
+      /\ Int32.to_int requested_ms <= Int32.to_int max_timeout_ms -> Int32.to_int result = Int32.to_int requested_ms)}
+    (! return {result}) ]

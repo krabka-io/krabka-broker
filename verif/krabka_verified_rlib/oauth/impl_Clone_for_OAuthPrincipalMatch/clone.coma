@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/oauth.rs" 35 27 35 32 *)
+
+(* <oauth::OAuthPrincipalMatch as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_OAuthPrincipalMatch = Matches | Differs
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OAuthPrincipalMatch [#"/workspace/crates/verified/src/oauth.rs" 35 27 35 32] (self: t_OAuthPrincipalMatch)
+  (return (x: t_OAuthPrincipalMatch)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OAuthPrincipalMatch = Any.any_l () | & self: t_OAuthPrincipalMatch = self ])
+  [ return (result: t_OAuthPrincipalMatch) -> (! return {result}) ]

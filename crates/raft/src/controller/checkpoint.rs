@@ -102,9 +102,24 @@ mod tests {
     #[test]
     fn load_latest_checkpoint_picks_highest_offset_then_epoch() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("1-9.checkpoint"), b"old-offset").unwrap();
-        std::fs::write(dir.path().join("2-1.checkpoint"), b"old-epoch").unwrap();
-        std::fs::write(dir.path().join("2-3.checkpoint"), b"best").unwrap();
+        std::fs::write(
+            dir.path()
+                .join("00000000000000000001-0000000009.checkpoint"),
+            b"old-offset",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path()
+                .join("00000000000000000002-0000000001.checkpoint"),
+            b"old-epoch",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path()
+                .join("00000000000000000002-0000000003.checkpoint"),
+            b"best",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("9-9.txt"), b"ignored suffix").unwrap();
         std::fs::write(
             dir.path().join("not-a-checkpoint.checkpoint"),
@@ -127,7 +142,11 @@ mod tests {
         let ctrl = Controller::start(cfg).await.expect("join start");
         let checkpoint_dir = crate::kraft::checkpoint_dir(dir.path());
         std::fs::create_dir_all(&checkpoint_dir).unwrap();
-        std::fs::write(checkpoint_dir.join("10-4.checkpoint"), b"abc").unwrap();
+        std::fs::write(
+            checkpoint_dir.join("00000000000000000010-0000000004.checkpoint"),
+            b"abc",
+        )
+        .unwrap();
 
         match ctrl.read_snapshot_range(3, 10) {
             SnapshotRange::Slice(slice) => {

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_resolve_transaction_timeout": {
+        "prover": "alt-ergo",
+        "time": 0.017
+      }
+    }
+  }
+}

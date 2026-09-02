@@ -4,9 +4,12 @@
 //! `ListClientMetricsResources` (KIP-714) and returned only client-metrics
 //! subscriptions. v1 generalises it with a `resource_types` filter.
 //!
-//! Krabka surfaces `TOPIC` (2), `BROKER` (4), `CLIENT_METRICS` (16), and
-//! `GROUP` (32). `BROKER_LOGGER` (8) is intentionally omitted because the
-//! broker reads its logging filter from `RUST_LOG`.
+//! Krabka surfaces `TOPIC` (2), `BROKER` (4), `BROKER_LOGGER` (8),
+//! `CLIENT_METRICS` (16), and `GROUP` (32), which is the set the JVM
+//! `ListConfigResourcesRequest.supportedResourceTypes()` reports at v1.
+//! `BROKER_LOGGER` enumerates the same names `BROKER` does — one per node —
+//! because a logger resource is addressed by the id of the node whose loggers
+//! it names.
 //!
 //! `CLIENT_METRICS` enumerates configured subscription names from the
 //! metadata image (see `MetadataImage::client_metrics_subscriptions`).
@@ -32,15 +35,17 @@ use crate::{
 /// `org.apache.kafka.common.config.ConfigResource.Type` enum.
 const RESOURCE_TYPE_TOPIC: i8 = 2;
 const RESOURCE_TYPE_BROKER: i8 = 4;
+const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
 const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
 const RESOURCE_TYPE_GROUP: i8 = 32;
 
 /// Default set returned when v1 callers omit `resource_types` (KIP-1142).
 /// Mirrors the JVM admin client's expectation: every supported type the
 /// broker can describe configs for.
-const DEFAULT_RESOURCE_TYPES: [i8; 4] = [
+const DEFAULT_RESOURCE_TYPES: [i8; 5] = [
     RESOURCE_TYPE_TOPIC,
     RESOURCE_TYPE_BROKER,
+    RESOURCE_TYPE_BROKER_LOGGER,
     RESOURCE_TYPE_CLIENT_METRICS,
     RESOURCE_TYPE_GROUP,
 ];
@@ -128,11 +133,11 @@ fn collect_resources(
                     });
                 }
             }
-            RESOURCE_TYPE_BROKER => {
+            RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER => {
                 for b in image.brokers() {
                     out.push(ConfigResource {
                         resource_name: b.node_id.to_string(),
-                        resource_type: RESOURCE_TYPE_BROKER,
+                        resource_type: rt,
                         ..Default::default()
                     });
                 }
@@ -155,7 +160,7 @@ fn collect_resources(
                     });
                 }
             }
-            // Unknown types (BROKER_LOGGER, anything new) silently drop.
+            // Unknown types (anything new) silently drop.
             _ => {}
         }
     }
@@ -306,8 +311,9 @@ mod tests {
     fn v1_empty_filter_returns_default_set() {
         let img = image_with_topics_and_brokers(&["t-a", "t-b"], &[1, 2]);
         let out = collect_resources(&img, 1, &[]);
-        // 2 topics + 2 brokers + 0 client_metrics = 4 entries, sorted by
-        // (type, name): topics (type 2) before brokers (type 4).
+        // 2 topics + 2 brokers + 2 broker-loggers + 0 client_metrics = 6
+        // entries, sorted by (type, name): topics (2), brokers (4), then the
+        // broker-logger resource each node answers for (8).
         let expected = vec![
             ConfigResource {
                 resource_name: "t-a".to_string(),
@@ -327,6 +333,16 @@ mod tests {
             ConfigResource {
                 resource_name: "2".to_string(),
                 resource_type: RESOURCE_TYPE_BROKER,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            ConfigResource {
+                resource_name: "1".to_string(),
+                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            ConfigResource {
+                resource_name: "2".to_string(),
+                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
         ];
@@ -365,10 +381,29 @@ mod tests {
     }
 
     #[test]
+    fn v1_broker_logger_filter_names_one_resource_per_node() {
+        let img = image_with_topics_and_brokers(&["t-a"], &[5, 7]);
+        let out = collect_resources(&img, 1, &[RESOURCE_TYPE_BROKER_LOGGER]);
+        let expected = vec![
+            ConfigResource {
+                resource_name: "5".to_string(),
+                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            ConfigResource {
+                resource_name: "7".to_string(),
+                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+        ];
+        assert!(out == expected);
+    }
+
+    #[test]
     fn v1_unknown_resource_type_returns_empty() {
         let img = image_with_topics_and_brokers(&["t-a"], &[1]);
-        // type 8 = BROKER_LOGGER; not supported.
-        let out = collect_resources(&img, 1, &[8]);
+        // type 64 is past every type KIP-1142 defines.
+        let out = collect_resources(&img, 1, &[64]);
         assert!(
             out.is_empty(),
             "unsupported resource types silently drop; got {out:?}"
@@ -383,7 +418,7 @@ mod tests {
             1,
             &[
                 RESOURCE_TYPE_TOPIC,
-                8, // BROKER_LOGGER — unsupported, dropped
+                64, // past every KIP-1142 type — dropped
                 RESOURCE_TYPE_BROKER,
             ],
         );
@@ -406,10 +441,24 @@ mod tests {
     fn output_is_deterministic_regardless_of_input_order() {
         let img = image_with_topics_and_brokers(&["z-late", "a-early"], &[10, 1]);
         let out = collect_resources(&img, 1, &[]);
-        // Topics sorted lexicographically, brokers sorted lexicographically
-        // by id-as-string.
-        let names: Vec<&str> = out.iter().map(|r| r.resource_name.as_str()).collect();
-        assert!(names == vec!["a-early", "z-late", "1", "10"]);
+        // Sorted by (resource_type, resource_name): topics (2), then brokers
+        // (4), then the broker-logger resource per node (8), each group
+        // lexicographic — so broker ids sort as strings.
+        let names: Vec<(i8, &str)> = out
+            .iter()
+            .map(|r| (r.resource_type, r.resource_name.as_str()))
+            .collect();
+        assert!(
+            names
+                == vec![
+                    (RESOURCE_TYPE_TOPIC, "a-early"),
+                    (RESOURCE_TYPE_TOPIC, "z-late"),
+                    (RESOURCE_TYPE_BROKER, "1"),
+                    (RESOURCE_TYPE_BROKER, "10"),
+                    (RESOURCE_TYPE_BROKER_LOGGER, "1"),
+                    (RESOURCE_TYPE_BROKER_LOGGER, "10"),
+                ]
+        );
     }
 
     #[tokio::test]

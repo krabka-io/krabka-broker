@@ -82,6 +82,9 @@ impl Model for FailoverModel {
                     dead,
                     &alive,
                     &self.witnesses,
+                    // This model carries no ELR state; the KIP-966 rung it
+                    // would unlock is checked in `leader_election::policy`.
+                    &[],
                     self.strategy,
                     self.unclean_enabled,
                 );

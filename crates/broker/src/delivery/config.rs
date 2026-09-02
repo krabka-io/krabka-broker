@@ -1,16 +1,14 @@
 //! Tunables of the delivery scheduler.
 //!
 //! The struct carries the two injected time sources as well as the two
-//! durations, so a test drives the scheduler on a mock timeline instead of
-//! wall-clock time. [`Default`] wires the system clock and the system sleeper.
+//! durations, so a test drives the scheduler on a manual timeline instead of
+//! wall-clock time. [`Default`] wires the system wall clock and the system
+//! timer.
 
 use std::sync::Arc;
 
 use krabka_units::{Time, millis, secs};
-use qubit_clock::{
-    Clock, SystemClock,
-    sleep::{AsyncSleeper, SystemSleeper},
-};
+use qubit_clock::{StdTimer, StdWallClock, Timer, WallClock};
 
 /// How the broker-wide delivery scheduler paces itself, and where it reads
 /// time.
@@ -39,16 +37,18 @@ pub(crate) struct DeliveryConfig {
 
     /// Wall clock the scheduler reads to decide which batches are due.
     ///
-    /// Production uses [`qubit_clock::SystemClock`]. Tests inject a
-    /// [`qubit_clock::MockClock`], so the activation boundary is an assertion
-    /// and not a race against real time.
-    pub(crate) clock: Arc<dyn Clock>,
+    /// Production uses [`qubit_clock::StdWallClock`]. A test drives both this
+    /// and [`Self::timer`] from one
+    /// [`qubit_clock::ManualMonotonicClock`], so the activation boundary is an
+    /// assertion and not a race against real time.
+    pub(crate) clock: Arc<dyn WallClock>,
 
-    /// Relative sleeper that drives the scheduler's cadence. Production uses
-    /// [`qubit_clock::sleep::SystemSleeper`]. Tests inject a
-    /// [`qubit_clock::sleep::MockSleeper`] on the same timeline as
-    /// [`Self::clock`].
-    pub(crate) sleeper: Arc<dyn AsyncSleeper>,
+    /// Timer that drives the scheduler's cadence. Production uses
+    /// [`qubit_clock::StdTimer`]. A test takes this from the same
+    /// [`qubit_clock::ManualMonotonicClock`] that handed out [`Self::clock`],
+    /// which puts the reading and the cadence on one timeline by construction
+    /// rather than by agreement.
+    pub(crate) timer: Arc<dyn Timer>,
 }
 
 impl Default for DeliveryConfig {
@@ -56,8 +56,8 @@ impl Default for DeliveryConfig {
         Self {
             idle_sleep: secs(1),
             min_sleep: millis(1),
-            clock: Arc::new(SystemClock::new()),
-            sleeper: Arc::new(SystemSleeper::new()),
+            clock: Arc::new(StdWallClock::new()),
+            timer: Arc::new(StdTimer::new()),
         }
     }
 }

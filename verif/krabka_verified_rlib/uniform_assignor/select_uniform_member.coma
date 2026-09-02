@@ -1,0 +1,161 @@
+(* #"/workspace/crates/verified/src/uniform_assignor.rs" 26 0 26 75 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span suniform_assignor = "/workspace/crates/verified/src/uniform_assignor.rs" 28 16 28 22
+let%span suniform_assignor'0 = "/workspace/crates/verified/src/uniform_assignor.rs" 42 14 42 36
+let%span suniform_assignor'1 = "/workspace/crates/verified/src/uniform_assignor.rs" 43 14 43 30
+let%span suniform_assignor'2 = "/workspace/crates/verified/src/uniform_assignor.rs" 30 16 41 5
+let%span suniform_assignor'3 = "/workspace/crates/verified/src/uniform_assignor.rs" 29 16 29 39
+let%span suniform_assignor'4 = "/workspace/crates/verified/src/uniform_assignor.rs" 47 32 47 45
+let%span suniform_assignor'5 = "/workspace/crates/verified/src/uniform_assignor.rs" 48 30 48 49
+let%span suniform_assignor'6 = "/workspace/crates/verified/src/uniform_assignor.rs" 56 13 56 14
+let%span suniform_assignor'7 = "/workspace/crates/verified/src/uniform_assignor.rs" 56 8 56 14
+let%span suniform_assignor'8 = "/workspace/crates/verified/src/uniform_assignor.rs" 12 10 12 54
+let%span suniform_assignor'9 = "/workspace/crates/verified/src/uniform_assignor.rs" 13 10 24 1
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup2_usize_bool = { f0: UInt64.t; f1: bool }
+
+let len_tup2_usize_bool (self_: Slice64.slice tup2_usize_bool) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0'0: UInt64.t)) = any
+  [ _k (f0'0: UInt64.t) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let select_uniform_member [#"/workspace/crates/verified/src/uniform_assignor.rs" 26 0 26 75]
+  (candidates: Slice64.slice tup2_usize_bool) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &i <- [%#suniform_assignor] (0: UInt64.t) ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#suniform_assignor'0] Seq.length (Slice64.view candidates)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#suniform_assignor'3] UInt64.t'int i
+      <= Seq.length (Slice64.view candidates)}
+      {[@expl:loop invariant #1] [%#suniform_assignor'2] match best with
+        | None -> UInt64.t'int i = 0
+        | Some index -> UInt64.t'int index < UInt64.t'int i
+        /\ (forall j: int. 0 <= j /\ j < UInt64.t'int i
+            -> not (Seq.get (Slice64.view candidates) j).f1
+            \/ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+        /\ (forall j: int. 0 <= j
+              /\ j < UInt64.t'int i
+              /\ (Seq.get (Slice64.view candidates) j).f1 = (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1
+            -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+            <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f0)
+        /\ (forall j: int. 0 <= j
+            /\ j < UInt64.t'int index
+            /\ (Seq.get (Slice64.view candidates) j).f1 = (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1
+          -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          < UInt64.t'int (Seq.get (Slice64.view candidates) j).f0)
+        end}
+      (! [ &variant_old_bb1 <- [%#suniform_assignor'0] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
+      [ s0 = len_tup2_usize_bool [%#suniform_assignor'1] {candidates} (fun (_x: UInt64.t) -> [ &_23 <- _x ] s1)
+      | s1 = [ &_21 <- UInt64.lt i _23 ] s2
+      | s2 = any [ br0 -> {_21 = false} (! bb21) | br1 -> {_21} (! bb4) ] ]
+      [ bb4 = any [ br0 -> {best = None} (! bb8) | br1 (x0: UInt64.t) -> {best = Some x0} (! bb7) ]
+      | bb7 = s0
+        [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &current' <- r0 ] s1)
+        | s1 = [ &_31 <- i ] s2
+        | s2 = [ &_32 <- Slice64.length candidates ] s3
+        | s3 = [ &_33 <- UInt64.lt _31 _32 ] s4
+        | s4 = {[@expl:index in bounds] [%#suniform_assignor'4] _33} s5
+        | s5 = Slice64.get [%#suniform_assignor'4] <tup2_usize_bool> {candidates} {_31}
+            (fun (r: tup2_usize_bool) -> [ &candidate <- r ] s6)
+        | s6 = [ &_35 <- current' ] s7
+        | s7 = [ &_36 <- Slice64.length candidates ] s8
+        | s8 = [ &_37 <- UInt64.lt _35 _36 ] s9
+        | s9 = {[@expl:index in bounds] [%#suniform_assignor'5] _37} s10
+        | s10 = Slice64.get [%#suniform_assignor'5] <tup2_usize_bool> {candidates} {_35}
+            (fun (r: tup2_usize_bool) -> [ &current''0 <- r ] s11)
+        | s11 = any [ br0 -> {candidate.f1 = false} (! bb12) | br1 -> {candidate.f1} (! bb11) ] ]
+      | bb11 = any [ br0 -> {current''0.f1 = false} (! bb15) | br1 -> {current''0.f1} (! bb12) ]
+      | bb12 = s0
+        [ s0 = [ &_40 <- candidate.f1 = current''0.f1 ] s1
+        | s1 = any [ br0 -> {_40 = false} (! bb20) | br1 -> {_40} (! bb13) ] ]
+      | bb13 = s0
+        [ s0 = [ &_43 <- UInt64.lt candidate.f0 current''0.f0 ] s1
+        | s1 = any [ br0 -> {_43 = false} (! bb20) | br1 -> {_43} (! bb15) ] ]
+      | bb15 = s0 [ s0 = [ &_46 <- Some i ] s1 | s1 = [ &best <- _46 ] s2 | s2 = bb20 ]
+      | bb8 = s0 [ s0 = [ &_27 <- Some i ] s1 | s1 = [ &best <- _27 ] s2 | s2 = bb20 ]
+      | bb20 = s0
+        [ s0 = UInt64.add [%#suniform_assignor'7] {i} {[%#suniform_assignor'6] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb21 = s0 [ s0 = [ &_ret <- best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & candidates: Slice64.slice tup2_usize_bool = candidates
+  | & best: t_Option_usize = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & _23: UInt64.t = Any.any_l ()
+  | & _27: t_Option_usize = Any.any_l ()
+  | & current': UInt64.t = Any.any_l ()
+  | & candidate: tup2_usize_bool = Any.any_l ()
+  | & _31: UInt64.t = Any.any_l ()
+  | & _32: UInt64.t = Any.any_l ()
+  | & _33: bool = Any.any_l ()
+  | & current''0: tup2_usize_bool = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _46: t_Option_usize = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:select_uniform_member ensures] ([@stop_split] [@expl:select_uniform_member ensures #0] [%#suniform_assignor'8] (result
+        = None)
+      = (Seq.length (Slice64.view candidates) = 0))
+    /\ ([@stop_split] [@expl:select_uniform_member ensures #1] [%#suniform_assignor'9] match result with
+      | None -> true
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view candidates)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view candidates)
+          -> not (Seq.get (Slice64.view candidates) j).f1
+          \/ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+      /\ (forall j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view candidates)
+            /\ (Seq.get (Slice64.view candidates) j).f1 = (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1
+          -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f0)
+      /\ (forall j: int. 0 <= j
+          /\ j < UInt64.t'int index
+          /\ (Seq.get (Slice64.view candidates) j).f1 = (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1
+        -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+        < UInt64.t'int (Seq.get (Slice64.view candidates) j).f0)
+      end)}
+    (! return {result}) ]

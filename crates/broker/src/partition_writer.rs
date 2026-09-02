@@ -179,6 +179,7 @@ pub async fn run_with_sequencer(
                     &log,
                     (&log_dir, &log_dir_status),
                     &replica_state,
+                    wal.as_ref(),
                     offset,
                     ack,
                 )
@@ -189,6 +190,7 @@ pub async fn run_with_sequencer(
                     &log,
                     (&log_dir, &log_dir_status),
                     &replica_state,
+                    wal.as_ref(),
                     new_base,
                     ack,
                 )

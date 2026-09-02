@@ -41,7 +41,7 @@ pub(super) fn throttle_follower_responses(
     }
 }
 
-pub(super) async fn apply_consumer_fetch_quota(
+pub(super) fn apply_consumer_fetch_quota(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
@@ -71,11 +71,23 @@ pub(super) async fn apply_consumer_fetch_quota(
         elapsed_micros,
         broker.config.quota_throttle_max,
     );
-    let delay = data_delay.max(request_delay);
+    // KIP-219: the connection is muted for the larger of the two delays.
+    // Resolving it through the metric records the throttle phase and the quota
+    // that caused it, and hands back the delay the response reports.
+    let delay = broker.metrics.record_applied_throttle(
+        super::FETCH_API_KEY,
+        &[
+            (crate::metrics::QuotaType::Fetch, data_delay),
+            (crate::metrics::QuotaType::Request, request_delay),
+        ],
+    );
     if delay <= <Time as TimeExt>::ZERO {
         return 0;
     }
-    tokio::time::sleep(delay.to_std()).await;
+    // KIP-219: the window goes back to the connection loop, which mutes the
+    // connection after the fetch plan is written. Sleeping here would delay the
+    // records the client is already waiting on.
+    context.record_throttle(delay);
     crate::quota::throttle_time_ms(delay)
 }
 

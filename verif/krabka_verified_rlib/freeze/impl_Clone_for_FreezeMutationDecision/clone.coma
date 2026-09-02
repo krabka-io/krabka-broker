@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 218 27 218 32 *)
+
+(* <freeze::FreezeMutationDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FreezeMutationDecision = AuthorizationDenied | Frozen | Admit
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeMutationDecision [#"/workspace/crates/verified/src/freeze.rs" 218 27 218 32]
+  (self: t_FreezeMutationDecision) (return (x: t_FreezeMutationDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeMutationDecision = Any.any_l () | & self: t_FreezeMutationDecision = self ])
+  [ return (result: t_FreezeMutationDecision) -> (! return {result}) ]

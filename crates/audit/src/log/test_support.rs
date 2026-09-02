@@ -1,9 +1,9 @@
 //! Fixtures shared by the unit tests of the `log` module tree.
 //!
 //! The module holds the `ProductInfo` and `AuditEvent` builders, the
-//! `AuditWriterParams` factories that wire a writer to a mock timeline, the
-//! failure-injecting sink, and the polling helper that replaces a real-time
-//! sleep in a test.
+//! `AuditWriterParams` factories that wire a writer to a manually advanced
+//! clock, the failure-injecting sink, and the polling helper that replaces a
+//! real-time sleep in a test.
 
 use std::sync::{
     Arc,
@@ -11,7 +11,7 @@ use std::sync::{
 };
 
 use krabka_units::prelude::{ByteSize, Time, hours, mebibytes, millis};
-use qubit_clock::{MockTimeline, sleep::MockSleeper};
+use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
 
 use super::AuditWriterParams;
 use crate::{
@@ -139,11 +139,11 @@ impl AuditSink for FailableSink {
     }
 }
 
-/// Replay ticker cadence for the test params. Tests advance the mock
-/// timeline by this amount to fire the replay ticker exactly once.
+/// Replay ticker cadence for the test params. Tests advance the manual clock
+/// by this amount to fire the replay ticker exactly once.
 pub const REPLAY_EVERY: Time = millis(20);
 
-/// A cadence that no test reaches. No test advances the mock timeline that
+/// A cadence that no test reaches. No test advances the manual clock that
 /// far, so the ticker this cadence drives stays dormant.
 pub const DORMANT: Time = hours(1);
 
@@ -161,28 +161,34 @@ pub fn params(sink: Arc<dyn AuditSink>, spool: Spool, stats: Arc<AuditStats>) ->
         spool: Some(spool),
         stats,
         replay_every: REPLAY_EVERY,
-        // A dormant mock sleeper: its checkpoint/replay tickers only fire
-        // when a test advances the shared timeline, so tests that don't
-        // exercise the tickers stay quiet and deterministic.
-        sleeper: Arc::new(MockSleeper::new()),
+        timer: dormant_timer(),
     }
 }
 
-/// Like [`params`], but also returns the mock [`MockTimeline`].
+/// A timer whose clock nothing holds and therefore nothing advances.
 ///
-/// The timeline backs the checkpoint and replay tickers. A test can fire
-/// them deterministically with `timeline.advance(replay_every)` instead of
-/// a sleep in real time.
-pub fn params_with_timeline(
+/// The checkpoint and replay tickers it drives only fire when the manual
+/// clock behind them moves, and the caller keeps no handle on that clock, so
+/// tests that do not exercise the tickers stay quiet and deterministic.
+pub fn dormant_timer() -> Arc<dyn Timer> {
+    ManualMonotonicClock::new_shared().new_timer()
+}
+
+/// Like [`params`], but also returns the [`ManualMonotonicClock`] the writer's
+/// timer was made from.
+///
+/// The clock backs the checkpoint and replay tickers. A test can fire them
+/// deterministically with `clock.advance(replay_every)` instead of a sleep in
+/// real time.
+pub fn params_with_clock(
     sink: Arc<dyn AuditSink>,
     spool: Spool,
     stats: Arc<AuditStats>,
-) -> (AuditWriterParams, MockTimeline) {
-    let sleeper = MockSleeper::new();
-    let timeline = sleeper.timeline();
+) -> (AuditWriterParams, Arc<ManualMonotonicClock>) {
+    let clock = ManualMonotonicClock::new_shared();
     let mut p = params(sink, spool, stats);
-    p.sleeper = Arc::new(sleeper);
-    (p, timeline)
+    p.timer = clock.new_timer();
+    (p, clock)
 }
 
 /// Polls `cond` on every executor turn until it holds.

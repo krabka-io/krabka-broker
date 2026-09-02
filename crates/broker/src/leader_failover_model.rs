@@ -1,10 +1,18 @@
 //! Exhaustive stateright models of the controller leader-failover decision
-//! (`failover_one`) and the KIP-966 winner selection (Task 3). See
+//! (`failover_one`) and the KIP-966 winner selection (`select_leader`). See
 //! `docs/superpowers/specs/2026-06-13-krabka-failover-recovery-model-design.md`.
 //!
 //! Each failover configuration also runs with a data-bearing witness in the
 //! replica set. The witness stays in every emitted ISR, and no reachable state
 //! has a witness leader.
+//!
+//! The winner-selection model runs once per published eligible-leader set, and
+//! checks the ordering the KIP-966 rule imposes: which replica is elected out
+//! of which group, and whether the election reports itself as losing data. It
+//! holds no logs, so it cannot check that the replica so elected really is
+//! complete -- that claim is about ELR maintenance, and `data_path_model`'s
+//! `data_elr` configuration is where it is checked. See [`recovery_model`] for
+//! the split.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! `within_boundary` + `target_state_count` fence each run. You MUST run these
@@ -105,7 +113,25 @@ fn failover_witness_recover() {
     );
 }
 
+/// KIP-966 winner selection, over every published eligible-leader set the
+/// three-replica partition can have, with and without a witness among them.
+///
+/// The ELR is not part of the search state -- it was published before the poll
+/// began -- so it is swept here instead: each subset of `{1,2,3}` is one
+/// exhaustive run of the response fan-out, including the sets that name a
+/// replica which never answers and the ones whose only member is the witness.
 #[test]
 fn offset_recovery() {
-    run_recovery(RecoveryModel::offset_recovery(), "offset_recovery");
+    for published in 0u8..8 {
+        let eligible: Vec<i32> = (1..=3)
+            .filter(|id| published & (1 << (id - 1)) != 0)
+            .collect();
+        for witness_ids in [&[][..], &WITNESS_REPLICA[..]] {
+            let label = format!("offset_recovery elr={eligible:?} witnesses={witness_ids:?}");
+            run_recovery(
+                RecoveryModel::offset_recovery(&eligible, witness_ids),
+                &label,
+            );
+        }
+    }
 }

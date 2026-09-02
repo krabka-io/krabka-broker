@@ -401,7 +401,7 @@ fn finish_read(
 ///
 /// `now_ms` comes from the partition's own delivery clock rather than from the
 /// system clock directly, so an append, the scheduler and a fetch all read one
-/// timeline. That is what lets a test drive a mock clock across an activation
+/// timeline. That is what lets a test drive a manual clock across an activation
 /// boundary and assert what a fetch returns on each side of it.
 fn deliverable_offset(
     log: &mut Log,
@@ -481,7 +481,6 @@ mod tests {
         records::{Attributes, Record, RecordBatch, RecordsPayload},
     };
     use krabka_units::prelude::mebibytes;
-    use qubit_clock::{Clock as _, SystemClock};
 
     /// The read budget for the hand-off test: larger than the log it reads, so
     /// the served bytes are the whole batch under either runtime flavor.
@@ -864,7 +863,7 @@ mod tests {
 
     #[test]
     fn a_consumer_is_capped_at_the_delivery_watermark_and_a_follower_is_not() {
-        let now_ms = SystemClock::new().millis();
+        let now_ms = crate::time_util::now_ms();
         // Two batches of two records: [0, 1] is due, [2, 3] is an hour out.
         let (_dir, mut log) = scheduled_log(
             DeliveryPolicy::Scheduled,
@@ -878,7 +877,7 @@ mod tests {
 
     #[test]
     fn an_immediate_topic_is_capped_at_the_high_watermark_alone() {
-        let now_ms = SystemClock::new().millis();
+        let now_ms = crate::time_util::now_ms();
         let (_dir, mut log) = scheduled_log(
             DeliveryPolicy::Immediate,
             &[now_ms + 3_600_000, now_ms + 7_200_000],
