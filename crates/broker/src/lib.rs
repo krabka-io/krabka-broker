@@ -248,8 +248,9 @@ mod stretch_cluster_model;
 pub mod telemetry;
 /// Shared scaffolding for the per-handler `#[cfg(test)] mod tests` modules
 /// (deny-all authorizer, principal/peer/context builders, wire codec helpers,
-/// temp-dir broker launcher). It consolidates the copies that the
-/// mutant-hardening pass duplicated across ~40 handlers.
+/// temp-dir broker launcher, and the one `MetadataSource` fake this crate's
+/// suites read from). It consolidates the copies that the mutant-hardening
+/// pass duplicated across ~40 handlers.
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod throttle;
@@ -264,5 +265,8 @@ pub use broker::{Broker, BrokerHandle};
 pub use config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
 pub use config_keys::{TopicConfigDoc, topic_config_docs};
 pub use error::BrokerError;
+/// Benchmark seam over the produce hot path, driven by `benches/produce.rs`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub use handlers::produce::hot_path as produce_hot_path;
 pub use health::{HealthState, NotReady};
 pub use krabka_raft::NodeId;

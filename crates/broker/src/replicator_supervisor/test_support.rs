@@ -3,7 +3,6 @@
 //! built over a temporary log dir.
 
 use std::{
-    collections::BTreeSet,
     net::SocketAddr,
     sync::{
         Arc,
@@ -17,12 +16,8 @@ use krabka_metadata::{
     BrokerEndpoint, BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord,
     TopicRecord,
 };
-use krabka_raft::{
-    AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-    UpdateVoter,
-};
+use krabka_raft::NodeId;
 use krabka_units::hours;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -31,7 +26,7 @@ use super::{
 };
 use crate::{
     config::ReplicationRuntimeConfig, partition_registry::PartitionRegistry,
-    throttle::ThrottleState,
+    test_support::FakeMetadataSource, throttle::ThrottleState,
 };
 
 /// Yield-poll until `cond` holds, with a bounded hang-guard. A real
@@ -104,90 +99,14 @@ pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
     }
 }
 
-pub(super) struct StaticMetadataSource {
-    image: Arc<MetadataImage>,
-    image_rx: watch::Receiver<Arc<MetadataImage>>,
-    leader_rx: watch::Receiver<Option<NodeId>>,
-}
-
-impl StaticMetadataSource {
-    pub(super) fn new(image: MetadataImage) -> Self {
-        let image = Arc::new(image);
-        let (_image_tx, image_rx) = watch::channel(image.clone());
-        let (_leader_tx, leader_rx) = watch::channel(None);
-        Self {
-            image,
-            image_rx,
-            leader_rx,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::metadata_source::MetadataSource for StaticMetadataSource {
-    fn current_image(&self) -> Arc<MetadataImage> {
-        self.image.clone()
-    }
-
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        self.image_rx.clone()
-    }
-
-    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        self.leader_rx.clone()
-    }
-
-    fn quorum_state(&self) -> QuorumState {
-        QuorumState {
-            current_term: 0,
-            last_applied_index: 0,
-            current_leader: None,
-            voters: Vec::new(),
-            voter_nodes: std::collections::BTreeMap::new(),
-            per_voter_matched_index: std::collections::BTreeMap::new(),
-        }
-    }
-
-    async fn submit_change(
-        &self,
-        _records: Vec<MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
-        panic!("unused in replicator supervisor tests")
-    }
-
-    async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-        panic!("unused in replicator supervisor tests")
-    }
-
-    async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-        panic!("unused in replicator supervisor tests")
-    }
-
-    fn controller_bound_addr(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 0))
-    }
-
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-        SnapshotRange::NoSnapshot
-    }
-
-    async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-        panic!("unused in replicator supervisor tests")
-    }
-
-    async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-        panic!("unused in replicator supervisor tests")
-    }
-
-    async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-        panic!("unused in replicator supervisor tests")
-    }
-
-    async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-        panic!("unused in replicator supervisor tests")
-    }
-
-    async fn cancel(&self) {}
+/// A metadata source over `image` with no controller leader elected, and a
+/// loopback controller listener for the assign-dirs reporter to resolve
+/// against.
+pub(super) fn static_source(image: MetadataImage) -> FakeMetadataSource {
+    FakeMetadataSource::builder()
+        .image(image)
+        .controller_bound_addr(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .build()
 }
 
 #[derive(Default)]
@@ -223,7 +142,7 @@ pub(super) fn supervisor_fixture(
     let mut supervisor = ReplicatorSupervisor::new(ReplicatorSupervisorConfig {
         node_id: NodeId(2),
         broker_id: 2,
-        controller: Arc::new(StaticMetadataSource::new(image)),
+        controller: Arc::new(static_source(image)),
         partitions: partitions.clone(),
         log_dirs: vec![dir.path().to_path_buf()],
         log_config: LogConfig::default(),

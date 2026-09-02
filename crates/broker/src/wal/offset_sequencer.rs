@@ -91,130 +91,12 @@ fn controller_epoch_coordinate(epoch: Option<u64>) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
-    use krabka_metadata::{MetadataImage, MetadataRecord};
-    use krabka_raft::{
-        AddVoter, Node, NodeId, OffsetReservation, QuorumState, RaftError, ReconfigOutcome,
-        RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
-    };
-    use tokio::sync::watch;
+    use krabka_raft::{OffsetReservation, RaftError, SubmitChangeResult};
 
     use super::*;
-
-    struct FakeMetadataSource {
-        result: SubmitChangeResult,
-        term: u64,
-        known_term: bool,
-        fail: bool,
-    }
-
-    #[async_trait]
-    impl MetadataSource for FakeMetadataSource {
-        fn current_image(&self) -> Arc<MetadataImage> {
-            Arc::new(MetadataImage::default())
-        }
-
-        fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-            let (_tx, rx) = watch::channel(self.current_image());
-            rx
-        }
-
-        fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-            let (_tx, rx) = watch::channel(None);
-            rx
-        }
-
-        fn quorum_state(&self) -> QuorumState {
-            QuorumState {
-                current_term: self.term,
-                last_applied_index: 0,
-                current_leader: None,
-                voters: Vec::new(),
-                voter_nodes: std::collections::BTreeMap::new(),
-                per_voter_matched_index: std::collections::BTreeMap::new(),
-            }
-        }
-
-        fn current_controller_epoch(&self) -> Option<u64> {
-            self.known_term.then_some(self.term)
-        }
-
-        async fn submit_change(
-            &self,
-            records: Vec<MetadataRecord>,
-        ) -> Result<SubmitChangeResult, RaftError> {
-            assert2::assert!(matches!(
-                records.as_slice(),
-                [MetadataRecord::V1PartitionOffsetAdvance(record)]
-                    if record.topic == "topic" && record.partition == 0 && record.count == 3
-            ));
-            if self.fail {
-                Err(RaftError::Shutdown)
-            } else {
-                Ok(self.result.clone())
-            }
-        }
-
-        async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        fn controller_bound_addr(&self) -> SocketAddr {
-            "127.0.0.1:0".parse().unwrap()
-        }
-
-        fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-            SnapshotRange::NoSnapshot
-        }
-
-        async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn cancel(&self) {}
-    }
-
-    #[tokio::test]
-    async fn controller_sequencer_uses_returned_reservation_base() {
-        let sequencer = ControllerSequencer::new(Arc::new(FakeMetadataSource {
-            result: SubmitChangeResult {
-                offset_reservations: vec![OffsetReservation {
-                    topic: "topic".to_string(),
-                    partition: 0,
-                    base_offset: 11,
-                    count: 3,
-                    leader_epoch: 7,
-                }],
-            },
-            term: 7,
-            known_term: true,
-            fail: false,
-        }));
-
-        let base = sequencer
-            .assign("topic", PartitionIndex(0), 3)
-            .await
-            .unwrap();
-
-        assert2::assert!((base) == (Offset(11)));
-    }
+    use crate::test_support::FakeMetadataSource;
 
     fn reservation(
         topic: &str,
@@ -230,6 +112,48 @@ mod tests {
             count,
             leader_epoch,
         }
+    }
+
+    /// The batches the sequencer must have submitted after one `assign` of
+    /// three records on `topic-0`. Every case below asks for that same
+    /// advance, so every case must submit exactly this -- whatever the
+    /// controller then answers.
+    fn expected_submissions() -> Vec<Vec<MetadataRecord>> {
+        vec![vec![MetadataRecord::V1PartitionOffsetAdvance(
+            PartitionOffsetAdvanceRecord {
+                topic: "topic".to_string(),
+                partition: 0,
+                count: 3,
+            },
+        )]]
+    }
+
+    /// A controller in term 7 that answers every `submit_change` with
+    /// `result`.
+    fn source_answering(result: SubmitChangeResult) -> Arc<FakeMetadataSource> {
+        Arc::new(
+            FakeMetadataSource::builder()
+                .term(7)
+                .on_submit(move |_| Ok(result.clone()))
+                .build(),
+        )
+    }
+
+    #[tokio::test]
+    async fn controller_sequencer_uses_returned_reservation_base() {
+        let source = source_answering(SubmitChangeResult {
+            offset_reservations: vec![reservation("topic", 0, 11, 3, 7)],
+        });
+        let sequencer = ControllerSequencer::new(Arc::clone(&source) as Arc<dyn MetadataSource>);
+
+        let base = sequencer
+            .assign("topic", PartitionIndex(0), 3)
+            .await
+            .unwrap();
+
+        assert2::assert!((base) == (Offset(11)));
+        // One batch, carrying exactly the advance the caller asked for.
+        assert2::assert!(source.submitted() == expected_submissions());
     }
 
     #[tokio::test]
@@ -263,39 +187,50 @@ mod tests {
         ];
 
         for result in cases {
-            let sequencer = ControllerSequencer::new(Arc::new(FakeMetadataSource {
-                result,
-                term: 7,
-                known_term: true,
-                fail: false,
-            }));
+            let source = source_answering(result);
+            let sequencer =
+                ControllerSequencer::new(Arc::clone(&source) as Arc<dyn MetadataSource>);
             assert2::assert!(
                 sequencer
                     .assign("topic", PartitionIndex(0), 3)
                     .await
                     .is_err()
             );
+            // The write went out as asked; only the answer was unusable.
+            assert2::assert!(source.submitted() == expected_submissions());
         }
 
-        let failing = ControllerSequencer::new(Arc::new(FakeMetadataSource {
-            result: SubmitChangeResult::default(),
-            term: 7,
-            known_term: true,
-            fail: true,
-        }));
-        assert2::assert!(failing.assign("topic", PartitionIndex(0), 3).await.is_err());
+        let failing = Arc::new(
+            FakeMetadataSource::builder()
+                .term(7)
+                .on_submit(|_| Err(RaftError::Shutdown))
+                .build(),
+        );
+        let sequencer = ControllerSequencer::new(Arc::clone(&failing) as Arc<dyn MetadataSource>);
+        assert2::assert!(
+            sequencer
+                .assign("topic", PartitionIndex(0), 3)
+                .await
+                .is_err()
+        );
+        assert2::assert!(failing.submitted() == expected_submissions());
     }
 
     #[tokio::test]
     async fn broker_only_sequencer_accepts_a_committed_response_epoch() {
-        let sequencer = ControllerSequencer::new(Arc::new(FakeMetadataSource {
-            result: SubmitChangeResult {
-                offset_reservations: vec![reservation("topic", 0, 11, 3, 7)],
-            },
-            term: 0,
-            known_term: false,
-            fail: false,
-        }));
+        // A broker-only observer owns no term state, so it fences the write
+        // against no epoch at all and must still take the controller's answer.
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .without_controller_epoch()
+                .on_submit(|_| {
+                    Ok(SubmitChangeResult {
+                        offset_reservations: vec![reservation("topic", 0, 11, 3, 7)],
+                    })
+                })
+                .build(),
+        );
+        let sequencer = ControllerSequencer::new(Arc::clone(&source) as Arc<dyn MetadataSource>);
 
         assert2::assert!(
             sequencer
@@ -304,5 +239,6 @@ mod tests {
                 .unwrap()
                 == Offset(11)
         );
+        assert2::assert!(source.submitted() == expected_submissions());
     }
 }

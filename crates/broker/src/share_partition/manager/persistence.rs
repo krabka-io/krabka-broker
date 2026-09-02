@@ -72,7 +72,7 @@ mod tests {
 
     #[tokio::test]
     async fn persist_if_dirty_keeps_dirty_on_write_failure() {
-        // Under MockSource the persister can't bootstrap the share-state topic,
+        // Over a broker-less image the persister can't bootstrap the share-state topic,
         // so `write_state` errors. A failed durable write must leave `dirty`
         // set so the sweeper/next-ack retries (F4 durability fix).
         let mgr = manager();

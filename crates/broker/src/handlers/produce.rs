@@ -38,6 +38,11 @@ mod append;
 mod authorization;
 mod delivery;
 mod framing;
+/// Benchmark seam over `prepare_batch`, `build_produce_data` and the log
+/// append behind them. `benches/produce.rs` is its only caller; the module is
+/// gated so a release build of the broker never carries it.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod hot_path;
 mod leadership;
 mod owned_decode;
 mod pipeline;

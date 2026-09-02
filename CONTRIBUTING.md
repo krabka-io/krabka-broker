@@ -63,4 +63,8 @@ Before you open a pull request:
 
 1. Run the build, tests, format check, and lint checks that apply to the change.
 2. Update documentation when the public behavior or a caller precondition changes.
-3. State what changed and list the checks that you ran.
+3. Record a change that an operator can see under `[Unreleased]` in the root
+   [`CHANGELOG.md`](CHANGELOG.md). Krabka releases the workspace as one unit, so
+   a crate changelog records no release and CI fails when one does. The
+   [release process](docs/releasing.md) turns those entries into a tag.
+4. State what changed and list the checks that you ran.

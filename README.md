@@ -9,6 +9,45 @@ It builds on two sibling repositories and nothing else in the stack —
 layer and [`krabka-client-rs`](https://github.com/krabka-io/krabka-client-rs)
 for the Kafka client the broker and its tests use.
 
+## AI co-development and verification
+
+A human maintainer and AI coding agents codeveloped krabka-broker. AI output is
+a proposed change, not evidence that the code is correct. The repository checks
+changes against executable tests, proof obligations, model checks, and observed
+Kafka behavior.
+
+The checks use several independent methods:
+
+* Unit, property, integration, and crash-recovery tests check behavior at
+  different boundaries.
+* Mutation testing changes production code and checks whether the test suite
+  detects each change.
+* Creusot proves contracts for small executable kernels. Stateright enumerates
+  all reachable states within each model's stated bounds. Pull request CI reruns
+  every registered proof and model check.
+* Differential and JVM acceptance suites start digest-pinned Apache Kafka and
+  Confluent Platform brokers. They compare krabka with live reference processes
+  and run real Kafka clients and admin tools against krabka.
+
+Stateright covers event orderings that example-based tests can miss. It explores
+every reachable state within explicit bounds for crashes, retries, failover,
+replay, and concurrent operations. Some models drive production decision
+functions directly. Other models compose those functions with a small
+environment.
+
+Each entry in the [Stateright inventory](docs/verification.md#stateright-model-check-tier)
+records its bounds, properties, reached state and transition counts, truncation
+guards, and modeled assumptions. Pull request CI runs every model-bearing target
+even when impact analysis would skip it.
+
+A proved kernel can still have a bad adapter. Mutation testing can expose weak
+assertions, while live Kafka comparisons can reveal undocumented or
+version-specific behavior.
+
+This process is not a whole-system formal proof. The
+[verification catalog](docs/verification.md) lists each proof, each model's
+bounds, caller preconditions, and the I/O or orchestration outside its scope.
+
 ## Crates
 
 | Crate | What it is |
@@ -256,13 +295,13 @@ Mutation sweeps run through
 bazel test //crates/raft:raft_mutants
 ```
 
-They are tagged `manual`, so `bazel test //...` skips them and a nightly job runs
-the full sweep. Two things to know about the results:
+They are tagged `manual`, so `bazel test //...` skips them. The on-demand,
+sharded `mutants` workflow runs a requested crate's full sweep. A non-excluded
+survivor fails its shard. Two things to know about the results:
 
-* Only `#[cfg(test)]` unit tests take part. Mutants that the `tests/*.rs` suites
-  would kill are reported as survivors, so scores read lower than the monorepo's
-  `cargo mutants` numbers for the same code. The nightly job is therefore
-  `continue-on-error`: it exists to produce a list to read, not to gate.
+* The target runs unit tests and ordinary `tests/*.rs` integration tests. It
+  excludes manual and Docker-backed suites because the sweep reruns the tests
+  for each mutant.
 * The `cargo-mutants` version is pinned by `tools/mutants/Cargo.lock`, not by
   whatever is on `PATH`.
 
@@ -283,8 +322,20 @@ command needs only the metadata and security crates, so it lives here as
 `krabka-format` — a library as well as a binary, so `krabka-cli` can call it
 rather than carry a second copy.
 
+## Releases
+
+A release of this repository is an annotated `vX.Y.Z` tag on `main`. Pushing
+that tag builds the image, signs it, attests its SBOM and provenance, and
+creates the GitHub release. [`CHANGELOG.md`](CHANGELOG.md) records what each tag
+contains, and [releasing](docs/releasing.md) gives the commands that cut one.
+
+The workspace is versioned and tagged as one unit, so no crate has a release of
+its own and no crate changelog records one. `tools/lint/crate_changelogs.py`
+holds that rule in CI. Each crate changelog keeps an `[Unreleased]` heading and
+points at robot-head/crabka for the history before the extraction.
+
 ## Publishing
 
 `krabka-log` and the other published names in this tree are released to crates.io
 from [`robot-head/crabka`](https://github.com/robot-head/crabka). This repository
-has no release automation; consumers pin it by git revision.
+publishes no crate; consumers pin it by git revision.
