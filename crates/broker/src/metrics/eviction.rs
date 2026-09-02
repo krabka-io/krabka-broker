@@ -40,6 +40,18 @@
 //! redundant: a shard's voters are selected from the registered brokers rather
 //! than from the partition's replica set, so this broker can still vote on --
 //! and still report lag for -- a shard whose replicas no longer name it.
+//!
+//! The two lag families of `metrics::lag` are keyed that way too, and they
+//! join in here rather than being left to a narrower owner. Their samplers
+//! already release what a pass stops naming, but a reassignment or a topic
+//! delete must not wait for the next pass, and a group that leaves this
+//! coordinator is never named by a pass again. Each entry point below reaches
+//! the families its own rule justifies: the per-partition one covers replica
+//! lag, because "this broker left the replica set" is exactly what ends a
+//! follower's series, while consumer-group lag follows the group rather than
+//! the host and so is reached only by the per-topic entry point and by
+//! `evict_group_series`, which gives group removal -- an event no image
+//! records -- its own one call to make.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -78,6 +90,7 @@ impl BrokerMetrics {
         ] {
             family.remove(label);
         }
+        self.evict_partition_lag_series(label);
     }
 
     /// Drop every series that any per-topic family carries for `topic`.
@@ -112,6 +125,7 @@ impl BrokerMetrics {
                     reason: reason.to_string(),
                 });
         }
+        self.evict_topic_lag_series(topic);
     }
 }
 
@@ -255,7 +269,11 @@ mod tests {
     };
 
     use super::*;
-    use crate::{metadata_source::MetadataSource as _, test_support::FakeMetadataSource};
+    use crate::{
+        metadata_source::MetadataSource as _,
+        metrics::{ConsumerGroupLabel, ReplicaLagLabel},
+        test_support::FakeMetadataSource,
+    };
 
     const TOPIC: &str = "orders";
     const THIS_BROKER: NodeId = NodeId(1);
@@ -548,18 +566,57 @@ mod tests {
 
     /// Eviction is exhaustive over the families each entry point owns: after
     /// one call the scrape body carries no sample for that label set at all.
+    ///
+    /// The two `metrics::lag` families are in here too, and they are what
+    /// makes "the families each entry point owns" a narrower claim than "every
+    /// family keyed by this label set". Replica lag is owned by both entry
+    /// points, because a broker that left the replica set has no follower to
+    /// report on. Consumer-group lag is owned only by the per-topic one: a
+    /// group's lag on a partition follows this broker coordinating the
+    /// *group*, not hosting the *partition*, so it is put on a partition the
+    /// per-partition call names and asserted to survive it.
     #[test]
     fn the_eviction_entry_points_clear_every_family_they_own() {
         let metrics = BrokerMetrics::new();
         create_partition_series(&metrics, &Arc::from(TOPIC), 0);
         create_topic_series(&metrics, &Arc::from(TOPIC));
-        assert!(scrape(&metrics).contains(TOPIC));
-
+        metrics.publish_replica_lag(&HashMap::from([(
+            ReplicaLagLabel {
+                topic: TOPIC.into(),
+                partition: 0,
+                replica: OTHER_BROKER.0,
+            },
+            12,
+        )]));
+        metrics.publish_consumer_group_lag(&HashMap::from([(
+            ConsumerGroupLabel {
+                group_id: "billing".into(),
+                topic: TOPIC.into(),
+                partition: 0,
+            },
+            7,
+        )]));
+        // A registered family keeps its `# HELP` line whether or not it
+        // carries a sample, so every check below names a label set rather
+        // than a family, and each one is asserted present before it is
+        // asserted gone.
+        let follower = format!(
+            "{},replica=\"{}\"",
+            partition_pair(TOPIC, 0),
+            OTHER_BROKER.0
+        );
+        let group = format!("group_id=\"billing\",{}", partition_pair(TOPIC, 0));
+        let before = scrape(&metrics);
+        assert!(before.contains(TOPIC));
+        assert!(before.contains(&follower));
+        assert!(before.contains(&group));
         metrics.evict_partition_series(&PartitionLabel {
             topic: TOPIC.into(),
             partition: 0,
         });
-        check!(!scrape(&metrics).contains(&partition_pair(TOPIC, 0)));
+        let after_partition = scrape(&metrics);
+        check!(!after_partition.contains(&follower));
+        check!(after_partition.contains(&group));
 
         metrics.evict_topic_series(TOPIC);
         check!(!scrape(&metrics).contains(TOPIC));

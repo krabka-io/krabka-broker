@@ -89,6 +89,13 @@ pub struct GroupCoordinator {
     /// the pure-coordinator unit tests, where reconcile does nothing and
     /// returns `NotReady`.
     pub(crate) metadata_source: std::sync::OnceLock<MetadataSourceHandle>,
+    /// The metric bundle whose per-group lag series this coordinator owns the
+    /// lifetime of.
+    ///
+    /// `Broker::start` sets it once. It is `None` in the pure-coordinator unit
+    /// tests, where nothing samples group lag and there is no series to
+    /// release.
+    pub(crate) metrics: std::sync::OnceLock<crate::metrics::BrokerMetrics>,
 }
 
 /// `Debug`-able wrapper around an `Arc<dyn MetadataSource>` so that it can
@@ -132,6 +139,7 @@ impl GroupCoordinator {
             streams_seeds: Arc::new(DashMap::new()),
             streams_seeds_cache: Arc::new(DashMap::new()),
             metadata_source: std::sync::OnceLock::new(),
+            metrics: std::sync::OnceLock::new(),
         }
     }
 
@@ -176,6 +184,28 @@ impl GroupCoordinator {
         &self,
     ) -> Option<Arc<dyn crate::metadata_source::MetadataSource>> {
         self.metadata_source.get().map(|h| h.0.clone())
+    }
+
+    /// Install the metric bundle whose group-lag series this coordinator
+    /// releases.
+    ///
+    /// `Broker::start` calls this once. A second call does nothing, because
+    /// the `OnceLock` keeps the first value.
+    pub(crate) fn set_metrics(&self, metrics: crate::metrics::BrokerMetrics) {
+        let _ = self.metrics.set(metrics);
+    }
+
+    /// Release every `consumer_group_lag` series for `group_id`.
+    ///
+    /// A group's lifetime ends in three places — `DeleteGroups`, the streams
+    /// delete, and losing the offsets partition that hosts the group — and
+    /// none of them is a metadata-image event the series evictor can see. Each
+    /// calls this instead, so the widest family the broker emits loses its
+    /// series at the moment the group stops being this broker's to report.
+    pub(crate) fn forget_group_metrics(&self, group_id: &str) {
+        if let Some(metrics) = self.metrics.get() {
+            metrics.evict_group_series(group_id);
+        }
     }
 }
 

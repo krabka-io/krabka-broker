@@ -62,6 +62,47 @@ pub struct PartitionLabel {
     pub partition: i32,
 }
 
+/// Per-follower replica-lag label set, paired with the `replica_lag_records`
+/// gauge family. `replica` is the follower's node id, so a partition this
+/// broker leads carries one series per follower in its replica set and none
+/// for the leader itself.
+///
+/// Cardinality is bounded by the partitions this broker leads times their
+/// replication factor. Two rules hold that bound. The lag sampler republishes
+/// the whole set each pass and releases what the pass no longer justifies, so
+/// losing leadership or dropping a replica takes the series with it, and
+/// `metrics::eviction` releases the rest when the image stops naming this
+/// broker in the partition's replica set. No client input reaches this label
+/// set: both the partition and the follower come from the leader's own
+/// replica state.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ReplicaLagLabel {
+    pub topic: String,
+    pub partition: i32,
+    pub replica: u64,
+}
+
+/// Per-(group, topic, partition) consumer-group-lag label set, paired with the
+/// `consumer_group_lag_records` gauge family. It covers classic and KIP-848
+/// groups alike, because a group's committed offsets live on the
+/// protocol-agnostic `CoordinatorGroup` whichever protocol its members speak.
+///
+/// This is the widest label set the broker emits, so its bound is worth
+/// stating exactly. A series exists only for a `(topic, partition)` a group
+/// this broker coordinates has actually committed an offset for, and only
+/// while that partition is still in the metadata image. The commit itself is
+/// bounded: `OffsetCommit` writes to `__consumer_offsets`, so a client cannot
+/// invent a series more cheaply than it can write a record. Every way a series
+/// stops being justified releases it — the group is deleted, this broker stops
+/// coordinating the group, the topic is deleted, or the sampler's next pass no
+/// longer names the tuple.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ConsumerGroupLabel {
+    pub group_id: String,
+    pub topic: String,
+    pub partition: i32,
+}
+
 /// One diskless WAL shard. Topic UUIDs keep delete/recreate cycles distinct.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct WalShardLabel {

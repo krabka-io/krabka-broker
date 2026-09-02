@@ -220,5 +220,33 @@ impl BrokerMetrics {
              outbound traffic to its source.",
             self.replication_bytes_out.clone(),
         );
+
+        registry.register(
+            "replica_lag_records",
+            "Records a follower of a partition this broker leads has yet \
+             to fetch: the leader's log end offset minus that follower's \
+             last-fetched offset. Where under_replicated_partitions says \
+             only that a follower left the ISR, this says how far behind \
+             it is while it is still in.",
+            self.replica_lag.clone(),
+        );
+
+        registry.register(
+            "replica_lag_max_records",
+            "The largest value replica_lag_records carries on this \
+             broker, or zero when it leads no partition with a follower. \
+             Mirrors Kafka's ReplicaFetcherManager.MaxLag; alert on it \
+             rather than aggregating the per-follower family.",
+            self.replica_lag_max.clone(),
+        );
+
+        registry.register(
+            "consumer_group_lag_records",
+            "Records a consumer group this broker coordinates has yet to \
+             consume from one partition: the partition's high watermark \
+             minus the group's committed offset. Classic and KIP-848 \
+             groups both report here.",
+            self.consumer_group_lag.clone(),
+        );
     }
 }

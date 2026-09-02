@@ -29,6 +29,7 @@ mod diskless;
 mod eviction;
 mod fetch_drain;
 mod labels;
+mod lag;
 mod log_cleaner;
 mod phases;
 mod registration;
@@ -40,12 +41,13 @@ mod traffic;
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
     BreakGlassStateLabel, ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel,
-    DirectoryLabel, FetchDrainPath, FetchDrainPathLabel, PartitionLabel, QuotaType, QuotaTypeLabel,
-    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
-    WalVoterLabel,
+    ConsumerGroupLabel, DirectoryLabel, FetchDrainPath, FetchDrainPathLabel, PartitionLabel,
+    QuotaType, QuotaTypeLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
+    ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
 };
 pub(crate) use self::{
-    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, phases::RequestPhases,
+    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, lag::LagSeriesIndex,
+    phases::RequestPhases,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -56,7 +58,7 @@ pub type SharedRegistry = Arc<Mutex<Registry>>;
 /// Cheaply-clonable bundle of counter / gauge handles. Construct once
 /// in `Broker::start`; hand out clones (each clone is a single
 /// `Arc::clone`) to every subsystem that emits.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BrokerMetrics {
     pub registry: SharedRegistry,
     pub topic_bytes_in: Family<TopicLabel, Counter>,
@@ -103,6 +105,29 @@ pub struct BrokerMetrics {
     /// `partition_bytes_out`).
     pub replication_bytes_out: Family<PartitionLabel, Counter>,
     pub partition_disk_bytes: Family<PartitionLabel, Gauge>,
+    /// Records each follower of a partition this broker leads still has to
+    /// fetch: the leader's log end offset minus the follower's last-fetched
+    /// offset, per follower.
+    ///
+    /// `under_replicated_partitions` says only that a follower fell out of the
+    /// ISR. This says how far behind it is while it is still in, which is what
+    /// tells an operator whether a follower is drifting toward an ISR shrink
+    /// or holding steady. Mirrors the per-partition half of Kafka's
+    /// `ReplicaFetcherManager` lag reporting.
+    pub replica_lag: Family<ReplicaLagLabel, Gauge>,
+    /// The largest value `replica_lag` carries on this broker, or zero when it
+    /// leads no partition with a follower. Mirrors Kafka's
+    /// `ReplicaFetcherManager.MaxLag`: one series an operator alerts on
+    /// without having to aggregate a per-follower family first.
+    pub replica_lag_max: Gauge,
+    /// Records a consumer group has yet to consume from one partition: the
+    /// partition's high watermark minus the group's committed offset.
+    ///
+    /// It covers classic and KIP-848 groups alike, because committed offsets
+    /// live on the protocol-agnostic `CoordinatorGroup`. This is the metric
+    /// most consumer-owning teams alert on, and the broker is the only place
+    /// that holds both halves of the subtraction without a client round trip.
+    pub consumer_group_lag: Family<ConsumerGroupLabel, Gauge>,
     /// Records waiting for acquisition in each share-group partition.
     pub share_group_backlog: Family<ShareGroupLabel, Gauge>,
     /// Cumulative handler-thread microseconds spent processing each
@@ -591,4 +616,17 @@ pub struct BrokerMetrics {
     pub diskless_wal_cold_read_hits_total: Counter,
     pub diskless_wal_cold_read_misses_total: Counter,
     pub diskless_wal_cold_read_errors_total: Counter,
+    /// The label sets [`Self::replica_lag`] and [`Self::consumer_group_lag`]
+    /// currently carry, so that a caller holding only part of a lag label set
+    /// can still release the series. See [`LagSeriesIndex`].
+    pub(crate) lag_series: LagSeriesIndex,
+}
+
+/// Opaque `Debug`, so that a type holding a [`BrokerMetrics`] can still derive
+/// its own. The bundle is a registry and some seventy metric handles, and
+/// printing them says nothing a scrape does not say better.
+impl std::fmt::Debug for BrokerMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrokerMetrics").finish_non_exhaustive()
+    }
 }

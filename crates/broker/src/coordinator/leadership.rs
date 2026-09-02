@@ -210,6 +210,10 @@ async fn unload_partition(
         coordinator.streams_seeds.remove(&group_id);
         coordinator.streams_seeds_cache.remove(&group_id);
         coordinator.group_types.remove(&group_id);
+        // The group's offsets partition moved to another broker, so its lag is
+        // that broker's to report from here on. Nothing else would release the
+        // series: this broker's sampler will never name the group again.
+        coordinator.forget_group_metrics(&group_id);
     }
 }
 
@@ -237,5 +241,57 @@ mod tests {
             led_partitions(&image, NodeId(1))
                 == maplit::hashset! {PartitionIndex(0), PartitionIndex(2)}
         );
+    }
+
+    /// Losing the offsets partition that hosts a group ends this broker's
+    /// claim to report that group's lag. Nothing else would release the
+    /// series: no metadata image records a group's coordinator moving, and
+    /// this broker's lag sampler will never name the group again.
+    #[tokio::test]
+    async fn unloading_a_partition_releases_its_groups_lag_series() {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+            name: OFFSETS_TOPIC.into(),
+            topic_id: uuid::Uuid::from_u128(2),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: OFFSETS_TOPIC.into(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: vec![NodeId(1)],
+            isr: vec![NodeId(1)],
+            ..PartitionRecord::default()
+        }));
+        let metadata: Arc<dyn MetadataSource> = Arc::new(
+            crate::test_support::FakeMetadataSource::builder()
+                .image(image.clone())
+                .leader(Some(NodeId(1)))
+                .build(),
+        );
+        let coordinator = Arc::new(GroupCoordinator::new(
+            crate::coordinator::unified::config::NextGenConfig::default(),
+            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            Arc::new(crate::coordinator::unified::ImageMetadataProvider {
+                controller: Arc::clone(&metadata),
+            }),
+            Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
+            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        ));
+        let metrics = crate::metrics::BrokerMetrics::new();
+        coordinator.set_metrics(metrics.clone());
+        // The group has to be live for the unload to find it.
+        let _actor = coordinator.get_or_create_classic("billing");
+        let label = crate::metrics::ConsumerGroupLabel {
+            group_id: "billing".into(),
+            topic: "orders".into(),
+            partition: 0,
+        };
+        metrics.publish_consumer_group_lag(&std::collections::HashMap::from([(label.clone(), 33)]));
+
+        unload_partition(&coordinator, &image, PartitionIndex(0)).await;
+
+        check!(metrics.consumer_group_lag.get(&label).is_none());
     }
 }
