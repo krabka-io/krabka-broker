@@ -44,7 +44,9 @@ pub enum FreezeSignatureDecision {
 }
 
 /// Mathematical skew-window predicate, without machine-integer overflow.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 pub fn freeze_timestamp_in_window_model(set_at_ms: i64, now_ms: i64, max_skew_ms: i64) -> bool {
     pearlite! {
@@ -245,7 +247,9 @@ pub const fn freeze_refuses(kind: FreezeMutationKind) -> bool {
 }
 
 /// Logical mirror of [`freeze_refuses`] for the mutation contract.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn freeze_refusal_model(kind: FreezeMutationKind) -> bool {
     match kind {

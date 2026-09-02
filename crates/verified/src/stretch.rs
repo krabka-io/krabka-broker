@@ -15,7 +15,9 @@
 use creusot_std::prelude::*;
 
 /// The sum of the first `limit` elements of `s`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[variant(limit)]
 pub fn sum_prefix(s: Seq<i64>, limit: Int) -> Int {
@@ -29,21 +31,27 @@ pub fn sum_prefix(s: Seq<i64>, limit: Int) -> Int {
 }
 
 /// The sum of every element of `s`. This is the total voter count.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 pub fn sum_all(s: Seq<i64>) -> Int {
     pearlite! { sum_prefix(s, s.len()) }
 }
 
 /// One step of the `sum_prefix` recursion, as a fact about `limit - 1`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(1 <= limit && limit <= s.len())]
 #[ensures(sum_prefix(s, limit) == sum_prefix(s, limit - 1) + s[limit - 1]@)]
 pub fn lemma_sum_prefix_step(s: Seq<i64>, limit: Int) {}
 
 /// A prefix sum is not negative when no element of that prefix is negative.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(0 <= limit && limit <= s.len())]
 #[requires(forall<k: Int> 0 <= k && k < limit ==> s[k]@ >= 0)]
@@ -61,7 +69,9 @@ pub fn lemma_sum_prefix_nonnegative(s: Seq<i64>, limit: Int) {
 /// This is the reason a stretch cluster needs a third site. One of the two
 /// sites holds at least half of the voters. The loss of that site leaves half
 /// of the voters or less, and half is not a strict majority.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[requires(voters_per_site@.len() == 2)]
 #[requires(forall<k: Int> 0 <= k && k < 2 ==> voters_per_site@[k]@ >= 0)]
 #[ensures(exists<k: Int> 0 <= k && k < voters_per_site@.len()

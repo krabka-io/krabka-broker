@@ -43,21 +43,13 @@ exclude_re = [
     # waiting forever. The drain test detects that, but cargo-mutants can only
     # classify the deliberately stuck process as a timeout.
     "broker/src/client_metrics/mod\\.rs.*replace ClientMetrics::shutdown with \\(\\)",
-    # `capped` is `#[cfg(creusot)] #[logic]`: a specification function that a
-    # normal build does not compile, so mutating it changes nothing that runs
-    # and no test can tell. Creusot discharges it instead, under verif/.
-    # Matched on path and function rather than on the mutation's wording: a
-    # whole-function mutant reads "replace capped Int with ..." (the return type
-    # is in there) and an operator one reads "replace + with * in capped", so
-    # anything tighter matches one genre and silently misses the other.
-    "throttle/src/lib\\.rs.*capped",
     # ---- crates/log ----------------------------------------------------
     #
     # The epoch guard in each append path is `epoch.is_known() && latest is none
     # or epoch > it`. Relaxing `>` to `>=` only admits an epoch already
     # recorded, and `append_to` refuses one it has seen -- so the checkpoint is
     # unchanged either way. The `&&` half is real and is tested.
-    "log/src/log\\.rs.*replace > with >= in Log::append(_verbatim)?(_at)?$",
+    "replace > with >= in Log::append(_verbatim)?(_at)?$",
     # `read_raw`'s early return for "past the segment, or at the limit" is an
     # optimisation: the walk reaches the same empty result on its own, one
     # skipping every batch and the other breaking on `base >= limit_offset`.
@@ -65,7 +57,23 @@ exclude_re = [
     # `last_offset` starts at `fetch_offset - 1` and is overwritten by every
     # batch the walk selects. When the walk selects none the result is the empty
     # read, which does not carry it. The initial value is never returned.
-    "segment\\.rs:630.*in Segment::read_raw_with_buffer_cap",
+    #
+    # Pinned to a line because `Segment::read_raw_with_buffer_cap` has two other
+    # `-` sites (the target-offset conversion and the byte-budget check) that
+    # this reasoning does not cover -- a function-name-only match would also
+    # swallow those. The cost is the same one paid by `read_at` below: this
+    # needs updating if a line above it in the file moves.
+    "read_raw\\.rs:75:.*replace - with [+/] in Segment::read_raw_with_buffer_cap",
+    #
+    # `read_raw_desc`'s twin of the same initial-value site
+    # (`segment/read_raw_desc.rs:78`) needs no entry of its own: the module is
+    # declared through the `sendfile_cfg!` macro (`segment.rs`), and
+    # cargo-mutants' source walk does not look inside macro invocations for
+    # `mod` items, so it never discovers the file to mutate it. Likewise
+    # `stamp_index.rs:106`, the `NotFound`-guard twin of `txn_index.rs`'s entry
+    # below, needs none: unlike the `txn_index` guard it is fully covered and
+    # both its mutants are caught.
+    #
     # `max_timestamp > current` guards an assignment of that timestamp, so at
     # equality both branches store the same value. (`<` is a different
     # function and is tested.)
@@ -83,21 +91,25 @@ exclude_re = [
     # Pinned to a line because the unix and windows implementations share the
     # name `read_at`, and the unix one IS compiled -- matching on the name alone
     # would exclude mutants that a test can and should kill. The cost is that
-    # this needs updating whenever anything above it in segment.rs moves, which
-    # has already happened once: adding `read_full_with` shifted it from 73.
-    "segment\\.rs:87.*replace read_at ",
+    # this needs updating whenever anything above it in the file moves, which
+    # has already happened twice: `read_full_with` first shifted it from 73 to
+    # 87 in the old monolithic segment.rs, and splitting segment.rs into
+    # segment/io.rs moved it again, to 94.
+    "io\\.rs:94.*replace read_at ",
     # Guards on `io::ErrorKind` -- `Interrupted` in the read loop, `NotFound`
     # when a sidecar is absent. Reaching them needs the kernel to return that
     # errno, which a test cannot ask a real file for.
     "replace == with != in read_full_at",
-    "leader_epoch_checkpoint\\.rs.*e\\.kind\\(\\)",
-    "txn_index\\.rs:85",
-    # `crates/verified` carries its Creusot specification beside the executable
-    # code. These are `#[cfg(creusot)] #[logic]` functions and the `lemma_*`
-    # proof obligations: a normal build does not compile them, so mutating one
-    # changes nothing that runs and no test can tell. Creusot discharges them,
-    # under verif/.
-    "verified/src/(consensus|compaction)\\.rs.*(hwm_member_at|count_ge|least_hwm_member_ge_index|lemma_|compute_horizon_model)",
+    "leader_epoch_checkpoint/file\\.rs.*e\\.kind\\(\\)",
+    "txn_index\\.rs:94",
+    # `crates/verified`'s `#[cfg(creusot)]` specification functions and lemma
+    # proof obligations carry `#[cfg_attr(test, mutants::skip)]` on their own
+    # definitions instead of a path-and-line regex here: cargo-mutants reads
+    # the attribute from source, so it works on a function a normal build does
+    # not compile, and it cannot rot the way a regex keyed to an old path or
+    # line number can. `tools/lint/creusot_skip.py` keeps every such function
+    # covered.
+    #
     # The rest of `verified`'s survivors are equivalent mutants: a comparison
     # whose two branches yield the same value at the boundary the mutation
     # moves. Left as they are rather than rewritten -- these bodies carry

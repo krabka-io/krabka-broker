@@ -181,7 +181,9 @@ pub fn select_best_recovery_replica(candidates: &[(i32, i64, u64)]) -> Option<us
 
 /// Members of `{log_end} U s` with value >= `v`. This is the
 /// majority-replication witness.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 pub fn hwm_member_at(log_end: Int, s: Seq<i64>, k: Int) -> Int {
     pearlite! {
@@ -189,7 +191,9 @@ pub fn hwm_member_at(log_end: Int, s: Seq<i64>, k: Int) -> Int {
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[variant(limit)]
 pub fn count_ge_prefix(log_end: Int, s: Seq<i64>, v: Int, limit: Int, leader_counts: bool) -> Int {
@@ -204,14 +208,18 @@ pub fn count_ge_prefix(log_end: Int, s: Seq<i64>, v: Int, limit: Int, leader_cou
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[variant(s.len())]
 pub fn count_ge(log_end: Int, s: Seq<i64>, v: Int, leader_counts: bool) -> Int {
     pearlite! { count_ge_prefix(log_end, s, v, s.len() + 1, leader_counts) }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(0 <= limit && limit <= s.len() + 1)]
 #[requires(low <= high)]
@@ -231,7 +239,9 @@ pub fn lemma_count_ge_prefix_monotone(
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(0 <= limit && limit <= s.len() + 1)]
 #[ensures(count_ge_prefix(log_end, s, v, limit, leader_counts) >= 0)]
@@ -248,7 +258,9 @@ pub fn lemma_count_ge_prefix_nonnegative(
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(0 < limit && limit <= s.len() + 1)]
 #[requires(count_ge_prefix(log_end, s, v, limit, leader_counts) >= 1)]
@@ -362,7 +374,9 @@ pub fn least_hwm_member_ge_index(
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[requires(1 <= majority@ && majority@ <= s@.len() + 1)]
 #[ensures(forall<v: Int> count_ge(log_end@, s@, v, leader_counts) >= majority@
     ==> exists<k: Int> 0 <= k && k < s@.len() + 1
@@ -381,7 +395,9 @@ pub fn lemma_hwm_threshold_has_member(
             && count_ge(log_end@, s@, hwm_member_at(log_end@, s@, k), leader_counts) >= majority@);
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[requires(1 <= majority@ && majority@ <= s@.len() + 1)]
 #[requires(forall<k: Int> 0 <= k && k < s@.len() + 1
     && count_ge(log_end@, s@, hwm_member_at(log_end@, s@, k), leader_counts) >= majority@

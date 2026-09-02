@@ -120,7 +120,9 @@ pub const fn retention_segment_evict(
 ///
 /// The tombstone or marker is retained until the wall clock reaches this
 /// value.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 pub fn compute_horizon_model(now_ms: i64, delete_retention_ms: i64) -> Int {
     pearlite! {

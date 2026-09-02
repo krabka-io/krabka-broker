@@ -3401,6 +3401,7 @@ dependencies = [
  "creusot-std",
  "derive_more",
  "krabka-ids",
+ "mutants",
  "proptest",
 ]
 
