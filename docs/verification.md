@@ -195,21 +195,24 @@ Install the pinned Creusot release and its provers as the
 the repository root:
 
 ```sh
+aspect check-creusot-packages
 export PATH="${HOME}/.local/share/creusot/bin:${PATH}"
-python3 tools/test_creusot_packages.py
 packages=(krabka-verified)
-python3 tools/creusot_packages.py "${packages[@]}"
 for package in "${packages[@]}"; do
   cargo creusot --package "${package}"
 done
 ```
 
 The package check fails if a workspace package that depends on `creusot-std`
-or contains a Creusot contract is absent from the explicit proof list. Each
-`cargo creusot` command updates its package directory under `verif/`. A
-nonzero exit or an unproved goal fails the CI job. CI checks the proof result,
-not a clean Git diff. Generated `.coma` files contain an absolute source path,
-so another checkout can change them without a change to the proof result.
+or contains a Creusot contract is absent from the explicit proof list. It runs
+outside the proof image, which carries no Aspect CLI, and it also asserts that
+[`tools/creusot/prove.sh`](../tools/creusot/prove.sh) -- the image's entrypoint,
+and the loop above -- still names the same packages, so the list and the proofs
+cannot drift apart. Each `cargo creusot` command updates its package directory
+under `verif/`. A nonzero exit or an unproved goal fails the CI job. CI checks
+the proof result, not a clean Git diff. Generated `.coma` files contain an
+absolute source path, so another checkout can change them without a change to
+the proof result.
 
 ## Stateright Model-Check Tier
 
