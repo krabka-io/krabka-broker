@@ -370,6 +370,7 @@ async fn commit_offset(handle: &GroupActorHandle, offset: i64) {
                     leader_epoch: 1,
                     metadata: String::new(),
                     commit_timestamp_ms: 1_700_000_000_000,
+                    expire_timestamp_ms: None,
                 },
             )],
             reply,

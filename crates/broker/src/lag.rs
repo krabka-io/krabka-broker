@@ -407,13 +407,21 @@ fn coordinates_group(image: &MetadataImage, node_id: NodeId, group_id: &str) -> 
 /// does one that has not answered within [`SAMPLE_WAIT`]: a wedged actor costs
 /// its own group's series this pass rather than the pass, which every other
 /// group's series and both replica families would otherwise wait behind.
+///
+/// `FetchOffsets` also reports the keys an open transaction has not resolved
+/// yet, and this pass drops them. `OffsetFetch` answers those
+/// `UNSTABLE_OFFSET_COMMIT` under `read_committed` because a reader must not
+/// see an offset that may still abort, but the gauge is a distance and the
+/// stable commit under the pending key is the last offset the group is known
+/// to have kept, so reporting lag from it is the honest reading of where the
+/// group stands.
 async fn committed_offsets(
     actor: &tokio::sync::mpsc::Sender<GroupActorMessage>,
 ) -> HashMap<TopicPartition, crate::coordinator::unified::classic_state::OffsetEntry> {
     let (reply, response) = oneshot::channel();
     let exchange = async {
         actor
-            .send(GroupActorMessage::FetchCommitted { reply })
+            .send(GroupActorMessage::FetchOffsets { reply })
             .await
             .ok()?;
         response.await.ok()
@@ -422,7 +430,7 @@ async fn committed_offsets(
         tracing::debug!("a group actor did not answer the lag sampler in time");
         return HashMap::new();
     };
-    offsets.unwrap_or_default()
+    offsets.unwrap_or_default().committed
 }
 
 /// Lag of every follower of every partition `node_id` currently leads.
