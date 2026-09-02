@@ -94,7 +94,7 @@ async fn an_incremental_alter_raises_the_cap_for_the_next_produce() {
     let raised = (CAP + 1).to_string();
     check!(set_max_message_bytes(&p.client, "orders", &raised).await == (codes::NONE, None));
     check!(describe_max_message_bytes(&p.client, "orders").await.value == Some(raised));
-    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == accepted(0));
+    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == accepted(0, 0));
 
     p.broker.shutdown().await;
 }

@@ -34,10 +34,10 @@ async fn a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused() {
     )
     .await;
 
-    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP).await == accepted(0));
+    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP).await == accepted(0, 0));
     check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP + 1).await == too_large());
     check!(p.broker.local_log_end_offset("orders", 0) == Some(1));
-    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP).await == accepted(1));
+    check!(produce_batch_of_wire_len(&p.client, "orders", topic, CAP).await == accepted(1, 0));
     check!(p.broker.local_log_end_offset("orders", 0) == Some(2));
 
     p.broker.shutdown().await;
@@ -57,7 +57,8 @@ async fn a_topic_with_no_override_inherits_the_brokers_message_max_bytes() {
     let topic = create_topic(&p.broker, &p.client, "orders", &[]).await;
 
     check!(
-        produce_batch_of_wire_len(&p.client, "orders", topic, KAFKA_DEFAULT).await == accepted(0)
+        produce_batch_of_wire_len(&p.client, "orders", topic, KAFKA_DEFAULT).await
+            == accepted(0, 0)
     );
     check!(
         produce_batch_of_wire_len(&p.client, "orders", topic, KAFKA_DEFAULT + 1).await
@@ -96,7 +97,7 @@ async fn a_topic_override_binds_below_and_above_the_broker_default() {
     check!(p.broker.local_log_end_offset("tight", 0) == Some(0));
     check!(
         produce_batch_of_wire_len(&p.client, "loose", loose, KAFKA_DEFAULT + 1).await
-            == accepted(0)
+            == accepted(0, 0)
     );
 
     p.broker.shutdown().await;
@@ -150,7 +151,8 @@ async fn a_batch_the_topic_expands_is_measured_after_the_broker_re_encodes_it() 
     check!(produce_batch(&p.client, "orders", topic, oversized).await == too_large());
     check!(p.broker.local_log_end_offset("orders", 0) == Some(0));
     check!(
-        produce_batch(&p.client, "orders", topic, gzip_batch(FITS_EITHER_WAY)).await == accepted(0)
+        produce_batch(&p.client, "orders", topic, gzip_batch(FITS_EITHER_WAY)).await
+            == accepted(0, 0)
     );
     check!(p.broker.local_log_end_offset("orders", 0) == Some(1));
 

@@ -115,6 +115,14 @@ _FEATURE_RULES = [
         "crates/broker/src/producer_state",
         "crates/broker/src/partition_writer",
         "crates/broker/src/broker/replication",
+        # The produce handler is the caller of the three above: it is what a
+        # JVM producer's acks=all write runs through, so the durability suite
+        # is the container gate on it. Without this entry the writer and the
+        # dedup tracker were gated while the handler that drives them was not,
+        # and a change to the handler alone selected no container suite. The
+        # `handlers/produce/delivery` subtree keeps its own KFC-1 suite and
+        # now selects both.
+        "crates/broker/src/handlers/produce",
     ], ["jvm_acceptance_durability"]),
     ([
         "crates/broker/src/legacy_fetch",
@@ -234,6 +242,15 @@ def _self_test():
     _check(
         _select(["crates/broker/src/heartbeat/client.rs"], available) == [_target("jvm_role_separated_admin")],
         "heartbeat source must select the role-separated suite",
+    )
+    _check(
+        _select(["crates/broker/src/handlers/produce/append.rs"], available) == [_target("jvm_acceptance_durability")],
+        "produce handler source must select the durability suite its appends drive",
+    )
+    _check(
+        sorted(_select(["crates/broker/src/handlers/produce/delivery/gate.rs"], available)) ==
+        sorted([_target("jvm_acceptance_durability"), _target("jvm_deliver_at_time")]),
+        "the produce delivery gate must keep its own suite and gain the durability one",
     )
     _check(_select(["crates/broker/src/codes.rs"], available) == [], "unmapped broker source must select nothing")
     _check(
