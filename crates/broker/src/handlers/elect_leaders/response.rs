@@ -46,6 +46,10 @@ pub(super) fn elect_error_to_wire(err: ElectError) -> (i16, &'static str) {
         ElectError::NoEligibleReplica => {
             (codes::ELIGIBLE_LEADERS_NOT_AVAILABLE, "no alive replica")
         }
+        ElectError::EpochExhausted => (
+            codes::INVALID_REQUEST,
+            "partition metadata epoch is exhausted",
+        ),
     }
 }
 

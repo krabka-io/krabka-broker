@@ -5,6 +5,10 @@
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value};
 use krabka_protocol::records::metadata::control::ControlRecord;
+use krabka_verified::recovery::{
+    ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
+    should_capture_first_downgrade,
+};
 
 use super::{
     PendingDowngradeSnapshot,
@@ -35,21 +39,18 @@ pub fn replay_committed(
             break;
         }
         for batch in &batches {
-            if Offset(batch.base_offset) >= target {
-                continue;
-            }
-            if batch.attributes.is_control_batch() {
-                continue;
-            }
             for rec in &batch.records {
-                let record_offset = Offset(
-                    batch
-                        .base_offset
-                        .saturating_add(i64::from(rec.offset_delta)),
-                );
-                if record_offset < from || record_offset >= target {
+                let ReplayRecordDecision::Apply(record_offset) = replay_record_decision(
+                    batch.base_offset,
+                    rec.offset_delta,
+                    from.0,
+                    target.0,
+                    batch.attributes.is_control_batch(),
+                    false,
+                ) else {
                     continue;
-                }
+                };
+                let record_offset = Offset(record_offset);
                 let Some(value) = rec.value.as_ref() else {
                     continue;
                 };
@@ -66,7 +67,10 @@ pub fn replay_committed(
                                     .is_some_and(|current| feature.level < current)
                     );
                     image.apply(&meta);
-                    if is_metadata_version_downgrade && pending.is_none() {
+                    if should_capture_first_downgrade(
+                        pending.is_some(),
+                        is_metadata_version_downgrade,
+                    ) {
                         pending = Some(PendingDowngradeSnapshot {
                             image: image.clone(),
                             end_offset: record_offset + 1,
@@ -76,16 +80,17 @@ pub fn replay_committed(
                 }
             }
         }
-        let Some(next) = next.filter(|next| *next > cursor) else {
-            break;
-        };
-        cursor = next;
+        match replay_cursor_decision(cursor.0, next.map(|offset| offset.0)) {
+            ReplayCursorDecision::Advance(next) => cursor = Offset(next),
+            ReplayCursorDecision::Stop => break,
+        }
     }
     Ok(pending)
 }
 
 pub fn replay_control_records(log: &KraftLog, state: &mut QuorumState, max: MetadataRaftFetchMax) {
-    let mut cursor = log.log_start_offset();
+    let from = log.log_start_offset();
+    let mut cursor = from;
     let target = log.hwm();
     while cursor < target {
         match log.read_decoded(cursor, max.size()) {
@@ -95,13 +100,20 @@ pub fn replay_control_records(log: &KraftLog, state: &mut QuorumState, max: Meta
                     break;
                 }
                 for batch in &batches {
-                    if Offset(batch.base_offset) >= target {
-                        continue;
-                    }
-                    if !batch.attributes.is_control_batch() {
-                        continue;
-                    }
                     for record in &batch.records {
+                        if !matches!(
+                            replay_record_decision(
+                                batch.base_offset,
+                                record.offset_delta,
+                                from.0,
+                                target.0,
+                                batch.attributes.is_control_batch(),
+                                true,
+                            ),
+                            ReplayRecordDecision::Apply(_)
+                        ) {
+                            continue;
+                        }
                         match decode_control_record(record) {
                             Ok(Some(ControlRecord::KRaftVersion(record))) => {
                                 if let Ok(version) = u16::try_from(record.k_raft_version) {
@@ -122,10 +134,10 @@ pub fn replay_control_records(log: &KraftLog, state: &mut QuorumState, max: Meta
                         }
                     }
                 }
-                let Some(next) = next.filter(|next| *next > cursor) else {
-                    break;
-                };
-                cursor = next;
+                match replay_cursor_decision(cursor.0, next.map(|offset| offset.0)) {
+                    ReplayCursorDecision::Advance(next) => cursor = Offset(next),
+                    ReplayCursorDecision::Stop => break,
+                }
             }
             Err(error) => {
                 tracing::error!(?error, "kraft: control replay for recovery failed");
@@ -142,7 +154,8 @@ pub fn control_state_at(
     max: MetadataRaftFetchMax,
 ) -> Result<QuorumState, RaftError> {
     let mut state = bootstrap.clone();
-    let mut cursor = log.log_start_offset();
+    let from = log.log_start_offset();
+    let mut cursor = from;
     while cursor < end_offset {
         let batches = log.read_decoded(cursor, max.size())?;
         let next = next_batch_offset(&batches);
@@ -150,14 +163,18 @@ pub fn control_state_at(
             break;
         }
         for batch in &batches {
-            if Offset(batch.base_offset) >= end_offset || !batch.attributes.is_control_batch() {
-                continue;
-            }
             for record in &batch.records {
-                let record_offset = batch
-                    .base_offset
-                    .saturating_add(i64::from(record.offset_delta));
-                if record_offset >= end_offset.0 {
+                if !matches!(
+                    replay_record_decision(
+                        batch.base_offset,
+                        record.offset_delta,
+                        from.0,
+                        end_offset.0,
+                        batch.attributes.is_control_batch(),
+                        true,
+                    ),
+                    ReplayRecordDecision::Apply(_)
+                ) {
                     continue;
                 }
                 let Some(control) = decode_control_record(record)? else {
@@ -179,10 +196,10 @@ pub fn control_state_at(
                 }
             }
         }
-        let Some(next) = next.filter(|next| *next > cursor) else {
-            break;
-        };
-        cursor = next;
+        match replay_cursor_decision(cursor.0, next.map(|offset| offset.0)) {
+            ReplayCursorDecision::Advance(next) => cursor = Offset(next),
+            ReplayCursorDecision::Stop => break,
+        }
     }
     Ok(state)
 }

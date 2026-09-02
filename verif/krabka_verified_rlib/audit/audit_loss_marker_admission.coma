@@ -1,0 +1,73 @@
+(* #"/workspace/crates/verified/src/audit.rs" 78 0 85 29 *)
+
+let%span saudit = "/workspace/crates/verified/src/audit.rs" 86 35 86 36
+let%span saudit'0 = "/workspace/crates/verified/src/audit.rs" 88 29 88 30
+let%span saudit'1 = "/workspace/crates/verified/src/audit.rs" 90 29 90 30
+let%span saudit'2 = "/workspace/crates/verified/src/audit.rs" 67 10 68 77
+let%span saudit'3 = "/workspace/crates/verified/src/audit.rs" 69 10 71 46
+let%span saudit'4 = "/workspace/crates/verified/src/audit.rs" 72 10 76 52
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_AuditLossMarkerAdmission = AdmitLegacy | AdmitPersisted | Reject
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let audit_loss_marker_admission [#"/workspace/crates/verified/src/audit.rs" 78 0 85 29] (header_matches: bool)
+  (field_count: UInt64.t) (count: UInt64.t) (generation_present: bool) (generation: UInt64.t)
+  (previous_generation: UInt64.t) (return (x: t_AuditLossMarkerAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {header_matches = false} (! bb3) | br1 -> {header_matches} (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_27 <- count = ([%#saudit] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb4) | br1 -> {_27} (! bb3) ] ]
+  | bb4 = s0
+    [ s0 = [ &_29 <- field_count = ([%#saudit'0] (1: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb8) | br1 -> {_29} (! bb5) ] ]
+  | bb5 = any [ br0 -> {generation_present = false} (! bb6) | br1 -> {generation_present} (! bb8) ]
+  | bb6 = s0 [ s0 = [ &_ret <- AdmitLegacy ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = [ &_32 <- field_count = ([%#saudit'1] (2: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb14) | br1 -> {_32} (! bb9) ] ]
+  | bb9 = any [ br0 -> {generation_present = false} (! bb14) | br1 -> {generation_present} (! bb10) ]
+  | bb10 = s0
+    [ s0 = [ &_35 <- UInt64.gt generation previous_generation ] s1
+    | s1 = any [ br0 -> {_35 = false} (! bb14) | br1 -> {_35} (! bb11) ] ]
+  | bb11 = s0 [ s0 = [ &_ret <- AdmitPersisted ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AuditLossMarkerAdmission = Any.any_l ()
+  | & header_matches: bool = header_matches
+  | & field_count: UInt64.t = field_count
+  | & count: UInt64.t = count
+  | & generation_present: bool = generation_present
+  | & generation: UInt64.t = generation
+  | & previous_generation: UInt64.t = previous_generation
+  | & _27: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _35: bool = Any.any_l () ])
+  [ return (result: t_AuditLossMarkerAdmission) ->
+  {[@stop_split] [@expl:audit_loss_marker_admission ensures] ([@stop_split] [@expl:audit_loss_marker_admission ensures #0] [%#saudit'2] (result
+        = AdmitLegacy)
+      = (header_matches /\ UInt64.t'int field_count = 1 /\ gt_log_Int (UInt64.t'int count) 0 /\ not generation_present))
+    /\ ([@stop_split] [@expl:audit_loss_marker_admission ensures #1] [%#saudit'3] (result = AdmitPersisted)
+      = (header_matches
+      /\ UInt64.t'int field_count = 2
+      /\ gt_log_Int (UInt64.t'int count) 0
+      /\ generation_present /\ gt_log_Int (UInt64.t'int generation) (UInt64.t'int previous_generation)))
+    /\ ([@stop_split] [@expl:audit_loss_marker_admission ensures #2] [%#saudit'4] (result = Reject)
+    = (not (header_matches
+    /\ (UInt64.t'int field_count = 1 /\ gt_log_Int (UInt64.t'int count) 0 /\ not generation_present
+    \/ UInt64.t'int field_count = 2
+    /\ gt_log_Int (UInt64.t'int count) 0
+    /\ generation_present /\ gt_log_Int (UInt64.t'int generation) (UInt64.t'int previous_generation)))))}
+    (! return {result}) ]

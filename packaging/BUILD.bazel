@@ -1,15 +1,10 @@
 """The broker container image.
 
-`aspect delivery` pushes this only when its built output actually changed, which
-for a repository where most commits touch one crate is most pushes avoided.
+apko builds the locked Wolfi base. rules_img adds the Bazel-built broker and
+owns both local loading and registry delivery.
 
     bazel run //packaging:image_load     # load into the local daemon
-    bazel run //packaging:push           # push to the registry
-
-The monorepo builds the equivalent with apko from Wolfi. This layers the
-Bazel-built binary onto a digest-pinned distroless base instead: same shape --
-glibc, ca-certificates, nonroot -- without a second package manager inside the
-build, and reproducible from the digest in //MODULE.bazel.
+    bazel run //packaging:push -- --tag dev
 
 The operator tools ride in the same image rather than a sibling one. The base
 has no shell, so nothing can be fetched, unpacked or run inside a running
@@ -21,54 +16,93 @@ lockstep with the broker, all to save a few tens of megabytes on an image that
 already carries a broker.
 """
 
-load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
-load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_apko//apko:defs.bzl", "apko_image")
+load("@rules_img//img:convert.bzl", "image_manifest_from_oci_layout")
+load("@rules_img//img:image.bzl", "image_manifest")
+load("@rules_img//img:layer.bzl", "file_metadata", "image_layer")
+load("@rules_img//img:load.bzl", "image_load")
+load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
+load("@rules_img//img:push.bzl", "image_push")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
 
-# What `oci_load` tags the image with locally, and what the Docker-driven test
-# then runs. A push supplies its own tags; see `remote_tags` below.
-IMAGE_TAG = "krabka-io/krabka-broker:dev"
+# What `image_load` tags the image with locally, and what the Docker-driven test
+# then runs. A push supplies its own tags; see `push` below.
+IMAGE_TAG = "docker.io/krabka-io/krabka-broker:dev"
 
-pkg_tar(
+# Owned by `nonroot` in the apko base. The broker needs no privilege: it binds
+# 9092/9093, both above 1024, and writes only its data directory.
+NONROOT = file_metadata(
+    gid = 65532,
+    mode = "0755",
+    uid = 65532,
+)
+
+apko_image(
+    name = "base_oci",
+    config = "base.apko.yaml",
+    contents = "@broker_base_lock//:contents",
+    tag = "krabka-broker-base:locked",
+)
+
+image_manifest_from_oci_layout(
+    name = "base",
+    src = ":base_oci",
+    architecture = "amd64",
+    layers = [GZIP_LAYER],
+    os = "linux",
+)
+
+image_layer(
     name = "broker_layer",
-    srcs = ["//crates/broker:krabka-broker"],
-    package_dir = "/usr/bin",
+    srcs = {
+        "/usr/bin/krabka-broker": "//crates/broker:krabka-broker",
+    },
+    default_metadata = NONROOT,
+    include_runfiles = False,
 )
 
 # Every operator-facing tool the repository ships, in a layer of its own: the
 # broker binary changes on nearly every commit and these rarely do, so keeping
 # them apart is a registry push and a `docker pull` that reuse the tools blob.
-pkg_tar(
+image_layer(
     name = "tools_layer",
-    srcs = [
-        "//crates/audit:krabka-audit",
-        "//crates/barrier-cli:krabka-barrier",
-        "//crates/format:krabka-format",
-        "//crates/guard-cli:krabka-guard",
-        "//crates/remote-storage:krabka-worm-verify",
-        "//crates/restore:krabka-restore",
-    ],
-    package_dir = "/usr/bin",
+    srcs = {
+        "/usr/bin/krabka-audit": "//crates/audit:krabka-audit",
+        "/usr/bin/krabka-barrier": "//crates/barrier-cli:krabka-barrier",
+        "/usr/bin/krabka-format": "//crates/format:krabka-format",
+        "/usr/bin/krabka-guard": "//crates/guard-cli:krabka-guard",
+        "/usr/bin/krabka-restore": "//crates/restore:krabka-restore",
+        "/usr/bin/krabka-worm-verify": "//crates/remote-storage:krabka-worm-verify",
+    },
+    default_metadata = NONROOT,
+    include_runfiles = False,
 )
 
-oci_image(
+image_manifest(
     name = "image",
-    base = "@distroless_cc",
+    base = ":base",
     entrypoint = ["/usr/bin/krabka-broker"],
-    tars = [
+    layers = [
         ":broker_layer",
         ":tools_layer",
     ],
-    # 65532 is distroless' `nonroot`. The broker needs no privilege: it binds
-    # 9092/9093, both above 1024, and writes only its data directory.
     user = "65532:65532",
+    working_dir = "/var/lib/krabka",
+)
+
+# `image` puts both the manifest and the config in its default outputs, and
+# `$(rootpath)` needs exactly one file. `root_blob` is the manifest alone, which
+# is the half that names the layer digests.
+filegroup(
+    name = "image_manifest_blob",
+    srcs = [":image"],
+    output_group = "root_blob",
 )
 
 # What the image carries under /usr/bin, asserted against the built layers and
-# against the image that references them. The equivalent by hand is
+# against the manifest that references them. The equivalent by hand is
 # `bazel run //packaging:image_load` and a `docker run --entrypoint` per binary;
 # this needs no daemon, so it runs in `bazel test //...` on every commit.
 sh_test(
@@ -76,21 +110,21 @@ sh_test(
     size = "small",
     srcs = ["image_binaries_test.sh"],
     args = [
-        "$(rootpath :image)",
+        "$(rootpath :image_manifest_blob)",
         "$(rootpath :broker_layer)",
         "$(rootpath :tools_layer)",
     ],
     data = [
         ":broker_layer",
-        ":image",
+        ":image_manifest_blob",
         ":tools_layer",
     ],
 )
 
-oci_load(
+image_load(
     name = "image_load",
     image = ":image",
-    repo_tags = [IMAGE_TAG],
+    tag = IMAGE_TAG,
 )
 
 # The same binaries, run through a Docker daemon under the base image's own
@@ -123,18 +157,11 @@ sh_test(
     ],
 )
 
-# `remote_tags` takes a file rather than a list. CI supplies every tag on the
-# command line so main can push an immutable SHA without moving `latest`;
-# tagged releases supply both the release tag and `latest`.
-write_file(
-    name = "remote_tags",
-    out = "remote_tags.txt",
-    content = [],
-)
-
-oci_push(
+# CI supplies tags on the command line, so a main build can push an immutable
+# SHA without moving `latest`; a tagged release can supply both.
+image_push(
     name = "push",
     image = ":image",
-    remote_tags = ":remote_tags",
-    repository = "ghcr.io/krabka-io/krabka-broker",
+    registry = "ghcr.io",
+    repository = "krabka-io/krabka-broker",
 )

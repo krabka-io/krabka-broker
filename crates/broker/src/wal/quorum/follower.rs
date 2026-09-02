@@ -361,11 +361,11 @@ mod tests {
             .unwrap()
             .append_at(&mut common_batch, Offset(0))
             .unwrap();
-        let mut leader_tail = batch(1, b"leader");
+        let mut leader_batch = batch(1, b"leader");
         leader
             .lock()
             .unwrap()
-            .append_at(&mut leader_tail, Offset(1))
+            .append_at(&mut leader_batch, Offset(1))
             .unwrap();
         leader.lock().unwrap().sync().unwrap();
 

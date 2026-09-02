@@ -181,8 +181,8 @@ pub async fn fetch_committed(handle: &GroupActorHandle) -> HashMap<(String, i32)
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle
         .tx
-        .send(GroupActorMessage::FetchCommitted { reply: tx })
+        .send(GroupActorMessage::FetchOffsets { reply: tx })
         .await
         .unwrap();
-    rx.await.unwrap()
+    rx.await.unwrap().committed
 }

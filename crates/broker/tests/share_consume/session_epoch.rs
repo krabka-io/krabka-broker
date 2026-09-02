@@ -30,7 +30,7 @@ async fn session_epoch_validation() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 1).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
@@ -85,7 +85,7 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 1).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;

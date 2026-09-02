@@ -52,6 +52,15 @@ impl MetadataEventLog for PacedReplayLog {
         self.inner.publish(partition, event).await
     }
 
+    async fn publish_keyed(
+        &self,
+        partition: i32,
+        key: Bytes,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        self.inner.publish_keyed(partition, key, event).await
+    }
+
     fn subscribe(
         &self,
         assignment: Vec<PartitionStart>,
@@ -99,6 +108,15 @@ impl MetadataEventLog for RacingAppendLog {
 
     async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
         self.inner.publish(partition, event).await
+    }
+
+    async fn publish_keyed(
+        &self,
+        partition: i32,
+        key: Bytes,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        self.inner.publish_keyed(partition, key, event).await
     }
 
     fn subscribe(

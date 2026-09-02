@@ -11,13 +11,14 @@ use tracing::instrument;
 
 use crate::{error::LogError, name};
 
-/// Heal any `<base>.log.swap` triples found in `dir`:
+/// Heal any canonical `<base>.<sidecar>.swap` set found in `dir`:
 ///
 /// - If the matching plain `<base>.log` exists, the swap was in step 1 or 2
 ///   and the originals are still authoritative, so delete the swap triple.
-/// - If it does not exist, the swap was in step 3, part-way through the
-///   rename. The originals are gone and the `.swap` files are complete, so
-///   finish the rename to the final names.
+/// - If the final log is absent and its swap exists, promotion has not started;
+///   promote the log and every surviving sidecar.
+/// - If the final log exists but its swap is absent, the log rename completed;
+///   continue promoting sidecars. Reject sidecars with neither form of log.
 ///
 /// This function is idempotent. It is safe to call on every `Log::open`.
 #[instrument(
@@ -28,7 +29,8 @@ use crate::{error::LogError, name};
 )]
 pub fn swap_orphan_recover(dir: &Path) -> Result<(), LogError> {
     let entries = std::fs::read_dir(dir)?;
-    let mut log_swaps: Vec<i64> = Vec::new();
+    let mut swap_bases: HashSet<i64> = HashSet::new();
+    let mut log_swap_bases: HashSet<i64> = HashSet::new();
     let mut existing_log_bases: HashSet<i64> = HashSet::new();
     for entry in entries {
         let entry = entry?;
@@ -36,64 +38,114 @@ pub fn swap_orphan_recover(dir: &Path) -> Result<(), LogError> {
         let Some(name) = file_name.to_str() else {
             continue;
         };
-        if let Some(stem) = name.strip_suffix(".log.swap")
-            && stem.len() == name::FILENAME_DIGITS
-            && let Ok(base) = stem.parse::<i64>()
-        {
-            log_swaps.push(base);
+        if let Some((base, is_log)) = parse_swap_filename(name) {
+            swap_bases.insert(base);
+            if is_log {
+                log_swap_bases.insert(base);
+            }
         }
         if let Ok(base) = name::parse_log_filename(name) {
             existing_log_bases.insert(base);
         }
     }
 
-    tracing::Span::current().record("swaps", log_swaps.len());
-    for base in log_swaps {
+    let mut swap_bases: Vec<i64> = swap_bases.into_iter().collect();
+    swap_bases.sort_unstable();
+    tracing::Span::current().record("swaps", swap_bases.len());
+    for base in swap_bases {
         let log_swap = swap_triple(dir, base, "log");
         let index_swap = swap_triple(dir, base, "index");
         let timeindex_swap = swap_triple(dir, base, "timeindex");
         let txnindex_swap = swap_triple(dir, base, "txnindex");
 
-        if existing_log_bases.contains(&base) {
-            // Orphan partial — discard. The `.txnindex.swap` is only
-            // produced when the survivor segment retains aborted txns
-            // (`RewriteOutput::txnindex_swap` is `Option`), so it may be
-            // absent; `remove_file` no-ops on a missing path.
-            let _ = std::fs::remove_file(&log_swap);
-            let _ = std::fs::remove_file(&index_swap);
-            let _ = std::fs::remove_file(&timeindex_swap);
-            let _ = std::fs::remove_file(&txnindex_swap);
-        } else {
-            // Complete swap interrupted mid-rename — promote.
-            std::fs::rename(&log_swap, name::log_path(dir, base))?;
-            // The index / timeindex .swap files may not exist if the
-            // crash happened *between* the three renames. Tolerate
-            // missing sidecars — `Segment::open` accepts empty index files
-            // and rebuilds on tail-scan.
-            if index_swap.exists() {
-                std::fs::rename(&index_swap, name::index_path(dir, base))?;
-            } else {
-                std::fs::File::create(name::index_path(dir, base))?;
+        match krabka_verified::local_recovery_swap_action(
+            existing_log_bases.contains(&base),
+            log_swap_bases.contains(&base),
+        ) {
+            krabka_verified::LocalRecoverySwapAction::DiscardSwap => {
+                // Orphan partial — discard. The `.txnindex.swap` is only
+                // produced when the survivor segment retains aborted txns
+                // (`RewriteOutput::txnindex_swap` is `Option`), so it may be
+                // absent; `remove_file` no-ops on a missing path.
+                let _ = std::fs::remove_file(&log_swap);
+                let _ = std::fs::remove_file(&index_swap);
+                let _ = std::fs::remove_file(&timeindex_swap);
+                let _ = std::fs::remove_file(&txnindex_swap);
             }
-            if timeindex_swap.exists() {
-                std::fs::rename(&timeindex_swap, name::timeindex_path(dir, base))?;
-            } else {
-                std::fs::File::create(name::timeindex_path(dir, base))?;
+            krabka_verified::LocalRecoverySwapAction::PromoteAll => {
+                // Complete swap interrupted mid-rename — promote.
+                std::fs::rename(&log_swap, name::log_path(dir, base))?;
+                // The index / timeindex .swap files may not exist if the
+                // crash happened *between* the three renames. Tolerate
+                // missing sidecars — `Segment::open` accepts empty index files
+                // and rebuilds on tail-scan.
+                if index_swap.exists() {
+                    std::fs::rename(&index_swap, name::index_path(dir, base))?;
+                } else {
+                    std::fs::File::create(name::index_path(dir, base))?;
+                }
+                if timeindex_swap.exists() {
+                    std::fs::rename(&timeindex_swap, name::timeindex_path(dir, base))?;
+                } else {
+                    std::fs::File::create(name::timeindex_path(dir, base))?;
+                }
+                // The `.txnindex` is an OPTIONAL sidecar (`atomic_swap` only
+                // renames it when the survivor retained aborted txns). Unlike
+                // the index / timeindex, a segment with no aborted txns has NO
+                // `.txnindex` at all and `Segment::open` tolerates its absence,
+                // so we must NOT synthesize an empty one. Promote the survivor
+                // `.txnindex.swap` if present; otherwise remove any leftover
+                // `.txnindex` at the target offset so a stale pre-swap index
+                // can't outlive the segment it described.
+                if txnindex_swap.exists() {
+                    std::fs::rename(&txnindex_swap, name::txnindex_path(dir, base))?;
+                } else {
+                    let _ = std::fs::remove_file(name::txnindex_path(dir, base));
+                }
             }
-            // The `.txnindex` is an OPTIONAL sidecar (`atomic_swap` only
-            // renames it when the survivor retained aborted txns). Unlike
-            // the index / timeindex, a segment with no aborted txns has NO
-            // `.txnindex` at all and `Segment::open` tolerates its absence,
-            // so we must NOT synthesize an empty one. Promote the survivor
-            // `.txnindex.swap` if present; otherwise remove any leftover
-            // `.txnindex` at the target offset so a stale pre-swap index
-            // can't outlive the segment it described.
-            if txnindex_swap.exists() {
-                std::fs::rename(&txnindex_swap, name::txnindex_path(dir, base))?;
-            } else {
-                let _ = std::fs::remove_file(name::txnindex_path(dir, base));
+            krabka_verified::LocalRecoverySwapAction::PromoteSidecars => {
+                // The log rename completed before interruption. Continue the
+                // remaining sidecars without discarding a transaction index.
+                promote_or_create(&index_swap, &name::index_path(dir, base))?;
+                promote_or_create(&timeindex_swap, &name::timeindex_path(dir, base))?;
+                if txnindex_swap.exists() {
+                    std::fs::rename(&txnindex_swap, name::txnindex_path(dir, base))?;
+                }
+            }
+            krabka_verified::LocalRecoverySwapAction::Reject => {
+                return Err(LogError::Corrupt(format!(
+                    "swap sidecars for segment {base} have no log file"
+                )));
             }
         }
+    }
+    Ok(())
+}
+
+fn parse_swap_filename(value: &str) -> Option<(i64, bool)> {
+    for (suffix, is_log) in [
+        (".log.swap", true),
+        (".index.swap", false),
+        (".timeindex.swap", false),
+        (".txnindex.swap", false),
+    ] {
+        let Some(stem) = value.strip_suffix(suffix) else {
+            continue;
+        };
+        if stem.len() != name::FILENAME_DIGITS {
+            return None;
+        }
+        let base = stem.parse::<i64>().ok()?;
+        return (base >= 0 && name::format_base_offset(base) == stem).then_some((base, is_log));
+    }
+    None
+}
+
+fn promote_or_create(swap: &Path, target: &Path) -> Result<(), LogError> {
+    if swap.exists() {
+        std::fs::rename(swap, target)?;
+    } else if !target.exists() {
+        std::fs::File::create(target)?;
     }
     Ok(())
 }
@@ -162,6 +214,27 @@ mod tests {
         check!(name::log_path(p, 0).exists());
         check!(name::txnindex_path(p, 0).exists());
         check!(!p.join("00000000000000000000.txnindex.swap").exists());
+
+        swap_orphan_recover(p).unwrap();
+        check!(name::txnindex_path(p, 0).exists());
+    }
+
+    #[test]
+    fn continues_sidecar_promotion_after_log_rename() {
+        let dir = tempdir().unwrap();
+        let p = dir.path();
+        touch(&name::log_path(p, 0));
+        touch(&p.join("00000000000000000000.index.swap"));
+        touch(&p.join("00000000000000000000.timeindex.swap"));
+        touch(&p.join("00000000000000000000.txnindex.swap"));
+
+        swap_orphan_recover(p).unwrap();
+
+        check!(name::log_path(p, 0).exists());
+        check!(name::index_path(p, 0).exists());
+        check!(name::timeindex_path(p, 0).exists());
+        check!(name::txnindex_path(p, 0).exists());
+        check!(!p.join("00000000000000000000.txnindex.swap").exists());
     }
 
     #[test]
@@ -182,5 +255,38 @@ mod tests {
         // No `.txnindex` is synthesized when the survivor had none.
         check!(!name::txnindex_path(p, 0).exists());
         check!(!p.join("00000000000000000000.txnindex.swap").exists());
+    }
+
+    #[test]
+    fn ignores_malformed_swap_names() {
+        let dir = tempdir().unwrap();
+        let malformed = dir.path().join("not-a-segment.log.swap");
+        touch(&malformed);
+
+        swap_orphan_recover(dir.path()).unwrap();
+
+        check!(malformed.exists());
+    }
+
+    #[test]
+    fn reports_directory_scan_failure() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing");
+
+        check!(matches!(
+            swap_orphan_recover(&missing),
+            Err(LogError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_sidecars_without_any_log() {
+        let dir = tempdir().unwrap();
+        touch(&dir.path().join("00000000000000000000.index.swap"));
+
+        check!(matches!(
+            swap_orphan_recover(dir.path()),
+            Err(LogError::Corrupt(message)) if message.contains("no log file")
+        ));
     }
 }

@@ -1,0 +1,103 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 126 0 126 98 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 127 28 127 30
+let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 127 50 127 51
+let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 128 32 128 34
+let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 128 61 128 62
+let%span slist_offsets'3 = "/workspace/crates/verified/src/list_offsets.rs" 129 32 129 34
+let%span slist_offsets'4 = "/workspace/crates/verified/src/list_offsets.rs" 129 63 129 64
+let%span slist_offsets'5 = "/workspace/crates/verified/src/list_offsets.rs" 129 88 129 89
+let%span slist_offsets'6 = "/workspace/crates/verified/src/list_offsets.rs" 133 40 133 42
+let%span slist_offsets'7 = "/workspace/crates/verified/src/list_offsets.rs" 135 39 135 40
+let%span slist_offsets'8 = "/workspace/crates/verified/src/list_offsets.rs" 109 10 125 1
+
+use creusot.int.Int32
+use creusot.int.Int8
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_ListOffsetsBoundFacts = {
+  replica_id: Int32.t;
+  isolation_level: Int8.t;
+  log_end: Int64.t;
+  high_watermark: Int64.t;
+  last_stable: Int64.t }
+
+type t_ListOffsetsBoundDecision = RejectMalformed | Bound Int64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let list_offsets_bound_decision [#"/workspace/crates/verified/src/list_offsets.rs" 126 0 126 98]
+  (facts: t_ListOffsetsBoundFacts) (return (x: t_ListOffsetsBoundDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- facts.replica_id <> ([%#slist_offsets] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb5) | br1 -> {_9} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_11 <- Int64.lt facts.log_end ([%#slist_offsets'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb5) | br1 -> {_11} (! bb14) ] ]
+  | bb5 = s0
+    [ s0 = [ &_13 <- facts.replica_id = ([%#slist_offsets'1] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb10) | br1 -> {_13} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = [ &_15 <- Int64.lt facts.high_watermark ([%#slist_offsets'2] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb10) | br1 -> {_15} (! bb14) ] ]
+  | bb10 = s0
+    [ s0 = [ &_17 <- facts.replica_id = ([%#slist_offsets'3] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb18) | br1 -> {_17} (! bb11) ] ]
+  | bb11 = s0
+    [ s0 = [ &_19 <- facts.isolation_level = ([%#slist_offsets'4] (1: Int8.t)) ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb18) | br1 -> {_19} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = [ &_21 <- Int64.lt facts.last_stable ([%#slist_offsets'5] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb18) | br1 -> {_21} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb18 = s0
+    [ s0 = [ &_25 <- facts.replica_id <> ([%#slist_offsets'6] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb20) | br1 -> {_25} (! bb19) ] ]
+  | bb19 = s0 [ s0 = [ &offset <- facts.log_end ] s1 | s1 = bb27 ]
+  | bb20 = s0
+    [ s0 = [ &_27 <- facts.isolation_level = ([%#slist_offsets'7] (1: Int8.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb22) | br1 -> {_27} (! bb21) ] ]
+  | bb21 = s0
+    [ s0 = [ &_29 <- Int64.lt facts.last_stable facts.high_watermark ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb24) | br1 -> {_29} (! bb23) ] ]
+  | bb23 = s0 [ s0 = [ &offset <- facts.last_stable ] s1 | s1 = bb27 ]
+  | bb24 = s0 [ s0 = [ &offset <- facts.high_watermark ] s1 | s1 = bb27 ]
+  | bb22 = s0 [ s0 = [ &offset <- facts.high_watermark ] s1 | s1 = bb27 ]
+  | bb27 = s0 [ s0 = [ &_ret <- Bound offset ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsBoundDecision = Any.any_l ()
+  | & facts: t_ListOffsetsBoundFacts = facts
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _19: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: bool = Any.any_l () ])
+  [ return (result: t_ListOffsetsBoundDecision) ->
+  {[@stop_split] [@expl:list_offsets_bound_decision ensures] [%#slist_offsets'8] match result with
+      | RejectMalformed -> Int32.to_int facts.replica_id <> - 1 /\ Int64.to_int facts.log_end < 0
+      \/ Int32.to_int facts.replica_id = - 1 /\ Int64.to_int facts.high_watermark < 0
+      \/ Int32.to_int facts.replica_id = - 1
+      /\ Int8.to_int facts.isolation_level = 1 /\ Int64.to_int facts.last_stable < 0
+      | Bound offset -> ge_log_Int (Int64.to_int offset) 0
+      /\ (Int32.to_int facts.replica_id <> - 1 -> Int64.to_int offset = Int64.to_int facts.log_end)
+      /\ (Int32.to_int facts.replica_id = - 1 /\ Int8.to_int facts.isolation_level <> 1
+        -> Int64.to_int offset = Int64.to_int facts.high_watermark)
+      /\ (Int32.to_int facts.replica_id = - 1 /\ Int8.to_int facts.isolation_level = 1
+      -> Int64.to_int offset <= Int64.to_int facts.high_watermark
+      /\ Int64.to_int offset <= Int64.to_int facts.last_stable)
+      end}
+    (! return {result}) ]

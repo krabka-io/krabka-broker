@@ -1,0 +1,68 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 72 0 75 29 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 76 23 76 24
+let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 78 33 78 35
+let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 65 10 65 87
+let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 66 10 67 70
+let%span slist_offsets'3 = "/workspace/crates/verified/src/list_offsets.rs" 68 10 69 67
+let%span slist_offsets'4 = "/workspace/crates/verified/src/list_offsets.rs" 70 10 71 41
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_ListOffsetsEpochDecision = RejectMalformed | Proceed | Fenced | Unknown
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let list_offsets_epoch_decision [#"/workspace/crates/verified/src/list_offsets.rs" 72 0 75 29]
+  (requested_epoch: Int32.t) (current_epoch: Int32.t) (return (x: t_ListOffsetsEpochDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- Int32.lt current_epoch ([%#slist_offsets] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &_16 <- requested_epoch = ([%#slist_offsets'0] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb4) | br1 -> {_16} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_18 <- requested_epoch = current_epoch ] s1
+    | s1 = any [ br0 -> {_18 = false} (! bb7) | br1 -> {_18} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- Proceed ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_21 <- Int32.lt requested_epoch current_epoch ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb9) | br1 -> {_21} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- Fenced ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Unknown ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsEpochDecision = Any.any_l ()
+  | & requested_epoch: Int32.t = requested_epoch
+  | & current_epoch: Int32.t = current_epoch
+  | & _14: bool = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _18: bool = Any.any_l ()
+  | & _21: bool = Any.any_l () ])
+  [ return (result: t_ListOffsetsEpochDecision) ->
+  {[@stop_split] [@expl:list_offsets_epoch_decision ensures] ([@stop_split] [@expl:list_offsets_epoch_decision ensures #0] [%#slist_offsets'1] (result
+        = RejectMalformed)
+      = (Int32.to_int current_epoch < 0))
+    /\ ([@stop_split] [@expl:list_offsets_epoch_decision ensures #1] [%#slist_offsets'2] (result = Proceed)
+      = (ge_log_Int (Int32.to_int current_epoch) 0
+      /\ (Int32.to_int requested_epoch = - 1 \/ Int32.to_int requested_epoch = Int32.to_int current_epoch)))
+    /\ ([@stop_split] [@expl:list_offsets_epoch_decision ensures #2] [%#slist_offsets'3] (result = Fenced)
+      = (ge_log_Int (Int32.to_int current_epoch) 0
+      /\ Int32.to_int requested_epoch <> - 1 /\ Int32.to_int requested_epoch < Int32.to_int current_epoch))
+    /\ ([@stop_split] [@expl:list_offsets_epoch_decision ensures #3] [%#slist_offsets'4] (result = Unknown)
+    = (ge_log_Int (Int32.to_int current_epoch) 0
+    /\ gt_log_Int (Int32.to_int requested_epoch) (Int32.to_int current_epoch)))}
+    (! return {result}) ]

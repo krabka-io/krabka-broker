@@ -1,0 +1,36 @@
+(* #"/proof-work-216d/crates/verified/src/authz.rs" 61 0 67 9 *)
+
+let%span sauthz = "/proof-work-216d/crates/verified/src/authz.rs" 70 39 70 56
+let%span sauthz'0 = "/proof-work-216d/crates/verified/src/authz.rs" 68 4 72 9
+let%span sauthz'1 = "/proof-work-216d/crates/verified/src/authz.rs" 56 10 59 2
+
+use creusot.prelude.Any
+
+type t_AclPatternKind = Literal | Prefixed
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let acl_resource_match [#"/proof-work-216d/crates/verified/src/authz.rs" 61 0 67 9] (same_type: bool)
+  (pattern: t_AclPatternKind) (exact: bool) (wildcard: bool) (prefix: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {same_type = false} (! bb2) | br1 -> {same_type} (! bb1) ]
+  | bb1 = any [ br0 -> {pattern = Literal} (! bb6) | br1 -> {pattern = Prefixed} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- prefix ] s1 | s1 = return {_ret} ]
+  | bb6 = any [ br0 -> {exact = false} (! bb8) | br1 -> {exact} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#sauthz] true ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- wildcard ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#sauthz'0] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & same_type: bool = same_type
+  | & pattern: t_AclPatternKind = pattern
+  | & exact: bool = exact
+  | & wildcard: bool = wildcard
+  | & prefix: bool = prefix ])
+  [ return (result: bool) -> {[@stop_split] [@expl:acl_resource_match ensures] [%#sauthz'1] result
+    = (same_type
+    /\ match pattern with
+      | Literal -> exact \/ wildcard
+      | Prefixed -> prefix
+      end)}
+    (! return {result}) ]

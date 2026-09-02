@@ -12,6 +12,10 @@ use krabka_security::{
     SaslMechanism,
     scram::{MAX_SCRAM_ITERATIONS, MIN_SCRAM_ITERATIONS},
 };
+use krabka_verified::{
+    ScramAlterationDecision, ScramAlterationFacts, ScramAlterationKind, ScramPriorState,
+    scram_alteration_decision,
+};
 
 use crate::{broker::Broker, codes};
 
@@ -27,78 +31,114 @@ pub(super) struct AlterationError {
     pub(super) message: &'static str,
 }
 
+#[cfg(test)]
 pub(super) fn validate_deletion(
     broker: &Broker,
     deletion: &ScramCredentialDeletion,
     authorized: bool,
 ) -> Result<SaslMechanism, AlterationError> {
-    if !authorized {
-        return Err(AlterationError {
-            code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            message: "not super-user",
-        });
-    }
-    if deletion.name.is_empty() {
-        return Err(AlterationError {
-            code: codes::UNACCEPTABLE_CREDENTIAL,
-            message: EMPTY_USERNAME_MESSAGE,
-        });
-    }
-    let Some(mech) = wire_to_mech(deletion.mechanism) else {
-        return Err(AlterationError {
-            code: codes::UNSUPPORTED_SASL_MECHANISM,
-            message: "unknown mechanism",
-        });
-    };
-    if broker
-        .controller
-        .current_image()
-        .scram_credential(&deletion.name, mech)
-        .is_none()
-    {
-        return Err(AlterationError {
-            code: codes::RESOURCE_NOT_FOUND,
-            message: "credential not found",
-        });
-    }
-    Ok(mech)
+    let decision = decide_deletion(broker, deletion, authorized, ScramPriorState::Unseen);
+    decision_mechanism(decision)
+        .ok_or_else(|| decision_error(decision).expect("a first-row rejection has an error"))
 }
 
+pub(super) fn decide_deletion(
+    broker: &Broker,
+    deletion: &ScramCredentialDeletion,
+    authorized: bool,
+    prior: ScramPriorState,
+) -> ScramAlterationDecision {
+    let deletion_target_exists = wire_to_mech(deletion.mechanism).is_some_and(|mechanism| {
+        broker
+            .controller
+            .current_image()
+            .scram_credential(&deletion.name, mechanism)
+            .is_some()
+    });
+    scram_alteration_decision(ScramAlterationFacts {
+        kind: ScramAlterationKind::Delete,
+        prior,
+        authorized,
+        name_empty: deletion.name.is_empty(),
+        mechanism: deletion.mechanism,
+        iterations: 0,
+        min_iterations: MIN_SCRAM_ITERATIONS,
+        max_iterations: MAX_SCRAM_ITERATIONS,
+        deletion_target_exists,
+    })
+}
+
+#[cfg(test)]
 pub(super) fn validate_upsertion(
     upsertion: &ScramCredentialUpsertion,
     authorized: bool,
 ) -> Result<SaslMechanism, AlterationError> {
-    if !authorized {
-        return Err(AlterationError {
+    let decision = decide_upsertion(upsertion, authorized, ScramPriorState::Unseen);
+    decision_mechanism(decision)
+        .ok_or_else(|| decision_error(decision).expect("a first-row rejection has an error"))
+}
+
+pub(super) fn decide_upsertion(
+    upsertion: &ScramCredentialUpsertion,
+    authorized: bool,
+    prior: ScramPriorState,
+) -> ScramAlterationDecision {
+    scram_alteration_decision(ScramAlterationFacts {
+        kind: ScramAlterationKind::Upsert,
+        prior,
+        authorized,
+        name_empty: upsertion.name.is_empty(),
+        mechanism: upsertion.mechanism,
+        iterations: upsertion.iterations,
+        min_iterations: MIN_SCRAM_ITERATIONS,
+        max_iterations: MAX_SCRAM_ITERATIONS,
+        deletion_target_exists: false,
+    })
+}
+
+pub(super) fn decision_mechanism(decision: ScramAlterationDecision) -> Option<SaslMechanism> {
+    match decision {
+        ScramAlterationDecision::AcceptSha256 => Some(SaslMechanism::ScramSha256),
+        ScramAlterationDecision::AcceptSha512 => Some(SaslMechanism::ScramSha512),
+        _ => None,
+    }
+}
+
+pub(super) fn decision_error(decision: ScramAlterationDecision) -> Option<AlterationError> {
+    let error = match decision {
+        ScramAlterationDecision::KeepPriorError
+        | ScramAlterationDecision::AcceptSha256
+        | ScramAlterationDecision::AcceptSha512 => return None,
+        ScramAlterationDecision::Duplicate => AlterationError {
+            code: codes::DUPLICATE_RESOURCE,
+            message: "A user credential cannot be altered twice in the same request",
+        },
+        ScramAlterationDecision::Unauthorized => AlterationError {
             code: codes::CLUSTER_AUTHORIZATION_FAILED,
             message: "not super-user",
-        });
-    }
-    if upsertion.name.is_empty() {
-        return Err(AlterationError {
+        },
+        ScramAlterationDecision::EmptyName => AlterationError {
             code: codes::UNACCEPTABLE_CREDENTIAL,
             message: EMPTY_USERNAME_MESSAGE,
-        });
-    }
-    let Some(mech) = wire_to_mech(upsertion.mechanism) else {
-        return Err(AlterationError {
+        },
+        ScramAlterationDecision::UnsupportedMechanism => AlterationError {
             code: codes::UNSUPPORTED_SASL_MECHANISM,
             message: "unknown mechanism",
-        });
-    };
-    if upsertion.iterations < MIN_SCRAM_ITERATIONS {
-        return Err(AlterationError {
+        },
+        ScramAlterationDecision::TooFewIterations => AlterationError {
             code: codes::UNACCEPTABLE_CREDENTIAL,
             message: "iterations < 4096",
-        });
-    }
-    if upsertion.iterations > MAX_SCRAM_ITERATIONS {
-        return Err(AlterationError {
+        },
+        ScramAlterationDecision::TooManyIterations => AlterationError {
             code: codes::UNACCEPTABLE_CREDENTIAL,
             message: "iterations > 16384",
-        });
-    }
-    Ok(mech)
+        },
+        ScramAlterationDecision::MissingCredential => AlterationError {
+            code: codes::RESOURCE_NOT_FOUND,
+            message: "credential not found",
+        },
+    };
+    Some(error)
 }
 
 /// Maps the KIP-554 wire mechanism byte to a [`SaslMechanism`].

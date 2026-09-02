@@ -1,0 +1,99 @@
+(* #"/workspace/crates/verified/src/recovery.rs" 131 0 137 30 *)
+
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span srecovery = "/workspace/crates/verified/src/recovery.rs" 162 36 162 71
+let%span srecovery'0 = "/workspace/crates/verified/src/recovery.rs" 153 22 153 57
+let%span srecovery'1 = "/workspace/crates/verified/src/recovery.rs" 99 10 129 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_BarrierRecoveryRecordKind = Group | InjectionStart | Cut
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_Option_Int = None'0 | Some'0 int
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+function deep_model_Option_i64 [@inline:trivial] (self: t_Option_i64) : t_Option_Int = [%#soption] match self with
+    | Some t -> Some'0 (deep_model_i64 t)
+    | None -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_i64
+
+function deep_model_ref_Option_i64 [@inline:trivial] (self: t_Option_i64) : t_Option_Int =
+  [%#smodel] deep_model_Option_i64 self
+
+meta "rewrite_def" function deep_model_ref_Option_i64
+
+let eq_Option_i64 (self_: t_Option_i64) (rhs: t_Option_i64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:eq ensures] [%#scmp] result
+    = (deep_model_ref_Option_i64 self_ = deep_model_ref_Option_i64 rhs)}
+    (! return {result}) ]
+
+type t_BarrierRecoveryFoldAction =
+  | DefineGroup
+  | RemoveGroup
+  | SetPending
+  | KeepPending
+  | ClearPending
+  | UpsertCut bool
+  | RemoveCut
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let barrier_recovery_fold_action [#"/workspace/crates/verified/src/recovery.rs" 131 0 137 30]
+  (kind: t_BarrierRecoveryRecordKind) (value_present: bool) (record_epoch: Int64.t) (pending_epoch: t_Option_i64)
+  (epoch_already_consumed: bool) (return (x: t_BarrierRecoveryFoldAction)) = (! bb0
+  [ bb0 = any [ br0 -> {kind = Group} (! bb6) | br1 -> {kind = InjectionStart} (! bb5) | br2 -> {kind = Cut} (! bb4) ]
+  | bb4 = any [ br0 -> {value_present = false} (! bb22) | br1 -> {value_present} (! bb20) ]
+  | bb20 = s0
+    [ s0 = [ &_25 <- Some record_epoch ] s1
+    | s1 = eq_Option_i64 [%#srecovery] {pending_epoch} {_25} (fun (_x: bool) -> [ &_22 <- _x ] s2)
+    | s2 = [ &_ret <- UpsertCut _22 ] s3
+    | s3 = return {_ret} ]
+  | bb22 = s0 [ s0 = [ &_ret <- RemoveCut ] s1 | s1 = return {_ret} ]
+  | bb5 = any [ br0 -> {value_present = false} (! bb14) | br1 -> {value_present} (! bb10) ]
+  | bb10 = any [ br0 -> {epoch_already_consumed = false} (! bb12) | br1 -> {epoch_already_consumed} (! bb11) ]
+  | bb11 = s0 [ s0 = [ &_ret <- KeepPending ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- SetPending ] s1 | s1 = return {_ret} ]
+  | bb14 = s0
+    [ s0 = [ &_19 <- Some record_epoch ] s1
+    | s1 = eq_Option_i64 [%#srecovery'0] {pending_epoch} {_19} (fun (_x: bool) -> [ &_16 <- _x ] s2)
+    | s2 = any [ br0 -> {_16 = false} (! bb17) | br1 -> {_16} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- ClearPending ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- KeepPending ] s1 | s1 = return {_ret} ]
+  | bb6 = any [ br0 -> {value_present = false} (! bb8) | br1 -> {value_present} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- DefineGroup ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- RemoveGroup ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierRecoveryFoldAction = Any.any_l ()
+  | & kind: t_BarrierRecoveryRecordKind = kind
+  | & value_present: bool = value_present
+  | & record_epoch: Int64.t = record_epoch
+  | & pending_epoch: t_Option_i64 = pending_epoch
+  | & epoch_already_consumed: bool = epoch_already_consumed
+  | & _16: bool = Any.any_l ()
+  | & _19: t_Option_i64 = Any.any_l ()
+  | & _22: bool = Any.any_l ()
+  | & _25: t_Option_i64 = Any.any_l () ])
+  [ return (result: t_BarrierRecoveryFoldAction) ->
+  {[@stop_split] [@expl:barrier_recovery_fold_action ensures] [%#srecovery'1] match result with
+      | DefineGroup -> kind = Group /\ value_present
+      | RemoveGroup -> kind = Group /\ not value_present
+      | SetPending -> kind = InjectionStart /\ value_present /\ not epoch_already_consumed
+      | KeepPending -> kind = InjectionStart
+      /\ (value_present /\ epoch_already_consumed \/ not value_present /\ pending_epoch <> Some record_epoch)
+      | ClearPending -> kind = InjectionStart /\ not value_present /\ pending_epoch = Some record_epoch
+      | UpsertCut retire_pending -> kind = Cut /\ value_present /\ retire_pending = (pending_epoch = Some record_epoch)
+      | RemoveCut -> kind = Cut /\ not value_present
+      end}
+    (! return {result}) ]

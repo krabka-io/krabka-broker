@@ -36,6 +36,37 @@ async fn reaper_retries_an_existing_prepare_abort() {
     check!(retried.state == TxnState::PrepareAbort);
 }
 
+#[tokio::test]
+async fn reaper_never_retries_a_prepared_two_phase_transaction() {
+    let coordinator = test_coordinator();
+    let mut prepared =
+        TxnEntry::new_empty("tid-2pc".to_string(), ProducerId(1000), 2, NO_TIMEOUT_MS, 0);
+    prepared.state = TxnState::PrepareAbort;
+    coordinator.state.insert(
+        prepared.transactional_id.clone(),
+        Arc::new(Mutex::new(prepared.clone())),
+    );
+
+    assert!(
+        ReaperBackend::prepare_abort(
+            &coordinator,
+            &prepared.transactional_id,
+            i64::MAX,
+            TxnVersion::TwoPhase,
+        )
+        .await
+        .is_none()
+    );
+    check!(
+        *coordinator
+            .get(&prepared.transactional_id)
+            .expect("2PC entry")
+            .lock()
+            .await
+            == prepared
+    );
+}
+
 // ── Pure transition / guard helpers ───────────────────────────────────
 
 #[test]
@@ -79,29 +110,141 @@ fn apply_complete_abort_records_prev_only_on_a_pid_roll() {
 }
 
 #[test]
-fn complete_abort_guard_rejects_identity_or_state_drift() {
+fn complete_abort_decision_rejects_any_prepared_snapshot_drift() {
     let mut prepared = entry(1000, -1);
     prepared.producer_epoch = 7;
     prepared.state = TxnState::PrepareAbort;
 
     // Exact match → ok.
     let mut current = prepared.clone();
-    assert!(complete_abort_guard_ok(&current, &prepared));
+    assert!(complete_abort_decision(&current, &prepared) == CompletionDecision::Proceed);
 
     // pid changed → reject.
     current = prepared.clone();
     current.producer_id = ProducerId(9999);
-    assert!(!complete_abort_guard_ok(&current, &prepared));
+    assert!(
+        complete_abort_decision(&current, &prepared) == CompletionDecision::RejectStaleIdentity
+    );
 
     // epoch changed → reject.
     current = prepared.clone();
     current.producer_epoch = 8;
-    assert!(!complete_abort_guard_ok(&current, &prepared));
+    assert!(
+        complete_abort_decision(&current, &prepared) == CompletionDecision::RejectStaleIdentity
+    );
 
     // state advanced past PrepareAbort → reject.
     current = prepared.clone();
+    current.state = TxnState::Ongoing;
+    assert!(
+        complete_abort_decision(&current, &prepared)
+            == CompletionDecision::RejectChangedPreparedState
+    );
+
+    // A partition registration with the same identity and state is still a
+    // different prepared snapshot and must not be cleared by completion.
+    current = prepared.clone();
+    current
+        .partitions
+        .insert(crate::txn::state::TopicPartition {
+            topic: "late-registration".into(),
+            partition: PartitionIndex(4),
+        });
+    assert!(
+        complete_abort_decision(&current, &prepared)
+            == CompletionDecision::RejectChangedPreparedState
+    );
+
+    // A staged recovery identity changed while markers were in flight.
+    current = prepared.clone();
+    current.next_producer_id = ProducerId(2000);
+    current.next_producer_epoch = 0;
+    assert!(
+        complete_abort_decision(&current, &prepared)
+            == CompletionDecision::RejectChangedPreparedState
+    );
+
+    // The exact completed identity is an idempotent success, not a second
+    // completion write.
+    current = prepared.clone();
     current.state = TxnState::CompleteAbort;
-    assert!(!complete_abort_guard_ok(&current, &prepared));
+    assert!(complete_abort_decision(&current, &prepared) == CompletionDecision::AlreadyComplete);
+
+    current = prepared.clone();
+    current.producer_epoch = -1;
+    assert!(complete_abort_decision(&current, &prepared) == CompletionDecision::RejectMalformed);
+}
+
+#[tokio::test]
+async fn failed_prepare_persistence_leaves_the_live_entry_ongoing() {
+    let coordinator = test_coordinator();
+    let mut ongoing = entry(1000, -1);
+    ongoing.state = TxnState::Ongoing;
+    ongoing.txn_timeout_ms = 1;
+    ongoing.start_ms = 0;
+    let tid = ongoing.transactional_id.clone();
+    coordinator
+        .state
+        .insert(tid.clone(), Arc::new(Mutex::new(ongoing.clone())));
+
+    assert!(
+        ReaperBackend::prepare_abort(&coordinator, &tid, 2, TxnVersion::Classic)
+            .await
+            .is_none()
+    );
+    check!(*coordinator.get(&tid).expect("ongoing entry").lock().await == ongoing);
+}
+
+#[tokio::test]
+async fn failed_completion_persistence_leaves_the_live_entry_prepared() {
+    let coordinator = test_coordinator();
+    let mut prepared = entry(1000, -1);
+    prepared.state = TxnState::PrepareAbort;
+    let tid = prepared.transactional_id.clone();
+    coordinator
+        .state
+        .insert(tid.clone(), Arc::new(Mutex::new(prepared.clone())));
+
+    assert!(
+        ReaperBackend::complete_abort(&coordinator, &prepared, 2, TxnVersion::Classic)
+            .await
+            .is_none()
+    );
+    check!(*coordinator.get(&tid).expect("prepared entry").lock().await == prepared);
+}
+
+#[tokio::test]
+async fn completed_retry_is_at_most_once_without_persistence() {
+    let coordinator = test_coordinator();
+    let mut prepared = entry(1000, -1);
+    prepared.state = TxnState::PrepareAbort;
+    let mut completed = prepared.clone();
+    completed.state = TxnState::CompleteAbort;
+    let tid = prepared.transactional_id.clone();
+    coordinator
+        .state
+        .insert(tid.clone(), Arc::new(Mutex::new(completed.clone())));
+
+    let result = ReaperBackend::complete_abort(&coordinator, &prepared, 2, TxnVersion::Classic)
+        .await
+        .expect("completed retry");
+    check!(result == completed);
+    check!(*coordinator.get(&tid).expect("completed entry").lock().await == completed);
+}
+
+#[tokio::test]
+async fn replaced_entry_handle_is_rejected_as_stale() {
+    let coordinator = test_coordinator();
+    let current = entry(1000, -1);
+    let tid = current.transactional_id.clone();
+    let stale = Arc::new(Mutex::new(current.clone()));
+    coordinator.state.insert(tid.clone(), stale.clone());
+    assert!(handle_is_current(&coordinator, &tid, &stale));
+
+    let replacement = Arc::new(Mutex::new(current));
+    coordinator.state.insert(tid.clone(), replacement.clone());
+    assert!(!handle_is_current(&coordinator, &tid, &stale));
+    assert!(handle_is_current(&coordinator, &tid, &replacement));
 }
 
 // ── Orchestration loop, driven against a mock backend ─────────────────

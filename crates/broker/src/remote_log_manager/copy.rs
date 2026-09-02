@@ -72,6 +72,12 @@ pub(crate) async fn copy_eligible(
         if known.contains(&ex.base_offset.0) {
             continue;
         }
+        if chain == ChainPosition::Exhausted {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  "remote-log-manager: WORM chain sequence exhausted; refusing to copy a \
+                   segment without a distinct chain position");
+            break;
+        }
         // Each success hands back the next chain position, so a run of
         // consecutive segments chains inside one tick with no further listing.
         if let CopyOutcome::Copied { next } =
@@ -89,9 +95,12 @@ mod tests {
     use assert2::{assert, check};
     use krabka_ids::LeaderEpoch;
     use krabka_remote_storage::{
-        ChainHead, CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
-        LogSegmentData, ManifestSeq, RemoteLogSegmentMetadata, RemoteStorageError, WormChainRecord,
+        ChainHead, ChainStamp, CustomMetadata, EpochId, IndexType,
+        InmemoryRemoteLogMetadataManager, LocalTieredStorage, LogSegmentData, ManifestSeq,
+        RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+        RemoteLogSegmentMetadataUpdate, RemoteStorageError, WormChainRecord,
     };
+    use uuid::Uuid;
 
     use super::*;
     use crate::remote_log_manager::test_support::{
@@ -325,6 +334,66 @@ mod tests {
         check!(records[0].prev_head == ChainHead::GENESIS);
         check!(records[1].prev_head == records[0].head.unwrap());
         check!(records[2].prev_head == records[1].head.unwrap());
+    }
+
+    #[tokio::test]
+    async fn copy_eligible_finishes_the_last_sequence_then_stops() {
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let segment_id = RemoteLogSegmentId::new(tp(), Uuid::from_u128(0xdead));
+        let started = RemoteLogSegmentMetadata::new(
+            segment_id.clone(),
+            0,
+            9,
+            100,
+            1,
+            100,
+            RemoteLogSegmentDetails::new(
+                64,
+                RemoteLogSegmentState::CopySegmentStarted,
+                maplit::btreemap! {LeaderEpoch(0) => 0},
+            ),
+        )
+        .unwrap();
+        rlmm.add_remote_log_segment_metadata(started).unwrap();
+        let receipt = WormChainRecord::request(ChainStamp {
+            epoch_id: EpochId(Uuid::from_u128(7)),
+            seq: ManifestSeq(u64::MAX - 1),
+            prev_head: ChainHead([0xaa; 32]),
+        })
+        .with_head(ChainHead([0xbb; 32]))
+        .to_custom_metadata();
+        rlmm.update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
+            remote_log_segment_id: segment_id,
+            event_timestamp_ms: 101,
+            custom_metadata: Some(receipt),
+            state: RemoteLogSegmentState::CopySegmentFinished,
+            broker_id: 1,
+        })
+        .unwrap();
+
+        let archive = Arc::new(FakeWormArchive::new());
+        let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
+        let copied = copy_eligible(
+            &tp(),
+            1,
+            LeaderEpoch(0),
+            vec![
+                synth_export(0, 9, 100, 64),
+                synth_export(10, 19, 200, 64),
+                synth_export(20, 29, 300, 64),
+            ],
+            ArchiveMode::WriteOnce,
+            &rsm,
+            &rlmm,
+        )
+        .await;
+
+        check!(copied == 1);
+        check!(archive.archived_segments() == 1);
+        let records = chain_records(&rlmm);
+        check!(records.len() == 2);
+        check!(records[1].seq == ManifestSeq(u64::MAX));
     }
 
     #[tokio::test]

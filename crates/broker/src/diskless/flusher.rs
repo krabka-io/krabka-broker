@@ -1,13 +1,18 @@
 //! Diskless WAL object-store flusher.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
+use futures_util::TryStreamExt as _;
 use krabka_log::Offset;
 use krabka_metadata::{MetadataImage, NodeId};
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -19,9 +24,13 @@ mod object_flush;
 #[cfg(test)]
 mod test_support;
 
-#[cfg(any(test, feature = "test-helpers"))]
-pub(crate) use self::object_flush::put_failure_count;
 pub(crate) use self::{config::FlushConfig, object_flush::flush_once};
+
+/// Every broker sweeps the shared prefix, so objects from removed brokers are
+/// covered too. The observation grace lets independent index consumers apply
+/// replacements before any broker deletes the old object.
+const RECLAIM_INTERVAL: Duration = Duration::from_secs(30);
+const RECLAIM_GRACE: Duration = Duration::from_mins(5);
 
 pub(crate) struct FlushPartition {
     pub(crate) topic_id: Uuid,
@@ -37,6 +46,7 @@ pub(crate) struct FlusherContext {
     pub(crate) index_log: DisklessIndexLog,
     pub(crate) node_id: NodeId,
     pub(crate) broker_id: i32,
+    pub(crate) metrics: crate::metrics::BrokerMetrics,
     /// Set once the first tick is allowed to fire, which is after the index
     /// projection has replayed the index topic.
     pub(crate) ready: Arc<AtomicBool>,
@@ -83,22 +93,31 @@ pub(crate) async fn run(
         );
         return FlusherExit::ReplayStalled;
     }
+    let mut reclaimer = Reclaimer::new(RECLAIM_GRACE);
+    reclaimer.sweep(&context).await;
     context.ready.store(true, Ordering::Release);
     let mut ticker = tokio::time::interval(config.interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut reclaim_ticker = tokio::time::interval_at(
+        tokio::time::Instant::now() + RECLAIM_INTERVAL,
+        RECLAIM_INTERVAL,
+    );
+    reclaim_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut rotation = 0usize;
     loop {
         tokio::select! {
-            _ = ticker.tick() => {}
+            _ = ticker.tick() => {
+                if let Err(error) = flush_tick(&context, &config, rotation).await {
+                    tracing::warn!(%error, "diskless WAL flush failed; retrying");
+                }
+                rotation = rotation.wrapping_add(1);
+            }
+            _ = reclaim_ticker.tick() => reclaimer.sweep(&context).await,
             () = shutdown.cancelled() => {
                 tracing::debug!("diskless WAL flusher shutting down");
                 return FlusherExit::ShutDown;
             }
         }
-        if let Err(error) = flush_tick(&context, &config, rotation).await {
-            tracing::warn!(%error, "diskless WAL flush failed; retrying");
-        }
-        rotation = rotation.wrapping_add(1);
     }
 }
 
@@ -108,6 +127,7 @@ async fn flush_tick(
     rotation: usize,
 ) -> Result<Option<WalFlushRecord>, crate::error::BrokerError> {
     let image = context.image_rx.borrow().clone();
+    tombstone_deleted_topics(context, &image).await?;
     let mut partitions = flushable_partitions(&context.partitions, &image, context.node_id).await;
     if !partitions.is_empty() {
         let start = rotation % partitions.len();
@@ -116,12 +136,95 @@ async fn flush_tick(
     flush_once(
         Arc::clone(&context.object_store),
         context.broker_id,
+        &context.metrics,
         &context.index_log,
         context.index_log.cache(),
         &partitions,
         config,
+        |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
     )
     .await
+}
+
+async fn tombstone_deleted_topics(
+    context: &FlusherContext,
+    image: &MetadataImage,
+) -> Result<(), crate::error::BrokerError> {
+    let topic_ids = context.index_log.cache().lock().await.topic_ids();
+    for topic_id in topic_ids {
+        if image.topic_by_id(&topic_id).is_none() {
+            context.index_log.tombstone_topic(topic_id).await?;
+        }
+    }
+    Ok(())
+}
+
+struct Reclaimer {
+    first_seen: HashMap<String, Instant>,
+    grace: Duration,
+}
+
+impl Reclaimer {
+    fn new(grace: Duration) -> Self {
+        Self {
+            first_seen: HashMap::new(),
+            grace,
+        }
+    }
+
+    async fn sweep(&mut self, context: &FlusherContext) {
+        self.sweep_at(context, Instant::now()).await;
+    }
+
+    async fn sweep_at(&mut self, context: &FlusherContext, now: Instant) {
+        let referenced = context.index_log.cache().lock().await.referenced_objects();
+        let prefix = object_store::path::Path::from("diskless-wal");
+        let objects = match context
+            .object_store
+            .list(Some(&prefix))
+            .try_collect::<Vec<_>>()
+            .await
+        {
+            Ok(objects) => objects,
+            Err(error) => {
+                tracing::warn!(%error, "diskless WAL reclaim listing failed; retrying");
+                return;
+            }
+        };
+        let mut unreferenced = HashSet::new();
+        for object in objects {
+            let object_key = object.location.to_string();
+            if referenced.contains(&object_key) {
+                self.first_seen.remove(&object_key);
+                continue;
+            }
+            unreferenced.insert(object_key.clone());
+            let first_seen = *self.first_seen.entry(object_key.clone()).or_insert(now);
+            let grace_elapsed = now.duration_since(first_seen) >= self.grace;
+            if !krabka_verified::diskless_object_reclaimable(false, grace_elapsed) {
+                continue;
+            }
+            let cache = context.index_log.cache();
+            let cache = cache.lock().await;
+            if !krabka_verified::diskless_object_reclaimable(
+                cache.references_object(&object_key),
+                true,
+            ) {
+                self.first_seen.remove(&object_key);
+                continue;
+            }
+            match context.object_store.delete(&object.location).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {
+                    self.first_seen.remove(&object_key);
+                }
+                Err(error) => {
+                    tracing::warn!(%object_key, %error, "diskless WAL reclaim failed; retrying");
+                }
+            }
+        }
+        self.first_seen
+            .retain(|object_key, _| unreferenced.contains(object_key));
+    }
 }
 
 async fn flushable_partitions(
@@ -161,7 +264,7 @@ mod tests {
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, TopicRecord};
     use krabka_units::{ByteSize, convert::ByteSizeExt as _};
-    use object_store::{ObjectStoreExt, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
     use tempfile::tempdir;
 
     use super::{test_support::test_partition, *};
@@ -198,6 +301,7 @@ mod tests {
             index_log: index,
             node_id: NodeId(1),
             broker_id: 7,
+            metrics: crate::metrics::BrokerMetrics::new(),
             ready: Arc::new(AtomicBool::new(false)),
         };
 
@@ -251,6 +355,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::new(AtomicBool::new(false)),
             },
             FlushConfig {
@@ -292,6 +397,153 @@ mod tests {
             .unwrap();
         keys.sort();
         keys
+    }
+
+    async fn wait_for_object(
+        cache: &Arc<tokio::sync::Mutex<crate::diskless::wal_index::WalIndexCache>>,
+        topic_id: Uuid,
+        object_key: &str,
+    ) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if cache
+                    .lock()
+                    .await
+                    .lookup(topic_id, 0, 0)
+                    .is_some_and(|(key, _, _)| key == object_key)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reclaim_grace_then_deletes_a_superseded_object_from_another_broker() {
+        let topic_id = Uuid::from_u128(11);
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        for key in ["diskless-wal/9/old.ckwl", "diskless-wal/7/new.ckwl"] {
+            store
+                .put(&Path::from(key), PutPayload::from_static(b"object"))
+                .await
+                .unwrap();
+        }
+        let index = DisklessIndexLog::start(
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+        )
+        .await
+        .unwrap();
+        let cache = index.cache();
+        for key in ["diskless-wal/9/old.ckwl", "diskless-wal/7/new.ckwl"] {
+            index
+                .publish_flush(&WalFlushRecord {
+                    object_key: key.into(),
+                    format_version: 1,
+                    entries: vec![crate::diskless::wal_index::WalIndexEntry {
+                        topic_id,
+                        partition: 0,
+                        first_offset: 0,
+                        last_offset: 2,
+                        byte_start: 0,
+                        byte_len: 6,
+                    }],
+                })
+                .await
+                .unwrap();
+            wait_for_object(&cache, topic_id, key).await;
+        }
+        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(MetadataImage::new(Uuid::nil())));
+        let context = FlusherContext {
+            partitions: Arc::new(PartitionRegistry::new()),
+            image_rx,
+            object_store: Arc::clone(&store),
+            index_log: index,
+            node_id: NodeId(1),
+            broker_id: 7,
+            metrics: crate::metrics::BrokerMetrics::new(),
+            ready: Arc::new(AtomicBool::new(false)),
+        };
+
+        let mut reclaimer = Reclaimer::new(Duration::from_mins(1));
+        let observed = Instant::now();
+        reclaimer.sweep_at(&context, observed).await;
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/9/old.ckwl"))
+                .await
+                .is_ok(),
+            "the grace period protects lagging projections"
+        );
+        reclaimer
+            .sweep_at(&context, observed + Duration::from_mins(1))
+            .await;
+
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/9/old.ckwl"))
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/7/new.ckwl"))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn deleted_topic_leaves_the_cache_and_object_store() {
+        let topic_id = Uuid::from_u128(11);
+        let object_key = "diskless-wal/7/deleted.ckwl";
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        store
+            .put(&Path::from(object_key), PutPayload::from_static(b"object"))
+            .await
+            .unwrap();
+        let index = DisklessIndexLog::start(
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+        )
+        .await
+        .unwrap();
+        let cache = index.cache();
+        index
+            .publish_flush(&WalFlushRecord {
+                object_key: object_key.into(),
+                format_version: 1,
+                entries: vec![crate::diskless::wal_index::WalIndexEntry {
+                    topic_id,
+                    partition: 0,
+                    first_offset: 0,
+                    last_offset: 2,
+                    byte_start: 0,
+                    byte_len: 6,
+                }],
+            })
+            .await
+            .unwrap();
+        wait_for_object(&cache, topic_id, object_key).await;
+        let image = MetadataImage::new(Uuid::nil());
+        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image.clone()));
+        let context = FlusherContext {
+            partitions: Arc::new(PartitionRegistry::new()),
+            image_rx,
+            object_store: Arc::clone(&store),
+            index_log: index,
+            node_id: NodeId(1),
+            broker_id: 7,
+            metrics: crate::metrics::BrokerMetrics::new(),
+            ready: Arc::new(AtomicBool::new(false)),
+        };
+
+        tombstone_deleted_topics(&context, &image).await.unwrap();
+        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+
+        assert!(cache.lock().await.lookup(topic_id, 0, 0).is_none());
+        assert!(store.head(&Path::from(object_key)).await.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -337,6 +589,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::new(AtomicBool::new(false)),
             },
             config.clone(),
@@ -376,6 +629,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::clone(&ready),
             },
             config,
@@ -458,6 +712,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready,
             },
             store,
@@ -555,6 +810,7 @@ mod tests {
                 index_log: index,
                 node_id: NodeId(1),
                 broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
                 ready: Arc::new(AtomicBool::new(false)),
             },
             FlushConfig {

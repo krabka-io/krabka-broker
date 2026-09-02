@@ -1,0 +1,77 @@
+(* #"/proof-work-234/crates/verified/src/registration.rs" 58 0 66 31 *)
+
+let%span sregistration = "/proof-work-234/crates/verified/src/registration.rs" 20 10 26 1
+let%span sregistration'0 = "/proof-work-234/crates/verified/src/registration.rs" 27 10 34 1
+let%span sregistration'1 = "/proof-work-234/crates/verified/src/registration.rs" 35 10 43 1
+let%span sregistration'2 = "/proof-work-234/crates/verified/src/registration.rs" 44 10 52 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_BrokerRegistrationDecision = RejectCompatibility | Register | Idempotent Int64.t | DuplicateIncarnation
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let broker_registration_decision [#"/proof-work-234/crates/verified/src/registration.rs" 58 0 66 31]
+  (identity_valid: bool) (cluster_matches: bool) (migration_allowed: bool) (listeners_valid: bool)
+  (features_compatible: bool) (existing_epoch: t_Option_i64) (incarnation_matches: bool)
+  (return (x: t_BrokerRegistrationDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {identity_valid = false} (! bb5) | br1 -> {identity_valid} (! bb1) ]
+  | bb1 = any [ br0 -> {cluster_matches = false} (! bb5) | br1 -> {cluster_matches} (! bb2) ]
+  | bb2 = any [ br0 -> {migration_allowed = false} (! bb5) | br1 -> {migration_allowed} (! bb3) ]
+  | bb3 = any [ br0 -> {listeners_valid = false} (! bb5) | br1 -> {listeners_valid} (! bb4) ]
+  | bb4 = any [ br0 -> {features_compatible = false} (! bb5) | br1 -> {features_compatible} (! bb6) ]
+  | bb6 = any [ br0 -> {existing_epoch = None} (! bb12) | br1 (x0: Int64.t) -> {existing_epoch = Some x0} (! bb11) ]
+  | bb11 = s0
+    [ s0 = elim_Some {existing_epoch} (fun (r0: Int64.t) -> [ &epoch'0 <- r0 ] s1)
+    | s1 = any [ br0 -> {incarnation_matches = false} (! bb10) | br1 -> {incarnation_matches} (! bb13) ] ]
+  | bb13 = s0
+    [ s0 = elim_Some {existing_epoch} (fun (r0: Int64.t) -> [ &epoch <- r0 ] s1)
+    | s1 = [ &_ret <- Idempotent epoch ] s2
+    | s2 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- DuplicateIncarnation ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- Register ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- RejectCompatibility ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BrokerRegistrationDecision = Any.any_l ()
+  | & identity_valid: bool = identity_valid
+  | & cluster_matches: bool = cluster_matches
+  | & migration_allowed: bool = migration_allowed
+  | & listeners_valid: bool = listeners_valid
+  | & features_compatible: bool = features_compatible
+  | & existing_epoch: t_Option_i64 = existing_epoch
+  | & incarnation_matches: bool = incarnation_matches
+  | & epoch: Int64.t = Any.any_l ()
+  | & epoch'0: Int64.t = Any.any_l () ])
+  [ return (result: t_BrokerRegistrationDecision) ->
+  {[@stop_split] [@expl:broker_registration_decision ensures] ([@stop_split] [@expl:broker_registration_decision ensures #0] [%#sregistration] (result
+        = RejectCompatibility)
+      = (not identity_valid
+      \/ not cluster_matches \/ not migration_allowed \/ not listeners_valid \/ not features_compatible))
+    /\ ([@stop_split] [@expl:broker_registration_decision ensures #1] [%#sregistration'0] (result = Register)
+      = (identity_valid
+      /\ cluster_matches /\ migration_allowed /\ listeners_valid /\ features_compatible /\ existing_epoch = None))
+    /\ ([@stop_split] [@expl:broker_registration_decision ensures #2] [%#sregistration'1] forall epoch: Int64.t. (result
+          = Idempotent epoch)
+        = (identity_valid
+        /\ cluster_matches
+        /\ migration_allowed
+        /\ listeners_valid /\ features_compatible /\ existing_epoch = Some epoch /\ incarnation_matches))
+    /\ ([@stop_split] [@expl:broker_registration_decision ensures #3] [%#sregistration'2] (result
+      = DuplicateIncarnation)
+    = (identity_valid
+    /\ cluster_matches
+    /\ migration_allowed
+    /\ listeners_valid /\ features_compatible /\ existing_epoch <> None /\ not incarnation_matches))}
+    (! return {result}) ]

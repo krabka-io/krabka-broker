@@ -1,0 +1,18 @@
+(* #"/proof-work-232/crates/verified/src/directory.rs" 9 27 9 32 *)
+
+(* <directory::DirectoryAssignmentDecision as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_DirectoryAssignmentDecision = Ignore | NoOp | Assign UInt64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_DirectoryAssignmentDecision [#"/proof-work-232/crates/verified/src/directory.rs" 9 27 9 32]
+  (self: t_DirectoryAssignmentDecision) (return (x: t_DirectoryAssignmentDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DirectoryAssignmentDecision = Any.any_l () | & self: t_DirectoryAssignmentDecision = self ])
+  [ return (result: t_DirectoryAssignmentDecision) -> (! return {result}) ]

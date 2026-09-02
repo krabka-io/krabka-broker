@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/oauth.rs" 11 27 11 32 *)
+
+(* <oauth::OAuthExpiryPresence as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_OAuthExpiryPresence = Missing | Present
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OAuthExpiryPresence [#"/workspace/crates/verified/src/oauth.rs" 11 27 11 32] (self: t_OAuthExpiryPresence)
+  (return (x: t_OAuthExpiryPresence)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OAuthExpiryPresence = Any.any_l () | & self: t_OAuthExpiryPresence = self ])
+  [ return (result: t_OAuthExpiryPresence) -> (! return {result}) ]

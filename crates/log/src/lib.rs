@@ -60,7 +60,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-log/0.5.1")]
+#![doc(html_root_url = "https://docs.rs/krabka-log/0.5.3")]
 
 /// Emit the wrapped items only on platforms with a usable file-to-socket
 /// `sendfile(2)` for the zero-copy fetch path.
@@ -109,8 +109,8 @@ mod stamp_index;
 mod stamp_source;
 mod txn_index;
 
-pub use config::{CleanupPolicy, DeliveryPolicy, LogConfig};
-pub use delivery::DeliveryAdvance;
+pub use config::{CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DeliveryPolicy, LogConfig};
+pub use delivery::{DeliveryAdvance, batch_is_deliverable};
 pub use error::LogError;
 pub use filter::{FilteredBatch, filter_batch};
 #[cfg(any(test, feature = "test-helpers"))]

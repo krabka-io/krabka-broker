@@ -1,0 +1,75 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 221 0 226 29 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 232 27 232 28
+let%span sbroker'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 201 10 205 1
+let%span sbroker'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 206 10 210 1
+let%span sbroker'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 211 10 217 1
+let%span sbroker'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 218 10 219 58
+
+use creusot.int.Int8
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type t_FindCoordinatorAdmission =
+  | AllowGroup
+  | AllowTransaction
+  | AllowShare
+  | DenyGroup
+  | DenyTransaction
+  | DenyCluster
+  | InvalidRequest
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let find_coordinator_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 221 0 226 29]
+  (api_version: Int16.t) (key_type: Int8.t) (acl_allowed: bool) (share_key_valid: bool)
+  (return (x: t_FindCoordinatorAdmission)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {key_type = (0: Int8.t)} (! bb15)
+    | br1 -> {key_type = (1: Int8.t)} (! bb13)
+    | br2 -> {key_type = (2: Int8.t)} (! bb11)
+    | default -> -{key_type <> (0: Int8.t) /\ key_type <> (1: Int8.t) /\ key_type <> (2: Int8.t)}- (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- InvalidRequest ] s1 | s1 = return {_ret} ]
+  | bb11 = s0
+    [ s0 = [ &_21 <- Int16.lt api_version ([%#sbroker] (6: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb21) | br1 -> {_21} (! bb24) ] ]
+  | bb21 = any [ br0 -> {share_key_valid = false} (! bb24) | br1 -> {share_key_valid} (! bb10) ]
+  | bb10 = any [ br0 -> {acl_allowed = false} (! bb9) | br1 -> {acl_allowed} (! bb25) ]
+  | bb25 = s0 [ s0 = [ &_ret <- AllowShare ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- DenyCluster ] s1 | s1 = return {_ret} ]
+  | bb24 = s0 [ s0 = [ &_ret <- InvalidRequest ] s1 | s1 = return {_ret} ]
+  | bb13 = any [ br0 -> {acl_allowed = false} (! bb12) | br1 -> {acl_allowed} (! bb18) ]
+  | bb18 = s0 [ s0 = [ &_ret <- AllowTransaction ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- DenyTransaction ] s1 | s1 = return {_ret} ]
+  | bb15 = any [ br0 -> {acl_allowed = false} (! bb14) | br1 -> {acl_allowed} (! bb16) ]
+  | bb16 = s0 [ s0 = [ &_ret <- AllowGroup ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- DenyGroup ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FindCoordinatorAdmission = Any.any_l ()
+  | & api_version: Int16.t = api_version
+  | & key_type: Int8.t = key_type
+  | & acl_allowed: bool = acl_allowed
+  | & share_key_valid: bool = share_key_valid
+  | & _21: bool = Any.any_l () ])
+  [ return (result: t_FindCoordinatorAdmission) ->
+  {[@stop_split] [@expl:find_coordinator_admission ensures] ([@stop_split] [@expl:find_coordinator_admission ensures #0] [%#sbroker'0] Int8.to_int key_type
+        = 0 -> result = (if acl_allowed then AllowGroup else DenyGroup))
+    /\ ([@stop_split] [@expl:find_coordinator_admission ensures #1] [%#sbroker'1] Int8.to_int key_type = 1
+      -> result = (if acl_allowed then AllowTransaction else DenyTransaction))
+    /\ ([@stop_split] [@expl:find_coordinator_admission ensures #2] [%#sbroker'2] Int8.to_int key_type = 2
+      -> result
+      = (if Int16.to_int api_version < 6 \/ not share_key_valid then
+        InvalidRequest
+      else
+        if acl_allowed then AllowShare else DenyCluster
+      ))
+    /\ ([@stop_split] [@expl:find_coordinator_admission ensures #3] [%#sbroker'3] Int8.to_int key_type < 0
+      \/ gt_log_Int (Int8.to_int key_type) 2 -> result = InvalidRequest)}
+    (! return {result}) ]

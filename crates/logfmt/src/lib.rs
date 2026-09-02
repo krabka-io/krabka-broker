@@ -36,12 +36,13 @@ use tracing::{
     field::{Field, Visit},
 };
 use tracing_subscriber::{
-    EnvFilter, Layer, Registry,
+    Layer, Registry,
     fmt::{
         FmtContext, FormatEvent, FormatFields, MakeWriter,
         format::Writer,
         time::{FormatTime, SystemTime},
     },
+    layer::Filter,
     registry::LookupSpan,
 };
 
@@ -152,12 +153,17 @@ where
 /// `make_writer` is the sink. Production code passes `std::io::stdout`, and
 /// tests pass a capturing buffer.
 ///
+/// `filter` is any per-layer [`Filter`], not only an `EnvFilter`: a service
+/// that retargets its log level at runtime passes a filter it can swap out
+/// from under this layer.
+///
 /// The function returns a boxed layer over a [`Registry`], so call sites
 /// compose it with `tracing_subscriber::registry().with(...)`.
 #[must_use]
-pub fn layer<W>(filter: EnvFilter, make_writer: W) -> Box<dyn Layer<Registry> + Send + Sync>
+pub fn layer<W, F>(filter: F, make_writer: W) -> Box<dyn Layer<Registry> + Send + Sync>
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+    F: Filter<Registry> + Send + Sync + 'static,
 {
     tracing_subscriber::fmt::layer()
         .event_format(CloudLogging)
@@ -201,8 +207,10 @@ mod tests {
     /// Capture the JSON emitted for a single event by `emit`.
     fn capture(emit: impl FnOnce()) -> serde_json::Value {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let subscriber =
-            tracing_subscriber::registry().with(layer(EnvFilter::new("trace"), Buf(buf.clone())));
+        let subscriber = tracing_subscriber::registry().with(layer(
+            tracing_subscriber::EnvFilter::new("trace"),
+            Buf(buf.clone()),
+        ));
         tracing::subscriber::with_default(subscriber, emit);
         let out = String::from_utf8(buf.lock().unwrap().clone()).expect("utf8 log output");
         // The crux of the fix: captured logs carry no ANSI escape sequences.

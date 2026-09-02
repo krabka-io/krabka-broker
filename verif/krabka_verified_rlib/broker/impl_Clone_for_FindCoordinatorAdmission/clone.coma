@@ -1,0 +1,24 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 182 27 182 32 *)
+
+(* <broker::FindCoordinatorAdmission as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FindCoordinatorAdmission =
+  | AllowGroup
+  | AllowTransaction
+  | AllowShare
+  | DenyGroup
+  | DenyTransaction
+  | DenyCluster
+  | InvalidRequest
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FindCoordinatorAdmission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 182 27 182 32]
+  (self: t_FindCoordinatorAdmission) (return (x: t_FindCoordinatorAdmission)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FindCoordinatorAdmission = Any.any_l () | & self: t_FindCoordinatorAdmission = self ])
+  [ return (result: t_FindCoordinatorAdmission) -> (! return {result}) ]

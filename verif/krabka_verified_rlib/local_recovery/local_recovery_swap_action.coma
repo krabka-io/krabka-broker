@@ -1,0 +1,32 @@
+(* #"/proof-work-243/crates/verified/src/local_recovery.rs" 34 0 37 28 *)
+
+let%span slocal_recovery = "/proof-work-243/crates/verified/src/local_recovery.rs" 27 10 32 1
+
+use creusot.prelude.Any
+
+type t_LocalRecoverySwapAction = DiscardSwap | PromoteAll | PromoteSidecars | Reject
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let local_recovery_swap_action [#"/proof-work-243/crates/verified/src/local_recovery.rs" 34 0 37 28]
+  (original_log_exists: bool) (log_swap_exists: bool) (return (x: t_LocalRecoverySwapAction)) = (! bb0
+  [ bb0 = any [ br0 -> {original_log_exists = false} (! bb5) | br1 -> {original_log_exists} (! bb1) ]
+  | bb1 = any [ br0 -> {log_swap_exists = false} (! bb3) | br1 -> {log_swap_exists} (! bb2) ]
+  | bb2 = s0 [ s0 = [ &_ret <- DiscardSwap ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- PromoteSidecars ] s1 | s1 = return {_ret} ]
+  | bb5 = any [ br0 -> {log_swap_exists = false} (! bb7) | br1 -> {log_swap_exists} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- PromoteAll ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_LocalRecoverySwapAction = Any.any_l ()
+  | & original_log_exists: bool = original_log_exists
+  | & log_swap_exists: bool = log_swap_exists ])
+  [ return (result: t_LocalRecoverySwapAction) ->
+  {[@stop_split] [@expl:local_recovery_swap_action ensures] [%#slocal_recovery] match result with
+      | DiscardSwap -> original_log_exists /\ log_swap_exists
+      | PromoteAll -> not original_log_exists /\ log_swap_exists
+      | PromoteSidecars -> original_log_exists /\ not log_swap_exists
+      | Reject -> not original_log_exists /\ not log_swap_exists
+      end}
+    (! return {result}) ]

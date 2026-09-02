@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 11 27 11 32 *)
+
+(* <freeze::FreezeIdentityState as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FreezeIdentityState = UnknownKey | WrongKeyPrincipal | WrongConnectionPrincipal | Bound
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeIdentityState [#"/workspace/crates/verified/src/freeze.rs" 11 27 11 32] (self: t_FreezeIdentityState)
+  (return (x: t_FreezeIdentityState)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeIdentityState = Any.any_l () | & self: t_FreezeIdentityState = self ])
+  [ return (result: t_FreezeIdentityState) -> (! return {result}) ]

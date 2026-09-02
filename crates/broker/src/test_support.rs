@@ -8,12 +8,29 @@
 //! behaviour-specific facades over them. Their own principal name, client id,
 //! `BrokerConfig` tweaks, and negotiated wire version live at the call site, so
 //! this module centralises no behaviour that a handler needs to vary.
+//!
+//! [`BrokenTimer`] is the one fixture here that is not handler scaffolding.
+//! Every broker cadence loop takes its ticker through an injectable field, and
+//! every one of them stops when that ticker gives out, so the fake that makes a
+//! ticker give out is shared rather than copied into each of their test
+//! modules.
 
-use std::net::SocketAddr;
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use bytes::{Bytes, BytesMut};
 use krabka_protocol::{Decode, Encode};
 use krabka_security::{AuthMethod, Principal};
+use qubit_clock::{
+    MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, Timer, TimerFuture,
+    TimerUnavailableError,
+};
 
 use crate::{
     broker::{Broker, BrokerHandle},
@@ -72,6 +89,8 @@ pub(crate) fn request_context<'a>(
         connection_id: "test-connection",
         sendfile_capable: false,
         connection_listener_name: "PLAINTEXT",
+        throttle: crate::quota::ThrottleSlot::default(),
+        listener_authorized_cluster_action: false,
     }
 }
 
@@ -239,3 +258,99 @@ macro_rules! codec_helpers {
     };
 }
 pub(crate) use codec_helpers;
+
+/// The point in a deadline's life at which a [`BrokenTimer`] fails.
+///
+/// [`Timer`] reports the two separately — the outer `Result` of `at` covers
+/// registration, and the [`TimerFuture`] it hands back covers everything after
+/// — and so do [`crate::time_util::arm`] and [`crate::time_util::fired`], which
+/// is why a cadence loop has two ways to lose its ticker rather than one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TimerFailure {
+    /// The registration is refused outright, so `arm` reports `None`.
+    Registration,
+    /// The registration is accepted and the deadline it yields then resolves
+    /// to an error, so `fired` reports `false`.
+    Completion,
+}
+
+/// A timer whose backend gives out, for the tests that assert a cadence loop
+/// stops instead of spinning once it has no ticker left.
+///
+/// The first `healthy` deadlines are honoured, and each of them completes the
+/// moment it is armed whatever duration it was asked for, so a loop takes that
+/// many ticks and no more real time passes than the test needs. Every deadline
+/// after them fails, at [`TimerFailure`].
+///
+/// This is hand-rolled rather than taken from
+/// `qubit_clock::test_util::FaultInjectingTimer`, because that fixture honours
+/// a deadline that is already due, and the start-up deadline of every cadence
+/// loop here but the group actor's is `Duration::ZERO` — exactly the
+/// registration these tests need to see refused.
+pub(crate) struct BrokenTimer {
+    /// The domain every deadline handed to [`Self::at`] is validated against.
+    /// Nothing here reads the time; the clock exists to give the timer a
+    /// domain, as the [`Timer`] contract requires.
+    clock: StdMonotonicClock,
+    /// Where in a deadline's life the failure surfaces.
+    failure: TimerFailure,
+    /// How many leading deadlines are honoured before the failures start.
+    healthy: usize,
+    /// How many deadlines have been asked for so far.
+    registrations: AtomicUsize,
+}
+
+impl BrokenTimer {
+    /// A timer that fails every deadline, including the start-up one.
+    pub(crate) fn dead(failure: TimerFailure) -> Arc<Self> {
+        Self::dead_after(0, failure)
+    }
+
+    /// A timer that honours `healthy` deadlines — each completing at once, so
+    /// the loop takes that many ticks — and fails every deadline after them.
+    pub(crate) fn dead_after(healthy: usize, failure: TimerFailure) -> Arc<Self> {
+        Arc::new(Self {
+            clock: StdMonotonicClock::new(),
+            failure,
+            healthy,
+            registrations: AtomicUsize::new(0),
+        })
+    }
+
+    /// This timer as the trait object a cadence loop's config holds, leaving
+    /// the caller its own handle to read [`Self::registrations`] from.
+    pub(crate) fn injectable(self: &Arc<Self>) -> Arc<dyn Timer> {
+        Arc::clone(self) as Arc<dyn Timer>
+    }
+
+    /// How many deadlines the loop under test has asked this timer for.
+    ///
+    /// A loop that stopped asked for exactly one more than it was given; a
+    /// loop that re-armed through the failure keeps climbing.
+    pub(crate) fn registrations(&self) -> usize {
+        self.registrations.load(Ordering::Relaxed)
+    }
+}
+
+impl Timer for BrokenTimer {
+    fn clock(&self) -> &dyn MonotonicClock {
+        &self.clock
+    }
+
+    fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
+        let nth = self.registrations.fetch_add(1, Ordering::Relaxed);
+        if nth < self.healthy {
+            return Ok(Box::pin(std::future::ready(Ok(()))));
+        }
+        let error = TimeError::TimerUnavailable {
+            source: TimerUnavailableError::BackendUnavailable {
+                backend: "krabka-broker test",
+                source: Box::new(io::Error::other("the timer backend is gone")),
+            },
+        };
+        match self.failure {
+            TimerFailure::Registration => Err(error),
+            TimerFailure::Completion => Ok(Box::pin(std::future::ready(Err(error)))),
+        }
+    }
+}

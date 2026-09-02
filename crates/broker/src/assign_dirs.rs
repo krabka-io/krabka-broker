@@ -82,71 +82,85 @@ pub(crate) fn build_request(
 
 /// Sends an `AssignReplicasToDirs` report to the controller leader.
 ///
-/// It resolves the controller leader's address from `controller`, opens a
-/// short-lived `krabka_client_core::Client`, sends `req`, and checks the
-/// top-level `error_code`.
+/// KIP-919 carries api key 73 on the controller's CONTROLLER listener, so the
+/// report is addressed the same way `BrokerHeartbeat` is: resolve the leader's
+/// controller endpoint with [`crate::controller_endpoint::leader_endpoint`],
+/// then dial it through `dialer`, which runs whatever TLS and SASL that
+/// listener is configured for.
+///
+/// Neither half is optional. A controller-only node never self-registers as a
+/// broker, so `image.broker(leader)` is empty for it and a broker-only node
+/// would give up before sending anything. A bare
+/// `krabka_client_core::Client` would send plaintext Kafka frames at a
+/// controller listener configured for SSL, `SASL_SSL`, or `SASL_PLAINTEXT`
+/// and fail every reconcile.
 ///
 /// It returns `Err` in these cases:
 /// - the image holds no controller leader
-/// - the image holds no broker record for the leader
+/// - neither the voter set nor the configured quorum names the leader's
+///   controller endpoint
 /// - the connection failed
 /// - the send or the receive failed
 /// - the response carries a non-zero `error_code`
-#[cfg(test)]
 pub(crate) async fn send_assignments(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    dialer: &crate::controller_endpoint::ControllerDialer,
     client_id: &str,
     req: AssignReplicasToDirsRequest,
 ) -> Result<(), String> {
-    send_assignments_with_policy(
-        controller,
-        client_id,
-        req,
-        krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-        krabka_client_core::ClientFrameMax::default(),
-    )
-    .await
-}
-
-pub(crate) async fn send_assignments_with_policy(
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    client_id: &str,
-    req: AssignReplicasToDirsRequest,
-    dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
-    frame_max: krabka_client_core::ClientFrameMax,
-) -> Result<(), String> {
-    // Resolve the controller leader address — same pattern as
-    // `isr_maintenance::send_alter_partition`.
     let leader_id = *controller.watch_leader().borrow();
     let Some(leader_id) = leader_id else {
         return Err("no controller leader".into());
     };
     let image = controller.current_image();
-    let Some(broker_rec) = image.broker(leader_id) else {
-        return Err("controller leader not in image".into());
+    let Some((host, port)) =
+        crate::controller_endpoint::leader_endpoint(&image, &dialer.quorum_voters, leader_id)
+    else {
+        return Err("controller leader has no known controller endpoint".into());
     };
-    let addr = format!("{}:{}", broker_rec.host, broker_rec.port);
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(addr)
-        .client_id(client_id.to_owned())
-        .dispatch_queue_capacity(dispatch_queue_capacity.get())
-        .frame_max(frame_max.size())
-        .build()
+    let connection = dialer
+        .outbound_client
+        .connect_as_connection(
+            &host,
+            port,
+            dialer.listener_protocol,
+            &dialer.server_name,
+            krabka_client_core::ConnectionOptions {
+                client_id: client_id.to_owned(),
+                ..krabka_client_core::ConnectionOptions::default()
+            },
+        )
         .await
         .map_err(|e| format!("connect: {e}"))?;
 
-    let resp = client.send(req).await.map_err(|e| format!("send: {e}"))?;
-    validate_assign_response(resp.error_code)
+    let resp = connection
+        .send(req)
+        .await
+        .map_err(|e| format!("send: {e}"))?;
+    connection.close();
+    let current_leader = *controller.watch_leader().borrow();
+    validate_assign_response(resp.error_code, leader_id, current_leader)
 }
 
-fn validate_assign_response(error_code: i16) -> Result<(), String> {
-    if error_code != 0 {
-        return Err(format!(
+fn validate_assign_response(
+    error_code: i16,
+    sent_controller: krabka_raft::NodeId,
+    current_controller: Option<krabka_raft::NodeId>,
+) -> Result<(), String> {
+    match krabka_verified::directory_response_decision(
+        error_code == 0,
+        sent_controller.0,
+        current_controller.map(|node| node.0),
+    ) {
+        krabka_verified::DirectoryResponseDecision::ControllerError => Err(format!(
             "AssignReplicasToDirs rejected by controller: error_code={error_code}"
-        ));
+        )),
+        krabka_verified::DirectoryResponseDecision::StaleController => {
+            Err("controller leader changed while assignment report was in flight".into())
+        }
+        krabka_verified::DirectoryResponseDecision::Accept => Ok(()),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -311,13 +325,81 @@ mod tests {
         assert!(decoded.broker_epoch == -1);
     }
 
+    /// A dialer for a plaintext controller listener that knows `voters` as its
+    /// statically configured quorum.
+    fn plaintext_dialer(
+        voters: Vec<(NodeId, String)>,
+    ) -> crate::controller_endpoint::ControllerDialer {
+        crate::controller_endpoint::ControllerDialer {
+            outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
+            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+            server_name: "localhost".to_owned(),
+            quorum_voters: voters,
+        }
+    }
+
+    /// What a broker-only node sees of a controller-only leader: a voter with a
+    /// CONTROLLER endpoint, and no broker registration anywhere in the image.
+    /// `register_broker` skips a node whose `process.roles` exclude `broker`,
+    /// so `image.broker(leader)` stays empty however long the cluster runs.
+    fn voter_only_image(leader: NodeId, controller_addr: SocketAddr) -> MetadataImage {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1Voters(
+            krabka_metadata::VotersRecord {
+                voters: krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
+                    id: leader,
+                    directory_id: uuid::Uuid::nil(),
+                    endpoints: vec![krabka_metadata::VoterEndpoint {
+                        name: "CONTROLLER".to_owned(),
+                        host: controller_addr.ip().to_string(),
+                        port: controller_addr.port(),
+                    }],
+                    kraft_version: krabka_metadata::KRaftVersionRange::default(),
+                }]),
+            },
+        ));
+        image
+    }
+
+    /// Boot a single-node broker that leads the metadata quorum, and hand back
+    /// the address of the controller listener KIP-919 puts api key 73 on.
+    async fn start_controller() -> (crate::BrokerHandle, SocketAddr, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind data listener");
+        let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind controller listener");
+        let data_addr = data_listener.local_addr().expect("data addr");
+        let controller_addr = controller_listener.local_addr().expect("controller addr");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.listen_addr = data_addr;
+        config.advertised_listener = data_addr.to_string();
+        config.controller_listen_addr = controller_addr;
+        config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
+        let broker = crate::Broker::start_with_listeners(
+            config,
+            Some(controller_listener),
+            Some(data_listener),
+        )
+        .await
+        .expect("broker start");
+        broker.wait_until_controller_leader().await;
+        (broker, controller_addr, dir)
+    }
+
     #[tokio::test]
     async fn send_assignments_rejects_bad_controller_leader() {
         let cases = [
             // No controller leader elected at all.
             (None, "no controller leader"),
-            // Leader elected but its broker record is missing from the image.
-            (Some(NodeId(42)), "controller leader not in image"),
+            // A leader that neither the voter set nor the configured quorum
+            // carries an endpoint for.
+            (
+                Some(NodeId(42)),
+                "controller leader has no known controller endpoint",
+            ),
         ];
         for (leader, expected) in cases {
             let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(MockSource {
@@ -325,18 +407,89 @@ mod tests {
                 leader,
             });
 
-            let err = send_assignments(&source, "assign-test", build_request(1, &[]))
-                .await
-                .expect_err("bad controller leader must fail");
+            let err = send_assignments(
+                &source,
+                &plaintext_dialer(Vec::new()),
+                "assign-test",
+                build_request(1, &[]),
+            )
+            .await
+            .expect_err("bad controller leader must fail");
 
             assert!(err == expected, "case: leader={leader:?}");
         }
     }
 
+    /// KIP-919 carries `AssignReplicasToDirs` on the controller listener, and a
+    /// controller-only node publishes no broker registration at all. Resolving
+    /// the leader through `image.broker()` would therefore strand every
+    /// broker-only node: the report would never leave, and no partition would
+    /// ever record which log dir hosts its replica.
+    ///
+    /// The voter set is the source, so a leader that is only ever a controller
+    /// is still reachable, and the report round-trips.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_assignments_reaches_a_leader_registered_only_as_a_controller() {
+        let (broker, controller_addr, _dir) = start_controller().await;
+        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(MockSource {
+            image: Arc::new(voter_only_image(NodeId(1), controller_addr)),
+            leader: Some(NodeId(1)),
+        });
+
+        let sent = send_assignments(
+            &source,
+            &plaintext_dialer(Vec::new()),
+            "assign-test",
+            build_request(1, &[]),
+        )
+        .await;
+
+        assert!(sent == Ok(()));
+        broker.shutdown().await;
+    }
+
+    /// The report travels the controller listener's own channel. A bare
+    /// `krabka_client_core::Client` would put plaintext Kafka frames on a
+    /// listener configured for SSL, `SASL_SSL`, or `SASL_PLAINTEXT` and fail
+    /// every reconcile.
+    ///
+    /// An SSL controller listener with no client TLS configured is the
+    /// observable end of that: the dialer refuses before a byte is written,
+    /// where a plaintext client would have connected and succeeded.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_assignments_dials_with_the_controller_listener_security() {
+        let (broker, controller_addr, _dir) = start_controller().await;
+        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(MockSource {
+            image: Arc::new(voter_only_image(NodeId(1), controller_addr)),
+            leader: Some(NodeId(1)),
+        });
+        let mut dialer = plaintext_dialer(Vec::new());
+        dialer.listener_protocol = krabka_security::ListenerProtocol::Ssl;
+
+        let err = send_assignments(&source, &dialer, "assign-test", build_request(1, &[]))
+            .await
+            .expect_err("an SSL controller listener needs the configured TLS client");
+
+        assert!(err == "connect: config: TLS listener without TlsConnector");
+        broker.shutdown().await;
+    }
+
     #[test]
     fn validate_assign_response_rejects_controller_error() {
-        assert!(validate_assign_response(0).is_ok());
-        let err = validate_assign_response(42).expect_err("non-zero error_code must fail");
+        assert!(validate_assign_response(0, NodeId(7), Some(NodeId(7))).is_ok());
+        let err = validate_assign_response(42, NodeId(7), Some(NodeId(7)))
+            .expect_err("non-zero error_code must fail");
         assert!(err.contains("error_code=42"));
+    }
+
+    #[test]
+    fn validate_assign_response_rejects_stale_controller_and_is_retryable() {
+        for current in [None, Some(NodeId(8))] {
+            for _ in 0..2 {
+                let err = validate_assign_response(0, NodeId(7), current)
+                    .expect_err("stale controller success must be retried");
+                assert!(err.contains("leader changed"));
+            }
+        }
     }
 }

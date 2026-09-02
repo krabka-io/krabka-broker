@@ -1,8 +1,10 @@
 # Local MIT krb5 KDC for the CRABKA.TEST realm, used by the GSSAPI spike and
-# (later) the GSSAPI integration tests. Hand-rolled on debian so we control the
-# realm, principals, enctypes, and keytab export precisely.
+# (later) the GSSAPI integration tests. The image is built from the locked apko
+# config in this directory so we control the realm, principals, enctypes, and
+# keytab export precisely.
 #
-#   docker compose up --build        # brings the realm up; keytabs land in ./
+#   bazel run :image_load            # build and load the pinned fixture image
+#   docker compose up                # brings the realm up; keytabs land in ./
 #   docker compose logs | grep READY # KDC_READY printed once bootstrap completes
 #   docker compose down              # tears it down
 #
@@ -11,9 +13,7 @@
 # container inherits the host clock through Docker, so keep the host clock sane.
 services:
   kdc:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: docker.io/krabka-io/krb5-kdc:test
     container_name: krabka-kdc
     ports:
       - "88:88/tcp"

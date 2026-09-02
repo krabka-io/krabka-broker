@@ -12,10 +12,13 @@ use std::sync::{
 use arc_swap::ArcSwapOption;
 use krabka_ids::Offset;
 use krabka_log::{DeliveryPolicy, Log};
-use qubit_clock::{Clock, SystemClock};
+use qubit_clock::{StdWallClock, WallClock};
 use tokio::sync::Notify;
 
-use crate::delivery::{PartitionDelivery, waker::DeliveryWaker};
+use crate::{
+    delivery::{PartitionDelivery, waker::DeliveryWaker},
+    time_util,
+};
 
 /// The delivery watermark mirror, the long-poll wake, and the scheduler poke of
 /// one partition.
@@ -47,19 +50,20 @@ pub(crate) struct DeliveryHandles {
     /// Clock the writer reads when it refreshes the mirror after an append.
     /// The scheduler passes its own reading in, so this is only for the paths
     /// that have no clock of their own.
-    clock: Arc<dyn Clock>,
+    clock: Arc<dyn WallClock>,
 }
 
 impl DeliveryHandles {
     /// Handles that read the system clock.
     pub(crate) fn new() -> Self {
-        Self::with_clock(Arc::new(SystemClock::new()))
+        Self::with_clock(Arc::new(StdWallClock::new()))
     }
 
-    /// Handles that read `clock`. A test passes a
-    /// [`MockClock`](qubit_clock::MockClock), so an append and the scheduler
-    /// agree on one mock timeline.
-    pub(crate) fn with_clock(clock: Arc<dyn Clock>) -> Self {
+    /// Handles that read `clock`. A test passes a wall clock it pins or drives
+    /// itself -- a [`FixedWallClock`](qubit_clock::FixedWallClock), or the
+    /// [`ManualWallClock`](qubit_clock::ManualWallClock) that also feeds the
+    /// scheduler -- so an append and the scheduler agree on one timeline.
+    pub(crate) fn with_clock(clock: Arc<dyn WallClock>) -> Self {
         Self {
             watermark: Arc::new(AtomicI64::new(0)),
             advance_notify: Arc::new(Notify::new()),
@@ -108,7 +112,7 @@ impl DeliveryHandles {
     /// [`Self::publish`] against this handle's own clock, for a caller that has
     /// none. The partition writer uses it after an append.
     pub(crate) fn publish_now(&self, log: &Mutex<Log>) -> Option<PartitionDelivery> {
-        self.publish(log, self.clock.millis())
+        self.publish(log, time_util::epoch_millis(self.clock.now()))
     }
 
     /// This partition's clock reading, for a caller that already holds the log
@@ -116,10 +120,10 @@ impl DeliveryHandles {
     ///
     /// A fetch is that caller. It recomputes the watermark under the guard it
     /// already has, and it must take its reading from the same clock the
-    /// writer and the scheduler read, or a test that drives a mock timeline
+    /// writer and the scheduler read, or a test that drives a manual timeline
     /// across an activation boundary cannot reach the fetch path at all.
     pub(crate) fn now_ms(&self) -> i64 {
-        self.clock.millis()
+        time_util::epoch_millis(self.clock.now())
     }
 
     /// Install the scheduler's poke, so an append to this partition can re-arm
@@ -164,11 +168,11 @@ impl std::fmt::Debug for DeliveryHandles {
 mod tests {
     use assert2::check;
     use krabka_log::LogConfig;
-    use qubit_clock::{DateTime, MockTime};
+    use qubit_clock::{FixedWallClock, ManualMonotonicClock};
     use tempfile::tempdir;
 
     use super::*;
-    use crate::delivery::test_support::{BOUND_MS, NOW_MS, batch_at};
+    use crate::delivery::test_support::{BOUND_MS, NOW_MS, batch_at, wall_at};
 
     fn log_of(policy: DeliveryPolicy, activations: &[i64]) -> (tempfile::TempDir, Mutex<Log>) {
         let dir = tempdir().expect("log root");
@@ -184,17 +188,24 @@ mod tests {
         (dir, Mutex::new(log))
     }
 
-    fn handles_at(now_ms: i64) -> (MockTime, DeliveryHandles) {
-        let time =
-            MockTime::at(DateTime::from_timestamp_millis(now_ms).expect("a representable instant"));
-        let handles = DeliveryHandles::with_clock(Arc::new(time.clock()));
-        (time, handles)
+    /// Handles pinned at `now_ms`, for a test that only reads the clock.
+    fn handles_at(now_ms: i64) -> DeliveryHandles {
+        DeliveryHandles::with_clock(Arc::new(FixedWallClock::new(wall_at(now_ms))))
+    }
+
+    /// Handles on a manual timeline that starts at `now_ms`, for the one test
+    /// that has to carry the clock across an activation boundary. The clock it
+    /// returns moves the wall reading it handed the handles.
+    fn advancing_handles_at(now_ms: i64) -> (Arc<ManualMonotonicClock>, DeliveryHandles) {
+        let clock = ManualMonotonicClock::new_shared();
+        let handles = DeliveryHandles::with_clock(clock.new_wall_clock(wall_at(now_ms)));
+        (clock, handles)
     }
 
     #[test]
     fn an_immediate_topic_reports_no_schedule_but_still_mirrors_the_log_end() {
         let (_dir, log) = log_of(DeliveryPolicy::Immediate, &[NOW_MS + 3_600_000]);
-        let (_time, handles) = handles_at(NOW_MS);
+        let handles = handles_at(NOW_MS);
 
         check!(handles.publish_now(&log).is_none());
         check!(handles.watermark() == Offset(2));
@@ -206,7 +217,7 @@ mod tests {
             DeliveryPolicy::Scheduled,
             &[NOW_MS - 60_000, NOW_MS + 10_000],
         );
-        let (_time, handles) = handles_at(NOW_MS);
+        let handles = handles_at(NOW_MS);
 
         check!(
             handles.publish_now(&log)
@@ -222,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn a_publish_that_moves_the_watermark_wakes_a_parked_reader() {
         let (_dir, log) = log_of(DeliveryPolicy::Scheduled, &[NOW_MS + 10_000]);
-        let (time, handles) = handles_at(NOW_MS);
+        let (clock, handles) = advancing_handles_at(NOW_MS);
         handles.publish_now(&log);
         check!(handles.watermark() == Offset(0));
 
@@ -231,9 +242,11 @@ mod tests {
         // Register the waiter now: `notify_waiters` wakes only what is already
         // registered, and a `Notified` registers on its first poll.
         parked.as_mut().enable();
-        time.advance(std::time::Duration::from_millis(
-            u64::try_from(10_000 + BOUND_MS).expect("positive"),
-        ));
+        clock
+            .advance(std::time::Duration::from_millis(
+                u64::try_from(10_000 + BOUND_MS).expect("positive"),
+            ))
+            .expect("manual time moves forward");
 
         check!(handles.publish_now(&log).is_some());
         check!(handles.watermark() == Offset(2));
@@ -242,7 +255,7 @@ mod tests {
 
     #[test]
     fn a_partition_no_scheduler_adopted_cannot_rearm_one() {
-        let (_time, handles) = handles_at(NOW_MS);
+        let handles = handles_at(NOW_MS);
         check!(!handles.wake_scheduler(NOW_MS));
 
         let waker = Arc::new(DeliveryWaker::new());

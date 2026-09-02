@@ -197,6 +197,27 @@ impl Log {
         )
     }
 
+    /// Producer and coordinator generations used to admit one transaction
+    /// marker, plus whether that producer currently has an open transaction.
+    /// Missing generations use Kafka's `-1` sentinel.
+    #[must_use]
+    pub fn transaction_marker_state(&self, producer_id: ProducerId) -> (i16, i32, bool) {
+        let producer_epoch = self
+            .producer_state
+            .get(&producer_id)
+            .map_or(-1, |entry| entry.producer_epoch);
+        let coordinator_epoch = self
+            .coordinator_epochs
+            .get(&producer_id)
+            .copied()
+            .unwrap_or(-1);
+        (
+            producer_epoch,
+            coordinator_epoch,
+            self.pending.contains_key(&producer_id),
+        )
+    }
+
     /// Producer state restored from the newest valid Kafka-compatible
     /// snapshot and the uncovered local log tail.
     #[must_use]

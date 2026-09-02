@@ -48,6 +48,14 @@ fn abort_partition_writers(partitions: &PartitionRegistry) {
 }
 
 impl BrokerHandle {
+    /// Test-only: the shared broker state behind this handle, for the unit
+    /// tests that drive a subsystem taking `&Arc<Broker>` directly rather than
+    /// over a socket. `BrokerControllerAdminRouter::bind` is one.
+    #[cfg(test)]
+    pub(crate) fn broker_for_test(&self) -> &std::sync::Arc<crate::broker::Broker> {
+        &self.broker
+    }
+
     /// The actual bound `SocketAddr`. This is useful when
     /// `BrokerConfig.listen_addr` used port 0 and the OS picked the port.
     #[must_use]
@@ -351,6 +359,29 @@ impl BrokerHandle {
         self.broker.controller.cancel().await;
     }
 
+    /// Record the broker epoch this node is stopping on, so its next start can
+    /// prove to the controller that the stop was graceful.
+    ///
+    /// Kafka writes the same proof from `LogManager.shutdown`, through
+    /// `CleanShutdownFileHandler`, and reads it back as
+    /// `BrokerRegistrationRequest.previousBrokerEpoch`. A node the cluster has
+    /// no registration for has no epoch to name and writes nothing; so does a
+    /// pure controller, which holds no replica and so no ELR membership.
+    fn write_clean_shutdown_proof(&self) {
+        let config = &self.broker.config;
+        if !config.is_broker() {
+            return;
+        }
+        if let Some(epoch) = self
+            .broker
+            .controller
+            .current_image()
+            .broker_epoch(config.node_id)
+        {
+            crate::clean_shutdown::write(&config.log_dir, epoch);
+        }
+    }
+
     /// Cancel the listener and drain in-flight connections. The returned
     /// future completes when the listener task exits.
     pub async fn shutdown(mut self) {
@@ -393,6 +424,12 @@ impl BrokerHandle {
         crate::future_log::shutdown_moves(&self.broker.future_logs).await;
         shutdown_partition_writers(&self.broker.partitions).await;
         self.broker.client_metrics.shutdown().await;
+        // Every log this broker holds is now closed, so the record set it
+        // brings back on restart is the one the cluster believes it has. That
+        // is the whole content of the clean-shutdown proof, and this is the
+        // last moment it is true, so leave it here. A crash never reaches this
+        // line, which is exactly why the absence of the file means unclean.
+        self.write_clean_shutdown_proof();
         // Shut down the raft engine so this broker's openraft instance stops
         // participating in elections after the broker is logically dead.
         // Without this, a killed broker's in-process raft engine keeps ticking

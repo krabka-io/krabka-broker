@@ -81,11 +81,7 @@ pub(super) fn completing_classic_group(member_ids: &[&str]) -> CoordinatorGroup 
     }
     state.resolve_selected_protocol_metadata("range");
     state.complete_rebalance("range");
-    CoordinatorGroup {
-        group_id: "g".into(),
-        kind: GroupKind::Classic(state),
-        committed_offsets: HashMap::new(),
-    }
+    CoordinatorGroup::seeded("g", GroupKind::Classic(state), HashMap::new())
 }
 
 pub(super) async fn last_classic_metadata(
@@ -215,11 +211,11 @@ pub(super) async fn seed_and_upgrade(
         std::time::Duration::from_mins(1),
         vec![("range".into(), subscription_blob(&[topic]))],
     ));
-    let group = Box::new(CoordinatorGroup {
-        group_id: "g".into(),
-        kind: GroupKind::Classic(cs),
-        committed_offsets: HashMap::new(),
-    });
+    let group = Box::new(CoordinatorGroup::seeded(
+        "g",
+        GroupKind::Classic(cs),
+        HashMap::new(),
+    ));
     coord.seed_classic("g", group);
     let handle = coord.find("g").expect("seeded classic actor");
 
@@ -321,11 +317,11 @@ pub(super) fn seed_classic_member(
         )
         .with_instance_id(instance_id.map(str::to_string)),
     );
-    let group = Box::new(CoordinatorGroup {
-        group_id: "g".into(),
-        kind: GroupKind::Classic(cs),
-        committed_offsets: HashMap::new(),
-    });
+    let group = Box::new(CoordinatorGroup::seeded(
+        "g",
+        GroupKind::Classic(cs),
+        HashMap::new(),
+    ));
     coord.seed_classic("g", group);
     coord.find("g").expect("seeded classic actor")
 }

@@ -1,25 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-target="${1:-//crates/raft:raft_mutants}"
-baseline=".cargo/mutants-baseline.txt"
-logs="bazel-testlogs/crates/raft/raft_mutants"
-actual="$(mktemp)"
-trap 'rm -f "${actual}"' EXIT
+target="${1:?usage: check-mutants.sh TARGET SHARD_INDEX SHARD_COUNT}"
+shard_index="${2:?usage: check-mutants.sh TARGET SHARD_INDEX SHARD_COUNT}"
+shard_count="${3:?usage: check-mutants.sh TARGET SHARD_INDEX SHARD_COUNT}"
 
-status=0
-bazel test "${target}" --test_output=errors || status=$?
-
-# Bazel 3 is a completed test run with test failures (the reviewed survivors).
-# Preserve build, infrastructure, and interrupted-run failures.
-if ((status != 0 && status != 3)); then
-  exit "${status}"
-fi
-
-mapfile -t shard_logs < <(find "${logs}" -name test.log -type f | sort)
-test "${#shard_logs[@]}" -eq 16
-test "$(grep -El '^[0-9]+ mutants: [0-9]+ caught, [0-9]+ missed, [0-9]+ unviable$' "${shard_logs[@]}" | wc -l)" -eq 16
-test "$(grep -El '^cargo_mutants: [0-9]+ mutants survived$' "${shard_logs[@]}" | wc -l)" -eq 16
-grep -h '^MISSED ' "${shard_logs[@]}" |
-  sed 's/^MISSED //' | sort -u >"${actual}"
-diff -u "${baseline}" "${actual}"
+# The pinned rules_rs_mutants runner reads Bazel's standard test-sharding
+# variables even when launched with `bazel run`.
+export TEST_SHARD_INDEX="${shard_index}"
+export TEST_TOTAL_SHARDS="${shard_count}"
+exec bazel run --test_sharding_strategy=disabled "${target}"

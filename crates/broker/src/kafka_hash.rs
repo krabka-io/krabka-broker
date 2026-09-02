@@ -10,11 +10,10 @@ pub(crate) fn murmur2(data: &[u8]) -> u32 {
     let length_bytes = length.to_le_bytes();
     let length32 = u32::from_le_bytes(length_bytes[..4].try_into().expect("usize is at least u32"));
     let mut h: u32 = MURMUR2_SEED ^ length32;
-    let chunks = data.chunks_exact(4);
-    let rem = chunks.remainder();
+    let (chunks, rem) = data.as_chunks::<4>();
 
     for chunk in chunks {
-        let mut k = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let mut k = u32::from_le_bytes(*chunk);
         k = k.wrapping_mul(MURMUR2_M);
         k ^= k >> MURMUR2_R;
         k = k.wrapping_mul(MURMUR2_M);

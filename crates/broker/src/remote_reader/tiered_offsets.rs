@@ -10,6 +10,9 @@ use krabka_remote_storage::{
     LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
     TopicIdPartition,
 };
+use krabka_verified::{
+    tiered_earliest_finished_index, tiered_latest_finished_index, tiered_owning_epoch_index,
+};
 
 use super::{RemoteReader, TieredOffset};
 
@@ -22,11 +25,9 @@ impl RemoteReader {
         tp: &TopicIdPartition,
     ) -> Result<Option<LogOffset>, RemoteStorageError> {
         let listed = self.list_remote_log_segments_blocking(tp).await?;
-        Ok(listed
-            .into_iter()
-            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .map(|md| md.start_offset())
-            .min())
+        let (starts, ends, finished) = tiered_segment_inputs(&listed);
+        Ok(tiered_earliest_finished_index(&starts, &ends, &finished)
+            .map(|index| listed[index].start_offset()))
     }
 
     /// Returns the highest offset held by a finished remote segment and the
@@ -36,28 +37,48 @@ impl RemoteReader {
         tp: &TopicIdPartition,
     ) -> Result<Option<TieredOffset>, RemoteStorageError> {
         let listed = self.list_remote_log_segments_blocking(tp).await?;
-        let Some(metadata) = listed
-            .into_iter()
-            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .max_by_key(RemoteLogSegmentMetadata::end_offset)
-        else {
+        let (starts, ends, finished) = tiered_segment_inputs(&listed);
+        let Some(index) = tiered_latest_finished_index(&starts, &ends, &finished) else {
             return Ok(None);
         };
+        let metadata = &listed[index];
         let offset = metadata.end_offset();
-        let Some(leader_epoch) = metadata
+        let epochs = metadata
             .segment_leader_epochs()
             .iter()
-            .filter(|(_, start)| **start <= offset)
-            .max_by_key(|(_, start)| **start)
-            .map(|(epoch, _)| *epoch)
-        else {
+            .map(|(epoch, start)| (*epoch, *start))
+            .collect::<Vec<_>>();
+        let epoch_values = epochs.iter().map(|(epoch, _)| epoch.0).collect::<Vec<_>>();
+        let epoch_starts = epochs.iter().map(|(_, start)| *start).collect::<Vec<_>>();
+        let Some(epoch_index) = tiered_owning_epoch_index(
+            &epoch_values,
+            &epoch_starts,
+            metadata.start_offset(),
+            offset,
+        ) else {
             return Ok(None);
         };
         Ok(Some(TieredOffset {
             offset,
-            leader_epoch,
+            leader_epoch: epochs[epoch_index].0,
         }))
     }
+}
+
+fn tiered_segment_inputs(listed: &[RemoteLogSegmentMetadata]) -> (Vec<i64>, Vec<i64>, Vec<bool>) {
+    let starts = listed
+        .iter()
+        .map(RemoteLogSegmentMetadata::start_offset)
+        .collect();
+    let ends = listed
+        .iter()
+        .map(RemoteLogSegmentMetadata::end_offset)
+        .collect();
+    let finished = listed
+        .iter()
+        .map(|metadata| metadata.state() == RemoteLogSegmentState::CopySegmentFinished)
+        .collect();
+    (starts, ends, finished)
 }
 
 #[cfg(test)]
@@ -68,12 +89,144 @@ mod tests {
     use krabka_ids::LeaderEpoch;
     use krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
-        RemoteStorageManager,
+        RemoteLogSegmentMetadataUpdate, RemoteStorageManager,
     };
     use uuid::Uuid;
 
     use super::*;
     use crate::remote_reader::test_support::{NotReadyRlmm, populated_reader, tp};
+
+    fn reader_with_metadata() -> (RemoteReader, tempfile::TempDir) {
+        let remote_dir = tempfile::tempdir().unwrap();
+        let rsm: Arc<dyn RemoteStorageManager> =
+            Arc::new(LocalTieredStorage::new(remote_dir.path()));
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        (RemoteReader::new(rsm, rlmm), remote_dir)
+    }
+
+    fn add_segment(
+        reader: &RemoteReader,
+        start: i64,
+        end: i64,
+        epochs: std::collections::BTreeMap<LeaderEpoch, i64>,
+        finished: bool,
+    ) {
+        let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
+        reader
+            .rlmm
+            .add_remote_log_segment_metadata(
+                RemoteLogSegmentMetadata::new(
+                    id.clone(),
+                    start,
+                    end,
+                    0,
+                    1,
+                    0,
+                    krabka_remote_storage::RemoteLogSegmentDetails::new(
+                        1,
+                        RemoteLogSegmentState::CopySegmentStarted,
+                        epochs,
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        if finished {
+            reader
+                .rlmm
+                .update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
+                    remote_log_segment_id: id,
+                    event_timestamp_ms: 1,
+                    custom_metadata: None,
+                    state: RemoteLogSegmentState::CopySegmentFinished,
+                    broker_id: 1,
+                })
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn tiered_frontiers_ignore_invalid_and_unfinished_candidates() {
+        let (reader, _remote_dir) = reader_with_metadata();
+        add_segment(
+            &reader,
+            -10,
+            -1,
+            maplit::btreemap! {LeaderEpoch(0) => -10},
+            true,
+        );
+        add_segment(
+            &reader,
+            20,
+            39,
+            maplit::btreemap! {
+                LeaderEpoch(0) => 20,
+                LeaderEpoch(2) => 30,
+                LeaderEpoch(4) => 35,
+            },
+            true,
+        );
+        add_segment(
+            &reader,
+            0,
+            19,
+            maplit::btreemap! {LeaderEpoch(0) => 0},
+            true,
+        );
+        add_segment(
+            &reader,
+            40,
+            99,
+            maplit::btreemap! {LeaderEpoch(8) => 40},
+            false,
+        );
+
+        assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(0));
+        let expected = Some(TieredOffset {
+            offset: 39,
+            leader_epoch: LeaderEpoch(4),
+        });
+        assert!(reader.latest_tiered_offset(&tp()).await.unwrap() == expected);
+        assert!(
+            reader.latest_tiered_offset(&tp()).await.unwrap() == expected,
+            "retry is deterministic"
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_tiered_offset_rejects_a_segment_without_an_owning_epoch() {
+        let (reader, _remote_dir) = reader_with_metadata();
+        add_segment(&reader, 0, 9, maplit::btreemap! {LeaderEpoch(0) => 0}, true);
+        add_segment(
+            &reader,
+            10,
+            19,
+            maplit::btreemap! {LeaderEpoch(7) => 20},
+            true,
+        );
+        assert!(reader.latest_tiered_offset(&tp()).await.unwrap() == None);
+    }
+
+    #[tokio::test]
+    async fn tiered_frontiers_accept_the_maximum_offset_without_arithmetic() {
+        let (reader, _remote_dir) = reader_with_metadata();
+        add_segment(
+            &reader,
+            i64::MAX,
+            i64::MAX,
+            maplit::btreemap! {LeaderEpoch(i32::MAX) => i64::MAX},
+            true,
+        );
+        assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(i64::MAX));
+        assert!(
+            reader.latest_tiered_offset(&tp()).await.unwrap()
+                == Some(TieredOffset {
+                    offset: i64::MAX,
+                    leader_epoch: LeaderEpoch(i32::MAX),
+                })
+        );
+    }
 
     #[tokio::test]
     async fn earliest_offset_returns_lowest_finished_start() {
@@ -152,6 +305,8 @@ mod tests {
         let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(NotReadyRlmm);
         let reader = RemoteReader::new(rsm, rlmm);
         let err = reader.earliest_offset(&tp()).await.unwrap_err();
+        assert!(matches!(err, RemoteStorageError::NotReady { .. }));
+        let err = reader.latest_tiered_offset(&tp()).await.unwrap_err();
         assert!(matches!(err, RemoteStorageError::NotReady { .. }));
     }
 

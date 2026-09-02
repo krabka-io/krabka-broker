@@ -4,10 +4,11 @@
 use std::{sync::Arc, time::Duration};
 
 use krabka_compression::RecordDecompressionPolicy;
-use krabka_metadata::TopicFreezeRecord;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{
+    INVALID_OFFSET,
     append::{AppendContext, dispatch_prepared},
     delivery::DeliveryGate,
     framing::FramedPartition,
@@ -22,7 +23,7 @@ use super::{
 use crate::{
     codes,
     error::BrokerError,
-    freeze::resolve::FreezeVerdict,
+    freeze::resolve::{FreezeMutationResolution, FreezeVerdict},
     partition_registry::PartitionRegistry,
     schema_validation::{SchemaGate, SchemaValidator},
 };
@@ -38,6 +39,10 @@ use crate::{
 pub(super) struct PartitionInput<'a> {
     pub(super) part_data: FramedPartition,
     pub(super) topic_compression: Option<krabka_compression::CompressionType>,
+    /// The topic's `max.message.bytes`, resolved once per topic, with the
+    /// broker's `message.max.bytes` behind it. Every topic has one, so unlike
+    /// the gates below it is a value and not an `Option`.
+    pub(super) max_message_bytes: ByteSize,
     /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
     /// `delivery.mode=immediate`, and skips the delivery gate entirely.
     pub(super) delivery: Option<DeliveryGate>,
@@ -46,12 +51,9 @@ pub(super) struct PartitionInput<'a> {
     /// `schema.validation.value` is set", and skips the check entirely.
     pub(super) schema: Option<SchemaGate>,
     pub(super) topic_name: String,
-    pub(super) topic_denied: bool,
-    /// The topic's KFC-9 write-freeze entry, resolved once per topic. `None`
-    /// is a topic that accepts writes, and skips the freeze gate entirely.
-    /// It sits beside `topic_denied` because it refuses for the same kind of
-    /// reason: nothing about this batch can earn the write.
-    pub(super) freeze: Option<&'a TopicFreezeRecord>,
+    /// The topic's authorization-and-freeze result, resolved once per topic.
+    /// Only `Frozen` carries registry detail, after authorization succeeded.
+    pub(super) freeze: FreezeMutationResolution<'a>,
     pub(super) txn_id_denied: bool,
     pub(super) acks: i16,
     pub(super) timeout: Duration,
@@ -67,6 +69,10 @@ pub(super) struct PartitionServices<'a> {
     pub(super) broker_policy: BrokerProducePolicy,
     pub(super) record_decompression_policy: RecordDecompressionPolicy,
     pub(super) metrics: &'a crate::metrics::BrokerMetrics,
+    /// The request's phase accumulator. The append charges the writer
+    /// round-trip and the `acks=-1` high-watermark gate to it, and the handler
+    /// observes the totals once the whole request is done.
+    pub(super) phases: &'a crate::metrics::RequestPhases,
     /// The broker's KFC-7 validator. `None` is "no `[schema_registry]`
     /// section", and a topic that asks for validation on such a broker is
     /// rejected rather than admitted unchecked.
@@ -80,10 +86,10 @@ pub(super) async fn process_partition(
     let PartitionInput {
         part_data,
         topic_compression,
+        max_message_bytes,
         delivery,
         schema,
         topic_name,
-        topic_denied,
         freeze,
         txn_id_denied,
         acks,
@@ -99,21 +105,26 @@ pub(super) async fn process_partition(
         broker_policy,
         record_decompression_policy,
         metrics,
+        phases,
         schema_validator,
     } = services;
     let idx = part_data.index;
+    // Every gate below returns this row, and every one of them refuses before
+    // any append happened. Kafka fills such a row from
+    // `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO`, whose `firstOffset` is -1, so
+    // the sentinel is stamped once here rather than at each `return`. The
+    // `Default` for the other two offset-ish fields is already -1; only
+    // `base_offset` defaults to 0, which would claim the batch landed at the
+    // start of the log. The success and dedup paths build their own row and
+    // never see this one.
     let mut out = PartitionProduceResponse {
         index: idx,
+        base_offset: INVALID_OFFSET,
         ..Default::default()
     };
 
     if txn_id_denied {
         out.error_code = codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED;
-        return Ok(out);
-    }
-
-    if topic_denied {
-        out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
         return Ok(out);
     }
 
@@ -129,10 +140,42 @@ pub(super) async fn process_partition(
     // the producer state untouched and the log end offset unmoved. A refusal
     // that still appended would be the worst failure this feature can have,
     // and the error code alone does not rule it out.
-    if let Some(entry) = freeze {
-        metrics.record_topic_freeze_rejection(topic_name);
-        out.error_code = codes::POLICY_VIOLATION;
-        out.error_message = Some(FreezeVerdict::from(entry).error_message());
+    match freeze {
+        FreezeMutationResolution::AuthorizationDenied => {
+            out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            return Ok(out);
+        }
+        FreezeMutationResolution::Frozen(entry) => {
+            metrics.record_topic_freeze_rejection(topic_name);
+            out.error_code = codes::POLICY_VIOLATION;
+            out.error_message = Some(FreezeVerdict::from(entry).error_message());
+            return Ok(out);
+        }
+        FreezeMutationResolution::Admit => {}
+    }
+
+    // ── max.message.bytes ────────────────────────────────────────────
+    // Ahead of `prepare_batch`, which is the whole operational point: a batch
+    // the broker will never accept must not first cost it a CRC pass and a
+    // decompression over however many mebibytes the producer sent. The check
+    // reads v2 batch headers and nothing else.
+    //
+    // Kafka measures each batch on its own, over the batch's entire wire
+    // encoding including its 61-byte header, and refuses one that is strictly
+    // larger than the cap. `error_message` stays empty because Kafka's
+    // `RecordTooLargeException` is not one of the exceptions it attaches a
+    // custom message to; the client renders `Errors.MESSAGE_TOO_LARGE`'s own
+    // text instead.
+    //
+    // `base_offset` is the -1 sentinel, not 0. The refusal happens before any
+    // append, so Kafka's `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO` supplies the
+    // row's offsets and every one of them is -1. A raw `Produce v9` against
+    // `apache/kafka:4.3.1` with `max.message.bytes=2048` answers a 2049-byte
+    // batch with `base_offset=-1`, and a producer that read 0 would report a
+    // record it never wrote as living at the partition's first offset.
+    if part_data.payload.largest_batch_len() > max_message_bytes.bytes_usize() {
+        out.error_code = codes::MESSAGE_TOO_LARGE;
+        out.base_offset = INVALID_OFFSET;
         return Ok(out);
     }
 
@@ -158,6 +201,31 @@ pub(super) async fn process_partition(
             return Ok(out);
         }
     };
+
+    // ── max.message.bytes, again, on the re-encoded batch ────────────
+    // The check above measured the bytes the producer sent. Those are the
+    // bytes that land only on the verbatim path. The owned path re-encodes,
+    // and a topic whose `compression.type` forces a codec the producer did not
+    // use decides the stored size itself: `compression.type=uncompressed`
+    // expands a batch that arrived well under the cap into one the cap exists
+    // to keep out, and a legacy `MessageSet` changes size in the v2
+    // up-conversion. `stored_len` is `None` on the verbatim path, so this
+    // second measurement costs the hot path nothing.
+    //
+    // Kafka runs the same second check for the same reason:
+    // `UnifiedLog.append` re-walks the validated batches and throws
+    // `RecordTooLargeException` whenever `LogValidator` reports
+    // `messageSizeMaybeChanged`. It sits here, before the producer-state
+    // gates, because Kafka's sits before `analyzeAndValidateProducerState`
+    // too, and because a refused batch must leave the idempotent sequence and
+    // the log end offset exactly where it found them.
+    if let Some(stored) = prepared.stored_len(topic_compression)
+        && stored > max_message_bytes.bytes_usize()
+    {
+        out.error_code = codes::MESSAGE_TOO_LARGE;
+        out.base_offset = INVALID_OFFSET;
+        return Ok(out);
+    }
 
     // ── KFC-7 schema validation ──────────────────────────────────────
     // Before the leadership gate, so that record-shape rejections keep coming
@@ -264,7 +332,7 @@ pub(super) async fn process_partition(
         return Ok(out);
     }
     if let Some(code) =
-        validate_transactional_produce(&prepared, txn_coordinator, image, topic_name, idx).await?
+        validate_transactional_produce(&prepared, txn_coordinator, image, topic_name, idx).await
     {
         out.error_code = code;
         return Ok(out);
@@ -322,6 +390,7 @@ pub(super) async fn process_partition(
             acks,
             timeout,
             leader_epoch,
+            phases,
         },
     )
     .await

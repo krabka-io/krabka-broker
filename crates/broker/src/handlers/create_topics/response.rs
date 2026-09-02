@@ -1,13 +1,15 @@
 //! Response assembly for `CreateTopics`: the per-topic result rows, the
 //! response envelope around them, the admin audit event for the topics that
-//! were created, and the throttle sleep that precedes the encoded reply.
+//! were created, and the KIP-219 throttle window recorded on the request
+//! context for the connection loop to enforce after the reply is written.
 
 use bytes::Bytes;
 use krabka_protocol::{
     Encode,
+    api_key::ApiKey,
     owned::create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
 };
-use krabka_units::{Time, convert::TimeExt};
+use krabka_units::Time;
 
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -68,7 +70,7 @@ pub(super) fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes
     crate::handlers::encode_response(resp, version)
 }
 
-pub(super) async fn finish_response(
+pub(super) fn finish_response(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
     results: Vec<CreatableTopicResult>,
@@ -80,10 +82,18 @@ pub(super) async fn finish_response(
         context,
         created_topic_resources(&results),
     );
+    // The KIP-599 delay is the only throttle this api applies — the dispatch
+    // loop marks it quota-exempt and never charges it the request quota — so
+    // resolving it through the metric records the throttle phase and the quota
+    // that caused it exactly once per request.
+    let delay = broker.metrics.record_applied_throttle(
+        ApiKey::CreateTopics as i16,
+        &[(crate::metrics::QuotaType::ControllerMutation, delay)],
+    );
     let response = create_topics_response(results, crate::quota::throttle_time_ms(delay));
-    if delay > <Time as TimeExt>::ZERO {
-        tokio::time::sleep(delay.to_std()).await;
-    }
+    // KIP-219: the KIP-599 window is reported here and enforced by the
+    // connection loop, which mutes the connection after the response is sent.
+    context.record_throttle(delay);
     encode_response(&response, version)
 }
 

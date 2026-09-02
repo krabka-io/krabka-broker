@@ -250,6 +250,20 @@ mod tests {
         is_witness: bool,
         diskless: bool,
     ) -> Option<(i16, Option<LeaderIdAndEpoch>)> {
+        gate_with_acks(image, node_id, is_witness, diskless, 1, 1)
+    }
+
+    /// [`produce_gate`], with the two inputs the `min.insync.replicas` rule
+    /// reads: the request's `acks`, and this broker's command-line
+    /// `default_min_insync_replicas`.
+    fn gate_with_acks(
+        image: &MetadataImage,
+        node_id: krabka_audit::NodeId,
+        is_witness: bool,
+        diskless: bool,
+        acks: i16,
+        default_min_insync_replicas: i32,
+    ) -> Option<(i16, Option<LeaderIdAndEpoch>)> {
         let dir = tempfile::tempdir().expect("tempdir");
         let log = krabka_log::Log::open(
             crate::log_dir::partition_dir(dir.path(), "orders", 0),
@@ -273,18 +287,66 @@ mod tests {
         validate_partition_gate(
             "orders",
             0,
-            1,
+            acks,
             &partitions,
             &crate::log_dir_status::LogDirRegistry::default(),
             image,
             BrokerProducePolicy {
                 node_id,
-                default_min_insync_replicas: 1,
+                default_min_insync_replicas,
                 is_witness,
             },
         )
         .err()
         .map(|error| (error.code, error.current_leader))
+    }
+
+    /// The cluster-wide dynamic `min.insync.replicas` default gates
+    /// `acks=all` here, exactly as it gates the ELR the controller keeps.
+    ///
+    /// Node 1 leads `orders` with an ISR of one and a replica set of three,
+    /// and the cluster default asks for two. Reading only the topic override
+    /// left this gate on the broker's own default of 1, so the write was
+    /// accepted at an ISR the controller still called below-min -- and the
+    /// replicas the controller held in the KIP-966 eligible set fell behind
+    /// a committed record while it went on offering them as leaders.
+    #[tokio::test]
+    async fn acks_all_honours_the_cluster_wide_min_isr_default_the_elr_is_kept_against() {
+        let mut image = image_with_topic("orders", &[1, 2, 3]);
+        image.apply(&MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
+                topic: "orders".into(),
+                partition: 0,
+                leader: krabka_audit::NodeId(1),
+                replicas: vec![
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
+                ],
+                isr: vec![krabka_audit::NodeId(1)],
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 1,
+            },
+        ));
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            config_name: crate::config_keys::MIN_INSYNC_REPLICAS.into(),
+            config_value: Some("2".into()),
+        }));
+
+        let refused = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, -1, 1);
+
+        assert!(
+            refused == Some((crate::codes::NOT_ENOUGH_REPLICAS, None)),
+            "got {refused:?}"
+        );
+        // The same partition still takes an acks=1 write: the rule is the
+        // `acks=all` durability gate, not a partition-wide refusal.
+        let admitted = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, 1, 1);
+        assert!(admitted.is_none(), "got {admitted:?}");
     }
 
     #[tokio::test]

@@ -1,0 +1,20 @@
+(* #"/proof-work-216d/crates/verified/src/authz.rs" 47 0 47 62 *)
+
+let%span sauthz = "/proof-work-216d/crates/verified/src/authz.rs" 48 4 48 21
+let%span sauthz'0 = "/proof-work-216d/crates/verified/src/authz.rs" 45 10 45 39
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let acl_identity_match [#"/proof-work-216d/crates/verified/src/authz.rs" 47 0 47 62] (wildcard: bool) (exact: bool)
+  (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {wildcard = false} (! bb2) | br1 -> {wildcard} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#sauthz] true ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- exact ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & wildcard: bool = wildcard | & exact: bool = exact ])
+  [ return (result: bool) -> {[@stop_split] [@expl:acl_identity_match ensures] [%#sauthz'0] result
+    = (wildcard \/ exact)}
+    (! return {result}) ]

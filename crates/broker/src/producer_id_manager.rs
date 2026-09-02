@@ -12,18 +12,17 @@ use std::sync::{
 
 use krabka_log::ProducerId;
 use krabka_metadata::{MetadataRecord, NodeId, ProducerIdsRecord};
+use krabka_verified::{
+    ProducerIdBlockAllocationDecision as BlockDecision, producer_id_block_allocation,
+};
 use tokio::sync::Mutex;
 
 use crate::metadata_source::MetadataSource;
 
 /// Kafka's controller-assigned producer-ID block size.
-pub(crate) const PRODUCER_ID_BLOCK_SIZE: i64 = 1_000;
+pub(crate) const PRODUCER_ID_BLOCK_SIZE: i32 = 1_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProducerIdBlock {
-    pub(crate) first: i64,
-    pub(crate) len: i32,
-}
+pub(crate) type ProducerIdBlock = krabka_verified::ProducerIdBlockPlan;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProducerIdAllocationError {
@@ -35,10 +34,45 @@ pub(crate) enum ProducerIdAllocationError {
         requested: i64,
         registered: i64,
     },
+    #[error("invalid producer ID allocation frontier {first} or block length {len}")]
+    InvalidFrontier { first: i64, len: i32 },
     #[error("the signed 64-bit producer ID space is exhausted")]
     Exhausted,
     #[error("controller failed to allocate a producer ID block: {0}")]
     Controller(String),
+}
+
+fn plan_block(
+    broker_id: NodeId,
+    requested_epoch: i64,
+    registered_epoch: Option<i64>,
+    first: i64,
+) -> Result<ProducerIdBlock, ProducerIdAllocationError> {
+    let registered = registered_epoch.is_some();
+    let registered_epoch = registered_epoch.unwrap_or(-1);
+    match producer_id_block_allocation(
+        i32::try_from(broker_id.0).is_ok(),
+        registered,
+        requested_epoch,
+        registered_epoch,
+        first,
+        PRODUCER_ID_BLOCK_SIZE,
+    ) {
+        BlockDecision::BrokerNotRegistered => {
+            Err(ProducerIdAllocationError::BrokerNotRegistered(broker_id))
+        }
+        BlockDecision::StaleBrokerEpoch => Err(ProducerIdAllocationError::StaleBrokerEpoch {
+            broker_id,
+            requested: requested_epoch,
+            registered: registered_epoch,
+        }),
+        BlockDecision::InvalidFrontier => Err(ProducerIdAllocationError::InvalidFrontier {
+            first,
+            len: PRODUCER_ID_BLOCK_SIZE,
+        }),
+        BlockDecision::Exhausted => Err(ProducerIdAllocationError::Exhausted),
+        BlockDecision::Allocate(plan) => Ok(plan),
+    }
 }
 
 impl From<ProducerIdAllocationError> for crate::error::BrokerError {
@@ -59,38 +93,23 @@ pub(crate) async fn allocate_block(
 ) -> Result<ProducerIdBlock, ProducerIdAllocationError> {
     loop {
         let image = controller.current_image();
-        let Some(registered_epoch) = image.broker_epoch(broker_id) else {
-            return Err(ProducerIdAllocationError::BrokerNotRegistered(broker_id));
-        };
-        if registered_epoch != broker_epoch {
-            return Err(ProducerIdAllocationError::StaleBrokerEpoch {
-                broker_id,
-                requested: broker_epoch,
-                registered: registered_epoch,
-            });
-        }
-
-        let first = image.next_producer_id();
-        let next = first
-            .checked_add(PRODUCER_ID_BLOCK_SIZE)
-            .ok_or(ProducerIdAllocationError::Exhausted)?;
+        let block = plan_block(
+            broker_id,
+            broker_epoch,
+            image.broker_epoch(broker_id),
+            image.next_producer_id(),
+        )?;
         let record = MetadataRecord::V1ProducerIds(ProducerIdsRecord {
             broker_id,
             broker_epoch,
-            next_producer_id: next,
+            next_producer_id: block.next,
         });
         match controller.submit_change(vec![record]).await {
-            Ok(_) => {
-                return Ok(ProducerIdBlock {
-                    first,
-                    len: i32::try_from(PRODUCER_ID_BLOCK_SIZE)
-                        .expect("producer ID block size fits i32"),
-                });
-            }
+            Ok(_) => return Ok(block),
             Err(error) => {
                 // A competing allocation committed first. Retry from the new
                 // durable boundary; return all other controller failures.
-                if controller.current_image().next_producer_id() > first {
+                if controller.current_image().next_producer_id() > block.first {
                     continue;
                 }
                 return Err(ProducerIdAllocationError::Controller(error.to_string()));
@@ -150,12 +169,8 @@ impl ProducerIdManager {
                 .broker_epoch(self.node_id)
                 .ok_or(ProducerIdAllocationError::BrokerNotRegistered(self.node_id))?;
             let block = allocate_block(controller, self.node_id, broker_epoch).await?;
-            let end = block
-                .first
-                .checked_add(i64::from(block.len))
-                .ok_or(ProducerIdAllocationError::Exhausted)?;
             self.next.store(block.first, Ordering::Release);
-            self.end_exclusive.store(end, Ordering::Release);
+            self.end_exclusive.store(block.next, Ordering::Release);
         }
     }
 
@@ -200,6 +215,37 @@ mod tests {
         for want in 0..3 {
             assert!(manager.allocate().await.unwrap() == (ProducerId(want), 0));
         }
+    }
+
+    #[test]
+    fn block_plan_adapter_fences_malformed_stale_and_limit_inputs() {
+        let broker = NodeId(7);
+        assert!(matches!(
+            plan_block(NodeId(u64::MAX), 3, Some(3), 0),
+            Err(ProducerIdAllocationError::BrokerNotRegistered(_))
+        ));
+        assert!(matches!(
+            plan_block(broker, 3, None, 0),
+            Err(ProducerIdAllocationError::BrokerNotRegistered(_))
+        ));
+        assert!(matches!(
+            plan_block(broker, 2, Some(3), 0),
+            Err(ProducerIdAllocationError::StaleBrokerEpoch { .. })
+        ));
+        assert!(matches!(
+            plan_block(broker, 3, Some(3), -1),
+            Err(ProducerIdAllocationError::InvalidFrontier { .. })
+        ));
+        assert!(matches!(
+            plan_block(broker, 3, Some(3), i64::MAX - 999),
+            Err(ProducerIdAllocationError::Exhausted)
+        ));
+        assert!(
+            plan_block(broker, 3, Some(3), i64::MAX - 1_000)
+                .is_ok_and(|block| block.first == i64::MAX - 1_000
+                    && block.len == 1_000
+                    && block.next == i64::MAX)
+        );
     }
 
     #[test]

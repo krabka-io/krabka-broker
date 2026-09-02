@@ -1,18 +1,28 @@
-//! `murmur2(transactional_id) % num_partitions`.
+//! `String.hashCode(transactional_id) % num_partitions`.
 //!
-//! This is Apache Kafka's `Utils.abs(murmur2(...)) % numPartitions`
-//! convention. It matches the JVM client, so a tid hashes to the same
-//! `__transaction_state` partition on Krabka as it does on Apache Kafka.
+//! Apache Kafka selects a transaction coordinator with Java's UTF-16
+//! `String.hashCode` and `Utils.abs`. This adapter delegates those operations
+//! and the partition modulo to the verified kernel.
 
-use crate::kafka_hash::murmur2_partition;
+/// Checked form of [`partition_for_tid`].
+///
+/// Returns `None` when `num_partitions` is not positive.
+#[must_use]
+pub fn try_partition_for_tid(transactional_id: &str, num_partitions: i32) -> Option<i32> {
+    let utf16: Vec<u16> = transactional_id.encode_utf16().collect();
+    krabka_verified::broker::java_string_hash_partition(&utf16, num_partitions)
+}
 
 /// Map a `transactional_id` to a partition index in `__transaction_state`.
 ///
-/// The function casts to `i32` and then takes `abs`, to match the JVM
-/// `Utils.abs(int)` semantics. Those semantics return 0 for
-/// `Integer.MIN_VALUE` to avoid arithmetic overflow.
+/// # Panics
+///
+/// Panics when `num_partitions` is not positive; broker configuration enforces
+/// that invariant.
+#[must_use]
 pub fn partition_for_tid(transactional_id: &str, num_partitions: i32) -> i32 {
-    murmur2_partition(transactional_id.as_bytes(), num_partitions)
+    try_partition_for_tid(transactional_id, num_partitions)
+        .expect("transaction state partition count must be positive")
 }
 
 #[cfg(test)]
@@ -21,12 +31,11 @@ mod tests {
 
     use super::*;
 
-    // Reference vectors generated from the canonical JVM implementation:
-    //   Utils.abs(Utils.murmur2(tid.getBytes(StandardCharsets.UTF_8))) % 50
-    // where Utils is org.apache.kafka.common.utils.Utils.
+    // Reference vectors generated from the JVM implementation:
+    //   Utils.abs(tid.hashCode()) % 50
     #[test]
     fn matches_jvm_for_canonical_tids() {
-        let cases: &[(&str, i32)] = &[("my-tid", 43), ("producer-1", 45), ("tx-orders-prod", 26)];
+        let cases: &[(&str, i32)] = &[("my-tid", 20), ("producer-1", 30), ("tx-orders-prod", 16)];
         for (tid, expected) in cases {
             assert!(
                 partition_for_tid(tid, 50) == *expected,
@@ -50,30 +59,26 @@ mod tests {
     }
 
     #[test]
-    fn min_value_input_does_not_break_bounds() {
-        // Sanity test verifying the i32::MIN guard in Utils.abs semantics.
-        // We can't easily construct a tid that murmur2's to exactly i32::MIN,
-        // but verify partition_for_tid never returns negative for a diverse set of inputs.
-        let long_repeated = "x".repeat(64);
-        let inputs: &[&str] = &[
-            "",
-            "a",
-            "tid",
-            "transactional-id-123",
-            &long_repeated,
-            "00000000",
-            "1111111111111111",
-            "deadbeef",
-            "very-long-string-that-might-trigger-edge-cases-in-murmur2-mixing",
-        ];
-        for s in inputs {
-            for num_partitions in [1, 3, 50, 256] {
-                let p = partition_for_tid(s, num_partitions);
-                assert!(
-                    (0..num_partitions).contains(&p),
-                    "tid={s:?}, num_partitions={num_partitions} produced p={p} (out of bounds)"
-                );
-            }
-        }
+    fn hashes_non_bmp_text_as_utf16() {
+        assert!(partition_for_tid("😀", 50) == 49);
+        assert!(partition_for_tid("a😀b", 50) == 44);
+    }
+
+    #[test]
+    fn signed_minimum_hash_maps_to_zero() {
+        // This Java String has hashCode() == Integer.MIN_VALUE.
+        assert!(partition_for_tid("polygenelubricants", 50) == 0);
+    }
+
+    #[test]
+    fn rejects_invalid_partition_counts_without_panicking() {
+        assert!(try_partition_for_tid("tid", 0) == None);
+        assert!(try_partition_for_tid("tid", -1) == None);
+    }
+
+    #[test]
+    fn exact_retry_is_deterministic() {
+        let first = partition_for_tid("retry-tid", 50);
+        assert!(partition_for_tid("retry-tid", 50) == first);
     }
 }

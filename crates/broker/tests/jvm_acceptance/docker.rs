@@ -47,6 +47,17 @@ pub(crate) const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka
 /// KIP-405 is GA.
 pub(crate) const KAFKA_IMAGE_TIERED: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.8.8";
 
+/// KIP-966 needs a `DescribeTopicPartitions` client and a `TopicCommand` that
+/// renders the `Elr:` / `LastKnownElr:` columns. Neither [`KAFKA_IMAGE`] (Kafka
+/// 2.7) nor [`KAFKA_IMAGE_TXN`] (Kafka 3.5) has either: their `kafka-topics`
+/// still describes topics through a `Metadata` fan-out, and Kafka's `Metadata`
+/// schema carries no ELR field in any version.
+/// `mirror.gcr.io/apache/kafka:4.3.1` is the same image
+/// `jvm_kip320_divergence` uses as a modern `AdminClient`, and it doubles as
+/// the JVM broker the ELR columns are compared against. Its tools are not on
+/// `PATH`; call them by their `/opt/kafka/bin` path.
+pub(crate) const KAFKA_IMAGE_ELR: &str = "mirror.gcr.io/apache/kafka:4.3.1";
+
 /// Verify TCP connectivity from inside a bridge-network container with
 /// `--add-host=host.docker.internal:host-gateway`.
 pub(crate) fn nc_check_connectivity() {

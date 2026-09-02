@@ -124,6 +124,32 @@ fn unsafe_metadata_downgrade_cleans_lossy_fields_before_version_record() {
 }
 
 #[test]
+fn rejected_lossy_downgrade_is_retryable_and_write_free() {
+    let image = image_with_directory(crate::features::METADATA_VERSION_MAX);
+    let target = krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1;
+    let request = validate_only(vec![metadata_update(target, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
+
+    for _ in 0..2 {
+        let (results, records) = validate_updates(&request, &image, VERSION);
+        assert!(results[0].error_code == codes::INVALID_UPDATE_VERSION);
+        assert!(
+            results[0]
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("lossy"))
+        );
+        assert!(records.is_empty());
+        assert!(
+            image
+                .partition("orders", 0)
+                .expect("unchanged partition")
+                .directories
+                == vec![uuid::Uuid::from_u128(0xD1)]
+        );
+    }
+}
+
+#[test]
 fn safe_metadata_downgrade_preserves_representable_directory_fields() {
     let image = image_with_directory(crate::features::METADATA_VERSION_MAX);
     let target = krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL;
