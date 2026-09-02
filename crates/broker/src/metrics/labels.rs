@@ -25,9 +25,22 @@ pub struct TopicLabel {
 }
 
 /// Per-partition label set, paired with the `partition_*` and `delivery_*`
-/// metric families. Consumed by the rebalancer's metric scraper. Cardinality is
-/// bounded by the number of partitions this broker hosts, because both fields
-/// come from the metadata image and never from client input.
+/// metric families. Consumed by the rebalancer's metric scraper.
+///
+/// The `metrics::eviction` watcher drops a partition's series once the image
+/// stops naming this broker in that partition's replica set, and drops every
+/// partition of a topic when that topic is deleted. Across the label sets an
+/// image named, cardinality is therefore bounded by the partitions the cluster
+/// holds now rather than by every partition this broker has ever seen: a
+/// misrouted request materialises a label for a partition this broker does not
+/// host, but that partition exists, and the topic going away releases it.
+///
+/// No such bound covers a label set no image ever named. Produce and fetch
+/// account for a request the broker rejected as well as one it served, so a
+/// client naming a topic or a partition index the image does not hold still
+/// materialises a series here, and the image diff has no record of it to
+/// release. Bounding that case needs eviction driven by series creation
+/// rather than by the image, which is issue #199.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct PartitionLabel {
     pub topic: String,

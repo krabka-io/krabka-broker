@@ -125,6 +125,15 @@ fn start_runtime_watchers(
         shutdown.child_token(),
     ));
     spawn_break_glass_gauges(config, controller, metrics, shutdown.child_token());
+    // Per-partition and per-topic series are created lazily by the data path
+    // and are not released by anything else, so the image watch that adds a
+    // partition is also what has to take its series away again.
+    crate::metrics::spawn_metric_series_evictor(
+        controller.watch_image(),
+        config.node_id,
+        metrics.clone(),
+        shutdown.child_token(),
+    );
     if config.txn_abort_cleanup_interval > <Time as TimeExt>::ZERO {
         tokio::spawn(crate::txn::expiration::run(
             Arc::clone(txn_coordinator),
