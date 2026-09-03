@@ -203,6 +203,14 @@ struct Engine {
     /// HWM at which the last checkpoint was written (and the log pruned to).
     /// Seeded from the recovered checkpoint on `open`.
     last_snapshot_end_offset: Offset,
+    /// The `last_contained_log_timestamp` the most recent checkpoint this node
+    /// wrote or installed was stamped with, seeded on `open` from the
+    /// recovered checkpoint's own header. It is the fallback for a snapshot
+    /// whose boundary has already been pruned away: the log below it is gone,
+    /// so the create-time of the last record it contains is only knowable from
+    /// the checkpoint that already named it, and a snapshot rewritten at an
+    /// unchanged boundary contains exactly the same last record.
+    last_snapshot_timestamp_ms: i64,
     /// `self.now()` (ms) at which the last checkpoint was written. Seeded to
     /// `0` on construction, which is `clock_base`'s own instant, so a
     /// restarted node measures the time-based cap from its own start rather

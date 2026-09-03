@@ -97,8 +97,8 @@ pub fn checkpoint_id_is_newer(candidate: (i64, i32), current: (i64, i32)) -> boo
 }
 
 /// Delete every `.checkpoint` in `dir` except the two newest
-/// `(end_offset, epoch)` ids, after a snapshot+prune or an install.
-/// Best-effort: read/remove errors are ignored.
+/// `(end_offset, epoch)` ids, after the controller's snapshot+prune or an
+/// install. Best-effort: read/remove errors are ignored.
 ///
 /// The previous checkpoint stays because a `FetchSnapshot` reader is chunking
 /// a snapshot id byte range by byte range: deleting the id it started on the
@@ -111,6 +111,25 @@ pub fn retain_recent_checkpoints(dir: &std::path::Path) {
     let Some((latest, previous)) = recent_checkpoint_ids(dir) else {
         return;
     };
+    retain_checkpoints(dir, latest, previous);
+}
+
+/// Delete every `.checkpoint` in `dir` except the latest `(end_offset, epoch)`.
+///
+/// This is the rule for a directory no peer fetches from — the broker
+/// observer's own resume store, which only its own restart reads — where the
+/// second copy [`retain_recent_checkpoints`] keeps for an in-flight
+/// `FetchSnapshot` reader would buy nothing.
+pub fn retain_latest_checkpoint(dir: &std::path::Path) {
+    let Some(latest) = latest_checkpoint_id(dir) else {
+        return;
+    };
+    retain_checkpoints(dir, latest, latest);
+}
+
+/// Delete every `.checkpoint` in `dir` outside the two retained ids. Passing
+/// one id as both keeps exactly that one.
+fn retain_checkpoints(dir: &std::path::Path, latest: (i64, i32), previous: (i64, i32)) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

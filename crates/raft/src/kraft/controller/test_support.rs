@@ -213,6 +213,7 @@ pub fn build_engine_only_with_policy(
             max_snapshot_interval: krabka_units::prelude::millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             last_snapshot_end_offset: Offset(0),
+            last_snapshot_timestamp_ms: 0,
             last_snapshot_at_ms: 0,
             bytes_since_snapshot: 0,
             downgrade_snapshot_pending: None,

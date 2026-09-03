@@ -13,9 +13,10 @@ use crate::kraft::controller::{
     },
     records::decode_control_record,
     test_support::{
-        await_leader, build_engine_only, build_with_max_bytes_between_snapshots,
-        build_with_snapshot_interval, elect_single_voter_engine, one_offset_batch,
-        submit_change_with_timeout, topic_record,
+        TEST_ELECTION_TIMEOUT, await_leader, build_engine_only,
+        build_with_max_bytes_between_snapshots, build_with_snapshot_interval,
+        elect_single_voter_engine, one_offset_batch, submit_change_with_timeout, topic_record,
+        voter_set,
     },
 };
 
@@ -23,6 +24,13 @@ use crate::kraft::controller::{
 /// `SnapshotHeaderRecord` is stamped with. The header is the first control
 /// batch of the artifact, so decoding it is how a reader — the JVM
 /// `kafka-dump-log --cluster-metadata-decoder` included — sees the value.
+fn latest_header_timestamp(checkpoint_dir: &std::path::Path) -> i64 {
+    let bytes = load_latest_checkpoint(checkpoint_dir)
+        .expect("scan checkpoints")
+        .expect("a checkpoint exists");
+    snapshot_header_timestamp(&bytes)
+}
+
 fn snapshot_header_timestamp(bytes: &[u8]) -> i64 {
     let mut cursor = bytes;
     let header = RecordBatch::decode(&mut cursor).expect("decode the header batch");
@@ -291,6 +299,100 @@ fn the_checkpoint_header_carries_the_last_contained_batch_create_time() {
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
     assert2::assert!(snapshot_header_timestamp(&bytes) == newer);
+}
+
+/// A checkpoint rewritten at a boundary the previous one already pruned to
+/// keeps that boundary's create-time. The prune moves the log start up to the
+/// boundary, so `hwm - 1` is no longer readable; the last record the snapshot
+/// contains has not changed, and reverting its header to the epoch would undo
+/// the stamp on disk. A time-cap fire on an idle log and an explicit trigger
+/// both land here.
+#[test]
+fn a_snapshot_at_an_already_pruned_boundary_keeps_the_header_timestamp() {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let stamp = 1_700_000_222_333;
+    let mut batch = one_offset_batch(0, 1, b"only");
+    engine.log.append(&mut batch, stamp).expect("append");
+    engine.log.advance_hwm(engine.log.log_end_offset());
+
+    let cp_dir = checkpoint_dir(dir.path());
+    let mut stamps = Vec::new();
+    engine.write_snapshot_and_prune().expect("first snapshot");
+    stamps.push(latest_header_timestamp(&cp_dir));
+    // Nothing committed in between, so both of these rewrite the same
+    // checkpoint id over the pruned boundary.
+    engine.write_snapshot_and_prune().expect("second snapshot");
+    stamps.push(latest_header_timestamp(&cp_dir));
+    engine.do_trigger_snapshot().expect("explicit trigger");
+    stamps.push(latest_header_timestamp(&cp_dir));
+
+    assert2::assert!(stamps == vec![stamp; 3]);
+}
+
+/// A follower that installed a snapshot has no log below the boundary either,
+/// so the create-time it carries forward comes from the installed artifact's
+/// own header — the one place the record's stamp still exists on this node.
+#[test]
+fn an_installed_snapshot_hands_its_header_timestamp_to_the_next_checkpoint() {
+    let (mut engine, dir) = build_engine_only(NodeId(2), &[NodeId(1), NodeId(2)]);
+    let stamp = 1_700_000_444_555;
+    let mut image = engine.image.clone();
+    image.apply(&MetadataRecord::V1Voters(VotersRecord {
+        voters: voter_set(&[NodeId(1), NodeId(2)]),
+    }));
+    let bytes = crate::snapshot::SnapshotWriter::serialize(&image, stamp).expect("serialize");
+
+    engine
+        .install_fetched_snapshot((7, 0), &bytes)
+        .expect("install the fetched snapshot");
+    engine
+        .do_trigger_snapshot()
+        .expect("checkpoint after install");
+
+    assert2::assert!(latest_header_timestamp(&checkpoint_dir(dir.path())) == stamp);
+}
+
+/// The same across a restart: the recovered checkpoint's header is the only
+/// surviving record of the create-time, and a checkpoint written before any
+/// new records commit must not drop it.
+#[tokio::test]
+async fn a_restart_recovers_the_header_timestamp_from_the_checkpoint() {
+    let stamp = 1_700_000_666_777;
+    // Snapshot and prune without an election, so the reopened controller's
+    // bootstrap epoch matches and its checkpoint lands on the same id.
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let mut batch = one_offset_batch(0, 0, b"restart");
+    engine.log.append(&mut batch, stamp).expect("append");
+    engine.log.advance_hwm(engine.log.log_end_offset());
+    engine
+        .write_snapshot_and_prune()
+        .expect("snapshot and prune");
+    let cp_dir = checkpoint_dir(dir.path());
+    assert2::assert!(latest_header_timestamp(&cp_dir) == stamp);
+    drop(engine);
+
+    let reopened = KraftController::open(
+        dir.path().to_path_buf(),
+        NodeId(1),
+        uuid::Uuid::nil(),
+        voter_set(&[NodeId(1)]),
+        TEST_ELECTION_TIMEOUT,
+        None,
+        ControllerFetchMissLimit::default(),
+        MetadataRaftCommandQueueCapacity::default(),
+        MetadataRaftFetchMax::default(),
+        Arc::new(crate::kraft::NullPeerSender),
+        0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
+        MetadataSnapshotFetchMax::default(),
+    )
+    .expect("reopen over the same data dir");
+    reopened.trigger_snapshot().await.expect("trigger snapshot");
+
+    assert2::assert!(latest_header_timestamp(&cp_dir) == stamp);
+    reopened.shutdown().await;
 }
 
 /// The same stamp end to end through the engine's own leader append path: a

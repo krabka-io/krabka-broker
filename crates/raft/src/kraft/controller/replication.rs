@@ -366,6 +366,10 @@ impl Engine {
         }
         self.log.install_snapshot(end_offset_pos)?;
         self.last_snapshot_end_offset = end_offset_pos;
+        // The records below the boundary arrive only as this artifact, so its
+        // header is the only source for the create-time of the last one a
+        // checkpoint rewritten at the same boundary would contain.
+        self.last_snapshot_timestamp_ms = contents.last_contained_log_timestamp;
         self.installed_snapshot_epoch = Some(
             u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
         );
