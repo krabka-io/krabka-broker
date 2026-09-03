@@ -53,6 +53,28 @@ BUILD_FILES = [
 # without touching a `.rs` file.
 BUILD_PREFIXES = ["bazel/", "packaging/", "tools/"]
 
+# Generated artifacts and example configs that live under `docs/` but are Rust
+# test inputs. `crates/broker/BUILD.bazel` names every one of them in the
+# `data` of its test targets, where `config_reference`, `docgen_contract`,
+# `example_broker_toml` and `metrics_contract` read them back and compare or
+# parse them against what the code produces.
+#
+# They have to be listed because the `crates/` rule below cannot see them, and
+# the `.md` carve-out would drop `config-reference.md` even if it could. What
+# makes the omission unsafe rather than merely slow is which job runs those
+# four suites: only `coverage` does, because the `ci` job's `test` step is
+# narrowed to `--test_tag_filters=timing-sensitive`. A schema edited here and
+# skipped here is a schema no Rust contract test ever checks -- and
+# `aspect generate-config-reference` would still pass, because it regenerates
+# the reference *from* the schema rather than checking the schema against
+# `FileConfig`.
+#
+# The two directories are whole prefixes rather than the seven exact files, so
+# that a file added to one of those `data` attributes is covered before anyone
+# remembers this list exists.
+DATA_FILES = ["docs/config-reference.md", "docs/config-schema.json"]
+DATA_PREFIXES = ["docs/examples/", "docs/operations/"]
+
 # Where the code is. Everything under it counts except documentation: a crate's
 # README and changelog are checked by their own tasks, which do not need a
 # compiler.
@@ -65,9 +87,9 @@ def touches_rust(paths):
         path = raw_path.strip().replace("\\", "/")
         if not path:
             continue
-        if path in BUILD_FILES:
+        if path in BUILD_FILES or path in DATA_FILES:
             return True
-        if starts_with_any(path, BUILD_PREFIXES):
+        if starts_with_any(path, BUILD_PREFIXES) or starts_with_any(path, DATA_PREFIXES):
             return True
         if path.startswith(SOURCE_PREFIX) and not path.endswith(DOC_SUFFIX):
             return True

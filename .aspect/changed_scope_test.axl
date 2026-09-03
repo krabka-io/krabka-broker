@@ -55,6 +55,36 @@ def _test_the_build_directories_need_the_rust_jobs(_ctx):
     check_eq("image", touches_rust(["packaging/base.apko.yaml"]), True)
     check_eq("toolchains", touches_rust(["tools/lint/linters.bzl"]), True)
 
+def _test_docs_that_are_rust_test_data_need_the_rust_jobs(_ctx):
+    # Every one of these is named in the `data` of a `//crates/broker` test
+    # target, and only `coverage` runs those suites -- the `ci` job's `test`
+    # step is narrowed to `--test_tag_filters=timing-sensitive`. Skipping
+    # `coverage` for them means no Rust contract test checks the edit at all.
+    check_eq("config schema", touches_rust(["docs/config-schema.json"]), True)
+    check_eq("config reference", touches_rust(["docs/config-reference.md"]), True)
+    check_eq(
+        "example config",
+        touches_rust(["docs/examples/broker-single-node.toml"]),
+        True,
+    )
+    check_eq(
+        "metrics contract",
+        touches_rust(["docs/operations/metrics-body.txt"]),
+        True,
+    )
+    check_eq(
+        "alert rules",
+        touches_rust(["docs/operations/alert-rules.yaml"]),
+        True,
+    )
+
+def _test_ordinary_docs_still_do_not_need_the_rust_jobs(_ctx):
+    # The carve-out has to stay narrow, or the gate stops paying for itself: a
+    # design doc, a KFC and a style guide reach no test's `data`.
+    check_eq("design doc", touches_rust(["docs/design/raft.md"]), False)
+    check_eq("kfc", touches_rust(["docs/KFCs/KFC-1-deliver-at-time.md"]), False)
+    check_eq("kip matrix", touches_rust(["docs/KIP_MATRIX.md"]), False)
+
 def _test_a_crate_readme_alone_does_not_need_the_rust_jobs(_ctx):
     # The carve-out that makes the common documentation pull request cheap.
     # `check-crate-readmes` and `check-crate-changelogs` still gate these.
@@ -97,6 +127,8 @@ changed_scope_tests = suite("changed-scope", [
     _test_the_workspace_manifest_and_lock_need_the_rust_jobs,
     _test_the_bazel_module_and_bazelrc_need_the_rust_jobs,
     _test_the_pinned_toolchains_and_their_config_need_the_rust_jobs,
+    _test_docs_that_are_rust_test_data_need_the_rust_jobs,
+    _test_ordinary_docs_still_do_not_need_the_rust_jobs,
     _test_the_build_directories_need_the_rust_jobs,
     _test_a_crate_readme_alone_does_not_need_the_rust_jobs,
     _test_a_crate_readme_beside_a_source_still_needs_the_rust_jobs,
