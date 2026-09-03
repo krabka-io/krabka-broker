@@ -180,6 +180,22 @@ pub(crate) fn consume_records(
     timeout_ms: u64,
     bootstrap_host_port: &str,
 ) -> usize {
+    consume_record_values(topic, max, timeout_ms, bootstrap_host_port).len()
+}
+
+/// [`consume_records`], returning the record values the consumer printed
+/// rather than only how many there were.
+///
+/// A caller that has to say *which* records came back -- the restore case,
+/// which reads a rebuilt cluster and must find the archive's oldest record at
+/// the front -- needs the lines themselves. `kafka-console-consumer` prints
+/// one record value per line with the default formatter.
+pub(crate) fn consume_record_values(
+    topic: &str,
+    max: usize,
+    timeout_ms: u64,
+    bootstrap_host_port: &str,
+) -> Vec<String> {
     let consumer_out = docker_run_kafka_tool_with_image(
         KAFKA_IMAGE_TIERED,
         &[
@@ -198,5 +214,9 @@ pub(crate) fn consume_records(
         ],
     );
     let stdout = String::from_utf8_lossy(&consumer_out.stdout);
-    stdout.lines().filter(|l| !l.trim().is_empty()).count()
+    stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+        .collect()
 }

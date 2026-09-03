@@ -167,6 +167,14 @@ krabka-raft = { version = "0.5.4", path = "../raft", features = ["scenarios"] }
 # binary: the formatting is setup, not the thing under test, and a subprocess
 # would need a Cargo working tree, which a Bazel test sandbox does not have.
 krabka-format = { version = "0.5.4", path = "../format" }
+# `jvm_acceptance_tiered`'s restore case rebuilds a log directory from the
+# MinIO bucket this crate's own tiered-storage path filled, then boots a broker
+# on it and points the JVM console consumer at that. Called in process for the
+# same reason `krabka-format` is. The two crates dev-depend on each other --
+# `krabka-restore` boots a broker to read its output back -- which Cargo and
+# `//bazel:defs.bzl` both allow, because a library and its test binaries are
+# separate compilations and neither library depends on the other.
+krabka-restore = { version = "0.5.4", path = "../restore" }
 # Drives the relocated `client_admin_*` suites, which boot an in-process
 # broker to exercise the admin client end to end.
 krabka-client-admin = { version = "0.4" }
