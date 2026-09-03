@@ -85,19 +85,22 @@ test:docker --test_tag_filters=docker
 #
 #     bazel build --config=rbe //...
 #
-# NOTHING IN CI PASSES THIS YET, and the reason is not the configuration.
-# Run 33719593644 wired it onto `lint` and every layer worked: the config
-# resolved, toolchain resolution picked the hermetic toolchain for the remote
-# platform, and Bazel uploaded action inputs and scheduled 100 actions. The
+# `ci` passes it on `lint`, `build` and `docgen`, and the `coverage` job passes
+# it wholesale. Deliberately not `test` or `stateright models` -- see those
+# steps in the workflow for why.
+#
+# It did not work on the first attempt, and the failure is worth recording
+# because none of it was configuration. On run 33719593644 the config resolved,
+# toolchain resolution picked the hermetic toolchain for the remote platform,
+# and Bazel uploaded action inputs and scheduled a hundred actions. The
 # scheduler then refused them:
 #
 #     UNAVAILABLE: Error scheduling execution task:
 #     No registered executors in pool "" with os "linux" with arch "amd64"
 #
-# The account has a remote *cache* but no executors behind it. That is an
-# account-provisioning question rather than a build one, so the flags stay here,
-# verified as far as they can be, and the `--config=rbe` that CI would pass is
-# not written until there is something to execute on.
+# The account had a remote cache and nothing behind it to execute on. Executors
+# were enabled afterwards. If that error ever comes back, it is the pool that is
+# empty, not this file that is wrong.
 #
 # The execution platform is the one the `llvm` module already publishes rather
 # than a hand-written copy, and that is load-bearing: it carries
