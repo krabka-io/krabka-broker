@@ -70,6 +70,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-verified` | Formally verified pure kernels shared by consensus and log. |
 | `krabka-telemetry` | OTLP pipeline, metrics registry, and the debug/pprof routes. |
 | `krabka-logfmt` | logfmt encoder for structured logs. |
+| `krabka-parse-benches` | Parses Criterion benchmark output into structured JSON summaries. |
 
 Rustdoc for every crate is published at
 [krabka-io.github.io/krabka-broker](https://krabka-io.github.io/krabka-broker/)

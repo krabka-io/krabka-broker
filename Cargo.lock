@@ -3112,6 +3112,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "krabka-parse-benches"
+version = "0.5.4"
+dependencies = [
+ "assert2",
+ "clap",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
 name = "krabka-protocol"
 version = "0.4.0"
 source = "git+https://github.com/krabka-io/krabka-protocol?rev=141a660b1324d8dea57a35c4447e2d7c437ab927#141a660b1324d8dea57a35c4447e2d7c437ab927"
