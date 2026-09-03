@@ -207,10 +207,12 @@ public final class TransactionalProducer {
 ///   `retention.ms=-1`, `segment.bytes=52428800`).
 /// - a time-windowed `count()` with the record cache disabled, so every
 ///   update is forwarded rather than the last per key per commit interval,
-///   and with no `Materialized` name, so the store name
-///   is the generated `KSTREAM-AGGREGATE-STATE-STORE-<n>` and the changelog
-///   is created with `WindowedChangelogTopicConfig`'s
-///   `cleanup.policy=compact,delete`.
+///   and with the window store named `krabka-counts` -- the name
+///   `jvm_streams_app`'s `WINDOW_STORE_NAME` looks for -- so the changelog is
+///   `<application.id>-krabka-counts-changelog`, created with
+///   `WindowedChangelogTopicConfig`'s `cleanup.policy=compact,delete`. An
+///   unnamed store would be `KSTREAM-AGGREGATE-STATE-STORE-<n>`; this one is
+///   named because it has to be asked for in memory.
 /// - `processing.guarantee=exactly_once_v2`, so the single stream thread runs
 ///   one transactional producer and every sink and changelog write is inside
 ///   a transaction the consumer only sees under `read_committed`.

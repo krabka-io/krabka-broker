@@ -539,39 +539,41 @@ async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
     broker.shutdown().await;
 }
 
-/// Wait until the cluster finalizes `transaction.version` at level 2, and fail
-/// if it never does.
+/// Fail unless the cluster finalized `transaction.version` at level 2.
 ///
-/// The bootstrap `FeatureLevelRecord`s are committed by the controller and
-/// reach the broker through the metadata image, so a client that connects in
-/// the same millisecond as `Broker::start` returns can be answered an
-/// `ApiVersions` whose `finalized_features` is still empty. That is a race
-/// against the bootstrap batch, not a statement about the cluster's level, so
-/// the precondition polls the surface the JVM client reads rather than
-/// sampling it once. A cluster that really is below `TV_2` still fails here,
-/// with the level it stopped at.
+/// The request carries `client_software_name` / `client_software_version`
+/// because the broker validates them from `ApiVersions` v3 upwards, as Kafka's
+/// own handler does: a v3+ request with either field empty is answered
+/// `INVALID_REQUEST` and a response whose every other field is default. Read
+/// without checking `error_code`, that refusal is indistinguishable from a
+/// cluster that finalized nothing, which is what an earlier version of this
+/// check misread -- the levels are there, and were the whole time.
 async fn assert_transaction_version_2(admin: &Client) {
-    let deadline = Instant::now() + SETTLE_DEADLINE;
-    loop {
-        let features = admin
-            .send(ApiVersionsRequest::default())
-            .await
-            .expect("ApiVersions")
-            .finalized_features;
-        let level = features
-            .iter()
-            .find(|feature| feature.name == "transaction.version")
-            .map(|feature| feature.max_version_level);
-        if level == Some(2) {
-            return;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "this case is only meaningful at transaction.version=2, and the \
-             cluster finalized {level:?}: {features:?}",
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let response = admin
+        .send(ApiVersionsRequest {
+            client_software_name: "krabka-tv2-acceptance".into(),
+            client_software_version: env!("CARGO_PKG_VERSION").into(),
+            ..Default::default()
+        })
+        .await
+        .expect("ApiVersions");
+    assert!(
+        response.error_code == 0,
+        "ApiVersions was refused with error {}; the feature levels below say \
+         nothing until it is accepted",
+        response.error_code,
+    );
+    let level = response
+        .finalized_features
+        .iter()
+        .find(|feature| feature.name == "transaction.version")
+        .map(|feature| feature.max_version_level);
+    assert!(
+        level == Some(2),
+        "this case is only meaningful at transaction.version=2, and the \
+         cluster finalized {level:?}: {:?}",
+        response.finalized_features,
+    );
 }
 
 /// Compile [`TRANSACTIONAL_PRODUCER_JAVA`] against the Kafka client jars in

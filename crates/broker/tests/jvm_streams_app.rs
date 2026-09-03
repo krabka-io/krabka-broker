@@ -35,7 +35,7 @@
 //! | topic | configs |
 //! | --- | --- |
 //! | `<app>-shuffle-repartition` | `cleanup.policy=delete`, `retention.ms=-1`, `message.timestamp.type=CreateTime` |
-//! | `<app>-KSTREAM-AGGREGATE-STATE-STORE-<n>-changelog` | `cleanup.policy=compact,delete`, `message.timestamp.type=CreateTime` |
+//! | `<app>-krabka-counts-changelog` | `cleanup.policy=compact,delete`, `message.timestamp.type=CreateTime` |
 //!
 //! Networking is the `jvm_acceptance` harness's: the broker binds an allocated
 //! port on `0.0.0.0` and advertises `host.docker.internal:<port>`, which the
@@ -78,6 +78,12 @@ const CP_APACHE: &str = r"$(ls /opt/kafka/libs/*.jar | tr '\n' ':')";
 /// window). A windowed `count()` with no suppression and the record cache
 /// disabled emits the running count on every update, so the sink holds one
 /// record per input record.
+/// The window store the topology names in its `Materialized`, and so the
+/// middle of its changelog topic's name. It is named because the topology asks
+/// for an in-memory store; an unnamed one would be
+/// `KSTREAM-AGGREGATE-STATE-STORE-<n>`.
+const WINDOW_STORE_NAME: &str = "krabka-counts";
+
 const EXPECTED_SINK: [&str; 5] = ["alpha:1", "alpha:2", "beta:1", "alpha:3", "beta:2"];
 
 /// The JVM linkage failures that mean the Kafka-3.5-compiled class cannot run
@@ -350,9 +356,12 @@ fn assert_streams_run(bootstrap: &str, application_id: &str, output_topic: &str)
     let topics = list_topics(bootstrap);
     let repartition_topic = format!("{application_id}-shuffle-repartition");
     let repartition = only_topic(&topics, "repartition", |name| name == repartition_topic);
+    // `<app>-<store>-changelog`, where the store is the one the topology names
+    // in its `Materialized`. Streams generates a
+    // `KSTREAM-AGGREGATE-STATE-STORE-<n>` name only for an unnamed store, and
+    // this topology names its window store so it can ask for an in-memory one.
     let changelog = only_topic(&topics, "aggregate-store changelog", |name| {
-        name.starts_with(&format!("{application_id}-KSTREAM-AGGREGATE-STATE-STORE-"))
-            && name.ends_with("-changelog")
+        name == format!("{application_id}-{WINDOW_STORE_NAME}-changelog")
     });
 
     // `RepartitionTopicConfig`: `cleanup.policy=delete`, `retention.ms=-1`
