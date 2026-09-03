@@ -105,38 +105,36 @@ test:docker --test_tag_filters=docker
 # `--config=rbe` to resolve, and this is the least it can be.
 build:rbe --remote_timeout=600
 
-# Cargo build scripts stay on the runner. Everything they produce -- a C
-# archive from `cc`, a generated source file -- is addressed through `OUT_DIR`,
-# which rules_rs sets to an absolute path under the running action's working
-# directory. Whatever a crate then bakes into its rlib carries that path.
+# `--config=rbe` is on the `lint` step alone, and that is a finding rather
+# than caution. rustc *codegen* actions cannot currently execute on a
+# BuildBuddy executor at all:
 #
-# rules_rs scans every rustc codegen output for the *compile* action's working
-# directory (`rust/private/rustc.bzl` passes `--check-output-for-working-dir`;
-# `util/process_wrapper/main.rs` runs the scan) and fails the build on a match:
-#
-#     compiled Rust output ...libring-*.rlib embeds the absolute working
+#     compiled Rust output ...libcodspeed-*.rlib embeds the absolute working
 #     directory /buildbuddy-execroot
 #
-# The two actions are what make this remote-only. The scan never fires on a
-# local build, so the path cannot be coming from the compile's own `OUT_DIR` --
-# that is `${pwd}` of the same action and would match every time. It comes from
-# the build script, and locally Bazel gives the two actions different sandbox
-# directories, so the string one baked in is not the string the other is
-# checked against. A BuildBuddy executor runs every action in one fixed
-# `/buildbuddy-execroot`; the two collapse into one string and the scan fires.
+# rules_rs scans every rustc codegen output for the action's own working
+# directory (`rust/private/rustc.bzl` passes `--check-output-for-working-dir`;
+# `util/process_wrapper/main.rs` runs the scan) and fails the build on a match.
+# The scan never fires locally, where each sandboxed action gets its own
+# `.../sandbox/linux-sandbox/<n>/execroot/_main`; every action on an executor
+# shares one fixed `/buildbuddy-execroot`.
 #
-# So keep the build scripts local and the two paths stay different, which is
-# the state every local build is already in. `ring` and `codspeed` are the two
-# seen so far and they would not have been the last: any crate whose build
-# script emits something the compile bakes in hits this.
+# Pinning the Cargo build scripts to the runner was tried on the theory that
+# the path arrived from a second action, and it did not help -- `codspeed`
+# failed identically with `CargoBuildScriptRun` local. So where the path comes
+# from is still unestablished, and it is not one crate: run 33723594983 logged
+# `2542 remote cache hit ... 2 remote`, meaning nearly everything was served
+# from the cache `main` built locally and `codspeed` failed because it was one
+# of the two actions that genuinely ran. Every codegen action that executes
+# remotely is exposed; the warm cache is what hides it.
 #
-# The compiles themselves -- which is where the time is -- still run remotely.
-# A build script run is short, and its result is cached like anything else.
-# `--strategy` takes the mnemonic directly. Not `--strategy_regexp`: the only
-# regex that identifies these actions is their progress message, "Running Cargo
-# build script", and a `.bazelrc` line is tokenised on whitespace, so that
-# spelling arrives as four separate options and Bazel rejects the first.
-build:rbe --strategy=CargoBuildScriptRun=sandboxed
+# `lint` is unaffected for a structural reason, not by luck: the clippy aspect
+# emits metadata and no object code, and rustc.bzl skips the scan for those
+# ("RustcMetadata has separate arguments and no object code"). It is also where
+# the win was -- 10m6s locally, 52.5s here -- so this keeps the measured
+# benefit and drops the part that cannot work yet. Fixing the rest belongs
+# upstream in rules_rs, which should not compare an output against a needle
+# that a fixed remote execroot makes trivially collidable.
 
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.

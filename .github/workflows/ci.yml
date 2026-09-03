@@ -85,10 +85,11 @@ jobs:
       - name: lint
         run: aspect lint --bazel-flag=--config=rbe
 
+      # No `--config=rbe`: this compiles, and rustc codegen actions cannot
+      # currently execute on the remote. See the `build:rbe` block in .bazelrc.
       - name: build
         run: |
           aspect build \
-            --bazel-flag=--config=rbe \
             --bazel-flag=--build_tag_filters=-docker \
             //...
 
@@ -112,7 +113,7 @@ jobs:
       # `aspect build` renders docs for impacted crates. Build the complete set
       # here for the artifact, reusing this runner's Bazel output tree.
       - name: docgen
-        run: bazel build --config=rbe $(bazel query 'kind("rust_doc rule", //crates/...)')
+        run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
       - uses: actions/upload-artifact@v7
         with:
           name: rustdoc
@@ -213,7 +214,7 @@ jobs:
           upload: ${{ github.event_name != 'pull_request' }}
 
       - name: coverage
-        run: bazel coverage --config=rbe //crates/...
+        run: bazel coverage //crates/...
 
       # `if: always()`, and the three directories by name: when this job does
       # run the disk out, the failure arrives as a linker `Bus error` or a bare
