@@ -29,8 +29,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: docker/login-action@v4
         with:

@@ -42,8 +42,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       # The same query `ci.yml`'s docgen step runs, so the two never disagree
       # about which crates have documentation.

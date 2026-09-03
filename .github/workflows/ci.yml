@@ -55,10 +55,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          # Share the one output tree across format, lint, build and docgen,
-          # and restore it in the `coverage` and `delivery` jobs.
-          disk-cache: ${{ github.workflow }}
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
       # and `info` off it -- so this gates here and only reports locally.
@@ -120,33 +125,31 @@ jobs:
   # but still builds it. Those 22 plus the 5 timing-sensitive suites are 27
   # instrumented broker binaries this job would otherwise link and discard.
   #
-  # It takes no `--disk_cache`, which is the whole of the disk budget fix. That
-  # cache was the job's largest consumer by a wide margin: on run 33567157672
-  # `~/.cache/bazel-disk` held 61 GB next to a 19 GB output tree, and the job
-  # ended with 33 GB free on a 145 GB disk. About 19 GB of the 61 is what this
-  # build wrote into it -- run 33569559769 restored a 1.2 GB entry and still
-  # finished with 22 GB there -- and none of those writes has a reader. The
-  # `build · lint · format · docgen` job never looks up an instrumented action,
-  # and the key hashes `MODULE.bazel` and every `BUILD.bazel`, so the next
-  # coverage run asks for a different one.
+  # This job used to carry `disk-cache: false`, alone among the Bazel jobs, and
+  # the reason is worth keeping because it is what the remote cache fixes. The
+  # disk cache was this job's largest consumer by a wide margin: on run
+  # 33567157672 `~/.cache/bazel-disk` held 61 GB next to a 19 GB output tree and
+  # the job ended with 33 GB free on a 145 GB disk. None of those writes had a
+  # reader -- the `ci` job never looks up an instrumented action, and the key
+  # hashes `MODULE.bazel` and every `BUILD.bazel`, so the next coverage run
+  # asked for a different one. Nor did they stay on the runner: setup-aspect's
+  # post step saves on a miss, so run 33569559769 saved a 22 GB instrumented
+  # tree under the `ci` namespace that two other jobs then restored and could
+  # not use. That is the growth #337 measured. Turning the cache off was the
+  # only lever Bazel 9 offered, because `--noremote_upload_local_results` and
+  # the `no-remote-cache` tags are defined against remote caches and leave
+  # `--disk_cache` writable. The price was the third-party closure, compiled
+  # rather than restored: about 17 minutes rather than about 7.5.
   #
-  # Nor do the writes stay on the runner. That same key misses whenever a
-  # `BUILD.bazel` changes, and setup-aspect's post step saves on a miss: run
-  # 33569559769 saved a 22 GB instrumented tree under the `ci` namespace, which
-  # `build · lint · format · docgen` and `delivery` then restore and cannot use.
-  # That is the growth #337 measured, and it is why the paragraph this replaces
-  # -- "a restore is an exact hit and the post step skips the save" -- was wrong.
-  #
-  # Bazel 9 has no read-only disk cache to reach for instead:
-  # `--noremote_upload_local_results` and the `no-remote-cache` and
-  # `no-remote-cache-upload` execution tags are defined against remote caches
-  # and leave `--disk_cache` writable (measured on 9.2.0). Not having one is the
-  # only way not to write one.
-  #
-  # The price is the third-party closure, which this job now compiles instead of
-  # restoring: about 17 minutes rather than about 7.5, beside a sibling job that
-  # takes 14 to 21. `repository-cache` stays -- it holds fetched archives rather
-  # than build outputs, so coverage neither bloats it nor diverges from `ci`.
+  # A remote cache has neither problem. Instrumented actions key under their own
+  # digests on the server, so they cost this runner no disk at all and cannot
+  # collide with the uninstrumented namespace; there is nothing to evict, and
+  # nothing to save on the way out. The `disk-cache` inputs are gone from every
+  # job for the same reason -- they shared one 10 GB repository-wide GitHub
+  # Actions quota across seven namespaces, which is why an "exact cache hit on
+  # restore" still executed 2520 actions on run 33693850747's container jobs.
+  # `bazelisk-cache` and `repository-cache` stay: they hold fetched archives
+  # rather than build outputs, and they are small.
   #
   # On a pull request this job is gated on the change touching Rust or build
   # inputs: `aspect changed-scope`, read through `select`, says so, and a
@@ -173,8 +176,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: false
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       - name: coverage
         run: bazel coverage //crates/...
@@ -235,6 +245,13 @@ jobs:
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       # Every check and generator this repository runs on a runner is an AXL task
       # under `.aspect/`, and this step is their unit tests. It is also where the
@@ -340,6 +357,13 @@ jobs:
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       # The proved-package list and what the proof image actually proves cannot
       # drift apart. This ran inside the image until the checks moved to AXL
@@ -382,11 +406,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          # Reached only when the registry has no image for this tree, so this
-          # namespace is a bonus on the apko base and the repository rules, not
-          # what keeps the Creusot installation from being rebuilt.
-          disk-cache: ${{ github.workflow }}-images
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       # `--verbose_failures`: the toolchain layer is built by a genrule that
       # shells out to Docker, and when it fails Bazel otherwise reports only
@@ -461,8 +489,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-docker
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       - id: select
         run: |
@@ -505,8 +540,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-docker
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
 
       # The host side of these suites reaches the broker over loopback, but a few
       # host-side Rust clients bootstrap through the advertised name, so it has to
@@ -578,8 +620,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-images
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
       - name: load KDC image
         run: bazel run //crates/broker/tests/fixtures/security/kdc:image_load
@@ -623,8 +672,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io

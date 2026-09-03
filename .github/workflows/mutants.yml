@@ -32,8 +32,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-prepare
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
       - id: prepare
         env:
           CRATE: ${{ inputs.crate }}
@@ -69,8 +76,15 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ inputs.crate }}
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
       - run: |
           aspect mutants-shard \
             --target '${{ needs.prepare.outputs.target }}' \

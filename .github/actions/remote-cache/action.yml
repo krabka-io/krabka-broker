@@ -1,0 +1,87 @@
+name: point Bazel at the remote cache
+description: Write the BuildBuddy configuration into user.bazelrc, when this run holds a key for it.
+
+# The flags go in `user.bazelrc` rather than `.bazelrc` for three reasons, and
+# the first is the one BuildBuddy's own documentation gives for open source
+# repositories: `.bazelrc` cannot interpolate an environment variable, so a key
+# written there is a key committed. `.bazelrc` already ends with
+# `try-import %workspace%/user.bazelrc`, and `.gitignore` already ignores that
+# file, so the hook this needs was there before the cache was.
+#
+# Second, a pull request from a fork sees no secrets. This step then writes
+# nothing, `try-import` finds nothing, and Bazel builds exactly as it does
+# today -- no `if:` guard on any job, and no failure that has to be explained
+# to a first-time contributor. The same path covers the window before the
+# secret exists at all.
+#
+# Third, a developer's own `user.bazelrc` is untouched off CI.
+#
+# A wrong or expired key is deliberately left to fail loudly rather than fall
+# back to a local build. A cache that silently stops working looks exactly like
+# a cache that is working badly, and the whole point of this is to be able to
+# measure it.
+
+inputs:
+  api-key:
+    description: >-
+      The BuildBuddy API key. Empty on a fork, whose pull requests cannot read
+      secrets, and empty until the secret is added -- both mean "build locally".
+    required: false
+    default: ""
+  upload:
+    description: >-
+      Whether this run may write to the cache. Only pushes to `main` should:
+      a pull request reads the third-party closure and every unchanged crate,
+      which is the bulk of the win, and cannot poison an entry it never writes.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        API_KEY: ${{ inputs.api-key }}
+        UPLOAD: ${{ inputs.upload }}
+      run: |
+        set -euo pipefail
+        if [ -z "${API_KEY}" ]; then
+          echo "No BuildBuddy key on this run: Bazel will build locally."
+          exit 0
+        fi
+
+        # `>` and not `>>`: the runner's checkout is fresh, but a re-run on a
+        # warm self-hosted box must not accumulate duplicate blocks.
+        {
+          echo "# Written by .github/actions/remote-cache. Not for committing."
+          echo "build --remote_cache=grpcs://remote.buildbuddy.io"
+          echo "build --bes_backend=grpcs://remote.buildbuddy.io"
+          echo "build --bes_results_url=https://app.buildbuddy.io/invocation/"
+          # `test` and `coverage` inherit `build`, so one block covers the
+          # `bazel test`, `bazel coverage` and `aspect build` invocations alike.
+          echo "build --remote_header=x-buildbuddy-api-key=${API_KEY}"
+          # Ten minutes: the broker's link actions are large, and the default
+          # 60s times out on the first cold upload of one.
+          echo "build --remote_timeout=600"
+          # Already the Bazel 9.2 default, and pinned anyway because the free
+          # tier bills cache *transfer*: `toplevel` keeps intermediate rlibs on
+          # the server and downloads only what a test or a push actually runs.
+          # A future default of `all` would multiply this repository's transfer
+          # without anything else changing.
+          echo "build --remote_download_outputs=toplevel"
+          # The 9.2 name. `--experimental_remote_cache_async` still resolves to
+          # it, but only as a deprecated alias.
+          echo "build --remote_cache_async"
+        } >user.bazelrc
+
+        if [ "${UPLOAD}" != "true" ]; then
+          echo "build --noremote_upload_local_results" >>user.bazelrc
+        fi
+
+        # The key is the one line that must not reach the log. Everything else
+        # is worth showing, because "is the cache configured" is the first
+        # question anyone debugging a slow run will ask.
+        echo "::group::user.bazelrc"
+        grep -v remote_header user.bazelrc
+        echo "::endgroup::"
+        echo "uploads enabled: ${UPLOAD}"
