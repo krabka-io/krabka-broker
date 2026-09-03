@@ -318,7 +318,11 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
     assert!(
         outcome.log_start
             == Some(Offset(
-                pre.iter().map(|md| md.end_offset()).max().unwrap() + 1
+                pre.iter()
+                    .map(RemoteLogSegmentMetadata::end_offset)
+                    .max()
+                    .unwrap()
+                    + 1
             ))
     );
 
