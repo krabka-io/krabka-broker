@@ -27,6 +27,9 @@ A partition lives in `<log_dir>/<topic>-<partition>/`, named by [`name.rs`](../s
 | `<base>.snapshot` | Producer state at the segment boundary, in Kafka's snapshot format. | [`producer_snapshot.rs`](../src/producer_snapshot.rs) |
 | `<base>.stampindex` | Krabka-private commit-stamp sidecar, present only when a stamp source is injected. | [`stamp_index.rs`](../src/stamp_index.rs) |
 | `.leader-epoch-checkpoint` | Per-partition two-column text file of `(epoch, start_offset)`. | [`leader_epoch_checkpoint.rs`](../src/leader_epoch_checkpoint.rs) |
+| `log-start-offset-checkpoint` | The log start offset, when the segment names alone cannot express it. | [`log_start_offset_checkpoint.rs`](../src/log_start_offset_checkpoint.rs) |
+
+Kafka keeps the log start offset per log dir, keyed by partition, and writes it on a `log.flush.start.offset.checkpoint.interval.ms` schedule; krabka keeps it per partition directory, which needs no key inside the file, and writes it on the trim itself.
 
 The `.stampindex` sidecar is the one file Kafka does not have. It never changes the `.log` bytes, offset assignment, the LSO, or the high watermark, and nothing on any client-facing API reads it.
 
@@ -50,7 +53,7 @@ Producer state comes back from the newest `.snapshot` at or below the log end, c
 
 ### Truncation and trimming
 
-[`log/truncate.rs`](../src/log/truncate.rs) has two operations. `truncate_to` discards every record at or past an offset, cuts the leader-epoch checkpoint and the producer snapshots that begin at or after it, and is what replication and leader election use after a divergence. `trim_to_offset` moves the log start forward: it deletes every sealed segment whose last offset is below the target and, when the target falls inside the active segment, advances an in-memory start override without deleting the file. `reset_to` empties the log at a new base offset, which a follower needs when it has fallen below the leader's log start.
+[`log/truncate.rs`](../src/log/truncate.rs) has two operations. `truncate_to` discards every record at or past an offset, cuts the leader-epoch checkpoint and the producer snapshots that begin at or after it, and is what replication and leader election use after a divergence. `trim_to_offset` moves the log start forward: it deletes every sealed segment whose last offset is below the target and, when the target falls inside the active segment, advances a start override without deleting the file. Segment deletion is its own witness across a restart, but the override is not, so `set_log_start_offset` checkpoints it to `log-start-offset-checkpoint` and `Log::open` reads it back clamped to the offsets the log actually holds. Without that a reopened log serves records a `DeleteRecords` already deleted. `reset_to` empties the log at a new base offset, which a follower needs when it has fallen below the leader's log start.
 
 ### Retention and compaction
 

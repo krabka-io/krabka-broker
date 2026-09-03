@@ -20,6 +20,16 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
+- A `DeleteRecords` trim now survives a broker restart even when it lands inside
+  the active segment. Segment deletion records a trim that reaches a segment
+  boundary, but the remainder used to live only in memory, so a restart served
+  the deleted records again and `ListOffsets EARLIEST` moved back down. Every
+  `krabka_log::Log` now checkpoints its log start to a
+  `log-start-offset-checkpoint` file in the partition directory and reads it
+  back on open, clamped to the offsets the log actually holds. Apache Kafka
+  keeps the same value per log dir on a 60-second schedule; krabka writes it on
+  the trim itself. The metadata log's private copy of this checkpoint is gone in
+  favour of the shared one.
 - A broker-only node no longer stalls forever after a restart once the
   controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
   observer metadata fetch now answers a pruned fetch offset with the KIP-630
