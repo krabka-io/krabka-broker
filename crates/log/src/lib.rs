@@ -100,6 +100,7 @@ mod index;
 mod io;
 mod leader_epoch_checkpoint;
 mod log;
+mod log_start_offset_checkpoint;
 pub mod name;
 mod producer_snapshot;
 mod recovery;

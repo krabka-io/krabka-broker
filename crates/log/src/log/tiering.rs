@@ -155,8 +155,10 @@ impl Log {
         }
 
         // Advance the (single) log-start pointer. `local_log_start_offset`
-        // delegates here, so the local floor moves in lockstep.
-        self.start_offset_override = Some(target);
+        // delegates here, so the local floor moves in lockstep, and the
+        // checkpoint `set_log_start_offset` writes keeps the deleted local
+        // prefix deleted across a restart.
+        self.set_log_start_offset(target)?;
 
         Ok(removed)
     }

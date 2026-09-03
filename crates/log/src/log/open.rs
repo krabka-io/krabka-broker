@@ -28,7 +28,7 @@ use crate::{
     error::LogError,
     io::FileIo,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
-    name,
+    log_start_offset_checkpoint, name,
     producer_snapshot::{self, ProducerSnapshotEntry},
     segment::Segment,
     txn_index::TxnIndex,
@@ -167,10 +167,37 @@ impl Log {
             delivery_watermark: Offset(0),
             delivery_pending_ms: None,
         };
+        // Producer-state replay walks whole batches, so it must start from the
+        // segment-derived floor, which is always a batch boundary. Restoring
+        // the checkpoint first would start it mid-batch on a trim that landed
+        // inside one.
+        log.rebuild_producer_and_transaction_state()?;
+        // Restore a log start that the segment names cannot express: a trim
+        // that landed inside a segment left its records on disk, and only the
+        // checkpoint says they are gone.
+        if let Some(checkpointed) = log_start_offset_checkpoint::read(&log.dir)? {
+            // Clamp into `[derived_start, log_end]`. Below the derived start
+            // the deleted segments already cover it. Above the log end the
+            // whole surviving log is below a start that was acknowledged, so
+            // every record left is one the trim removed: the log start is the
+            // log end. A crash between a trim and the fsync of the records it
+            // trimmed past lands here.
+            let derived_start = log.log_start_offset();
+            let effective = checkpointed.clamp(derived_start, log.log_end_offset());
+            if effective > derived_start {
+                log.start_offset_override = Some(effective);
+            }
+            if effective != checkpointed {
+                // Persist what was resolved instead of leaving the
+                // out-of-range value on disk. It is inert against this log,
+                // but appends move the log end, and the next open would find
+                // the stale value back in range and hide live records.
+                log_start_offset_checkpoint::write(&log.dir, effective)?;
+            }
+        }
         // Recovery needs no durable watermark: the schedule is in the records,
         // so the first advance rebuilds it from the log start.
         log.delivery_watermark = log.log_start_offset();
-        log.rebuild_producer_and_transaction_state()?;
         Ok(log)
     }
 

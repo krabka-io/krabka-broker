@@ -92,7 +92,7 @@ The controller policy runs in the broker crate, on whichever node currently lead
 
 ### What the quorum depends on
 
-- **Storage.** `KraftLog` sits on [`krabka-log`](../../log/docs/design.md), which owns the segment files, the leader-epoch checkpoint, and fsync.
+- **Storage.** `KraftLog` sits on [`krabka-log`](../../log/docs/design.md), which owns the segment files, the leader-epoch checkpoint, the log-start-offset checkpoint that carries a prune inside the active segment across a restart, and fsync.
 - **Transport.** Outbound peer RPCs use `krabka_client_core::Connection::raw_request` over one cached connection per voter, in [`network/peer_sender.rs`](../src/network/peer_sender.rs).
 - **Formatting.** A node refuses to boot on an unformatted directory. [`krabka-format`](../../format/src/lib.rs) seeds `meta.properties.json`, the bootstrap records, and the singleton `VotersRecord`.
 - **Diskless WAL shards.** The [diskless WAL](../../broker/docs/diskless-wal-design.md) reuses the KIP-595 `Fetch` envelope, the `LogView` seam, and the `RaftShardRouter` hook, and reserves its offsets through `submit_change`.

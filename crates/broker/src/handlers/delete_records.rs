@@ -28,6 +28,18 @@
 //! refusal text reaches the operator through the audit log and the broker's own
 //! log rather than the wire.
 //!
+//! # The trim outlives the broker
+//!
+//! A trim that lands on a segment boundary is durable in the segment names
+//! alone: the files below it are gone. One that lands inside a segment leaves
+//! its records on disk, so krabka-log checkpoints the new log start to
+//! `log-start-offset-checkpoint` in the partition directory and reads it back
+//! in `Log::open`. Without that, a restart would serve records an operator
+//! deleted for a compliance request, and `ListOffsets EARLIEST` would move back
+//! down. Apache Kafka keeps the same value, per log dir rather than per
+//! partition directory, on a `log.flush.start.offset.checkpoint.interval.ms`
+//! schedule; krabka writes it on the trim itself.
+//!
 //! This trim writes no metadata record, so there is nothing for the consumed
 //! proposal to ride beside. The broker appends the consume on its own and only
 //! then trims. Consume-then-transition is the safe order of the two: a crash

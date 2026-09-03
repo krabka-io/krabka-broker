@@ -49,7 +49,9 @@ mod wait;
 // carries `allow(dead_code)`.
 #[allow(unused_imports)]
 pub(crate) use self::{
-    broker::{start_host_broker, start_host_broker_jbod, start_host_broker_with},
+    broker::{
+        start_host_broker, start_host_broker_in, start_host_broker_jbod, start_host_broker_with,
+    },
     delegation_tokens::{
         extract_jvm_kv, start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,
     },
