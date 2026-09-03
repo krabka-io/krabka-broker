@@ -83,14 +83,10 @@ jobs:
       # the same aspect through the `*_clippy` targets, for anyone without the
       # CLI.
       - name: lint
-        run: aspect lint --bazel-flag=--config=rbe
+        run: aspect lint
 
       - name: build
-        run: |
-          aspect build \
-            --bazel-flag=--config=rbe \
-            --bazel-flag=--build_tag_filters=-docker \
-            //...
+        run: aspect build --bazel-flag=--build_tag_filters=-docker //...
 
       # The six suites `coverage` excludes as timing-sensitive, plus
       # `//packaging:image_binaries_test`, which sits outside `//crates` and so
@@ -98,13 +94,6 @@ jobs:
       # just those rather than a full `bazel test //...`, which would rerun the
       # ~140 suites `coverage` already executes and roughly double this job's
       # wall clock for no new signal.
-      #
-      # No `--config=rbe`, and this step is the reason the config is applied per
-      # step rather than per job: `timing-sensitive` is precisely the tag for
-      # suites that assert on wall clock, and a shared executor beside a noisy
-      # neighbour is the one place those assertions cannot hold. They are
-      # already `flaky = True`; running them remotely would make that worse
-      # rather than better.
       - name: test
         run: |
           bazel test --test_tag_filters=timing-sensitive //crates/...
@@ -113,7 +102,7 @@ jobs:
       # `aspect build` renders docs for impacted crates. Build the complete set
       # here for the artifact, reusing this runner's Bazel output tree.
       - name: docgen
-        run: bazel build --config=rbe $(bazel query 'kind("rust_doc rule", //crates/...)')
+        run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
       - uses: actions/upload-artifact@v7
         with:
           name: rustdoc
@@ -123,10 +112,6 @@ jobs:
       # Impact analysis may omit a model when its source did not change. Run
       # every Stateright-bearing target explicitly so the verification catalog
       # remains a merge gate on every pull request.
-      # Local as well. These are model checks rather than wall-clock
-      # assertions, so they could run remotely, but they are the verification
-      # catalog's merge gate and there is no case for making a gate depend on a
-      # second service before the cheaper steps have proved it.
       - name: stateright models
         run: |
           bazel test \
@@ -214,7 +199,7 @@ jobs:
           upload: ${{ github.event_name != 'pull_request' }}
 
       - name: coverage
-        run: bazel coverage --config=rbe //crates/...
+        run: bazel coverage //crates/...
 
       # `if: always()`, and the three directories by name: when this job does
       # run the disk out, the failure arrives as a linker `Bus error` or a bare
