@@ -193,10 +193,31 @@ struct Engine {
     /// Snapshot every this many committed records past the last snapshot, then
     /// prune the log below that point. `0` disables snapshotting (KIP-630).
     snapshot_interval_records: u64,
+    /// `metadata.log.max.record.bytes.between.snapshots` (KIP-630). `0`
+    /// disables the byte-size cap.
+    max_bytes_between_snapshots: ByteSize,
+    /// `metadata.log.max.snapshot.interval.ms` (KIP-630). `0` disables the
+    /// time-based cap.
+    max_snapshot_interval: Time,
     metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
     /// HWM at which the last checkpoint was written (and the log pruned to).
     /// Seeded from the recovered checkpoint on `open`.
     last_snapshot_end_offset: Offset,
+    /// `self.now()` (ms) at which the last checkpoint was written. Seeded to
+    /// `0` on construction, which is `clock_base`'s own instant, so a
+    /// restarted node measures the time-based cap from its own start rather
+    /// than immediately firing.
+    last_snapshot_at_ms: u64,
+    /// Verbatim log bytes applied since the last checkpoint, tracked
+    /// incrementally as batches are applied rather than re-measured by
+    /// reading the log: a read bounded by the byte cap can under-count
+    /// (a batch that would cross the cap does not fit the remaining budget
+    /// and is excluded), and an unbounded read would rescan the whole
+    /// pending backlog on every engine tick. Reset to `0` on every snapshot,
+    /// including `0` on a fresh restart, so a restart under-counts until
+    /// enough new records flow in — the same restart tradeoff
+    /// `last_snapshot_at_ms` already makes for the time-based cap.
+    bytes_since_snapshot: u64,
     /// The first committed metadata-version downgrade whose mandatory exact
     /// checkpoint, reload, and prune has not completed locally yet. Capturing
     /// the image and post-record boundary prevents later committed records from
@@ -288,6 +309,12 @@ pub struct KraftConfig {
     /// Snapshot once committed offset advances this many records past the
     /// last snapshot, then prune the log below it. `0` disables snapshotting.
     pub snapshot_interval_records: u64,
+    /// `metadata.log.max.record.bytes.between.snapshots` (KIP-630). `0`
+    /// disables the byte-size cap.
+    pub max_bytes_between_snapshots: ByteSize,
+    /// `metadata.log.max.snapshot.interval.ms` (KIP-630). `0` disables the
+    /// time-based cap.
+    pub max_snapshot_interval: Time,
     /// Validated maximum metadata snapshot size this follower will fetch.
     pub metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
 }

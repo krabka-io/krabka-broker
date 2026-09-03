@@ -6,7 +6,10 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord};
-use krabka_units::{fmt::Human as _, prelude::Time};
+use krabka_units::{
+    fmt::Human as _,
+    prelude::{ByteSize, Time},
+};
 use tokio::{
     sync::{mpsc, watch},
     time::Instant,
@@ -79,6 +82,8 @@ impl KraftController {
             metadata_raft_fetch_max,
             peers,
             snapshot_interval_records,
+            max_bytes_between_snapshots,
+            max_snapshot_interval,
             metadata_snapshot_fetch_max,
         } = config;
 
@@ -171,8 +176,12 @@ impl KraftController {
             was_leader: initial_was_leader,
             held_epoch: initial_epoch,
             snapshot_interval_records,
+            max_bytes_between_snapshots,
+            max_snapshot_interval,
             metadata_snapshot_fetch_max,
             last_snapshot_end_offset,
+            last_snapshot_at_ms: 0,
+            bytes_since_snapshot: 0,
             downgrade_snapshot_pending,
             #[cfg(test)]
             downgrade_snapshot_failures_remaining: 0,
@@ -233,6 +242,8 @@ impl KraftController {
         metadata_raft_fetch_max: MetadataRaftFetchMax,
         peers: Arc<dyn PeerSender>,
         snapshot_interval_records: u64,
+        max_bytes_between_snapshots: ByteSize,
+        max_snapshot_interval: Time,
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
@@ -334,6 +345,8 @@ impl KraftController {
                 metadata_raft_fetch_max,
                 peers,
                 snapshot_interval_records,
+                max_bytes_between_snapshots,
+                max_snapshot_interval,
                 metadata_snapshot_fetch_max,
             },
             log,
