@@ -87,6 +87,20 @@ runs:
           echo "build --remote_cache=grpcs://remote.buildbuddy.io"
           echo "build --bes_backend=grpcs://remote.buildbuddy.io"
           echo "build --bes_results_url=https://app.buildbuddy.io/invocation/"
+          # The profile BES carries, made legible. Bazel's default `slim_profile`
+          # collapses the many small actions this build is mostly made of into
+          # aggregate rows, and without the target label a row says `Rustc` and
+          # not which crate. That is the difference between "the build spent
+          # eleven minutes compiling" and "these four crates are the critical
+          # path", which is the whole reason to look at a profile. Suggested by
+          # the BuildBuddy team.
+          #
+          # Here rather than in `.bazelrc` because an unslimmed profile only
+          # earns its size when something is uploading it to look at; a local
+          # build would pay for a profile nobody reads.
+          echo "build --noslim_profile"
+          echo "build --experimental_profile_include_target_label"
+          echo "build --experimental_profile_include_primary_output"
           # Ten minutes: the broker's link actions are large, and the default
           # 60s times out on the first cold upload of one.
           echo "build --remote_timeout=600"
