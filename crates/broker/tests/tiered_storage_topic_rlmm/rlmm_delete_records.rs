@@ -16,7 +16,6 @@
 use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
-use krabka_broker::BrokerHandle;
 use krabka_client_admin::{AdminClient, DeleteRecordsOp};
 use krabka_client_core::Client;
 use krabka_protocol::{
