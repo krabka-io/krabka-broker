@@ -276,6 +276,17 @@ async fn controller_listener_serves_the_topic_lifecycle() {
     // The topic id is minted per create, so the expectation borrows it back;
     // the check below pins it as non-nil, which is what the create promises.
     check!(created_topic.topic_id != WireUuid([0; 16]));
+    // KIP-525 fills the row with the topic's whole effective configuration,
+    // which the controller listener answers exactly as the broker listener
+    // does. `admin_create_topics.rs` is what pins that list against
+    // `DescribeConfigs`; here it is borrowed back like the topic id, so this
+    // case stays about the lifecycle the controller listener serves.
+    check!(
+        created_topic
+            .configs
+            .as_ref()
+            .is_some_and(|configs| !configs.is_empty())
+    );
     check!(
         created
             == CreateTopicsResponse {
@@ -287,7 +298,7 @@ async fn controller_listener_serves_the_topic_lifecycle() {
                     error_message: None,
                     num_partitions: 1,
                     replication_factor: 1,
-                    configs: Some(Vec::new()),
+                    configs: created_topic.configs.clone(),
                     topic_config_error_code: 0,
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }],

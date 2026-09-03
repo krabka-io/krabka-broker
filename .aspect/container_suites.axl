@@ -496,6 +496,7 @@ def _self_test():
         _select(["crates/broker/src/share_partition/state.rs"], available) == [_target("jvm_share_groups")],
         "share source must select share groups",
     )
+
     # Both streams suites, and neither consumer-group one: the compiled
     # `KafkaStreams` topology and the `StreamsGroupHeartbeat` admin case read
     # the same broker surface, so a change to it has to run both.

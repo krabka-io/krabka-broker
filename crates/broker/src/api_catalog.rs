@@ -691,9 +691,8 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/client_telemetry.rs",
             "crates/broker/tests/client_metrics_config.rs",
-            "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
         ],
-        clients: ClientEvidence::Kcat,
+        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -747,9 +746,8 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/consumer_group_next_gen.rs",
             "crates/broker/tests/jvm_consumer_group_next_gen.rs",
             "crates/broker/tests/group_version.rs",
-            "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
         ],
-        clients: ClientEvidence::Kcat,
+        clients: ClientEvidence::NotCovered,
         note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker.",
     },
     KipAnnotation {

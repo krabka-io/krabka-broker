@@ -417,14 +417,12 @@ def _test_librdkafka_clients(_ctx):
         '        program: "kcat",',
         '        library: "librdkafka 1.8.2",',
         '        version_marker: "librdkafka 1.8.2",',
-        "        extras: &[],",
         "    },",
         "    ClientCase {",
-        '        image: "mirror.gcr.io/confluentinc/cp-kcat:8.2.3",',
-        '        program: "kcat",',
+        '        image: "mirror.gcr.io/example/rdkafka-example:2",',
+        '        program: "rdkafka_example",',
         '        library: "librdkafka 2.x",',
         '        version_marker: "librdkafka 2.",',
-        '        extras: &[("group.protocol=consumer", "ConsumerGroupHeartbeat")],',
         "    },",
         "];",
     ])
@@ -433,7 +431,7 @@ def _test_librdkafka_clients(_ctx):
         librdkafka_clients(suite),
         [
             ("mirror.gcr.io/edenhill/kcat:1.7.1", "kcat", "librdkafka 1.8.2"),
-            ("mirror.gcr.io/confluentinc/cp-kcat:8.2.3", "kcat", "librdkafka 2.x"),
+            ("mirror.gcr.io/example/rdkafka-example:2", "rdkafka_example", "librdkafka 2.x"),
         ],
     )
 

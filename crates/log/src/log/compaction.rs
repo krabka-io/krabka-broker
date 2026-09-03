@@ -171,12 +171,18 @@ impl Log {
     /// The clean/cleanable split and dirty-region age [`Self::compaction_due`]
     /// reads. See [`CompactionCandidacy`] for what counts as which and why.
     fn compaction_candidacy(&self, min_lag_ms: i64, now_ms: i64) -> CompactionCandidacy {
-        let mut sealed = self.segments.iter();
-        let clean_bytes = sealed.next().map_or(ByteSize::ZERO, Segment::size);
-        let dirty: Vec<&Segment> = sealed.collect();
+        // Kafka's clean prefix is what a previous pass produced, which it
+        // reads from `cleaner-offset-checkpoint`. A log nothing has cleaned
+        // has no clean prefix at all: its whole sealed region is dirty, which
+        // is what makes a single sealed segment cleanable on the first pass.
+        let clean_segments = usize::from(self.compacted_once);
+        let clean_bytes = self.segments[..clean_segments]
+            .iter()
+            .fold(ByteSize::ZERO, |total, segment| total + segment.size());
+        let dirty: Vec<&Segment> = self.segments[clean_segments..].iter().collect();
         let cleanable = self
             .cleanable_sealed_count(min_lag_ms, now_ms)
-            .saturating_sub(1);
+            .saturating_sub(clean_segments);
         let cleanable_bytes = dirty[..cleanable]
             .iter()
             .fold(ByteSize::ZERO, |total, segment| total + segment.size());
@@ -308,6 +314,10 @@ impl Log {
         self.sealed_txn_indexes
             .insert(rewrite.new_base_offset, txn_index);
         self.segments.insert(0, new_seg);
+        // The segment just inserted is this pass's output, so from here the
+        // first sealed segment is a clean prefix — Kafka's cleaner checkpoint,
+        // in the one form this log needs it.
+        self.compacted_once = true;
         Ok(())
     }
 }
@@ -499,6 +509,47 @@ mod tests {
         let log = log_stamped_a_second_apart(dir.path(), cfg, 6);
 
         assert2::check!(log.compaction_due(at_epoch_millis(6_000)));
+    }
+
+    /// A log nothing has cleaned yet has no clean prefix: its one sealed
+    /// segment is dirty, and the pass it is owed happens.
+    ///
+    /// This is Kafka's `cleaner-offset-checkpoint` read on a fresh log — the
+    /// dirty region is `[logStart, firstUncleanable)`, not `[secondSegment,
+    /// firstUncleanable)`. Treating the first sealed segment as clean before
+    /// any pass has run makes a partition with a single sealed segment report
+    /// a cleanable ratio of zero, so it is never due and a duplicate key
+    /// survives however long the log sits there. The `compact,delete`
+    /// end-to-end case in `jvm_acceptance_cli` is what caught it.
+    #[test]
+    fn a_never_cleaned_log_has_no_clean_prefix() {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1),
+            ..Default::default()
+        };
+        // Two appends: one sealed segment and the active one.
+        let mut log = log_stamped_a_second_apart(dir.path(), cfg, 2);
+
+        assert2::check!(log.segments.len() == 1, "one sealed segment");
+        assert2::check!(
+            log.compaction_due(at_epoch_millis(6_000)),
+            "a single dirty sealed segment is cleanable"
+        );
+
+        log.compact(&CompactionContext {
+            now: at_epoch_millis(6_000),
+            active_producers: std::collections::HashMap::new(),
+        })
+        .unwrap();
+
+        // The pass output is now the clean prefix, so the same log is not due
+        // again until something else is produced.
+        assert2::check!(
+            !log.compaction_due(at_epoch_millis(6_000)),
+            "a log whose only sealed segment is the last pass's output is settled"
+        );
     }
 
     /// The withheld tail is withheld from the pass as well, so a record inside

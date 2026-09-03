@@ -1,12 +1,12 @@
-//! Stock librdkafka clients against krabka: the 1.x kcat the project has
-//! always run, and a current 2.x build.
+//! The stock librdkafka client against krabka.
 //!
-//! The 2.x entry is what makes the librdkafka column of the KIP matrix mean
-//! anything beyond `ApiVersions`: librdkafka 2.x is the client family behind
-//! confluent-kafka-python, confluent-kafka-go and node-rdkafka, and it is
-//! where KIP-848 (`group.protocol=consumer`) and KIP-714 (metrics push) are
-//! implemented. [`ClientCase::extras`] is what separates the two runs: the
-//! 1.x client has neither feature and is exercised on the classic protocol.
+//! Only one entry: no published image carries a CLI linked against a current
+//! librdkafka. `kcat` has had no release since 1.7.1 and its own build script
+//! pins librdkafka 1.8.2, so Confluent's `cp-kcat:8.2.3` -- a 2026 build --
+//! still reports `Version 1.7.1 (... librdkafka 1.8.2)`, exactly what
+//! `edenhill/kcat:1.7.1` reports. A librdkafka 2.x run would therefore need an
+//! image built here rather than a pinned published one; see the note on
+//! [`CLIENTS`]. The table stays a table so that adding one is a row.
 
 mod jvm_acceptance;
 mod support;
@@ -34,42 +34,20 @@ struct ClientCase {
     /// The substring of the client's own `-V` banner that proves it: the
     /// banner is what says which librdkafka the binary is linked against.
     version_marker: &'static str,
-    /// `-X` settings added to the consume run, and the protocol markers the
-    /// debug trace must then carry. Empty for a client too old for them.
-    extras: &'static [(&'static str, &'static str)],
 }
 
-/// `kcat` has had no release since 1.7.1 (librdkafka 1.8.2, 2021), so the 2.x
-/// build comes from Confluent's own `cp-kcat` image, which ships the same
-/// program against a current library.
-const CLIENTS: [ClientCase; 2] = [
-    ClientCase {
-        image: "mirror.gcr.io/edenhill/kcat:1.7.1",
-        program: "kcat",
-        library: "librdkafka 1.8.2",
-        version_marker: "librdkafka 1.8.2",
-        extras: &[],
-    },
-    ClientCase {
-        image: "mirror.gcr.io/confluentinc/cp-kcat:8.2.3",
-        program: "kcat",
-        // Only the major version is pinned. The image is a Confluent Platform
-        // release rather than a librdkafka one, so its exact library version
-        // moves with the platform patch level; what this suite claims is that
-        // the client is a 2.x one, which is what makes the KIP-848 and KIP-714
-        // assertions below meaningful.
-        library: "librdkafka 2.x",
-        version_marker: "librdkafka 2.",
-        extras: &[
-            // KIP-848: the next-generation protocol replaces JoinGroup and
-            // SyncGroup with ConsumerGroupHeartbeat.
-            ("group.protocol=consumer", "ConsumerGroupHeartbeat"),
-            // KIP-714: the client asks the broker for a metrics subscription
-            // on connect.
-            ("enable.metrics.push=true", "GetTelemetrySubscriptions"),
-        ],
-    },
-];
+/// Every librdkafka client this suite drives.
+///
+/// The 1.x client has neither KIP-848 (`group.protocol=consumer`) nor KIP-714
+/// (metrics push), so this suite says nothing about either: it establishes the
+/// version-negotiation and flexible-version rows of the KIP matrix and the
+/// classic-protocol round trip, and nothing more.
+const CLIENTS: [ClientCase; 1] = [ClientCase {
+    image: "mirror.gcr.io/edenhill/kcat:1.7.1",
+    program: "kcat",
+    library: "librdkafka 1.8.2",
+    version_marker: "librdkafka 1.8.2",
+}];
 
 fn run_client(image: &str, program: &str, args: &[&str], input: Option<&str>) -> Output {
     let mut child = Command::new("docker")
@@ -123,7 +101,6 @@ async fn round_trip_group_join_and_api_versions_with_kcat() {
             program,
             library,
             version_marker,
-            extras,
         },
     ) in CLIENTS.iter().enumerate()
     {
@@ -183,44 +160,40 @@ async fn round_trip_group_join_and_api_versions_with_kcat() {
         );
 
         let group = format!("librdkafka-group-{index}");
-        let mut consume_args = vec![
-            "-G",
-            &group,
-            "-b",
-            bootstrap,
-            "-X",
-            "auto.offset.reset=earliest",
-            "-X",
-            "enable.auto.commit=false",
-            "-X",
-            "enable.auto.offset.store=false",
-        ];
-        for (setting, _marker) in *extras {
-            consume_args.extend_from_slice(&["-X", setting]);
-        }
-        consume_args.extend_from_slice(&["-c", "1", "-f", "%s\\n", "-d", "cgrp,protocol", &topic]);
-        let consumed = run_client(image, program, &consume_args, None);
+        let consumed = run_client(
+            image,
+            program,
+            &[
+                "-G",
+                &group,
+                "-b",
+                bootstrap,
+                "-X",
+                "auto.offset.reset=earliest",
+                "-X",
+                "enable.auto.commit=false",
+                "-X",
+                "enable.auto.offset.store=false",
+                "-c",
+                "1",
+                "-f",
+                "%s\\n",
+                "-d",
+                "cgrp,protocol",
+                &topic,
+            ],
+            None,
+        );
         assert!(
             String::from_utf8_lossy(&consumed.stdout) == payload,
             "{program} round-trip mismatch: {}",
             String::from_utf8_lossy(&consumed.stdout)
         );
         let trace = String::from_utf8_lossy(&consumed.stderr);
-        // The 1.x client joins on the classic protocol; the 2.x one is asked
-        // for `group.protocol=consumer` above, so its own marker replaces
-        // `JoinGroup` rather than joining it.
-        let joined = if extras.is_empty() {
-            trace.contains("JoinGroup")
-        } else {
-            true
-        };
-        assert!(joined, "{program} did not join a consumer group: {trace}");
-        for (setting, marker) in *extras {
-            assert!(
-                trace.contains(marker),
-                "{program} with -X {setting} did not send {marker}: {trace}"
-            );
-        }
+        assert!(
+            trace.contains("JoinGroup"),
+            "{program} did not join a consumer group: {trace}"
+        );
     }
 
     broker.shutdown().await;

@@ -164,10 +164,7 @@ crate_tests(
         ],
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
         "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
-        "librdkafka_conformance": [
-            "cp_kcat_8_2_3",
-            "kcat_1_7_1",
-        ],
+        "librdkafka_conformance": ["kcat_1_7_1"],
         # One image, used twice: as the `kafka-topics` client that reads
         # krabka's answer and as the Kafka broker the same command is run
         # against for the differential.
