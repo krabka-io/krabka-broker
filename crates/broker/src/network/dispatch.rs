@@ -35,7 +35,7 @@ mod response;
 /// `benches/perf_deferrals.rs`.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod response_framing;
-mod sasl;
+pub(crate) mod sasl;
 mod session;
 #[cfg(test)]
 mod test_support;
@@ -299,6 +299,25 @@ async fn serve_connection_stream<S>(
                 .record_connection_close(crate::metrics::ConnectionCloseReason::DecodeError);
             break;
         };
+        // KIP-368 session expiry, enforced where Kafka enforces it: on the
+        // request that arrives past the deadline, not on a timer racing the
+        // read. A client re-authenticates only when it next has something to
+        // send, so it routinely opens the exchange after its window closed;
+        // `expired_for_request` lets the two SASL api_keys through so that
+        // exchange runs, and ends the connection on anything else.
+        if is_sasl_listener && auth.expired_for_request(parsed.api_key, crate::time_util::now_ms())
+        {
+            tracing::info!(
+                api_key = parsed.api_key,
+                principal = ?auth.principal().map(|p| p.name.as_str()),
+                listener = %spec.name,
+                "SASL session expired, closing connection (KIP-368)"
+            );
+            broker
+                .metrics
+                .record_connection_close(crate::metrics::ConnectionCloseReason::SaslSessionExpired);
+            break;
+        }
         // Per-state request gate: on SASL listeners, gate every api_key
         // through `auth.allows_request(api_key)`. This covers:
         //   - Anonymous / Negotiating: only the pre-auth allowlist

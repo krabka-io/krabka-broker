@@ -136,11 +136,19 @@ fn split_rule(body: &str) -> Option<(&str, &str, &str)> {
 /// The rule list of one listener's `ssl.principal.mapping.rules`, applied in
 /// order with the first match winning.
 ///
-/// The default is an empty list, which maps every DN to itself just as a lone
-/// `DEFAULT` rule does.
-#[derive(Debug, Clone, Default)]
+/// The default is Kafka's default value for the property, the single rule
+/// `DEFAULT`, which maps every DN to itself.
+#[derive(Debug, Clone)]
 pub struct SslPrincipalMapper {
     rules: Vec<Rule>,
+}
+
+impl Default for SslPrincipalMapper {
+    fn default() -> Self {
+        Self {
+            rules: vec![Rule::Default],
+        }
+    }
 }
 
 impl SslPrincipalMapper {
@@ -161,13 +169,18 @@ impl SslPrincipalMapper {
     }
 
     /// The principal name for a peer certificate's Subject DN: the first
-    /// matching rule's result, or the DN itself when none matches.
+    /// matching rule's result, or `None` when no rule matches.
+    ///
+    /// Kafka's `SslPrincipalMapper.getName` throws `NoMatchingRule` in that
+    /// case rather than falling back to the DN, and the DN pass-through is the
+    /// `DEFAULT` rule's job. An operator whose rule list is exhaustive by
+    /// design therefore gets a rejected connection, not a peer authenticated
+    /// under its full DN.
     #[must_use]
-    pub fn apply(&self, distinguished_name: &str) -> String {
+    pub fn apply(&self, distinguished_name: &str) -> Option<String> {
         self.rules
             .iter()
             .find_map(|rule| rule.apply(distinguished_name))
-            .unwrap_or_else(|| distinguished_name.to_owned())
     }
 }
 
@@ -186,47 +199,64 @@ mod tests {
             (
                 &["RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/"][..],
                 "CN=serviceuser,OU=ServiceUsers,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                "serviceuser",
+                Some("serviceuser"),
             ),
-            // No rule matches, so the DN passes through unchanged.
+            // No rule matches and there is no DEFAULT tail, so the mapping is
+            // refused rather than falling back to the DN.
             (
                 &["RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/"][..],
                 "CN=adminUser,OU=Admin,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                "CN=adminUser,OU=Admin,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
+                None,
             ),
             (
                 &["RULE:^CN=(.*?),OU=(.*?),O=(.*?),L=(.*?),ST=(.*?),C=(.*?)$/$1@$2/L"][..],
                 "CN=adminUser,OU=Admin,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                "adminuser@admin",
+                Some("adminuser@admin"),
             ),
             (
                 &["RULE:^.*[Cc][Nn]=([a-zA-Z0-9.]*).*$/$1/U"][..],
                 "cn=User,OU=Admin,O=Unknown,L=Unknown,ST=Unknown,C=Unknown",
-                "USER",
+                Some("USER"),
             ),
-            (&["DEFAULT"][..], "CN=alice,OU=x,O=y", "CN=alice,OU=x,O=y"),
+            (
+                &["DEFAULT"][..],
+                "CN=alice,OU=x,O=y",
+                Some("CN=alice,OU=x,O=y"),
+            ),
             // First match wins: the specific rule shadows the DEFAULT tail.
             (
                 &["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"][..],
                 "CN=alice,OU=integration,O=krabka",
-                "alice",
+                Some("alice"),
             ),
+            // The DEFAULT tail is what passes an unmatched DN through.
             (
                 &["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"][..],
                 "OU=integration,O=krabka",
-                "OU=integration,O=krabka",
+                Some("OU=integration,O=krabka"),
             ),
-            // An empty list is the same pass-through a lone DEFAULT gives.
-            (&[][..], "CN=alice,OU=x,O=y", "CN=alice,OU=x,O=y"),
+            // An explicitly empty list has no rule to match, so it maps
+            // nothing.
+            (&[][..], "CN=alice,OU=x,O=y", None),
         ];
         for (specs, distinguished_name, expected) in cases {
             let mapper =
                 SslPrincipalMapper::parse(specs).unwrap_or_else(|_| panic!("{specs:?} parses"));
             check!(
-                mapper.apply(distinguished_name) == expected,
+                mapper.apply(distinguished_name).as_deref() == expected,
                 "{specs:?} against {distinguished_name}"
             );
         }
+    }
+
+    /// The configured default is Kafka's `["DEFAULT"]`, so a listener with no
+    /// rules of its own still authenticates a peer under its Subject DN.
+    #[test]
+    fn the_default_mapper_passes_the_subject_dn_through() {
+        assert!(
+            SslPrincipalMapper::default().apply("CN=alice,OU=x,O=y")
+                == Some("CN=alice,OU=x,O=y".to_owned())
+        );
     }
 
     /// A pattern may carry an escaped slash, which the DN it matches carries
@@ -235,7 +265,7 @@ mod tests {
     fn an_escaped_slash_is_part_of_the_pattern() {
         let mapper =
             SslPrincipalMapper::parse(&["RULE:^CN=(.*?)\\/svc$/$1/"]).expect("escaped rule parses");
-        assert!(mapper.apply("CN=alice/svc") == "alice");
+        assert!(mapper.apply("CN=alice/svc") == Some("alice".to_owned()));
     }
 
     #[test]

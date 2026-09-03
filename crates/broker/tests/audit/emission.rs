@@ -8,23 +8,29 @@
 //! the topic, because fetch visibility can lag the durable write.
 
 use krabka_broker::coordinator::AUDIT_TOPIC;
-use krabka_protocol::owned::{
-    alter_client_quotas_request::{
-        AlterClientQuotasRequest, EntityData, EntryData, OpData as QuotaOp,
+use krabka_protocol::{
+    owned::{
+        alter_client_quotas_request::{
+            AlterClientQuotasRequest, EntityData, EntryData, OpData as QuotaOp,
+        },
+        alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
+        alter_user_scram_credentials_request::{
+            AlterUserScramCredentialsRequest, ScramCredentialUpsertion,
+        },
+        create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        delete_records_request::{
+            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+        },
+        delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
+        incremental_alter_configs_request::{
+            AlterConfigsResource as IncrementalResource, AlterableConfig as IncrementalConfig,
+            IncrementalAlterConfigsRequest,
+        },
+        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
-    alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
-    alter_user_scram_credentials_request::{
-        AlterUserScramCredentialsRequest, ScramCredentialUpsertion,
-    },
-    create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    delete_records_request::{DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic},
-    delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
-    incremental_alter_configs_request::{
-        AlterConfigsResource as IncrementalResource, AlterableConfig as IncrementalConfig,
-        IncrementalAlterConfigsRequest,
-    },
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
+    records::{Record, RecordBatch},
 };
 
 use crate::support;
@@ -35,6 +41,97 @@ const RESOURCE_TYPE_TOPIC: i8 = 2;
 const OP_SET: i8 = 0;
 /// The KIP-554 mechanism discriminant for `SCRAM-SHA-256`.
 const SCRAM_SHA_256: i8 = 1;
+
+/// Append one record to partition 0, so that a later `DeleteRecords` has
+/// something below the high watermark to delete.
+async fn produce_one(
+    p: &support::InProcess,
+    topic: &str,
+    topic_id: krabka_protocol::primitives::uuid::Uuid,
+) {
+    let batch = RecordBatch {
+        last_offset_delta: 0,
+        records: vec![Record {
+            offset_delta: 0,
+            value: Some(bytes::Bytes::from_static(b"audited-record")),
+            ..Default::default()
+        }],
+        ..RecordBatch::default()
+    };
+    let resp = p
+        .client
+        .send(ProduceRequest {
+            acks: 1,
+            timeout_ms: 5_000,
+            topic_data: vec![TopicProduceData {
+                name: topic.into(),
+                topic_id,
+                partition_data: vec![PartitionProduceData {
+                    index: 0,
+                    records: Some(batch.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("Produce");
+    assert2::check!(resp.responses[0].partition_responses[0].error_code == 0);
+}
+
+/// Fill partition 0 and send the same `DeleteRecords` twice.
+///
+/// A trim only deletes something when the partition holds records below the
+/// requested offset, and only the first of two identical requests moves the
+/// log start: the second is the idempotent retry that must audit nothing.
+async fn trim_twice(p: &support::InProcess, topic: &str) {
+    let topic_id = p
+        .client
+        .send(MetadataRequest {
+            topics: Some(vec![MetadataRequestTopic {
+                name: Some(topic.into()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        })
+        .await
+        .expect("Metadata")
+        .topics
+        .iter()
+        .find(|t| t.name.as_deref() == Some(topic))
+        .map(|t| t.topic_id)
+        .expect("topic in Metadata response");
+    for _ in 0..2 {
+        produce_one(p, topic, topic_id).await;
+    }
+
+    let request = DeleteRecordsRequest {
+        topics: vec![DeleteRecordsTopic {
+            name: topic.into(),
+            partitions: vec![DeleteRecordsPartition {
+                partition_index: 0,
+                offset: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    for what in ["DeleteRecords", "DeleteRecords (retry)"] {
+        let resp = p.client.send(request.clone()).await.expect(what);
+        assert2::check!(resp.topics[0].partitions[0].error_code == 0, "{what}");
+    }
+}
+
+/// The audit records that name one admin operation.
+fn records_for(records: &[serde_json::Value], operation: &str) -> usize {
+    records
+        .iter()
+        .filter(|j| j["class_uid"] == 6003 && j["api"]["operation"] == operation)
+        .count()
+}
 
 #[tokio::test]
 async fn audit_topic_exists_after_startup() {
@@ -168,6 +265,10 @@ async fn every_admin_mutation_is_audited() {
         .expect("AlterConfigs");
     assert2::check!(altered.responses[0].error_code == 0);
 
+    // The complete replacement below drops both keys the two requests above
+    // stored, and the audit trail has to say so.
+    let dropped = ["retention.ms", "max.message.bytes"];
+
     let incremental = p
         .client
         .send(IncrementalAlterConfigsRequest {
@@ -187,6 +288,27 @@ async fn every_admin_mutation_is_audited() {
         .await
         .expect("IncrementalAlterConfigs");
     assert2::check!(incremental.responses[0].error_code == 0);
+
+    // A topic `AlterConfigs` replaces the whole override map, so this request
+    // deletes both stored keys by omitting them. The record has to name them.
+    let replaced = p
+        .client
+        .send(AlterConfigsRequest {
+            resources: vec![AlterConfigsResource {
+                resource_type: RESOURCE_TYPE_TOPIC,
+                resource_name: topic.into(),
+                configs: vec![AlterableConfig {
+                    name: "cleanup.policy".into(),
+                    value: Some("delete".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("AlterConfigs (replacement)");
+    assert2::check!(replaced.responses[0].error_code == 0);
 
     let quotas = p
         .client
@@ -231,24 +353,7 @@ async fn every_admin_mutation_is_audited() {
         .expect("AlterUserScramCredentials");
     assert2::check!(scram.results[0].error_code == 0);
 
-    let trimmed = p
-        .client
-        .send(DeleteRecordsRequest {
-            topics: vec![DeleteRecordsTopic {
-                name: topic.into(),
-                partitions: vec![DeleteRecordsPartition {
-                    partition_index: 0,
-                    offset: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("DeleteRecords");
-    assert2::check!(trimmed.topics[0].partitions[0].error_code == 0);
+    trim_twice(&p, topic).await;
 
     let deleted = p
         .client
@@ -286,9 +391,27 @@ async fn every_admin_mutation_is_audited() {
         .await;
     }
 
+    // A replacement deletes every stored key it omits, so the record for it
+    // names the keys that disappeared beside the one it set.
+    support::wait_for_audit_record(&p.client, "AlterConfigs replacement", |j| {
+        j["api"]["operation"] == "AlterConfigs"
+            && j["resources"].as_array().is_some_and(|resources| {
+                let named = |key: &str| resources.iter().any(|r| r["name"] == key);
+                named("cleanup.policy") && dropped.iter().copied().all(named)
+            })
+    })
+    .await;
+
     // Redaction: nothing the SCRAM request carried reaches the audit topic,
     // and neither do the config values.
     let records = support::consume_audit_records(&p.client).await;
+
+    // The retried trim deleted nothing, and an audit record claiming it did
+    // would be false evidence of a second deletion.
+    assert2::check!(
+        records_for(&records, "DeleteRecords") == 1,
+        "an idempotent DeleteRecords retry must audit nothing"
+    );
     let dump = serde_json::to_string(&records).expect("audit records serialize");
     for secret in [
         "audited-salt",

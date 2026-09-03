@@ -83,7 +83,9 @@ pub async fn serve_connection_on_listener(
             else {
                 return;
             };
-            let mtls_principal = peer_cert_principal(&tls_stream, &spec.principal_mapper);
+            let Ok(mtls_principal) = peer_cert_principal(&tls_stream, &spec, peer) else {
+                return;
+            };
             // `config_ktls_server` consumes `tls_stream` by value; on error
             // the stream is gone, so we cannot fall back to userspace TLS for
             // THIS connection — we close it. This is safe precisely because
@@ -120,7 +122,10 @@ pub async fn serve_connection_on_listener(
         // client_auth=Required, the handshake itself fails when no cert is
         // presented, so we always have one here. Optional or Disabled may
         // produce `None`.
-        let mtls_principal = peer_cert_principal(&tls_stream, &spec.principal_mapper);
+        // A cert whose DN no mapping rule matches closes the connection.
+        let Ok(mtls_principal) = peer_cert_principal(&tls_stream, &spec, peer) else {
+            return;
+        };
         serve_connection_stream(broker, tls_stream, spec, peer, mtls_principal).await;
     } else {
         serve_connection_plaintext(broker, stream, spec, peer).await;
@@ -176,20 +181,42 @@ where
 /// present, this derives the Subject DN with
 /// [`krabka_security::extract_principal_from_cert`] and runs it through the
 /// listener's KIP-371 `ssl.principal.mapping.rules` to get the principal name.
-/// With no rules configured the DN itself is the principal, which is what
-/// Kafka's `DEFAULT` rule does.
+/// The default rule list is Kafka's `DEFAULT`, under which the DN itself is
+/// the principal.
+///
+/// `Ok(None)` is the no-certificate case, which the session layer turns into
+/// `ANONYMOUS`. `Err(())` means a certificate was presented and no mapping
+/// rule matched its DN: Kafka's `SslPrincipalMapper` throws `NoMatchingRule`
+/// there and the channel never builds, so the caller closes the connection
+/// rather than admitting the peer under its DN or as `ANONYMOUS`.
 fn peer_cert_principal<S>(
     stream: &tokio_rustls::server::TlsStream<S>,
-    mapper: &crate::network::auth::SslPrincipalMapper,
-) -> Option<krabka_security::Principal> {
+    spec: &crate::config::ListenerSpec,
+    peer: SocketAddr,
+) -> Result<Option<krabka_security::Principal>, ()> {
     let (_, server_conn) = stream.get_ref();
-    let cert = server_conn.peer_certificates()?.first()?;
-    let distinguished_name = krabka_security::extract_principal_from_cert(cert.as_ref())?;
-    Some(krabka_security::Principal {
-        name: mapper.apply(&distinguished_name),
+    let Some(distinguished_name) = server_conn
+        .peer_certificates()
+        .and_then(<[_]>::first)
+        .and_then(|cert| krabka_security::extract_principal_from_cert(cert.as_ref()))
+    else {
+        return Ok(None);
+    };
+    let Some(name) = spec.principal_mapper.apply(&distinguished_name) else {
+        tracing::warn!(
+            listener = %spec.name,
+            peer = %peer,
+            distinguished_name = %distinguished_name,
+            "no ssl.principal.mapping.rules rule matched the peer certificate \
+             subject DN, closing connection"
+        );
+        return Err(());
+    };
+    Ok(Some(krabka_security::Principal {
+        name,
         auth_method: krabka_security::AuthMethod::MTls,
         groups: vec![],
-    })
+    }))
 }
 
 /// Plaintext entry point. It keeps the legacy `TcpStream`-typed signature for

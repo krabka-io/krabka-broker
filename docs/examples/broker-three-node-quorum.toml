@@ -188,8 +188,12 @@ expire_after_ms = 300000
 # `jwks_endpoint_uri` nor `introspection_endpoint_uri` set, a listener offering
 # OAUTHBEARER fails to start unless `allow_unsecured = true` opts into the
 # unsecured-JWS (`alg:none`) development validator. Never set that here.
-#[oauthbearer]
-#jwks_endpoint_uri = "https://idp.example.com/.well-known/jwks.json"
+#
+# The `CLIENT` listener above offers OAUTHBEARER, so this section and its
+# endpoint are live rather than commented out: without them the broker refuses
+# to start.
+[oauthbearer]
+jwks_endpoint_uri = "https://idp.example.com/.well-known/jwks.json"
 #valid_issuer_uri = "https://idp.example.com/"
 #expected_audience = "krabka"
 #principal_claim_name = "sub"

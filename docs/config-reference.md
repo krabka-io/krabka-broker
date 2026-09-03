@@ -513,7 +513,7 @@ TOML shape of `[sasl_plain]`. Maps to [`crate::BrokerConfig::plain_credentials`]
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `credentials_path` | string | broker default |  | Filesystem path to the SASL/PLAIN credential file: one `username=password` per line, `#` comment lines and blank lines ignored, the trailing newline stripped. File-based (not literal) so no password sits in the TOML; the operator mounts a `Secret` and writes the mount path here. A password may contain `=`; only the first `=` on a line separates the two. |
+| `credentials_path` | string | broker default |  | Filesystem path to the SASL/PLAIN credential file: one `username=password` per line, split at the first `=`, so a password may contain `=`. Line endings are stripped. A line whose trimmed content is empty or starts with `#` is ignored. The username is trimmed of surrounding whitespace, since it is matched against the SASL authcid and padding there is a typo rather than intent; the password is stored exactly as written, including any leading or trailing whitespace, so a secret is never silently rewritten. File-based (not literal) so no password sits in the TOML; the operator mounts a `Secret` and writes the mount path here. |
 
 ### `[schema_registry]`
 

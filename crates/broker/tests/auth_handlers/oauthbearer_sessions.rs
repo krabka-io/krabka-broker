@@ -2,22 +2,19 @@
 //!
 //! Six scenarios exercise the full session-lifetime and in-band re-auth
 //! surface: the response carries `session_lifetime_ms ~ exp - now`; a broker
-//! cap clamps it; the dispatch-loop timer closes the connection past the
-//! token's `exp`; an in-band re-auth with a fresh token resets the timer; an
-//! in-band re-auth with a different principal name returns 58 and closes the
-//! connection; an in-band attempt to switch mechanism returns 34; and, as a
-//! regression, a PLAIN listener reports `session_lifetime_ms = 0` and arms no
-//! timer.
+//! cap clamps it; a request past the token's `exp` closes the connection; an
+//! in-band re-auth with a fresh token re-arms the session even when it starts
+//! after the old token expired; an in-band re-auth with a different principal
+//! name returns 58 and closes the connection; an in-band attempt to switch
+//! mechanism returns 34; and, as a regression, a PLAIN listener reports
+//! `session_lifetime_ms = 0` and expires nothing.
 //!
-//! `tokio::time::pause()` and `advance()` drive the per-connection deadline
-//! deterministically. The tests pause AFTER the broker is started and the
-//! handshake completes, rather than with `start_paused = true`, because the
-//! broker's own internal timers -- heartbeats, JWKS refresh, disk scans,
-//! raft -- must run at real wall-clock rates during startup or
-//! `Broker::start` hangs. Post-handshake `pause()` is enough: the dispatch
-//! loop's `sleep_until(instant_at_epoch_ms(exp))` was armed against the real
-//! tokio clock at the moment the loop re-entered `select!` after the
-//! `SaslAuthenticate`; `advance()` then jumps past that Instant.
+//! The expiry deadline is a wall-clock instant that the dispatch loop compares
+//! each arriving request against, the way Kafka's
+//! `Processor.processCompletedReceives` does, so these tests use short real
+//! windows and real sleeps rather than a paused tokio clock. There is no timer
+//! to jump past, and a session that has expired stays open until a request
+//! that is not part of a re-authentication arrives on it.
 
 use assert2::assert;
 use bytes::BytesMut;
@@ -44,6 +41,21 @@ use crate::{
         start_oauthbearer_broker_with_cap, unsecured_jws,
     },
 };
+
+/// Sends one Metadata request on a session whose window has elapsed.
+///
+/// That request is what ends the connection: KIP-368 expiry is enforced where
+/// a request is admitted, not by a timer, so a test that only waits out the
+/// window would wait forever. The broker closes without answering, so the
+/// round trip's own result is nothing to assert on — the EOF the caller then
+/// reads is.
+async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
+    let mut md_body = BytesMut::new();
+    MetadataRequest::default()
+        .encode(&mut md_body, 12)
+        .expect("Metadata encode must succeed");
+    let _ = round_trip(stream, 3, 12, 98, true, &md_body).await;
+}
 
 /// Test #1: a successful OAUTHBEARER authentication carries
 /// `session_lifetime_ms ≈ exp - now`.
@@ -79,18 +91,18 @@ async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
 /// The response value becomes `min(token_exp_ms - now_ms, cap * 1000)`. The
 /// dispatch loop anchors its deadline to the CLAMPED value, so the broker
 /// enforces what it told the client.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_capped_by_connections_max_reauth() {
     let log_dir = tempfile::tempdir().unwrap();
     let handle = start_oauthbearer_broker_with_cap(
         log_dir.path(),
         oauthbearer_zero_skew_validator(),
-        Some(krabka_units::secs(30)), // 30s cap
+        Some(krabka_units::millis(300)),
     )
     .await;
     let addr = handle.listen_addr();
 
-    // Token exp = now + 600s. Cap = 30s. Expected session = 30_000 ms.
+    // Token exp = now + 600s. Cap = 300 ms. Expected session = 300 ms.
     let exp_secs = now_unix_secs() + 600;
     let token = unsecured_jws("alice", exp_secs);
 
@@ -100,14 +112,12 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
 
     // Cap should clamp the response.
     assert!(
-        (29_000..31_000).contains(&session_lifetime_ms),
-        "session_lifetime_ms = {session_lifetime_ms}, expected ~30_000 (capped)"
+        (200..=300).contains(&session_lifetime_ms),
+        "session_lifetime_ms = {session_lifetime_ms}, expected ~300 (capped)"
     );
 
-    // Now pause and advance past cap; broker should close.
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(31)).await;
-    tokio::time::resume();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    send_metadata_on_expired_session(&mut stream).await;
 
     let mut buf = [0_u8; 16];
     let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
@@ -122,38 +132,27 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
     handle.shutdown().await;
 }
 
-/// Test #2: once the tokio clock advances past the token's `exp`, the
-/// dispatch loop's per-connection `sleep_until` fires and closes the
-/// TCP stream. The client observes EOF on the next read.
+/// Test #2: a request that arrives past the token's `exp` closes the TCP
+/// stream, and the client observes EOF on the next read.
 ///
-/// `tokio::time::pause()` needs the `current_thread` runtime. The test calls
-/// `pause()` after the handshake and does not set `start_paused = true`,
-/// because the broker's internal start-up timers need real wall-clock
-/// progress. Those timers are the raft heartbeats, the JWKS refresh, and the
-/// disk scans. Without that progress, `Broker::start` hangs. The dispatch
-/// loop armed its deadline on the real Instant when it re-entered `select!`
-/// after the handshake, so `advance(61s)` after the pause jumps tokio past
-/// that Instant.
-#[tokio::test(flavor = "current_thread")]
+/// The token is given a one-second life and the test waits it out, rather than
+/// jumping a paused tokio clock: the deadline is a wall-clock instant the
+/// dispatch loop compares each arriving request against, not a timer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_expires_closes_connection() {
     let log_dir = tempfile::tempdir().unwrap();
     let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
     let addr = handle.listen_addr();
 
-    let exp_secs = now_unix_secs() + 60;
+    let exp_secs = now_unix_secs() + 1;
     let token = unsecured_jws("alice", exp_secs);
 
     let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token)
         .await
         .expect("OAUTHBEARER session must succeed");
 
-    // Freeze tokio's clock and jump past the token's expiry. The deadline
-    // armed by the dispatch loop after handshake completion was anchored
-    // to the real Instant at the time the loop re-entered `select!`; a
-    // 61-second `advance` jumps tokio's clock past that Instant.
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(61)).await;
-    tokio::time::resume();
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    send_metadata_on_expired_session(&mut stream).await;
 
     // Broker must have closed the connection. Read should EOF.
     let mut buf = [0_u8; 16];
@@ -169,34 +168,28 @@ async fn oauthbearer_session_expires_closes_connection() {
 /// Test #3: an in-band SaslHandshake/SaslAuthenticate pair with a fresh token
 /// on an already-authenticated stream resets the per-connection deadline.
 ///
-/// The fresh token has a longer `exp`. After the clock advances past the
-/// original token's `exp`, the connection is still open and a Metadata RPC
-/// succeeds.
-#[tokio::test(flavor = "current_thread")]
+/// The re-auth here runs *after* token A has already expired, which is what a
+/// JVM client does: it picks a re-auth point inside the window but acts on it
+/// only when it next has a request to write. The broker must serve the
+/// exchange and then re-arm the session from token B's `exp`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
     let log_dir = tempfile::tempdir().unwrap();
     let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
     let addr = handle.listen_addr();
 
-    // Token A expires in 60s. Token B expires in 600s.
-    let token_a = unsecured_jws("alice", now_unix_secs() + 60);
+    // Token A expires in a second. Token B expires in 600s.
+    let token_a = unsecured_jws("alice", now_unix_secs() + 1);
     let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token_a)
         .await
         .expect("initial OAUTHBEARER must succeed");
 
-    // In-band re-auth with the fresh token BEFORE token A expires (we
-    // haven't yet paused / advanced anything).
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
     let token_b = unsecured_jws("alice", now_unix_secs() + 600);
     drive_inband_reauth(&mut stream, &token_b)
         .await
-        .expect("in-band re-auth with fresh token must succeed");
-
-    // Now jump past token A's exp (61s). Token B is good for another
-    // ~540s, so the dispatch deadline should be re-armed to token B's
-    // expiry and the connection must remain open.
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_mins(2)).await;
-    tokio::time::resume();
+        .expect("in-band re-auth with fresh token must succeed past token A's exp");
 
     // Issue a Metadata RPC to prove the connection survived.
     let md_req = MetadataRequest::default();

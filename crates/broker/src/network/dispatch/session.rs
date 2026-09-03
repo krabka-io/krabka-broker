@@ -1,21 +1,20 @@
 //! Per-connection session state. It derives the initial `ConnectionAuth` for
 //! a listener, borrows the connection's principal, holds the read off for the
-//! KIP-219 mute window a throttled request earned, and arms the two deadlines
-//! that race the next frame read: the KIP-368 SASL session expiry and the
-//! `connections.max.idle.ms` idle window.
+//! KIP-219 mute window a throttled request earned, and arms the one deadline
+//! that races the next frame read: the `connections.max.idle.ms` idle window.
 //!
-//! The two deadlines are independent. The SASL deadline is a property of the
-//! credential and only exists on a connection whose token carries an `exp`;
-//! the idle deadline is a property of the listener, applies whatever the
+//! The idle deadline is a property of the listener, applies whatever the
 //! connection's auth state, and is re-armed from `Instant::now()` on every
 //! pass through [`next_connection_frame`] — that is, after every frame read.
-//! Whichever deadline is nearer closes the connection, because both are arms
-//! of the same `select!`.
+//!
+//! The KIP-368 SASL session deadline is deliberately not armed here. Kafka
+//! runs no timer against it either: an expired session closes on the next
+//! request that is not part of a re-authentication, which the dispatch loop
+//! enforces through `ConnectionAuth::expired_for_request`.
 //!
 //! The idle window is armed after the mute rather than before it, so a pause
 //! the broker itself imposed to shed load never counts as the client falling
-//! silent. The SASL deadline does race the mute, because a session that
-//! expires mid-mute must still close on time.
+//! silent.
 //!
 //! The idle window covers a connection only from the moment it reaches this
 //! loop. On a TLS listener the handshake that runs before it is held to the
@@ -62,38 +61,6 @@ async fn sleep_until_some(deadline: Option<tokio::time::Instant>) {
     }
 }
 
-/// Converts an "expires-at as Unix epoch ms" value into a
-/// `tokio::time::Instant` for `sleep_until`.
-///
-/// The function computes the delta against the current wall clock and adds it
-/// to `Instant::now()`. A test that calls `tokio::time::pause` can then
-/// advance the tokio clock and fire the deadline deterministically.
-fn instant_at_epoch_ms(epoch_ms: i64) -> tokio::time::Instant {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    // `.max(0)` ensures delta is non-negative before the unsigned cast;
-    // tokens with past `exp` fire the timer on the very next poll.
-    let delta_ms = epoch_ms.saturating_sub(now_ms).max(0);
-    tokio::time::Instant::now() + std::time::Duration::from_millis(delta_ms.cast_unsigned())
-}
-
-/// Returns the principal name for an `Authenticated` connection, or for the
-/// `previous` snapshot of a `Reauthenticating` connection. It returns `None`
-/// otherwise. The per-connection re-auth timer reads it for the tracing log it
-/// writes on expiry.
-fn auth_principal_name(auth: &crate::network::auth::ConnectionAuth) -> Option<&str> {
-    match auth {
-        crate::network::auth::ConnectionAuth::Authenticated { principal, .. } => {
-            Some(principal.name.as_str())
-        }
-        crate::network::auth::ConnectionAuth::Reauthenticating { previous, .. } => {
-            Some(previous.principal.name.as_str())
-        }
-        _ => None,
-    }
-}
-
 /// Resolves the connection's starting authentication state.
 ///
 /// A SASL listener starts anonymous and authenticates over the wire. A
@@ -136,19 +103,6 @@ pub(super) fn initial_connection_auth(
     }
 }
 
-fn auth_deadline(auth: &crate::network::auth::ConnectionAuth) -> Option<tokio::time::Instant> {
-    match auth {
-        crate::network::auth::ConnectionAuth::Authenticated {
-            expires_at_ms: Some(expires_at_ms),
-            ..
-        } => Some(instant_at_epoch_ms(*expires_at_ms)),
-        crate::network::auth::ConnectionAuth::Reauthenticating { previous, .. } => {
-            previous.expires_at_ms.map(instant_at_epoch_ms)
-        }
-        _ => None,
-    }
-}
-
 /// What the connection is held to while it waits for its next frame: the
 /// listener's idle window, the peer it belongs to, and the metrics handle the
 /// close is counted on.
@@ -161,18 +115,6 @@ pub(super) struct FrameWaitPolicy {
     pub(super) metrics: crate::metrics::BrokerMetrics,
 }
 
-/// Logs and counts the KIP-368 session expiry that ends the connection.
-fn close_on_session_expiry(auth: &crate::network::auth::ConnectionAuth, policy: &FrameWaitPolicy) {
-    tracing::info!(
-        principal = ?auth_principal_name(auth),
-        peer = %policy.peer,
-        "SASL session expired, closing connection (KIP-368)"
-    );
-    policy
-        .metrics
-        .record_connection_close(crate::metrics::ConnectionCloseReason::SaslSessionExpired);
-}
-
 /// Reads the next request frame, after honouring any KIP-219 mute window.
 ///
 /// `mute_until` is the deadline the previous response's throttle earned. Kafka
@@ -182,10 +124,11 @@ fn close_on_session_expiry(auth: &crate::network::auth::ConnectionAuth, policy: 
 /// a throttled client from timing out its in-flight request and retrying into
 /// the quota that is shedding load.
 ///
-/// The KIP-368 session-expiry deadline races the mute as well as the read, so
-/// an expiring session still closes the connection on time. The idle window is
-/// armed once the mute has drained, so the broker's own backpressure never
-/// spends the client's idle budget.
+/// The idle window is armed once the mute has drained, so the broker's own
+/// backpressure never spends the client's idle budget. The KIP-368 session
+/// deadline is not armed here at all: Kafka closes an expired session on the
+/// request that arrives past it, which the dispatch loop does with
+/// `ConnectionAuth::expired_for_request`.
 pub(super) async fn next_connection_frame<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     auth: &crate::network::auth::ConnectionAuth,
@@ -198,28 +141,15 @@ where
     use crate::metrics::ConnectionCloseReason;
 
     if let Some(mute_until) = mute_until {
-        tokio::select! {
-            biased;
-            () = sleep_until_some(auth_deadline(auth)) => {
-                close_on_session_expiry(auth, policy);
-                return None;
-            }
-            () = tokio::time::sleep_until(mute_until) => {}
-        }
+        tokio::time::sleep_until(mute_until).await;
     }
     // Armed after the mute has drained, so every frame read resets the idle
-    // window and a pause the broker imposed is not charged to the client. The
-    // SASL deadline is absolute and is not reset by traffic, so the nearer of
-    // the two is what closes the connection.
+    // window and a pause the broker imposed is not charged to the client.
     let idle_deadline = policy
         .idle
         .map(|window| tokio::time::Instant::now() + window);
     let frame_result = tokio::select! {
         biased;
-        () = sleep_until_some(auth_deadline(auth)) => {
-            close_on_session_expiry(auth, policy);
-            return None;
-        }
         () = sleep_until_some(idle_deadline) => {
             tracing::info!(
                 principal = principal_or_anonymous(auth).name.as_str(),
@@ -312,44 +242,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn auth_principal_name_reads_authenticated_and_reauth_previous_only() {
-        let authenticated = crate::network::auth::ConnectionAuth::Authenticated {
-            principal: krabka_security::Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: krabka_security::SaslMechanism::OAuthBearer,
-            expires_at_ms: Some(123),
-            authenticated_via_token: false,
-        };
-        let reauth = crate::network::auth::ConnectionAuth::Reauthenticating {
-            previous: crate::network::auth::AuthenticatedSnapshot {
-                principal: krabka_security::Principal {
-                    name: "bob".to_string(),
-                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                    groups: vec![],
-                },
-                mechanism: krabka_security::SaslMechanism::OAuthBearer,
-                expires_at_ms: Some(456),
-                authenticated_via_token: false,
-            },
-            exchange: crate::network::auth::SaslExchange::OAuthBearer,
-            pending_token_expiry_ms: None,
-        };
-        let anonymous = crate::network::auth::ConnectionAuth::Anonymous;
-
-        let cases = [
-            ("authenticated", &authenticated, Some("alice")),
-            ("reauthenticating uses previous", &reauth, Some("bob")),
-            ("anonymous", &anonymous, None),
-        ];
-        for (case, auth, want) in cases {
-            assert!(auth_principal_name(auth) == want, "{case}");
-        }
-    }
-
     // `start_paused = true` runs these on tokio's virtual clock: with no other
     // work pending, the runtime auto-advances logical time to the next timer, so
     // the `sleep_until`/`timeout` deadlines fire instantly and deterministically
@@ -372,81 +264,5 @@ mod tests {
             .await
             .expect("deadline should resolve");
         assert!(tokio::time::Instant::now() >= deadline);
-    }
-
-    /// KIP-368 beats KIP-219: an expiring SASL session closes the connection
-    /// on time even while a throttle mute is holding the read off.
-    ///
-    /// The mute is armed for five seconds and the session expires in a
-    /// hundred milliseconds, with a request frame already waiting to be read.
-    /// A mute that did not race the expiry would sleep out its window and then
-    /// hand back that frame, serving a request on an expired session; instead
-    /// the connection ends.
-    #[tokio::test(start_paused = true)]
-    async fn an_expiring_session_closes_while_the_connection_is_muted() {
-        use futures_util::SinkExt as _;
-
-        const MAX_FRAME_BYTES: usize = 4096;
-
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-        let auth = crate::network::auth::ConnectionAuth::Authenticated {
-            principal: krabka_security::Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: krabka_security::SaslMechanism::OAuthBearer,
-            expires_at_ms: Some(now_ms + 100),
-            authenticated_via_token: true,
-        };
-
-        let (client, server) = tokio::io::duplex(MAX_FRAME_BYTES);
-        let mut client_framed =
-            tokio_util::codec::Framed::new(client, crate::network::codec::codec(MAX_FRAME_BYTES));
-        client_framed
-            .send(Bytes::from_static(b"a queued request"))
-            .await
-            .expect("queue a request behind the mute");
-        let mut server_framed =
-            tokio_util::codec::Framed::new(server, crate::network::codec::codec(MAX_FRAME_BYTES));
-
-        let mute_until = tokio::time::Instant::now() + Duration::from_secs(5);
-        // No idle window, so the only deadline that can end this connection is
-        // the session expiry the case is about.
-        let policy = FrameWaitPolicy {
-            idle: None,
-            peer: "127.0.0.1:9092".parse().expect("a literal socket address"),
-            metrics: crate::metrics::BrokerMetrics::default(),
-        };
-        let frame =
-            next_connection_frame(&mut server_framed, &auth, Some(mute_until), &policy).await;
-
-        assert!(
-            frame.is_none(),
-            "the session expiry must end the connection, not wait out the mute"
-        );
-    }
-
-    #[test]
-    fn instant_at_epoch_ms_maps_future_and_past_wall_clock_to_tokio_deadlines() {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-
-        let before = tokio::time::Instant::now();
-        let future = instant_at_epoch_ms(now_ms + 250);
-        let delay = future.duration_since(before);
-        assert!(
-            delay >= Duration::from_millis(100) && delay <= Duration::from_secs(2),
-            "future epoch should become a near future tokio deadline, got {delay:?}"
-        );
-
-        let past = instant_at_epoch_ms(now_ms - 250);
-        assert!(
-            past <= tokio::time::Instant::now() + Duration::from_millis(50),
-            "past epoch should fire immediately"
-        );
     }
 }

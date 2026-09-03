@@ -223,7 +223,10 @@ tls_config = { cert_path = "/tls/c", key_path = "/tls/k" }
         let tls = cfg.listeners[0].tls_config.as_ref().unwrap();
         assert!(tls.principal_mapping_rules == vec!["DEFAULT".to_owned()]);
         let spec = cfg.listeners[0].clone().into_spec().unwrap();
-        assert!(spec.principal_mapper.apply("CN=alice,OU=x,O=y") == "CN=alice,OU=x,O=y");
+        assert!(
+            spec.principal_mapper.apply("CN=alice,OU=x,O=y").as_deref()
+                == Some("CN=alice,OU=x,O=y")
+        );
     }
 
     /// The configured rules reach the listener the accept path reads them
@@ -254,10 +257,15 @@ tls_config = { cert_path = "/tls/c", key_path = "/tls/k", client_auth = "Require
             listener
                 .principal_mapper
                 .apply("CN=alice,OU=integration,O=krabka")
-                == "alice"
+                .as_deref()
+                == Some("alice")
         );
         assert!(
-            listener.principal_mapper.apply("OU=integration,O=krabka") == "OU=integration,O=krabka"
+            listener
+                .principal_mapper
+                .apply("OU=integration,O=krabka")
+                .as_deref()
+                == Some("OU=integration,O=krabka")
         );
     }
 

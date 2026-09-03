@@ -1,3 +1,4 @@
+
 {
   "$defs": {
     "AuthzType": {
@@ -1031,7 +1032,7 @@
       "description": "TOML shape of `[sasl_plain]`. Maps to\n[`crate::BrokerConfig::plain_credentials`].",
       "properties": {
         "credentials_path": {
-          "description": "Filesystem path to the SASL/PLAIN credential file: one\n`username=password` per line, `#` comment lines and blank lines\nignored, the trailing newline stripped. File-based (not literal) so no\npassword sits in the TOML; the operator mounts a `Secret` and writes\nthe mount path here. A password may contain `=`; only the first `=` on\na line separates the two.",
+          "description": "Filesystem path to the SASL/PLAIN credential file: one\n`username=password` per line, split at the first `=`, so a password may\ncontain `=`. Line endings are stripped. A line whose trimmed content is\nempty or starts with `#` is ignored. The username is trimmed of\nsurrounding whitespace, since it is matched against the SASL authcid\nand padding there is a typo rather than intent; the password is stored\nexactly as written, including any leading or trailing whitespace, so a\nsecret is never silently rewritten. File-based (not literal) so no\npassword sits in the TOML; the operator mounts a `Secret` and writes\nthe mount path here.",
           "type": [
             "string",
             "null"

@@ -17,11 +17,15 @@ use super::FileConfigError;
 #[serde(deny_unknown_fields)]
 pub struct FileSaslPlainConfig {
     /// Filesystem path to the SASL/PLAIN credential file: one
-    /// `username=password` per line, `#` comment lines and blank lines
-    /// ignored, the trailing newline stripped. File-based (not literal) so no
+    /// `username=password` per line, split at the first `=`, so a password may
+    /// contain `=`. Line endings are stripped. A line whose trimmed content is
+    /// empty or starts with `#` is ignored. The username is trimmed of
+    /// surrounding whitespace, since it is matched against the SASL authcid
+    /// and padding there is a typo rather than intent; the password is stored
+    /// exactly as written, including any leading or trailing whitespace, so a
+    /// secret is never silently rewritten. File-based (not literal) so no
     /// password sits in the TOML; the operator mounts a `Secret` and writes
-    /// the mount path here. A password may contain `=`; only the first `=` on
-    /// a line separates the two.
+    /// the mount path here.
     pub credentials_path: Option<std::path::PathBuf>,
 }
 
@@ -37,13 +41,14 @@ fn parse_credentials(
             !trimmed.is_empty() && !trimmed.starts_with('#')
         })
         .map(|(index, line)| {
-            let (user, password) = line.trim().split_once('=').ok_or_else(|| {
+            let (user, password) = line.split_once('=').ok_or_else(|| {
                 FileConfigError::InvalidConfig(format!(
                     "[sasl_plain]: {}:{}: expected user=password",
                     path.display(),
                     index + 1
                 ))
             })?;
+            let user = user.trim();
             if user.is_empty() {
                 return Err(FileConfigError::InvalidConfig(format!(
                     "[sasl_plain]: {}:{}: empty username",
@@ -118,6 +123,44 @@ mod tests {
     }
 
     #[test]
+    fn preserves_password_whitespace_and_trims_the_username() {
+        for (body, expected) in [
+            (
+                "pad=  secret  ",
+                maplit::hashmap! { "pad".to_string() => "  secret  ".to_string() },
+            ),
+            (
+                "tabbed=\tsecret\t",
+                maplit::hashmap! { "tabbed".to_string() => "\tsecret\t".to_string() },
+            ),
+            (
+                "spacey=  pa=ss  ",
+                maplit::hashmap! { "spacey".to_string() => "  pa=ss  ".to_string() },
+            ),
+            (
+                "  admin  =  secret  ",
+                maplit::hashmap! { "admin".to_string() => "  secret  ".to_string() },
+            ),
+            (
+                "empty=",
+                maplit::hashmap! { "empty".to_string() => String::new() },
+            ),
+            (
+                "blank=   ",
+                maplit::hashmap! { "blank".to_string() => "   ".to_string() },
+            ),
+            (
+                "   \t  \n\t# indented comment\n  admin=secret\n",
+                maplit::hashmap! { "admin".to_string() => "secret".to_string() },
+            ),
+        ] {
+            let cfg = apply_credential_file(body).unwrap();
+
+            assert!(*cfg.plain_credentials.as_map() == expected, "{body:?}");
+        }
+    }
+
+    #[test]
     fn absent_section_leaves_the_table_empty() {
         let file: FileConfig = toml::from_str("").unwrap();
         let mut cfg = crate::config::BrokerConfig::default();
@@ -128,16 +171,18 @@ mod tests {
 
     #[test]
     fn rejects_a_malformed_line() {
-        let message = apply_credential_file("admin=secret\nnonsense\n")
-            .expect_err("a line without `=` is rejected");
-        assert!(message.contains("expected user=password"), "{message}");
+        for body in ["admin=secret\nnonsense\n", "admin=secret\n  nonsense  \n"] {
+            let message = apply_credential_file(body).expect_err("a line without `=` is rejected");
+            assert!(message.contains("expected user=password"), "{message}");
+        }
     }
 
     #[test]
     fn rejects_an_empty_username() {
-        let message =
-            apply_credential_file("=secret\n").expect_err("an empty username is rejected");
-        assert!(message.contains("empty username"), "{message}");
+        for body in ["=secret\n", "   =secret\n", "\t=  secret  \n"] {
+            let message = apply_credential_file(body).expect_err("an empty username is rejected");
+            assert!(message.contains("empty username"), "{message}");
+        }
     }
 
     #[test]

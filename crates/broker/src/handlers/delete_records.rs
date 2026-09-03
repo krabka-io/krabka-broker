@@ -139,6 +139,10 @@ pub(crate) async fn handle(
     // topic name covers every partition of it, and it is spent once.
     let mut spent: HashSet<Uuid> = HashSet::new();
     let mut topic_results: Vec<DeleteRecordsTopicResult> = Vec::with_capacity(req.topics.len());
+    // The partitions whose deletion frontier actually moved. A stale request
+    // and an exact retry at the current log start answer success and delete
+    // nothing, so the wire code cannot say which partitions were trimmed.
+    let mut trimmed: Vec<krabka_audit::AuditResource> = Vec::new();
 
     for topic in req.topics {
         // Per-topic ACL check: if denied, mark every partition in the topic.
@@ -158,7 +162,14 @@ pub(crate) async fn handle(
             Vec::with_capacity(topic.partitions.len());
 
         for fp in topic.partitions {
-            part_results.push(trim_one(&env, &mut spent, &topic.name, &fp).await);
+            let (row, deleted) = trim_one(&env, &mut spent, &topic.name, &fp).await;
+            if deleted {
+                trimmed.push(crate::handlers::audit_resource(
+                    "Partition",
+                    format!("{}-{}", topic.name, row.partition_index),
+                ));
+            }
+            part_results.push(row);
         }
 
         topic_results.push(topic_result(topic.name, part_results));
@@ -167,26 +178,7 @@ pub(crate) async fn handle(
     // A gated trim audits itself as a `PrivilegedAction`. On a cluster with no
     // approver set the gate is inert, so every partition that was actually
     // trimmed is audited here.
-    crate::handlers::audit_admin_success(
-        broker.audit_log.as_ref(),
-        ctx,
-        "DeleteRecords",
-        topic_results
-            .iter()
-            .flat_map(|topic| {
-                topic
-                    .partitions
-                    .iter()
-                    .filter(|row| row.error_code == codes::NONE)
-                    .map(move |row| {
-                        crate::handlers::audit_resource(
-                            "Partition",
-                            format!("{}-{}", topic.name, row.partition_index),
-                        )
-                    })
-            })
-            .collect(),
-    );
+    crate::handlers::audit_admin_success(broker.audit_log.as_ref(), ctx, "DeleteRecords", trimmed);
 
     let resp = delete_records_response(topic_results);
     crate::handlers::encode_response(&resp, version)
@@ -286,7 +278,13 @@ pub(super) struct TrimEnv<'a> {
     pub(super) partitions: &'a crate::partition_registry::PartitionRegistry,
 }
 
-/// Trim one partition, and answer the row the response carries for it.
+/// Trim one partition, and answer the row the response carries for it beside
+/// whether the trim moved the partition's deletion frontier.
+///
+/// The two are not the same answer. A stale request, and an exact retry at the
+/// current log start, are a `Noop` that deletes nothing and still answers
+/// `NONE` on the wire, so the caller reads the second value rather than the
+/// error code when it decides what to audit.
 ///
 /// `spent` carries the proposals this request already consumed, so one approval
 /// that covers a whole topic is spent once however many partitions the request
@@ -296,18 +294,19 @@ async fn trim_one(
     spent: &mut HashSet<Uuid>,
     topic: &str,
     fp: &DeleteRecordsPartition,
-) -> DeleteRecordsPartitionResult {
+) -> (DeleteRecordsPartitionResult, bool) {
     let index = fp.partition_index;
+    let refused = |code| (error_partition_result(index, code), false);
     let part_opt = env.partitions.get(topic, krabka_ids::PartitionIndex(index));
     let Some(part) = part_opt else {
-        return error_partition_result(index, codes::UNKNOWN_TOPIC_OR_PARTITION);
+        return refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
     };
 
     let cur_leader = part
         .current_leader
         .load(std::sync::atomic::Ordering::Acquire);
     if cur_leader != env.broker.config.node_id {
-        return error_partition_result(index, codes::NOT_LEADER_OR_FOLLOWER);
+        return refused(codes::NOT_LEADER_OR_FOLLOWER);
     }
 
     // KFC-9: a write freeze refuses every operation that removes data from the
@@ -336,7 +335,7 @@ async fn trim_one(
             refusal = %verdict.removal_message(),
             "DeleteRecords refused by a freeze"
         );
-        return error_partition_result(index, codes::POLICY_VIOLATION);
+        return refused(codes::POLICY_VIOLATION);
     }
 
     // KFC-9: the two-person rule answers here, before the broker reads a single
@@ -345,7 +344,7 @@ async fn trim_one(
     // gather two signatures again over a typo.
     let consumed = match authorize_trim(env.image, &env.broker.config.break_glass, topic, index) {
         Ok(consumed) => consumed,
-        Err(denial) => return refuse_trim(env, topic, index, &denial),
+        Err(denial) => return (refuse_trim(env, topic, index, &denial), false),
     };
 
     let leo = part.log_end_offset();
@@ -368,14 +367,17 @@ async fn trim_one(
     let current_start = diskless_logical_start(env, topic, &part)
         .await
         .map_or_else(|| part.log_start_offset(), Offset);
-    let target = match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
-        DeleteRecordsTrimDecision::Noop { frontier }
-        | DeleteRecordsTrimDecision::Apply { frontier } => Offset(frontier),
-        DeleteRecordsTrimDecision::RejectMalformed
-        | DeleteRecordsTrimDecision::RejectOutOfRange => {
-            return error_partition_result(index, codes::OFFSET_OUT_OF_RANGE);
-        }
-    };
+    // `deletes` is what the audit trail keys on: a `Noop` answers the current
+    // start, trims to where the partition already begins, and removes nothing.
+    let (target, deletes) =
+        match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
+            DeleteRecordsTrimDecision::Noop { frontier } => (Offset(frontier), false),
+            DeleteRecordsTrimDecision::Apply { frontier } => (Offset(frontier), true),
+            DeleteRecordsTrimDecision::RejectMalformed
+            | DeleteRecordsTrimDecision::RejectOutOfRange => {
+                return refused(codes::OFFSET_OUT_OF_RANGE);
+            }
+        };
 
     let audit_target = trim_target(topic, index);
     if let Err(error) = require_transition(
@@ -393,7 +395,7 @@ async fn trim_one(
     .await
     {
         tracing::warn!(%topic, partition = index, %error, "DeleteRecords refused by audit policy");
-        return error_partition_result(index, codes::POLICY_VIOLATION);
+        return refused(codes::POLICY_VIOLATION);
     }
 
     // KFC-9: spend the approval before the trim removes anything.
@@ -404,7 +406,7 @@ async fn trim_one(
                 %topic, partition = index, %error,
                 "DeleteRecords could not spend the break-glass approval"
             );
-            return error_partition_result(index, codes::COORDINATOR_NOT_AVAILABLE);
+            return refused(codes::COORDINATOR_NOT_AVAILABLE);
         }
     };
 
@@ -415,7 +417,7 @@ async fn trim_one(
             %topic, partition = index, %error,
             "DeleteRecords could not record the diskless delete floor"
         );
-        return error_partition_result(index, codes::UNKNOWN_SERVER_ERROR);
+        return refused(codes::UNKNOWN_SERVER_ERROR);
     }
 
     match part.trim_to_offset(target).await {
@@ -437,14 +439,14 @@ async fn trim_one(
                     reason: "records deleted below the trim point",
                 },
             );
-            partition_result(index, low_watermark, codes::NONE)
+            (partition_result(index, low_watermark, codes::NONE), deletes)
         }
         Err(e) => {
             tracing::warn!(
                 %topic, partition = index, error = %e,
                 "DeleteRecords: trim_to_offset failed"
             );
-            error_partition_result(index, codes::UNKNOWN_SERVER_ERROR)
+            refused(codes::UNKNOWN_SERVER_ERROR)
         }
     }
 }

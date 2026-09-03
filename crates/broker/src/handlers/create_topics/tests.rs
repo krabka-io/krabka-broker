@@ -552,6 +552,76 @@ async fn duplicate_topic_reports_error_without_success_fields() {
 }
 
 #[tokio::test]
+async fn validate_only_answers_the_verdict_and_commits_nothing() {
+    /// One dry run: the topic name, and the row it has to answer with.
+    type DryRun<'a> = (&'a str, CreatableTopicResult);
+
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let committed = drive(&broker, &request(vec![topic("existing", 1, 1)]), &p, &peer).await;
+    assert!(committed.topics[0].error_code == codes::NONE);
+
+    let cases: [DryRun<'_>; 2] = [
+        (
+            // Kafka's `validateOnly` reports `TopicExistsException` for a name
+            // that is already taken, and the committing path never runs here
+            // to find that out.
+            "existing",
+            CreatableTopicResult {
+                name: "existing".into(),
+                error_code: codes::TOPIC_ALREADY_EXISTS,
+                num_partitions: -1,
+                replication_factor: -1,
+                ..Default::default()
+            },
+        ),
+        (
+            "fresh",
+            CreatableTopicResult {
+                name: "fresh".into(),
+                error_code: codes::NONE,
+                num_partitions: 1,
+                replication_factor: 1,
+                configs: Some(Vec::new()),
+                ..Default::default()
+            },
+        ),
+    ];
+
+    for (name, expected_row) in cases {
+        let req = CreateTopicsRequest {
+            validate_only: true,
+            ..request(vec![topic(name, 1, 1)])
+        };
+
+        let resp = drive(&broker, &req, &p, &peer).await;
+
+        assert!(resp.topics.len() == 1, "topic {name}");
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            // A fresh topic_id is generated before the verdict on every row.
+            topics: vec![CreatableTopicResult {
+                topic_id: resp.topics[0].topic_id,
+                ..expected_row
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "topic {name}");
+    }
+
+    // The dry run for "fresh" passed every check and still committed nothing.
+    assert!(
+        broker_handle
+            .controller_image_for_test()
+            .topic("fresh")
+            .is_none()
+    );
+    broker_handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn strict_create_topics_rejects_after_quota_exhaustion() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     seed_controller_quota(&broker_handle, 2.0).await;

@@ -23,7 +23,7 @@
 //! answers `POLICY_VIOLATION (44)` with the refusal text, and the gate is
 //! active only when `[break_glass]` names an approver set.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use krabka_metadata::ResourceType;
@@ -158,19 +158,7 @@ pub(crate) async fn handle(
         broker.audit_log.as_ref(),
         ctx,
         "AlterPartitionReassignments",
-        by_topic
-            .iter()
-            .flat_map(|(topic, rows)| {
-                rows.iter()
-                    .filter(|row| row.error_code == crate::codes::NONE)
-                    .map(move |row| {
-                        crate::handlers::audit_resource(
-                            "Partition",
-                            format!("{topic}-{}", row.partition_index),
-                        )
-                    })
-            })
-            .collect(),
+        audited_partitions(&by_topic, &batch.altered),
     );
 
     let responses: Vec<ReassignableTopicResponse> = by_topic
@@ -187,4 +175,31 @@ pub(crate) async fn handle(
         ..Default::default()
     };
     encode_response(&resp, api_version)
+}
+
+/// The partitions an `AlterPartitionReassignments` request actually
+/// reassigned.
+///
+/// A success row is not a mutation. A requested target that already equals the
+/// partition's current one plans no record, and the row still answers `NONE`,
+/// so the audited set is the intersection of the rows that succeeded with the
+/// partitions that contributed a record to the append: `altered` holds those,
+/// in the same `"<topic>-<partition>"` spelling the audit resource carries.
+fn audited_partitions(
+    by_topic: &HashMap<String, Vec<ReassignablePartitionResponse>>,
+    altered: &HashSet<String>,
+) -> Vec<krabka_audit::AuditResource> {
+    by_topic
+        .iter()
+        .flat_map(|(topic, rows)| {
+            rows.iter()
+                .filter(|row| row.error_code == crate::codes::NONE)
+                .filter_map(move |row| {
+                    let name = format!("{topic}-{}", row.partition_index);
+                    altered
+                        .contains(&name)
+                        .then(|| crate::handlers::audit_resource("Partition", name))
+                })
+        })
+        .collect()
 }

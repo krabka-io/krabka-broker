@@ -383,6 +383,11 @@ mod tests {
         let controller = BrokerConfig {
             controller_listener_protocol: ListenerProtocol::SaslPlaintext,
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
+            // A controller listener offering PLAIN needs a credential table to
+            // reach the outbound-mismatch error this case is about.
+            plain_credentials: [("admin".to_string(), "admin-secret".to_string())]
+                .into_iter()
+                .collect(),
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),
             }),

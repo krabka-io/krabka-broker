@@ -192,7 +192,7 @@ async fn handle_sasl_frame(
 /// time. `source` is built the same way [`crate::handlers::admin_audit`]
 /// builds it, so an auditor can join an authentication row to the
 /// privileged-action rows the same session went on to write.
-pub(super) fn emit_authentication(
+pub(crate) fn emit_authentication(
     audit_log: &krabka_audit::AuditLog,
     peer: &SocketAddr,
     mechanism: &str,
@@ -219,7 +219,7 @@ pub(super) fn emit_authentication(
 /// `break_glass::handlers::principal_name` puts on a `PrivilegedAction` row.
 /// An auditor joins the two by that string, so the two sites have to spell a
 /// principal the same way.
-pub(super) fn audit_principal(
+pub(crate) fn audit_principal(
     principal: &krabka_security::Principal,
 ) -> krabka_audit::AuditPrincipal {
     krabka_audit::AuditPrincipal {

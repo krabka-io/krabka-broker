@@ -95,14 +95,17 @@ fn oauthbearer_listener_enabled(cfg: &crate::config::BrokerConfig) -> bool {
 /// # Errors
 ///
 /// Returns [`FileConfigError::InvalidConfig`] when the table selects no
-/// endpoint — which would silently fall back to the unsecured-JWS
-/// (`alg:none`) validator — while a listener enables OAUTHBEARER and
-/// `allow_unsecured` is not `true`.
+/// endpoint, or is absent entirely — either of which would silently fall back
+/// to the unsecured-JWS (`alg:none`) validator — while a listener enables
+/// OAUTHBEARER and `allow_unsecured` is not `true`.
 pub(super) fn apply_oauthbearer(
     oauth: Option<FileOAuthBearerConfig>,
     cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
-    let Some(oauth) = oauth else { return Ok(()) };
+    // An absent `[oauthbearer]` table is an endpoint-less one: it must still
+    // reach the `(None, None)` arm below, or a listener enabling OAUTHBEARER
+    // would keep the unsecured (`alg:none`) validator without the opt-in.
+    let oauth = oauth.unwrap_or_default();
     // Thread the IdP trust-store path
     // unconditionally. Inert when no HTTPS-bound endpoint is set,
     // and harmlessly carried for the unsecured validator.
@@ -339,6 +342,46 @@ allowable_clock_skew_ms = 5000
 [oauthbearer]
 principal_claim_name = "sub"
 allowable_clock_skew_ms = 5000
+"#;
+        let file: FileConfig = toml::from_str(src).expect("parse");
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        assert!(cfg.oauthbearer_jwks_endpoint.is_none());
+        assert!(matches!(
+            cfg.oauthbearer_validator,
+            krabka_security::OAuthBearerValidator::Unsecured(_)
+        ));
+    }
+
+    #[test]
+    fn apply_to_missing_oauthbearer_table_rejects_unsecured_fallback() {
+        let src = r#"
+[[listeners]]
+name = "SASL"
+bind_addr = "0.0.0.0:9092"
+advertised = "host:9092"
+protocol = "SaslPlaintext"
+sasl_config = { enabled_mechanisms = ["OAUTHBEARER"] }
+"#;
+        let file: FileConfig = toml::from_str(src).expect("parse");
+        let mut cfg = crate::config::BrokerConfig::default();
+        let error = file
+            .apply_to(&mut cfg)
+            .expect_err("a missing [oauthbearer] table must not silently stay unsecured");
+        let FileConfigError::InvalidConfig(message) = &error else {
+            panic!("expected InvalidConfig; got {error:?}")
+        };
+        assert!(message.contains("allow_unsecured"));
+    }
+
+    #[test]
+    fn apply_to_missing_oauthbearer_table_applies_when_no_listener_offers_it() {
+        let src = r#"
+[[listeners]]
+name = "PLAIN"
+bind_addr = "0.0.0.0:9092"
+advertised = "host:9092"
+protocol = "Plaintext"
 "#;
         let file: FileConfig = toml::from_str(src).expect("parse");
         let mut cfg = crate::config::BrokerConfig::default();

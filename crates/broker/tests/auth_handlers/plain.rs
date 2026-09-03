@@ -348,12 +348,12 @@ async fn start_plain_reauth_broker(
 }
 
 /// KIP-368: with `connections.max.reauth.ms` set, a PLAIN session reports the
-/// window as `session_lifetime_ms` and the broker closes the connection once
-/// it elapses without an in-band re-authentication.
-#[tokio::test(flavor = "current_thread")]
+/// window as `session_lifetime_ms`, and a data-plane request that arrives after
+/// it elapses without an in-band re-authentication closes the connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_session_capped_by_connections_max_reauth_then_closes() {
     let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
+    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
     let addr = handle.listen_addr();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -363,14 +363,19 @@ async fn plain_session_capped_by_connections_max_reauth_then_closes() {
         .expect("PLAIN authenticate round-trip");
     check!(resp.error_code == 0);
     check!(
-        (29_000..=30_000).contains(&resp.session_lifetime_ms),
-        "session_lifetime_ms = {}, expected the 30_000 ms cap",
+        (200..=300).contains(&resp.session_lifetime_ms),
+        "session_lifetime_ms = {}, expected the 300 ms cap",
         resp.session_lifetime_ms
     );
 
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(31)).await;
-    tokio::time::resume();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // The request that arrives on the expired session is what ends it.
+    let md_req = MetadataRequest::default();
+    let mut md_body = BytesMut::new();
+    md_req.encode(&mut md_body, 12).unwrap();
+    corr += 1;
+    let _ = round_trip(&mut stream, 3, 12, corr, true, &md_body).await;
 
     let mut buf = [0_u8; 16];
     let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
@@ -487,6 +492,60 @@ async fn plain_authenticate_without_handshake_is_illegal_sasl_state() {
         "expected ILLEGAL_SASL_STATE, got {}",
         resp.error_code
     );
+
+    handle.shutdown().await;
+}
+
+/// KIP-368: a PLAIN connection re-authenticates round after round, and each
+/// round may begin after its window has already elapsed.
+///
+/// A JVM client re-authenticates only when it next has a request to write, so
+/// on its own send cadence it opens the exchange past the deadline routinely.
+/// The window here is short and the test sleeps past it before every round, so
+/// each of the five rounds starts expired.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
+    let addr = handle.listen_addr();
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut corr = 0;
+    let initial = plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
+        .await
+        .expect("initial PLAIN authenticate");
+    check!(initial.error_code == 0);
+
+    for round in 1..=5 {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        let reauth =
+            plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
+                .await
+                .unwrap_or_else(|e| panic!("re-auth round {round} must round-trip: {e}"));
+        check!(
+            reauth.error_code == 0,
+            "re-auth round {round} must succeed, got {} {:?}",
+            reauth.error_code,
+            reauth.error_message
+        );
+        check!(
+            (200..=300).contains(&reauth.session_lifetime_ms),
+            "re-auth round {round} must re-arm the window, got {}",
+            reauth.session_lifetime_ms
+        );
+
+        let md_req = MetadataRequest::default();
+        let mut md_body = BytesMut::new();
+        md_req.encode(&mut md_body, 12).unwrap();
+        corr += 1;
+        let md_resp_bytes = round_trip(&mut stream, 3, 12, corr, true, &md_body)
+            .await
+            .unwrap_or_else(|e| panic!("Metadata after re-auth round {round}: {e}"));
+        let mut cur: &[u8] = &md_resp_bytes;
+        let md_resp = MetadataResponse::decode(&mut cur, 12).unwrap();
+        check!(!md_resp.brokers.is_empty(), "round {round}");
+    }
 
     handle.shutdown().await;
 }

@@ -481,12 +481,16 @@ async fn start_scram_reauth_broker(
 }
 
 /// KIP-368: a SCRAM session under `connections.max.reauth.ms` reports the
-/// window as `session_lifetime_ms`, and the broker closes the connection when
-/// it elapses without an in-band re-authentication.
-#[tokio::test(flavor = "current_thread")]
+/// window as `session_lifetime_ms`, and a data-plane request that arrives after
+/// it elapses without an in-band re-authentication closes the connection.
+///
+/// The close happens on that request and not on a timer, which is where Kafka
+/// puts it (`Processor.processCompletedReceives`): a connection that has fallen
+/// silent is reclaimed by `connections.max.idle.ms`, not by this window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scram_session_capped_by_connections_max_reauth_then_closes() {
     let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
+    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
     let addr = handle.listen_addr();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -502,14 +506,19 @@ async fn scram_session_capped_by_connections_max_reauth_then_closes() {
     .expect("SCRAM authenticate round-trips");
     check!(resp.error_code == 0);
     check!(
-        (29_000..=30_000).contains(&resp.session_lifetime_ms),
-        "session_lifetime_ms = {}, expected the 30_000 ms cap",
+        (200..=300).contains(&resp.session_lifetime_ms),
+        "session_lifetime_ms = {}, expected the 300 ms cap",
         resp.session_lifetime_ms
     );
 
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(31)).await;
-    tokio::time::resume();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // The request that arrives on the expired session is what ends it.
+    let md_req = MetadataRequest::default();
+    let mut md_body = BytesMut::new();
+    md_req.encode(&mut md_body, 12).unwrap();
+    corr += 1;
+    let _ = round_trip(&mut stream, 3, 12, corr, true, &md_body).await;
 
     let mut buf = [0_u8; 16];
     let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
@@ -613,6 +622,80 @@ async fn scram_in_band_reauth_with_different_principal_closes() {
         .expect("read should not hang")
         .expect("read should not error");
     check!(n == 0, "expected EOF after a refused re-auth");
+
+    handle.shutdown().await;
+}
+
+/// KIP-368: a connection re-authenticates round after round for the whole life
+/// of the connection, and it may begin each round *after* its window has
+/// already elapsed.
+///
+/// That lateness is not an edge case. A JVM client picks its re-auth point at
+/// 85–95% of the advertised `session_lifetime_ms`, but acts on it only when it
+/// next has a request to write, so a producer on its own send cadence opens the
+/// exchange past the deadline as a matter of course. Kafka serves it: the
+/// broker runs no timer, and an expired session is closed only by a request
+/// that is not part of a re-authentication.
+///
+/// The window here is short and the test sleeps past it before every round, so
+/// each of the five rounds starts expired. A broker that closed on the deadline
+/// itself fails on the first one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
+    let addr = handle.listen_addr();
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut corr = 0;
+    let initial = scram_authenticate(
+        &mut stream,
+        &mut corr,
+        "alice",
+        &alice_password(),
+        SaslMechanism::ScramSha512,
+    )
+    .await
+    .expect("initial SCRAM authenticate");
+    check!(initial.error_code == 0);
+
+    for round in 1..=5 {
+        // Past the deadline the previous round armed, the way a client that
+        // only re-authenticates when it has something to send arrives.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        let reauth = scram_authenticate(
+            &mut stream,
+            &mut corr,
+            "alice",
+            &alice_password(),
+            SaslMechanism::ScramSha512,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("re-auth round {round} must round-trip: {e}"));
+        check!(
+            reauth.error_code == 0,
+            "re-auth round {round} must succeed, got {} {:?}",
+            reauth.error_code,
+            reauth.error_message
+        );
+        check!(
+            (200..=300).contains(&reauth.session_lifetime_ms),
+            "re-auth round {round} must re-arm the window, got {}",
+            reauth.session_lifetime_ms
+        );
+
+        let md_req = MetadataRequest::default();
+        let mut md_body = BytesMut::new();
+        md_req.encode(&mut md_body, 12).unwrap();
+        corr += 1;
+        let md_resp_bytes = round_trip(&mut stream, 3, 12, corr, true, &md_body)
+            .await
+            .unwrap_or_else(|e| panic!("Metadata after re-auth round {round}: {e}"));
+        let mut cur: &[u8] = &md_resp_bytes;
+        let md_resp = MetadataResponse::decode(&mut cur, 12).unwrap();
+        check!(!md_resp.brokers.is_empty(), "round {round}");
+    }
 
     handle.shutdown().await;
 }

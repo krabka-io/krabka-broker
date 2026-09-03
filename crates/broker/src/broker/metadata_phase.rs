@@ -22,6 +22,9 @@ use crate::{
 
 struct RaftTransport {
     controller_cell: Arc<tokio::sync::OnceCell<Arc<krabka_raft::ControllerHandle>>>,
+    /// Filled by `Broker::start` once the audit pipeline exists, so the
+    /// controller listener's SASL logins reach the audit trail.
+    audit_cell: crate::raft_handshake::AuditLogArc,
     handshake: Option<Arc<dyn krabka_raft::RaftListenerHandshake>>,
     dialer: Option<Arc<dyn krabka_raft::OutboundDialer>>,
     admin_router: Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
@@ -33,6 +36,7 @@ fn prepare_raft_transport(
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
 ) -> RaftTransport {
     let controller_cell = Arc::new(tokio::sync::OnceCell::new());
+    let audit_cell: crate::raft_handshake::AuditLogArc = Arc::new(tokio::sync::OnceCell::new());
     let handshake =
         if config.controller_listener_protocol == krabka_security::ListenerProtocol::Plaintext {
             tracing::warn!(
@@ -48,11 +52,9 @@ fn prepare_raft_transport(
                 enabled_sasl_mechanisms: config.enabled_sasl_mechanisms.clone(),
                 gssapi: config.gssapi.clone(),
                 oauthbearer_validator: config.oauthbearer_validator.clone(),
-                // The controller listener has no name in `listeners`, so it
-                // takes the broker-wide window unless an override names it.
-                connections_max_reauth: config.connections_max_reauth_for("CONTROLLER"),
                 protocol: config.controller_listener_protocol,
                 controller: Arc::clone(&controller_cell),
+                audit_log: Arc::clone(&audit_cell),
                 max_frame_bytes: config.socket_request_max.bytes_usize(),
                 authorizer: Arc::clone(&config.authorizer),
             };
@@ -69,6 +71,7 @@ fn prepare_raft_transport(
     )) as Arc<dyn krabka_raft::OutboundDialer>;
     RaftTransport {
         controller_cell,
+        audit_cell,
         handshake,
         dialer: Some(dialer),
         admin_router: config
@@ -141,6 +144,7 @@ async fn start_metadata_source(
 > {
     let RaftTransport {
         controller_cell,
+        audit_cell: _,
         handshake,
         dialer,
         admin_router,
@@ -290,10 +294,12 @@ pub(super) async fn start_metadata_phase(
     (
         Arc<dyn crate::metadata_source::MetadataSource>,
         Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
+        crate::raft_handshake::AuditLogArc,
     ),
     BrokerError,
 > {
     let transport = prepare_raft_transport(config, tls_dynamic, inter_broker_client);
+    let audit_cell = Arc::clone(&transport.audit_cell);
     let mut bootstrap_records = crate::bootstrap::load_bootstrap_records(&config.log_dir)?;
     let controller = start_metadata_source(
         config,
@@ -316,5 +322,5 @@ pub(super) async fn start_metadata_phase(
     register_controller(config, &*controller.0).await?;
     register_broker(config, &*controller.0).await?;
     spawn_deferred_controller_registration(config, &controller.0);
-    Ok(controller)
+    Ok((controller.0, controller.1, audit_cell))
 }

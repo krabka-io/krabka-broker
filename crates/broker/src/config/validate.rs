@@ -125,10 +125,23 @@ impl BrokerConfig {
                 "controller_listener_protocol requires TLS but tls_config is None".into(),
             ));
         }
-        if cp.requires_sasl() && self.enabled_sasl_mechanisms.is_empty() {
-            return Err(BrokerError::SaslListenerNoMechanisms {
-                name: "controller".into(),
-            });
+        if cp.requires_sasl() {
+            if self.enabled_sasl_mechanisms.is_empty() {
+                return Err(BrokerError::SaslListenerNoMechanisms {
+                    name: "controller".into(),
+                });
+            }
+            // As above, but the controller listener is configured on its own
+            // and is not in `effective_listeners`: an empty table here starts
+            // the node and then rejects every controller peer, so no quorum
+            // ever forms.
+            if self.enabled_sasl_mechanisms.contains(&SaslMechanism::Plain)
+                && self.plain_credentials.is_empty()
+            {
+                return Err(BrokerError::PlainListenerNoCredentials {
+                    name: "controller".into(),
+                });
+            }
         }
         self.validate_outbound_sasl(inter_broker_listener)?;
         self.validate_positive_runtime_scalars()?;
@@ -315,6 +328,7 @@ impl BrokerConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_security::ListenerProtocol;
     use krabka_units::{Time, bytes, millis};
 
     use super::*;
@@ -349,6 +363,44 @@ mod tests {
         // The same config passes once the table is loaded.
         let config = crate::config::test_support::base();
         assert!(config.validate().is_ok());
+    }
+
+    /// The controller listener is configured outside `listeners`, so it needs
+    /// the same check: PLAIN with an empty table starts the node and then
+    /// rejects every controller peer, and no quorum ever forms.
+    #[test]
+    fn rejects_plain_controller_listener_without_credentials() {
+        // (controller protocol, credentials loaded, expected to be refused)
+        let cases: &[(ListenerProtocol, bool, bool)] = &[
+            (ListenerProtocol::SaslPlaintext, false, true),
+            (ListenerProtocol::SaslPlaintext, true, false),
+            (ListenerProtocol::Plaintext, false, false),
+        ];
+
+        for &(protocol, credentials, refused) in cases {
+            let config = BrokerConfig {
+                controller_listener_protocol: protocol,
+                enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
+                plain_credentials: if credentials {
+                    [("admin".to_string(), "admin-secret".to_string())]
+                        .into_iter()
+                        .collect()
+                } else {
+                    crate::config::PlainCredentials::default()
+                },
+                ..BrokerConfig::default()
+            };
+
+            let result = config.validate();
+            if refused {
+                let Err(BrokerError::PlainListenerNoCredentials { name }) = result else {
+                    panic!("expected PlainListenerNoCredentials for {protocol:?}");
+                };
+                assert!(name == "controller");
+            } else {
+                assert!(result.is_ok());
+            }
+        }
     }
 
     #[test]

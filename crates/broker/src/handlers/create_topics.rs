@@ -259,6 +259,16 @@ pub(crate) async fn handle(
             continue;
         }
 
+        // The committing path learns of a name collision from
+        // `submit_change`, which decides it inside the quorum and is the
+        // race-safe answer. A dry run never gets there, so ask the image
+        // directly: Kafka's `validateOnly` reports `TopicExistsException` for
+        // an existing name, and it reports it ahead of the topic policy.
+        if validate_only && image.topic(&name).is_some() {
+            results.push(topic_error_result(name, codes::TOPIC_ALREADY_EXISTS, None));
+            continue;
+        }
+
         // KIP-108: the operator-declared topic policy, on the effective
         // partition count and replication factor the placement resolved and
         // on the topic's own config overrides. Kafka calls
@@ -359,5 +369,5 @@ pub(crate) async fn handle(
         results.push(result);
     }
 
-    finish_response(broker, ctx, results, quota.delay(), version)
+    finish_response(broker, ctx, results, validate_only, quota.delay(), version)
 }
