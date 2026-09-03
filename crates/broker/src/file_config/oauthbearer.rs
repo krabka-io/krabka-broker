@@ -15,7 +15,8 @@ use serde::Deserialize;
 /// `introspection_endpoint_uri` selects the RFC 7662 introspection
 /// validator; the two endpoint URIs are mutually
 /// exclusive. With neither set, the unsecured-JWS validator
-/// (development only) is used.
+/// (development only) is used, and that fallback is rejected at
+/// config-load unless `allow_unsecured = true`.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 pub struct FileOAuthBearerConfig {
     /// Claim whose value becomes the principal name. Default `sub`.
@@ -88,12 +89,6 @@ pub struct FileOAuthBearerConfig {
     /// requests, in milliseconds. Default 10 000 (10 s).
     pub introspection_http_timeout_ms: Option<u64>,
 
-    /// Optional ceiling on OAUTHBEARER session lifetime, in
-    /// seconds. When set, the broker clamps `session_lifetime_ms` to
-    /// `min(token_exp_ms - now_ms, cap * 1000)`. When unset, sessions
-    /// last until the token's natural `exp`.
-    pub max_session_lifetime_seconds: Option<u32>,
-
     /// Alternate claim name for principal-name fallback.
     pub fallback_user_name_claim: Option<String>,
     /// Prepended on fallback only.
@@ -116,6 +111,14 @@ pub struct FileOAuthBearerConfig {
     /// (6 minutes). Unset = no expiry check. Fails
     /// closed on prolonged `IdP` outage. Signed validator only.
     pub jwks_expiry_seconds: Option<u32>,
+
+    /// Opt-in for the unsecured-JWS (`alg:none`) development
+    /// validator. Default false. With neither `jwks_endpoint_uri` nor
+    /// `introspection_endpoint_uri` set and a listener enabling
+    /// `OAUTHBEARER`, the broker refuses to start rather than silently
+    /// trusting unsigned tokens; set this to true to accept that
+    /// fallback in development. Never set it in production.
+    pub allow_unsecured: Option<bool>,
 
     /// When true, the JWKS parser keeps keys regardless of `use`
     /// field. Default false (filter out `use=enc`). Some identity providers

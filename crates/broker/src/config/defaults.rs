@@ -178,13 +178,14 @@ impl Default for BrokerConfig {
             inter_broker_listener_name: "PLAINTEXT".to_string(),
             inter_broker_credentials: None,
             inter_broker_principal_node_ids: HashMap::new(),
-            plain_credentials: HashMap::new(),
+            plain_credentials: crate::config::PlainCredentials::default(),
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
             schema_validator: None,
             operator_keys: OperatorKeys::default(),
             freeze: FreezeConfig::default(),
             break_glass: BreakGlassConfig::default(),
+            topic_policy: crate::topic_policy::TopicPolicy::default(),
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
@@ -192,7 +193,6 @@ impl Default for BrokerConfig {
             oauthbearer_jwks_endpoint: None,
             oauthbearer_jwks_refresh_interval: DEFAULT_JWKS_REFRESH_INTERVAL,
             oauthbearer_idp_tls_trust: None,
-            oauthbearer_max_session_lifetime: None,
             oauthbearer_jwks_signal_rx: std::sync::Arc::new(std::sync::Mutex::new(None)),
             oauthbearer_jwks_last_successful_fetch_ms: shared_epoch_ms(),
             oauthbearer_jwks_cache_generation: std::sync::Arc::new(
@@ -258,6 +258,8 @@ impl Default for BrokerConfig {
             // until an operator writes one.
             connections_max_idle: None,
             connections_max_idle_overrides: std::collections::BTreeMap::new(),
+            connections_max_reauth: None,
+            connections_max_reauth_overrides: std::collections::BTreeMap::new(),
             // Master key off by default. Operators flip this on
             // via `KRABKA_DELEGATION_TOKEN_SECRET_KEY` env var or the
             // `[delegation_token] secret_key` TOML stanza.

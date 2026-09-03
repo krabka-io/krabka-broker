@@ -34,6 +34,7 @@ mod per_listener_config_tests {
             protocol,
             tls_config: None,
             sasl_mechanisms: sasl,
+            principal_mapper: crate::SslPrincipalMapper::default(),
         }
     }
 

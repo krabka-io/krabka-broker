@@ -164,6 +164,30 @@ pub(crate) async fn handle(
         topic_results.push(topic_result(topic.name, part_results));
     }
 
+    // A gated trim audits itself as a `PrivilegedAction`. On a cluster with no
+    // approver set the gate is inert, so every partition that was actually
+    // trimmed is audited here.
+    crate::handlers::audit_admin_success(
+        broker.audit_log.as_ref(),
+        ctx,
+        "DeleteRecords",
+        topic_results
+            .iter()
+            .flat_map(|topic| {
+                topic
+                    .partitions
+                    .iter()
+                    .filter(|row| row.error_code == codes::NONE)
+                    .map(move |row| {
+                        crate::handlers::audit_resource(
+                            "Partition",
+                            format!("{}-{}", topic.name, row.partition_index),
+                        )
+                    })
+            })
+            .collect(),
+    );
+
     let resp = delete_records_response(topic_results);
     crate::handlers::encode_response(&resp, version)
 }

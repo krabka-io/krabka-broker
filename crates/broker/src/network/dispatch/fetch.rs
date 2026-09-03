@@ -28,6 +28,7 @@ pub(super) async fn dispatch_fetch<S>(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
     peer: &SocketAddr,
+    listener_name: &str,
     request_span: tracing::Span,
 ) -> AfterResponse
 where
@@ -35,9 +36,16 @@ where
 {
     let sendfile_capable =
         crate::network::fetch_writer::SendfileSink::is_sendfile_capable(framed.get_ref());
-    match handle_fetch_frame_from_parsed(broker, parsed, auth, peer, sendfile_capable)
-        .instrument(request_span)
-        .await
+    match handle_fetch_frame_from_parsed(
+        broker,
+        parsed,
+        auth,
+        peer,
+        listener_name,
+        sendfile_capable,
+    )
+    .instrument(request_span)
+    .await
     {
         Ok(FetchPlan {
             operations,
@@ -99,6 +107,7 @@ async fn handle_fetch_frame_from_parsed(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
     peer: &SocketAddr,
+    listener_name: &str,
     sendfile_capable: bool,
 ) -> Result<FetchPlan, BrokerError> {
     use crate::network::fetch_writer::build_fetch_plan;
@@ -112,7 +121,7 @@ async fn handle_fetch_frame_from_parsed(
         parsed.client_id.unwrap_or(""),
         "",
         sendfile_capable && parsed.api_version >= 4,
-        "",
+        listener_name,
     );
 
     let (resp, version) = crate::handlers::fetch::handle(

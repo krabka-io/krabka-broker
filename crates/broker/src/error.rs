@@ -260,11 +260,30 @@ pub enum BrokerError {
     #[error("SASL listener {name} declared but enabled_sasl_mechanisms is empty")]
     SaslListenerNoMechanisms { name: String },
 
+    /// A listener offers SASL/PLAIN while the broker holds no PLAIN
+    /// credential, so every PLAIN login would fail with
+    /// `SASL_AUTHENTICATION_FAILED`.
+    #[error(
+        "listener {name} enables SASL/PLAIN but no PLAIN credentials are configured: set \
+         [sasl_plain] credentials_path in broker.toml"
+    )]
+    PlainListenerNoCredentials { name: String },
+
     /// `Gssapi` is an enabled SASL mechanism, but the config supplied no
     /// `gssapi` block with a keytab, a service name, and a principal
     /// mapping.
     #[error("GSSAPI is an enabled SASL mechanism but gssapi config is missing")]
     GssapiConfigMissing,
+
+    /// `super_users` lists `"ANONYMOUS"`, the principal every PLAINTEXT and
+    /// one-way-TLS connection carries.
+    #[error(
+        "super_users must not list \"ANONYMOUS\": it makes every unauthenticated client a \
+         super-user, and the delegation-token RPCs still answer \
+         DELEGATION_TOKEN_REQUEST_NOT_ALLOWED because they require a SASL- or \
+         mTLS-authenticated principal. List the SASL or mTLS principal that mints tokens instead"
+    )]
+    SuperUserAnonymous,
 
     /// TLS configuration error.
     #[error("tls: {0}")]

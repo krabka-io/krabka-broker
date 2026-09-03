@@ -77,8 +77,19 @@ impl TrustedManifestKeys {
     /// A set that trusts one raw Ed25519 public key under `key_id`.
     #[must_use]
     pub fn single(key_id: String, public_key: Vec<u8>) -> Self {
+        Self::from_pairs([(key_id, public_key)])
+    }
+
+    /// A set built from every `(key_id, public_key)` pair.
+    ///
+    /// An archive that spans a key rotation carries manifests signed under
+    /// each key it was written with, so verifying it in one run means
+    /// trusting all of them at once. A later pair wins over an earlier one
+    /// naming the same `key_id`.
+    #[must_use]
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
         Self {
-            keys: maplit::hashmap! {key_id => public_key},
+            keys: pairs.into_iter().collect(),
         }
     }
 

@@ -10,11 +10,11 @@ use krabka_protocol::owned::{
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
 use krabka_security::{Principal, SaslMechanism};
-use krabka_units::{ByteSize, kibibytes};
+use krabka_units::{ByteSize, Time, kibibytes};
 
 use super::{
     response::fail_authenticate,
-    state::{ConnectionAuth, SaslExchange},
+    state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 
 /// RFC 4752 server "maximum message size" advertised in the auth-only
@@ -52,10 +52,29 @@ const GSSAPI_MAX_RECV: ByteSize = kibibytes(64);
 ///
 /// Any GSS or codec error returns `SASL_AUTHENTICATION_FAILED` (58), and the
 /// dispatcher closes the connection.
+///
+/// A Kerberos context carries no broker-visible lifetime, so `max_reauth` —
+/// the listener's `connections.max.reauth.ms` — is what bounds the session
+/// (KIP-368). In-band re-authentication runs the same rounds and must land on
+/// the same principal.
 pub fn handle_authenticate_gssapi(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     config: &krabka_security::gssapi::GssapiConfig,
+    max_reauth: Option<Time>,
+) -> SaslAuthenticateResponse {
+    let Some(previous) = begin_reauth(auth) else {
+        return authenticate_gssapi(req, auth, config, max_reauth);
+    };
+    let resp = authenticate_gssapi(req, auth, config, max_reauth);
+    finish_reauth(auth, previous, resp)
+}
+
+fn authenticate_gssapi(
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
+    config: &krabka_security::gssapi::GssapiConfig,
+    max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
     use krabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
 
@@ -93,7 +112,9 @@ pub fn handle_authenticate_gssapi(
             }
             // GSSAPI always negotiates the security layer after context
             // establishment, so round 1 never completes the exchange.
-            ServerStep::Done { principal } => finish_gssapi(&principal, mech, config, auth),
+            ServerStep::Done { principal } => {
+                finish_gssapi(&principal, mech, config, auth, max_reauth)
+            }
         };
     }
 
@@ -126,7 +147,9 @@ pub fn handle_authenticate_gssapi(
                 };
                 gssapi_challenge_response(token)
             }
-            ServerStep::Done { principal } => finish_gssapi(&principal, mechanism, config, auth),
+            ServerStep::Done { principal } => {
+                finish_gssapi(&principal, mechanism, config, auth, max_reauth)
+            }
         };
     }
 
@@ -153,11 +176,14 @@ fn finish_gssapi(
     mech: SaslMechanism,
     config: &krabka_security::gssapi::GssapiConfig,
     auth: &mut ConnectionAuth,
+    max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
     let short = match map_gssapi_principal(raw_principal, config) {
         Ok(s) => s,
         Err(e) => return fail_authenticate(&format!("GSSAPI principal mapping failed: {e}")),
     };
+    let (expires_at_ms, session_lifetime_ms) =
+        session_expiry(crate::time_util::now_ms(), None, max_reauth);
     *auth = ConnectionAuth::Authenticated {
         principal: Principal {
             name: short,
@@ -165,18 +191,18 @@ fn finish_gssapi(
             groups: vec![],
         },
         mechanism: mech,
-        // GSSAPI sessions have no broker-imposed expiry (the ticket lifetime is
-        // enforced by the KDC at context-establishment time, not re-checked
-        // mid-session). KIP-368 re-auth, if configured, rides the same
-        // SaslHandshake path as the other mechanisms.
-        expires_at_ms: None,
+        // The KDC enforces the ticket lifetime at context-establishment time
+        // and the broker never sees it, so the only ceiling on a GSSAPI
+        // session is the listener's `connections.max.reauth.ms`. KIP-368
+        // re-auth rides the same SaslHandshake path as the other mechanisms.
+        expires_at_ms,
         authenticated_via_token: false,
     };
     SaslAuthenticateResponse {
         error_code: 0,
         error_message: None,
         auth_bytes: bytes::Bytes::new(),
-        session_lifetime_ms: 0,
+        session_lifetime_ms,
         ..Default::default()
     }
 }
@@ -243,6 +269,7 @@ mod tests {
             SaslMechanism::Gssapi,
             &config,
             &mut auth,
+            None,
         );
 
         assert_success_authenticate_response(&resp, b"", 0);
@@ -284,6 +311,7 @@ mod tests {
             SaslMechanism::Gssapi,
             &config,
             &mut auth,
+            None,
         );
 
         assert_failed_authenticate_response(&resp);
@@ -310,7 +338,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle_authenticate_gssapi(&req, &mut auth, &config);
+        let resp = handle_authenticate_gssapi(&req, &mut auth, &config, None);
 
         assert_failed_authenticate_response(&resp);
         assert!(matches!(
@@ -385,7 +413,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle_authenticate_gssapi(&req, &mut auth, &config);
+        let resp = handle_authenticate_gssapi(&req, &mut auth, &config, None);
 
         assert_success_authenticate_response(&resp, b"", 0);
         match auth {

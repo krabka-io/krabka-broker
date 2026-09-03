@@ -83,7 +83,7 @@ pub async fn serve_connection_on_listener(
             else {
                 return;
             };
-            let mtls_principal = peer_cert_principal(&tls_stream);
+            let mtls_principal = peer_cert_principal(&tls_stream, &spec.principal_mapper);
             // `config_ktls_server` consumes `tls_stream` by value; on error
             // the stream is gone, so we cannot fall back to userspace TLS for
             // THIS connection — we close it. This is safe precisely because
@@ -120,7 +120,7 @@ pub async fn serve_connection_on_listener(
         // client_auth=Required, the handshake itself fails when no cert is
         // presented, so we always have one here. Optional or Disabled may
         // produce `None`.
-        let mtls_principal = peer_cert_principal(&tls_stream);
+        let mtls_principal = peer_cert_principal(&tls_stream, &spec.principal_mapper);
         serve_connection_stream(broker, tls_stream, spec, peer, mtls_principal).await;
     } else {
         serve_connection_plaintext(broker, stream, spec, peer).await;
@@ -173,16 +173,20 @@ where
 }
 
 /// Inspects the post-handshake TLS stream for a peer certificate. If one is
-/// present, this derives the principal name, the Subject DN, with
-/// [`krabka_security::extract_principal_from_cert`].
+/// present, this derives the Subject DN with
+/// [`krabka_security::extract_principal_from_cert`] and runs it through the
+/// listener's KIP-371 `ssl.principal.mapping.rules` to get the principal name.
+/// With no rules configured the DN itself is the principal, which is what
+/// Kafka's `DEFAULT` rule does.
 fn peer_cert_principal<S>(
     stream: &tokio_rustls::server::TlsStream<S>,
+    mapper: &crate::network::auth::SslPrincipalMapper,
 ) -> Option<krabka_security::Principal> {
     let (_, server_conn) = stream.get_ref();
     let cert = server_conn.peer_certificates()?.first()?;
-    let name = krabka_security::extract_principal_from_cert(cert.as_ref())?;
+    let distinguished_name = krabka_security::extract_principal_from_cert(cert.as_ref())?;
     Some(krabka_security::Principal {
-        name,
+        name: mapper.apply(&distinguished_name),
         auth_method: krabka_security::AuthMethod::MTls,
         groups: vec![],
     })

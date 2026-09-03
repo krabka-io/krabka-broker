@@ -84,6 +84,7 @@ pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile
             protocol: ListenerProtocol::Ssl,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         }],
         inter_broker_listener_name: "SSL".to_string(),
         tls_config: Some(TlsConfig {
@@ -244,6 +245,7 @@ pub(crate) fn start_sasl_ssl_broker(
             protocol: ListenerProtocol::SaslSsl,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         }],
         inter_broker_listener_name: "SASL_SSL".to_string(),
         tls_config: Some(TlsConfig {

@@ -94,14 +94,14 @@ mod tests {
     #[test]
     fn super_users_toml_populates_broker_config_set() {
         let toml = r#"
-super_users = ["ANONYMOUS", "admin"]
+super_users = ["operator", "admin"]
 "#;
         let file: FileConfig = toml::from_str(toml).unwrap();
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
 
         let expected: std::collections::HashSet<String> =
-            ["ANONYMOUS".to_string(), "admin".to_string()].into();
+            ["operator".to_string(), "admin".to_string()].into();
         assert!(cfg.super_users == expected);
     }
     // `[authorization]` TOML section → `Arc<dyn Authorizer>`.
@@ -180,7 +180,7 @@ super_users = ["admin"]
             let toml = r#"
 [authorization]
 type = "opa"
-super_users = ["ANONYMOUS"]
+super_users = ["operator"]
 
 [authorization.opa]
 url = "http://opa.invalid:8181/v1/data/k/a"
@@ -192,15 +192,15 @@ expire_after_ms = 60000
             let mut cfg = crate::config::BrokerConfig::default();
             file.apply_to(&mut cfg).unwrap();
 
-            assert!(cfg.super_users.contains("ANONYMOUS"));
+            assert!(cfg.super_users.contains("operator"));
 
             // Smoke-check via the super-user bypass — no HTTP call is
             // made (and `opa.invalid` deliberately doesn't resolve).
             let img = MetadataImage::new(uuid::Uuid::nil());
-            let anon = test_principal("ANONYMOUS");
+            let operator = test_principal("operator");
             let host: std::net::SocketAddr = "127.0.0.1:9092".parse().unwrap();
             let req = AuthorizationRequest {
-                principal: &anon,
+                principal: &operator,
                 host: &host,
                 resource_type: ResourceType::Topic,
                 resource_name: "t",

@@ -50,6 +50,17 @@ pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.
 /// Kafka's `ListenerName.configPrefix`.
 pub(crate) const CONNECTIONS_MAX_IDLE_MS: &str = "connections.max.idle.ms";
 
+/// KIP-368: how long an authenticated SASL session may live before the client
+/// must re-authenticate in band. The process reads it from its static
+/// configuration at startup, so `DescribeConfigs` reports it read-only, the
+/// same way it reports [`CONNECTIONS_MAX_IDLE_MS`].
+///
+/// Kafka spells the per-listener override
+/// `listener.name.<name>.<mechanism>.connections.max.reauth.ms`; krabka keys
+/// its own override by listener alone, because the window is a property of
+/// the listener rather than of the mechanism a client picks on it.
+pub(crate) const CONNECTIONS_MAX_REAUTH_MS: &str = "connections.max.reauth.ms";
+
 /// The value krabka writes for [`BROKER_WITNESS`] on a witness node.
 pub(crate) const WITNESS_TRUE: &str = "true";
 

@@ -52,6 +52,7 @@ pub(crate) fn start_single_broker_sasl_plaintext_with_acl_authorizer(
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];

@@ -72,17 +72,28 @@ impl WalShardRegistry {
         self
     }
 
+    /// Maps an authenticated principal to the WAL node id it may fetch as.
+    ///
+    /// `inter_broker_principal_node_ids` is authoritative: when it is
+    /// populated, only the names it lists map to a node id. The built-in
+    /// `broker-<id>` / `CN=broker-<id>` convention is a fallback for an empty
+    /// map, and only on the inter-broker listener -- otherwise a principal
+    /// created on a client listener could name itself into a voter slot.
     pub(crate) fn authenticated_node_id(
         &self,
         principal: &krabka_security::Principal,
+        on_inter_broker_listener: bool,
     ) -> Option<krabka_raft::NodeId> {
         if principal.auth_method == krabka_security::AuthMethod::Anonymous {
             return None;
         }
-        self.principal_node_ids
-            .get(&principal.name)
-            .copied()
-            .or_else(|| super::wire::conventional_node_id(&principal.name))
+        if let Some(node_id) = self.principal_node_ids.get(&principal.name) {
+            return Some(*node_id);
+        }
+        if !on_inter_broker_listener || !self.principal_node_ids.is_empty() {
+            return None;
+        }
+        super::wire::conventional_node_id(&principal.name)
     }
 
     pub(crate) fn insert(&self, shard_id: ShardId, engine: Arc<WalShardEngine>) {
@@ -303,8 +314,10 @@ impl krabka_raft::RaftShardRouter for WalShardRouter {
         body: bytes::Bytes,
         principal: Option<&krabka_security::Principal>,
     ) -> krabka_raft::ShardRouteFuture<'_> {
+        // The raft transport only ever carries inter-broker traffic, so the
+        // `broker-<id>` convention stays available on it.
         let authenticated_from =
-            principal.and_then(|principal| self.registry.authenticated_node_id(principal));
+            principal.and_then(|principal| self.registry.authenticated_node_id(principal, true));
         Box::pin(async move {
             if api_key != krabka_raft::kraft::transport::api_key::FETCH {
                 return Ok(None);
@@ -683,5 +696,51 @@ mod tests {
 
         assert2::assert!(registry.placement(stale).is_none());
         assert2::assert!((registry.placement(current)) == (Some(vec![krabka_raft::NodeId(2)])));
+    }
+
+    #[test]
+    fn authenticated_node_id_honors_listener_and_map() {
+        use krabka_security::{AuthMethod, Principal};
+
+        let node3 = krabka_raft::NodeId(3);
+        let mapped = maplit::hashmap! {"wal-fetcher".to_string() => node3};
+        let scram = AuthMethod::SaslScramSha256;
+        // (configured map, principal name, auth method, inter-broker listener, expected node)
+        let cases = vec![
+            (HashMap::new(), "broker-3", scram, false, None),
+            (HashMap::new(), "broker-3", scram, true, Some(node3)),
+            (HashMap::new(), "CN=broker-3,O=krabka", scram, false, None),
+            (
+                HashMap::new(),
+                "CN=broker-3,O=krabka",
+                scram,
+                true,
+                Some(node3),
+            ),
+            (
+                HashMap::new(),
+                "broker-3",
+                AuthMethod::Anonymous,
+                true,
+                None,
+            ),
+            (mapped.clone(), "wal-fetcher", scram, false, Some(node3)),
+            (mapped.clone(), "wal-fetcher", scram, true, Some(node3)),
+            (mapped, "broker-3", scram, true, None),
+        ];
+
+        for (principal_node_ids, name, auth_method, inter_broker, expected) in cases {
+            let registry = WalShardRegistry::new(krabka_raft::NodeId(1))
+                .with_principal_node_ids(principal_node_ids);
+            let principal = Principal {
+                name: name.to_string(),
+                auth_method,
+                groups: Vec::new(),
+            };
+
+            let actual = registry.authenticated_node_id(&principal, inter_broker);
+
+            assert2::check!(actual == expected, "{name} inter_broker={inter_broker}");
+        }
     }
 }

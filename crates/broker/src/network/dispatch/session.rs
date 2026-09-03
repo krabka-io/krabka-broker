@@ -94,18 +94,40 @@ fn auth_principal_name(auth: &crate::network::auth::ConnectionAuth) -> Option<&s
     }
 }
 
+/// Resolves the connection's starting authentication state.
+///
+/// A SASL listener starts anonymous and authenticates over the wire. A
+/// non-SASL listener is already decided at accept time: the mTLS principal the
+/// cert chain produced, or `ANONYMOUS`. The mTLS case is a completed
+/// credential presentation with no SASL frame behind it, so it is the one
+/// place that writes its own `Authentication` audit row.
 pub(super) fn initial_connection_auth(
     is_sasl_listener: bool,
     mtls_principal: Option<krabka_security::Principal>,
+    audit_log: &krabka_audit::AuditLog,
+    peer: &std::net::SocketAddr,
 ) -> crate::network::auth::ConnectionAuth {
     if is_sasl_listener {
         return crate::network::auth::ConnectionAuth::Anonymous;
     }
-    let principal = mtls_principal.unwrap_or_else(|| krabka_security::Principal {
-        name: "ANONYMOUS".to_string(),
-        auth_method: krabka_security::AuthMethod::Anonymous,
-        groups: vec![],
-    });
+    let principal = match mtls_principal {
+        Some(principal) => {
+            super::sasl::emit_authentication(
+                audit_log,
+                peer,
+                "SSL",
+                super::sasl::audit_principal(&principal),
+                krabka_audit::AuditOutcome::Success,
+                None,
+            );
+            principal
+        }
+        None => krabka_security::Principal {
+            name: "ANONYMOUS".to_string(),
+            auth_method: krabka_security::AuthMethod::Anonymous,
+            groups: vec![],
+        },
+    };
     crate::network::auth::ConnectionAuth::Authenticated {
         principal,
         mechanism: krabka_security::SaslMechanism::Plain,
@@ -238,6 +260,58 @@ mod tests {
 
     use super::*;
 
+    /// The mTLS binding is the one authentication with no SASL frame behind
+    /// it, so `initial_connection_auth` is the only place that can record it.
+    /// The anonymous and SASL starts presented no credential and must record
+    /// nothing.
+    #[test]
+    fn initial_connection_auth_audits_the_mtls_binding_only() {
+        let peer: std::net::SocketAddr = "192.0.2.7:9093".parse().expect("peer addr");
+        let cert_dn = krabka_security::Principal {
+            name: "CN=test-client,OU=integration,O=crabka".to_string(),
+            auth_method: krabka_security::AuthMethod::MTls,
+            groups: vec![],
+        };
+
+        for (what, is_sasl, mtls) in [
+            ("a SASL listener", true, Some(cert_dn.clone())),
+            ("an SSL listener with no client cert", false, None),
+        ] {
+            let (log, mut rx) = krabka_audit::AuditLog::new(8);
+            let _auth = initial_connection_auth(is_sasl, mtls, log.as_ref(), &peer);
+            assert!(rx.try_recv().is_err(), "{what} presented no credential");
+        }
+
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
+        let auth = initial_connection_auth(false, Some(cert_dn), log.as_ref(), &peer);
+        assert!(
+            auth.principal().map(|p| p.name.as_str())
+                == Some("CN=test-client,OU=integration,O=crabka")
+        );
+
+        let event = rx.try_recv().expect("the mTLS authentication row");
+        let krabka_audit::AuditEvent::Authentication { time_ms, .. } = event else {
+            panic!("expected an Authentication event, got {event:?}");
+        };
+        assert!(
+            event
+                == krabka_audit::AuditEvent::Authentication {
+                    outcome: krabka_audit::AuditOutcome::Success,
+                    mechanism: "SSL".to_string(),
+                    principal: krabka_audit::AuditPrincipal {
+                        name: "User:CN=test-client,OU=integration,O=crabka".to_string(),
+                        auth_method: "MTls".to_string(),
+                    },
+                    source: krabka_audit::AuditEndpoint {
+                        ip: "192.0.2.7".to_string(),
+                        port: 9093,
+                    },
+                    reason: None,
+                    time_ms,
+                }
+        );
+    }
+
     #[test]
     fn auth_principal_name_reads_authenticated_and_reauth_previous_only() {
         let authenticated = crate::network::auth::ConnectionAuth::Authenticated {
@@ -259,8 +333,10 @@ mod tests {
                 },
                 mechanism: krabka_security::SaslMechanism::OAuthBearer,
                 expires_at_ms: Some(456),
+                authenticated_via_token: false,
             },
             exchange: crate::network::auth::SaslExchange::OAuthBearer,
+            pending_token_expiry_ms: None,
         };
         let anonymous = crate::network::auth::ConnectionAuth::Anonymous;
 

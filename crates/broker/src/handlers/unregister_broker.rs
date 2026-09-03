@@ -182,6 +182,16 @@ pub(crate) async fn handle(
         },
     );
 
+    crate::handlers::audit_admin_success(
+        broker.audit_log.as_ref(),
+        ctx,
+        "UnregisterBroker",
+        vec![crate::handlers::audit_resource(
+            "Broker",
+            node_id.to_string(),
+        )],
+    );
+
     let resp = response(codes::NONE, None);
     encode_resp(version, &resp)
 }

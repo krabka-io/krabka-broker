@@ -175,7 +175,13 @@ cert_path = "/etc/krabka/tls/tls.crt"
 key_path = "/etc/krabka/tls/tls.key"
 
 [listeners.sasl_config]
-enabled_mechanisms = ["SCRAM-SHA-512"]
+enabled_mechanisms = ["SCRAM-SHA-512", "PLAIN"]
+
+# PLAIN has no dynamic credential path the way SCRAM does. The file holds one
+# `username=password` per line; `#` starts a comment. A listener that offers
+# PLAIN with no credentials loaded is refused at start.
+[sasl_plain]
+credentials_path = "/etc/krabka/sasl/plain-credentials"
 
 [runtime]
 controlled_shutdown_drain_timeout = "20s"
@@ -193,6 +199,7 @@ first:
 | `[runtime]` | Timers and sizes: the controlled-shutdown drain, snapshot cadence, the diskless WAL flusher, queue capacities. Heartbeats and `replica_lag_time_max` sit at the top level. |
 | `[remote_storage]` | KIP-405 tiered storage: the S3 or GCS bucket, the WORM policy and the topic-backed metadata manager. |
 | `[audit]` | The audit topic, its failure mode, signing and the durable spool. |
+| `[sasl_plain]` | `credentials_path`: the file the static SASL/PLAIN credential table is read from. Required once a listener offers `PLAIN`. |
 | `[authorization]` | ACL or OPA authorizer. |
 | `[schema_registry]` | KFC-7 schema validation. |
 | `[freeze]`, `[break_glass]`, `[[operator_keys]]` | KFC-9 write freezes and the two-person rule. |

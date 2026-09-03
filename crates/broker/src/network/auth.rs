@@ -17,6 +17,7 @@ mod oauthbearer;
 mod plain;
 mod response;
 mod scram;
+mod ssl_principal_mapper;
 mod state;
 #[cfg(test)]
 mod test_support;
@@ -34,5 +35,6 @@ pub use self::{
     },
     plain::handle_authenticate_plain,
     scram::handle_authenticate_scram,
+    ssl_principal_mapper::{SslPrincipalMapper, SslPrincipalRuleError},
     state::{ConnectionAuth, SaslExchange, is_pre_auth_allowed},
 };

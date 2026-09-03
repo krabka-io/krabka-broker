@@ -143,5 +143,16 @@ pub(crate) async fn handle(
         }
     }
 
+    crate::handlers::audit_admin_success(
+        broker.audit_log.as_ref(),
+        ctx,
+        "UpdateFeatures",
+        results
+            .iter()
+            .filter(|result| result.error_code == codes::NONE)
+            .map(|result| crate::handlers::audit_resource("Feature", result.feature.clone()))
+            .collect(),
+    );
+
     finalize(results, version)
 }

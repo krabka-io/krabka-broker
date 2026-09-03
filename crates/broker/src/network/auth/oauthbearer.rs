@@ -138,6 +138,7 @@ async fn handle_authenticate_oauthbearer_inner(
         ConnectionAuth::Reauthenticating {
             previous,
             exchange: SaslExchange::OAuthBearer,
+            ..
         } => {
             let prev_mech = previous.mechanism;
             let prev_name = previous.principal.name.clone();

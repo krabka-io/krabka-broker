@@ -23,7 +23,7 @@ use krabka_protocol::{
 };
 use krabka_security::SaslMechanism;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
 };
 
@@ -32,8 +32,8 @@ use tokio::{
 // `auth_handlers/harness.rs::round_trip` and `describe_user_scram_credentials.rs`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub(crate) async fn round_trip(
-    stream: &mut TcpStream,
+pub(crate) async fn round_trip<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
     api_key: i16,
     api_version: i16,
     corr_id: i32,

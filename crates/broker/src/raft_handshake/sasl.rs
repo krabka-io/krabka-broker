@@ -97,16 +97,24 @@ pub(super) async fn run_inbound_sasl(
                     }
                 };
                 let resp = match mech {
-                    SaslMechanism::Plain => {
-                        handle_authenticate_plain(&req, &mut auth, &cfg.plain_credentials)
-                    }
+                    SaslMechanism::Plain => handle_authenticate_plain(
+                        &req,
+                        &mut auth,
+                        &cfg.plain_credentials,
+                        cfg.connections_max_reauth,
+                    ),
                     SaslMechanism::ScramSha256 | SaslMechanism::ScramSha512 => {
                         let controller = cfg.controller.get().ok_or_else(|| {
                             RaftHandshakeError::Sasl(
                                 "controller handle not initialised for SCRAM lookup".into(),
                             )
                         })?;
-                        handle_authenticate_scram(&req, &mut auth, controller.as_ref())
+                        handle_authenticate_scram(
+                            &req,
+                            &mut auth,
+                            controller.as_ref(),
+                            cfg.connections_max_reauth,
+                        )
                     }
                     SaslMechanism::OAuthBearer => {
                         let now_ms = std::time::SystemTime::now()
@@ -119,7 +127,7 @@ pub(super) async fn run_inbound_sasl(
                             &mut auth,
                             &cfg.oauthbearer_validator,
                             now_ms,
-                            cfg.oauthbearer_max_session_lifetime,
+                            cfg.connections_max_reauth,
                         )
                         .await
                     }
@@ -130,7 +138,12 @@ pub(super) async fn run_inbound_sasl(
                                     .into(),
                             )
                         })?;
-                        handle_authenticate_gssapi(&req, &mut auth, config)
+                        handle_authenticate_gssapi(
+                            &req,
+                            &mut auth,
+                            config,
+                            cfg.connections_max_reauth,
+                        )
                     }
                 };
                 let error_code = resp.error_code;

@@ -90,15 +90,21 @@ impl Harness {
 /// metadata-driving client full access. The test can still seed ACLs and see
 /// their effect on the authorized-operations bitfield for a principal name that
 /// the authorizer evaluates separately.
+///
+/// The name goes to the authorizer only. `BrokerConfig.super_users` stays
+/// empty because `BrokerConfig::validate` rejects `"ANONYMOUS"` there: a
+/// cluster-wide super-user list naming the unauthenticated principal is a
+/// misconfiguration, while an authorizer that allows it is exactly what this
+/// suite needs to drive metadata over a PLAINTEXT listener.
 fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = Harness> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut cfg = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    cfg.super_users = {
+    let authorizer_super_users: HashSet<String> = {
         let mut s = HashSet::new();
         s.insert(super_user.to_string());
         s
     };
-    cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(authorizer_super_users));
     Box::pin(async move {
         let handle = Broker::start(cfg).await.expect("broker start");
         let client = Client::builder()

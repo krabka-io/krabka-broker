@@ -14,11 +14,12 @@ use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource;
 
 use super::{OP_DELETE, OP_SET};
-use crate::{codes, config_keys};
+use crate::{codes, config_keys, topic_policy::TopicPolicy};
 
 pub(super) fn topic_config_record(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
+    policy: &TopicPolicy,
 ) -> Result<MetadataRecord, (i16, String)> {
     if image.topic(&resource.resource_name).is_none() {
         return Err((
@@ -72,6 +73,12 @@ pub(super) fn topic_config_record(
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &merged)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    // KIP-133: the operator-declared policy, on the map the topic ends up
+    // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
+    // and its `RequestMetadata` carries no partition count and no replication
+    // factor, so neither is passed here.
+    crate::topic_policy::check(policy, &resource.resource_name, None, None, &merged)
+        .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides: merged,
@@ -87,6 +94,18 @@ mod tests {
     use crate::handlers::incremental_alter_configs::test_support::{
         image_with_topic_config, make_del_cfg, make_set_cfg, make_topic_resource,
     };
+
+    /// The record builder under the empty policy, which is the state of a
+    /// broker with no `[topic_policy]` section. It shadows the glob-imported
+    /// name so the cases below read as the two-argument call they were
+    /// written as; the policy's own cases pass a real one to
+    /// [`super::topic_config_record`].
+    fn topic_config_record(
+        resource: &AlterConfigsResource,
+        image: &MetadataImage,
+    ) -> Result<MetadataRecord, (i16, String)> {
+        super::topic_config_record(resource, image, &TopicPolicy::default())
+    }
 
     #[test]
     fn topic_throttle_config_value_validated() {
@@ -330,5 +349,56 @@ mod tests {
             config_keys::DELIVERY_SCHEDULE_MONOTONIC.to_string() => "true".to_string()},
         });
         assert!(record == expected);
+    }
+
+    #[test]
+    fn a_merged_map_that_breaks_the_policy_is_a_policy_violation() {
+        let img = image_with_topic_config("orders", &[(config_keys::MIN_INSYNC_REPLICAS, "2")]);
+        let policy = TopicPolicy {
+            min_insync_replicas: Some(2),
+            ..TopicPolicy::default()
+        };
+
+        let (code, message) = super::topic_config_record(
+            &make_topic_resource(
+                "orders",
+                vec![make_set_cfg(config_keys::MIN_INSYNC_REPLICAS, "1")],
+            ),
+            &img,
+            &policy,
+        )
+        .expect_err("a merged map below the policy floor must be refused");
+
+        check!(code == codes::POLICY_VIOLATION);
+        check!(
+            message.contains(config_keys::MIN_INSYNC_REPLICAS),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_merged_map_that_satisfies_the_policy_still_commits() {
+        let img = image_with_topic_config("orders", &[(config_keys::MIN_INSYNC_REPLICAS, "1")]);
+        let policy = TopicPolicy {
+            min_insync_replicas: Some(2),
+            ..TopicPolicy::default()
+        };
+
+        let record = super::topic_config_record(
+            &make_topic_resource(
+                "orders",
+                vec![make_set_cfg(config_keys::MIN_INSYNC_REPLICAS, "2")],
+            ),
+            &img,
+            &policy,
+        )
+        .expect("a merge that lifts the topic to the floor is accepted");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: maplit::btreemap! {
+            config_keys::MIN_INSYNC_REPLICAS.to_string() => "2".to_string()},
+        });
+        check!(record == expected);
     }
 }

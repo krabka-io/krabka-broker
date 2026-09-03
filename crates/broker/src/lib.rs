@@ -257,6 +257,7 @@ pub(crate) mod test_support;
 pub mod throttle;
 pub(crate) mod time_util;
 pub(crate) mod tls_reload;
+pub mod topic_policy;
 pub(crate) mod topic_resolve;
 mod txn;
 pub(crate) mod unclean_recovery;
@@ -285,6 +286,9 @@ pub mod fetch_drain {
 pub use handlers::produce::hot_path as produce_hot_path;
 pub use health::{HealthState, NotReady};
 pub use krabka_raft::NodeId;
+/// KIP-371 `ssl.principal.mapping.rules`, reachable here because
+/// [`config::ListenerSpec`] carries a parsed rule list per listener.
+pub use network::auth::{SslPrincipalMapper, SslPrincipalRuleError};
 /// Benchmark seam over the response-framing deferral, driven by
 /// `benches/perf_deferrals.rs`.
 #[cfg(any(test, feature = "test-helpers"))]

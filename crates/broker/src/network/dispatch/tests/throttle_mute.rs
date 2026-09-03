@@ -131,6 +131,7 @@ async fn connect_to_serve_loop(
             protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
     });

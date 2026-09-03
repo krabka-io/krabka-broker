@@ -77,6 +77,7 @@ fn sasl_listener(addr: SocketAddr) -> Vec<ListenerSpec> {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }]
 }
 

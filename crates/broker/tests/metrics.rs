@@ -194,6 +194,7 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
         protocol: ListenerProtocol::Plaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "PLAINTEXT".into();
     cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
@@ -308,6 +309,7 @@ async fn partition_level_metrics_and_disk_gauge_render() {
         protocol: ListenerProtocol::Plaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "PLAINTEXT".into();
     cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());

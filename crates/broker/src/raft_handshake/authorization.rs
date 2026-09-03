@@ -115,7 +115,7 @@ mod tests {
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
             gssapi: None,
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-            oauthbearer_max_session_lifetime: None,
+            connections_max_reauth: None,
             protocol: ListenerProtocol::SaslPlaintext,
             controller: controller_cell,
             max_frame_bytes: 4096,

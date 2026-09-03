@@ -72,12 +72,16 @@ struct VerifyArgs {
     /// Verify only this partition index.
     #[arg(long, value_name = "INDEX")]
     partition: Option<i32>,
-    /// The key id that `--public-key` holds the key for.
+    /// The key id that the `--public-key` in the same position holds the key
+    /// for. Repeat both flags to trust several keys in one run, which is what
+    /// an archive written across a key rotation needs.
     #[arg(long, value_name = "ID", requires = "public_key")]
-    key_id: Option<String>,
-    /// Path to the trusted Ed25519 public key, raw 32 bytes.
+    key_id: Vec<String>,
+    /// Path to a trusted Ed25519 public key, raw 32 bytes. Pairs by position
+    /// with `--key-id`, so the two flags must be repeated the same number of
+    /// times.
     #[arg(long, value_name = "PATH", requires = "key_id")]
-    public_key: Option<PathBuf>,
+    public_key: Vec<PathBuf>,
     /// Chain head the newest manifest must produce, obtained outside the
     /// archive. Without it, tail truncation is undetectable: removing the
     /// newest manifests leaves a shorter chain that verifies perfectly. A
@@ -179,14 +183,27 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
     }
 }
 
-/// Reads the trusted public key the run was given, if it was given one.
+/// Reads every trusted public key the run was given.
+///
+/// `--key-id` and `--public-key` pair by position, so an unequal count is a
+/// usage error rather than a silently dropped key: trusting one key fewer than
+/// the auditor meant to turns valid manifests into untrusted ones and reads as
+/// a finding.
 fn trusted_keys(args: &VerifyArgs) -> Result<TrustedManifestKeys, String> {
-    let (Some(key_id), Some(path)) = (args.key_id.as_ref(), args.public_key.as_ref()) else {
-        return Ok(TrustedManifestKeys::default());
-    };
-    let public_key =
-        std::fs::read(path).map_err(|e| format!("read public key {}: {e}", path.display()))?;
-    Ok(TrustedManifestKeys::single(key_id.clone(), public_key))
+    if args.key_id.len() != args.public_key.len() {
+        return Err(format!(
+            "--key-id was given {} time(s) and --public-key {} time(s); they pair by position",
+            args.key_id.len(),
+            args.public_key.len()
+        ));
+    }
+    let mut pairs = Vec::with_capacity(args.key_id.len());
+    for (key_id, path) in args.key_id.iter().zip(&args.public_key) {
+        let public_key =
+            std::fs::read(path).map_err(|e| format!("read public key {}: {e}", path.display()))?;
+        pairs.push((key_id.clone(), public_key));
+    }
+    Ok(TrustedManifestKeys::from_pairs(pairs))
 }
 
 /// Opens the archive named by `--local-dir` or by `--bucket`.
@@ -301,7 +318,7 @@ fn grade(
             "INCOMPLETE ATTESTATION: {unsigned} manifest(s) unsigned, {untrusted} signed by an \
              untrusted key"
         );
-        if untrusted > 0 && args.public_key.is_none() {
+        if untrusted > 0 && args.public_key.is_empty() {
             eprintln!(
                 "  No trusted key was given. Pass --key-id and --public-key to check the \
                  signatures the archive carries."
@@ -518,8 +535,8 @@ mod tests {
             prefix: None,
             topic: topic.map(str::to_string),
             partition: None,
-            key_id: None,
-            public_key: None,
+            key_id: Vec::new(),
+            public_key: Vec::new(),
             expect_head: None,
             deep: false,
             grading: GradingArgs {

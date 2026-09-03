@@ -204,7 +204,7 @@ mod tests {
     use crate::remote_log_manager::{
         ArchiveMode, copy_eligible, now_ms,
         test_support::{
-            FakeWormArchive, batch, rolled_tiered_partition_with_config, synth_export, tp,
+            FakeWormArchive, batch, rolled_tiered_partition_with_config, synth_export, tier, tp,
         },
     };
 
@@ -465,13 +465,11 @@ mod tests {
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(copied == exports.len());
@@ -531,13 +529,11 @@ mod tests {
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(copied == exports.len());
@@ -579,13 +575,11 @@ mod tests {
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         let copied = copy_eligible(
+            &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::WriteOnce,
-            &rsm,
-            &rlmm,
         )
         .await;
         check!(copied == exports.len());

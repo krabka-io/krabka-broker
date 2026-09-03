@@ -73,14 +73,14 @@ async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
     handle.shutdown().await;
 }
 
-/// The broker clamps `session_lifetime_ms` when the config sets
-/// `[oauthbearer].max_session_lifetime_seconds`.
+/// The broker clamps `session_lifetime_ms` when the listener sets
+/// `connections.max.reauth.ms`.
 ///
 /// The response value becomes `min(token_exp_ms - now_ms, cap * 1000)`. The
 /// dispatch loop anchors its deadline to the CLAMPED value, so the broker
 /// enforces what it told the client.
 #[tokio::test(flavor = "current_thread")]
-async fn oauthbearer_session_capped_by_broker_max_session_lifetime_seconds() {
+async fn oauthbearer_session_capped_by_connections_max_reauth() {
     let log_dir = tempfile::tempdir().unwrap();
     let handle = start_oauthbearer_broker_with_cap(
         log_dir.path(),
@@ -275,6 +275,7 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer, SaslMechanism::ScramSha512];
@@ -339,6 +340,7 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];

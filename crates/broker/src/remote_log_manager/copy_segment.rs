@@ -15,6 +15,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use super::{
+    RemoteTier,
     archive::{ArchiveMode, ChainPosition},
     leader_epoch::leader_epoch_index_bytes,
     now_ms,
@@ -46,14 +47,22 @@ pub(super) enum CopyOutcome {
 /// already says where the manifest was meant to sit, and a durable metadata
 /// manager shows that even if the broker dies mid-copy.
 pub(super) async fn copy_one(
+    tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
     leader_epoch: krabka_ids::LeaderEpoch,
     ex: &SegmentExport,
     chain: ChainPosition,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
 ) -> CopyOutcome {
+    let (rsm, rlmm) = (tier.rsm, tier.rlmm);
+    // Only a chained copy is trying to seal a manifest, so only a chained copy
+    // can fail to. An unchained copy failing on a mutable tier is an ordinary
+    // copy failure and says nothing about the archive's attestation.
+    let seal_failed = || {
+        if matches!(chain, ChainPosition::At(_)) {
+            tier.metrics.worm_manifest_seal_failures_total.inc();
+        }
+    };
     if chain == ChainPosition::Exhausted {
         error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                "remote-log-manager: refusing a WORM copy after chain sequence exhaustion");
@@ -141,12 +150,14 @@ pub(super) async fn copy_one(
         Ok(Err(e)) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy failed");
+            seal_failed();
             rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
             return CopyOutcome::Failed;
         }
         Err(e) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy task panicked");
+            seal_failed();
             rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
             return CopyOutcome::Failed;
         }
@@ -169,6 +180,7 @@ pub(super) async fn copy_one(
                        "remote-log-manager: write-once copy returned no chain receipt; \
                         leaving the segment in CopySegmentStarted rather than serving \
                         unattested data");
+                seal_failed();
                 return CopyOutcome::Failed;
             };
             if receipt.head.is_none()
@@ -180,8 +192,13 @@ pub(super) async fn copy_one(
                        "remote-log-manager: write-once copy returned a mismatched chain receipt; \
                         leaving the segment in CopySegmentStarted rather than serving \
                         unattested data");
+                seal_failed();
                 return CopyOutcome::Failed;
             }
+            // The receipt is the archive's word that a manifest over these
+            // objects is sealed and chained where the copy asked for it, so
+            // this is the one point at which a seal is known to have happened.
+            tier.metrics.worm_manifests_sealed_total.inc();
             match receipt.next_stamp() {
                 Some(stamp) => ChainPosition::At(stamp),
                 None if receipt.seq.0 == u64::MAX => ChainPosition::Exhausted,
@@ -274,9 +291,12 @@ mod tests {
     use krabka_units::bytes;
 
     use super::*;
-    use crate::remote_log_manager::{
-        copy_eligible,
-        test_support::{rolled_log, synth_export, tp},
+    use crate::{
+        metrics::BrokerMetrics,
+        remote_log_manager::{
+            copy_eligible,
+            test_support::{FakeWormArchive, rolled_log, synth_export, tier, tp},
+        },
     };
 
     /// An RSM whose copy always fails, but whose delete succeeds. The tests
@@ -415,13 +435,11 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
 
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(copied == 0, "every copy failed");
@@ -463,13 +481,11 @@ mod tests {
         };
 
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             7,
             LeaderEpoch(3),
             vec![export],
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(copied == 1);
@@ -504,7 +520,15 @@ mod tests {
                 Arc::new(InmemoryRemoteLogMetadataManager::new());
             let export = synth_export(0, 9, 100, 64);
 
-            let outcome = copy_one(&tp(), 1, LeaderEpoch(0), &export, chain, &rsm, &rlmm).await;
+            let outcome = copy_one(
+                &tier(chain.archive(), &rsm, &rlmm),
+                &tp(),
+                1,
+                LeaderEpoch(0),
+                &export,
+                chain,
+            )
+            .await;
 
             check!(matches!(outcome, CopyOutcome::Failed), "case {name}");
             let seen = rsm_impl
@@ -543,13 +567,12 @@ mod tests {
                 Arc::new(InmemoryRemoteLogMetadataManager::new());
 
             let outcome = copy_one(
+                &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
                 &tp(),
                 1,
                 LeaderEpoch(0),
                 &synth_export(0, 9, 100, 64),
                 ChainPosition::At(requested),
-                &rsm,
-                &rlmm,
             )
             .await;
 
@@ -559,6 +582,90 @@ mod tests {
                     .unwrap()
                     .iter()
                     .all(|md| md.state() != RemoteLogSegmentState::CopySegmentFinished)
+            );
+        }
+    }
+    /// One seal case: what it is called, the backend it runs against, where
+    /// the copy sits in the chain, and the counter values it must leave.
+    type SealCase = (
+        &'static str,
+        Arc<dyn RemoteStorageManager>,
+        ChainPosition,
+        u64,
+        u64,
+    );
+
+    /// The two KFC-5 seal counters, over every outcome one copy can reach.
+    ///
+    /// A seal is only attempted on a chained copy, so an unchained copy that
+    /// fails must move neither counter: a mutable tier's copy failure says
+    /// nothing about a WORM archive's attestation, and counting it would make
+    /// the failure alert fire on clusters that hold no archive at all.
+    #[tokio::test]
+    async fn the_seal_counters_follow_the_chain_receipt() {
+        let stamp = ChainStamp {
+            epoch_id: EpochId(Uuid::from_u128(0x00c0_ffee)),
+            seq: ManifestSeq(0),
+            prev_head: ChainHead::GENESIS,
+        };
+        let cases: [SealCase; 4] = [
+            (
+                "a sealed manifest with a matching receipt",
+                Arc::new(FakeWormArchive::new()),
+                ChainPosition::At(stamp),
+                1,
+                0,
+            ),
+            (
+                "a copy the backend refused",
+                Arc::new(AlwaysFailRsm),
+                ChainPosition::At(stamp),
+                0,
+                1,
+            ),
+            (
+                "a copy that came back with no receipt",
+                Arc::new(ReturningRsm(None)),
+                ChainPosition::At(stamp),
+                0,
+                1,
+            ),
+            (
+                "an unchained copy that failed",
+                Arc::new(AlwaysFailRsm),
+                ChainPosition::Unchained,
+                0,
+                0,
+            ),
+        ];
+        for (name, rsm, chain, sealed, failed) in cases {
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let metrics = BrokerMetrics::new();
+            let tier = RemoteTier {
+                archive: chain.archive(),
+                rsm: &rsm,
+                rlmm: &rlmm,
+                metrics: &metrics,
+            };
+
+            copy_one(
+                &tier,
+                &tp(),
+                1,
+                LeaderEpoch(0),
+                &synth_export(0, 9, 100, 64),
+                chain,
+            )
+            .await;
+
+            check!(
+                metrics.worm_manifests_sealed_total.get() == sealed,
+                "case {name}"
+            );
+            check!(
+                metrics.worm_manifest_seal_failures_total.get() == failed,
+                "case {name}"
             );
         }
     }

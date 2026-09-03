@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::remote_log_manager::{
         copy_eligible,
-        test_support::{FakeWormArchive, rolled_log, synth_export, tp},
+        test_support::{FakeWormArchive, rolled_log, synth_export, tier, tp},
     };
 
     #[tokio::test]
@@ -219,13 +219,11 @@ mod tests {
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(copied == exports.len());
@@ -273,13 +271,11 @@ mod tests {
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
         let copied = copy_eligible(
+            &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)],
-            ArchiveMode::WriteOnce,
-            &rsm,
-            &rlmm,
         )
         .await;
         check!(copied == 2);

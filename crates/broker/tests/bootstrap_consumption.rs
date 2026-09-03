@@ -87,6 +87,7 @@ async fn bootstrap_records_provisions_scram_user() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".into();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];

@@ -514,6 +514,15 @@
             "null"
           ]
         },
+        "connections_max_reauth": {
+          "default": null,
+          "description": "Per-listener KIP-368 `connections.max.reauth.ms`. Absent leaves this\nlistener on the broker-wide `connections_max_reauth`. Maps to an entry\nin [`crate::BrokerConfig::connections_max_reauth_overrides`].",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
         },
@@ -562,8 +571,15 @@
       "type": "object"
     },
     "FileOAuthBearerConfig": {
-      "description": "TOML shape of `[oauthbearer]`. Maps to\n[`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`\nselects the signed-JWT validator; setting\n`introspection_endpoint_uri` selects the RFC 7662 introspection\nvalidator; the two endpoint URIs are mutually\nexclusive. With neither set, the unsecured-JWS validator\n(development only) is used.",
+      "description": "TOML shape of `[oauthbearer]`. Maps to\n[`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`\nselects the signed-JWT validator; setting\n`introspection_endpoint_uri` selects the RFC 7662 introspection\nvalidator; the two endpoint URIs are mutually\nexclusive. With neither set, the unsecured-JWS validator\n(development only) is used, and that fallback is rejected at\nconfig-load unless `allow_unsecured = true`.",
       "properties": {
+        "allow_unsecured": {
+          "description": "Opt-in for the unsecured-JWS (`alg:none`) development\nvalidator. Default false. With neither `jwks_endpoint_uri` nor\n`introspection_endpoint_uri` set and a listener enabling\n`OAUTHBEARER`, the broker refuses to start rather than silently\ntrusting unsigned tokens; set this to true to accept that\nfallback in development. Never set it in production.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowable_clock_skew_ms": {
           "description": "Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`.\nDefault 30000.",
           "format": "int64",
@@ -686,15 +702,6 @@
         "jwks_refresh_interval_ms": {
           "description": "JWKS re-fetch interval, in milliseconds. Default 300000\n(5 minutes). Signed validator only.",
           "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "max_session_lifetime_seconds": {
-          "description": "Optional ceiling on OAUTHBEARER session lifetime, in\nseconds. When set, the broker clamps `session_lifetime_ms` to\n`min(token_exp_ms - now_ms, cap * 1000)`. When unset, sessions\nlast until the token's natural `exp`.",
-          "format": "uint32",
           "minimum": 0,
           "type": [
             "integer",
@@ -1019,6 +1026,20 @@
       ],
       "type": "object"
     },
+    "FileSaslPlainConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[sasl_plain]`. Maps to\n[`crate::BrokerConfig::plain_credentials`].",
+      "properties": {
+        "credentials_path": {
+          "description": "Filesystem path to the SASL/PLAIN credential file: one\n`username=password` per line, `#` comment lines and blank lines\nignored, the trailing newline stripped. File-based (not literal) so no\npassword sits in the TOML; the operator mounts a `Secret` and writes\nthe mount path here. A password may contain `=`; only the first `=` on\na line separates the two.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "FileSchemaRegistryConfig": {
       "additionalProperties": false,
       "description": "TOML shape of `[schema_registry]`. Mirrors the constructor arguments of\n[`crate::schema_validation::SchemaValidator::new`], the one registry client\neach broker holds.\n\n`deny_unknown_fields` so a misspelled key is rejected at parse time. A\nsilently ignored `fail_open` would leave the operator with the opposite of\nthe policy they wrote.",
@@ -1099,6 +1120,16 @@
         "key_path": {
           "type": "string"
         },
+        "principal_mapping_rules": {
+          "default": [
+            "DEFAULT"
+          ],
+          "description": "KIP-371 `ssl.principal.mapping.rules`: how the Subject DN of an mTLS\npeer certificate becomes the principal name ACLs and `super_users` are\nwritten against. Each entry is either `DEFAULT`, which uses the DN\nitself, or `RULE:pattern/replacement/[L|U]`, where `pattern` has to\nmatch the whole DN, `replacement` may reference capture groups as `$1`,\nand a trailing `L` or `U` lowercases or uppercases the result. The\nrules are tried in order and the first match wins. Defaults to\n`[\"DEFAULT\"]`, so a listener that says nothing keeps Kafka's behaviour\nof using the full DN. A malformed entry is rejected at startup.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "trust_roots_path": {
           "description": "PEM file of CA(s) this broker trusts when validating a PEER's server\ncert as an outbound inter-broker / controller-quorum dialer. The\noperator renders the cluster CA here so KIP-595 controller peers can\nmutually authenticate over the controller listener. Maps to\n[`krabka_security::TlsConfig::trust_roots_path`].",
           "type": [
@@ -1111,6 +1142,56 @@
         "cert_path",
         "key_path"
       ],
+      "type": "object"
+    },
+    "FileTopicPolicyConfig": {
+      "additionalProperties": false,
+      "description": "TOML shape of `[topic_policy]`. Maps to\n[`crate::topic_policy::TopicPolicy`].\n\nThe whole table is the KIP-108 / KIP-133 policy Kafka loads from a Java\nclass named by `create.topic.policy.class.name` and\n`alter.config.policy.class.name`. krabka cannot load a class, so the rules\nare declared here instead. Omitting the table declares no rule, which is\nKafka's default of no policy class: every `CreateTopics` and every topic\n`AlterConfigs` that passes ordinary config validation is accepted.\n\nA request that breaks a rule is answered with `POLICY_VIOLATION` (44) and\nan `error_message` naming the rule, which is what a `PolicyViolationException`\nfrom a Java policy class produces. The two replica rules apply to\n`CreateTopics` alone, because an `AlterConfigs` request carries neither\nnumber, exactly as `AlterConfigPolicy.RequestMetadata` does not.\n\n`deny_unknown_fields` so a misspelled rule name is rejected at parse time\nrather than leaving the broker enforcing nothing where the operator wrote\na rule.",
+      "properties": {
+        "forbidden": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Config keys the topic must not set to the named value, written as a\nTOML table:\n`forbidden = { \"unclean.leader.election.enable\" = \"true\" }`. Any other\nvalue for that key, and omitting the key, both pass.",
+          "type": "object"
+        },
+        "max_partitions": {
+          "description": "Highest partition count `CreateTopics` may be asked for, checked\nagainst the effective count. Omitted enforces no ceiling. Must be at\nleast 1.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_insync_replicas": {
+          "description": "Lowest `min.insync.replicas` a topic may carry. A topic that does not\nset the key passes: it runs on the cluster default, which the same\noperator sets. Omitted enforces no floor. Must be at least 1.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_replication_factor": {
+          "description": "Lowest replication factor `CreateTopics` may be asked for. The\neffective factor is checked, so a request that leaves it `-1` is\njudged on the factor the placement resolved. Omitted enforces no\nfloor. Must be at least 1.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "required": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Config keys the topic must set, with the exact value it must set them\nto, written as a TOML table:\n`required = { \"cleanup.policy\" = \"delete\" }`. A topic that omits the\nkey, or sets it to another value, is refused.",
+          "type": "object"
+        }
+      },
       "type": "object"
     },
     "FileWormConfig": {
@@ -2481,6 +2562,15 @@
         "null"
       ]
     },
+    "connections_max_reauth": {
+      "default": null,
+      "description": "KIP-368 `connections.max.reauth.ms`: how long an authenticated SASL\nsession may live before the client must re-authenticate in band.\nAbsent, or non-positive, disables re-authentication, which is Kafka's\ndefault. It applies to every mechanism: PLAIN, SCRAM and GSSAPI\nsessions are bounded by it alone, while an OAUTHBEARER or\ndelegation-token session expires at the earlier of its credential's\nexpiry and this window. A `[[listeners]]` entry may carry its own\n`connections_max_reauth`, which wins for that listener.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "controller_election_timeout": {
       "default": null,
       "description": "Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`.\nIt is the follower fetch watchdog, and 1.5x of it is the leader's\ncheck-quorum window: a leader that has not been fetched from by a\nmajority of the voters within that window resigns its epoch. Absent\nleaves the `BrokerConfig` default intact.",
@@ -2713,6 +2803,17 @@
       ],
       "description": "Operational runtime policy. Present values replace the current broker\nvalue; absent values retain it."
     },
+    "sasl_plain": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileSaslPlainConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`[sasl_plain]` section — where the broker's static SASL/PLAIN\ncredential table is read from. Absent leaves the table empty, which\n`BrokerConfig::validate` refuses once a listener offers PLAIN."
+    },
     "schema_registry": {
       "anyOf": [
         {
@@ -2743,7 +2844,7 @@
       "description": "`[stretch]` section — the three-site stretch deployment this node\nbelongs to. Maps to `BrokerConfig::stretch`. Absent leaves the\n`BrokerConfig` default `None`, an ordinary non-stretched cluster."
     },
     "super_users": {
-      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`. The\noperator emits `super_users = [\"ANONYMOUS\"]` when\n`Kafka.spec.delegationToken` is set so its PLAINTEXT\ninter-broker reconcile loop can mint per-`KafkaUser` tokens.\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
+      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`.\n\nSuper-user status does not substitute for authentication. The\ndelegation-token RPCs (`CreateDelegationToken`,\n`RenewDelegationToken`, `ExpireDelegationToken`) require a principal\nthat authenticated with SASL or mTLS, and answer\n`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or\none-way-TLS connection whatever this list holds. Listing\n`\"ANONYMOUS\"` is therefore rejected by `BrokerConfig::validate`: it\ncannot enable token issuance, and it would make every unauthenticated\nclient a super-user for all operations. Give the token-minting client\na SASL credential or a client certificate and list that principal\nhere.\n\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
       "items": {
         "type": "string"
       },
@@ -2762,6 +2863,17 @@
         }
       ],
       "description": "TLS material for the controller listener (and any\nlistener whose `protocol` is TLS-bearing)."
+    },
+    "topic_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileTopicPolicyConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`[topic_policy]` section — the KIP-108 / KIP-133 rule set a topic must\nsatisfy before the controller commits its creation or its config\nchange. Absent declares no rule, which is Kafka's default of no policy\nclass."
     }
   },
   "title": "FileConfig",

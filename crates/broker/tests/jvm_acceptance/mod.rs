@@ -73,8 +73,9 @@ pub(crate) use self::{
         controller_addr_2, host_port, minio_port, ports, rlmm_broker0_advertised,
     },
     sasl::{
-        oauthbearer_jaas, plain_jaas, scram_jaas, start_dual_mech_broker, start_oauthbearer_broker,
-        start_sasl_plaintext_broker, start_sasl_plaintext_broker_with_super_user,
+        oauthbearer_jaas, plain_jaas, scram_jaas, start_dual_mech_broker,
+        start_dual_mech_broker_with_reauth, start_oauthbearer_broker, start_sasl_plaintext_broker,
+        start_sasl_plaintext_broker_with_super_user,
     },
     three_broker_cluster::{
         start_three_broker_sasl_plaintext_jvm_cluster,

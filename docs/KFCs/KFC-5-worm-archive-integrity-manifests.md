@@ -28,7 +28,7 @@ This needs a KFC by the test in the [README](README.md). A stock Kafka client ca
 
 ## Public Interfaces
 
-The feature adds one broker config table, one object in the archive layout, and one command. It adds no API key, no error code, no topic config, and no metric.
+The feature adds one broker config table, one object in the archive layout, one command, and two broker counters. It adds no API key, no error code, and no topic config.
 
 ### The Broker Config Table
 
@@ -74,7 +74,7 @@ The manifest is JSON. It names every object the copy wrote with that object's si
 | `--bucket NAME` | Read from S3 or an S3-compatible store. `--region`, `--endpoint`, and `--allow-http` refine it. |
 | `--local-dir PATH` | Read from a local or mounted copy instead. |
 | `--prefix`, `--topic`, `--partition` | Narrow the run. |
-| `--key-id ID`, `--public-key PATH` | The trusted key. Both are needed, and each requires the other. |
+| `--key-id ID`, `--public-key PATH` | A trusted key. Both are needed, and each requires the other. Repeat the pair once per key to verify an archive that spans a key rotation in a single run; the two flags pair by position and an unequal count is a usage error. |
 | `--expect-head HEX` | The head the newest manifest must produce, taken from a record kept outside the archive. |
 | `--deep` | Download every object and recompute its `SHA-256`. |
 | `--allow-epoch-restarts` | Accept a chain restart instead of grading it as a hole. |
@@ -100,7 +100,7 @@ A failure to read the archive is a different outcome, and it exits with an error
 
 There is no new Kafka error code. A refused remote read reaches a consumer as `OFFSET_OUT_OF_RANGE`, which is the code the fetch path already returns when the remote reader cannot answer.
 
-There is no metric. A WORM deployment that wants to alert on a copy that stopped sealing manifests has nothing to alert on inside krabka today, and it has to watch the bucket instead. Two counters would close that, one for manifests sealed and one for seals that failed, and this document does not claim they exist.
+There is no new topic config. What the feature does add is observability, and it is two broker counters, both unlabelled: `krabka_broker_worm_manifests_sealed_total` counts the segment copies the archive sealed a manifest for and returned a matching chain receipt, and `krabka_broker_worm_manifest_seal_failures_total` counts the write-once copies that ended with no usable manifest -- the copy failed, the blocking task panicked, or the receipt was missing or did not match the requested chain position. A failure leaves the segment in `CopySegmentStarted` for the next tick, so a sustained rate is an archive that has stopped attesting, and `KrabkaWormSealFailures` alerts on it. Neither counter carries a topic label: a per-topic series here would be unbounded, and the broker log already names the partition behind every failure.
 
 ## Proposed Changes
 
@@ -240,7 +240,7 @@ It checks against the key registered under the manifest's `key_id` in the set th
 
 A run with no trusted key still recomputes the chain and checks every object, and it counts every signed manifest as untrusted. It proves internal consistency and says nothing about who wrote the archive. The tool grades that as an incomplete attestation rather than a pass, because a verdict of "OK" over an archive nobody's key vouches for is the kind of green that trains an auditor to stop looking.
 
-The key id is what lets a chain survive a key rotation, because each manifest names the key that signed it rather than assuming one key for the archive. The library's trusted-key set holds many keys for exactly that. The command line takes one `--key-id` and `--public-key` pair, so an archive that spans a rotation needs one run per key today, narrowed by prefix. Widening the flag to a repeatable pair is the obvious follow-up, and it is a change to this document rather than a new one.
+The key id is what lets a chain survive a key rotation, because each manifest names the key that signed it rather than assuming one key for the archive. The library's trusted-key set holds many keys for exactly that, and the command line reaches it: `--key-id` and `--public-key` are repeatable and pair by position, so one run over an archive written across a rotation trusts every key it was written under. An unequal count of the two flags is a usage error rather than a silently dropped key, because trusting one key fewer than the auditor meant to turns valid manifests into untrusted ones and reads as a finding.
 
 ### Tail Truncation Is Not Detectable from the Archive Alone
 
@@ -340,7 +340,7 @@ No test covers what a JVM consumer sees under `write_only = true`. The refusal h
 
 The multipart branch has behavioural coverage that forces a WORM segment above the threshold, replays the copy, and requires the reservation to reject the replay. The Object Lock suite separately proves bucket-side retention against deletion.
 
-Nothing covers a key rotation across a chain, because the command line cannot express one yet.
+A key rotation across a chain is covered at the command line: `worm_verify_cli.rs` seals the first manifest under one key id and the second under another, then verifies the archive clean with both pairs given and grades the rotated half untrusted with only the first. What is not covered is a broker that rotates its signing key while running, because the config is read once at startup.
 
 ## Rejected Alternatives
 

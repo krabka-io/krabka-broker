@@ -7,6 +7,7 @@
 //! handlers in the sibling modules read and write these types, so they live
 //! apart from any one mechanism.
 
+use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
 use krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange};
 use krabka_verified::{
     authz::{RequestAuthState, request_auth_admission},
@@ -58,10 +59,16 @@ pub enum ConnectionAuth {
         /// path cannot run there, because the listener does not accept
         /// `SaslHandshake` at all.
         mechanism: SaslMechanism,
-        /// Session expiry as Unix epoch ms. `None` means no expiry and no
-        /// re-auth timer, as for PLAIN, SCRAM, mTLS, and anonymous. `Some`
-        /// holds the OAUTHBEARER token's `exp`. The dispatch loop closes the
-        /// connection when this time passes.
+        /// Session expiry as Unix epoch ms: the earlier of the credential's
+        /// own lifetime and the listener's `connections.max.reauth.ms`
+        /// ceiling, as [`session_expiry`] computes it. Only OAUTHBEARER (the
+        /// token `exp`) and KIP-48 delegation tokens (the token expiry)
+        /// supply a credential lifetime; PLAIN, SCRAM and GSSAPI carry one
+        /// only when the listener caps re-authentication. `None` means no
+        /// expiry and no re-auth timer, which is what an uncapped listener
+        /// gives those three, and what mTLS and anonymous connections always
+        /// get. The dispatch loop closes the connection when this time
+        /// passes.
         expires_at_ms: Option<i64>,
         /// KIP-48: whether this connection authenticated with a delegation
         /// token instead of a "real" principal credential. Token auth uses
@@ -77,7 +84,7 @@ pub enum ConnectionAuth {
         authenticated_via_token: bool,
     },
     /// In-band re-authentication in progress: a `SaslHandshake` from a
-    /// previously `Authenticated` OAuth connection (KIP-368).
+    /// previously `Authenticated` connection (KIP-368).
     ///
     /// This variant holds the previous session snapshot. The post-validate
     /// equality check compares against it for the same principal name and the
@@ -86,6 +93,12 @@ pub enum ConnectionAuth {
     Reauthenticating {
         previous: AuthenticatedSnapshot,
         exchange: SaslExchange,
+        /// Same KIP-48 side-channel as
+        /// [`ConnectionAuth::Negotiating::pending_token_expiry_ms`]: a
+        /// multi-round re-auth exchange runs the mechanism's ordinary
+        /// rounds, so a token-SCRAM round 1 has the same value to carry to
+        /// round 2.
+        pending_token_expiry_ms: Option<i64>,
     },
 }
 
@@ -99,6 +112,130 @@ pub struct AuthenticatedSnapshot {
     pub principal: Principal,
     pub mechanism: SaslMechanism,
     pub expires_at_ms: Option<i64>,
+    /// KIP-48 token-auth flag of the session being replaced, so that a
+    /// re-auth the broker refuses puts the connection back exactly as it
+    /// was.
+    pub authenticated_via_token: bool,
+}
+
+/// The KIP-368 session ceiling a mechanism reports and arms: the earlier of
+/// the credential's own lifetime and the listener's
+/// `connections.max.reauth.ms`, as `(expires_at_ms, session_lifetime_ms)`.
+///
+/// `credential_expires_at_ms` is `None` for every credential that carries no
+/// expiry of its own — PLAIN, SCRAM and GSSAPI — which leaves the cap as the
+/// only ceiling. Only OAUTHBEARER's token `exp` and KIP-48's delegation-token
+/// expiry supply one. An absent cap and a non-positive one both mean "no
+/// broker ceiling", the way Kafka arms no re-auth deadline for a
+/// `connections.max.reauth.ms` that is not positive.
+pub(super) fn session_expiry(
+    now_ms: i64,
+    credential_expires_at_ms: Option<i64>,
+    max_reauth: Option<krabka_units::Time>,
+) -> (Option<i64>, i64) {
+    let cap_expiry = max_reauth
+        .map(krabka_units::convert::TimeExt::millis_i64)
+        .filter(|ms| *ms > 0)
+        .and_then(|ms| now_ms.checked_add(ms));
+    let expires_at_ms = match (credential_expires_at_ms, cap_expiry) {
+        (Some(credential), Some(cap)) => Some(credential.min(cap)),
+        (credential, cap) => credential.or(cap),
+    };
+    let session_lifetime_ms = expires_at_ms.map_or(0, |at| at.saturating_sub(now_ms).max(0));
+    (expires_at_ms, session_lifetime_ms)
+}
+
+/// Enters a KIP-368 re-authentication: a `Reauthenticating` connection runs
+/// the mechanism's ordinary exchange, so this hands the handler a
+/// `Negotiating` state to drive and keeps the previous session's snapshot for
+/// [`finish_reauth`] to check the result against.
+///
+/// Returns `None` for a connection that is not re-authenticating, which the
+/// handlers read as "run the initial-auth path and return its response as-is".
+pub(super) fn begin_reauth(auth: &mut ConnectionAuth) -> Option<AuthenticatedSnapshot> {
+    if !matches!(auth, ConnectionAuth::Reauthenticating { .. }) {
+        return None;
+    }
+    let ConnectionAuth::Reauthenticating {
+        previous,
+        exchange,
+        pending_token_expiry_ms,
+    } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+    else {
+        unreachable!("matched Reauthenticating above");
+    };
+    *auth = ConnectionAuth::Negotiating {
+        mechanism: previous.mechanism,
+        exchange,
+        pending_token_expiry_ms,
+    };
+    Some(previous)
+}
+
+/// Applies the KIP-368 rules to the state a re-auth exchange left behind.
+///
+/// A round that authenticated the same principal stands. A round that only
+/// advanced the exchange (SCRAM round 1, a GSSAPI challenge) goes back to
+/// `Reauthenticating`, so the request gate keeps refusing everything but
+/// `SaslAuthenticate` until the exchange finishes. Anything else — a failed
+/// exchange, or one that authenticated a different principal, which KIP-368
+/// forbids mid-connection — restores the previous session and answers
+/// `SASL_AUTHENTICATION_FAILED`, on which the dispatcher closes the
+/// connection.
+pub(super) fn finish_reauth(
+    auth: &mut ConnectionAuth,
+    previous: AuthenticatedSnapshot,
+    resp: SaslAuthenticateResponse,
+) -> SaslAuthenticateResponse {
+    if resp.error_code == 0 {
+        match auth {
+            ConnectionAuth::Authenticated { principal, .. }
+                if principal.name == previous.principal.name =>
+            {
+                return resp;
+            }
+            ConnectionAuth::Negotiating { .. } => {
+                let ConnectionAuth::Negotiating {
+                    exchange,
+                    pending_token_expiry_ms,
+                    ..
+                } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+                else {
+                    unreachable!("matched Negotiating above");
+                };
+                *auth = ConnectionAuth::Reauthenticating {
+                    previous,
+                    exchange,
+                    pending_token_expiry_ms,
+                };
+                return resp;
+            }
+            _ => {}
+        }
+    }
+    let switched_principal = matches!(auth, ConnectionAuth::Authenticated { .. });
+    if switched_principal {
+        tracing::debug!(
+            previous = %previous.principal.name,
+            "re-authentication attempted a principal switch"
+        );
+    }
+    *auth = ConnectionAuth::Authenticated {
+        principal: previous.principal,
+        mechanism: previous.mechanism,
+        expires_at_ms: previous.expires_at_ms,
+        authenticated_via_token: previous.authenticated_via_token,
+    };
+    if switched_principal {
+        return SaslAuthenticateResponse {
+            error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
+            error_message: Some("re-authentication may not change the principal".to_string()),
+            auth_bytes: bytes::Bytes::new(),
+            session_lifetime_ms: 0,
+            ..Default::default()
+        };
+    }
+    resp
 }
 
 /// In-flight SASL exchange.
@@ -318,8 +455,10 @@ mod tests {
                         },
                         mechanism: SaslMechanism::OAuthBearer,
                         expires_at_ms: Some(2_000_000),
+                        authenticated_via_token: false,
                     },
                     exchange: SaslExchange::OAuthBearer,
+                    pending_token_expiry_ms: None,
                 },
             ),
             (
@@ -423,8 +562,10 @@ mod tests {
                 },
                 mechanism: SaslMechanism::OAuthBearer,
                 expires_at_ms: Some(2_000_000),
+                authenticated_via_token: false,
             },
             exchange: SaslExchange::OAuthBearer,
+            pending_token_expiry_ms: None,
         };
         let cases = [
             (36, true),  // SaslAuthenticate
@@ -482,8 +623,10 @@ mod tests {
                 },
                 mechanism: SaslMechanism::OAuthBearer,
                 expires_at_ms: Some(2_000_000),
+                authenticated_via_token: false,
             },
             exchange: SaslExchange::OAuthBearer,
+            pending_token_expiry_ms: None,
         };
         let authenticated = ConnectionAuth::Authenticated {
             principal: Principal {

@@ -138,6 +138,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
             protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         serve_connection_stream(broker, stream, spec, peer, None).await;
     });
@@ -195,6 +196,7 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
             protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         serve_connection_stream(broker, stream, spec, peer, None).await;
     });
@@ -298,6 +300,7 @@ async fn serve_frames(
             protocol,
             tls_config: None,
             sasl_mechanisms: mechanisms,
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         serve_connection_stream(broker, stream, spec, peer, None).await;
     });

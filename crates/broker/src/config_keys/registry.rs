@@ -24,7 +24,7 @@ use super::{
     LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, MIN_INSYNC_REPLICAS,
     REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
     broker_scope::{
-        BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
+        BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS, CONNECTIONS_MAX_REAUTH_MS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
         REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
         TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
@@ -184,6 +184,7 @@ impl ConfigKey {
                 | OFFSETS_RETENTION_MINUTES
                 | OFFSETS_RETENTION_CHECK_INTERVAL_MS
                 | CONNECTIONS_MAX_IDLE_MS
+                | CONNECTIONS_MAX_REAUTH_MS
                 | TRANSACTIONAL_ID_EXPIRATION_MS
                 | TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
         )
@@ -667,6 +668,19 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Long,
             Some("600000"),
             "How long a client connection may go without a complete request frame before the broker closes it. The process reads it at startup, so no alter path can change it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-368"),
+        read_only: true,
+        ..key(
+            CONNECTIONS_MAX_REAUTH_MS,
+            ConfigScope::Broker,
+            ConfigType::Long,
+            Some("0"),
+            "How long an authenticated SASL session may live before the client must re-authenticate in band. Zero disables re-authentication. The process reads it at startup, so no alter path can change it.",
             ValueCheck::NotAltered,
         )
     },

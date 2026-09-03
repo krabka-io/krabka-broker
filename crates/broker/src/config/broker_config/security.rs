@@ -4,6 +4,51 @@
 //! and SASL settings, including the OAUTHBEARER validator and its JWKS
 //! refresh plumbing.
 
+/// The broker's static SASL/PLAIN credential table: username → password.
+///
+/// A newtype rather than a bare `HashMap` so that `BrokerConfig`'s derived
+/// `Debug` cannot print a password. The hand-written `Debug` below prints the
+/// usernames alone.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct PlainCredentials(std::collections::HashMap<String, String>);
+
+impl PlainCredentials {
+    /// The table as a plain map, for
+    /// [`krabka_security::verify_plain`].
+    #[must_use]
+    pub fn as_map(&self) -> &std::collections::HashMap<String, String> {
+        &self.0
+    }
+}
+
+/// Prints the usernames and no password, so `{config:?}` cannot leak the
+/// credential table.
+impl std::fmt::Debug for PlainCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.0.keys()).finish()
+    }
+}
+
+impl std::ops::Deref for PlainCredentials {
+    type Target = std::collections::HashMap<String, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for PlainCredentials {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl FromIterator<(String, String)> for PlainCredentials {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
 // Link 4 of the `BrokerConfig` field chain: it adds this group to the
 // fields collected so far and hands them to `coordinators_fields`.
 macro_rules! security_fields {
@@ -34,13 +79,20 @@ macro_rules! security_fields {
             pub inter_broker_credentials: Option<InterBrokerCredentials>,
 
             /// Exact authenticated principal name to broker node ID bindings used
-            /// by diskless WAL follower fetches. Principals absent from this map
-            /// may still use the built-in `broker-<id>` naming convention.
+            /// by diskless WAL follower fetches. This map is authoritative: once
+            /// it is non-empty, only the names it lists may fetch as a WAL voter,
+            /// on any listener. While it is empty, the built-in `broker-<id>` and
+            /// `CN=broker-<id>` naming convention applies, but only to connections
+            /// on `inter_broker_listener_name`; a principal of that name on a
+            /// client listener is refused.
             pub inter_broker_principal_node_ids: HashMap<String, krabka_raft::NodeId>,
 
             /// Static PLAIN credentials: username → password. Empty by default.
             /// PLAIN auth stays disabled until you explicitly enable the mechanisms.
-            pub plain_credentials: HashMap<String, String>,
+            /// `[sasl_plain] credentials_path` in `broker.toml` loads the table
+            /// from a file; `validate()` refuses a listener that offers PLAIN
+            /// while it is empty.
+            pub plain_credentials: PlainCredentials,
 
             /// Usernames that bypass ACL checks (super-users). The
             /// `create_delegation_token` act-as gate reads this directly; the
@@ -76,6 +128,11 @@ macro_rules! security_fields {
             /// Break-glass two-person rule policy, configured through `[break_glass]`.
             pub break_glass: BreakGlassConfig,
 
+            /// KIP-108 / KIP-133 topic policy, configured through
+            /// `[topic_policy]`. The default declares no rule, which is
+            /// Kafka's default of no policy class.
+            pub topic_policy: crate::topic_policy::TopicPolicy,
+
             /// TLS configuration. `None` means no TLS, and is the default.
             pub tls_config: Option<TlsConfig>,
 
@@ -108,13 +165,6 @@ macro_rules! security_fields {
             /// introspection, and userinfo all share it. `None` selects reqwest's
             /// default webpki-roots.
             pub oauthbearer_idp_tls_trust: Option<std::path::PathBuf>,
-
-            /// Optional ceiling on OAUTHBEARER session lifetime. When set, the
-            /// broker reports `session_lifetime_ms = min(token_exp_ms - now_ms,
-            /// cap)` and the dispatch-loop re-auth timer fires at the clamped
-            /// time. When unset, sessions last until the token's natural `exp`
-            /// (the default).
-            pub oauthbearer_max_session_lifetime: Option<Time>,
 
             /// Receiver half of the JWKS refresher signal channel.
             ///

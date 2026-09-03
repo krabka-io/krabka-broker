@@ -49,6 +49,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
         protocol: ListenerProtocol::Ssl,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SSL".to_string();
     cfg.tls_config = Some(TlsConfig {
@@ -200,6 +201,7 @@ async fn metadata_response_carries_listener_endpoints() {
             protocol: ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
         ListenerSpec {
             name: "SSL".to_string(),
@@ -208,6 +210,7 @@ async fn metadata_response_carries_listener_endpoints() {
             protocol: ListenerProtocol::Ssl,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
     ];
     cfg.inter_broker_listener_name = "PLAINTEXT".to_string();

@@ -63,9 +63,17 @@ client_ca_path = "/etc/krabka/tls/clients-ca.crt"
 client_auth = "Optional"
 
 # SASL mechanisms the `CLIENT` listener advertises. Wire names, as a client
-# writes them in `sasl.mechanism`.
+# writes them in `sasl.mechanism`. Adding `"PLAIN"` here means adding the
+# `[sasl_plain]` section below in the same change: a listener that offers PLAIN
+# without a credential file is refused at startup.
 [listeners.sasl_config]
-enabled_mechanisms = ["SCRAM-SHA-256", "PLAIN"]
+enabled_mechanisms = ["SCRAM-SHA-256"]
+
+# Where the SASL/PLAIN credential table is read from: one `username=password`
+# per line. The file is read when the config is applied, so it has to exist
+# before the broker starts, which is why this is disabled here.
+#[sasl_plain]
+#credentials_path = "/etc/krabka/sasl-plain.txt"
 
 # Kafka `server.properties` keys the broker honours as topic defaults.
 [server_properties]

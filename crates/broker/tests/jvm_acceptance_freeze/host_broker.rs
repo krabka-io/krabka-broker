@@ -104,6 +104,7 @@ pub(super) fn sasl_listener(config: &mut BrokerConfig, users: &[(&str, &str)]) {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     SASL_LISTENER.clone_into(&mut config.inter_broker_listener_name);
     config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];

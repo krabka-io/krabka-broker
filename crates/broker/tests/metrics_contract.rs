@@ -26,11 +26,11 @@ use std::{
 
 use assert2::assert;
 use krabka_broker::metrics::{
-    ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, BrokerMetrics, ClientSoftwareLabel, ConnectionCloseReason,
-    ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel, QuotaType,
-    QuotaTypeLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel,
-    TopicLabel, WalShardLabel, WalVoterLabel,
+    ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
+    BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
+    ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel,
+    DirectoryLabel, PartitionLabel, QuotaType, QuotaTypeLabel, ReplicaLagLabel, SaslMechanismLabel,
+    SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
 };
 use krabka_metadata::BreakGlassAction as GatedAction;
 
@@ -178,6 +178,7 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         client_software_versions: _,
         successful_authentication: _,
         failed_authentication: _,
+        authorization_denied: _,
         api_requests,
         unsupported_api_requests,
         request_duration_seconds,
@@ -191,6 +192,8 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         request_errors,
         tiered_storage_rlmm_topic_backed: _,
         tiered_storage_rlmm_bootstrap_attempts: _,
+        worm_manifests_sealed_total: _,
+        worm_manifest_seal_failures_total: _,
         produce_message_conversions,
         fetch_message_conversions,
         unclean_leader_elections_total: _,
@@ -345,6 +348,14 @@ fn seed_single_families(metrics: &BrokerMetrics) {
             mechanism: "SCRAM-SHA-512".into(),
         }));
     }
+    drop(
+        metrics
+            .authorization_denied
+            .get_or_create(&AuthorizationDeniedLabel {
+                operation: "Write".into(),
+                resource_type: "Topic".into(),
+            }),
+    );
     drop(
         metrics
             .quota_throttle_duration_seconds

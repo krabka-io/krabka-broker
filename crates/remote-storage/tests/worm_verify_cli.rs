@@ -27,6 +27,7 @@ use uuid::Uuid;
 const TOPIC: &str = "orders";
 const PARTITION: i32 = 0;
 const KEY_ID: &str = "worm-key-1";
+const ROTATED_KEY_ID: &str = "worm-key-2";
 const SEGMENTS: usize = 2;
 const SEGMENT_SPAN: i64 = 100;
 
@@ -67,6 +68,8 @@ struct Fixture {
     _keys: TempDir,
     partition_dir: String,
     public_key: PathBuf,
+    /// The second signer's public key, used only by the rotated fixture.
+    rotated_public_key: PathBuf,
     /// The signing key, so a test can rewrite a manifest the archive already
     /// holds without the rewrite failing on the signature instead.
     pkcs8: Vec<u8>,
@@ -80,6 +83,17 @@ impl Fixture {
     /// Writes a two-segment archive. `sign` chooses whether the manifests
     /// carry a signature at all.
     fn build(sign: bool) -> Self {
+        Self::build_with(sign, false)
+    }
+
+    /// A signed two-segment archive whose second manifest is signed under a
+    /// second key id, which is what a key rotation part-way through an
+    /// archive leaves behind.
+    fn rotated() -> Self {
+        Self::build_with(true, true)
+    }
+
+    fn build_with(sign: bool, rotate: bool) -> Self {
         let root = TempDir::new().unwrap();
         let keys = TempDir::new().unwrap();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
@@ -92,6 +106,13 @@ impl Fixture {
         } else {
             WormArchiver::new(None)
         };
+        let rotated_pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let rotated_signer =
+            FileEd25519Signer::from_pkcs8_bytes(rotated_pkcs8.as_ref(), ROTATED_KEY_ID.to_string())
+                .expect("ring mints a valid PKCS#8 Ed25519 key");
+        let rotated_public_key = keys.path().join("worm-rotated.pub");
+        std::fs::write(&rotated_public_key, rotated_signer.public_key()).unwrap();
+        let rotated_archiver = WormArchiver::new(Some(Arc::new(rotated_signer)));
 
         let partition_dir = format!("{TOPIC}-{PARTITION}-{}", uuid_b64(Uuid::from_u128(1)));
         std::fs::create_dir_all(root.path().join(&partition_dir)).unwrap();
@@ -123,7 +144,14 @@ impl Fixture {
                 })
                 .to_custom_metadata(),
             );
-            let sealed = archiver.seal(&stamped, entries).unwrap();
+            // The rotation lands part-way through: the chain is unbroken, so
+            // only the trusted-key set separates a clean run from an
+            // untrusted one.
+            let sealed = if rotate && index > 0 {
+                rotated_archiver.seal(&stamped, entries).unwrap()
+            } else {
+                archiver.seal(&stamped, entries).unwrap()
+            };
             std::fs::write(
                 root.path().join(format!("{stem}{MANIFEST_SUFFIX}")),
                 &sealed.bytes,
@@ -137,6 +165,7 @@ impl Fixture {
             _keys: keys,
             partition_dir,
             public_key,
+            rotated_public_key,
             pkcs8: pkcs8.as_ref().to_vec(),
             tip: prev_head,
             manifest_keys,
@@ -180,6 +209,16 @@ impl Fixture {
             KEY_ID.to_string(),
             "--public-key".to_string(),
             self.public_key.display().to_string(),
+        ]
+    }
+
+    /// The second `--key-id` / `--public-key` pair of a rotated archive.
+    fn rotated_key_args(&self) -> Vec<String> {
+        vec![
+            "--key-id".to_string(),
+            ROTATED_KEY_ID.to_string(),
+            "--public-key".to_string(),
+            self.rotated_public_key.display().to_string(),
         ]
     }
 }
@@ -440,4 +479,58 @@ fn an_emptied_archive_still_fails_against_an_expected_head() {
     check!(result.code == Some(1), "stdout: {}", result.stdout);
     check!(result.stderr.contains("HEAD MISMATCH"));
     check!(result.stderr.contains("archive tip none"));
+}
+
+/// One run over an archive that spans a key rotation, with both keys trusted.
+///
+/// This is the case the single-pair command line could not express: every
+/// manifest is signed, but under two different key ids, and a run naming one
+/// of them grades the other half as untrusted.
+#[test]
+fn both_key_pairs_verify_an_archive_that_spans_a_rotation() {
+    let fixture = Fixture::rotated();
+    let mut args = fixture.base_args();
+    args.extend(fixture.rotated_key_args());
+
+    let result = run(&args);
+
+    check!(result.code == Some(0), "stderr: {}", result.stderr);
+    check!(!result.stderr.contains("INCOMPLETE ATTESTATION"));
+    check!(
+        result
+            .stdout
+            .contains("chain continuous, all signatures valid")
+    );
+}
+
+#[test]
+fn one_key_pair_leaves_the_rotated_half_untrusted() {
+    let fixture = Fixture::rotated();
+
+    let result = run(&fixture.base_args());
+
+    check!(result.code == Some(1), "stdout: {}", result.stdout);
+    check!(
+        result.stderr.contains("INCOMPLETE ATTESTATION"),
+        "stderr: {}",
+        result.stderr
+    );
+    check!(result.stderr.contains("1 signed by an untrusted key"));
+}
+
+#[test]
+fn an_unpaired_key_flag_is_rejected_rather_than_dropped() {
+    let fixture = Fixture::rotated();
+    let mut args = fixture.base_args();
+    args.push("--key-id".to_string());
+    args.push(ROTATED_KEY_ID.to_string());
+
+    let result = run(&args);
+
+    check!(result.code == Some(1), "stdout: {}", result.stdout);
+    check!(
+        result.stderr.contains("pair by position"),
+        "stderr: {}",
+        result.stderr
+    );
 }

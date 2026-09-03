@@ -122,8 +122,8 @@ bucket of a phase says nothing about the same bucket of the total.
 | `krabka_broker_active_connections` | gauge | - | `socket-server-metrics,name=connection-count` | Client connections open now. |
 | `krabka_broker_connection_closes_total` | counter | `reason` | `Selector,name=connection-close-total`; `expired-connections-killed-count` for the idle arm | Connections the broker closed on its own. `reason` is one of `idle`, `sasl_session_expired`, `decode_error`, `peer_closed`. A connection dropped because of a request it did read is counted by that request's family instead. [Runbook](runbooks/idle-connection-closes.md). |
 | `krabka_broker_client_software_versions_total` | counter | `software_name`, `software_version` | `socket-server-metrics,clientSoftwareName=...,clientSoftwareVersion=...,name=connections` | KIP-511 accepted v3+ `ApiVersions` handshakes. |
-| `krabka_broker_successful_authentication_total` | counter | `mechanism` | `Selector,name=successful-authentication-total` | `SaslAuthenticate` frames that reached an authenticated state. `mechanism` is the wire name: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER`. |
-| `krabka_broker_failed_authentication_total` | counter | `mechanism` | `Selector,name=failed-authentication-total` | `SaslAuthenticate` frames that returned an error. `ILLEGAL_SASL_STATE` rejects with no prior handshake land under `Unknown`. |
+| `krabka_broker_successful_authentication_total` | counter | `mechanism` | `Selector,name=successful-authentication-total` | `SaslAuthenticate` frames that reached an authenticated state. `mechanism` is the wire name: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER`, `GSSAPI`. [Runbook](runbooks/authentication-failures.md). |
+| `krabka_broker_failed_authentication_total` | counter | `mechanism` | `Selector,name=failed-authentication-total` | `SaslAuthenticate` frames that returned an error. The `mechanism` label carries the same set, `GSSAPI` included. `ILLEGAL_SASL_STATE` rejects with no prior handshake land under `Unknown`. Alert on a sustained `rate(...)`. [Runbook](runbooks/authentication-failures.md). |
 | `krabka_broker_incremental_fetch_sessions` | gauge | - | `FetchSessionCache,name=NumIncrementalFetchSessions` | KIP-227 live fetch sessions. |
 | `krabka_broker_incremental_fetch_session_evictions_total` | counter | - | `FetchSessionCache,name=IncrementalFetchSessionEvictionsPerSec` | Sessions evicted to make room. |
 | `krabka_broker_incremental_fetch_partitions_cached` | gauge | - | `FetchSessionCache,name=NumIncrementalFetchPartitionsCached` | Partitions held across every live session. |
@@ -136,6 +136,8 @@ bucket of a phase says nothing about the same bucket of the total.
 | :--- | :--- | :--- | :--- | :--- |
 | `krabka_broker_tiered_storage_rlmm_topic_backed` | gauge | - | - | KIP-405: 1 once the topic-backed `RemoteLogMetadataManager` is in place, 0 on the fail-closed placeholder. Alert on `min_over_time(...[5m]) == 0` for a cluster that asked for it. [Runbook](runbooks/rlmm-bootstrap-stuck.md). |
 | `krabka_broker_tiered_storage_rlmm_bootstrap_attempts_total` | counter | - | - | Bootstrap attempts. Climbs while stuck, flat once the gauge flips to 1. |
+| `krabka_broker_worm_manifests_sealed_total` | counter | - | - | KFC-5: WORM manifests the archive sealed and returned a valid chain receipt for, one per segment copied into a write-once archive. Flat while a WORM cluster tiers means the chain has stopped growing. |
+| `krabka_broker_worm_manifest_seal_failures_total` | counter | - | - | KFC-5: write-once segment copies that ended with no usable manifest -- the copy failed, the task panicked, or the receipt was missing or did not match the requested chain position. Alert on `rate(...[5m]) > 0`. |
 
 ## Diskless WAL
 
@@ -190,6 +192,7 @@ any of these.
 | `krabka_broker_break_glass_proposals` | gauge | `state` | - | KFC-9 proposals by state: `pending`, `approved`, `expired`, `consumed`. |
 | `krabka_broker_break_glass_refusals_total` | counter | `action` | - | KFC-9 privileged transitions refused for want of an approved proposal. A steady rate is normal. |
 | `krabka_broker_break_glass_bypassed_total` | counter | `action` | - | KFC-9 privileged transitions that ran without an approved proposal. Alert on `rate(...) > 0`. [Runbook](runbooks/break-glass-bypassed.md). |
+| `krabka_broker_authorization_denied_total` | counter | `operation`, `resource_type` | the `Principal ... is Denied Operation ...` line on the `kafka.authorizer.logger` log4j logger; Kafka exports no metric | Authorization decisions that came back Deny. Both labels are the `AclOperation` / `ResourceType` spelling, so cardinality is bounded. Counted whether or not audit is enabled, so it is the denial signal a cluster with `audit.enabled=false` still has. Alert on `rate(...) > 0` sustained. [Runbook](runbooks/authorization-denials.md). |
 | `krabka_broker_audit_events_total` | counter | - | - | Audit records written to `__krabka_audit`. |
 | `krabka_broker_audit_write_failures_total` | counter | - | - | Audit records that failed to write. Alert on `rate(...) > 0`. [Runbook](runbooks/audit-write-failures.md). |
 | `krabka_broker_audit_spool_depth` | gauge | - | - | Audit records buffered in the durable spool. |

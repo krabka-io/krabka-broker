@@ -315,5 +315,15 @@ impl BrokerMetrics {
             "Diskless WAL cold reads that failed while reading object storage.",
             self.diskless_wal_cold_read_errors_total.clone(),
         );
+        registry.register(
+            "worm_manifests_sealed",
+            "WORM manifests sealed by the archive with a valid chain receipt.",
+            self.worm_manifests_sealed_total.clone(),
+        );
+        registry.register(
+            "worm_manifest_seal_failures",
+            "Write-once segment copies that ended without a usable manifest.",
+            self.worm_manifest_seal_failures_total.clone(),
+        );
     }
 }

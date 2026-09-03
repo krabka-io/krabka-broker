@@ -63,10 +63,19 @@ pub(crate) async fn handle(
 
     let image = broker.controller.current_image();
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
+    let validate_only = req.validate_only;
+    let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
 
     for resource in req.resources {
-        responses.push(process_resource(broker, &image, ctx, resource, req.validate_only).await);
+        let named = audit_resources_for(&resource);
+        let response = process_resource(broker, &image, ctx, resource, validate_only).await;
+        // A `--dry-run` request stores nothing, so it changed no resource.
+        if response.error_code == crate::codes::NONE && !validate_only {
+            audited.extend(named);
+        }
+        responses.push(response);
     }
+    crate::handlers::audit_admin_success(broker.audit_log.as_ref(), ctx, "AlterConfigs", audited);
 
     let resp = AlterConfigsResponse {
         responses,
@@ -74,4 +83,36 @@ pub(crate) async fn handle(
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
     crate::handlers::encode_response(&resp, version)
+}
+
+/// Names the audited resource and the keys the replacement sets on it.
+///
+/// The values never reach the audit record. A config value can be a password
+/// or a key store path, and the record only has to say who changed what.
+fn audit_resources_for(
+    resource: &krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
+) -> Vec<krabka_audit::AuditResource> {
+    let mut out = vec![crate::handlers::audit_resource(
+        config_resource_type(resource.resource_type),
+        resource.resource_name.clone(),
+    )];
+    out.extend(
+        resource
+            .configs
+            .iter()
+            .map(|config| crate::handlers::audit_resource("ConfigKey", config.name.clone())),
+    );
+    out
+}
+
+/// The audit `resource_type` for a KIP-133 config resource-type discriminant.
+pub(super) fn config_resource_type(resource_type: i8) -> &'static str {
+    match resource_type {
+        RESOURCE_TYPE_TOPIC => "Topic",
+        RESOURCE_TYPE_BROKER => "Broker",
+        8 => "BrokerLogger",
+        16 => "ClientMetrics",
+        32 => "Group",
+        _ => "Unknown",
+    }
 }

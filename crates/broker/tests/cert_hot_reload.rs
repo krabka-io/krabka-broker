@@ -146,6 +146,7 @@ async fn reload_tls_swaps_served_cert() {
         protocol: ListenerProtocol::Ssl,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SSL".into();
     cfg.tls_config = Some(TlsConfig {
@@ -217,6 +218,7 @@ async fn periodic_watcher_reloads_on_mtime_change() {
         protocol: ListenerProtocol::Ssl,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SSL".into();
     cfg.tls_config = Some(TlsConfig {

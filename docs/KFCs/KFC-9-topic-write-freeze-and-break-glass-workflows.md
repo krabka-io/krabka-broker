@@ -375,7 +375,7 @@ A proposal, each approval, the consume, the transition, and every refusal each p
 
 The existing administrative event carries one principal and no key material. The whole value of a two-person rule is that the record names both people. The whole value of a signature is that the record keeps it. A join across rows on a resource name reconstructs neither one, so this design adds an event that carries both.
 
-One audit gap that already exists stays open here. The authentication event and two lifecycle events are defined and never emitted. This feature does not change that, and this document does not imply that it does.
+Every completed login writes an `Authentication` row, so an approval joins back to the session that made it by principal name and source endpoint.
 
 ### A Signature Proves Who Wrote the Record, and Not What the Broker Did
 

@@ -151,6 +151,28 @@ pub(crate) async fn handle(
     // known.
     batch.audit_applied(broker, ctx, submit_failure.as_deref());
 
+    // A cancel audits itself as a `PrivilegedAction` through the two-person
+    // gate. An ordinary start spends no approval, so every partition the
+    // request actually altered is audited here.
+    crate::handlers::audit_admin_success(
+        broker.audit_log.as_ref(),
+        ctx,
+        "AlterPartitionReassignments",
+        by_topic
+            .iter()
+            .flat_map(|(topic, rows)| {
+                rows.iter()
+                    .filter(|row| row.error_code == crate::codes::NONE)
+                    .map(move |row| {
+                        crate::handlers::audit_resource(
+                            "Partition",
+                            format!("{topic}-{}", row.partition_index),
+                        )
+                    })
+            })
+            .collect(),
+    );
+
     let responses: Vec<ReassignableTopicResponse> = by_topic
         .into_iter()
         .map(|(name, partitions)| ReassignableTopicResponse {

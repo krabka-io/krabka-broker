@@ -60,7 +60,7 @@ pub struct BrokerRaftHandshake {
     pub enabled_sasl_mechanisms: Vec<SaslMechanism>,
     pub gssapi: Option<krabka_security::gssapi::GssapiConfig>,
     pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
-    pub oauthbearer_max_session_lifetime: Option<krabka_units::Time>,
+    pub connections_max_reauth: Option<krabka_units::Time>,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,
     /// Maximum Kafka handshake frame body accepted before authentication.
@@ -149,7 +149,7 @@ mod tests {
             enabled_sasl_mechanisms: vec![],
             gssapi: None,
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-            oauthbearer_max_session_lifetime: None,
+            connections_max_reauth: None,
             protocol: ListenerProtocol::Plaintext,
             controller: Arc::new(OnceCell::new()),
             max_frame_bytes: 4096,

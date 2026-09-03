@@ -2,18 +2,39 @@
 //! admin operation.
 //!
 //! The topic has to exist before anything can be audited, the broker's own
-//! start has to arrive on it, and a successful `CreateTopics` has to arrive as
-//! an `AdminOperation` record that names the topic it created. Each case
+//! start has to arrive on it, and every admin mutation has to arrive as an
+//! `AdminOperation` record that names the resource it changed. Each case
 //! drives the request over a plain client and then reads the record back off
 //! the topic, because fetch visibility can lag the durable write.
 
 use krabka_broker::coordinator::AUDIT_TOPIC;
 use krabka_protocol::owned::{
+    alter_client_quotas_request::{
+        AlterClientQuotasRequest, EntityData, EntryData, OpData as QuotaOp,
+    },
+    alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
+    alter_user_scram_credentials_request::{
+        AlterUserScramCredentialsRequest, ScramCredentialUpsertion,
+    },
+    create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    delete_records_request::{DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic},
+    delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
+    incremental_alter_configs_request::{
+        AlterConfigsResource as IncrementalResource, AlterableConfig as IncrementalConfig,
+        IncrementalAlterConfigsRequest,
+    },
     metadata_request::{MetadataRequest, MetadataRequestTopic},
 };
 
 use crate::support;
+
+/// The KIP-133 `resource_type` discriminant for a topic.
+const RESOURCE_TYPE_TOPIC: i8 = 2;
+/// The `IncrementalAlterConfigs` `config_operation` for SET.
+const OP_SET: i8 = 0;
+/// The KIP-554 mechanism discriminant for `SCRAM-SHA-256`.
+const SCRAM_SHA_256: i8 = 1;
 
 #[tokio::test]
 async fn audit_topic_exists_after_startup() {
@@ -73,20 +94,34 @@ async fn broker_started_event_is_written_to_audit_topic() {
     p.broker.shutdown().await;
 }
 
-/// Verifies that a successful `CreateTopics` call emits an `AdminOperation`
-/// audit record. That record must carry `class_uid == 6003`,
-/// `api.operation == "CreateTopics"`, `status_id == 1`, and the topic name in
-/// `resources[0].name`.
+/// Every admin mutation this fixture can drive emits one OCSF `ApiActivity`
+/// record naming the api and the resource it changed.
+///
+/// The requests run in order because they build on each other: the topic has
+/// to exist before its partitions grow, and it has to go away last. The
+/// expectations are then checked as a table. `wait_for_audit_record` reads the
+/// whole topic back on each call, so the order the records land in does not
+/// matter to the assertions.
+///
+/// Four apis are out of this fixture's reach. `AlterPartitionReassignments`,
+/// `UnregisterBroker`, `AddRaftVoter` and `RemoveRaftVoter` need more than one
+/// broker, and the three delegation-token apis need a SASL listener with a
+/// master key. `ElectLeaders` is reachable but moves nothing here: a preferred
+/// election on a one-broker cluster is already at its preferred leader, and an
+/// election that changed no partition is not an audited mutation.
 #[tokio::test]
-async fn successful_create_topics_is_audited() {
+async fn every_admin_mutation_is_audited() {
     let p = support::start().await;
+    p.broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
 
-    let audit_before = p.broker.metrics().audit_events.get();
-    let cr = p
+    let topic = "audited-orders";
+    let user = "audited-user";
+
+    let created = p
         .client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
-                name: "audited-orders".into(),
+                name: topic.into(),
                 num_partitions: 1,
                 replication_factor: 1,
                 ..Default::default()
@@ -95,25 +130,231 @@ async fn successful_create_topics_is_audited() {
             ..Default::default()
         })
         .await
-        .unwrap();
-    assert2::check!(cr.topics[0].error_code == 0);
+        .expect("CreateTopics");
+    assert2::check!(created.topics[0].error_code == 0);
 
-    // Wait for the CreateTopics AdminOperation audit record to be durable.
-    p.broker
-        .wait_for_metrics("audit event written", |m| {
-            m.audit_events.get() > audit_before
+    let grown = p
+        .client
+        .send(CreatePartitionsRequest {
+            topics: vec![CreatePartitionsTopic {
+                name: topic.into(),
+                count: 2,
+                assignments: None,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreatePartitions");
+    assert2::check!(grown.results[0].error_code == 0);
+
+    let altered = p
+        .client
+        .send(AlterConfigsRequest {
+            resources: vec![AlterConfigsResource {
+                resource_type: RESOURCE_TYPE_TOPIC,
+                resource_name: topic.into(),
+                configs: vec![AlterableConfig {
+                    name: "retention.ms".into(),
+                    value: Some("604800000".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("AlterConfigs");
+    assert2::check!(altered.responses[0].error_code == 0);
+
+    let incremental = p
+        .client
+        .send(IncrementalAlterConfigsRequest {
+            resources: vec![IncrementalResource {
+                resource_type: RESOURCE_TYPE_TOPIC,
+                resource_name: topic.into(),
+                configs: vec![IncrementalConfig {
+                    name: "max.message.bytes".into(),
+                    config_operation: OP_SET,
+                    value: Some("1048576".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("IncrementalAlterConfigs");
+    assert2::check!(incremental.responses[0].error_code == 0);
+
+    let quotas = p
+        .client
+        .send(AlterClientQuotasRequest {
+            entries: vec![EntryData {
+                entity: vec![EntityData {
+                    entity_type: "user".into(),
+                    entity_name: Some(user.into()),
+                    ..Default::default()
+                }],
+                ops: vec![QuotaOp {
+                    key: "producer_byte_rate".into(),
+                    value: 1_048_576.0,
+                    remove: false,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("AlterClientQuotas");
+    assert2::check!(quotas.entries[0].error_code == 0);
+
+    // KIP-554 puts PBKDF2 on the client, so these bytes stand in for a
+    // client-stretched password. The audit record names the user and nothing
+    // else: no salt, no salted password, no derived key.
+    let scram = p
+        .client
+        .send(AlterUserScramCredentialsRequest {
+            upsertions: vec![ScramCredentialUpsertion {
+                name: user.into(),
+                mechanism: SCRAM_SHA_256,
+                iterations: 4_096,
+                salt: bytes::Bytes::from_static(b"audited-salt"),
+                salted_password: bytes::Bytes::from_static(b"audited-salted-password-32-byte"),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("AlterUserScramCredentials");
+    assert2::check!(scram.results[0].error_code == 0);
+
+    let trimmed = p
+        .client
+        .send(DeleteRecordsRequest {
+            topics: vec![DeleteRecordsTopic {
+                name: topic.into(),
+                partitions: vec![DeleteRecordsPartition {
+                    partition_index: 0,
+                    offset: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("DeleteRecords");
+    assert2::check!(trimmed.topics[0].partitions[0].error_code == 0);
+
+    let deleted = p
+        .client
+        .send(DeleteTopicsRequest {
+            topics: vec![DeleteTopicState {
+                name: Some(topic.into()),
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("DeleteTopics");
+    assert2::check!(deleted.responses[0].error_code == 0);
+
+    // One row per audited api: the OCSF operation name, and the resource the
+    // record has to name first.
+    let expected = [
+        ("CreateTopics", topic.to_string()),
+        ("CreatePartitions", topic.to_string()),
+        ("AlterConfigs", topic.to_string()),
+        ("IncrementalAlterConfigs", topic.to_string()),
+        ("AlterClientQuotas", format!("user={user}")),
+        ("AlterUserScramCredentials", user.to_string()),
+        ("DeleteRecords", format!("{topic}-0")),
+        ("DeleteTopics", topic.to_string()),
+    ];
+    for (operation, resource) in expected {
+        support::wait_for_audit_record(&p.client, operation, |j| {
+            j["class_uid"] == 6003
+                && j["api"]["operation"] == operation
+                && j["status_id"] == 1
+                && j["resources"][0]["name"] == resource
         })
         .await;
+    }
 
-    // Fetch visibility (the high watermark) can lag the durable write, so retry
-    // until the record is consumable rather than single-shot fetching.
-    support::wait_for_audit_record(&p.client, "CreateTopics admin audit", |j| {
-        j["class_uid"] == 6003
-            && j["api"]["operation"] == "CreateTopics"
-            && j["status_id"] == 1
-            && j["resources"][0]["name"] == "audited-orders"
-    })
-    .await;
+    // Redaction: nothing the SCRAM request carried reaches the audit topic,
+    // and neither do the config values.
+    let records = support::consume_audit_records(&p.client).await;
+    let dump = serde_json::to_string(&records).expect("audit records serialize");
+    for secret in [
+        "audited-salt",
+        "audited-salted-password-32-byte",
+        "604800000",
+    ] {
+        assert2::check!(!dump.contains(secret), "audit topic leaked {secret}");
+    }
+
+    // The changed config *keys* are named, because that is what says a
+    // retention or a message-size limit moved.
+    assert2::check!(dump.contains("retention.ms"));
+    assert2::check!(dump.contains("max.message.bytes"));
 
     p.broker.shutdown().await;
+}
+
+/// A SASL/PLAIN exchange writes one OCSF `Authentication` row per completed
+/// attempt, whichever way it ended.
+///
+/// Both halves run on one broker because each half is one connection, and the
+/// row an auditor needs is the one that says which credential the connection
+/// presented and from where. The success row is written by the reading
+/// client's own login; the failure row by a second connection whose password
+/// is wrong, which the broker answers with `SASL_AUTHENTICATION_FAILED` and
+/// closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sasl_plain_logins_are_audited_either_way() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl(
+        &dir.path().join("data"),
+        &[],
+        &[],
+        &[("alice", "alice-secret")],
+    )
+    .await;
+    broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
+
+    let client = support::sasl_client(&bootstrap, "alice", "alice-secret").await;
+
+    // A wrong password never gets past the SaslAuthenticate frame, so the
+    // failed login is all this client ever leaves behind.
+    let refused = krabka_client_core::Client::builder()
+        .bootstrap(bootstrap)
+        .client_id("krabka-broker-test")
+        .security(support::sasl_plain_security("alice", "not-the-password"))
+        .build()
+        .await;
+    let served = match refused {
+        Ok(client) => client.send(MetadataRequest::default()).await.is_ok(),
+        Err(_) => false,
+    };
+    assert2::check!(!served, "a wrong PLAIN password must serve no request");
+
+    // Both rows name the same principal in the `User:<name>` form the
+    // privileged-action rows use, and carry the peer they came from.
+    for (what, status_id) in [("the successful login", 1), ("the refused login", 2)] {
+        support::wait_for_audit_record(&client, what, |j| {
+            j["class_uid"] == 3002
+                && j["status_id"] == status_id
+                && j["auth_protocol"] == "PLAIN"
+                && j["actor"]["user"]["name"] == "User:alice"
+                && j["src_endpoint"]["ip"] == "127.0.0.1"
+        })
+        .await;
+    }
+
+    broker.shutdown().await;
 }

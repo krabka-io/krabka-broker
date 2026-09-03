@@ -1,7 +1,7 @@
 //! Connection-identity accounting: the KIP-511 client software fingerprint
 //! counter and the per-mechanism SASL authentication outcome counters.
 
-use super::{BrokerMetrics, ClientSoftwareLabel, SaslMechanismLabel};
+use super::{AuthorizationDeniedLabel, BrokerMetrics, ClientSoftwareLabel, SaslMechanismLabel};
 
 impl BrokerMetrics {
     /// KIP-511: bump the per-(name, version) handshake counter.
@@ -32,6 +32,20 @@ impl BrokerMetrics {
         } else {
             self.failed_authentication.get_or_create(&lbl).inc();
         }
+    }
+
+    /// Account one Deny decision from the authorizer. `operation` and
+    /// `resource_type` are the `Debug` spellings of
+    /// `krabka_metadata::AclOperation` and `krabka_metadata::ResourceType`,
+    /// so the label set stays bounded by the two enums. Kafka has no
+    /// equivalent metric; the closest it offers is the
+    /// `kafka.authorizer.logger` Denied Operation line.
+    pub fn record_authorization_denied(&self, operation: &str, resource_type: &str) {
+        let lbl = AuthorizationDeniedLabel {
+            operation: operation.to_string(),
+            resource_type: resource_type.to_string(),
+        };
+        self.authorization_denied.get_or_create(&lbl).inc();
     }
 }
 
@@ -76,6 +90,28 @@ mod tests {
             // expression self-deadlocks.
             let got = family.get_or_create(label).get();
             assert!(got == want, "{outcome} auth for {:?}", label.mechanism);
+        }
+    }
+
+    #[test]
+    fn record_authorization_denied_counts_per_operation_and_resource_type() {
+        let m = BrokerMetrics::new();
+        let write_topic = AuthorizationDeniedLabel {
+            operation: "Write".to_string(),
+            resource_type: "Topic".to_string(),
+        };
+        let read_group = AuthorizationDeniedLabel {
+            operation: "Read".to_string(),
+            resource_type: "Group".to_string(),
+        };
+
+        m.record_authorization_denied("Write", "Topic");
+        m.record_authorization_denied("Write", "Topic");
+        m.record_authorization_denied("Read", "Group");
+
+        for (label, want) in [(&write_topic, 2), (&read_group, 1)] {
+            let got = m.authorization_denied.get_or_create(label).get();
+            assert!(got == want, "label {label:?}");
         }
     }
 

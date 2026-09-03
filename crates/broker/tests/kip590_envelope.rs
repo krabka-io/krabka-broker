@@ -437,9 +437,12 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
         // carries, and `ApiKeys.ENVELOPE.clusterAction` gates the envelope on
         // it. Making it a super-user holds that outer gate open so the inner
         // host check is the only thing this test moves.
-        config.super_users = std::iter::once("ANONYMOUS".to_owned()).collect();
-        config.authorizer =
-            std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+        // `BrokerConfig.super_users` stays empty: `BrokerConfig::validate`
+        // rejects `"ANONYMOUS"` there, and the authorizer's own super-user
+        // set is what this gate reads.
+        config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
+            std::iter::once("ANONYMOUS".to_owned()).collect(),
+        ));
     })
     .await;
 

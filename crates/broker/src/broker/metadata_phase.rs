@@ -44,11 +44,13 @@ fn prepare_raft_transport(
                 tls_dynamic.map(|dynamic| tokio_rustls::TlsAcceptor::from(dynamic.current()));
             let handshake = crate::raft_handshake::BrokerRaftHandshake {
                 tls_acceptor,
-                plain_credentials: config.plain_credentials.clone(),
+                plain_credentials: config.plain_credentials.as_map().clone(),
                 enabled_sasl_mechanisms: config.enabled_sasl_mechanisms.clone(),
                 gssapi: config.gssapi.clone(),
                 oauthbearer_validator: config.oauthbearer_validator.clone(),
-                oauthbearer_max_session_lifetime: config.oauthbearer_max_session_lifetime,
+                // The controller listener has no name in `listeners`, so it
+                // takes the broker-wide window unless an override names it.
+                connections_max_reauth: config.connections_max_reauth_for("CONTROLLER"),
                 protocol: config.controller_listener_protocol,
                 controller: Arc::clone(&controller_cell),
                 max_frame_bytes: config.socket_request_max.bytes_usize(),

@@ -32,6 +32,59 @@ same chain and signature primitives.
   decide spool admission, checkpoint admission, and loss-marker admission. A
   Stateright model checks the spool under crashes and replays.
 
+## Which RPCs are audited
+
+Every admin RPC that changes cluster state emits one `AdminOperation` event —
+OCSF `ApiActivity`, `class_uid` 6003 — on its success path, naming the
+principal, the source endpoint, the api, and the resources it changed. A
+request that changed nothing writes nothing.
+
+| RPC | Audited resources |
+| --- | --- |
+| `CreateTopics` | Topic per created topic |
+| `DeleteTopics` | Topic per deleted topic |
+| `CreatePartitions` | Topic per grown topic |
+| `AlterConfigs` | The config resource, then a `ConfigKey` per changed key |
+| `IncrementalAlterConfigs` | The config resource, then a `ConfigKey` per changed key |
+| `AlterClientQuotas` | `ClientQuotaEntity` per changed entity, as `type=name` |
+| `AlterUserScramCredentials` | User per changed credential |
+| `CreateAcls` | Acl per created binding |
+| `DeleteAcls` | Acl per deleted binding |
+| `CreateDelegationToken` | `DelegationToken`, by token id |
+| `RenewDelegationToken` | `DelegationToken`, by token id |
+| `ExpireDelegationToken` | `DelegationToken`, by token id |
+| `UpdateFeatures` | Feature per finalized feature |
+| `ElectLeaders` | Partition per partition that changed leader |
+| `AlterPartitionReassignments` | Partition per altered partition |
+| `DeleteRecords` | Partition per trimmed partition |
+| `UnregisterBroker` | The broker id |
+| `AddRaftVoter`, `RemoveRaftVoter` | `RaftVoter`, by voter id |
+
+Values never reach the record — only names and, for a config change, the names
+of the keys that moved. A SCRAM `salt`, `salted_password`, `stored_key` and
+`server_key` are not in it, and neither is a delegation token's HMAC, which is
+the token's password equivalent; a token is named by its id.
+
+The break-glass transitions — an unclean election, a reassignment cancel, a
+topic freeze, an unregister — additionally emit `PrivilegedAction` events
+carrying the approvals they spent. A refusal is recorded there, not here: this
+class covers what succeeded.
+
+Authentication is audited too, outside the RPC table because it happens before
+any RPC. Every completed credential presentation emits one `Authentication`
+event — OCSF `class_uid` 3002 — naming the mechanism, the principal in the
+`User:<name>` form the privileged-action rows use, and the peer endpoint:
+
+| What | `auth_protocol` | Outcome |
+| --- | --- | --- |
+| A `SaslAuthenticate` exchange that finished, initial or KIP-368 re-auth | The negotiated mechanism, e.g. `PLAIN` | Success, or failure with the broker's error message |
+| A request refused by the pre-auth state gate (`ILLEGAL_SASL_STATE`) | The negotiated mechanism, or `unknown` | Failure |
+| An mTLS client cert bound at accept time on a non-SASL listener | `SSL` | Success |
+
+A failed exchange names the principal it claimed only where the mechanism sent
+it in the clear, which is PLAIN. An anonymous connection presents no credential
+and writes no row.
+
 ## The `krabka-audit` binary
 
 `krabka-audit verify` reads an audit partition directory offline. It
