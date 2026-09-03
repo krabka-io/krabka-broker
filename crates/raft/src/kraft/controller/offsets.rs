@@ -77,6 +77,13 @@ pub fn metadata_fetch_offset_in_committed_window(
     krabka_verified::raft::in_half_open_window(fetch_offset.0, 0, high_watermark.0)
 }
 
+/// Whether an observer's metadata fetch has fallen below the retained log, so
+/// the records it asks for are gone and it must install a snapshot instead.
+/// The window is half-open: a fetch *at* `log_start` still reads from the log.
+pub fn metadata_fetch_offset_below_log_start(fetch_offset: Offset, log_start: Offset) -> bool {
+    krabka_verified::raft::in_half_open_window(fetch_offset.0, 0, log_start.0)
+}
+
 pub fn fetch_batch_committed_before_hwm(base_offset: i64, high_watermark: Offset) -> bool {
     krabka_verified::raft::in_half_open_window(base_offset, i64::MIN, high_watermark.0)
 }

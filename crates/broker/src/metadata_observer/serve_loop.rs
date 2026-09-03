@@ -1,6 +1,11 @@
 //! The observer's serve loop: it picks a controller voter round robin, fetches
 //! from it, records the applied offset and the leader hint, and parks on the
 //! poll interval whenever it is caught up or the voter is unreachable.
+//!
+//! The loop starts from what this node last checkpointed rather than from
+//! offset 0, and checkpoints again as it advances, so a restart does not replay
+//! the whole metadata log — and does not ask a pruned controller for records it
+//! no longer holds.
 
 use std::sync::{Arc, atomic::Ordering};
 
@@ -8,7 +13,7 @@ use krabka_raft::NodeId;
 use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
-use super::{MetadataObserver, ObserverConfig, fetch::fetch_once};
+use super::{MetadataObserver, ObserverConfig, fetch::fetch_once, store::ObserverStore};
 use crate::time_util;
 
 /// Names this loop in the timer-failure logs that [`time_util::arm`] and
@@ -38,13 +43,66 @@ fn voter_at(voters: &[(NodeId, String)], idx: usize) -> &(NodeId, String) {
     &voters[idx % voters.len()]
 }
 
+/// Successive fetches that leave the image empty while the quorum has
+/// committed records before the loop warns about it. One such fetch is
+/// ordinary — a node that has just started has an empty image and no records
+/// yet; a second one means no progress is being made at all.
+const EMPTY_IMAGE_POLLS_BEFORE_WARNING: u32 = 2;
+
+/// Watches for the stall where every fetch is answered and nothing is ever
+/// applied: the quorum has committed records, and this node's image is still
+/// empty a poll interval later.
+///
+/// Left silent, that state is only visible as a readiness lag the node can
+/// never close. The warning is raised once per stall and re-armed when the
+/// observer starts making progress again, so a node that is merely slow to see
+/// its first record does not warn, and a node that is genuinely stuck does not
+/// repeat itself on every poll.
+#[derive(Default)]
+struct EmptyImageWatch {
+    polls: u32,
+    warned: bool,
+}
+
+impl EmptyImageWatch {
+    /// Record one answered fetch. Reports whether this is the moment to warn.
+    fn observe(&mut self, image_is_empty: bool, quorum_high_watermark: i64) -> bool {
+        if !image_is_empty || quorum_high_watermark <= 0 {
+            *self = Self::default();
+            return false;
+        }
+        self.polls = self.polls.saturating_add(1);
+        let warn_now = self.polls >= EMPTY_IMAGE_POLLS_BEFORE_WARNING && !self.warned;
+        self.warned |= warn_now;
+        warn_now
+    }
+}
+
+/// Restore the image this node last checkpointed and report the offset to
+/// fetch from next. A node with no checkpoint starts at the log start.
+fn resume(config: &ObserverConfig, store: &mut ObserverStore, observer: &MetadataObserver) -> u64 {
+    let Some((image, fetch_offset)) = store.resume(config.cluster_id) else {
+        return 0;
+    };
+    let _ = observer.image.send_replace(Arc::new(image));
+    // The offset convention is one-past-the-last, so the last applied record
+    // sits one below the offset the next fetch asks for.
+    observer.metadata_offset.store(
+        i64::try_from(fetch_offset).unwrap_or(i64::MAX) - 1,
+        Ordering::Release,
+    );
+    fetch_offset
+}
+
 pub(super) async fn run_loop(
     config: ObserverConfig,
     observer: Arc<MetadataObserver>,
     shutdown: CancellationToken,
 ) {
-    let mut fetch_offset: u64 = 0;
+    let mut store = ObserverStore::open(&config.data_dir, config.snapshot_interval_records);
+    let mut fetch_offset: u64 = resume(&config, &mut store, &observer);
     let mut target_idx: usize = 0;
+    let mut empty_image = EmptyImageWatch::default();
     loop {
         if shutdown.is_cancelled() {
             return;
@@ -58,7 +116,7 @@ pub(super) async fn run_loop(
         let (target, addr) = voter_at(&config.voters, target_idx).clone();
         let result = tokio::select! {
             () = shutdown.cancelled() => return,
-            r = fetch_once(&config, &addr, target, fetch_offset, &observer.image) => r,
+            r = fetch_once(&config, &addr, target, fetch_offset, &observer.image, &mut store) => r,
         };
         if let Some(outcome) = result {
             let new_offset = outcome.next_fetch_offset;
@@ -76,6 +134,24 @@ pub(super) async fn run_loop(
                 Ordering::Release,
             );
             let _ = observer.leader.send_replace(Some(target));
+            // Every poll is answered and nothing is ever applied: the stall
+            // shows up as a readiness lag this node can never close, with
+            // nothing saying why. The responder's log start is what separates
+            // "still catching up" from "asking for records that were pruned
+            // away".
+            if empty_image.observe(
+                observer.metadata_offset.load(Ordering::Acquire) < 0,
+                outcome.quorum_high_watermark,
+            ) {
+                tracing::warn!(
+                    fetch_offset,
+                    log_start_offset = outcome.log_start_offset,
+                    quorum_high_watermark = outcome.quorum_high_watermark,
+                    voter = target.0,
+                    "observer metadata image is still empty while the quorum has committed \
+                     records; this node is not making progress"
+                );
+            }
             if new_offset == fetch_offset {
                 tokio::select! {
                     () = shutdown.cancelled() => return,
@@ -83,6 +159,7 @@ pub(super) async fn run_loop(
                 }
             } else {
                 fetch_offset = new_offset;
+                store.maybe_checkpoint(&observer.current_image(), fetch_offset);
             }
         } else {
             target_idx = target_idx.wrapping_add(1);
@@ -99,14 +176,8 @@ mod tests {
     use std::{sync::atomic::AtomicUsize, time::Duration};
 
     use assert2::assert;
-    use bytes::{Bytes, BytesMut};
-    use krabka_protocol::{
-        Encode,
-        owned::{
-            api_versions_request,
-            api_versions_response::{ApiVersion, ApiVersionsResponse},
-        },
-    };
+    use bytes::Bytes;
+    use krabka_protocol::owned::api_versions_request;
     use krabka_raft::OutboundDialer;
     use krabka_units::millis;
     use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
@@ -114,7 +185,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        metadata_observer::test_support::TEST_MAX_FETCH_BYTES,
+        metadata_observer::test_support::{api_versions_response_v0, observer_config},
         test_support::{BrokenTimer, TimerFailure},
     };
 
@@ -152,22 +223,6 @@ mod tests {
         }
     }
 
-    fn api_versions_response_v0() -> Vec<u8> {
-        let resp = ApiVersionsResponse {
-            error_code: 0,
-            api_keys: vec![ApiVersion {
-                api_key: api_versions_request::API_KEY,
-                min_version: 0,
-                max_version: 3,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let mut buf = BytesMut::new();
-        resp.encode(&mut buf, 0).unwrap();
-        buf.to_vec()
-    }
-
     /// `high_watermark` is what the responder itself has committed and
     /// `quorum_high_watermark` is what the quorum has: they differ whenever
     /// the controller that answered is a follower still catching up.
@@ -183,11 +238,34 @@ mod tests {
             log_start_offset: 0,
             high_watermark,
             quorum_high_watermark,
+            snapshot_id: None,
             records,
         }
         .encode_v0(&mut out)
         .unwrap();
         out
+    }
+
+    /// The stall warning fires once, after more than one answered fetch has
+    /// left the image empty, and re-arms only after the observer has made
+    /// progress. A node that has simply not seen its first record yet, or one
+    /// whose quorum has committed nothing, must stay silent.
+    #[test]
+    fn the_empty_image_warning_fires_once_per_stall_and_re_arms_after_progress() {
+        let mut watch = EmptyImageWatch::default();
+
+        // A quorum with nothing committed says nothing about this node.
+        assert!(!watch.observe(true, 0));
+        // The first answered fetch on a fresh node is ordinary.
+        assert!(!watch.observe(true, 10_000));
+        // The second one is the stall, and it is reported exactly once.
+        assert!(watch.observe(true, 10_000));
+        assert!(!watch.observe(true, 10_000));
+
+        // Progress clears it, and a later stall is reported again.
+        assert!(!watch.observe(false, 10_000));
+        assert!(!watch.observe(true, 10_000));
+        assert!(watch.observe(true, 10_000));
     }
 
     #[test]
@@ -232,19 +310,16 @@ mod tests {
             .await;
         let dial_count = Arc::new(AtomicUsize::new(0));
         let clock = ManualMonotonicClock::new_shared();
+        let dir = tempfile::tempdir().unwrap();
         let observer = MetadataObserver::start(ObserverConfig {
-            client_dispatch_queue_capacity:
-                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             voters: vec![(krabka_raft::NodeId(1), mock.addr.to_string())],
             dialer: Arc::new(CountingDialer {
                 dial_count: dial_count.clone(),
             }),
             client_id: "sleep-test".into(),
-            cluster_id: Uuid::nil(),
-            max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: millis(250),
             timer: clock.new_timer(),
+            ..observer_config(Uuid::nil(), dir.path().to_path_buf())
         });
 
         // Await (not sleep) for the first fetch to land. The fetch is real
@@ -304,19 +379,19 @@ mod tests {
         observer
     }
 
-    /// An `ObserverConfig` over `voters`, driven by `timer`.
-    fn config_on(voters: Vec<(NodeId, String)>, timer: Arc<dyn Timer>) -> ObserverConfig {
+    /// An `ObserverConfig` over `voters`, driven by `timer` and storing its
+    /// checkpoints under `data_dir`.
+    fn config_on(
+        voters: Vec<(NodeId, String)>,
+        timer: Arc<dyn Timer>,
+        data_dir: &std::path::Path,
+    ) -> ObserverConfig {
         ObserverConfig {
-            client_dispatch_queue_capacity:
-                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             voters,
-            dialer: Arc::new(krabka_raft::PlaintextDialer),
             client_id: "dead-timer-test".into(),
-            cluster_id: Uuid::nil(),
-            max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: millis(250),
             timer,
+            ..observer_config(Uuid::nil(), data_dir.to_path_buf())
         }
     }
 
@@ -324,13 +399,51 @@ mod tests {
     /// than on a connect timeout.
     const UNREACHABLE: &str = "127.0.0.1:1";
 
+    /// A restarted observer comes up on what it last checkpointed rather than on
+    /// an empty image at offset 0.
+    ///
+    /// The loop publishes the restored image and its applied offset before it
+    /// contacts anybody, so a node that was caught up before the restart serves
+    /// metadata immediately instead of replaying the log — or, once the
+    /// controller has pruned, instead of asking for records that are gone.
+    #[tokio::test]
+    async fn the_loop_resumes_from_the_checkpoint_this_node_last_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
+                name: "survives-the-restart".into(),
+                topic_id: Uuid::new_v4(),
+                partitions: 1,
+                replication_factor: 1,
+            },
+        ));
+        ObserverStore::open(dir.path(), 1).maybe_checkpoint(&image, 12);
+
+        // No voters and a dead timer, so the loop resumes and then stops
+        // without ever reaching a controller: what it holds came off disk.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable(), dir.path())).await;
+
+        assert!(
+            observer
+                .current_image()
+                .topic("survives-the-restart")
+                .is_some()
+        );
+        // The checkpoint covers records below offset 12, so the last applied
+        // one is 11 — the offset this node reports in its `BrokerHeartbeat`.
+        assert!(observer.current_metadata_offset() == 11);
+    }
+
     #[tokio::test]
     async fn the_loop_stops_when_a_voterless_park_cannot_be_armed() {
         // No voters: the loop's only move is to park, and the park cannot be
         // armed, so it stops instead of spinning through a poll that no longer
         // waits.
+        let dir = tempfile::tempdir().unwrap();
         let timer = BrokenTimer::dead(TimerFailure::Registration);
-        let observer = run_until_it_stops(config_on(vec![], timer.injectable())).await;
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable(), dir.path())).await;
 
         assert!(observer.current_metadata_offset() == -1);
         assert!(observer.watch_leader().borrow().is_none());
@@ -341,8 +454,9 @@ mod tests {
     async fn the_loop_stops_when_a_voterless_park_is_armed_but_never_completes() {
         // The other half of the park: the deadline registers and then fails,
         // which ends the loop the same way a refused registration does.
+        let dir = tempfile::tempdir().unwrap();
         let timer = BrokenTimer::dead(TimerFailure::Completion);
-        let observer = run_until_it_stops(config_on(vec![], timer.injectable())).await;
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable(), dir.path())).await;
 
         assert!(observer.current_metadata_offset() == -1);
         assert!(timer.registrations() == 1);
@@ -353,10 +467,12 @@ mod tests {
         // The fetch fails, so the loop rotates to the next voter and backs off
         // — and the back-off is the park that cannot be armed. It leaves no
         // leader hint, because no voter answered.
+        let dir = tempfile::tempdir().unwrap();
         let timer = BrokenTimer::dead(TimerFailure::Registration);
         let observer = run_until_it_stops(config_on(
             vec![(NodeId(1), UNREACHABLE.to_string())],
             timer.injectable(),
+            dir.path(),
         ))
         .await;
 
@@ -382,10 +498,12 @@ mod tests {
                 None
             })
             .await;
+        let dir = tempfile::tempdir().unwrap();
         let timer = BrokenTimer::dead(TimerFailure::Registration);
         let observer = run_until_it_stops(config_on(
             vec![(NodeId(1), mock.addr.to_string())],
             timer.injectable(),
+            dir.path(),
         ))
         .await;
 
@@ -418,17 +536,13 @@ mod tests {
                 None
             })
             .await;
+        let dir = tempfile::tempdir().unwrap();
         let observer = MetadataObserver::start(ObserverConfig {
-            client_dispatch_queue_capacity:
-                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             voters: vec![(krabka_raft::NodeId(1), mock.addr.to_string())],
-            dialer: Arc::new(krabka_raft::PlaintextDialer),
             client_id: "lag-test".into(),
-            cluster_id: Uuid::nil(),
-            max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: millis(250),
             timer: ManualMonotonicClock::new_shared().new_timer(),
+            ..observer_config(Uuid::nil(), dir.path().to_path_buf())
         });
 
         // The fetch is real loopback I/O, so drive the executor until the

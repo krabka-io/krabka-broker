@@ -22,6 +22,7 @@ impl ControllerHandle {
         self.engine.metadata_fetch(off, max_size).await.unwrap_or(
             crate::kraft::MetadataFetchSlice {
                 records: bytes::Bytes::new(),
+                snapshot_id: None,
                 log_start_offset: 0,
                 high_watermark: 0,
                 quorum_high_watermark: 0,

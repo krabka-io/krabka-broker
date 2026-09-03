@@ -83,7 +83,11 @@ use crate::{
 };
 
 mod apply;
-mod checkpoint;
+/// The KIP-630 `.checkpoint` artifacts under a node's metadata directory. It
+/// is public because a broker-only observer keeps its `__cluster_metadata`
+/// snapshot in the same on-disk layout, and reads and writes it with these
+/// helpers rather than with a second file format of its own.
+pub mod checkpoint;
 mod control_state;
 mod engine_loop;
 mod handle;

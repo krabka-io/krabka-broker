@@ -16,7 +16,10 @@ use krabka_protocol::ProtocolError;
 const I32_LEN: usize = 4;
 const SUBMIT_CHANGE_RESPONSE_FIXED_LEN: usize = 10;
 const METADATA_FETCH_REQUEST_LEN: usize = 12;
-const METADATA_FETCH_RESPONSE_FIXED_LEN: usize = 38;
+const METADATA_FETCH_RESPONSE_FIXED_LEN: usize = 50;
+/// `snapshot_id.end_offset` sentinel meaning "no snapshot": the observer's
+/// fetch offset is still inside the responder's retained log.
+const NO_SNAPSHOT: i64 = -1;
 
 /// Forwards a `Controller::submit_change` from a follower to the leader.
 ///
@@ -30,7 +33,8 @@ pub const API_KEY_SUBMIT_CHANGE: i16 = 1003;
 /// The body carries a `fetch_offset`, which is a `KraftLog` offset, and
 /// `max_bytes`. The response carries committed `__cluster_metadata` entries
 /// encoded as Kafka record batches, plus `log_start_offset`, `high_watermark`,
-/// `quorum_high_watermark`, and a `leader_hint`.
+/// `quorum_high_watermark`, a `leader_hint`, and the KIP-630 `snapshot_id`
+/// that replaces the records when the fetch offset has been pruned away.
 pub const API_KEY_METADATA_FETCH: i16 = 1004;
 
 /// Generation-bound delegation-token mutation forwarded to the leader.
@@ -177,7 +181,18 @@ pub struct KrabkaMetadataFetchResponse {
     /// against a quorum thousands of records ahead. This field is what the
     /// readiness probe measures against.
     pub quorum_high_watermark: i64,
+    /// The KIP-630 snapshot `(end_offset, epoch)` the observer must install
+    /// before it can resume fetching, set when `fetch_offset` is below
+    /// `log_start_offset` because the responder has pruned those records away.
+    ///
+    /// This is the observer's half of what `FetchResponse.SnapshotId` does for
+    /// a controller follower (KIP-595). Without it a restarted observer fetches
+    /// an offset the leader no longer holds, is served an empty slice, and
+    /// never makes progress.
+    pub snapshot_id: Option<(i64, i32)>,
     /// Concatenated Kafka `RecordBatch`es, one for each committed log batch.
+    /// Empty whenever `snapshot_id` is set: the records the observer asked for
+    /// are gone, so there is nothing to serve from the log.
     pub records: Bytes,
 }
 
@@ -190,6 +205,9 @@ impl KrabkaMetadataFetchResponse {
         out.put_i64(self.log_start_offset);
         out.put_i64(self.high_watermark);
         out.put_i64(self.quorum_high_watermark);
+        let (snapshot_end_offset, snapshot_epoch) = self.snapshot_id.unwrap_or((NO_SNAPSHOT, -1));
+        out.put_i64(snapshot_end_offset);
+        out.put_i32(snapshot_epoch);
         put_i32_len_prefixed_bytes(out, &self.records, "records length exceeds i32::MAX")
     }
 
@@ -202,6 +220,8 @@ impl KrabkaMetadataFetchResponse {
         let log_start_offset = buf.get_i64();
         let high_watermark = buf.get_i64();
         let quorum_high_watermark = buf.get_i64();
+        let snapshot_end_offset = buf.get_i64();
+        let snapshot_epoch = buf.get_i32();
         let records = get_i32_len_prefixed_bytes(buf, "negative records length")?;
         Ok(Self {
             error_code,
@@ -209,6 +229,8 @@ impl KrabkaMetadataFetchResponse {
             log_start_offset,
             high_watermark,
             quorum_high_watermark,
+            snapshot_id: (snapshot_end_offset != NO_SNAPSHOT)
+                .then_some((snapshot_end_offset, snapshot_epoch)),
             records,
         })
     }
@@ -294,6 +316,7 @@ mod tests {
             log_start_offset: 1,
             high_watermark: 99,
             quorum_high_watermark: 512,
+            snapshot_id: None,
             records: Bytes::from_static(b"\x01\x02\x03"),
         };
         let mut out = Vec::new();
@@ -328,7 +351,7 @@ mod tests {
     #[test]
     fn metadata_fetch_response_decode_checks_fixed_and_payload_lengths() {
         let mut short_fixed: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
-        assert_unexpected_eof(KrabkaMetadataFetchResponse::decode_v0(&mut short_fixed), 29);
+        assert_unexpected_eof(KrabkaMetadataFetchResponse::decode_v0(&mut short_fixed), 41);
 
         let resp = KrabkaMetadataFetchResponse {
             error_code: 0,
@@ -336,6 +359,7 @@ mod tests {
             log_start_offset: 4,
             high_watermark: 4,
             quorum_high_watermark: 6,
+            snapshot_id: None,
             records: Bytes::new(),
         };
         let mut exact = Vec::new();
@@ -350,9 +374,35 @@ mod tests {
         short_payload.extend_from_slice(&2_i64.to_be_bytes());
         short_payload.extend_from_slice(&3_i64.to_be_bytes());
         short_payload.extend_from_slice(&3_i64.to_be_bytes());
+        short_payload.extend_from_slice(&(-1_i64).to_be_bytes());
+        short_payload.extend_from_slice(&(-1_i32).to_be_bytes());
         short_payload.extend_from_slice(&4_i32.to_be_bytes());
         short_payload.push(0xaa);
         let mut cur: &[u8] = &short_payload;
         assert_unexpected_eof(KrabkaMetadataFetchResponse::decode_v0(&mut cur), 3);
+    }
+
+    /// A pruned observer fetch answers with the snapshot id instead of
+    /// records, so the id has to survive the round trip as a `Some` and the
+    /// `-1` sentinel has to decode back to `None` rather than to `(-1, -1)`.
+    #[test]
+    fn metadata_fetch_response_round_trips_a_snapshot_id() {
+        for want in [Some((4_096_i64, 7_i32)), Some((0, 0)), None] {
+            let resp = KrabkaMetadataFetchResponse {
+                error_code: 0,
+                leader_hint: 1,
+                log_start_offset: 4_096,
+                high_watermark: 5_000,
+                quorum_high_watermark: 5_000,
+                snapshot_id: want,
+                records: Bytes::new(),
+            };
+            let mut out = Vec::new();
+            resp.encode_v0(&mut out).unwrap();
+            let mut cur: &[u8] = &out;
+            let decoded = KrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap();
+            assert2::assert!(decoded == resp, "snapshot id {want:?}");
+            assert2::assert!(cur.is_empty());
+        }
     }
 }

@@ -21,7 +21,11 @@ use std::{
 };
 
 use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker, BrokerHandle, config::NodeRole};
+use krabka_broker::{
+    BootstrapMode, Broker, BrokerConfig, BrokerHandle,
+    config::{DEFAULT_READINESS_MAX_METADATA_LAG, NodeRole},
+    health::HealthState,
+};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -37,6 +41,12 @@ mod support;
 struct RoleSeparated {
     controller: BrokerHandle,
     brokers: Vec<BrokerHandle>,
+    /// The broker-only nodes' configs, index-aligned with `brokers`, so a test
+    /// can stop one and start it again on the same ports and log dir.
+    broker_configs: Vec<BrokerConfig>,
+    /// The controller-only node's log dir, where its `__cluster_metadata`
+    /// checkpoints land once it snapshots.
+    controller_log_dir: std::path::PathBuf,
     // Dropping these removes the log dirs the nodes still hold open.
     _dirs: Vec<TempDir>,
 }
@@ -63,6 +73,16 @@ impl RoleSeparated {
 /// before the first observer starts, so an observer's first fetch already has
 /// a committed log to replicate.
 async fn start_role_separated(brokers: usize) -> RoleSeparated {
+    start_role_separated_with(brokers, |_, _| {}).await
+}
+
+/// Like [`start_role_separated`], but each node's config passes through
+/// `customize` first. It is called with the node's index, so a test can settle
+/// something on the controller (index 0) without also changing the observers.
+async fn start_role_separated_with(
+    brokers: usize,
+    customize: impl Fn(usize, &mut BrokerConfig),
+) -> RoleSeparated {
     let nodes = brokers + 1;
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(nodes).await;
@@ -81,6 +101,8 @@ async fn start_role_separated(brokers: usize) -> RoleSeparated {
         BootstrapMode::Bootstrap,
     );
     ctrl_cfg.roles = vec![NodeRole::Controller];
+    customize(0, &mut ctrl_cfg);
+    let controller_log_dir = ctrl_cfg.log_dir.clone();
     let controller = Broker::start_with_listeners(
         ctrl_cfg,
         Some(ctrl_ls.next().unwrap()),
@@ -92,6 +114,7 @@ async fn start_role_separated(brokers: usize) -> RoleSeparated {
     controller.wait_until_controller_leader().await;
 
     let mut observers = Vec::with_capacity(brokers);
+    let mut broker_configs = Vec::with_capacity(brokers);
     for index in 1..nodes {
         let dir = TempDir::new().unwrap();
         let mut cfg = support::broker_config(
@@ -103,6 +126,8 @@ async fn start_role_separated(brokers: usize) -> RoleSeparated {
             BootstrapMode::Join,
         );
         cfg.roles = vec![NodeRole::Broker];
+        customize(index, &mut cfg);
+        broker_configs.push(cfg.clone());
         observers.push(
             Broker::start_with_listeners(
                 cfg,
@@ -123,6 +148,8 @@ async fn start_role_separated(brokers: usize) -> RoleSeparated {
     RoleSeparated {
         controller,
         brokers: observers,
+        broker_configs,
+        controller_log_dir,
         _dirs: dirs,
     }
 }
@@ -222,6 +249,149 @@ async fn broker_only_node_observes_and_forwards() {
     );
 
     cluster.shutdown().await;
+}
+
+/// Restart a broker-only node on the same ports and log dir it was using, and
+/// return the [`HealthState`] its startup marked, so the caller can read the
+/// readiness verdict the node would serve on `/readyz`.
+///
+/// The vacated ports are not always immediately bindable on Linux, so this
+/// retries `AddrInUse` the way `support::start_reusing_addrs` does.
+async fn restart_broker_only(cfg: &BrokerConfig) -> (BrokerHandle, HealthState) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let health = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
+        match Broker::start_with_health(cfg.clone(), health.clone()).await {
+            Ok(handle) => return (handle, health),
+            Err(error) if Instant::now() < deadline => {
+                tracing::warn!(%error, "broker-only restart failed; retrying");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(error) => panic!("broker-only restart: {error:?}"),
+        }
+    }
+}
+
+/// A broker-only node that comes back after the controller has snapshotted and
+/// pruned `__cluster_metadata` past the offset it asks for.
+///
+/// The observer fetches by offset, and the controller drops the log prefix
+/// behind every KIP-630 snapshot. A restarted observer therefore asks for
+/// records that no longer exist. Answered with an empty slice it re-asks for
+/// the same gone offset on every poll: the image stays empty forever, the node
+/// never registers, and `/readyz` reports a lag it can never close — until
+/// somebody deletes the controller's checkpoints by hand.
+///
+/// So the controller answers such a fetch with the id of the snapshot that
+/// replaced those records, and the observer installs it before resuming. This
+/// test drives exactly that: a snapshot interval low enough that a handful of
+/// topics crosses it several times, then a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset() {
+    support::init_tracing();
+
+    // Only the controller snapshots aggressively. The observer keeps the
+    // default checkpoint interval, so it writes none of its own over a handful
+    // of topics and restarts at the log start — which is the offset the
+    // controller has pruned away, and the case this test is about.
+    let cluster = start_role_separated_with(1, |index, cfg| {
+        if index == 0 {
+            cfg.metadata_snapshot_interval_records = 4;
+        }
+    })
+    .await;
+    let broker_only_id = cluster.brokers[0].node_id();
+
+    // Enough topics that the committed offset crosses the 4-record interval
+    // several times, so the controller has snapshotted and pruned well past 0.
+    let topics: Vec<String> = (0..6).map(|i| format!("pruned-topic-{i}")).collect();
+    let client = Client::builder()
+        .bootstrap(cluster.brokers[0].listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+    for topic in &topics {
+        let resp = client
+            .send(CreateTopicsRequest {
+                topics: vec![CreatableTopic {
+                    name: topic.clone(),
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    ..Default::default()
+                }],
+                timeout_ms: 5_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            resp.topics[0].error_code == 0,
+            "create {topic}: {:?}",
+            resp.topics[0]
+        );
+    }
+    for topic in &topics {
+        cluster.brokers[0]
+            .wait_until_partition_present(topic, 0)
+            .await;
+    }
+
+    // The controller really has taken a snapshot — the prune that strands a
+    // restarting observer happens in the same step that writes this file.
+    let checkpoints = cluster
+        .controller_log_dir
+        .join("__cluster_metadata")
+        .join("@metadata-0");
+    let snapshot_written = std::fs::read_dir(&checkpoints).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(".checkpoint"))
+        })
+    });
+    assert!(
+        snapshot_written,
+        "the controller should have snapshotted and pruned at a 4-record interval; {checkpoints:?}"
+    );
+
+    // Stop the broker-only node and bring it back on the same ports and dir.
+    let cfg = cluster.broker_configs[0].clone();
+    let RoleSeparated {
+        controller,
+        mut brokers,
+        _dirs,
+        ..
+    } = cluster;
+    brokers.remove(0).shutdown().await;
+    let (restarted, health) = restart_broker_only(&cfg).await;
+
+    // It rebuilt its whole image from the snapshot the controller pointed it
+    // at: every topic committed before the restart is there, including the ones
+    // whose records were pruned away.
+    for topic in &topics {
+        restarted.wait_until_partition_present(topic, 0).await;
+    }
+    // And it registered again, which is what an empty image would have
+    // stopped: the controller places replicas from `image.brokers()`.
+    restarted.wait_until_brokers_registered(1).await;
+    assert!(
+        controller
+            .controller_image_for_test()
+            .brokers()
+            .any(|broker| broker.node_id.0 == broker_only_id),
+        "the restarted broker-only node re-registers with the controller"
+    );
+    // Startup marked every readiness condition, so `/readyz` answers 200
+    // instead of reporting a metadata lag this node could never close.
+    assert!(
+        health.readiness().is_ok(),
+        "restarted broker-only node is not ready: {:?}",
+        health.readiness()
+    );
+
+    restarted.shutdown().await;
+    controller.shutdown().await;
 }
 
 /// A controller-only node never registers itself as a broker, so the only

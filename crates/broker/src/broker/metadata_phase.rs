@@ -112,6 +112,18 @@ fn prepare_initial_voters(
     voters
 }
 
+/// Validate `metadata_snapshot_fetch_max` for the observer's snapshot
+/// transfer, the same way a controller validates it for its follower path: a
+/// deployment may lower the 1 GiB ceiling but cannot raise it.
+fn observer_snapshot_fetch_max(
+    config: &BrokerConfig,
+) -> Result<krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax, BrokerError> {
+    krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax::new(
+        config.metadata_snapshot_fetch_max,
+    )
+    .map_err(BrokerError::Startup)
+}
+
 async fn start_metadata_source(
     config: &BrokerConfig,
     bootstrap_records: &mut Vec<krabka_metadata::MetadataRecord>,
@@ -188,6 +200,15 @@ async fn start_metadata_source(
             dialer: Arc::clone(&dialer),
             client_id: format!("krabka-broker-{}-observer", config.broker_id),
             cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
+            node_id: config.node_id,
+            // The metadata log directory. The observer keeps its checkpoints
+            // in a subdirectory of their own beside the controller's, never in
+            // it: an observer checkpoint carries no KIP-853 control state and
+            // has no log to match its boundary, so a controller must not load
+            // one. See `metadata_observer::store`.
+            data_dir: config.log_dir.join("__cluster_metadata"),
+            snapshot_interval_records: config.metadata_snapshot_interval_records,
+            snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
             max_bytes: config.observer_fetch_max,
             poll_interval: config.observer_poll_interval,
             timer: Arc::new(qubit_clock::StdTimer::new()),

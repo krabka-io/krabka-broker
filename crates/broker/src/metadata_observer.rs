@@ -5,6 +5,13 @@
 //! log from the controller quorum over `API_KEY_METADATA_FETCH`. It decodes
 //! each record batch through the `krabka_metadata` Kafka-record bridge, and
 //! applies the records exactly as the controller state machine would.
+//!
+//! The controller prunes that log behind KIP-630 snapshots, so the observer
+//! also speaks the two halves of snapshotting a follower does: a fetch below
+//! the controller's log start is answered with a snapshot id, which the
+//! observer installs over `FetchSnapshot` (the `snapshot` module), and what it
+//! has applied is checkpointed in a directory of its own (the `store` module)
+//! so a restart resumes there instead of at offset 0.
 
 use std::sync::{
     Arc,
@@ -12,7 +19,7 @@ use std::sync::{
 };
 
 use krabka_metadata::MetadataImage;
-use krabka_raft::{NodeId, OutboundDialer};
+use krabka_raft::{NodeId, OutboundDialer, kraft::snapshot_fetch::MetadataSnapshotFetchMax};
 use krabka_units::{ByteSize, Time};
 use qubit_clock::Timer;
 use tokio::{sync::watch, task::JoinHandle};
@@ -20,8 +27,10 @@ use tokio_util::sync::CancellationToken;
 
 mod fetch;
 mod serve_loop;
+mod snapshot;
+mod store;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use self::serve_loop::run_loop;
 
@@ -44,6 +53,19 @@ pub struct ObserverConfig {
     pub client_id: String,
     /// Cluster UUID for the initial empty image.
     pub cluster_id: uuid::Uuid,
+    /// This node's id, sent as the `replica_id` of the `FetchSnapshot`
+    /// requests that install a pruned-past metadata snapshot.
+    pub node_id: NodeId,
+    /// The node's `__cluster_metadata` directory. The observer keeps its
+    /// KIP-630 checkpoints in a subdirectory of their own under it, beside a
+    /// controller's rather than in it — the `store` module says why.
+    pub data_dir: std::path::PathBuf,
+    /// Records applied between the checkpoints the observer writes for itself.
+    /// `0` disables them, leaving only the snapshots fetched from a controller
+    /// on disk.
+    pub snapshot_interval_records: u64,
+    /// Ceiling on the bytes reassembled for one fetched metadata snapshot.
+    pub snapshot_fetch_max: MetadataSnapshotFetchMax,
     /// Soft cap per fetch.
     pub max_bytes: ByteSize,
     /// Idle poll interval once caught up to the high watermark.
@@ -155,12 +177,11 @@ mod tests {
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, TopicRecord};
     use krabka_raft::{BootstrapMode, Controller, ControllerConfig};
-    use krabka_units::{millis, minutes};
-    use qubit_clock::StdTimer;
+    use krabka_units::millis;
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{test_support::TEST_MAX_FETCH_BYTES, *};
+    use super::{test_support::observer_config, *};
 
     #[derive(Clone)]
     struct RecordingDialer {
@@ -187,17 +208,10 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_drains_background_task() {
+        let dir = TempDir::new().unwrap();
         let observer = MetadataObserver::start(ObserverConfig {
-            client_dispatch_queue_capacity:
-                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: krabka_client_core::ClientFrameMax::default(),
-            voters: vec![],
-            dialer: Arc::new(krabka_raft::PlaintextDialer),
             client_id: "cancel-test".into(),
-            cluster_id: Uuid::nil(),
-            max_bytes: TEST_MAX_FETCH_BYTES,
-            poll_interval: minutes(1),
-            timer: Arc::new(StdTimer::new()),
+            ..observer_config(Uuid::nil(), dir.path().to_path_buf())
         });
 
         assert!(observer.current_metadata_offset() == -1);
@@ -230,19 +244,14 @@ mod tests {
         .expect("submit");
         let client_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
 
+        let observer_dir = TempDir::new().unwrap();
         let observer = MetadataObserver::start(ObserverConfig {
-            client_dispatch_queue_capacity:
-                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             voters: vec![(krabka_raft::NodeId(1), ctrl_addr.to_string())],
             dialer: Arc::new(RecordingDialer {
                 client_ids: client_ids.clone(),
             }),
-            client_id: "test-observer".into(),
-            cluster_id: Uuid::nil(),
-            max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: millis(50),
-            timer: Arc::new(StdTimer::new()),
+            ..observer_config(Uuid::nil(), observer_dir.path().to_path_buf())
         });
 
         let mut img_rx = observer.watch_image();

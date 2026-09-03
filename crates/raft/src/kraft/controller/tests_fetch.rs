@@ -9,6 +9,7 @@ use assert2::assert;
 use super::*;
 use crate::kraft::{
     controller::{
+        offsets::metadata_fetch_offset_below_log_start,
         records::{decode_batches, encode_batches},
         replication::{
             FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
@@ -16,8 +17,9 @@ use crate::kraft::{
             snapshot_fetch_response_invalid,
         },
         test_support::{
-            build_engine_only, build_engine_only_with_policy, one_offset_batch, record_peer_sends,
-            recv_peer_send, recv_peer_send_with_api,
+            build_engine_only, build_engine_only_with_policy, elect_single_voter_engine,
+            one_offset_batch, record_peer_sends, recv_peer_send, recv_peer_send_with_api,
+            topic_record,
         },
     },
     types::LogOffsetMetadata,
@@ -652,4 +654,58 @@ async fn a_lagging_follower_serves_the_quorums_committed_offset() {
     let slice = engine.metadata_fetch_slice(0, DEFAULT_METADATA_RAFT_FETCH_MAX);
     assert!(slice.high_watermark == 0);
     assert!(slice.quorum_high_watermark == 10_000);
+}
+
+#[test]
+fn a_metadata_fetch_needs_a_snapshot_only_below_the_retained_log() {
+    // Half-open: a fetch *at* the log start still reads from the log, and a
+    // node that has never pruned (log start 0) never redirects. Widening this
+    // to `<=` would answer a caught-up observer with a snapshot on every poll.
+    for (_case, fetch_offset, log_start, want) in [
+        ("pruned away", 0, 4_096, true),
+        ("one below the start", 4_095, 4_096, true),
+        ("at the start", 4_096, 4_096, false),
+        ("past the start", 4_097, 4_096, false),
+        ("never pruned", 0, 0, false),
+        ("negative offset", -1, 4_096, false),
+    ] {
+        assert!(
+            metadata_fetch_offset_below_log_start(Offset(fetch_offset), Offset(log_start)) == want,
+            "fetch {fetch_offset} against log start {log_start}"
+        );
+    }
+}
+
+/// An observer that asks for an offset the controller has already pruned is
+/// pointed at the latest checkpoint instead of being served an empty slice.
+///
+/// This is the restart case: a broker-only node comes back at offset 0, the
+/// controller has snapshotted and pruned past it, and without the snapshot id
+/// the observer re-asks for the same gone offset on every poll, never builds
+/// an image, and never registers.
+#[tokio::test]
+async fn a_metadata_fetch_below_the_pruned_log_start_returns_the_snapshot_id() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    for name in ["a", "b", "c"] {
+        let (reply, mut rx) = oneshot::channel();
+        engine.on_submit_change(&topic_record(name), reply);
+        assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    }
+    engine
+        .write_snapshot_and_prune()
+        .expect("snapshot and prune");
+    let log_start = engine.log.log_start_offset();
+    assert!(log_start > 0, "the log must have been pruned");
+    let snapshot_id = engine.latest_snapshot_id().expect("a checkpoint exists");
+
+    let pruned = engine.metadata_fetch_slice(0, DEFAULT_METADATA_RAFT_FETCH_MAX);
+    assert!(pruned.snapshot_id == Some(snapshot_id));
+    assert!(pruned.records.is_empty());
+    assert!(pruned.log_start_offset == log_start.0);
+
+    // At the retained boundary the log still answers, so the observer keeps
+    // fetching records rather than re-installing a snapshot it already has.
+    let retained = engine.metadata_fetch_slice(log_start.0, DEFAULT_METADATA_RAFT_FETCH_MAX);
+    assert!(retained.snapshot_id == None);
 }

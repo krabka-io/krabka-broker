@@ -1,6 +1,10 @@
 //! One observer fetch round trip: the `API_KEY_METADATA_FETCH` request to a
 //! controller voter, and the decode-and-apply step that folds the returned
 //! record batches into the observer's `MetadataImage`.
+//!
+//! A response that names a snapshot instead of carrying records is handed to
+//! [`snapshot::install_snapshot`], on the same connection, before the round
+//! trip returns.
 
 use std::sync::Arc;
 
@@ -11,7 +15,7 @@ use krabka_units::convert::ByteSizeExt as _;
 use tokio::sync::watch;
 use tracing::{debug, warn};
 
-use super::ObserverConfig;
+use super::{ObserverConfig, snapshot::install_snapshot, store::ObserverStore};
 
 /// What one successful observer fetch round trip learned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,26 +32,28 @@ pub(super) struct FetchOutcome {
     /// what the quorum has committed. Reading that one would let an observer
     /// that had drawn level with a lagging follower call itself caught up.
     pub(super) quorum_high_watermark: i64,
+    /// Lowest offset the responder still retains. Everything below it has been
+    /// pruned behind a snapshot, so a fetch there reads no records at all.
+    pub(super) log_start_offset: i64,
 }
 
 /// Runs one iteration: it fetches from `addr` at `fetch_offset`, decodes and
 /// applies the records, and returns the new fetch offset together with the
 /// quorum's committed offset. It returns `None` on a transport error, so
 /// that the caller fails over.
+///
+/// A response that carries a `snapshot_id` means `fetch_offset` has been pruned
+/// away on the controller: the round trip then installs that snapshot over the
+/// same connection and resumes at its end offset, instead of asking for the
+/// same missing records again on every poll.
 pub(super) async fn fetch_once(
     config: &ObserverConfig,
     addr: &str,
     target: NodeId,
     fetch_offset: u64,
     image_tx: &watch::Sender<Arc<MetadataImage>>,
+    store: &mut ObserverStore,
 ) -> Option<FetchOutcome> {
-    let req = krabka_raft::KrabkaMetadataFetchRequest {
-        fetch_offset: i64::try_from(fetch_offset).unwrap_or(i64::MAX),
-        max_bytes: config.max_bytes.bytes_i32(),
-    };
-    let mut body = Vec::with_capacity(12);
-    req.encode_v0(&mut body);
-
     let opts = krabka_client_core::ConnectionOptions {
         client_id: config.client_id.clone(),
         dispatch_queue_capacity: config.client_dispatch_queue_capacity,
@@ -61,6 +67,30 @@ pub(super) async fn fetch_once(
             return None;
         }
     };
+    // One exit point past the dial, so the connection is closed on every path
+    // through the fetch and the snapshot transfer that may follow it.
+    let outcome = fetch_over(config, &conn, addr, target, fetch_offset, image_tx, store).await;
+    conn.close();
+    outcome
+}
+
+/// The round trip itself, over an open connection.
+async fn fetch_over(
+    config: &ObserverConfig,
+    conn: &krabka_client_core::Connection,
+    addr: &str,
+    target: NodeId,
+    fetch_offset: u64,
+    image_tx: &watch::Sender<Arc<MetadataImage>>,
+    store: &mut ObserverStore,
+) -> Option<FetchOutcome> {
+    let req = krabka_raft::KrabkaMetadataFetchRequest {
+        fetch_offset: i64::try_from(fetch_offset).unwrap_or(i64::MAX),
+        max_bytes: config.max_bytes.bytes_i32(),
+    };
+    let mut body = Vec::with_capacity(12);
+    req.encode_v0(&mut body);
+
     let resp_body = match conn
         .raw_request(
             krabka_raft::API_KEY_METADATA_FETCH,
@@ -72,11 +102,9 @@ pub(super) async fn fetch_once(
         Ok(b) => b,
         Err(e) => {
             debug!(%addr, error = %e, "observer fetch request failed");
-            conn.close();
             return None;
         }
     };
-    conn.close();
 
     let mut cur: &[u8] = &resp_body;
     let resp = match krabka_raft::KrabkaMetadataFetchResponse::decode_v0(&mut cur) {
@@ -90,9 +118,16 @@ pub(super) async fn fetch_once(
         return None;
     }
 
+    let next_fetch_offset = match resp.snapshot_id {
+        Some(snapshot_id) => {
+            install_snapshot(config, conn, target, snapshot_id, image_tx, store).await?
+        }
+        None => apply_fetch_records(fetch_offset, &resp.records, image_tx),
+    };
     Some(FetchOutcome {
-        next_fetch_offset: apply_fetch_records(fetch_offset, &resp.records, image_tx),
+        next_fetch_offset,
         quorum_high_watermark: resp.quorum_high_watermark,
+        log_start_offset: resp.log_start_offset,
     })
 }
 

@@ -8,7 +8,10 @@ use krabka_units::prelude::ByteSize;
 
 use super::{
     Engine,
-    offsets::{fetch_batch_committed_before_hwm, metadata_fetch_offset_in_committed_window},
+    offsets::{
+        fetch_batch_committed_before_hwm, metadata_fetch_offset_below_log_start,
+        metadata_fetch_offset_in_committed_window,
+    },
     quorum_state_file::save_quorum_state,
     records::encode_batches,
 };
@@ -88,6 +91,13 @@ impl Engine {
     /// HWM and concatenate their verbatim `RecordBatch` bytes (the engine's
     /// records are already Kafka record batches). At least the first batch is
     /// always emitted so the observer makes progress.
+    ///
+    /// A `fetch_offset` below the pruned log start reads nothing: those records
+    /// are gone, so the slice carries the latest snapshot id instead and the
+    /// observer installs that snapshot before it fetches again (KIP-630). This
+    /// is what `Inbound::Fetch` already does for a controller follower; an
+    /// observer that was answered with an empty slice here would re-ask for the
+    /// same pruned offset forever.
     pub fn metadata_fetch_slice(
         &self,
         fetch_offset: i64,
@@ -98,7 +108,14 @@ impl Engine {
         let fetch_offset = Offset(fetch_offset);
         let high_watermark = self.log.hwm();
         let log_start_offset = self.log.log_start_offset();
-        let records = if metadata_fetch_offset_in_committed_window(fetch_offset, high_watermark) {
+        let snapshot_id = if metadata_fetch_offset_below_log_start(fetch_offset, log_start_offset) {
+            self.latest_snapshot_id()
+        } else {
+            None
+        };
+        let records = if snapshot_id.is_none()
+            && metadata_fetch_offset_in_committed_window(fetch_offset, high_watermark)
+        {
             match self
                 .log
                 .read_decoded(fetch_offset, max_size.max(MIN_FETCH_BUDGET))
@@ -120,6 +137,7 @@ impl Engine {
         };
         MetadataFetchSlice {
             records,
+            snapshot_id,
             // `MetadataFetchSlice` is a wire-facing DTO of raw `i64` offsets.
             log_start_offset: log_start_offset.0,
             high_watermark: high_watermark.0,

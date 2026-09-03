@@ -127,10 +127,16 @@ pub enum Command {
 ///
 /// `records` is concatenated Kafka `RecordBatch`es, one for each committed log
 /// batch in `[fetch_offset, high_watermark)`. The offsets are `KraftLog`
-/// offsets.
+/// offsets. A `fetch_offset` below `log_start_offset` reads no records at all:
+/// the slice then carries `snapshot_id`, and the observer installs that
+/// snapshot before it fetches again.
 #[derive(Debug, Clone)]
 pub struct MetadataFetchSlice {
     pub records: bytes::Bytes,
+    /// The KIP-630 snapshot `(end_offset, epoch)` that replaces `records` when
+    /// the observer asked for an offset this node has already pruned away.
+    /// `records` is empty whenever this is set.
+    pub snapshot_id: Option<(i64, i32)>,
     pub log_start_offset: i64,
     pub high_watermark: i64,
     /// Highest offset the quorum has committed, as this node last heard it.
