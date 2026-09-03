@@ -147,9 +147,19 @@ jobs:
   # restoring: about 17 minutes rather than about 7.5, beside a sibling job that
   # takes 14 to 21. `repository-cache` stays -- it holds fetched archives rather
   # than build outputs, so coverage neither bloats it nor diverges from `ci`.
+  #
+  # On a pull request this job is gated on the change touching Rust or build
+  # inputs: `aspect changed-scope`, read through `select`, says so, and a
+  # docs-only pull request cannot move a coverage number. The gate is PR-only
+  # on purpose. A push to `main` always runs it, for two reasons: Codecov's
+  # trend line for the default branch would otherwise have holes wherever a
+  # docs-only commit landed, and `delivery` needs `[ci, coverage,
+  # supply-chain]`, which a skipped `coverage` on `main` would never satisfy.
+  # `changed-scope` fails open to `rust=true`, so an unreadable diff runs it.
   coverage:
     name: coverage
-    if: github.event_name != 'schedule'
+    needs: select
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -200,78 +210,64 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
-  # Every check and generator this repository runs on a runner is an AXL task
-  # under `.aspect/`, and this job is their unit tests. It is also where the
-  # "check the check" steps that used to sit beside three of them now live:
-  # `aspect axl-tests` runs every suite, so a check and its tests no longer have
-  # to be invoked as a pair from the job that uses the check.
+  # The repository's cheap checks, in one job.
   #
-  # `aspect check-scripts` is the ratchet beside them. A new `.sh` or `.py`
-  # fails it unless a row in that task's allowlist says where the file runs and
-  # why a task cannot go there.
-  axl:
-    name: axl tasks
+  # These were four jobs -- `axl tasks`, `changelogs`, `creusot mutants::skip`
+  # and `docs checks`. Every one of them wanted the same runner: a plain
+  # checkout and the Aspect CLI, with no Bazel cache namespace and nothing to
+  # build. Each then spent about 0.6 minutes on `setup-aspect` to do a few
+  # seconds of work, and four of those slots came out of the 20-concurrent-job
+  # cap that the container matrix is queued behind. Running the checks in
+  # sequence here costs seconds and hands three slots back.
+  #
+  # None of them uses Bazel, so they still do not need the merge base or a
+  # cache namespace: one `actions/checkout@v7` and one CLI is the union of what
+  # the four asked for.
+  checks:
+    name: checks
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-      - name: the tasks' own tests
-        run: aspect axl-tests
-      - name: no new shell or Python script
-        run: aspect check-scripts
-
-  # Krabka tags and releases the whole workspace as one unit, so the root
-  # CHANGELOG.md is the only record of what shipped. The twelve crate
-  # changelogs this repository inherited said otherwise: they documented
-  # robot-head/crabka's releases under these crate names. This keeps a version
-  # heading from coming back into one.
-  changelogs:
-    name: changelogs
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-      - name: no crate changelog records a release
-        run: aspect check-crate-changelogs
-
-  # cargo-mutants generates mutants syntactically and does not evaluate
-  # #[cfg], so every #[cfg(creusot)] fn in crates/verified/src/ is mutated
-  # anyway and reported as a survivor unless its own definition carries
-  # `#[cfg_attr(test, mutants::skip)]`. This keeps that pairing from silently
-  # dropping off a function as crates/verified grows.
-  creusot-skip:
-    name: creusot mutants::skip
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-      - name: every #[cfg(creusot)] fn skips mutation testing
-        run: aspect check-creusot-skip
-
-  # Documentation source checks do not use Bazel, so they can stay parallel
-  # while the `ci` job renders and uploads rustdoc from its warm output tree.
-  docs:
-    name: docs checks
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    # The longest of the four (`docs checks`, whose lychee step walks every
+    # markdown file); the other three wanted 10.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+
+      # Every check and generator this repository runs on a runner is an AXL task
+      # under `.aspect/`, and this step is their unit tests. It is also where the
+      # "check the check" steps that used to sit beside three of them now live:
+      # `aspect axl-tests` runs every suite, so a check and its tests no longer have
+      # to be invoked as a pair from the step that uses the check.
+      - name: the tasks' own tests
+        run: aspect axl-tests
+      # `aspect check-scripts` is the ratchet beside them. A new `.sh` or `.py`
+      # fails it unless a row in that task's allowlist says where the file runs and
+      # why a task cannot go there.
+      - name: no new shell or Python script
+        run: aspect check-scripts
+
+      # Krabka tags and releases the whole workspace as one unit, so the root
+      # CHANGELOG.md is the only record of what shipped. The twelve crate
+      # changelogs this repository inherited said otherwise: they documented
+      # robot-head/crabka's releases under these crate names. This keeps a version
+      # heading from coming back into one.
+      - name: no crate changelog records a release
+        run: aspect check-crate-changelogs
+
+      # cargo-mutants generates mutants syntactically and does not evaluate
+      # #[cfg], so every #[cfg(creusot)] fn in crates/verified/src/ is mutated
+      # anyway and reported as a survivor unless its own definition carries
+      # `#[cfg_attr(test, mutants::skip)]`. This keeps that pairing from silently
+      # dropping off a function as crates/verified grows.
+      - name: every #[cfg(creusot)] fn skips mutation testing
+        run: aspect check-creusot-skip
+
+      # Documentation source checks do not use Bazel, so they stay off the
+      # critical path while the `ci` job renders and uploads rustdoc from its
+      # warm output tree.
       - name: generated KIP matrix
         run: |
           generated="$(mktemp)"
@@ -285,7 +281,7 @@ jobs:
           trap 'rm -f "${generated}"' EXIT
           aspect generate-config-reference --output "${generated}"
           diff -u docs/config-reference.md "${generated}"
-      # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the `axl tasks` job runs the unit tests that prove the check fails on a missing heading or a status mismatch.
+      # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the `the tasks' own tests` step above runs the unit tests that prove the check fails on a missing heading or a status mismatch.
       - name: KFC template
         run: aspect check-kfcs
       # Design-doc index, required headings, README links, and #fragment anchors (lychee below does not follow fragments).
@@ -419,26 +415,43 @@ jobs:
             --mount type=bind,source="${GITHUB_WORKSPACE}",target=/workspace \
             "${LOCAL_IMAGE}"
 
-  # Container suites, one runner each.
+  # Container suites, sharded across runners.
   #
   # These saturate a runner: the suites are container-heavy, so Bazel got only
   # about 1.2x concurrency running them together and the box, not the target
   # granularity, was the limit. Sharding them across runners is what actually
-  # parallelises them -- one job per suite, so the wall clock is the slowest
-  # suite rather than the sum of all of them.
+  # parallelises them -- one job per group of suites, so the wall clock is the
+  # slowest group rather than the sum of all of them.
   #
   # `aspect test` does not narrow to impacted targets -- that is an Aspect
   # Workflows feature, not part of the open-source CLI. The custom `aspect
   # container-suites` task owns the selection: scheduled/manual runs take every
   # suite, while PRs use Bazel rdeps outside the broker and an explicit broker
   # feature map so one Rust target does not become the entire JVM matrix.
-  docker-select:
-    name: select container suites
+  #
+  # A matrix entry is a GROUP of targets rather than a single one, and the task
+  # emits at most 12 of them. The cap is the concurrency budget: GitHub runs at
+  # most 20 jobs at once for this account, and the rest of the workflow already
+  # claims several, so a matrix wider than that queues into a second wave and
+  # the run's wall clock becomes two container jobs deep instead of one. Twelve
+  # entries fit alongside the other jobs in a single wave. Grouping is also
+  # cheaper per target: the suites in a group are tested by one Bazel
+  # invocation, which analyses and compiles the shared broker closure once
+  # rather than once per suite.
+  #
+  # This job also answers whether the change touches Rust or build inputs at
+  # all, which is what lets `coverage` sit out a docs-only pull request.
+  select:
+    name: select
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
       suites: ${{ steps.select.outputs.suites }}
       any: ${{ steps.select.outputs.any }}
+      rust: ${{ steps.scope.outputs.rust }}
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -452,9 +465,6 @@ jobs:
           repository-cache: true
 
       - id: select
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
           if [ "${FULL_MATRIX}" = "true" ]; then
@@ -463,18 +473,32 @@ jobs:
             aspect container-suites --base "${BASE_SHA}"
           fi
 
+      # A second reading of the same diff, on the same checkout, so this costs
+      # a job slot nothing. `--base` is omitted on the full-matrix runs for the
+      # same reason `container-suites` omits it: with no merge base to compare
+      # against there is no diff to narrow by, and `changed-scope` fails open to
+      # `rust=true` -- which is what a scheduled or dispatched run wants anyway.
+      - id: scope
+        run: |
+          set -euo pipefail
+          if [ "${FULL_MATRIX}" = "true" ]; then
+            aspect changed-scope
+          else
+            aspect changed-scope --base "${BASE_SHA}"
+          fi
+
   docker:
     name: container · ${{ matrix.suite.name }}
-    needs: docker-select
-    if: needs.docker-select.outputs.any == 'true'
+    needs: select
+    if: needs.select.outputs.any == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
-      # One suite failing should not cancel the rest -- the point of the shard
+      # One group failing should not cancel the rest -- the point of the shard
       # is to see every suite's result in one run.
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(needs.docker-select.outputs.suites) }}
+        suite: ${{ fromJSON(needs.select.outputs.suites) }}
     steps:
       - uses: actions/checkout@v7
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
@@ -490,23 +514,55 @@ jobs:
       # `--add-host=host.docker.internal:host-gateway`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
-      # `aspect container-suites` selects by touched path, so the matrix can
-      # name a container target that is not a test rule -- the KDC fixture's
-      # `image` and `seed_layer` are built, not run. `bazel test` exits 4 on a
-      # label with no test targets ("No test targets were found, yet testing was
+      # `aspect container-suites` selects by touched path, so a group can name a
+      # container target that is not a test rule -- the KDC fixture's `image`
+      # and `seed_layer` are built, not run. `bazel test` exits 4 on a label
+      # with no test targets ("No test targets were found, yet testing was
       # requested"), which failed every suite in the matrix regardless of the
       # code under review. Dispatch on the rule kind instead.
-      - run: |
+      #
+      # One `bazel query` over the whole group, then at most one `bazel test`
+      # and at most one `bazel build` -- never a command per target. Sharing an
+      # invocation is the point of grouping: the group's suites analyse and
+      # compile the broker closure once between them, where a loop paid for it
+      # per target.
+      #
+      # `matrix.suite.targets` arrives through `env` rather than as a `${{ }}`
+      # interpolation into the script body, so a label can never be read as
+      # shell. It is a space-joined list, which `set(...)` takes verbatim.
+      - env:
+          TARGETS: ${{ matrix.suite.targets }}
+        run: |
           set -euo pipefail
-          target='${{ matrix.suite.target }}'
-          kind=$(bazel query --output=label_kind "${target}" | awk '{ print $1 }')
-          case "${kind}" in
-            # `--config=docker` is defined for `test` only (it swaps the
-            # `--test_tag_filters` set), so passing it to `build` fails with
-            # "Config value 'docker' is not defined in any .rc file".
-            *_test) bazel test --config=docker "${target}" ;;
-            *) bazel build "${target}" ;;
-          esac
+          # Assigned before the loop reads it: a command substitution in a
+          # here-string word is not a simple command, so `set -e` would not
+          # abort on a failed query there and the group would pass having run
+          # nothing.
+          labels="$(bazel query --output=label_kind "set(${TARGETS})")"
+          tests=""
+          builds=""
+          # `--output=label_kind` prints "<kind> <rule|file> <label>", so the
+          # kind is the first word and the label the last.
+          while read -r kind _ label; do
+            [ -n "${label}" ] || continue
+            case "${kind}" in
+              *_test) tests="${tests} ${label}" ;;
+              *) builds="${builds} ${label}" ;;
+            esac
+          done <<<"${labels}"
+          if [ -z "${tests}" ] && [ -z "${builds}" ]; then
+            printf 'No labels resolved for group targets: %s\n' "${TARGETS}" >&2
+            exit 1
+          fi
+          # `--config=docker` is defined for `test` only (it swaps the
+          # `--test_tag_filters` set), so passing it to `build` fails with
+          # "Config value 'docker' is not defined in any .rc file".
+          if [ -n "${tests}" ]; then
+            bazel test --config=docker ${tests}
+          fi
+          if [ -n "${builds}" ]; then
+            bazel build ${builds}
+          fi
 
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
   # Kerberos acceptance cases visible in their own scheduled lane instead of
@@ -593,10 +649,14 @@ jobs:
   # required check as satisfied, and a red run becomes mergeable -- the exact
   # failure this job exists to prevent.
   #
-  # `docker` is allowed to be skipped, and it alone: it is `if`-gated on the
-  # suite selection being non-empty, so a change impacting no container suite
-  # legitimately runs none. That indulgence cannot hide a broken selection,
-  # because a `docker-select` failure is read here on its own account.
+  # Two dependencies are allowed to be skipped, and only those two. `docker` is
+  # `if`-gated on the suite selection being non-empty, so a change impacting no
+  # container suite legitimately runs none. `coverage` is `if`-gated on the
+  # pull request touching Rust or build inputs, so a docs-only pull request
+  # legitimately runs none either -- and only a pull request can skip it, since
+  # a push to `main` runs coverage unconditionally. Neither indulgence can hide
+  # a broken selection, because a `select` failure is read here on its own
+  # account.
   gate:
     name: gate
     # Mergeability: pull requests, and the pushes to `main` that follow them.
@@ -606,12 +666,9 @@ jobs:
       - ci
       - coverage
       - supply-chain
-      - axl
-      - changelogs
-      - creusot-skip
-      - docs
+      - checks
       - proofs
-      - docker-select
+      - select
       - docker
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -624,10 +681,12 @@ jobs:
           jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' <<<"${NEEDS}" | sort
           unmet="$(
             jq -r '
-              to_entries[]
-              | select(.value.result != "success")
-              | select((.key == "docker" and .value.result == "skipped") | not)
-              | "  \(.key): \(.value.result)"
+              ["coverage", "docker"] as $may_skip
+              | to_entries[]
+              | . as $dep
+              | select($dep.value.result != "success")
+              | select(($dep.value.result == "skipped" and ($may_skip | index($dep.key)) != null) | not)
+              | "  \($dep.key): \($dep.value.result)"
             ' <<<"${NEEDS}"
           )"
           if [ -n "${unmet}" ]; then
