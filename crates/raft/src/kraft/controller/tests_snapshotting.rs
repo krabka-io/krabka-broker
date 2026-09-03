@@ -11,8 +11,9 @@ use crate::kraft::controller::{
         load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint, write_checkpoint,
     },
     test_support::{
-        await_leader, build_engine_only, build_with_snapshot_interval, elect_single_voter_engine,
-        submit_change_with_timeout, topic_record,
+        await_leader, build_engine_only, build_with_max_bytes_between_snapshots,
+        build_with_snapshot_interval, elect_single_voter_engine, submit_change_with_timeout,
+        topic_record,
     },
 };
 
@@ -108,6 +109,48 @@ async fn leader_snapshots_and_prunes_at_threshold() {
     assert2::assert!(!cp.is_empty());
 
     // The log was pruned: log-start advanced past 0.
+    let qs = ctrl.quorum_state().await.unwrap();
+    assert2::assert!(qs.log_start_offset > 0);
+    ctrl.shutdown().await;
+}
+
+/// The byte-size cap (`max_bytes_between_snapshots`) fires once enough
+/// records have committed, even though no single commit's batch reaches the
+/// threshold on its own and the threshold falls strictly between batch
+/// boundaries. `bytes_since_snapshot` is tracked incrementally from applied
+/// batch lengths rather than re-derived from a bounded log read, which would
+/// under-count whenever a batch that would cross the cap doesn't fit the
+/// remaining read budget and gets silently excluded (never re-included on a
+/// later, identical read of the same unchanged range).
+#[tokio::test]
+async fn leader_snapshots_and_prunes_at_byte_threshold_across_many_small_commits() {
+    let (ctrl, dir) = build_with_max_bytes_between_snapshots(
+        NodeId(1),
+        &[NodeId(1)],
+        krabka_units::prelude::bytes(200),
+    );
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    await_leader(&ctrl, Some(NodeId(1))).await;
+
+    // Commit distinct single-topic batches, each comfortably under the
+    // 200-byte cap on its own, until the cumulative bytes cross it.
+    for i in 0..50 {
+        submit_change_with_timeout(
+            &ctrl,
+            topic_record(&format!("bytes-cap-{i}")),
+            "byte threshold submit",
+        )
+        .await
+        .unwrap();
+        if ctrl.quorum_state().await.unwrap().log_start_offset > 0 {
+            break;
+        }
+    }
+
+    let cp = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+        .expect("scan checkpoints")
+        .expect("a checkpoint exists");
+    assert2::assert!(!cp.is_empty());
     let qs = ctrl.quorum_state().await.unwrap();
     assert2::assert!(qs.log_start_offset > 0);
     ctrl.shutdown().await;

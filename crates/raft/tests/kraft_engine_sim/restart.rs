@@ -80,6 +80,8 @@ async fn restart_recovers_image() {
         MetadataRaftFetchMax::default(),
         Arc::new(net.as_peer(victim)),
         0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
     )
     .expect("reopen");

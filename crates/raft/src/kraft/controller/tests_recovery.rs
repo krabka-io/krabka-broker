@@ -118,6 +118,8 @@ async fn snapshot_then_restart_recovers_image() {
                 metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
                 peers: Arc::new(NullPeerSender),
                 snapshot_interval_records: 0,
+                max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
+                max_snapshot_interval: krabka_units::prelude::millis(0),
                 metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             },
             log,
@@ -148,6 +150,8 @@ async fn snapshot_then_restart_recovers_image() {
         MetadataRaftFetchMax::default(),
         Arc::new(NullPeerSender),
         0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
     )
     .expect("reopen");
