@@ -132,7 +132,11 @@ build:rbe --remote_timeout=600
 #
 # The compiles themselves -- which is where the time is -- still run remotely.
 # A build script run is short, and its result is cached like anything else.
-build:rbe --strategy_regexp=Running Cargo build script=sandboxed
+# `--strategy` takes the mnemonic directly. Not `--strategy_regexp`: the only
+# regex that identifies these actions is their progress message, "Running Cargo
+# build script", and a `.bazelrc` line is tokenised on whitespace, so that
+# spelling arrives as four separate options and Bazel rejects the first.
+build:rbe --strategy=CargoBuildScriptRun=sandboxed
 
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.
