@@ -17,6 +17,23 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
+# The suites run the broker on this machine and advertise it as
+# `host.docker.internal`, so the name has to resolve here as well as inside the
+# containers -- those get `--add-host=host.docker.internal:host-gateway`, which
+# is a separate mechanism and already works. On a GitHub runner the workflow
+# adds the entry before calling Bazel. On a BuildBuddy microVM there is no such
+# step: this script is the only thing that runs on the machine the test runs
+# on, so it has to add the entry itself.
+#
+# Best effort in both directions. `getent` short-circuits when the name already
+# resolves, which is the runner, and a failed write is swallowed because a
+# machine where the name already resolves needs nothing and one where it cannot
+# be written is a failure the test itself will report far more legibly than
+# `set -e` firing here.
+if ! getent hosts host.docker.internal >/dev/null 2>&1; then
+    printf '127.0.0.1 host.docker.internal\n' >>/etc/hosts 2>/dev/null || true
+fi
+
 # `$(rootpath)` yields a path relative to the runfiles root, and a test does not
 # run from there. Everything handed to this script is resolved against it.
 runfile() {
