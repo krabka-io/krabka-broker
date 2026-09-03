@@ -5,6 +5,15 @@
 //! Automatic replica placement is site-aware. See [`crate::site_placement`]
 //! for the site spread and the leadership pinning it gives. An explicit
 //! `assignments` field still wins, as it does in Kafka.
+//!
+//! KIP-525: a v5+ row reports what the topic was created as -- its partition
+//! count, its replication factor, and its whole effective configuration, the
+//! list [`crate::handlers::describe_configs`] answers a `TOPIC` resource with.
+//! A client that reads it needs no follow-up `DescribeConfigs`, which is what
+//! Terraform's `kafka_topic`, Connect's `TopicAdmin` and Streams'
+//! `InternalTopicManager` do. Kafka gates the whole disclosure on a second,
+//! per-topic ACL check -- `DescribeConfigs` on `Topic(name)` -- and a denial
+//! withholds it behind `topicConfigErrorCode` without failing the create.
 
 use bytes::Bytes;
 use krabka_protocol::{
@@ -29,12 +38,15 @@ mod tests;
 
 pub(crate) use self::placement::{round_robin_replicas, site_broker_views};
 use self::{
-    authorization::cluster_create_denied,
+    authorization::{cluster_create_denied, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
     mutation_quota::mutation_count,
     placement::resolve_assignments,
     records::{topic_config_overrides, topic_records},
-    response::{create_topics_response, encode_response, finish_response, topic_error_result},
+    response::{
+        create_topics_response, effective_topic_configs, encode_response, finish_response,
+        topic_error_result,
+    },
 };
 use crate::{
     broker::Broker,
@@ -316,14 +328,40 @@ pub(crate) async fn handle(
         };
 
         if error_code == codes::NONE {
-            result.num_partitions = i32::try_from(assignments.len()).unwrap_or(i32::MAX);
-            result.replication_factor = assignments
-                .first()
-                .and_then(|replicas| i16::try_from(replicas.len()).ok())
-                .unwrap_or(-1);
-            // KIP-525 (v5+): return an empty configs list to satisfy
-            // clients that unconditionally call `configs().stream()`.
-            result.configs = Some(Vec::new());
+            // KIP-525 (v5+): the row carries what the topic was created as, so
+            // a client needs no follow-up DescribeConfigs. Kafka gates the
+            // whole disclosure -- the effective configs, the partition count
+            // and the replication factor -- on `DescribeConfigs` on
+            // `Topic(name)`, and stamps `topicConfigErrorCode` when the
+            // principal may not be told. The create itself already happened
+            // either way. Below v5 none of those fields are on the wire, so
+            // the check is not worth an authorizer call.
+            let describable =
+                version < 5 || !describe_configs_denied(broker, &image, ctx, &result.name);
+            if describable {
+                result.num_partitions = i32::try_from(assignments.len()).unwrap_or(i32::MAX);
+                result.replication_factor = assignments
+                    .first()
+                    .and_then(|replicas| i16::try_from(replicas.len()).ok())
+                    .unwrap_or(-1);
+                if version >= 5 {
+                    // The image the create committed to, not the one the
+                    // request was authorized against: the overrides this very
+                    // request carried are part of the topic's effective
+                    // configuration.
+                    result.configs = Some(effective_topic_configs(
+                        &controller.current_image(),
+                        &result.name,
+                    ));
+                }
+            } else {
+                // Kafka leaves the partition count and the replication factor
+                // at -1 here too: `AdminClient` fails every accessor on the
+                // create result once `topicConfigErrorCode` is set, so a value
+                // in either field would never be read.
+                result.configs = Some(Vec::new());
+                result.topic_config_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            }
         }
         results.push(result);
     }

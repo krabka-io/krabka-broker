@@ -101,7 +101,12 @@ mod tests {
         .unwrap();
         let actual_offsets = results
             .iter()
-            .map(|result| result.as_ref().map(|offset| *offset).map_err(|_| ()))
+            .map(|result| {
+                result
+                    .as_ref()
+                    .map(|appended| appended.base_offset)
+                    .map_err(|_| ())
+            })
             .collect::<Vec<_>>();
         assert!(actual_offsets == vec![Ok(Offset(0)), Ok(Offset(2))]);
         assert!(results.iter().all(Result::is_ok));

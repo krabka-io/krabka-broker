@@ -101,6 +101,7 @@ mod resources;
 mod static_configs;
 mod wire;
 
+pub(crate) use self::resources::effective_topic_configs;
 use self::{
     authz::{denied_result, resource_authz_failure},
     entry::EntryOptions,

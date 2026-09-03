@@ -7,7 +7,9 @@ use bytes::Bytes;
 use krabka_protocol::{
     Encode,
     api_key::ApiKey,
-    owned::create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
+    owned::create_topics_response::{
+        CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
+    },
 };
 use krabka_units::Time;
 
@@ -24,6 +26,41 @@ pub(super) fn topic_error_result(
         error_message,
         ..Default::default()
     }
+}
+
+/// KIP-525: the topic's effective configuration, in the shape a v5+
+/// `CreatableTopicResult` carries it.
+///
+/// It is the very list `DescribeConfigs` answers a `TOPIC` resource with --
+/// Kafka reaches `ConfigurationControlManager.computeEffectiveTopicConfigs`
+/// from both paths, and a client that reads `createTopics(...).config(topic)`
+/// instead of issuing a follow-up `DescribeConfigs` must see the same values.
+/// `CreatableTopicConfigs` has no `config_type`, `documentation` or synonym
+/// field, so those parts of the entry are dropped and the rest travels
+/// unchanged, sensitive values withheld included.
+///
+/// `read_only` is the one place krabka reports more than Kafka does. Kafka
+/// hardcodes `false` here (`KafkaConfigSchema.toConfigEntry`, "readonly is
+/// always false, for now") because no topic key in its schema is read-only.
+/// Two of krabka's are -- [`crate::config_keys::DISKLESS`] and
+/// [`crate::config_keys::WRITE_FREEZE`] -- and reporting them as writable
+/// would contradict this broker's own `DescribeConfigs` and its two alter
+/// paths.
+pub(super) fn effective_topic_configs(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+) -> Vec<CreatableTopicConfigs> {
+    crate::handlers::describe_configs::effective_topic_configs(image, topic)
+        .into_iter()
+        .map(|entry| CreatableTopicConfigs {
+            name: entry.name,
+            value: entry.value,
+            read_only: entry.read_only,
+            config_source: entry.config_source,
+            is_sensitive: entry.is_sensitive,
+            ..Default::default()
+        })
+        .collect()
 }
 
 pub(super) fn create_topics_response(

@@ -12,10 +12,13 @@
 //! - `ShareFetch` (key 78) acquire + record bytes,
 //! - `ShareAcknowledge` (key 79) implicit-ack on poll.
 //!
-//! The JVM share consumer joins a fresh share group with
-//! `group.share.auto.offset.reset=earliest`, so the share-partition start
-//! offset begins at 0 and the consumer reads every produced record. The test
-//! asserts that its stdout carries each produced value.
+//! Where a share partition starts is a GROUP config, not a client property:
+//! `KafkaShareConsumer` has no `auto.offset.reset` of its own, so these tests
+//! set `share.auto.offset.reset` with `kafka-configs.sh --entity-type groups`
+//! before the consumer's first fetch, exactly as an operator would. The
+//! `earliest` cases then read every produced record, the `by_duration` case
+//! reads only the records inside its window, and the default (`latest`) case
+//! reads none of the records produced before it joined.
 //!
 //! The test is gated with `#[ignore = "requires Docker"]`. Run it with
 //! `--ignored`.
@@ -93,6 +96,7 @@ fn client_addr() -> &'static str {
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.1.0";
 const SHARE_CONSUMER: &str = "/opt/kafka/bin/kafka-console-share-consumer.sh";
 const SHARE_GROUPS: &str = "/opt/kafka/bin/kafka-share-groups.sh";
+const CONFIGS: &str = "/opt/kafka/bin/kafka-configs.sh";
 
 const SHARE_STATE_TOPIC: &str = "__share_group_state";
 const SHARE_STATE_PARTITIONS: i32 = 50;
@@ -212,9 +216,35 @@ async fn bootstrap_share_state(broker: &BrokerHandle, client: &Client, key: &str
     }
 }
 
-/// Produces the supplied `values` as one batch into `(topic, 0)`. It retries
-/// while the new partition still materializes its leader.
+/// Wall-clock milliseconds, the unit a record timestamp carries.
+fn now_ms() -> i64 {
+    i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_millis(),
+    )
+    .expect("timestamp fits i64")
+}
+
+/// Produces `values` stamped with the current time.
 async fn produce(client: &Client, topic: &str, tid: uuid::Uuid, values: &[&str]) {
+    produce_at(client, topic, tid, values, now_ms()).await;
+}
+
+/// Produces the supplied `values` as one batch into `(topic, 0)`, every record
+/// stamped `timestamp_ms`. It retries while the new partition still
+/// materializes its leader.
+///
+/// The timestamp is what a `by_duration` share group resolves against, so a
+/// test can place records inside or outside the window without waiting.
+async fn produce_at(
+    client: &Client,
+    topic: &str,
+    tid: uuid::Uuid,
+    values: &[&str],
+    timestamp_ms: i64,
+) {
     for _ in 0..40 {
         let records: Vec<Record> = values
             .iter()
@@ -238,6 +268,8 @@ async fn produce(client: &Client, topic: &str, tid: uuid::Uuid, values: &[&str])
                         records: Some(
                             RecordBatch {
                                 last_offset_delta: i32::try_from(values.len() - 1).unwrap(),
+                                base_timestamp: timestamp_ms,
+                                max_timestamp: timestamp_ms,
                                 records,
                                 ..Default::default()
                             }
@@ -291,6 +323,30 @@ fn docker_run(args: &[&str]) -> std::process::Output {
     out
 }
 
+/// Sets `share.auto.offset.reset` for `group` through the real
+/// `kafka-configs.sh --alter --entity-type groups`, which drives
+/// `IncrementalAlterConfigs` (`api_key` 44) against Krabka.
+///
+/// `KafkaShareConsumer` has no client-side `auto.offset.reset`; the group
+/// config is the only way to move a share partition's start offset, and it has
+/// to be in place before the group's first `ShareFetch` resolves it.
+fn set_share_auto_offset_reset(bootstrap: &str, group: &str, value: &str) {
+    let out = docker_run(&[
+        "bash",
+        "-c",
+        &format!(
+            "{CONFIGS} --bootstrap-server {bootstrap} --alter \
+                --entity-type groups --entity-name {group} \
+                --add-config share.auto.offset.reset={value}"
+        ),
+    ]);
+    assert!(
+        out.status.success(),
+        "kafka-configs --alter share.auto.offset.reset={value} failed: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 /// The main differential test. A real JVM `KafkaShareConsumer` joins a fresh
 /// Krabka share group, reads every produced record, and acknowledges
 /// implicitly on poll. The test asserts that each produced value appears in
@@ -309,10 +365,11 @@ async fn jvm_share_consumer_reads_krabka() {
     bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
     produce(&client, topic, tid, &values).await;
 
-    // Drive the real JVM KafkaShareConsumer. A fresh share group with
-    // `group.share.auto.offset.reset=earliest` starts the share-partition at
-    // offset 0, so it must read all produced records. `--timeout-ms` makes it
-    // exit after the idle window once it has drained the partition.
+    // Drive the real JVM KafkaShareConsumer. The group config sets the
+    // share-partition start to the log start offset, so it must read all
+    // produced records. `--timeout-ms` makes it exit after the idle window
+    // once it has drained the partition.
+    set_share_auto_offset_reset(bootstrap, group, "earliest");
     let consumed = docker_run(&[
         "bash",
         "-c",
@@ -321,7 +378,6 @@ async fn jvm_share_consumer_reads_krabka() {
                 --bootstrap-server {bootstrap} \
                 --topic {topic} \
                 --group {group} \
-                --consumer-property group.share.auto.offset.reset=earliest \
                 --timeout-ms 20000 \
                 --max-messages {}",
             values.len()
@@ -359,6 +415,7 @@ async fn jvm_share_groups_describe_state() {
     produce(&client, topic, tid, &values).await;
 
     // Join + read so the group is registered with the coordinator.
+    set_share_auto_offset_reset(bootstrap, group, "earliest");
     let _ = docker_run(&[
         "bash",
         "-c",
@@ -367,7 +424,6 @@ async fn jvm_share_groups_describe_state() {
                 --bootstrap-server {bootstrap} \
                 --topic {topic} \
                 --group {group} \
-                --consumer-property group.share.auto.offset.reset=earliest \
                 --timeout-ms 15000 \
                 --max-messages {}",
             values.len()
@@ -415,6 +471,7 @@ async fn jvm_share_groups_list() {
     bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
     produce(&client, topic, tid, &values).await;
 
+    set_share_auto_offset_reset(bootstrap, group, "earliest");
     // Join + read so the share group is registered with the coordinator. The
     // share-group actor stays in the coordinator's share registry after the
     // consumer's idle-timeout exit (it is only removed on a delete-groups
@@ -427,7 +484,6 @@ async fn jvm_share_groups_list() {
                 --bootstrap-server {bootstrap} \
                 --topic {topic} \
                 --group {group} \
-                --consumer-property group.share.auto.offset.reset=earliest \
                 --timeout-ms 15000 \
                 --max-messages {}",
             values.len()
@@ -447,5 +503,115 @@ async fn jvm_share_groups_list() {
         list_out.contains(group),
         "share group {group} must appear in --list output; got:\n{list_out}\nstderr:\n{}",
         String::from_utf8_lossy(&listed.stderr),
+    );
+}
+
+/// `share.auto.offset.reset=by_duration:PT1H` starts the share partition at
+/// the first record inside the window. The test produces one batch stamped two
+/// hours ago and one stamped now, then asserts that the real JVM
+/// `KafkaShareConsumer` reads only the recent batch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Docker"]
+async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {
+    let bootstrap = bootstrap_addr();
+    let (broker, _dir) = start_host_broker().await;
+    let topic = "kip932-jvm-dur";
+    let group = "jvm-share-gdur";
+    let stale = ["dur-stale-one", "dur-stale-two"];
+    let recent = ["dur-recent-one", "dur-recent-two"];
+
+    let client = connect().await;
+    let tid = create_topic(&broker, &client, topic).await;
+    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    let now = now_ms();
+    produce_at(&client, topic, tid, &stale, now - 2 * 60 * 60 * 1_000).await;
+    produce_at(&client, topic, tid, &recent, now).await;
+
+    set_share_auto_offset_reset(bootstrap, group, "by_duration:PT1H");
+    let consumed = docker_run(&[
+        "bash",
+        "-c",
+        &format!(
+            "{SHARE_CONSUMER} \
+                --bootstrap-server {bootstrap} \
+                --topic {topic} \
+                --group {group} \
+                --timeout-ms 20000 \
+                --max-messages {}",
+            recent.len()
+        ),
+    ]);
+    let stdout = String::from_utf8_lossy(&consumed.stdout);
+    eprintln!("KRABKA[test] by_duration share-consumer stdout:\n{stdout}");
+
+    for v in recent {
+        assert!(
+            stdout.contains(v),
+            "record inside the by_duration window must be delivered: {v:?}; got:\n{stdout}",
+        );
+    }
+    for v in stale {
+        assert!(
+            !stdout.contains(v),
+            "record older than the by_duration window must not be delivered: {v:?}; got:\n{stdout}",
+        );
+    }
+}
+
+/// The default strategy is `latest`: a fresh share group never sees the
+/// records produced before its first fetch.
+///
+/// The group config is left untouched, so the broker's own default decides.
+/// After the consumer's idle-timeout exit, `kafka-share-groups.sh --describe
+/// --state` must still report the group, which is what proves the consumer
+/// joined and fetched rather than failing to connect.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Docker"]
+async fn jvm_share_consumer_defaults_to_latest() {
+    let bootstrap = bootstrap_addr();
+    let (broker, _dir) = start_host_broker().await;
+    let topic = "kip932-jvm-latest";
+    let group = "jvm-share-glatest";
+    let values = ["latest-alpha", "latest-bravo"];
+
+    let client = connect().await;
+    let tid = create_topic(&broker, &client, topic).await;
+    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    produce(&client, topic, tid, &values).await;
+
+    let consumed = docker_run(&[
+        "bash",
+        "-c",
+        &format!(
+            "{SHARE_CONSUMER} \
+                --bootstrap-server {bootstrap} \
+                --topic {topic} \
+                --group {group} \
+                --timeout-ms 15000"
+        ),
+    ]);
+    let stdout = String::from_utf8_lossy(&consumed.stdout);
+    eprintln!("KRABKA[test] default-latest share-consumer stdout:\n{stdout}");
+    for v in values {
+        assert!(
+            !stdout.contains(v),
+            "a `latest` share group must not read a record produced before it joined: {v:?}; \
+             got:\n{stdout}",
+        );
+    }
+
+    let state = docker_run(&[
+        "bash",
+        "-c",
+        &format!(
+            "{SHARE_GROUPS} --bootstrap-server {bootstrap} --describe --state --group {group}"
+        ),
+    ]);
+    let state_out = String::from_utf8_lossy(&state.stdout);
+    assert!(
+        state_out.contains(group),
+        "the share group must be registered, or the empty stdout above proves nothing; got:\n\
+         {state_out}\nstderr:\n{}",
+        String::from_utf8_lossy(&state.stderr),
     );
 }

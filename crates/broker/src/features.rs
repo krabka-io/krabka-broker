@@ -5,6 +5,11 @@
 //! lives here because it returns broker error codes.
 
 use krabka_metadata::MetadataImage;
+/// The `eligible.leader.replicas.version` feature name (KIP-966). It gates the
+/// controller's ELR bookkeeping, which `ElrPublisher::extend` reads with
+/// `feature_enabled`, and `UpdateFeatures` clears the published state when it
+/// is finalized back to 0.
+pub(crate) use krabka_metadata::metadata_version::ELR_VERSION_FEATURE as ELR_VERSION;
 pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_FEATURE as METADATA_VERSION;
 // Re-exported for `ApiVersions` tests / range-bound assertions; consumed only
 // from `#[cfg(test)]` modules, so the non-test lib target sees them as unused.

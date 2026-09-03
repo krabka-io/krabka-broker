@@ -46,7 +46,6 @@ const KAFKA_IMAGE_NEXT_GEN: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 /// console consumer subscribes with `SubscriptionPattern` when
 /// `group.protocol=consumer`, so `--include` reaches the broker as the
 /// heartbeat's `SubscribedTopicRegex` instead of being compiled client-side.
-const KAFKA_IMAGE_REGEX: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 const KAFKA_IMAGE_CLASSIC: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 
 async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
@@ -448,47 +447,16 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
     drop(broker);
 }
 
-/// A `SubscribedTopicRegex` that does not compile must FAIL the heartbeat.
-///
-/// Kafka's `GroupMetadataManager.throwIfRegularExpressionIsInvalid` compiles
-/// the pattern with `com.google.re2j.Pattern.compile` and answers
-/// `INVALID_REGULAR_EXPRESSION` (128) before it writes any member record, so
-/// the JVM client raises `InvalidRegularExpressionException` and exits. The
-/// failure mode this pins is the opposite one: admitting the member with error
-/// code `NONE` and never assigning it a partition, which leaves the consumer
-/// sitting on an empty assignment until its `--timeout-ms` expires with no
-/// diagnostic at all.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
-async fn jvm_kip848_invalid_subscription_regex_is_rejected() {
-    let bootstrap = bootstrap_addr();
-    let (_broker, _dir) = start_host_broker().await;
-    create_topic("kip848-badregex", 1);
-
-    // `(` is an unbalanced group: invalid under RE2J and under Rust `regex`.
-    let out = docker_run(
-        KAFKA_IMAGE_REGEX,
-        &[
-            "bash",
-            "-c",
-            &format!(
-                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --include '(' --group g-badregex --consumer-property group.protocol=consumer --from-beginning --timeout-ms 20000"
-            ),
-        ],
-    );
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-
-    assert!(
-        combined.contains("InvalidRegularExpressionException")
-            || combined.contains("is not a valid regular expression"),
-        "expected the client to surface INVALID_REGULAR_EXPRESSION, got: {combined}"
-    );
-    assert!(
-        !out.status.success(),
-        "the consumer must fail, not idle on an empty assignment: {combined}"
-    );
-}
+// A `SubscribedTopicRegex` that does not compile is answered
+// `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, but
+// there is no JVM-lane case for it: no stock JVM client sends an invalid
+// pattern to the broker. `KafkaConsumer.subscribe(Pattern)` and
+// `kafka-console-consumer --include` compile it locally with
+// `java.util.regex`, so `apache/kafka:4.3.1` fails inside
+// `ConsoleConsumer$ConsumerWrapper` with `PatternSyntaxException: Unclosed
+// group` before opening a connection. Only a compiled 4.x application using
+// the `SubscriptionPattern` overload sends the string through, and no image
+// here carries both a JDK and the 4.x client jars. The broker behaviour is
+// pinned over the wire instead, by
+// `consumer_group_next_gen::an_invalid_subscribed_topic_regex_fails_the_heartbeat`,
+// and in `coordinator::unified::actor::member_state`'s unit tests.

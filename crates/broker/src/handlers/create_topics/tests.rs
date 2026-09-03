@@ -10,7 +10,7 @@ use krabka_protocol::{
     UnknownTaggedFields,
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
+        create_topics_response::{CreatableTopicConfigs, CreateTopicsResponse},
     },
 };
 use krabka_security::Principal;
@@ -22,6 +22,51 @@ use crate::{
 };
 
 const VERSION: i16 = 7;
+
+/// `ConfigSource.DYNAMIC_TOPIC_CONFIG`, the source a value the create request
+/// carried reports.
+const DYNAMIC_TOPIC_CONFIG: i8 = 1;
+
+/// `ConfigSource.DEFAULT_CONFIG`, the source an untouched key reports.
+const DEFAULT_CONFIG: i8 = 5;
+
+/// The KIP-525 configs list a v5+ row carries for a topic created with
+/// `overrides` on a cluster that holds no dynamic defaults.
+///
+/// Every topic-scope key is in it, so spelling the list out row by row would
+/// transcribe the registry rather than say anything about the handler. What
+/// this states instead is the layering the response must show: a key the
+/// request set reads its value at `DYNAMIC_TOPIC_CONFIG`, every other key
+/// reads the built-in default at `DEFAULT_CONFIG`, a sensitive key's value is
+/// withheld, and the list is sorted by name.
+fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
+    use crate::config_keys::registry::{self, ConfigScope};
+
+    let mut configs: Vec<CreatableTopicConfigs> = registry::keys_in(ConfigScope::Topic)
+        .map(|row| {
+            let stored = overrides
+                .iter()
+                .find(|(key, _)| *key == row.name)
+                .map(|(_, value)| *value);
+            let (value, config_source) = stored.map_or((row.default, DEFAULT_CONFIG), |value| {
+                (Some(value), DYNAMIC_TOPIC_CONFIG)
+            });
+            CreatableTopicConfigs {
+                name: row.name.to_owned(),
+                value: (!row.is_sensitive())
+                    .then_some(value)
+                    .flatten()
+                    .map(str::to_owned),
+                read_only: row.read_only,
+                config_source,
+                is_sensitive: row.is_sensitive(),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+        })
+        .collect();
+    configs.sort_by(|left, right| left.name.cmp(&right.name));
+    configs
+}
 
 fn topic(name: &str, partitions: i32, rf: i16) -> CreatableTopic {
     CreatableTopic {
@@ -229,7 +274,7 @@ async fn handle_success_persists_topic_config_and_success_fields() {
             error_message: None,
             num_partitions: 2,
             replication_factor: 1,
-            configs: Some(Vec::new()),
+            configs: Some(expected_configs(&[("retention.ms", "60000")])),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         }],
@@ -411,7 +456,11 @@ async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
             error_message: None,
             num_partitions: 1,
             replication_factor: 1,
-            configs: Some(Vec::new()),
+            configs: Some(expected_configs(&[
+                ("delivery.mode", "scheduled"),
+                ("delivery.max.delay.ms", "-1"),
+                ("delivery.schedule.monotonic", "true"),
+            ])),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         }],
@@ -465,7 +514,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
             error_message: None,
             num_partitions: 1,
             replication_factor: 1,
-            configs: Some(Vec::new()),
+            configs: Some(expected_configs(&[("krabka.diskless", "true")])),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         }],
@@ -624,7 +673,7 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
             error_message: None,
             num_partitions: 5,
             replication_factor: 1,
-            configs: Some(Vec::new()),
+            configs: Some(expected_configs(&[])),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         }],
@@ -643,5 +692,189 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
         ..Default::default()
     };
     assert!(rejected == expected);
+    broker_handle.shutdown().await;
+}
+
+/// An authorizer that allows everything but `DescribeConfigs`, the operation
+/// KIP-525 hangs the configs disclosure on.
+#[derive(Debug)]
+struct DenyDescribeConfigs;
+
+impl crate::authorizer::Authorizer for DenyDescribeConfigs {
+    fn authorize(
+        &self,
+        _source: &dyn krabka_authz::AclSource,
+        req: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        if req.operation == krabka_metadata::AclOperation::DescribeConfigs {
+            crate::authorizer::AuthorizationResult::Deny
+        } else {
+            crate::authorizer::AuthorizationResult::Allow
+        }
+    }
+}
+
+/// KIP-525: the two layers a created topic's configs list distinguishes. The
+/// whole-list expectations elsewhere in this file are built from the registry,
+/// so this case names the two rows the layering turns on and their values.
+#[tokio::test]
+async fn created_topic_configs_separate_a_request_value_from_an_inherited_default() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let req = request(vec![topic_with_config("effective")]);
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    let configs = resp.topics[0].configs.clone().expect("v5+ configs list");
+    let entry = |name: &str| {
+        configs
+            .iter()
+            .find(|entry| entry.name == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} in the configs list"))
+    };
+    // The value this very request carried, at DYNAMIC_TOPIC_CONFIG (1).
+    let expected_retention = CreatableTopicConfigs {
+        name: "retention.ms".into(),
+        value: Some("60000".into()),
+        read_only: false,
+        config_source: DYNAMIC_TOPIC_CONFIG,
+        is_sensitive: false,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    check!(entry("retention.ms") == expected_retention);
+    // A key the request never mentioned, at DEFAULT_CONFIG (5).
+    let expected_cleanup = CreatableTopicConfigs {
+        name: "cleanup.policy".into(),
+        value: Some("delete".into()),
+        read_only: false,
+        config_source: DEFAULT_CONFIG,
+        is_sensitive: false,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    check!(entry("cleanup.policy") == expected_cleanup);
+    check!(resp.topics[0].topic_config_error_code == 0);
+    broker_handle.shutdown().await;
+}
+
+/// The list a `CreateTopics` row carries is the list `DescribeConfigs`
+/// answers for the same topic. A client that reads
+/// `createTopics(...).config(topic)` instead of issuing a follow-up
+/// `DescribeConfigs` -- Terraform's `kafka_topic`, Connect's `TopicAdmin`,
+/// Streams' `InternalTopicManager` -- must see no difference.
+#[tokio::test]
+async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let req = request(vec![topic_with_config("mirrored")]);
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    let image = broker_handle.controller_image_for_test();
+    let described: Vec<CreatableTopicConfigs> =
+        crate::handlers::describe_configs::effective_topic_configs(&image, "mirrored")
+            .into_iter()
+            .map(|entry| CreatableTopicConfigs {
+                name: entry.name,
+                value: entry.value,
+                read_only: entry.read_only,
+                config_source: entry.config_source,
+                is_sensitive: entry.is_sensitive,
+                ..Default::default()
+            })
+            .collect();
+    assert!(resp.topics[0].configs.clone().expect("configs") == described);
+    broker_handle.shutdown().await;
+}
+
+/// KIP-525: a principal that may create a topic but may not describe its
+/// configs still gets the topic. Kafka withholds only the disclosure -- an
+/// empty list, `TOPIC_AUTHORIZATION_FAILED` on `topicConfigErrorCode`, and
+/// neither the partition count nor the replication factor, because
+/// `AdminClient` fails every accessor on the row once the code is set.
+#[tokio::test]
+async fn create_without_describe_configs_withholds_the_configs_but_creates_the_topic() {
+    let (broker_handle, _dir) = start_broker(Arc::new(DenyDescribeConfigs)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let req = request(vec![topic_with_config("undescribable")]);
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    let expected = CreateTopicsResponse {
+        throttle_time_ms: 0,
+        topics: vec![CreatableTopicResult {
+            name: "undescribable".into(),
+            topic_id: resp.topics[0].topic_id,
+            error_code: codes::NONE,
+            error_message: None,
+            num_partitions: -1,
+            replication_factor: -1,
+            configs: Some(Vec::new()),
+            topic_config_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+    // The create itself went through: only the disclosure was withheld.
+    let image = broker_handle.controller_image_for_test();
+    assert!(image.topic("undescribable").is_some());
+    broker_handle.shutdown().await;
+}
+
+/// `configs` and `topicConfigErrorCode` arrived in v5, so a v4 response
+/// carries neither and encodes as it always did. The handler skips the
+/// `DescribeConfigs` check there too: nothing it decides can reach the wire.
+#[tokio::test]
+async fn v4_response_encodes_without_the_kip_525_fields() {
+    const V4: i16 = 4;
+
+    let (broker_handle, _dir) = start_broker(Arc::new(DenyDescribeConfigs)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let req = request(vec![topic_with_config("legacy")]);
+    let ctx = test_context(&p, &peer);
+
+    let bytes = handle(
+        &broker,
+        V4,
+        123,
+        &crate::test_support::encode_request(&req, V4),
+        &ctx,
+    )
+    .await
+    .expect("handle");
+
+    let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, V4);
+    let expected = CreateTopicsResponse {
+        throttle_time_ms: 0,
+        topics: vec![CreatableTopicResult {
+            name: "legacy".into(),
+            // v4 carries no topic id, no configs and no config error code.
+            topic_id: ProtoUuid([0; 16]),
+            error_code: codes::NONE,
+            error_message: None,
+            num_partitions: -1,
+            replication_factor: -1,
+            configs: None,
+            topic_config_error_code: 0,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+    assert!(
+        broker_handle
+            .controller_image_for_test()
+            .topic("legacy")
+            .is_some()
+    );
     broker_handle.shutdown().await;
 }

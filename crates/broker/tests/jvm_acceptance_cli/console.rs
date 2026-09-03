@@ -174,3 +174,136 @@ async fn rust_producer_to_console_consumer() {
 
     broker.shutdown().await;
 }
+
+/// The JVM tools read a `message.timestamp.type=LogAppendTime` topic as a
+/// log-append-time topic: `kafka-console-consumer --property
+/// print.timestamp=true` prints `LogAppendTime:<ms>` rather than
+/// `CreateTime:<ms>`, and `GetOffsetShell --time <that ms>` resolves the stamp
+/// back to the batch's offset.
+///
+/// The printed prefix is the claim this case exists for. It comes from
+/// `ConsumerRecord.timestampType()`, which the JVM client reads out of the
+/// batch's attribute bit — the one the broker patched at append. A broker that
+/// answered the right `logAppendTimeMs` in the produce response but left the
+/// stored bit alone still prints `CreateTime` here, and no in-process test of
+/// the response row can see that.
+///
+/// The `--time` lookup is the second half: Kafka builds the time index from
+/// the rewritten `maxTimestamp`, so `offsetsForTimes` on such a topic answers
+/// in append time. A broker that stamped the header but indexed the producer's
+/// timestamp passes the print check and fails this one.
+///
+/// This case has never been executed: the machine it was written on has no
+/// working Docker daemon. Run it with
+/// `cargo test -p krabka-broker --test jvm_acceptance_cli -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn console_consumer_prints_log_append_time() {
+    const TOPIC: &str = "krabka-log-append-time";
+
+    let (broker, _dir) = start_host_broker().await;
+    nc_check_connectivity();
+
+    docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--create",
+        "--if-not-exists",
+        "--topic",
+        TOPIC,
+        "--partitions",
+        "1",
+        "--replication-factor",
+        "1",
+        "--config",
+        "message.timestamp.type=LogAppendTime",
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+
+    let mut child = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-i",
+            "--add-host=host.docker.internal:host-gateway",
+            KAFKA_IMAGE,
+            "kafka-console-producer",
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--topic",
+            TOPIC,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn producer");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(b"stamped\n")
+        .expect("write stdin");
+    drop(child.stdin.take());
+    let producer_out = child.wait_with_output().expect("wait producer");
+    assert!(
+        producer_out.status.success(),
+        "producer failed: {}",
+        String::from_utf8_lossy(&producer_out.stderr)
+    );
+
+    let consumer_out = docker_run_kafka_tool(&[
+        "kafka-console-consumer",
+        "--bootstrap-server",
+        broker0_advertised(),
+        "--topic",
+        TOPIC,
+        "--partition",
+        "0",
+        "--from-beginning",
+        "--max-messages",
+        "1",
+        "--timeout-ms",
+        "20000",
+        "--property",
+        "print.timestamp=true",
+    ]);
+    let printed = String::from_utf8_lossy(&consumer_out.stdout);
+    // The default formatter prints `<timestampType>:<ms>\t<value>`.
+    let line = printed
+        .lines()
+        .find(|line| line.contains("stamped"))
+        .unwrap_or_else(|| panic!("no record printed: {printed:?}"));
+    assert!(
+        line.starts_with("LogAppendTime:"),
+        "the JVM client must read the stored batch as log-append time: {line:?}"
+    );
+    let stamp: i64 = line
+        .trim_start_matches("LogAppendTime:")
+        .split('\t')
+        .next()
+        .expect("a timestamp before the tab")
+        .trim()
+        .parse()
+        .expect("the printed stamp is a millisecond clock reading");
+
+    // The stamp resolves back to the batch it was written into, so the time
+    // index carries append time and not the producer's own timestamp.
+    let offsets_out = docker_run_kafka_tool(&[
+        "kafka-run-class",
+        "kafka.tools.GetOffsetShell",
+        "--broker-list",
+        broker0_advertised(),
+        "--topic",
+        TOPIC,
+        "--time",
+        &stamp.to_string(),
+    ]);
+    let resolved = String::from_utf8_lossy(&offsets_out.stdout);
+    assert!(
+        resolved.contains(&format!("{TOPIC}:0:0")),
+        "the stamp must resolve to offset 0: {resolved:?}"
+    );
+
+    broker.shutdown().await;
+}

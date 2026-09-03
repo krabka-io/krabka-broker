@@ -536,7 +536,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("0"),
-            "How long a record is safe from the log cleaner after it is written. The cleaner leaves a partition whose newest uncompacted record is younger than this.",
+            "How long a record is safe from the log cleaner after it is written. A pass stops at the first uncompacted segment younger than this and compacts what lies before it. Must not exceed max.compaction.lag.ms.",
             ValueCheck::I64AtLeast(0),
         )
     },
@@ -547,7 +547,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("9223372036854775807"),
-            "How long a record may stay uncompacted before the cleaner runs whatever the dirty ratio says.",
+            "How long a record may stay uncompacted before the cleaner runs whatever the dirty ratio says. Must not be below min.compaction.lag.ms.",
             ValueCheck::I64AtLeast(1),
         )
     },
@@ -581,7 +581,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Long,
             Some("9223372036854775807"),
             "Records between forced fsyncs. Stored and reported only: krabka manages fsync from its own durability settings.",
-            ValueCheck::I64AtLeast(0),
+            ValueCheck::I64AtLeast(1),
         )
     },
     ConfigKey {
@@ -619,7 +619,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         ConfigScope::Topic,
         ConfigType::String,
         Some(MESSAGE_TIMESTAMP_TYPE_CREATE),
-        "`CreateTime` stores the producer's own timestamps; `LogAppendTime` stores the broker's clock at append time. The value reaches the partition's log configuration; the append-path stamping it selects is not implemented yet.",
+        "`CreateTime` stores the producer's own timestamps; `LogAppendTime` makes the broker stamp its own clock into every batch at append and report it as the produce response's logAppendTimeMs. It cannot be combined with delivery.mode=scheduled, whose activation time is the field the stamp overwrites.",
         ValueCheck::OneOf(MESSAGE_TIMESTAMP_TYPE_VALUES),
     ),
     ConfigKey {
@@ -629,7 +629,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("9223372036854775807"),
-            "How far ahead of the broker's clock a producer timestamp may sit. Stored and reported only: krabka's produce path does not yet refuse a batch outside the window.",
+            "How far ahead of the broker's clock a producer timestamp may sit. A batch holding a record past the window is refused with INVALID_TIMESTAMP. The default of Long.MAX_VALUE removes the bound, and a LogAppendTime topic ignores it, as in Kafka.",
             ValueCheck::I64AtLeast(0),
         )
     },
@@ -640,7 +640,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("9223372036854775807"),
-            "How far behind the broker's clock a producer timestamp may sit. Stored and reported only: krabka's produce path does not yet refuse a batch outside the window.",
+            "How far behind the broker's clock a producer timestamp may sit. A batch holding a record before the window is refused with INVALID_TIMESTAMP. The default of Long.MAX_VALUE removes the bound, and a LogAppendTime topic ignores it, as in Kafka.",
             ValueCheck::I64AtLeast(0),
         )
     },
@@ -686,7 +686,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::String,
             None,
-            "Eligible-leader-replica state of the topic's partitions, one `partition:elr:last-known-elr` group per partition that has any. Only the controller's ISR transitions write it, and `kafka-topics --describe` reads it.",
+            "Eligible-leader-replica state of the topic's partitions, one `partition:elr:last-known-elr` group per partition that has any. Only the controller's ISR transitions write it, and only while `eligible.leader.replicas.version` is finalized at 1; `kafka-topics --describe` reads it, and a downgrade of that feature to 0 drops it.",
             ValueCheck::NotAltered,
         )
     },
@@ -994,7 +994,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Group,
             ConfigType::String,
             None,
-            "Where a share group starts when it has no committed offset. krabka accepts `earliest` alone; Kafka's `latest` and `by_duration:<duration>` are refused with INVALID_CONFIG until the share coordinator implements them.",
+            "Where a share partition starts when the share coordinator holds no state for it: `latest` (the default, the high watermark), `earliest` (the log start offset), or `by_duration:<PnDTnHnMn.nS>` (the first record at or after `now - duration`, and the high watermark when no record qualifies). A negative duration is refused with INVALID_CONFIG.",
             ValueCheck::Parsed,
         )
     },

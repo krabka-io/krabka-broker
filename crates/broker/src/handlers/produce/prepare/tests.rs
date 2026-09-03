@@ -35,6 +35,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
     let error = prepare_batch(
         PartitionPayload::Slice(wire.clone()),
         None,
+        TimestampPolicy::default(),
         &topic(),
         &metrics,
         policy,
@@ -45,6 +46,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
     let error = prepare_batch(
         PartitionPayload::Slice(wire.clone()),
         Some(CompressionType::Zstd),
+        TimestampPolicy::default(),
         &topic(),
         &metrics,
         policy,
@@ -55,6 +57,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         prepare_batch(
             PartitionPayload::Slice(wire),
             Some(CompressionType::Zstd),
+            TimestampPolicy::default(),
             &topic(),
             &metrics,
             RecordDecompressionPolicy::default(),
@@ -92,3 +95,13 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
 // the v2 batch and decides verbatim-vs-owned; `build_produce_data` maps the
 // result to the writer's `ProduceData`, stamping the leader epoch.
 mod verbatim;
+
+// ── the message.timestamp.{before,after}.max.ms window ───────────────────
+//
+// Kafka's `LogValidator.validateTimestamp` walks every record of a batch and
+// fails the whole batch with `INVALID_TIMESTAMP` as soon as one record's
+// timestamp falls outside the window around the broker's clock. These cases
+// drive that through `prepare_batch` on both append shapes: the verbatim
+// passthrough, which reads the timestamps out of the producer's own bytes, and
+// the owned fallback, which reads them off the decoded batch.
+mod timestamp_window;

@@ -20,6 +20,16 @@
 //! `bench_ratio` prints the owned-over-verbatim and legacy-over-verbatim
 //! ratios per shape, so a run answers "what does the fallback cost" without
 //! reading the criterion report.
+//!
+//! `bench_produce_acks_all` measures the other axis: one Produce request
+//! covering many partitions, at `acks=1` and at `acks=-1`, end to end against
+//! a booted broker. The three shapes above stop at the log append and say
+//! nothing about what a request pays per partition around it. The `acks=-1`
+//! arm is the one that used to grow with the partition count: the handler
+//! awaited each partition's high-watermark gate inline, before the next
+//! partition was appended, where Kafka registers one `DelayedProduce` over the
+//! whole request. The difference against the `acks=1` arm at the same
+//! partition count is what that gate costs now.
 
 use std::{
     cell::RefCell,
@@ -31,12 +41,24 @@ use assert2::assert;
 use bytes::{Bytes, BytesMut};
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use krabka_broker::{
+    Broker, BrokerConfig, BrokerHandle,
     metrics::BrokerMetrics,
-    produce_hot_path::{HotPathSettings, PathChoice, ProducePath, append_one_batch},
+    produce_hot_path::{
+        HotPathSettings, PathChoice, ProducePath, TimestampPolicy, append_one_batch,
+    },
 };
+use krabka_client_core::Client;
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_log::{Log, LogConfig};
-use krabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::{
+    owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+    },
+    primitives::uuid::Uuid as WireUuid,
+    records::{Record, RecordBatch},
+};
 use krabka_records_legacy::Magic;
 use tempfile::TempDir;
 
@@ -75,6 +97,9 @@ fn settings(metrics: &BrokerMetrics) -> HotPathSettings<'_> {
         // Producer pass-through: the topic asks for no recompression, which is
         // the configuration the verbatim path needs.
         topic_compression: None,
+        // Kafka's timestamp defaults: the producer's own clock, and neither
+        // window bounded, so no batch pays for a walk over record timestamps.
+        timestamps: TimestampPolicy::default(),
         decompression_policy: RecordDecompressionPolicy::default(),
         metrics,
         leader_epoch: LEADER_EPOCH,
@@ -324,5 +349,160 @@ fn bench_ratio(_c: &mut Criterion) {
     println!();
 }
 
-criterion_group!(benches, bench_produce_hot_path, bench_ratio);
+/// Partition counts one `acks=-1` request covers: a single partition, a
+/// modest producer's spread, and the wide request whose per-partition cost is
+/// the thing worth watching.
+const ACKS_ALL_PARTITIONS: [i32; 3] = [1, 8, 32];
+
+/// The topic the `acks=-1` arm produces to, and the partition count it is
+/// created with, which is the largest of [`ACKS_ALL_PARTITIONS`].
+const ACKS_ALL_TOPIC: &str = "bench-acks-all";
+
+/// A booted broker, a connected client, and the topic's id, held together for
+/// the lifetime of the `acks=-1` arm. The temp dir is dropped last, with the
+/// log directory in it.
+struct BenchBroker {
+    broker: BrokerHandle,
+    client: Client,
+    topic_id: WireUuid,
+    _dir: TempDir,
+}
+
+/// Boot a broker with a single-replica topic of the widest partition count.
+///
+/// Replication factor 1 on purpose: this arm measures what the handler does
+/// per partition around the gate, not how long a follower takes. On rf=1 the
+/// high watermark is already at the log end when the gate reads it, so what
+/// the `acks=-1` arm times is the gate machinery itself.
+async fn boot_bench_broker() -> BenchBroker {
+    let dir = TempDir::new().expect("temp dir for the broker log directory");
+    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
+        .await
+        .expect("boot a broker");
+    let bootstrap = broker.listen_addr().to_string();
+    let client = Client::builder()
+        .bootstrap(bootstrap)
+        .build()
+        .await
+        .expect("connect to the broker");
+    let widest = *ACKS_ALL_PARTITIONS
+        .iter()
+        .max()
+        .expect("the partition counts are not empty");
+    let created = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: ACKS_ALL_TOPIC.into(),
+                num_partitions: widest,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    assert!(created.topics[0].error_code == 0);
+    for index in 0..widest {
+        broker
+            .wait_until_partition_present(ACKS_ALL_TOPIC, index)
+            .await;
+    }
+    // Produce v13 carries only the topic id, so resolve it once.
+    let metadata = client
+        .send(MetadataRequest {
+            topics: Some(vec![MetadataRequestTopic {
+                name: Some(ACKS_ALL_TOPIC.into()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        })
+        .await
+        .expect("Metadata for the topic id");
+    let topic_id = metadata
+        .topics
+        .iter()
+        .find(|topic| topic.name.as_deref() == Some(ACKS_ALL_TOPIC))
+        .map(|topic| topic.topic_id)
+        .expect("the created topic is in the metadata");
+    BenchBroker {
+        broker,
+        client,
+        topic_id,
+        _dir: dir,
+    }
+}
+
+/// Send one Produce covering `partitions` partitions and check every row.
+async fn produce_across_partitions(
+    fixture: &BenchBroker,
+    partitions: i32,
+    acks: i16,
+    wire: &Bytes,
+) {
+    let response = fixture
+        .client
+        .send(ProduceRequest {
+            acks,
+            timeout_ms: 5_000,
+            topic_data: vec![TopicProduceData {
+                name: ACKS_ALL_TOPIC.into(),
+                topic_id: fixture.topic_id,
+                partition_data: (0..partitions)
+                    .map(|index| PartitionProduceData {
+                        index,
+                        records: Some(krabka_protocol::records::RecordsPayload::Raw(wire.clone())),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("Produce");
+    for row in &response.responses[0].partition_responses {
+        assert!(row.error_code == 0);
+    }
+}
+
+/// One Produce request across a sweep of partition counts, at `acks=1` and at
+/// `acks=-1`.
+fn bench_produce_acks_all(c: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("build a multi-threaded runtime");
+    let fixture = runtime.block_on(boot_bench_broker());
+    // One modest batch per partition: the request's partition count is the
+    // variable, so the bytes per partition stay small and constant.
+    let wire = v2_records(10, 128);
+
+    let mut group = c.benchmark_group("broker/produce_acks");
+    for partitions in ACKS_ALL_PARTITIONS {
+        for (label, acks) in [("acks1", 1_i16), ("acks_all", -1_i16)] {
+            let per_request = u64::try_from(wire.len()).expect("batch fits u64")
+                * u64::try_from(partitions).expect("the partition count is positive");
+            group.throughput(Throughput::Bytes(per_request));
+            group.bench_function(format!("{partitions}part/{label}"), |b| {
+                // `block_on` rather than criterion's `to_async`, which needs
+                // its `async_tokio` feature: the request is one await, and the
+                // runtime is the same one the fixture booted on.
+                b.iter(|| {
+                    runtime.block_on(produce_across_partitions(&fixture, partitions, acks, &wire));
+                });
+            });
+        }
+    }
+    group.finish();
+
+    runtime.block_on(fixture.broker.shutdown());
+}
+
+criterion_group!(
+    benches,
+    bench_produce_hot_path,
+    bench_produce_acks_all,
+    bench_ratio
+);
 criterion_main!(benches);

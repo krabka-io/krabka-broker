@@ -564,3 +564,175 @@ async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
         h.shutdown().await;
     }
 }
+
+/// Partitions the overlapped-wait case produces to in one request. Wide
+/// enough that N sequential `timeout.ms` waits and one overlapped wait are
+/// far apart, and small enough to create and lead on a two-broker cluster.
+const OVERLAP_PARTITIONS: i32 = 8;
+
+/// The `timeout.ms` the overlapped-wait case sends. One of these bounds the
+/// whole request; one per waiting partition would bound nothing useful.
+const OVERLAP_TIMEOUT_MS: i32 = 1_000;
+
+async fn create_topic_with_partitions(
+    broker: &BrokerHandle,
+    bootstrap: &str,
+    name: &str,
+    partitions: i32,
+    rf: i16,
+) {
+    let client = Client::builder()
+        .bootstrap(bootstrap.to_string())
+        .build()
+        .await
+        .unwrap();
+    let resp = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: name.into(),
+                num_partitions: partitions,
+                replication_factor: rf,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    assert!(
+        resp.topics[0].error_code == 0,
+        "CreateTopics failed: {resp:?}"
+    );
+    for index in 0..partitions {
+        broker.wait_until_partition_present(name, index).await;
+    }
+}
+
+/// One Produce carrying every partition of `topic`, returning each row's
+/// `(index, error_code)`.
+async fn produce_every_partition(
+    bootstrap: &str,
+    topic: &str,
+    partitions: i32,
+    acks: i16,
+    timeout_ms: i32,
+) -> Vec<(i32, i16)> {
+    let client = Client::builder()
+        .bootstrap(bootstrap.to_string())
+        .build()
+        .await
+        .unwrap();
+    let topic_id = topic_id_for(&client, topic).await;
+    let resp = client
+        .send(ProduceRequest {
+            acks,
+            timeout_ms,
+            topic_data: vec![TopicProduceData {
+                name: topic.into(),
+                topic_id,
+                partition_data: (0..partitions)
+                    .map(|index| PartitionProduceData {
+                        index,
+                        records: Some(record_batch_with_values(&["a"]).into()),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("Produce");
+    resp.responses[0]
+        .partition_responses
+        .iter()
+        .map(|row| (row.index, row.error_code))
+        .collect()
+}
+
+/// One `acks=-1` request to many partitions waits for the high watermark once,
+/// not once per partition.
+///
+/// Kafka appends every partition of a request to the local log and then
+/// registers a single `DelayedProduce` covering all of them with the request's
+/// `timeout.ms`, so the replication waits overlap and one timeout bounds the
+/// request. A handler that instead awaits each partition's watermark inline,
+/// before the next partition is appended, turns one round trip into N and one
+/// timeout into N of them.
+///
+/// The scenario holds the follower's fetch back for good: the cluster is two
+/// brokers, and the second one is stopped. Its replicas can never acknowledge,
+/// and the surviving broker cannot shrink the ISR either, because a two-voter
+/// quorum is gone with it. Every partition the survivor leads therefore waits
+/// out the full `timeout.ms` and answers `NOT_ENOUGH_REPLICAS_AFTER_APPEND`,
+/// which is exactly the case where the difference between one wait and N of
+/// them is a wall-clock fact rather than a scheduling detail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
+    support::init_tracing();
+    let mut cluster = support::start_n_node_with_retry(2).await;
+    support::wait_for_all_brokers_registered(&cluster, 2).await;
+    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
+    create_topic_with_partitions(
+        &cluster[0].0,
+        &bootstrap_1,
+        "overlap",
+        OVERLAP_PARTITIONS,
+        2,
+    )
+    .await;
+    // Both replicas in the ISR before the follower goes away, so the wait
+    // below is a follower that stopped acknowledging and not one that never
+    // started.
+    for index in 0..OVERLAP_PARTITIONS {
+        cluster[0].0.wait_until_isr_len("overlap", index, 2).await;
+    }
+
+    let follower = cluster.pop().expect("2nd broker");
+    follower.0.shutdown().await;
+
+    let start = Instant::now();
+    let rows = produce_every_partition(
+        &bootstrap_1,
+        "overlap",
+        OVERLAP_PARTITIONS,
+        -1,
+        OVERLAP_TIMEOUT_MS,
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    // The partitions the surviving broker leads are the ones that appended and
+    // then waited; the rest answer NOT_LEADER_OR_FOLLOWER without waiting at
+    // all. Half the partitions is the round-robin assignment's answer, and the
+    // assertion needs only that several of them waited.
+    let waited = rows
+        .iter()
+        // `NOT_ENOUGH_REPLICAS_AFTER_APPEND` (20): the append is on the
+        // leader's log and the high watermark never reached it.
+        .filter(|(_, code)| *code == 20)
+        .count();
+    check!(i32::try_from(rows.len()) == Ok(OVERLAP_PARTITIONS));
+    check!(
+        waited >= 2,
+        "the surviving broker must lead several partitions for this to measure anything; rows={rows:?}"
+    );
+
+    let one_wait = Duration::from_millis(u64::try_from(OVERLAP_TIMEOUT_MS).unwrap());
+    check!(
+        elapsed >= one_wait,
+        "the gate must actually have waited out the request timeout; took {elapsed:?}"
+    );
+    // Sequential waits would cost `waited` timeouts, so at least two here and
+    // typically four. Two of them is the bound that separates the two shapes
+    // while leaving room for the appends and the client round trip.
+    check!(
+        elapsed < one_wait * 2,
+        "the {waited} acks=-1 waits must overlap: sequential would take about \
+         {waited} x {OVERLAP_TIMEOUT_MS}ms, this took {elapsed:?}"
+    );
+
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+}

@@ -206,7 +206,7 @@ mod tests {
             ("fifth", 4, 500),
         ] {
             let mut b = ts_batch(ts);
-            assert2::assert!(log.append(&mut b).unwrap() == Offset(i));
+            assert2::assert!(log.append(&mut b).unwrap().0 == Offset(i));
         }
         for (name, ts, want) in [
             // before-first → offset 0.

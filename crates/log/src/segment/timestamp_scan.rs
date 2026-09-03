@@ -9,7 +9,7 @@
 use std::ops::ControlFlow;
 
 use krabka_ids::Offset;
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::records::{RecordBatch, TimestampType};
 use krabka_units::prelude::{ByteSize, ByteSizeExt, bytes};
 
 use super::Segment;
@@ -166,7 +166,20 @@ impl Segment {
         }
     }
 
+    /// The `(offset, timestamp)` pair of every record in `batch`, as a reader
+    /// sees them.
+    ///
+    /// Under `CreateTime` a record's timestamp is the batch's `base_timestamp`
+    /// plus its own delta, which is how the v2 format stores it. Under
+    /// `LogAppendTime` every record carries the batch's `max_timestamp`
+    /// instead: the broker stamped that one field and left `base_timestamp`
+    /// and the deltas as the producer wrote them, and Kafka's
+    /// `DefaultRecord.timestamp()` substitutes `maxTimestamp` for the whole
+    /// batch whenever the timestamp-type bit is set. A scan that read the
+    /// deltas on such a batch would answer `ListOffsets` in producer time on a
+    /// topic whose whole point is that it answers in append time.
     fn timestamp_records(batch: &RecordBatch) -> Option<Vec<(Offset, i64)>> {
+        let log_append_time = batch.attributes.timestamp_type() == TimestampType::LogAppendTime;
         batch
             .records
             .iter()
@@ -177,7 +190,16 @@ impl Segment {
                     batch.base_timestamp,
                     record.timestamp_delta,
                 )
-                .map(|(offset, timestamp)| (Offset(offset), timestamp))
+                .map(|(offset, timestamp)| {
+                    (
+                        Offset(offset),
+                        if log_append_time {
+                            batch.max_timestamp
+                        } else {
+                            timestamp
+                        },
+                    )
+                })
             })
             .collect()
     }

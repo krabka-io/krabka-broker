@@ -94,6 +94,13 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         "cleanup.policy=compact",
         "--config",
         "segment.bytes=256",
+        // Kafka's default `min.cleanable.dirty.ratio` is 0.5, so a partition
+        // whose dirty region is a small share of the log earns no pass. This
+        // test produces a handful of records and then waits for a pass, so it
+        // asks for Kafka's own prompt-compaction setting rather than relying
+        // on how the workload happens to divide into segments.
+        "--config",
+        "min.cleanable.dirty.ratio=0.0",
         "--bootstrap-server",
         broker0_advertised(),
     ]);
@@ -108,12 +115,13 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         if let Some(cfg) = broker.partition_log_config_for_test(TOPIC, 0)
             && cfg.cleanup_policy == krabka_log::CleanupPolicy::Compact
             && cfg.segment_size == krabka_units::bytes(256)
+            && cfg.min_cleanable_dirty_ratio == krabka_units::fraction(0.0)
         {
             break;
         }
         assert!(
             std::time::Instant::now() <= cfg_deadline,
-            "cleanup.policy/segment.bytes never propagated within 10s"
+            "cleanup.policy/segment.bytes/min.cleanable.dirty.ratio never propagated within 10s"
         );
         // intentional: bounded poll of the local reconciled LogConfig override;
         // `partition_log_config_for_test` is not surfaced by any awaiter/metric.
@@ -180,28 +188,24 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     );
     eprintln!("KRABKA[test] produced 5 records; waiting for cleaner to compact...");
 
-    // 3. Wait until the cleaner completes at least two compaction passes over
-    //    this partition *after* the records landed (per-partition counter
-    //    bumped once per sweep), so a sweep that was in-flight when the segment
-    //    sealed can't be mistaken for one that saw the new records. This
-    //    guarantees the stale k1 values have been compacted away.
-    let compactions_before = broker
-        .metrics()
-        .log_compactions_total
-        .get_or_create(&krabka_broker::metrics::PartitionLabel {
-            topic: TOPIC.into(),
-            partition: 0,
-        })
-        .get();
+    // 3. Wait for two whole cleaner sweeps to finish after the produce did.
+    //
+    //    One pass is all Kafka's cleaner owes a settled log: it rewrites every
+    //    cleanable sealed segment into one, which leaves nothing dirty behind
+    //    it, so the partition is not due again until something is produced.
+    //    Waiting for a further pass would wait forever, and waiting for a pass
+    //    *after* the produce would too whenever the sweep that ran while the
+    //    producer's JVM was shutting down already did the work.
+    //
+    //    Two sweeps is the sound bound instead: the counter is sampled after
+    //    the producer exited, so the second sweep to finish began after every
+    //    record had landed and saw the whole workload. Whether the pass it
+    //    owed had already run or ran there, the log is deduplicated by the
+    //    time the wait returns, and step 4 is what says so.
+    let sweeps_before = broker.metrics().log_cleaner_runs_total.get();
     broker
-        .wait_for_metrics("partition compacted after produce", |m| {
-            m.log_compactions_total
-                .get_or_create(&krabka_broker::metrics::PartitionLabel {
-                    topic: TOPIC.into(),
-                    partition: 0,
-                })
-                .get()
-                >= compactions_before + 2
+        .wait_for_metrics("two cleaner sweeps after the produce", move |m| {
+            m.log_cleaner_runs_total.get() >= sweeps_before + 2
         })
         .await;
 
@@ -235,6 +239,21 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
             "stale value {stale} still present after compaction; got: {stdout:?}"
         );
     }
+    // The stale values can only be missing because a pass removed them, and
+    // this says the cleaner is what removed them rather than the produce or
+    // the consumer having gone wrong.
+    assert!(
+        broker
+            .metrics()
+            .log_compactions_total
+            .get_or_create(&krabka_broker::metrics::PartitionLabel {
+                topic: TOPIC.into(),
+                partition: 0,
+            })
+            .get()
+            > 0,
+        "the cleaner never compacted this partition"
+    );
 
     broker.shutdown().await;
 }

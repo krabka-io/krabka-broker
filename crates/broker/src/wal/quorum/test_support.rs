@@ -24,7 +24,10 @@ pub(super) fn batch(records: i32) -> RecordBatch {
 pub(super) async fn append_source(
     store: &QuorumWalStore,
     records: i32,
-) -> (Vec<Result<Offset, BrokerError>>, Offset) {
+) -> (
+    Vec<Result<crate::partition::AppendedBatch, BrokerError>>,
+    Offset,
+) {
     crate::partition_writer::run_produce_append_batch(
         store.source.clone(),
         vec![crate::partition::ProduceData::Owned(batch(records))],

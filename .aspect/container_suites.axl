@@ -104,7 +104,16 @@ _FEATURE_RULES = [
         "crates/broker/src/coordinator/unified/replay_streams",
         "crates/broker/src/coordinator/unified/streams_conversion",
         "crates/broker/src/handlers/streams_group",
-    ], ["jvm_streams_groups"]),
+    ], ["jvm_streams_groups", "jvm_streams_app"]),
+    # A distributed Kafka Connect worker backs its config, offset and status
+    # stores with `KafkaBasedLog`: three compacted topics it creates, the end
+    # offsets it reads before it will serve, and the replay from the beginning
+    # that follows. Those two are the broker surfaces the worker will not boot
+    # without, so they are what selects the suite.
+    ([
+        "crates/broker/src/cleaner",
+        "crates/broker/src/handlers/list_offsets",
+    ], ["jvm_connect_distributed"]),
     ([
         "crates/broker/src/features.rs",
         "crates/broker/src/handlers/update_features",

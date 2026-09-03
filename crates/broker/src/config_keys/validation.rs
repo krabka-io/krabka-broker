@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use krabka_log::CleanupPolicy;
 
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE, MIN_CLEANABLE_DIRTY_RATIO, REMOTE_STORAGE_ENABLE,
+    CLEANUP_POLICY, COMPRESSION_TYPE, MAX_COMPACTION_LAG_MS, MESSAGE_TIMESTAMP_TYPE,
+    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
+    REMOTE_STORAGE_ENABLE,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
     diskless::validate_diskless_combination,
     qos::{QOS_TIER, validate_qos_tier},
@@ -115,6 +117,13 @@ pub(crate) fn validate_topic_config_map(
 /// a membership test over the policy list, `compact,delete` is refused beside
 /// `compact`.
 ///
+/// KFC-1 states a third: `message.timestamp.type=LogAppendTime` and
+/// `delivery.mode=scheduled` exclude each other. A scheduled topic reads each
+/// batch's `max_timestamp` as its activation time, and log-append stamping
+/// overwrites exactly that field with the broker's clock at append. The pair
+/// would silently deliver every record at once, and the schedule the producer
+/// wrote would be unrecoverable, because the overwrite destroys it.
+///
 /// The other two are the data-path rules in [`validate_diskless_combination`]:
 /// `krabka.diskless=true` excludes both `remote.storage.enable=true` and
 /// `delivery.mode=scheduled`.
@@ -136,13 +145,53 @@ pub(crate) fn validate_config_combination(
              be deleted without a single delivery"
         ));
     }
+    let log_append_time = overrides
+        .get(MESSAGE_TIMESTAMP_TYPE)
+        .is_some_and(|value| value == MESSAGE_TIMESTAMP_TYPE_LOG_APPEND);
+    if log_append_time && scheduled {
+        return Err(format!(
+            "{MESSAGE_TIMESTAMP_TYPE}={MESSAGE_TIMESTAMP_TYPE_LOG_APPEND} cannot be combined \
+             with {DELIVERY_MODE}={DELIVERY_MODE_SCHEDULED}: a scheduled topic reads a batch's \
+             max timestamp as its activation time, and log-append stamping overwrites that \
+             field with the broker's clock, so every record would come due at once"
+        ));
+    }
     let tiered = overrides
         .get(REMOTE_STORAGE_ENABLE)
         .is_some_and(|enabled| enabled == "true");
     if compacting && tiered {
         return Err(REMOTE_STORAGE_COMPACTED_MESSAGE.to_owned());
     }
+    validate_compaction_lag_order(overrides)?;
     validate_diskless_combination(overrides)
+}
+
+/// Kafka's `LogConfig.validateValues`: the cleaner cannot be told to protect a
+/// record for longer than the deadline that forces it to be compacted.
+///
+/// Each key alone passes its own range check, so the rule belongs here, where
+/// the whole map is in hand. A key the request leaves alone is read at its
+/// registry default, which is what Kafka's `props` carries for an unset key:
+/// `min.compaction.lag.ms` 0 and `max.compaction.lag.ms` `i64::MAX`, so an
+/// alter that sets only one of the two is still checked against the other.
+fn validate_compaction_lag_order(overrides: &BTreeMap<String, String>) -> Result<(), String> {
+    let lag = |name: &str| -> Option<i64> {
+        overrides
+            .get(name)
+            .map(String::as_str)
+            .or_else(|| registry::lookup(ConfigScope::Topic, name).and_then(|row| row.default))
+            .and_then(|value| value.trim().parse::<i64>().ok())
+    };
+    let (Some(min), Some(max)) = (lag(MIN_COMPACTION_LAG_MS), lag(MAX_COMPACTION_LAG_MS)) else {
+        return Ok(());
+    };
+    if min > max {
+        return Err(format!(
+            "conflict topic config setting {MIN_COMPACTION_LAG_MS} ({min}) > \
+             {MAX_COMPACTION_LAG_MS} ({max})"
+        ));
+    }
+    Ok(())
 }
 
 /// Parse Kafka's `cleanup.policy` list into the policy a partition runs under.

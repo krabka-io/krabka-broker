@@ -118,6 +118,21 @@ pub enum DeliveryPolicy {
     Scheduled,
 }
 
+/// Whether a scheduled partition's delivery times must not run backwards.
+///
+/// KFC-1's `delivery.schedule.monotonic`. It is an enum rather than a `bool`
+/// because it is meaningless outside [`DeliveryPolicy::Scheduled`], and the
+/// two names say at the call site which rule is in force.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleOrder {
+    /// Accept any delivery time, so a later batch may come due before an
+    /// earlier one. The default, and the only behaviour Kafka has.
+    Unordered,
+    /// Refuse, with `INVALID_TIMESTAMP`, a batch whose delivery time precedes
+    /// the largest delivery time the partition already holds.
+    Monotonic,
+}
+
 /// Tunables for [`Log`](crate::Log) behavior.
 ///
 /// Defaults match Apache Kafka 4.2 for `segment.bytes`, `segment.ms`,
@@ -223,6 +238,18 @@ pub struct LogConfig {
     /// [`DeliveryPolicy::Immediate`]. See [`DeliveryPolicy`].
     pub delivery_policy: DeliveryPolicy,
 
+    /// KFC-1 `delivery.schedule.monotonic`, read only under
+    /// [`DeliveryPolicy::Scheduled`]. See [`ScheduleOrder`].
+    ///
+    /// The check belongs to the log because only the log serializes appends.
+    /// A partition's schedule is a property of what it already holds, so a
+    /// test that reads it and an append that extends it have to be the same
+    /// critical section: two producers that each pass a check taken before the
+    /// append can still land out of order, and so can two jobs the writer
+    /// batches into one group. Kafka runs its own record-shape rejections in
+    /// the same place, under `UnifiedLog.append`'s lock.
+    pub schedule_order: ScheduleOrder,
+
     /// Declared bound on how far this broker's clock can be from true time.
     /// Default 250 ms. It has an effect only under
     /// [`DeliveryPolicy::Scheduled`].
@@ -269,6 +296,9 @@ impl Default for LogConfig {
             // Scheduled delivery is opt-in per topic; an ordinary topic pays
             // nothing for it.
             delivery_policy: DeliveryPolicy::Immediate,
+            // Kafka has no such setting, and a scheduled topic accepts a
+            // schedule that runs backwards unless an operator asks otherwise.
+            schedule_order: ScheduleOrder::Unordered,
             delivery_clock_uncertainty: DEFAULT_DELIVERY_CLOCK_UNCERTAINTY,
         }
     }
@@ -307,6 +337,7 @@ mod tests {
                     local_retention_size: None,
                     delete_retention: secs(24 * 60 * 60),
                     delivery_policy: DeliveryPolicy::Immediate,
+                    schedule_order: ScheduleOrder::Unordered,
                     delivery_clock_uncertainty: krabka_units::prelude::millis(250),
                 }
         );

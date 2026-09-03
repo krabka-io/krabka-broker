@@ -13,6 +13,13 @@
 //! We then point the bundled JVM admin tool at Krabka and prove it round-trips
 //! the streams-group admin wire path.
 //!
+//! The compiled topology this suite cannot run lives in
+//! `tests/jvm_streams_app.rs`: it builds a real `KafkaStreams` app in the
+//! `cp-kafka:7.5.0` image, which does ship `javac`, and runs it against Krabka
+//! on both the classic protocol and `group.protocol=streams`. This suite stays
+//! the one that reads the KIP-1071 ADMIN wire path off a real
+//! `AdminClient`'s DEBUG log.
+//!
 //! The real `apache-kafka-java` 4.1.0 `AdminClient` drives this flow, read
 //! empirically from its DEBUG wire log:
 //!

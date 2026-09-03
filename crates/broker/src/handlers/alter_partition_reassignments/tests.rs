@@ -166,6 +166,7 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_leader(&broker).await;
+    crate::test_support::finalize_elr_version_on(&broker).await;
     seed_cancellable_partition(&broker).await;
     let principal = Principal {
         name: "admin".into(),

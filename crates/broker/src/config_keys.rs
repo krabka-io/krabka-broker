@@ -123,10 +123,7 @@ pub(crate) use self::{
         parse_remote_list_offsets_timeout, resolve_broker_fenced, resolve_broker_witness,
         resolve_preferred_leader_site, resolve_remote_list_offsets_timeout, witness_node_ids,
     },
-    delivery::{
-        DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,
-        resolve_delivery_schedule_monotonic,
-    },
+    delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay},
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
     message_size::resolve_max_message_bytes,

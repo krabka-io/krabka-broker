@@ -104,6 +104,9 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         ("cp_kafka_7_5_0", "mirror.gcr.io", "confluentinc/cp-kafka", "7.5.0", "sha256:69022c46b7f4166ecf21689ab4c20d030b0a62f2d744c20633abfc7c0040fa80"),
         ("cp_kafka_7_8_8", "mirror.gcr.io", "confluentinc/cp-kafka", "7.8.8", "sha256:a8c5e3c481e58b130e1673e201c364fa23a9c6ff0f6ab017a31c326285822bf3"),
         ("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
+        # kcat has had no release since 1.7.1, so the librdkafka 2.x half of
+        # librdkafka_conformance runs the same program out of Confluent's image.
+        ("cp_kcat_8_2_3", "mirror.gcr.io", "confluentinc/cp-kcat", "8.2.3", "sha256:b700209db34cc98a5a0287cdd49466e18c5736a5c51da02e237064868a3fec57"),
         # jvm_acceptance_tiered's cases back the remote tier with MinIO.
         ("minio", "mirror.gcr.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z", "sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"),
         ("minio_mc", "mirror.gcr.io", "minio/mc", "RELEASE.2025-08-13T08-35-41Z", "sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780"),

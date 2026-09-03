@@ -1,5 +1,6 @@
 //! The per-partition produce pipeline, which runs one partition's records
-//! through every gate in order and returns that partition's response row.
+//! through every gate in order and returns that partition's response row, or
+//! the high-watermark wait that still stands between it and one.
 
 use std::{sync::Arc, time::Duration};
 
@@ -9,7 +10,7 @@ use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{
     INVALID_OFFSET,
-    append::{AppendContext, dispatch_prepared},
+    append::{AppendContext, AppendOutcome, PendingAck, dispatch_prepared},
     delivery::DeliveryGate,
     framing::FramedPartition,
     leadership::{
@@ -17,8 +18,9 @@ use super::{
         replication_target_matches_image, validate_partition_gate,
     },
     prepare::prepare_batch,
-    producer_checks::{handle_duplicate, validate_transactional_produce},
+    producer_checks::{DedupOutcome, handle_duplicate, validate_transactional_produce},
     schema::{SCHEMA_REJECTION_MESSAGE, validate_batch_schemas},
+    topic_settings::TimestampPolicy,
 };
 use crate::{
     codes,
@@ -28,17 +30,25 @@ use crate::{
     schema_validation::{SchemaGate, SchemaValidator},
 };
 
-/// Per-partition produce input, held apart so that the call site can wrap the
-/// work in `tokio_metrics::TaskMonitor` and charge only on-CPU poll time to
-/// `partition_cpu_micros_total`.
+/// Per-partition produce input, held apart so that the call site can time the
+/// work and charge it to `partition_cpu_micros_total`.
 ///
-/// Wall time spent on the writer queue, on the HW gate under `acks=-1`, or on
-/// the txn coordinator does not count toward CPU usage. The work returns the
-/// per-partition response on every path. Only `txn_coordinator.put` errors
-/// propagate with `?`.
+/// The interval the call site measures is this pipeline's own: the gates, the
+/// enqueue, and the writer's answer. The `acks=-1` high-watermark wait is not
+/// in it, because that wait no longer happens here — the pipeline hands it
+/// back and the handler drives every partition's wait together, so charging it
+/// per partition would charge one interval N times over.
+///
+/// The work returns the per-partition response on every path. Only
+/// `txn_coordinator.put` errors propagate with `?`.
 pub(super) struct PartitionInput<'a> {
     pub(super) part_data: FramedPartition,
     pub(super) topic_compression: Option<krabka_compression::CompressionType>,
+    /// The topic's KIP-32 timestamp policy, resolved once per topic:
+    /// `message.timestamp.type` plus the two
+    /// `message.timestamp.{before,after}.max.ms` windows. The default admits
+    /// every timestamp and costs one boolean test per batch.
+    pub(super) timestamps: TimestampPolicy,
     /// The topic's `max.message.bytes`, resolved once per topic, with the
     /// broker's `message.max.bytes` behind it. Every topic has one, so unlike
     /// the gates below it is a value and not an `Option`.
@@ -83,13 +93,41 @@ pub(super) struct PartitionServices<'a> {
     pub(super) schema_validator: Option<&'a Arc<SchemaValidator>>,
 }
 
+/// What one partition's pipeline produced: a finished response row, or the
+/// `acks=-1` high-watermark wait the handler has to drive before there is one.
+pub(super) enum PartitionOutcome {
+    /// The row is complete.
+    Done(PartitionProduceResponse),
+    /// The batch is on this broker's log; the row is complete once the high
+    /// watermark covers it.
+    AwaitingHighWatermark(PendingAck),
+}
+
+impl PartitionOutcome {
+    /// The response row, for a caller that knows this partition finished
+    /// without an `acks=-1` wait.
+    ///
+    /// # Panics
+    /// Panics when the partition is still waiting on the high watermark.
+    #[cfg(test)]
+    pub(super) fn expect_done(self) -> PartitionProduceResponse {
+        match self {
+            Self::Done(response) => response,
+            Self::AwaitingHighWatermark(_) => {
+                panic!("partition is still waiting on the high watermark")
+            }
+        }
+    }
+}
+
 pub(super) async fn process_partition(
     input: PartitionInput<'_>,
     services: PartitionServices<'_>,
-) -> Result<PartitionProduceResponse, BrokerError> {
+) -> Result<PartitionOutcome, BrokerError> {
     let PartitionInput {
         part_data,
         topic_compression,
+        timestamps,
         max_message_bytes,
         delivery,
         schema,
@@ -133,7 +171,7 @@ pub(super) async fn process_partition(
 
     if txn_id_denied {
         out.error_code = codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED;
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
 
     // ── KFC-9 write freeze ───────────────────────────────────────────
@@ -151,13 +189,13 @@ pub(super) async fn process_partition(
     match freeze {
         FreezeMutationResolution::AuthorizationDenied => {
             out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            return Ok(out);
+            return Ok(PartitionOutcome::Done(out));
         }
         FreezeMutationResolution::Frozen(entry) => {
             metrics.record_topic_freeze_rejection(topic_name);
             out.error_code = codes::POLICY_VIOLATION;
             out.error_message = Some(FreezeVerdict::from(entry).error_message());
-            return Ok(out);
+            return Ok(PartitionOutcome::Done(out));
         }
         FreezeMutationResolution::Admit => {}
     }
@@ -184,7 +222,7 @@ pub(super) async fn process_partition(
     if part_data.payload.largest_batch_len() > max_message_bytes.bytes_usize() {
         out.error_code = codes::MESSAGE_TOO_LARGE;
         out.base_offset = INVALID_OFFSET;
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
 
     // Decide verbatim-passthrough vs owned-decode and extract the HEADER
@@ -199,6 +237,7 @@ pub(super) async fn process_partition(
     let prepared = match prepare_batch(
         part_data.payload,
         topic_compression,
+        timestamps,
         &shared_topic,
         metrics,
         record_decompression_policy,
@@ -206,7 +245,7 @@ pub(super) async fn process_partition(
         Ok(p) => p,
         Err(code) => {
             out.error_code = code;
-            return Ok(out);
+            return Ok(PartitionOutcome::Done(out));
         }
     };
 
@@ -232,7 +271,7 @@ pub(super) async fn process_partition(
     {
         out.error_code = codes::MESSAGE_TOO_LARGE;
         out.base_offset = INVALID_OFFSET;
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
 
     // ── KFC-7 schema validation ──────────────────────────────────────
@@ -254,7 +293,7 @@ pub(super) async fn process_partition(
         out.error_code = codes::INVALID_RECORD;
         out.error_message = Some(SCHEMA_REJECTION_MESSAGE.to_owned());
         out.record_errors = rejection;
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
 
     // ── leadership gate (Kafka: only the LEADER accepts Produce) ──────
@@ -299,13 +338,15 @@ pub(super) async fn process_partition(
             if let Some(leader) = error.current_leader {
                 out.current_leader = leader;
             }
-            return Ok(out);
+            return Ok(PartitionOutcome::Done(out));
         }
     };
     // Hold the transition barrier through dedup, enqueue, append, and ack.
     // Diskless promotion takes the write side before hydrating and rebuilding
     // producer state, so it cannot publish a half-adopted prefix or race an
-    // idempotent retry already admitted here.
+    // idempotent retry already admitted here. The guard is owned, so a
+    // partition whose ack is still pending carries it into its [`PendingAck`]
+    // and holds the barrier across the overlapped wait too.
     let transition = part.lock_produce_transition().await;
     let record = image.partition(topic_name, idx).expect("gate checked");
     let topic_id = image.topic(topic_name).map(|topic| topic.topic_id);
@@ -314,14 +355,14 @@ pub(super) async fn process_partition(
     {
         out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         out.current_leader = current_leader_hint(record);
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
     if !part.diskless {
         let replica_state = part.replica_state.lock().await;
         if !replica_state_matches_image(&replica_state, record) {
             out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
             out.current_leader = current_leader_hint(record);
-            return Ok(out);
+            return Ok(PartitionOutcome::Done(out));
         }
     }
     let leader_epoch = part
@@ -337,71 +378,92 @@ pub(super) async fn process_partition(
     // `RecordBatch` header on the fallback path.
     if prepared.attributes.is_transactional() && part.diskless {
         out.error_code = codes::INVALID_TXN_STATE;
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
     if let Some(code) =
         validate_transactional_produce(&prepared, txn_coordinator, image, topic_name, idx).await
     {
         out.error_code = code;
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
 
     // ── idempotent-producer dedup gate ───────────────────────
-    if let Some(response) = handle_duplicate(
-        &prepared,
-        producer_state,
-        &part,
-        topic_name,
-        idx,
-        acks,
-        timeout,
-    )
-    .await
-    {
-        return Ok(response);
+    match handle_duplicate(&prepared, producer_state, &part, topic_name, idx, acks).await {
+        DedupOutcome::Append => {}
+        DedupOutcome::Answered(response) => return Ok(PartitionOutcome::Done(response)),
+        DedupOutcome::AwaitDurability { response, target } => {
+            // A recognized retry under `acks=-1` waits for the same frontier a
+            // fresh append of those records would have waited for, so it joins
+            // the request's one overlapped gate rather than opening a second
+            // kind of wait. It owes no producer-state commit: the append it
+            // deduplicates against already recorded one.
+            return Ok(PartitionOutcome::AwaitingHighWatermark(PendingAck::new(
+                response,
+                Arc::clone(&part),
+                target,
+                None,
+                transition,
+            )));
+        }
     }
 
     // ── KFC-1 scheduled-delivery gate ───────────────────────
     // On a topic with `delivery.mode=scheduled` the batch's `max_timestamp` is
-    // the time it becomes visible to a consumer. Two settings reject it, and
-    // both use the existing `INVALID_TIMESTAMP` (32) that every client already
-    // classifies: a delivery time further ahead than `delivery.max.delay.ms`,
-    // and, under `delivery.schedule.monotonic`, one that precedes the largest
-    // delivery time the partition already holds.
+    // the time it becomes visible to a consumer. Two settings reject such a
+    // batch, and both answer with the existing `INVALID_TIMESTAMP` (32) that
+    // every client already classifies: a delivery time further ahead than
+    // `delivery.max.delay.ms`, which is this gate, and, under
+    // `delivery.schedule.monotonic`, one that precedes the largest delivery
+    // time the partition already holds, which the log raises from
+    // `Log::append` under the lock that writes the batch.
     //
-    // The second is the guard against a schedule that stalls in silence.
-    // Visibility is offset-ordered for a classic group, because a group's
-    // position is one offset and a record it reads past is unreachable for it
-    // forever. So a batch that comes due before an earlier one holds up
-    // everything behind it. The topic still looks healthy and the lag is real,
-    // which is why the config turns that stall into an error at the producer
-    // that caused it.
+    // `delivery.max.delay.ms` compares the batch against the broker's clock
+    // and reads no log state, so nothing is gained by moving it down beside
+    // the other one: a batch scheduled past the bound is refused wherever the
+    // test runs, and refusing it here keeps the CRC-verified header the only
+    // thing the writer queue ever sees for it.
     //
     // The gate runs after the dedup gate on purpose. An idempotent retry is not
     // a new entry in the schedule, and a partition that accepted a later batch
     // in between would otherwise answer that retry with INVALID_TIMESTAMP
-    // instead of the offset it already assigned it.
+    // instead of the offset it already assigned it. The monotonic check keeps
+    // that ordering too: `handle_duplicate` answers a retry above, before
+    // anything reaches the writer.
     if let Some(gate) = delivery
-        && gate.rejects(prepared.max_timestamp, part.delivery.now_ms(), &part.log)
+        && gate.rejects(prepared.max_timestamp, part.delivery.now_ms())
     {
         out.error_code = codes::INVALID_TIMESTAMP;
-        return Ok(out);
+        return Ok(PartitionOutcome::Done(out));
     }
 
-    dispatch_prepared(
+    let appended = dispatch_prepared(
         prepared,
         AppendContext {
             partition: &part,
             producer_state,
-            topic_name,
             partition_index: idx,
             acks,
             timeout,
             leader_epoch,
             phases,
         },
+        &shared_topic,
     )
-    .await
+    .await?;
+    Ok(match appended {
+        AppendOutcome::Answered(response) => PartitionOutcome::Done(response),
+        AppendOutcome::AwaitDurability {
+            response,
+            target,
+            commit,
+        } => PartitionOutcome::AwaitingHighWatermark(PendingAck::new(
+            response,
+            Arc::clone(&part),
+            target,
+            commit,
+            transition,
+        )),
+    })
 }
 
 #[cfg(test)]

@@ -62,23 +62,6 @@ fn batch_delivered_at(delivery_ms: i64) -> RecordBatch {
     }
 }
 
-// A scheduled log holding one batch per entry of `deliveries`.
-fn scheduled_log(dir: &std::path::Path, deliveries: &[i64]) -> std::sync::Mutex<krabka_log::Log> {
-    let mut log = krabka_log::Log::open(
-        dir,
-        krabka_log::LogConfig {
-            delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
-            ..krabka_log::LogConfig::default()
-        },
-    )
-    .expect("open the log");
-    for delivery_ms in deliveries {
-        log.append(&mut batch_delivered_at(*delivery_ms))
-            .expect("append a scheduled batch");
-    }
-    std::sync::Mutex::new(log)
-}
-
 #[test]
 fn only_a_scheduled_topic_resolves_a_delivery_gate() {
     let cases: [(DeliveryOverrides, Option<DeliveryGate>, &str); 6] = [
@@ -102,7 +85,6 @@ fn only_a_scheduled_topic_resolves_a_delivery_gate() {
             &[(DELIVERY_MODE, DELIVERY_MODE_SCHEDULED)],
             Some(DeliveryGate {
                 max_delay: Some(millis(604_800_000)),
-                monotonic: false,
             }),
             "scheduled, with both other keys defaulted",
         ),
@@ -112,10 +94,7 @@ fn only_a_scheduled_topic_resolves_a_delivery_gate() {
                 (DELIVERY_MAX_DELAY_MS, "-1"),
                 (DELIVERY_SCHEDULE_MONOTONIC, "true"),
             ],
-            Some(DeliveryGate {
-                max_delay: None,
-                monotonic: true,
-            }),
+            Some(DeliveryGate { max_delay: None }),
             "scheduled, with the unbounded sentinel",
         ),
         (
@@ -125,7 +104,6 @@ fn only_a_scheduled_topic_resolves_a_delivery_gate() {
             ],
             Some(DeliveryGate {
                 max_delay: Some(millis(90_000)),
-                monotonic: false,
             }),
             "scheduled, with an explicit bound",
         ),
@@ -139,11 +117,10 @@ fn only_a_scheduled_topic_resolves_a_delivery_gate() {
 
 #[test]
 fn the_delivery_gate_bounds_only_how_far_ahead_a_batch_is_scheduled() {
-    let dir = tempfile::tempdir().expect("log root");
-    // An empty partition holds no schedule, so `monotonic` cannot fire and
-    // every verdict below is the `delivery.max.delay.ms` verdict alone.
-    let log = scheduled_log(dir.path(), &[]);
-
+    // `delivery.max.delay.ms` is the one bound this gate still holds: it
+    // compares the batch against the broker's clock and reads no log state.
+    // `delivery.schedule.monotonic` is the log's, under the lock that writes
+    // the batch, and `crates/log/src/log/append/tests.rs` covers it there.
     let cases = [
         (
             Some(millis(60_000)),
@@ -190,73 +167,9 @@ fn the_delivery_gate_bounds_only_how_far_ahead_a_batch_is_scheduled() {
     ];
 
     for (max_delay, delivery_ms, want, label) in cases {
-        let gate = DeliveryGate {
-            max_delay,
-            monotonic: true,
-        };
+        let gate = DeliveryGate { max_delay };
         check!(
-            gate.rejects(delivery_ms, SCHEDULE_NOW_MS, &log) == want,
-            "case: {label}"
-        );
-    }
-}
-
-#[test]
-fn a_monotonic_gate_rejects_a_batch_that_precedes_the_partitions_schedule() {
-    let dir = tempfile::tempdir().expect("log root");
-    // The partition's schedule already runs out to SCHEDULE_NOW_MS + 2_000.
-    let log = scheduled_log(
-        dir.path(),
-        &[SCHEDULE_NOW_MS + 1_000, SCHEDULE_NOW_MS + 2_000],
-    );
-
-    let cases = [
-        (
-            true,
-            SCHEDULE_NOW_MS + 2_001,
-            false,
-            "after the largest delivery time the partition holds",
-        ),
-        (
-            true,
-            SCHEDULE_NOW_MS + 2_000,
-            false,
-            "equal to it, which does not run backwards",
-        ),
-        (
-            true,
-            SCHEDULE_NOW_MS + 1_999,
-            true,
-            "one millisecond before it",
-        ),
-        (
-            true,
-            SCHEDULE_NOW_MS + 1_500,
-            true,
-            "between the two batches already scheduled",
-        ),
-        (
-            true,
-            SCHEDULE_NOW_MS - 1_000,
-            true,
-            "in the past, behind the whole schedule",
-        ),
-        (
-            false,
-            SCHEDULE_NOW_MS - 1_000,
-            false,
-            "the same batch with the guard turned off",
-        ),
-    ];
-
-    for (monotonic, delivery_ms, want, label) in cases {
-        let gate = DeliveryGate {
-            // Unbounded, so every verdict below is the monotonic verdict.
-            max_delay: None,
-            monotonic,
-        };
-        check!(
-            gate.rejects(delivery_ms, SCHEDULE_NOW_MS, &log) == want,
+            gate.rejects(delivery_ms, SCHEDULE_NOW_MS) == want,
             "case: {label}"
         );
     }
@@ -300,6 +213,10 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
         &part_dir,
         krabka_log::LogConfig {
             delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
+            // The topic config below asks for `delivery.schedule.monotonic`,
+            // and the log is what enforces it, so the applier's answer for
+            // that key is what the partition's log has to be opened with.
+            schedule_order: krabka_log::ScheduleOrder::Monotonic,
             ..krabka_log::LogConfig::default()
         },
     )
@@ -372,6 +289,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
         let resp = process_partition(
             PartitionInput {
                 schema: None,
+                timestamps: crate::handlers::produce::topic_settings::TimestampPolicy::default(),
                 part_data: FramedPartition {
                     index: 0,
                     payload: PartitionPayload::Slice(encode_batch(&batch_delivered_at(
@@ -405,7 +323,8 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             },
         )
         .await
-        .expect("process partition");
+        .expect("process partition")
+        .expect_done();
         check!(resp == want, "case: {label}");
     }
 

@@ -19,12 +19,31 @@ use krabka_log::LogConfig;
 use crate::jvm_acceptance::{KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, docker_run_kafka_tool};
 
 /// A zombie-fencing probe (KIP-360): two JVM producers share one
-/// `transactional.id`, and the first one re-initialises after the second has
-/// taken the id over. The coordinator must answer that stale
-/// `(producer_id, producer_epoch)` with `PRODUCER_FENCED`, which the JVM
-/// client raises as `ProducerFencedException`. Without the fence the first
-/// producer re-initialises cleanly and only learns it is a zombie later, from
-/// an `InvalidProducerEpochException` on its next send or commit.
+/// `transactional.id`, the second takes the id over, and the first must be
+/// fenced the next time it tries to write.
+///
+/// This is the fence Kafka documents on `transactional.id` itself: the second
+/// `initTransactions` bumps the epoch, and the coordinator then refuses the
+/// first producer's stale `(producer_id, producer_epoch)` on its
+/// `AddPartitionsToTxn`. The JVM client turns both `PRODUCER_FENCED` and
+/// `INVALID_PRODUCER_EPOCH` there into a fatal `ProducerFencedException`
+/// (`TransactionManager.AddPartitionsToTxnHandler`), so that is the name the
+/// probe expects. A broker that admits the stale epoch instead lets the zombie
+/// write, which is the failure this case is here to catch.
+///
+/// The first producer acquires the id and then writes nothing until after the
+/// takeover, so the takeover is the only thing that can have moved its epoch
+/// and the refusal cannot be read as anything else.
+///
+/// The probe cannot instead drive `InitProducerId` with the stale identity:
+/// the JVM client sends that request's `producer_id`/`producer_epoch` fields
+/// only for its own internal KIP-360 epoch bump, and a second public
+/// `initTransactions()` on a producer that has committed is refused locally --
+/// `TransactionManager` allows the `INITIALIZING` transition only from
+/// `UNINITIALIZED`, `COMMITTING_TRANSACTION` or `ABORTING_TRANSACTION`, so it
+/// throws `IllegalStateException` before any request reaches the broker. The
+/// broker's `PRODUCER_FENCED` answer on that request is pinned by the
+/// `init_producer_id` unit tests instead.
 ///
 /// The probe prints `ZOMBIEPROBE fenced=<exception simple name>`, or
 /// `ZOMBIEPROBE fenced=none` when nothing fenced it at all.
@@ -44,11 +63,11 @@ public final class ZombieProducer {
         "org.apache.kafka.common.serialization.StringSerializer");
     config.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "zombie-tid");
 
+    // The first instance acquires the id and stops there: it writes nothing
+    // before the takeover, so the only thing that can move its epoch is the
+    // takeover itself.
     KafkaProducer<String, String> first = new KafkaProducer<>(config);
     first.initTransactions();
-    first.beginTransaction();
-    first.send(new ProducerRecord<>(args[1], "zombie-first")).get();
-    first.commitTransaction();
 
     // A second instance of the same console producer takes the id over. Its
     // InitProducerId carries no identity, so it is admitted and bumps the
@@ -56,9 +75,10 @@ public final class ZombieProducer {
     KafkaProducer<String, String> second = new KafkaProducer<>(config);
     second.initTransactions();
 
+    // The zombie writes on. Its AddPartitionsToTxn carries the epoch the
+    // takeover superseded, and the coordinator must refuse it.
     String fenced = "none";
     try {
-      first.initTransactions();
       first.beginTransaction();
       first.send(new ProducerRecord<>(args[1], "zombie-stale")).get();
       first.commitTransaction();
@@ -347,8 +367,8 @@ async fn transactional_console_producer_eos() {
     );
 
     // 6. KIP-360: a second producer on one transactional.id fences the first,
-    // and the first learns it from `PRODUCER_FENCED` on its own
-    // re-initialisation rather than from a later epoch error.
+    // and the first learns it as a fatal `ProducerFencedException` the next
+    // time it writes.
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
@@ -408,8 +428,8 @@ async fn transactional_console_producer_eos() {
     );
     assert!(
         zombie_stdout.contains("ZOMBIEPROBE fenced=ProducerFencedException"),
-        "the fenced producer must see ProducerFencedException, not a later \
-         epoch error: {zombie_stdout}",
+        "the zombie producer must be fenced with ProducerFencedException; \
+         `fenced=none` means it was allowed to write: {zombie_stdout}",
     );
 
     for (h, _) in cluster {

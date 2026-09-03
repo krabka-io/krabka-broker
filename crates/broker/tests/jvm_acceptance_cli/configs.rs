@@ -4,7 +4,8 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    broker0_advertised, docker_run_kafka_tool, nc_check_connectivity, start_host_broker,
+    broker0_advertised, docker_run_kafka_tool, docker_run_kafka_tool_allowing_failure,
+    nc_check_connectivity, start_host_broker, tool_output,
 };
 
 /// `kafka-configs --alter --add-config retention.ms=60000 --topic t` then
@@ -339,7 +340,10 @@ async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
         broker0_advertised(),
     ]);
 
-    let out = docker_run_kafka_tool(&[
+    // The alter is the case, so the tool must be allowed to fail: it exits
+    // non-zero and prints the broker's `InvalidConfigurationException`, which
+    // is exactly the evidence this test wants.
+    let out = docker_run_kafka_tool_allowing_failure(&[
         "kafka-configs",
         "--alter",
         "--entity-type",
@@ -351,10 +355,10 @@ async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-    let rendered = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+    let rendered = tool_output(&out);
+    assert!(
+        !out.status.success(),
+        "the alter must be refused, not applied: {rendered}"
     );
     assert!(
         rendered.contains("Tiered storage is not supported for compacted topics"),

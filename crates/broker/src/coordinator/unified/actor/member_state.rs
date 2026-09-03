@@ -37,6 +37,70 @@ pub(super) fn reported_owned(req: &ConsumerGroupHeartbeatRequest) -> HashMap<Uui
         .unwrap_or_default()
 }
 
+/// RE2J's `ERR_INVALID_PERL_OP`, the description Kafka formats into the
+/// `INVALID_REGULAR_EXPRESSION` message when a pattern names a flag RE2J does
+/// not have.
+const RE2J_INVALID_PERL_OP: &str = "invalid or unsupported Perl syntax";
+
+/// The inline flags RE2J's `Parser.parsePerlFlags` accepts, plus the `-` that
+/// negates the ones that follow it.
+const RE2J_INLINE_FLAGS: [char; 5] = ['i', 'm', 's', 'U', '-'];
+
+/// The first inline flag in `pattern` that RE2J's `parsePerlFlags` does not
+/// accept, if any.
+///
+/// RE2J's flag set is exactly `i`, `m`, `s` and `U`; Rust's `regex` also takes
+/// `x` (verbose), `u` (Unicode) and `R` (CRLF), and would otherwise admit a
+/// pattern Kafka answers `INVALID_REGULAR_EXPRESSION` to. The scan tracks
+/// escapes and character classes so a `(` that is a literal, and everything
+/// inside `[...]`, is left alone, and it hands every other `(?` form -- named
+/// captures, non-capturing groups, the lookarounds both engines reject -- to
+/// the regex parser rather than judging it here.
+fn re2j_unsupported_inline_flag(pattern: &str) -> Option<char> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut index = 0;
+    let mut in_class = false;
+    while index < chars.len() {
+        let current = chars[index];
+        if current == '\\' {
+            index += 2;
+            continue;
+        }
+        if in_class {
+            in_class = current != ']';
+            index += 1;
+            continue;
+        }
+        if current == '[' {
+            in_class = true;
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if current != '(' || chars.get(index) != Some(&'?') {
+            continue;
+        }
+        // `(?P<`, `(?<`, `(?'`, `(?:`, `(?=` and `(?!` are not flag groups.
+        if matches!(
+            chars.get(index + 1),
+            Some('P' | ':' | '<' | '\'' | '=' | '!')
+        ) {
+            continue;
+        }
+        let mut flag = index + 1;
+        while let Some(&candidate) = chars.get(flag) {
+            if candidate == ')' || candidate == ':' {
+                break;
+            }
+            if !RE2J_INLINE_FLAGS.contains(&candidate) {
+                return Some(candidate);
+            }
+            flag += 1;
+        }
+    }
+    None
+}
+
 /// Rejects a heartbeat whose `SubscribedTopicRegex` does not compile, with the
 /// message Kafka builds in
 /// `GroupMetadataManager.throwIfRegularExpressionIsInvalid`.
@@ -59,7 +123,42 @@ pub(super) fn reported_owned(req: &ConsumerGroupHeartbeatRequest) -> HashMap<Uui
 ///   is only ever matched against Kafka topic names, whose legal alphabet is
 ///   `[a-zA-Z0-9._-]`. On ASCII-only inputs `\d`, `\w`, `\s` and `\b` mean the
 ///   same thing in both engines.
+///
+/// ## Residual divergence from RE2J
+///
+/// `regex` is not RE2J's grammar, so acceptance can still differ in both
+/// directions. Only the divergence that a client is likely to hit is screened
+/// out ahead of the compile, by [`re2j_unsupported_inline_flag`]: an inline
+/// flag group naming `x`, `u` or `R`, which `regex` takes and RE2J rejects.
+/// What is knowingly left:
+///
+/// - **Accepted here, rejected by RE2J.** `regex`'s character-class set
+///   operations (`[\w&&\d]`, `[a-z--b]`, nested `[[a-z]x]`), which RE2J reads
+///   as ordinary class members or as a syntax error. Screening these would
+///   need a class parser, and getting one wrong rejects patterns Kafka takes.
+/// - **Rejected here, accepted by RE2J.** `\Q...\E` literal quoting, which
+///   RE2 supports and `regex` has no equivalent for, and a repetition large
+///   enough to exceed `regex`'s compiled-size limit.
+///
+/// Neither residue can change which topics a subscription matches: an accepted
+/// pattern is matched by the same `regex` that accepted it, against ASCII
+/// topic names.
+///
+/// The tree's `java_regex` -- which `ListTransactions` uses, because KIP-664
+/// specifies `java.util.regex` -- is not the closer engine for this field.
+/// `java.util.regex` accepts backreferences, lookaround and possessive
+/// quantifiers that RE2J rejects outright, so it over-accepts by more than
+/// `regex` does, and it is a backtracking engine: this pattern is re-matched
+/// against every topic name on every metadata refresh, where RE2J's and
+/// `regex`'s linear-time guarantee is what keeps a subscription from becoming
+/// a denial of service.
 fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
+    if re2j_unsupported_inline_flag(pattern).is_some() {
+        return Err(format!(
+            "SubscribedTopicRegex `{pattern}` is not a valid regular expression: \
+             {RE2J_INVALID_PERL_OP}."
+        ));
+    }
     regex::Regex::new(pattern).map(|_| ()).map_err(|error| {
         // `regex`'s Display is a multi-line diagram; flatten it so the
         // response's `error_message` stays one line.
@@ -530,6 +629,25 @@ mod tests {
             // Rejected by both engines.
             ("(", false),
             ("[a-", false),
+            // Inline flags. RE2J's `parsePerlFlags` takes only `i`, `m`, `s`
+            // and `U`, with `-` to negate; `regex` also takes `x`, `u` and
+            // `R`, so those must be rejected here to stay with Kafka.
+            ("(?i)abc", true),
+            ("(?im)abc", true),
+            ("(?i-s)abc", true),
+            ("(?U)a+", true),
+            ("(?i:abc)", true),
+            ("(?:abc)", true),
+            ("(?x) a b c", false),
+            ("(?x:abc)", false),
+            ("(?iu)abc", false),
+            ("(?-u)abc", false),
+            ("(?R)abc", false),
+            // A `(?` that is not a flag group at all: the literal `(` an
+            // escape produces, and one inside a character class.
+            (r"\(?abc", true),
+            ("[(?x]abc", true),
+            (r"a\[(?x)", false),
         ] {
             check!(
                 check_subscribed_topic_regex(pattern).is_ok() == accepted,
@@ -537,6 +655,21 @@ mod tests {
                 check_subscribed_topic_regex(pattern),
             );
         }
+    }
+
+    /// A flag RE2J does not have is answered with the message Kafka builds
+    /// from RE2J's own `PatternSyntaxException.getDescription`, so a client
+    /// that reads `error_message` sees the same text either broker produced.
+    #[test]
+    fn an_re2j_unsupported_flag_carries_kafkas_message() {
+        check!(
+            check_subscribed_topic_regex("(?x)abc")
+                == Err(
+                    "SubscribedTopicRegex `(?x)abc` is not a valid regular expression: \
+                        invalid or unsupported Perl syntax."
+                        .to_string()
+                )
+        );
     }
 
     /// The one behavioral difference the Unicode choice leaves — `\d` matching

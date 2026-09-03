@@ -72,7 +72,10 @@
 use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord};
 
 use super::state::TopicElr;
-use crate::config_keys::ELIGIBLE_LEADER_REPLICAS;
+use crate::{
+    config_keys::ELIGIBLE_LEADER_REPLICAS,
+    features::{ELR_VERSION, feature_enabled},
+};
 
 /// The `V1TopicConfig` records that take `node` out of every ELR it is named
 /// in, cluster-wide.
@@ -88,6 +91,13 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
     let Ok(node) = i32::try_from(node.0) else {
         return Vec::new();
     };
+    // Kafka's `handleBrokerShutdown` runs its unclean branch only under
+    // `isElrFeatureEnabled()`. Below level 1 the controller publishes no ELR,
+    // and a downgrade to 0 has already cleared whatever an earlier level 1
+    // left, so there is never anything to withdraw.
+    if !feature_enabled(image, ELR_VERSION, 1) {
+        return Vec::new();
+    }
     image
         .topics()
         .filter_map(|topic| topic_record(image, &topic.name, node))
@@ -113,6 +123,41 @@ fn topic_record(image: &MetadataImage, topic: &str, node: i32) -> Option<Metadat
     } else {
         after.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), rendered);
     }
+    Some(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: topic.to_string(),
+        overrides: after,
+    }))
+}
+
+/// The `V1TopicConfig` records that drop every published ELR, cluster-wide.
+///
+/// `UpdateFeatures` emits them in the same batch as the
+/// `eligible.leader.replicas.version` record that finalizes the feature back
+/// to level 0, which is Kafka's `generateRecordsForCleaningElr`: the feature
+/// going off does not merely stop the controller from maintaining the sets,
+/// it clears the ones it already published, so no election path can elect
+/// from a membership nothing is keeping true any more.
+///
+/// Empty when no topic carries the override, which is every cluster that
+/// never turned the feature on.
+pub(crate) fn clear_published_elr(image: &MetadataImage) -> Vec<MetadataRecord> {
+    image
+        .topics()
+        .filter_map(|topic| cleared_topic_record(image, &topic.name))
+        .collect()
+}
+
+/// One topic's config with the ELR override removed, or `None` when the topic
+/// carries none.
+fn cleared_topic_record(image: &MetadataImage, topic: &str) -> Option<MetadataRecord> {
+    let before = image.topic_config(topic)?;
+    if !before.contains_key(ELIGIBLE_LEADER_REPLICAS) {
+        return None;
+    }
+    // Applying a `V1TopicConfig` replaces the topic's whole override map, so
+    // the record carries every other override the topic has as well.
+    let mut after = before.clone();
+    after.remove(ELIGIBLE_LEADER_REPLICAS);
     Some(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: topic.to_string(),
         overrides: after,

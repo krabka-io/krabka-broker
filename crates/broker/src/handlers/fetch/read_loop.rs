@@ -203,7 +203,10 @@ async fn long_poll_then_reread(
     let max_wait = Duration::from_millis(u64::from(u32::try_from(state.max_wait_ms).unwrap_or(0)));
     let deadline = tokio::time::Instant::now() + max_wait;
     loop {
-        if revalidate_epochs(broker, pending) || state.total() >= state.min_bytes {
+        if revalidate_epochs(broker, pending)
+            || has_read_error(pending)
+            || state.total() >= state.min_bytes
+        {
             return Ok(());
         }
         if waits.is_empty() {
@@ -270,6 +273,26 @@ fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
         }
     }
     fenced
+}
+
+/// Whether any partition's latest read ended in an error.
+///
+/// This is Kafka's `errorReadingData`: `ReplicaManager.fetchMessages` never
+/// parks a fetch whose first read pass produced an error, and
+/// `DelayedFetch.tryComplete` force-completes a parked one as soon as a
+/// partition's offset falls off the log. Retention or truncation moving a
+/// requested offset out of range while the fetch waits is exactly that case,
+/// and the re-read that discovers it contributes zero bytes -- so without this
+/// the fetch would sit on its `min_bytes` floor until `max_wait_ms` expired
+/// with the error already in hand.
+///
+/// A partition the cold tier answered has had its `OFFSET_OUT_OF_RANGE`
+/// cleared by `serve_from_cold_tier`, so a tiered read still accumulates and
+/// keeps waiting.
+fn has_read_error(pending: &[PendingRead]) -> bool {
+    pending
+        .iter()
+        .any(|read| read.out.error_code != codes::NONE)
 }
 
 /// Read the one partition whose notifier fired, replacing both its response
@@ -552,6 +575,71 @@ mod tests {
 
         assert!(pending[0].out.error_code == crate::codes::FENCED_LEADER_EPOCH);
         assert!(pending[0].out.records.is_none());
+        broker_handle.shutdown().await;
+    }
+
+    /// Retention or truncation moving a requested offset off the log while
+    /// the fetch is parked is Kafka's `errorReadingData`: `fetchMessages`
+    /// never parks on it and `DelayedFetch.tryComplete` force-completes for
+    /// it, whatever the accumulated byte count is. A fetch that only ever
+    /// checked its epochs and its `min_bytes` floor would instead hold the
+    /// error until `max_wait_ms` expired.
+    #[tokio::test]
+    async fn a_partition_error_completes_the_long_poll() {
+        const TOPIC: &str = "long-poll-error";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
+            dir.path().to_path_buf(),
+        ))
+        .await
+        .expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+        let part_dir = dir.path().join(format!("{TOPIC}-0"));
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let part = crate::broker::spawn_partition(
+            TOPIC.to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+        let request = super::EffectivePartition {
+            partition: 0,
+            current_leader_epoch: 0,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            partition_max_bytes: 1024,
+        };
+        let mut pending = [super::PendingRead::planned(
+            TOPIC,
+            WireUuid::ZERO,
+            &request,
+            (false, true),
+            Some(std::sync::Arc::clone(&part)),
+            super::PartitionData {
+                partition_index: 0,
+                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                ..Default::default()
+            },
+        )];
+
+        // Nothing will ever append, and the floor is unreachable: only the
+        // error can end this wait before its 30-second deadline.
+        let waits = super::arm_waits(&pending);
+        let phases = RequestPhases::default();
+        let mut state = state_for(&pending, 4096, 30_000);
+        let completed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            super::long_poll_then_reread(&broker, &mut pending, waits, &mut state, &phases),
+        )
+        .await
+        .expect("the error completes the long poll");
+        completed.expect("long poll");
+
+        assert!(pending[0].out.error_code == crate::codes::OFFSET_OUT_OF_RANGE);
         broker_handle.shutdown().await;
     }
 

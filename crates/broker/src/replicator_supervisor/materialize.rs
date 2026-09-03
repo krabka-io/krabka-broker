@@ -194,6 +194,7 @@ mod tests {
             .expect("partition log")
             .append(&mut batch)
             .expect("append")
+            .0
     }
 
     #[tokio::test]

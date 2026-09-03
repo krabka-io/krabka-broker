@@ -637,29 +637,40 @@ def kafka_image_keys(keys):
     ]
 
 def librdkafka_clients(suite, source = _LIBRDKAFKA):
-    """The `(image, program, library)` the librdkafka conformance suite drives."""
-    opening = "CLIENTS: [(&str, &str, &str); 1] = [("
+    """Every `(image, program, library)` the librdkafka conformance suite drives.
+
+    The suite's `CLIENTS` table is a `ClientCase` struct per client, so the
+    matrix's librdkafka column names each of them rather than the one client
+    the table used to hold.
+    """
+    opening = "const CLIENTS: [ClientCase; "
     start = suite.find(opening)
     if start < 0:
         fail("missing matrix evidence in %s: %s" % (source, opening))
 
     at = start + len(opening)
-    fields = []
-    for _ in range(3):
-        found = _quoted(suite, _skip_whitespace(suite, at))
-        if found == None or not found.value:
-            fail("unreadable CLIENTS entry in %s" % source)
-        fields.append(found.value)
-        at = found.end
-        if len(fields) < 3:
-            if suite[at:at + 1] != ",":
+    digits = suite[at:].partition("]")[0]
+    if not digits or not digits.isdigit():
+        fail("unreadable CLIENTS length in %s" % source)
+    count = int(digits)
+    if count < 1:
+        fail("empty CLIENTS table in %s" % source)
+
+    clients = []
+    at = start
+    for _ in range(count):
+        fields = []
+        for name in ("image: ", "program: ", "library: "):
+            field = suite.find(name, at)
+            if field < 0:
                 fail("unreadable CLIENTS entry in %s" % source)
-            at += 1
-    if suite[at:at + 1] == ",":
-        at += 1
-    if suite[_skip_whitespace(suite, at):][:2] != ")]":
-        fail("unreadable CLIENTS entry in %s" % source)
-    return tuple(fields)
+            found = _quoted(suite, field + len(name))
+            if found == None or not found.value:
+                fail("unreadable CLIENTS entry in %s" % source)
+            fields.append(found.value)
+            at = found.end
+        clients.append(tuple(fields))
+    return clients
 
 def citations(note):
     """Every `crates/<path>.rs:<line>` in `note`, as `struct(start, end, path, line)`.
@@ -1049,12 +1060,16 @@ def _librdkafka_evidence(fs, root, pins, broker_build):
         "async fn %s()" % _LIBRDKAFKA_TEST,
     )
 
-    image, program, library = librdkafka_clients(suite)
+    clients = librdkafka_clients(suite)
     keys = docker_map(broker_build, _BROKER_BUILD).get("librdkafka_conformance", [])
-    if not keys or image_for(pins.images, keys[0]) != image:
-        fail("librdkafka client image %s is not the one Bazel loads" % image)
-    _digest(pins, keys[0])
-    return kcat_evidence(image, program, library)
+    loaded = [image_for(pins.images, key) for key in keys]
+    fragments = []
+    for image, program, library in clients:
+        if image not in loaded:
+            fail("librdkafka client image %s is not one Bazel loads" % image)
+        _digest(pins, keys[loaded.index(image)])
+        fragments.append(kcat_evidence(image, program, library))
+    return "<br>".join(fragments)
 
 def _kip_inventory(fs, root, catalog):
     """Every `KIP-<n>` a file under `crates/` names.

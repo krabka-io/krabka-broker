@@ -227,6 +227,18 @@ pub(super) fn validate_updates(
         if name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE {
             metadata_version_records = Some((planned_cleanup, feature_record));
         } else {
+            // KIP-966: turning the feature off clears the memberships it
+            // published, the way Kafka's controller emits its own cleaning
+            // records. The clearing records go in first, so a replay that
+            // stops between them and the feature record has already forgotten
+            // the memberships rather than kept them under a feature that is
+            // still on.
+            if name == crate::features::ELR_VERSION
+                && level == DELETE_FINALIZED_LEVEL
+                && current.is_some_and(|cur| cur >= 1)
+            {
+                records.extend(crate::elr::clear_published_elr(image));
+            }
             records.push(feature_record);
         }
         results.push(row(name, codes::NONE, ""));

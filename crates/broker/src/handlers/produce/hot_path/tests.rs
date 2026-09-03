@@ -14,7 +14,7 @@ use krabka_log::{Log, LogConfig};
 use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::tempdir;
 
-use super::{HotPathSettings, PathChoice, ProducePath, append_one_batch};
+use super::{HotPathSettings, PathChoice, ProducePath, TimestampPolicy, append_one_batch};
 use crate::{codes, handlers::produce::test_support::encode_batch};
 
 const RECORDS: i32 = 4;
@@ -47,6 +47,7 @@ fn settings(
     HotPathSettings {
         topic_name: Arc::from("bench-topic"),
         topic_compression,
+        timestamps: TimestampPolicy::default(),
         decompression_policy: RecordDecompressionPolicy::default(),
         metrics,
         leader_epoch: 7,

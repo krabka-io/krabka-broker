@@ -2,12 +2,30 @@
 //! the append: the KIP-1319 transactional verify, and the idempotent-producer
 //! dedup that answers a retry with the offset it already assigned.
 
-use std::time::Duration;
-
+use krabka_log::Offset;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
 use super::{ACKS_ALL, INVALID_OFFSET, durability_frontier, prepare::PreparedBatch};
 use crate::codes;
+
+/// What the idempotent-producer dedup gate decided for one batch.
+pub(super) enum DedupOutcome {
+    /// Not a duplicate: the batch goes on to the append.
+    Append,
+    /// The gate answered the batch without an append: a recognized retry under
+    /// `acks != -1`, an out-of-order sequence, or a fenced epoch.
+    Answered(PartitionProduceResponse),
+    /// A recognized retry under `acks=-1`. The original append is on the log,
+    /// and the row is complete once the high watermark covers it — the same
+    /// wait a fresh append of those records would have joined, so the caller
+    /// hands it to the request's one overlapped gate rather than waiting here.
+    AwaitDurability {
+        /// The row so far, carrying the offset the original append was given.
+        response: PartitionProduceResponse,
+        /// The exclusive frontier the high watermark has to reach.
+        target: Offset,
+    },
+}
 
 pub(super) async fn validate_transactional_produce(
     batch: &PreparedBatch,
@@ -56,10 +74,9 @@ pub(super) async fn handle_duplicate(
     topic_name: &str,
     partition_index: i32,
     acks: i16,
-    timeout: Duration,
-) -> Option<PartitionProduceResponse> {
+) -> DedupOutcome {
     if batch.producer_id < 0 {
-        return None;
+        return DedupOutcome::Append;
     }
     let decision = producer_state
         .check(
@@ -81,24 +98,25 @@ pub(super) async fn handle_duplicate(
     let (error_code, base_offset, log_start_offset) = match decision {
         crate::producer_state::Decision::Duplicate { base_offset } => {
             let Some(target) = durability_frontier(base_offset, batch.last_offset_delta) else {
-                return Some(PartitionProduceResponse {
+                return DedupOutcome::Answered(PartitionProduceResponse {
                     index: partition_index,
                     error_code: codes::INVALID_RECORD,
                     base_offset: -1,
                     ..Default::default()
                 });
             };
-            let error_code = if acks == ACKS_ALL {
-                let deadline = std::time::Instant::now() + timeout;
-                if partition.await_hw_at_least(target, deadline).await.is_ok() {
-                    codes::NONE
-                } else {
-                    codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND
-                }
-            } else {
-                codes::NONE
-            };
-            (error_code, base_offset, partition.log_start_offset().0)
+            if acks == ACKS_ALL {
+                return DedupOutcome::AwaitDurability {
+                    response: PartitionProduceResponse {
+                        index: partition_index,
+                        base_offset,
+                        log_start_offset: partition.log_start_offset().0,
+                        ..Default::default()
+                    },
+                    target,
+                };
+            }
+            (codes::NONE, base_offset, partition.log_start_offset().0)
         }
         crate::producer_state::Decision::OutOfOrder => (
             codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
@@ -110,9 +128,9 @@ pub(super) async fn handle_duplicate(
             INVALID_OFFSET,
             INVALID_OFFSET,
         ),
-        crate::producer_state::Decision::Append => return None,
+        crate::producer_state::Decision::Append => return DedupOutcome::Append,
     };
-    Some(PartitionProduceResponse {
+    DedupOutcome::Answered(PartitionProduceResponse {
         index: partition_index,
         error_code,
         base_offset,
@@ -139,6 +157,7 @@ mod tests {
             leadership::BrokerProducePolicy,
             pipeline::{PartitionInput, PartitionServices, process_partition},
             test_support::{encode_batch, image_with_topic},
+            topic_settings::TimestampPolicy,
         },
     };
 
@@ -389,7 +408,7 @@ mod tests {
             ..Default::default()
         });
 
-        let resp: PartitionProduceResponse = process_partition(
+        let outcome = process_partition(
             PartitionInput {
                 schema: None,
                 part_data: FramedPartition {
@@ -397,6 +416,7 @@ mod tests {
                     payload: PartitionPayload::Slice(payload),
                 },
                 topic_compression: None,
+                timestamps: TimestampPolicy::default(),
                 max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 topic_name: "orders".into(),
@@ -424,6 +444,19 @@ mod tests {
         )
         .await
         .expect("process partition");
+
+        // The duplicate path joins the request's one overlapped `acks=-1`
+        // wait rather than blocking inside `process_partition`, so the row is
+        // decided here, the way `await_durability` decides it for a request.
+        let resp: PartitionProduceResponse = match outcome {
+            crate::handlers::produce::pipeline::PartitionOutcome::AwaitingHighWatermark(ack) => {
+                ack.finish(std::time::Instant::now() + Duration::from_millis(50))
+                    .await
+            }
+            crate::handlers::produce::pipeline::PartitionOutcome::Done(response) => {
+                panic!("an acks=-1 duplicate must wait on the high watermark, got {response:?}")
+            }
+        };
 
         check!(resp.base_offset == 0);
         check!(

@@ -167,7 +167,7 @@ fn the_remaining_kafka_topic_config_names_are_accepted() {
         (MAX_COMPACTION_LAG_MS, "9223372036854775807", "0"),
         (MIN_CLEANABLE_DIRTY_RATIO, "0.5", "2.0"),
         (FILE_DELETE_DELAY_MS, "60000", "-1"),
-        (FLUSH_MESSAGES, "10000", "-1"),
+        (FLUSH_MESSAGES, "10000", "0"),
         (FLUSH_MS, "1000", "-1"),
         (INDEX_INTERVAL_BYTES, "4096", "-1"),
         (PREALLOCATE, "true", "yes"),
@@ -329,6 +329,57 @@ fn compact_and_scheduled_delivery_exclude_each_other() {
     }
 }
 
+/// Kafka's `LogConfig.validateValues`: a `min.compaction.lag.ms` above
+/// `max.compaction.lag.ms` is refused, and an alter that names only one of the
+/// two is checked against the other's stored default, which is what Kafka's
+/// fully-defaulted property map carries.
+#[test]
+fn a_min_compaction_lag_above_the_max_is_refused() {
+    let cases = [
+        ("both, min below max", Some("1000"), Some("60000"), true),
+        ("both, equal", Some("60000"), Some("60000"), true),
+        ("both, min above max", Some("60000"), Some("1000"), false),
+        (
+            "min alone against the unbounded default",
+            Some("60000"),
+            None,
+            true,
+        ),
+        ("max alone against the zero default", None, Some("1"), true),
+        ("neither", None, None, true),
+    ];
+    for (case, min, max, want_ok) in cases {
+        let mut overrides = BTreeMap::new();
+        if let Some(min) = min {
+            overrides.insert(MIN_COMPACTION_LAG_MS.to_string(), min.to_string());
+        }
+        if let Some(max) = max {
+            overrides.insert(MAX_COMPACTION_LAG_MS.to_string(), max.to_string());
+        }
+        assert!(
+            validate_config_combination(&overrides).is_ok() == want_ok,
+            "{case}: {overrides:?}"
+        );
+    }
+}
+
+/// The refusal carries Kafka's wording, which `kafka-configs` prints verbatim.
+#[test]
+fn the_compaction_lag_conflict_carries_kafkas_message() {
+    let overrides = BTreeMap::from([
+        (MIN_COMPACTION_LAG_MS.to_string(), "60000".to_string()),
+        (MAX_COMPACTION_LAG_MS.to_string(), "1".to_string()),
+    ]);
+    assert!(
+        validate_config_combination(&overrides)
+            == Err(
+                "conflict topic config setting min.compaction.lag.ms (60000) > \
+                 max.compaction.lag.ms (1)"
+                    .to_string()
+            )
+    );
+}
+
 /// Kafka's `validateNoRemoteStorageForCompactedTopic`: `remote.storage.enable`
 /// and a cleanup policy containing `compact` exclude each other, and because
 /// the test is a membership test over the list, `compact,delete` is refused
@@ -370,6 +421,51 @@ fn compact_and_delete_is_compaction_for_the_scheduled_delivery_rule() {
     DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
 
     assert!(validate_config_combination(&overrides).is_err());
+}
+
+/// KFC-1's third exclusion: a scheduled topic reads each batch's
+/// `max_timestamp` as its activation time, and log-append stamping overwrites
+/// exactly that field, so the pair would deliver every record at once.
+#[test]
+fn log_append_time_and_scheduled_delivery_exclude_each_other() {
+    let cases = [
+        ("LogAppendTime", Some(DELIVERY_MODE_SCHEDULED), false),
+        ("LogAppendTime", Some(DELIVERY_MODE_IMMEDIATE), true),
+        ("LogAppendTime", None, true),
+        ("CreateTime", Some(DELIVERY_MODE_SCHEDULED), true),
+        ("CreateTime", None, true),
+    ];
+    for (timestamp_type, mode, want_ok) in cases {
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            MESSAGE_TIMESTAMP_TYPE.to_string(),
+            timestamp_type.to_string(),
+        );
+        if let Some(mode) = mode {
+            overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
+        }
+        let outcome = validate_config_combination(&overrides);
+        check!(
+            outcome.is_ok() == want_ok,
+            "message.timestamp.type={timestamp_type} delivery.mode={mode:?}"
+        );
+        if !want_ok {
+            let error = outcome.unwrap_err();
+            check!(error.contains(MESSAGE_TIMESTAMP_TYPE), "got: {error}");
+            check!(error.contains(DELIVERY_MODE), "got: {error}");
+        }
+    }
+}
+
+/// The whole-map entry point applies the rule too, which is the path
+/// `CreateTopics` takes.
+#[test]
+fn validate_topic_config_map_refuses_log_append_time_on_a_scheduled_topic() {
+    let overrides = maplit::btreemap! {
+    MESSAGE_TIMESTAMP_TYPE.to_string() => "LogAppendTime".to_string(),
+    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
+
+    assert!(validate_topic_config_map(&overrides).is_err());
 }
 
 #[test]

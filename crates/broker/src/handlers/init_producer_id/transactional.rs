@@ -28,9 +28,19 @@ use crate::{
 ///
 /// `request_identity` is the `(producer_id, producer_epoch)` the caller
 /// claims, `(-1, -1)` when it claims none. Kafka's
-/// `TransactionCoordinator.handleInitProducerId` fences a stale claim with
-/// `PRODUCER_FENCED` before it matches on the persisted state, so an ongoing
-/// transaction is aborted only for the producer that owns it (KIP-360).
+/// `TransactionCoordinator.prepareInitProducerIdTransit` fences a stale claim
+/// with `PRODUCER_FENCED` before it matches on the persisted state, so an
+/// ongoing transaction is aborted only for the producer that owns it
+/// (KIP-360). It does that inside `txnMetadata.inLock`, together with the
+/// transit it prepares, and so does every branch below: the check and the
+/// mutation it admits share one guard.
+///
+/// A transactional id with no entry is not fenced, whatever the caller
+/// claims. Kafka's `isValidProducerId` opens with
+/// `txnMetadata.producerEpoch == RecordBatch.NO_PRODUCER_EPOCH`, which the
+/// metadata it just created always satisfies: a producer recovering from
+/// `UNKNOWN_PRODUCER_ID` names its old identity, and the freshly allocated one
+/// is what it gets back.
 // cargo-mutants: live transaction-coordinator orchestration; the response
 // identity and error mapping are exercised by broker transaction integration.
 #[cfg_attr(test, mutants::skip)]
@@ -62,35 +72,20 @@ pub(super) async fn handle_transactional(
         Some(existing) => {
             // KIP-360: a caller that names a producer identity must name the
             // live one, or the epoch this entry held before an epoch fence
-            // whose abort failed. The check runs before every branch below,
-            // so a zombie neither recovers a prepared transaction nor aborts
-            // the ongoing transaction of the producer that fenced it.
-            {
-                let entry = existing.lock().await;
-                let (entry_pid, entry_epoch) =
-                    crate::txn::handlers::end_txn::client_producer_identity(&entry);
-                let decision = krabka_verified::transaction::init_producer_id_fencing_decision(
-                    entry_pid.get(),
-                    entry_epoch,
-                    entry.last_producer_epoch,
-                    entry.has_failed_epoch_fence,
-                    request_identity.0,
-                    request_identity.1,
-                );
-                drop(entry);
-                if decision == InitProducerIdFencingDecision::Fenced {
-                    return Ok(InitProducerIdResponse {
-                        error_code: codes::PRODUCER_FENCED,
-                        producer_id: -1,
-                        producer_epoch: -1,
-                        ..Default::default()
-                    });
-                }
-            }
-
+            // whose abort failed. Kafka runs that check inside
+            // `txnMetadata.inLock` together with the transit it prepares, so
+            // every branch below re-runs it under the very lock that performs
+            // its mutation. Two overlapping v3 calls that name the same live
+            // identity therefore serialize on that lock, and the one that
+            // loses finds the epoch the winner already advanced. A zombie
+            // neither recovers a prepared transaction nor aborts the ongoing
+            // transaction of the producer that fenced it.
             if keep_prepared_txn {
                 let recovery = {
                     let mut entry = existing.lock().await;
+                    if is_fenced(&entry, request_identity) {
+                        return Ok(fenced_response());
+                    }
                     if entry.state == TxnState::Ongoing {
                         let ongoing_pid = entry.producer_id;
                         let ongoing_epoch = entry.producer_epoch;
@@ -123,7 +118,12 @@ pub(super) async fn handle_transactional(
                         ..Default::default()
                     });
                 }
-                let state = existing.lock().await.state;
+                let entry = existing.lock().await;
+                if is_fenced(&entry, request_identity) {
+                    return Ok(fenced_response());
+                }
+                let state = entry.state;
+                drop(entry);
                 if matches!(state, TxnState::PrepareCommit | TxnState::PrepareAbort) {
                     return Ok(InitProducerIdResponse {
                         error_code: codes::CONCURRENT_TRANSACTIONS,
@@ -139,6 +139,9 @@ pub(super) async fn handle_transactional(
             // responding.
             let aborted_ongoing = {
                 let mut e = existing.lock().await;
+                if is_fenced(&e, request_identity) {
+                    return Ok(fenced_response());
+                }
                 if matches!(e.state, TxnState::Ongoing) {
                     // Transition to PrepareAbort; persist; dispatch markers.
                     let (request_pid, fenced_from_epoch) =
@@ -154,20 +157,28 @@ pub(super) async fn handle_transactional(
                     let entry_clone = e.clone();
                     drop(e); // release lock while we fan out markers
                     coord.put(entry_clone.clone(), txnv).await?;
+                    // `put` republishes the tid under a fresh handle, so the
+                    // one this call started from is no longer the entry a
+                    // concurrent `coord.get` finds. Everything below must act
+                    // on the published entry.
+                    let published = coord.get(tid).unwrap_or_else(|| Arc::clone(&existing));
                     if let Err(error) = dispatch_abort_markers(coord, &entry_clone).await {
                         // KIP-360: the epoch fence is persisted but the abort
                         // it was prepared for did not complete. The producer
                         // that owns the transaction still holds
-                        // `fenced_from_epoch`, so record it and let only that
-                        // producer retry its `InitProducerId`.
-                        let mut fenced = existing.lock().await;
+                        // `fenced_from_epoch`, so record it on the published
+                        // entry and let only that producer retry its
+                        // `InitProducerId`. Kafka keeps `hasFailedEpochFence`
+                        // in memory too: a coordinator that loses it fails
+                        // closed, and the producer is fenced.
+                        let mut fenced = published.lock().await;
                         fenced.last_producer_epoch = fenced_from_epoch;
                         fenced.has_failed_epoch_fence = true;
                         drop(fenced);
                         return Err(error);
                     }
                     // Re-acquire + transition to CompleteAbort.
-                    let mut e2 = existing.lock().await;
+                    let mut e2 = published.lock().await;
                     e2.state = TxnState::CompleteAbort;
                     e2.last_update_ms = now_millis();
                     let (completed_pid, completed_epoch) =
@@ -203,6 +214,11 @@ pub(super) async fn handle_transactional(
             // a metadata object mid-transition with `CONCURRENT_TRANSACTIONS`,
             // which the client retries; the retry finds no entry and
             // allocates cleanly.
+            // The check comes before the identity one below because a `Dead`
+            // entry holds no live mapping to be fenced against, exactly like
+            // the tid that was never there: Kafka's `isValidProducerId` opens
+            // by admitting freshly created metadata, and the retry this answer
+            // asks for finds no entry and allocates.
             if e3.state == TxnState::Dead {
                 return Ok(InitProducerIdResponse {
                     error_code: codes::CONCURRENT_TRANSACTIONS,
@@ -210,6 +226,12 @@ pub(super) async fn handle_transactional(
                     producer_epoch: -1,
                     ..Default::default()
                 });
+            }
+            // The abort above already advanced the entry past the identity
+            // this call named, so only a call that has changed nothing yet
+            // revalidates here -- under the same lock as the epoch bump below.
+            if !aborted_ongoing && is_fenced(&e3, request_identity) {
+                return Ok(fenced_response());
             }
             let (new_pid, new_epoch) = if aborted_ongoing && txnv.verified() {
                 (e3.producer_id, e3.producer_epoch)
@@ -228,6 +250,32 @@ pub(super) async fn handle_transactional(
                 ..Default::default()
             })
         }
+    }
+}
+
+/// Whether `request_identity` is fenced against `entry`'s live identity.
+///
+/// The caller holds `entry`'s lock, and the mutation the verdict admits runs
+/// under that same guard.
+fn is_fenced(entry: &TxnEntry, request_identity: (i64, i16)) -> bool {
+    let (entry_pid, entry_epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
+    krabka_verified::transaction::init_producer_id_fencing_decision(
+        entry_pid.get(),
+        entry_epoch,
+        entry.last_producer_epoch,
+        entry.has_failed_epoch_fence,
+        request_identity.0,
+        request_identity.1,
+    ) == InitProducerIdFencingDecision::Fenced
+}
+
+/// Kafka's `initTransactionError(Errors.PRODUCER_FENCED)`.
+fn fenced_response() -> InitProducerIdResponse {
+    InitProducerIdResponse {
+        error_code: codes::PRODUCER_FENCED,
+        producer_id: -1,
+        producer_epoch: -1,
+        ..Default::default()
     }
 }
 
@@ -390,6 +438,178 @@ mod tests {
             .await
             .expect("seed __transaction_state");
         (Arc::new(coordinator), part)
+    }
+
+    /// Seeds one `TxnEntry` into a coordinator that already leads its
+    /// `__transaction_state` partition.
+    async fn seed(coordinator: &TxnCoordinator, entry: TxnEntry) {
+        coordinator
+            .put(entry, TxnVersion::Verified)
+            .await
+            .expect("seed __transaction_state");
+    }
+
+    /// A transactional id the coordinator has no entry for is answered with a
+    /// freshly allocated identity even when the caller names one of its own.
+    ///
+    /// Kafka's `isValidProducerId` opens with `txnMetadata.producerEpoch ==
+    /// RecordBatch.NO_PRODUCER_EPOCH`, and the metadata
+    /// `handleInitProducerId` creates for an unknown id always satisfies it:
+    /// the case the clause exists for is a producer recovering from
+    /// `UNKNOWN_PRODUCER_ID`, which names the identity it last held and must
+    /// get the new one back rather than `PRODUCER_FENCED`.
+    #[tokio::test]
+    async fn an_unknown_transactional_id_is_not_fenced_by_a_supplied_identity() {
+        const SEEDED: &str = "tid-seeded";
+        const UNKNOWN: &str = "tid-unknown";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), SEEDED).await;
+        check!(coordinator.get(UNKNOWN).is_none());
+
+        let response = handle_transactional(
+            &coordinator,
+            UNKNOWN,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (4242, 7),
+        )
+        .await
+        .expect("init responds");
+
+        check!(response.error_code == codes::NONE);
+        check!(response.producer_id != 4242);
+        check!(response.producer_epoch == 0);
+    }
+
+    /// Two `InitProducerId` v3 calls that name the same live identity race for
+    /// one transactional id. Exactly one may win: the identity check and the
+    /// epoch bump it admits run under one lock, so the loser wakes to the
+    /// epoch the winner already wrote and is fenced.
+    ///
+    /// With the check hoisted above the mutation, both calls read epoch 3,
+    /// both bump, and the first caller's response is already stale when it
+    /// reaches the client -- two live producers for one transactional id.
+    ///
+    /// The runtime is single-threaded and both tasks are stepped to their park
+    /// on the entry lock with an explicit yield, so the interleaving is the
+    /// same every run.
+    #[tokio::test]
+    async fn overlapping_inits_for_one_identity_fence_the_loser() {
+        const TID: &str = "tid-overlapping-init";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+
+        // Both calls park on the entry lock while the test holds it.
+        let handle = coordinator.get(TID).expect("the seeded entry");
+        let guard = handle.lock().await;
+
+        let mut calls = Vec::new();
+        for _ in 0..2 {
+            let coordinator = Arc::clone(&coordinator);
+            calls.push(tokio::spawn(async move {
+                handle_transactional(
+                    &coordinator,
+                    TID,
+                    TxnVersion::Verified,
+                    60_000,
+                    false,
+                    false,
+                    (1000, 3),
+                )
+                .await
+            }));
+            tokio::task::yield_now().await;
+        }
+        drop(guard);
+
+        let mut answered: Vec<i16> = Vec::new();
+        for call in calls {
+            let response = call.await.expect("init task").expect("init responds");
+            answered.push(response.error_code);
+        }
+        answered.sort_unstable();
+        check!(answered == vec![codes::NONE, codes::PRODUCER_FENCED]);
+
+        // One bump landed, not two.
+        let entry = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!((entry.producer_id, entry.producer_epoch) == (ProducerId(1000), 4));
+    }
+
+    /// A failed abort-marker fan-out must leave the failed-epoch fence on the
+    /// entry the coordinator publishes, not on the handle this call started
+    /// from: `put` republishes the tid under a fresh `Arc`, so a write to the
+    /// superseded handle is invisible to the retry that comes to read it.
+    ///
+    /// KIP-360 lets exactly the producer that still holds the pre-fence epoch
+    /// retry, and that allowance is what the retry below exercises. Without
+    /// it the producer is answered `PRODUCER_FENCED` and its transaction is
+    /// stuck in `PrepareAbort`.
+    #[tokio::test]
+    async fn a_failed_abort_fan_out_records_the_fence_on_the_published_entry() {
+        const TID: &str = "tid-failed-fence";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+
+        // An ongoing transaction over a partition this broker does not host:
+        // the abort marker cannot be delivered, so the fan-out fails after
+        // the epoch fence is already persisted.
+        let mut ongoing = TxnEntry::new_empty(TID.to_string(), ProducerId(1000), 3, 60_000, 0);
+        ongoing.state = TxnState::Ongoing;
+        ongoing.partitions.insert(TopicPartition {
+            topic: "ghost".to_string(),
+            partition: PartitionIndex(0),
+        });
+        seed(&coordinator, ongoing).await;
+
+        let failed = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 3),
+        )
+        .await;
+        check!(failed.is_err());
+
+        let published = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(published.has_failed_epoch_fence);
+        check!(published.last_producer_epoch == 3);
+        check!(published.state == TxnState::PrepareAbort);
+
+        // The owner of the fenced-from epoch retries and is admitted; a
+        // zombie that names any other epoch is not.
+        let zombie = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 2),
+        )
+        .await
+        .expect("zombie responds");
+        check!(zombie.error_code == codes::PRODUCER_FENCED);
+
+        let retry = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 3),
+        )
+        .await
+        .expect("retry responds");
+        check!(retry.error_code == codes::NONE);
     }
 
     /// The KIP-98 expiry sweep and an `InitProducerId` already parked on the

@@ -25,3 +25,30 @@ pub(super) fn cluster_create_denied(
         },
     ) == AuthorizationResult::Deny
 }
+
+/// KIP-525's second, per-topic check: may this principal be told what the
+/// topic it just created is configured with?
+///
+/// Kafka's `ControllerApis.handleCreateTopics` filters the requested names by
+/// `DESCRIBE_CONFIGS` on `Topic(name)` and hands the surviving set to the
+/// controller, which fills `configs` for those and stamps
+/// `TOPIC_AUTHORIZATION_FAILED` on `topicConfigErrorCode` for the rest. A
+/// denial never fails the create: the topic exists either way, and only the
+/// disclosure is withheld.
+pub(super) fn describe_configs_denied(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    context: &crate::handlers::RequestContext<'_>,
+    topic: &str,
+) -> bool {
+    broker.config.authorizer.authorize(
+        image,
+        &AuthorizationRequest {
+            principal: context.principal,
+            host: context.peer,
+            resource_type: krabka_metadata::ResourceType::Topic,
+            resource_name: topic,
+            operation: AclOperation::DescribeConfigs,
+        },
+    ) == AuthorizationResult::Deny
+}

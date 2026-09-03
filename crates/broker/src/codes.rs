@@ -511,6 +511,12 @@ krabka_private_codes! {
 pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
     use crate::error::BrokerError;
     match err {
+        // KFC-1 `delivery.schedule.monotonic`. The log refuses a batch whose
+        // delivery time precedes one the partition already holds, and the
+        // refusal is a statement about the batch's timestamp, not a server
+        // fault: the produce row carries the same code the produce-side
+        // `delivery.max.delay.ms` bound answers with.
+        BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards { .. }) => INVALID_TIMESTAMP,
         BrokerError::UnsupportedApi { .. } => UNSUPPORTED_VERSION,
         BrokerError::PartitionWriterDied { .. } => NOT_LEADER_OR_FOLLOWER,
         BrokerError::GroupInvalidState { .. } => REBALANCE_IN_PROGRESS,

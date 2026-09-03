@@ -17,14 +17,15 @@ use krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicPr
 use krabka_verified::FreezeMutationKind;
 
 use self::{
+    append::PendingAck,
     authorization::authorize_produce,
     delivery::resolve_delivery_gate,
     framing::decode_produce_request,
     leadership::BrokerProducePolicy,
-    pipeline::{PartitionInput, PartitionServices, process_partition},
+    pipeline::{PartitionInput, PartitionOutcome, PartitionServices, process_partition},
     response::build_topic_error_response,
     throttle::{finish_produce_response, produce_bytes_by_qos_tier},
-    topic_settings::resolve_topic_compression,
+    topic_settings::{resolve_timestamp_policy, resolve_topic_compression},
 };
 use crate::{
     broker::Broker,
@@ -79,6 +80,12 @@ pub(super) const PRODUCE_API_KEY: crate::handlers::ApiKeyCode =
 /// that failed before any append happened.
 const INVALID_OFFSET: i64 = -1;
 
+/// Wire sentinel "this topic does not stamp a log-append time", which is
+/// Kafka's `RecordBatch.NO_TIMESTAMP` in the `logAppendTimeMs` response field.
+/// Every `message.timestamp.type=CreateTime` topic answers with it, which is
+/// every topic that did not ask for `LogAppendTime`.
+const NO_LOG_APPEND_TIME: i64 = -1;
+
 /// Wire sentinel "leader unknown" for the KIP-951 `current_leader` hint. The
 /// handler uses it when the leader's `NodeId` does not fit the wire's `i32`.
 const NO_LEADER_ID: i32 = -1;
@@ -103,10 +110,10 @@ pub(crate) async fn handle(
     // below (KIP-219).
     let handler_start = std::time::Instant::now();
     // Phase accounting for `request_{local,remote}_duration_seconds`. One
-    // Produce appends to many partitions, so the two phases are sums over the
-    // partition loop below rather than single intervals: `dispatch_prepared`
-    // charges the writer round-trip to local and the `acks=all` high-watermark
-    // gate to remote.
+    // Produce appends to many partitions, so the local phase is a sum over the
+    // partition loop below: `dispatch_prepared` charges each writer round-trip
+    // to it. The remote phase is a single interval, because the `acks=all`
+    // high-watermark waits of every appended partition run as one wait.
     let phases = crate::metrics::RequestPhases::default();
     let record_decompression_policy = broker.config.record_decompression_policy()?;
     let partitions = broker.partitions.clone();
@@ -160,6 +167,15 @@ pub(crate) async fn handle(
     let denied_topics = authorization.denied_topics;
 
     let mut topic_results: Vec<TopicProduceResponse> = Vec::with_capacity(req.topic_data.len());
+    // The `acks=-1` partitions of this request that have appended and are
+    // waiting for the high watermark to cover them. Kafka registers one
+    // `DelayedProduce` per request covering every such partition, so the waits
+    // overlap and the request's `timeout.ms` bounds all of them together; this
+    // is that set, and `await_durability` below is that one wait. Each entry
+    // remembers where its row goes, because the response is built topic by
+    // topic while the waits are driven once, after every partition has
+    // appended.
+    let mut awaiting: Vec<PendingPartition> = Vec::new();
 
     // ── KIP-13: measure total request bytes before consuming the topic_data ──
     // Computed here so the iterator doesn't conflict with `for topic in req.topic_data`
@@ -255,6 +271,13 @@ pub(crate) async fn handle(
         // timestamp, or the log.
         let delivery = resolve_delivery_gate(&image, &topic_name);
 
+        // KIP-32, resolved here for the same reason again: whose clock the
+        // records carry, and how far a producer timestamp may sit from the
+        // broker's, are properties of the topic. The default is `CreateTime`
+        // with both windows open, so a topic that configured neither costs
+        // every partition one boolean test and reads no clock.
+        let timestamps = resolve_timestamp_policy(&image, &topic_name);
+
         // KFC-7, resolved here for the same reason: schema validation is a
         // property of the topic. `None` is the default, and every partition of
         // such a topic then skips the check without reading a record body.
@@ -275,56 +298,72 @@ pub(crate) async fn handle(
 
         for part_data in topic.partition_data {
             let idx = part_data.index;
-            // Time the per-partition handler work for the
-            // rebalancer's CpuUsage / CpuCapacity goals via
-            // tokio_metrics::TaskMonitor — only on-CPU poll duration is
-            // charged (not wall-time spent awaiting the writer queue,
-            // HW gate under acks=-1, or txn coordinator).
-            let monitor = tokio_metrics::TaskMonitor::new();
-            let out = monitor
-                .instrument(process_partition(
-                    PartitionInput {
-                        part_data,
-                        topic_compression,
-                        max_message_bytes,
-                        delivery,
-                        schema,
-                        topic_name: topic_name.clone(),
-                        freeze,
-                        txn_id_denied,
-                        acks: req.acks,
-                        timeout,
-                    },
-                    PartitionServices {
-                        partitions: &partitions,
-                        txn_coordinator: &txn_coordinator,
-                        producer_state: &producer_state,
-                        log_dir_status: &log_dir_status,
-                        image: &image,
-                        broker_policy,
-                        record_decompression_policy,
-                        metrics: &broker.metrics,
-                        phases: &phases,
-                        schema_validator: broker.config.schema_validator.as_ref(),
-                    },
-                ))
-                .await?;
-            let micros = u64::try_from(monitor.cumulative().total_poll_duration.as_micros())
-                .unwrap_or(u64::MAX);
+            // Time the per-partition handler work for the rebalancer's
+            // CpuUsage / CpuCapacity goals, the way the fetch read loop times
+            // its per-partition read: one `Instant` delta around the call.
+            // The interval covers this partition's gates, its enqueue and the
+            // writer's answer, and stops there — the `acks=-1` high-watermark
+            // wait is not in it, because that wait is one wait for the whole
+            // request and charging it to each partition would count it N times.
+            let started = std::time::Instant::now();
+            let outcome = process_partition(
+                PartitionInput {
+                    part_data,
+                    topic_compression,
+                    timestamps,
+                    max_message_bytes,
+                    delivery,
+                    schema,
+                    topic_name: topic_name.clone(),
+                    freeze,
+                    txn_id_denied,
+                    acks: req.acks,
+                    timeout,
+                },
+                PartitionServices {
+                    partitions: &partitions,
+                    txn_coordinator: &txn_coordinator,
+                    producer_state: &producer_state,
+                    log_dir_status: &log_dir_status,
+                    image: &image,
+                    broker_policy,
+                    record_decompression_policy,
+                    metrics: &broker.metrics,
+                    phases: &phases,
+                    schema_validator: broker.config.schema_validator.as_ref(),
+                },
+            )
+            .await?;
+            let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
             if !topic_name.is_empty() {
                 broker
                     .metrics
                     .record_partition_cpu_micros(&topic_name, idx, micros);
-                // Per-partition failure accounting. Bumps
-                // once per partition whose response carries a non-zero
-                // error code (TOPIC_AUTHORIZATION_FAILED,
-                // NOT_ENOUGH_REPLICAS, INVALID_RECORD, etc.) —
-                // mirrors JVM's `failedProduceRequestRate.mark()`.
-                if out.error_code != 0 {
-                    broker.metrics.record_failed_produce(&topic_name);
+            }
+            match outcome {
+                PartitionOutcome::Done(out) => {
+                    record_partition_failure(broker, &topic_name, out.error_code);
+                    partition_results.push(out);
+                }
+                PartitionOutcome::AwaitingHighWatermark(ack) => {
+                    // The row is decided by the wait below. Reserve its slot
+                    // with the same `UNKNOWN_LOG_APPEND_INFO` sentinel every
+                    // pre-append refusal carries, so a row is never absent
+                    // from the response even on a path that cannot reach the
+                    // overwrite.
+                    awaiting.push(PendingPartition {
+                        topic_row: topic_results.len(),
+                        partition_row: partition_results.len(),
+                        topic_name: topic_name.clone(),
+                        ack,
+                    });
+                    partition_results.push(PartitionProduceResponse {
+                        index: idx,
+                        base_offset: INVALID_OFFSET,
+                        ..Default::default()
+                    });
                 }
             }
-            partition_results.push(out);
         }
 
         topic_results.push(TopicProduceResponse {
@@ -335,9 +374,12 @@ pub(crate) async fn handle(
         });
     }
 
-    // The local and remote phases are complete once the partition loop is.
-    // The throttle below is the third phase, and `finish_produce_response`
-    // observes that one itself.
+    // ── the one acks=-1 high-watermark wait ─────────────────────────
+    await_durability(broker, awaiting, &mut topic_results, timeout, &phases).await;
+
+    // The local and remote phases are complete once the partition loop and the
+    // wait above are. The throttle below is the third phase, and
+    // `finish_produce_response` observes that one itself.
     broker
         .metrics
         .observe_request_phases(PRODUCE_API_KEY, &phases);
@@ -357,6 +399,80 @@ pub(crate) async fn handle(
         topic_results,
         version,
     )
+}
+
+/// One partition of this request whose row is decided by the high-watermark
+/// wait, and the place in the response that row belongs.
+struct PendingPartition {
+    topic_row: usize,
+    partition_row: usize,
+    /// The topic's shared name, for the per-partition failure metric the row
+    /// earns once the wait has decided its error code. It is the registry's
+    /// own `Arc<str>`, so holding it here costs a refcount and no allocation.
+    topic_name: Arc<str>,
+    ack: PendingAck,
+}
+
+/// Drive every appended `acks=-1` partition's high-watermark wait together and
+/// write each answer into the row it reserved.
+///
+/// This is Kafka's one `DelayedProduce` per request. `ReplicaManager
+/// .appendRecords` appends to every partition of the request first and then
+/// registers a single delayed operation covering all of them with the
+/// request's `timeout.ms`, so N partitions of one request cost one replication
+/// round trip and not N of them, and one timeout bounds the whole request
+/// rather than each partition in turn.
+///
+/// The deadline is computed once, here, for the same reason: it starts when
+/// the appends are done, which is when Kafka's `DelayedProduce` is registered.
+///
+/// The whole wait is the request's remote phase. Everything it waits for is a
+/// follower taking an append this broker already made durable, and it is
+/// charged once because it happened once.
+async fn await_durability(
+    broker: &Broker,
+    awaiting: Vec<PendingPartition>,
+    topic_results: &mut [TopicProduceResponse],
+    timeout: Duration,
+    phases: &crate::metrics::RequestPhases,
+) {
+    if awaiting.is_empty() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let deadline = started + timeout;
+    let finished = futures_util::future::join_all(awaiting.into_iter().map(|pending| {
+        let PendingPartition {
+            topic_row,
+            partition_row,
+            topic_name,
+            ack,
+        } = pending;
+        async move {
+            (
+                topic_row,
+                partition_row,
+                topic_name,
+                ack.finish(deadline).await,
+            )
+        }
+    }))
+    .await;
+    phases.add_remote(started.elapsed());
+    for (topic_row, partition_row, topic_name, row) in finished {
+        record_partition_failure(broker, &topic_name, row.error_code);
+        topic_results[topic_row].partition_responses[partition_row] = row;
+    }
+}
+
+/// Per-partition failure accounting. Bumps once per partition whose response
+/// carries a non-zero error code (`TOPIC_AUTHORIZATION_FAILED`,
+/// `NOT_ENOUGH_REPLICAS`, `INVALID_RECORD`, etc.) — mirrors JVM's
+/// `failedProduceRequestRate.mark()`.
+fn record_partition_failure(broker: &Broker, topic_name: &Arc<str>, error_code: i16) {
+    if !topic_name.is_empty() && error_code != 0 {
+        broker.metrics.record_failed_produce(topic_name);
+    }
 }
 
 /// Whether Kafka requires a response for this Produce request. `acks=0`

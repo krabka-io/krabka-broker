@@ -1,5 +1,5 @@
-//! The three KFC-1 scheduled-delivery keys and the produce-path resolvers for
-//! the two of them that never reach `Log.config`.
+//! The three KFC-1 scheduled-delivery keys and the produce-path resolver for
+//! the one of them that never reaches `Log.config`.
 
 use krabka_units::{Time, convert::wire::opt_time_from_millis_i64};
 
@@ -18,10 +18,12 @@ pub(crate) const DELIVERY_MAX_DELAY_MS: &str = "delivery.max.delay.ms";
 /// Default `delivery.max.delay.ms`: 7 days.
 pub(crate) const DEFAULT_DELIVERY_MAX_DELAY_MS: i64 = 604_800_000;
 
-/// KFC-1: when `true`, the produce path rejects a batch whose delivery time is
-/// before the largest delivery time already in the partition. It turns a
-/// silently stalled schedule into an `INVALID_TIMESTAMP` (32) at the producer
-/// that caused it. Default `false`.
+/// KFC-1: when `true`, the log refuses a batch whose delivery time is before
+/// the largest delivery time already in the partition. It turns a silently
+/// stalled schedule into an `INVALID_TIMESTAMP` (32) at the producer that
+/// caused it. Default `false`. It reaches
+/// [`krabka_log::LogConfig::schedule_order`], because only the log's own
+/// lock makes the test and the append it guards one critical section.
 pub(crate) const DELIVERY_SCHEDULE_MONOTONIC: &str = "delivery.schedule.monotonic";
 
 /// KFC-1 sentinel for `delivery.max.delay.ms`: `-1` means no bound on how far
@@ -45,22 +47,6 @@ pub(crate) fn resolve_delivery_max_delay(
         .filter(|millis| *millis >= DELIVERY_MAX_DELAY_UNLIMITED)
         .unwrap_or(DEFAULT_DELIVERY_MAX_DELAY_MS);
     opt_time_from_millis_i64(millis)
-}
-
-/// Resolve `delivery.schedule.monotonic` for `topic`. `true` makes the produce
-/// path reject a batch whose delivery time is before the largest delivery time
-/// already in the partition. A missing or unparseable value resolves to
-/// `false`.
-#[must_use]
-pub(crate) fn resolve_delivery_schedule_monotonic(
-    image: &krabka_metadata::MetadataImage,
-    topic: &str,
-) -> bool {
-    image
-        .topic_config(topic)
-        .and_then(|configs| configs.get(DELIVERY_SCHEDULE_MONOTONIC))
-        .map(String::as_str)
-        == Some("true")
 }
 
 #[cfg(test)]
@@ -152,13 +138,23 @@ mod tests {
     }
 
     #[test]
-    fn apply_leaves_delivery_policy_alone_for_the_produce_side_keys() {
-        // Both keys are enforced on the produce path, so neither may move the
-        // log's own visibility policy.
+    fn apply_carries_schedule_monotonic_and_leaves_the_produce_side_key_alone() {
+        // `delivery.max.delay.ms` is enforced on the produce path against the
+        // broker's clock, so it may not move any of the log's own settings.
+        // `delivery.schedule.monotonic` is enforced by the log itself, so it
+        // has to reach the log's config and nothing else.
         let mut overrides = BTreeMap::new();
         overrides.insert(DELIVERY_MAX_DELAY_MS.into(), "1000".into());
-        overrides.insert(DELIVERY_SCHEDULE_MONOTONIC.into(), "true".into());
         assert!(apply_to_log_config(&overrides, &LogConfig::default()) == LogConfig::default());
+
+        overrides.insert(DELIVERY_SCHEDULE_MONOTONIC.into(), "true".into());
+        assert!(
+            apply_to_log_config(&overrides, &LogConfig::default())
+                == LogConfig {
+                    schedule_order: krabka_log::ScheduleOrder::Monotonic,
+                    ..LogConfig::default()
+                }
+        );
     }
 
     #[test]
@@ -168,23 +164,19 @@ mod tests {
 
         let mut image = MetadataImage::new(Uuid::nil());
         assert!(resolve_delivery_max_delay(&image, "t") == Some(millis(604_800_000)));
-        assert!(!resolve_delivery_schedule_monotonic(&image, "t"));
 
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
             overrides: maplit::btreemap! {
-            DELIVERY_MAX_DELAY_MS.into() => "90000".into(),
-            DELIVERY_SCHEDULE_MONOTONIC.into() => "true".into()},
+            DELIVERY_MAX_DELAY_MS.into() => "90000".into()},
         }));
         assert!(resolve_delivery_max_delay(&image, "t") == Some(millis(90_000)));
-        assert!(resolve_delivery_schedule_monotonic(&image, "t"));
 
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
             overrides: maplit::btreemap! {DELIVERY_MAX_DELAY_MS.into() => "-1".into()},
         }));
         assert!(resolve_delivery_max_delay(&image, "t") == None);
-        assert!(!resolve_delivery_schedule_monotonic(&image, "t"));
     }
 
     #[test]
@@ -205,8 +197,15 @@ mod tests {
                 resolve_delivery_max_delay(&image, "t") == Some(millis(604_800_000)),
                 "delivery.max.delay.ms={value}"
             );
+            // A corrupt `delivery.schedule.monotonic` is not "true", so the
+            // applier leaves the log's default in place.
             assert!(
-                !resolve_delivery_schedule_monotonic(&image, "t"),
+                apply_to_log_config(
+                    &maplit::btreemap! {
+                        DELIVERY_SCHEDULE_MONOTONIC.to_owned() => value.to_owned()
+                    },
+                    &LogConfig::default()
+                ) == LogConfig::default(),
                 "delivery.schedule.monotonic={value}"
             );
         }

@@ -33,7 +33,9 @@ pub(crate) const WRITE_FREEZE: &str = "write.freeze";
 /// The name is krabka-private, like [`super::DISKLESS`], because Kafka has no
 /// topic config for this: `eligible.leader.replicas.version` is a cluster
 /// feature flag, not a per-topic override, so an operator cannot confuse the
-/// two.
+/// two. krabka registers that feature as well, and the controller keeps this
+/// key only while it is finalized at 1; a downgrade to 0 drops every value
+/// the feature published, as Kafka's controller clears its own ELR state.
 ///
 /// The key is controller-managed and read-only. `DescribeConfigs` reports it
 /// with `read_only` set, and both `AlterConfigs` and `IncrementalAlterConfigs`

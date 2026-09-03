@@ -397,3 +397,67 @@ async fn list_groups_includes_next_gen_consumer_group() {
         matches[0].group_type
     );
 }
+
+/// KIP-848: a `SubscribedTopicRegex` that does not compile fails the
+/// heartbeat with `INVALID_REGULAR_EXPRESSION` (128) and admits no member.
+///
+/// Kafka's `GroupMetadataManager.throwIfRegularExpressionIsInvalid` compiles
+/// the pattern before it writes any member record. The failure mode this pins
+/// is the opposite one: admitting the member with `NONE` and never assigning
+/// it a partition, which leaves a consumer sitting on an empty assignment
+/// with no diagnostic.
+///
+/// This is the wire test rather than a JVM-lane one because no stock JVM
+/// client can reach the broker check. `KafkaConsumer.subscribe(Pattern)` and
+/// `kafka-console-consumer --include` both compile the pattern locally with
+/// `java.util.regex`, so an invalid pattern dies in the client with
+/// `PatternSyntaxException` (observed against `apache/kafka:4.3.1`:
+/// `ConsoleConsumer$ConsumerWrapper` compiles at construction, before any
+/// request is sent). Only a compiled 4.x application using the
+/// `SubscriptionPattern` overload sends the string through, and this
+/// repository has no image carrying both a JDK and the 4.x client jars.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
+    let (_b, bootstrap, _d) = boot().await;
+    let client = Arc::new(
+        Client::builder()
+            .bootstrap(bootstrap.as_str())
+            .client_id("c-badregex")
+            .build()
+            .await
+            .unwrap(),
+    );
+    create_topic(&client, "t-badregex", 1).await;
+
+    for pattern in ["(", "[a-", "a{2,1}"] {
+        let mut req = heartbeat("g-badregex", "", 0);
+        req.subscribed_topic_regex = Some(pattern.into());
+        let resp = client.send(req).await.unwrap();
+        check!(
+            resp.error_code == 128,
+            "pattern {pattern:?} must answer INVALID_REGULAR_EXPRESSION, got {} ({:?})",
+            resp.error_code,
+            resp.error_message
+        );
+        check!(
+            resp.error_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("is not a valid regular expression"),
+            "pattern {pattern:?} must carry Kafka's message, got {:?}",
+            resp.error_message
+        );
+        check!(
+            resp.member_id.is_none() || resp.member_epoch == 0,
+            "pattern {pattern:?} must not admit a member: {resp:?}"
+        );
+    }
+
+    // The group is still joinable with a pattern that does compile, so the
+    // refusals above left no member state behind.
+    let mut good = heartbeat("g-badregex", "", 0);
+    good.subscribed_topic_regex = Some("t-bad.*".into());
+    let resp = client.send(good).await.unwrap();
+    assert!(resp.error_code == 0, "valid pattern: {resp:?}");
+    assert!(resp.member_epoch == 1);
+}

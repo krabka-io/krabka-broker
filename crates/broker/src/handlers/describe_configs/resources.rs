@@ -196,6 +196,31 @@ pub(super) fn describe_one(
     ok(Vec::new())
 }
 
+/// A topic's whole effective configuration, for a caller outside
+/// `DescribeConfigs`.
+///
+/// KIP-525 puts the same values on a `CreateTopics` v5+ response, so a client
+/// that has just created a topic needs no follow-up `DescribeConfigs` to learn
+/// what it created. Kafka's controller calls
+/// `ConfigurationControlManager.computeEffectiveTopicConfigs` from both paths;
+/// this is the one computation krabka answers both with. The synonym chain and
+/// the documentation are left out because `CreatableTopicConfigs` has no
+/// fields for them.
+pub(crate) fn effective_topic_configs(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+) -> Vec<DescribeConfigsResourceResult> {
+    topic_configs(
+        image,
+        topic,
+        &|_| true,
+        EntryOptions {
+            include_synonyms: false,
+            include_documentation: false,
+        },
+    )
+}
+
 /// A topic's effective configuration: every registry key, with the layer its
 /// value came from.
 ///

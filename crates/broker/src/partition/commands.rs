@@ -179,6 +179,7 @@ impl Partition {
             .map_err(|_| {
                 ProduceBatchError::Indeterminate("produce acknowledgement dropped".into())
             })?
+            .map(|appended| appended.base_offset)
             .map_err(ProduceBatchError::Rejected)
     }
 
@@ -230,9 +231,10 @@ impl Partition {
             }))
             .await
             .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;
-        ack_rx
+        Ok(ack_rx
             .await
-            .map_err(|_| BrokerError::Txn("ack dropped".into()))?
+            .map_err(|_| BrokerError::Txn("ack dropped".into()))??
+            .base_offset)
     }
 
     /// Append an internally built control batch, such as a transaction ABORT
@@ -261,9 +263,10 @@ impl Partition {
             }))
             .await
             .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;
-        ack_rx
+        Ok(ack_rx
             .await
-            .map_err(|_| BrokerError::Txn("ack dropped".into()))?
+            .map_err(|_| BrokerError::Txn("ack dropped".into()))??
+            .base_offset)
     }
 
     /// Test-only: shift the partition's in-memory `log_start_offset` to

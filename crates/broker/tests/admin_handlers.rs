@@ -19,6 +19,8 @@ mod support;
 mod admin_alter_configs;
 #[path = "admin_handlers/admin_create_partitions.rs"]
 mod admin_create_partitions;
+#[path = "admin_handlers/admin_create_topics.rs"]
+mod admin_create_topics;
 #[path = "admin_handlers/admin_delete_records.rs"]
 mod admin_delete_records;
 #[path = "admin_handlers/admin_describe_cluster.rs"]

@@ -281,6 +281,13 @@ mod unclean_restart {
     /// which is what gives the partition an ELR to fall below.
     fn seed_records() -> Vec<MetadataRecord> {
         vec![
+            // KIP-966 ELR maintenance is gated on the feature, whose release
+            // default is 0, so the seed finalizes it the way an operator's
+            // `kafka-features upgrade` would.
+            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+                name: crate::features::ELR_VERSION.into(),
+                level: 1,
+            }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: TOPIC.into(),
                 topic_id: uuid::Uuid::from_bytes(TOPIC_ID_BYTES),

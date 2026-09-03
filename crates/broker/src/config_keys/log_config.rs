@@ -18,7 +18,7 @@ use super::{
     MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO,
     MIN_COMPACTION_LAG_MS, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES,
     SEGMENT_MS,
-    delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
+    delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
     validation::{parse_cleanup_policy, parse_compression_type},
 };
 
@@ -131,6 +131,16 @@ pub(crate) fn apply_to_log_config(
                     krabka_log::DeliveryPolicy::Scheduled
                 } else {
                     krabka_log::DeliveryPolicy::Immediate
+                };
+            }
+            DELIVERY_SCHEDULE_MONOTONIC => {
+                // The log enforces this one, under the same lock acquisition
+                // that writes the batch, so it travels with `delivery.mode`
+                // into `Log.config` rather than being resolved per produce.
+                out.schedule_order = if v == "true" {
+                    krabka_log::ScheduleOrder::Monotonic
+                } else {
+                    krabka_log::ScheduleOrder::Unordered
                 };
             }
             DELETE_RETENTION_MS => {

@@ -33,6 +33,7 @@ use std::{
 use assert2::assert;
 use base64::Engine as _;
 use krabka_client_core::Client;
+use krabka_protocol::owned::metadata_request::MetadataRequest;
 
 use crate::wire::{HELD_AT_LEAST, min_bytes_exchange};
 
@@ -130,24 +131,60 @@ impl Oracle {
         }
     }
 
-    /// Block until the oracle accepts a client.
+    /// Block until the oracle answers a request.
+    ///
+    /// The probe is a whole `Metadata` round trip, not a connect: building a
+    /// [`Client`] only resolves the bootstrap address, and the published port
+    /// is accepted by Docker's proxy from the moment the container starts, so
+    /// anything short of a served response says nothing about whether the
+    /// broker inside is up. Every request until it is answers `Disconnected`.
     async fn wait_until_ready(&self) {
         let deadline = Instant::now() + ORACLE_BOOT_BUDGET;
         loop {
-            let built = Client::builder()
-                .bootstrap(&self.bootstrap)
-                .client_id("krabka-fetch-min-bytes")
-                .build()
-                .await;
-            if built.is_ok() {
+            if self.metadata_probe().await.is_ok() {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "the Kafka oracle never accepted a client"
+                "the Kafka oracle never answered Metadata within {ORACLE_BOOT_BUDGET:?}; \
+                 container logs:\n{}",
+                self.logs(),
             );
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+    }
+
+    /// One `Metadata` request, on a connection of its own, answered only by a
+    /// broker that is serving.
+    async fn metadata_probe(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::builder()
+            .bootstrap(&self.bootstrap)
+            .client_id("krabka-fetch-min-bytes")
+            .build()
+            .await?;
+        let response = client
+            .send(MetadataRequest {
+                topics: Some(Vec::new()),
+                ..Default::default()
+            })
+            .await?;
+        if response.brokers.is_empty() {
+            return Err("the oracle advertised no broker yet".into());
+        }
+        Ok(())
+    }
+
+    /// Everything the container has printed, for a boot that never finished.
+    fn logs(&self) -> String {
+        let out = Command::new("docker")
+            .args(["logs", &self.container])
+            .output()
+            .expect("spawn docker logs");
+        format!(
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        )
     }
 }
 
