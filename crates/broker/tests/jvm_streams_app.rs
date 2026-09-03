@@ -75,8 +75,9 @@ const CP_APACHE: &str = r"$(ls /opt/kafka/libs/*.jar | tr '\n' ':')";
 
 /// What the topology emits, in order, for the five seeded input records
 /// (`alpha alpha beta alpha beta`, all at timestamps inside one ten-minute
-/// window). A windowed `count()` with no suppression emits the running count
-/// on every update, so the sink holds one record per input record.
+/// window). A windowed `count()` with no suppression and the record cache
+/// disabled emits the running count on every update, so the sink holds one
+/// record per input record.
 const EXPECTED_SINK: [&str; 5] = ["alpha:1", "alpha:2", "beta:1", "alpha:3", "beta:2"];
 
 /// The JVM linkage failures that mean the Kafka-3.5-compiled class cannot run

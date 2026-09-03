@@ -205,7 +205,9 @@ public final class TransactionalProducer {
 ///   `InternalTopicManager` creates `<application.id>-shuffle-repartition`
 ///   with `RepartitionTopicConfig`'s overrides (`cleanup.policy=delete`,
 ///   `retention.ms=-1`, `segment.bytes=52428800`).
-/// - a time-windowed `count()` with no `Materialized` name, so the store name
+/// - a time-windowed `count()` with the record cache disabled, so every
+///   update is forwarded rather than the last per key per commit interval,
+///   and with no `Materialized` name, so the store name
 ///   is the generated `KSTREAM-AGGREGATE-STATE-STORE-<n>` and the changelog
 ///   is created with `WindowedChangelogTopicConfig`'s
 ///   `cleanup.policy=compact,delete`.
@@ -309,6 +311,13 @@ public final class StreamsApp {
     config.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
     config.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 1);
     config.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 500);
+    // Forward every update rather than the last one per key per commit. The
+    // record cache is 10MB by default, which collapses the running counts
+    // this suite reads back into one record per key -- `alpha:3`, `beta:2` --
+    // and the five expected outputs would never all arrive. The raw key is
+    // used rather than the `StreamsConfig` constant because the class is
+    // compiled against Kafka 3.5 jars and also runs against 4.3 ones.
+    config.put("statestore.cache.max.bytes", 0);
     config.put(StreamsConfig.STATE_DIR_CONFIG, "/tmp/krabka-streams-state/" + applicationId);
     if (!"classic".equals(groupProtocol)) {
       config.put("group.protocol", groupProtocol);
