@@ -34,7 +34,8 @@
 //!
 //! A richer rule than this table can express — one that reads the principal,
 //! or the broker set — would go in the OPA authorizer input
-//! ([`crate::authorizer::opa::wire`]) rather than here. Nothing needs it yet.
+//! (`authorizer::opa`'s private `wire` module) rather than here. Nothing
+//! needs it yet.
 
 use std::collections::BTreeMap;
 
