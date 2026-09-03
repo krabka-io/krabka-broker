@@ -88,5 +88,5 @@ sweep on the strength of this consumer.
 generates and that [`config-reference.md`](config-reference.md) carries a row
 for every key. `crates/broker/tests/example_broker_toml.rs` parses the example
 configs and checks every key they set against the schema. The docs CI job
-regenerates the reference page with `tools/generate-config-reference.py` and
+regenerates the reference page with `aspect generate-config-reference` and
 diffs it.

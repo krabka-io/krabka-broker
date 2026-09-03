@@ -1,0 +1,229 @@
+"""Check that no crate CHANGELOG documents a release.
+
+Krabka versions and tags the whole workspace as one unit, so the root
+`CHANGELOG.md` is the only record of what shipped. A crate `CHANGELOG.md` is
+allowed to hold an `[Unreleased]` heading and prose, and nothing else. This
+check fails when one carries a version heading, which is what the twelve files
+extracted from robot-head/crabka did: they documented that repository's
+releases under this repository's crate names.
+
+The rule here is stricter than "no version heading below `[Unreleased]`". A
+version heading anywhere in a crate changelog is a release record, and the
+position of the `[Unreleased]` heading does not change that.
+
+    aspect check-crate-changelogs
+    aspect check-crate-changelogs --root=/path/to/a/checkout
+"""
+
+load("./repo.axl", "basename", "walk_suffix")
+
+# Markdown reads up to three leading spaces as part of a heading or a code
+# fence, and a fourth as the start of an indented code block. Both scanners
+# below carry that allowance, so an indented heading is still an offender and
+# an indented fence still opens a block.
+_MAX_INDENT = 3
+
+# A heading's `#` run: `#` through `######`, and no further.
+_MAX_HEADING_LEVEL = 6
+
+# The shortest run of backticks or tildes that opens or closes a fence.
+_MIN_FENCE = 3
+
+_DIGITS = "0123456789"
+
+# What separates a heading's `#` run from its text. Markdown's own set, minus
+# the line terminators that `splitlines` has already taken off.
+_WHITESPACE = " \t\r\f\v"
+
+# The two characters a fence is built from, in the order a line is tried
+# against them. A run of one is never a run of the other.
+_FENCE_CHARACTERS = ["`", "~"]
+
+def _run_length(line, start, characters):
+    """How many of `characters` run consecutively from `start`."""
+    length = 0
+    for index in range(start, len(line)):
+        if line[index] not in characters:
+            break
+        length += 1
+    return length
+
+def _indent(line):
+    """The count of leading spaces, or -1 when a fourth makes it a code block.
+
+    Only spaces indent: a leading tab is not indentation Markdown reads, so a
+    line that opens with one is neither a heading nor a fence.
+    """
+    spaces = _run_length(line, 0, " ")
+    return -1 if spaces > _MAX_INDENT else spaces
+
+def _is_version_heading(line):
+    """Whether `line` is a Markdown heading that names a version.
+
+    `## [0.3.8] - 2026-06-23`, `## 1.0.0`, `### [v2.1]`, ` ## [0.6.0]`. The
+    link brackets and the `v` prefix are optional, and the release date, if
+    there is one, follows the version. Two numeric components are the least a
+    version has, which is what keeps `## 1` and prose like `## 2026 in review`
+    from reading as one.
+    """
+    index = _indent(line)
+    if index < 0:
+        return False
+
+    level = _run_length(line, index, "#")
+    if level < 1 or level > _MAX_HEADING_LEVEL:
+        return False
+    index += level
+
+    spacing = _run_length(line, index, _WHITESPACE)
+    if spacing < 1:
+        return False
+    index += spacing
+
+    if index < len(line) and line[index] == "[":
+        index += 1
+    if index < len(line) and line[index] == "v":
+        index += 1
+
+    digits = _run_length(line, index, _DIGITS)
+    if digits < 1:
+        return False
+    index += digits
+
+    # At least one `.<digits>` group has to follow that first run: two
+    # components are what makes a version a version. The trailing `]` of the
+    # link form is optional and nothing is required after it, so the scan ends
+    # at the version and the rest of the line -- a release date, say -- is free.
+    groups = 0
+    for _ in range(len(line)):
+        if index >= len(line) or line[index] != ".":
+            break
+        digits = _run_length(line, index + 1, _DIGITS)
+        if digits < 1:
+            break
+        index += 1 + digits
+        groups += 1
+    return groups > 0
+
+def _fence(line):
+    """The code fence `line` carries, or `None` when it carries none.
+
+    A fence is three or more backticks or tildes, under up to three spaces of
+    indent. The run's character and length decide what closes it, and the info
+    string that follows decides whether it opens anything.
+    """
+    indent = _indent(line)
+    if indent < 0:
+        return None
+    for character in _FENCE_CHARACTERS:
+        length = _run_length(line, indent, character)
+        if length >= _MIN_FENCE:
+            return struct(
+                character = character,
+                length = length,
+                info = line[indent + length:],
+            )
+    return None
+
+def _opens(fence):
+    """Whether a fence line opens a block.
+
+    A backtick fence's info string holds no backtick, which is what keeps a
+    line of inline code spans from opening one. A tilde fence takes any info
+    string.
+    """
+    return not (fence.character == "`" and "`" in fence.info)
+
+def _closes(fence, opened):
+    """Whether a fence line closes the block `opened` opened.
+
+    Only a run of the opening character, at least as long as the opening run,
+    and with nothing but whitespace after it.
+    """
+    return (
+        fence.character == opened.character and
+        fence.length >= opened.length and
+        not fence.info.strip()
+    )
+
+def version_headings(text):
+    """Return the version headings of one changelog, in file order.
+
+    A heading inside a fenced code block is an example, not a release, so this
+    skips fenced blocks -- backtick and tilde alike, each closing only on its
+    own delimiter.
+    """
+    headings = []
+    opened = None
+
+    for line in text.splitlines():
+        fence = _fence(line)
+
+        if opened != None:
+            if fence != None and _closes(fence, opened):
+                opened = None
+        elif fence != None and _opens(fence):
+            opened = fence
+        elif _is_version_heading(line):
+            headings.append(line.strip())
+
+    return headings
+
+def offenders(changelogs):
+    """Every `(path, heading)` pair that breaks the rule, in path order.
+
+    A changelog is `struct(path, text)`: its repository-relative path and its
+    contents. Taking the read files rather than a directory keeps this pure,
+    so the walking stays in the task and the rule stays under test.
+    """
+    return [
+        (changelog.path, heading)
+        for changelog in sorted(changelogs, key = lambda changelog: changelog.path)
+        for heading in version_headings(changelog.text)
+    ]
+
+def crate_changelogs(fs, root):
+    """Every `crates/**/CHANGELOG.md` under `root`, read, in path order.
+
+    The rule is about crate changelogs, so the root `CHANGELOG.md` -- the one
+    record of what shipped -- is not among them. The name has to be exactly
+    `CHANGELOG.md`: a suffix match would take `OLD_CHANGELOG.md` with it.
+    """
+    return [
+        struct(path = path, text = fs.read_to_string(root + "/" + path))
+        for path in walk_suffix(fs, root + "/crates", "CHANGELOG.md", relative_to = root)
+        if basename(path) == "CHANGELOG.md"
+    ]
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.args.root or ctx.std.env.bazel_root_dir()
+    if not ctx.std.fs.exists(root + "/crates"):
+        ctx.std.io.stderr.write("no crates/ directory under %s\n" % root)
+        return 1
+
+    found_changelogs = crate_changelogs(ctx.std.fs, root)
+    found = offenders(found_changelogs)
+    if found:
+        ctx.std.io.stderr.write(
+            "A crate changelog must record no release. Move the entry to the " +
+            "root CHANGELOG.md and delete these headings:\n",
+        )
+        for path, heading in found:
+            ctx.std.io.stderr.write("  %s: %s\n" % (path, heading))
+        return 1
+
+    ctx.std.io.stdout.write(
+        "check-crate-changelogs: %d changelogs record no release\n" % len(found_changelogs),
+    )
+    return 0
+
+check_crate_changelogs = task(
+    summary = "Check that no crate changelog records a release",
+    implementation = _impl,
+    args = {
+        "root": args.string(
+            default = "",
+            description = "The checkout to check. Defaults to the repository root.",
+        ),
+    },
+)

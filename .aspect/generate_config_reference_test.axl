@@ -1,0 +1,329 @@
+"""Unit tests for `generate_config_reference.axl`."""
+
+load(
+    "./generate_config_reference.axl",
+    "cell",
+    "contains_word",
+    "default_label",
+    "effective",
+    "enum_values",
+    "render",
+    "resolve",
+    "type_label",
+    "units_label",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_INNER = {"type": "object", "properties": {"a": {"type": "string"}}}
+
+def _root():
+    return {"$defs": {"Inner": {"type": "object", "properties": {"a": {"type": "string"}}}}}
+
+def _test_cell_collapses_whitespace(_ctx):
+    check_eq("surrounding space", cell("  a\n\n  b  "), "a b")
+    check_eq("a paragraph break", cell("one\n\n   two\nthree"), "one two three")
+    check_eq("several blank lines", cell("a\n\n\nb"), "a b")
+    check_eq("a wrapped line", cell("a\n b"), "a b")
+    check_eq("tabs and carriage returns", cell("a\tb\r\nc"), "a b c")
+    check_eq("vertical tab and form feed", cell("a\x0bb\x0cc"), "a b c")
+    check_eq("nothing to say", cell(""), "")
+    check_eq("only whitespace", cell(" \n\t "), "")
+
+def _test_cell_escapes_the_column_separator(_ctx):
+    check_eq("a pipe cannot end the cell", cell("a | b"), "a \\| b")
+
+def _test_contains_word_respects_word_boundaries(_ctx):
+    check_eq("the word alone", contains_word("seconds", "seconds"), True)
+    check_eq("between punctuation", contains_word("wait, in seconds.", "seconds"), True)
+
+    # `\bseconds\b` is what the original matched, so a longer word that merely
+    # ends with it is not a hit -- this is the case that decides the Units
+    # column for a key documented in subseconds.
+    check_eq("a longer word", contains_word("in subseconds", "seconds"), False)
+    check_eq("an identifier", contains_word("seconds_left", "seconds"), False)
+    check_eq("a later occurrence still counts", contains_word("subseconds and seconds", "seconds"), True)
+    check_eq("a different case", contains_word("Milliseconds", "milliseconds"), False)
+    check_eq("absent", contains_word("a short line", "seconds"), False)
+    check_eq("nothing at all", contains_word("", "seconds"), False)
+
+def _test_resolve_follows_a_local_ref(_ctx):
+    check_eq("the $defs entry", resolve(_root(), {"$ref": "#/$defs/Inner"}), _INNER)
+    check_eq("no $ref", resolve(_root(), {"type": "string"}), {"type": "string"})
+
+def _test_effective_collapses_an_optional_struct(_ctx):
+    root = {"$defs": {"Inner": {"type": "object", "properties": {"a": {"type": "string"}}}}}
+    check_eq(
+        "the field's own description reaches the inner schema",
+        effective(root, {"anyOf": [{"$ref": "#/$defs/Inner"}, {"type": "null"}], "description": "outer doc"}),
+        {"type": "object", "properties": {"a": {"type": "string"}}, "description": "outer doc"},
+    )
+
+def _test_effective_keeps_the_inner_description(_ctx):
+    root = {"$defs": {"Inner": {"type": "object", "properties": {}, "description": "inner doc"}}}
+    check_eq(
+        "the inner description wins, and the default still travels",
+        effective(root, {
+            "anyOf": [{"$ref": "#/$defs/Inner"}, {"type": "null"}],
+            "description": "outer doc",
+            "default": 7,
+        }),
+        {"type": "object", "properties": {}, "description": "inner doc", "default": 7},
+    )
+
+def _test_effective_leaves_a_real_union_alone(_ctx):
+    union = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+    check_eq("two non-null branches", effective({}, union), union)
+
+def _test_enum_values(_ctx):
+    check_eq("an enum", enum_values({"enum": ["a", "b"]}), ["a", "b"])
+    check_eq("oneOf consts", enum_values({"oneOf": [{"const": "x"}, {"const": "y"}]}), ["x", "y"])
+    check_eq("a oneOf of structs", enum_values({"oneOf": [{"$ref": "#/$defs/Inner"}]}), None)
+    check_eq("neither", enum_values({"type": "string"}), None)
+
+def _test_type_label_scalars(_ctx):
+    root = _root()
+    check_eq("a string", type_label(root, {"type": "string"}), "string")
+    check_eq("an optional string", type_label(root, {"type": ["string", "null"]}), "string")
+    check_eq("an integer width", type_label(root, {"type": "integer", "format": "uint32"}), "integer (uint32)")
+    check_eq("a plain integer", type_label(root, {"type": "integer"}), "integer")
+    check_eq("two types", type_label(root, {"type": ["string", "integer"]}), "string or integer")
+    check_eq("no type at all", type_label(root, {}), "any")
+    check_eq("a constant", type_label(root, {"const": "off"}), "constant `\"off\"`")
+    check_eq("an enum", type_label(root, {"enum": ["a", "b"]}), "one of `a`, `b`")
+
+def _test_type_label_containers(_ctx):
+    root = _root()
+    check_eq("a table", type_label(root, {"type": "object"}), "table")
+    check_eq("an optional table", type_label(root, {"anyOf": [{"$ref": "#/$defs/Inner"}, {"type": "null"}]}), "table")
+    check_eq("an array of scalars", type_label(root, {"type": "array", "items": {"type": "string"}}), "array of string")
+    check_eq(
+        "an array of structs",
+        type_label(root, {"type": "array", "items": {"$ref": "#/$defs/Inner"}}),
+        "array of tables",
+    )
+    check_eq("an array with no items", type_label(root, {"type": "array"}), "array of any")
+    check_eq(
+        "a map",
+        type_label(root, {"type": "object", "additionalProperties": {"type": "string"}}),
+        "map of string to string",
+    )
+
+def _test_type_label_nests_element_types(_ctx):
+    # The Python reached these by recursing, which Starlark forbids; the loop
+    # that replaces it has to prepend one wrapper per level.
+    root = _root()
+    check_eq(
+        "an array of arrays",
+        type_label(root, {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}),
+        "array of array of string",
+    )
+    check_eq(
+        "a map of arrays",
+        type_label(root, {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}),
+        "map of string to array of string",
+    )
+
+def _test_default_label(_ctx):
+    check_eq("a required key", default_label({}, {}, True), "required")
+    check_eq("a serde default", default_label({}, {"default": 5}, False), "`5`")
+    check_eq("a false default", default_label({}, {"default": False}, False), "`false`")
+    check_eq("a string default", default_label({}, {"default": "x"}, False), "`\"x\"`")
+    check_eq("an empty list default", default_label({}, {"default": []}, False), "`[]`")
+    check_eq("an empty map default", default_label({}, {"default": {}}, False), "`{}`")
+    check_eq("an explicit null default", default_label({}, {"default": None}, False), "broker default")
+    check_eq(
+        "a nullable scalar",
+        default_label({"type": ["string", "null"]}, {"type": ["string", "null"]}, False),
+        "broker default",
+    )
+    check_eq("an array with no default", default_label({}, {"type": "array"}, False), "`[]`")
+    check_eq("a scalar with no default", default_label({}, {"type": "string"}, False), "broker default")
+
+def _test_units_label_from_the_format(_ctx):
+    check_eq("a duration", units_label("x", {"format": "duration"}), "duration")
+    check_eq("a byte size", units_label("x", {"format": "byte-size"}), "byte size")
+    check_eq("a ratio", units_label("x", {"format": "ratio"}), "ratio")
+    check_eq("an integer width is not a unit", units_label("x", {"type": "integer", "format": "uint32"}), "")
+
+def _test_units_label_from_the_key(_ctx):
+    check_eq("_ms", units_label("timeout_ms", {"type": "integer"}), "milliseconds")
+    check_eq("_secs", units_label("retention_secs", {"type": "integer"}), "seconds")
+    check_eq("_seconds", units_label("retention_seconds", {"type": "integer"}), "seconds")
+    check_eq("_bytes", units_label("max_bytes", {"type": "integer"}), "bytes")
+
+    # Every key pattern the original used was anchored at the end of the key,
+    # so a unit that opens the name is not one.
+    check_eq("a prefix is not a suffix", units_label("ms_first", {"type": "integer"}), "")
+
+def _test_units_label_from_the_description(_ctx):
+    check_eq("bytes in prose", units_label("max", {"type": "integer", "description": "In bytes."}), "bytes")
+    check_eq(
+        "entries in prose",
+        units_label("cache", {"type": ["integer", "null"], "description": "Number of entries."}),
+        "entries",
+    )
+    check_eq(
+        "the first unit in the list wins",
+        units_label("max", {"type": "integer", "description": "Wait milliseconds or seconds."}),
+        "milliseconds",
+    )
+    check_eq(
+        "a longer word is not the unit",
+        units_label("max", {"type": "integer", "description": "In subseconds."}),
+        "",
+    )
+    check_eq(
+        "only an integer reads its prose",
+        units_label("max", {"type": "string", "description": "In bytes."}),
+        "",
+    )
+
+def _fixture_schema():
+    """A schema with every shape the page renders, nested two deep."""
+    return {
+        "type": "object",
+        "required": ["broker_id"],
+        "properties": {
+            "broker_id": {"type": ["integer", "null"], "description": "The broker's\n\nid."},
+            "alpha": {"$ref": "#/$defs/Alpha"},
+            "beta": {"$ref": "#/$defs/Beta"},
+            "listeners": {"type": "array", "items": {"$ref": "#/$defs/Listener"}, "default": []},
+            "authz": {"$ref": "#/$defs/Authz"},
+        },
+        "$defs": {
+            "Alpha": {
+                "type": "object",
+                "description": "Alpha table.",
+                "properties": {
+                    "child": {"$ref": "#/$defs/Child"},
+                    "flag": {"type": "boolean", "default": False},
+                },
+            },
+            "Child": {
+                "type": "object",
+                "description": "Child table.",
+                "properties": {"deep_ms": {"type": "integer", "default": 5}},
+            },
+            "Beta": {
+                "type": "object",
+                "properties": {"m": {"type": "integer", "description": "How many bytes."}},
+            },
+            "Listener": {
+                "type": "object",
+                "description": "One listener.",
+                "properties": {"name": {"type": "string"}},
+            },
+            "Authz": {"oneOf": [{"$ref": "#/$defs/AuthzOff"}, {"$ref": "#/$defs/AuthzOn"}]},
+            "AuthzOff": {
+                "type": "object",
+                "description": "Off.",
+                "properties": {"type": {"type": "string", "const": "off"}},
+            },
+            "AuthzOn": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "const": "on"},
+                    "path": {"type": "string"},
+                },
+            },
+        },
+    }
+
+# What `_fixture_schema` renders below the `## Top-level keys` heading. The
+# section order is the point: `[alpha.child]` sits between `[alpha]` and
+# `[beta]`, which is depth-first, not one level at a time.
+_FIXTURE_BODY = [
+    "",
+    "| Key | Type | Default | Units | Description |",
+    "| :--- | :--- | :--- | :--- | :--- |",
+    "| `broker_id` | integer | required |  | The broker's id. |",
+    "| `alpha` | table | broker default |  | Alpha table. See `[alpha]` below. |",
+    "| `beta` | table | broker default |  | See `[beta]` below. |",
+    "| `listeners` | array of tables | `[]` |  | See `[[listeners]]` below. |",
+    "| `authz` | table | broker default |  | See the `[authz]` sections below. |",
+    "",
+    "### `[alpha]`",
+    "",
+    "Alpha table.",
+    "",
+    "| Key | Type | Default | Units | Description |",
+    "| :--- | :--- | :--- | :--- | :--- |",
+    "| `child` | table | broker default |  | Child table. See `[alpha.child]` below. |",
+    "| `flag` | boolean | `false` |  |  |",
+    "",
+    "#### `[alpha.child]`",
+    "",
+    "Child table.",
+    "",
+    "| Key | Type | Default | Units | Description |",
+    "| :--- | :--- | :--- | :--- | :--- |",
+    "| `deep_ms` | integer | `5` | milliseconds |  |",
+    "",
+    "### `[beta]`",
+    "",
+    "| Key | Type | Default | Units | Description |",
+    "| :--- | :--- | :--- | :--- | :--- |",
+    "| `m` | integer | broker default | bytes | How many bytes. |",
+    "",
+    "### `[[listeners]]`",
+    "",
+    "One listener.",
+    "",
+    "| Key | Type | Default | Units | Description |",
+    "| :--- | :--- | :--- | :--- | :--- |",
+    "| `name` | string | broker default |  |  |",
+    "",
+    "### `[authz]` with `type = \"off\"`",
+    "",
+    "Off.",
+    "",
+    "| Key | Type | Default | Units | Description |",
+    "| :--- | :--- | :--- | :--- | :--- |",
+    "| `type` | constant `\"off\"` | broker default |  |  |",
+    "",
+    "### `[authz]` with `type = \"on\"`",
+    "",
+    "| Key | Type | Default | Units | Description |",
+    "| :--- | :--- | :--- | :--- | :--- |",
+    "| `type` | constant `\"on\"` | broker default |  |  |",
+    "| `path` | string | broker default |  |  |",
+    "",
+]
+
+def _test_render_walks_sections_depth_first(_ctx):
+    body = render(_fixture_schema()).partition("## Top-level keys\n")[2]
+    check_eq("the rendered sections", body, "\n".join(_FIXTURE_BODY))
+
+def _test_render_opens_with_the_banner(_ctx):
+    page = render({"type": "object", "properties": {}})
+    lines = page.split("\n")
+    check_eq("the title", lines[0], "# Broker configuration reference")
+    check_eq(
+        "the banner names the generator",
+        lines[2],
+        "<!-- Generated by `aspect generate-config-reference` from docs/config-schema.json;" +
+        " do not edit by hand. -->",
+    )
+    check_eq("a page with no keys still ends in one newline", page.endswith("keys\n"), True)
+
+generate_config_reference_tests = suite("generate-config-reference", [
+    _test_cell_collapses_whitespace,
+    _test_cell_escapes_the_column_separator,
+    _test_contains_word_respects_word_boundaries,
+    _test_resolve_follows_a_local_ref,
+    _test_effective_collapses_an_optional_struct,
+    _test_effective_keeps_the_inner_description,
+    _test_effective_leaves_a_real_union_alone,
+    _test_enum_values,
+    _test_type_label_scalars,
+    _test_type_label_containers,
+    _test_type_label_nests_element_types,
+    _test_default_label,
+    _test_units_label_from_the_format,
+    _test_units_label_from_the_key,
+    _test_units_label_from_the_description,
+    _test_render_walks_sections_depth_first,
+    _test_render_opens_with_the_banner,
+])
+
+test_generate_config_reference = suite_task(generate_config_reference_tests)

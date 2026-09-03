@@ -1,0 +1,166 @@
+"""Fail when a shell script or a Python script enters the tree unannounced.
+
+Every check, generator and helper this repository runs on a developer's or a
+runner's machine is an `.axl` task under `.aspect/`, with its own unit tests
+beside it. The scripts they replaced were untested by construction: a bash
+`awk` pipeline or a 600-line Python renderer has no unit under it, and the two
+that did have self-tests carried them as a second script.
+
+What is left is the set below, and it is not a preference: each of these runs
+somewhere the Aspect CLI is not -- inside a Bazel action, inside a Bazel test
+sandbox, or inside a container image built from an apko base. A task cannot go
+there. Everything else has moved, so a new `.sh` or `.py` is a regression, and
+this task is what says so.
+
+Adding a row to `ALLOWED` is the deliberate way past it. The reason column is
+the point of the row: it has to name where the file runs, because "the Aspect
+CLI is not there" is the only argument this list accepts.
+
+    aspect check-scripts
+"""
+
+load("./repo.axl", "walk")
+
+# Suffixes that make a file a script whatever its first line says.
+SCRIPT_SUFFIXES = [".sh", ".bash", ".zsh", ".py", ".pyi", ".pyw"]
+
+# Interpreters that make a `#!` line a script's, for a file with no suffix.
+SHEBANG_INTERPRETERS = ["sh", "bash", "zsh", "dash", "ksh", "python", "python2", "python3"]
+
+# Directories the sweep does not enter. `.git` and the Bazel and Cargo output
+# trees hold no repository source; every other hidden directory is swept, so a
+# script cannot hide under `.github/`.
+_SKIPPED_DIRS = [".git", "target", "node_modules"]
+
+# The scripts that stay, and why each one cannot be an `.axl` task.
+ALLOWED = {
+    "bazel/docker_test.sh": "the sh_test body //bazel:defs.bzl wraps every container suite in; it runs inside a Bazel test sandbox",
+    "bazel/images/pinned_digests.sh": "the tool of the //bazel/images:pinned_digests genrule; it runs inside a Bazel action",
+    "crates/broker/tests/fixtures/security/kdc/bootstrap.sh": "the KDC fixture image's entrypoint; it runs inside that container",
+    "packaging/image_binaries_test.sh": "the sh_test body of //packaging:image_binaries_test; it runs inside a Bazel test sandbox",
+    "packaging/image_docker_test.sh": "the sh_test body of //packaging:image_docker_test; it runs inside a Bazel test sandbox",
+    "tools/creusot/build-layer.sh": "the cmd of the //tools/creusot:installed_toolchain_tar genrule; it runs inside a Bazel action",
+    "tools/creusot/install-creusot.sh": "the proof builder image's entrypoint; it runs inside that container",
+    "tools/creusot/prove.sh": "the proof image's entrypoint; it runs inside that container",
+}
+
+def has_script_suffix(path):
+    for suffix in SCRIPT_SUFFIXES:
+        if path.endswith(suffix):
+            return True
+    return False
+
+# The `env` options whose operand is the next word rather than attached to
+# them. `--unset=NAME` and `--chdir=DIR` carry theirs, so only the bare forms
+# swallow a word; `-S` does not, because in a `#!` line the kernel hands `env`
+# the whole tail as one string and `-S` is what asks it to split that string.
+ENV_OPTIONS_TAKING_AN_OPERAND = ["-u", "--unset", "-C", "--chdir"]
+
+def env_program(words):
+    """The program `env` runs, given the words that follow it.
+
+    `env` accepts options and `NAME=value` assignments before the program, and
+    two of its options take the next word. Treating that word as the program is
+    how `#!/usr/bin/env -S -u PYTHONPATH python3` would slip past this check.
+    """
+    index = 0
+    for _ in range(len(words)):
+        if index >= len(words):
+            return ""
+        word = words[index]
+        if word in ENV_OPTIONS_TAKING_AN_OPERAND:
+            index += 2
+        elif word.startswith("-") or "=" in word:
+            index += 1
+        else:
+            return word
+    return ""
+
+def shebang_interpreter(first_line):
+    """The interpreter a `#!` line selects, or "" when the line is not one.
+
+    Both `#!/bin/bash` and `#!/usr/bin/env python3 -u` resolve to their
+    program's base name; anything else resolves to nothing.
+    """
+    if not first_line.startswith("#!"):
+        return ""
+    words = [word for word in first_line[2:].strip().split(" ") if word]
+    if not words:
+        return ""
+    program = words[0].rsplit("/", 1)[-1]
+    if program == "env":
+        program = env_program(words[1:]).rsplit("/", 1)[-1]
+    return program
+
+def is_script(path, read_first_line):
+    """Whether `path` is a shell or Python script.
+
+    A suffix settles it. A file without one -- the shape a `tools/check-thing`
+    executable takes -- is settled by its `#!` line, so dropping the suffix is
+    not a way around this check.
+
+    `read_first_line` is the callable that opens the file, not the line itself,
+    so a sweep over a tree of `.rs` sources reads none of them.
+    """
+    if has_script_suffix(path):
+        return True
+    if "." in path.rsplit("/", 1)[-1]:
+        return False
+    return shebang_interpreter(read_first_line(path)) in SHEBANG_INTERPRETERS
+
+def audit(paths, read_first_line):
+    """The unlisted scripts among `paths`, and the `ALLOWED` rows nothing backs.
+
+    `read_first_line` opens a path and returns its opening line. It is called
+    only for a file whose name carries no suffix.
+    """
+    unlisted = sorted([
+        path
+        for path in paths
+        if path not in ALLOWED and is_script(path, read_first_line)
+    ])
+    present = {path: True for path in paths}
+    stale = sorted([path for path in ALLOWED if path not in present])
+    return struct(unlisted = unlisted, stale = stale)
+
+def _first_line(fs, root):
+    def read(path):
+        text = fs.try_read_to_string(root + "/" + path)
+        return text.splitlines()[0] if text else ""
+
+    return read
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    paths = walk(
+        ctx.std.fs,
+        root,
+        skip_dir = lambda name: name in _SKIPPED_DIRS or name.startswith("bazel-"),
+    )
+    result = audit(paths, _first_line(ctx.std.fs, root))
+
+    for path in result.unlisted:
+        ctx.std.io.stderr.write(
+            "%s: a new shell or Python script. Write it as an .axl task under " % path +
+            ".aspect/ with unit tests beside it, or, if it has to run where the " +
+            "Aspect CLI is not, add it to ALLOWED in .aspect/check_scripts.axl " +
+            "with the reason.\n",
+        )
+    for path in result.stale:
+        ctx.std.io.stderr.write(
+            "%s: ALLOWED in .aspect/check_scripts.axl names it, but it does not " % path +
+            "exist. Delete the row.\n",
+        )
+    if result.unlisted or result.stale:
+        return 1
+
+    ctx.std.io.stdout.write(
+        "check-scripts: %d scripts, all of them accounted for\n" % len(ALLOWED),
+    )
+    return 0
+
+check_scripts = task(
+    summary = "Fail on a shell or Python script that is not on the allowlist",
+    implementation = _impl,
+    args = {},
+)

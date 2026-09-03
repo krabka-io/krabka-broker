@@ -1,0 +1,311 @@
+"""Unit tests for `check_mutants_config.axl`."""
+
+load(
+    "./check_mutants_config.axl",
+    "dead_fragments",
+    "exclude_patterns",
+    "matching_files",
+    "path_fragments",
+    "scan_exclude_re",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+# A line-count table standing in for a `crates/` tree: `segment.rs` is the thin
+# facade the module split left behind, and `segment/io.rs` is where the code
+# went. Both end in `segment/io.rs`'s and `segment.rs`'s fragments, so between
+# them they cover the multi-match cases.
+_TREE = {
+    "crates/log/src/segment.rs": 40,
+    "crates/log/src/segment/io.rs": 120,
+    "crates/log/src/segment/read_raw.rs": 90,
+    "crates/raft/src/io.rs": 30,
+    "crates/raft/src/radio.rs": 500,
+}
+
+def _test_a_bare_fragment_and_its_escaped_twin(_ctx):
+    # An `exclude_re` entry is a regex, so the `.` of `.rs` is usually escaped.
+    # Both spellings name the same file and both report it unescaped.
+    check_eq("bare", path_fragments("segment/io.rs"), [("segment/io.rs", None)])
+    check_eq("escaped", path_fragments("io\\.rs"), [("io.rs", None)])
+    check_eq("escaped and pinned", path_fragments("txn_index\\.rs:94"), [("txn_index.rs", 94)])
+    check_eq("bare and pinned", path_fragments("txn_index.rs:94"), [("txn_index.rs", 94)])
+
+def _test_fragments_of_the_shapes_the_config_holds(_ctx):
+    for pattern, want in [
+        (
+            "broker/src/client_metrics/mod\\.rs.*replace ClientMetrics::shutdown with \\(\\)",
+            [("broker/src/client_metrics/mod.rs", None)],
+        ),
+        (
+            "read_raw\\.rs:75:.*replace - with [+/] in Segment::read_raw_with_buffer_cap",
+            [("read_raw.rs", 75)],
+        ),
+        ("io\\.rs:94.*replace read_at ", [("io.rs", 94)]),
+        (
+            "leader_epoch_checkpoint/file\\.rs.*e\\.kind\\(\\)",
+            [("leader_epoch_checkpoint/file.rs", None)],
+        ),
+        ("replace > with >= in Log::append(_verbatim)?(_at)?$", []),
+        ("replace \\|\\| with && in Segment::read_raw_with_buffer_cap", []),
+        ("replace \\| with \\^ in attrs_with_compression", []),
+    ]:
+        check_eq("fragments of %r" % pattern, path_fragments(pattern), want)
+
+def _test_an_entry_with_no_fragment_names_nothing(_ctx):
+    # Most entries match on a function name alone. They pin nothing, so there
+    # is nothing for this check to hold them to.
+    for pattern in [
+        "replace == with != in read_full_at",
+        "replace < with <= in fetch_visibility",
+        "",
+        "x.RS",
+        ".rs",
+        "\\.rs",
+    ]:
+        check_eq("no fragment in %r" % pattern, path_fragments(pattern), [])
+
+def _test_the_run_stops_at_a_character_a_path_cannot_hold(_ctx):
+    # `[A-Za-z0-9_/]` is the whole alphabet of a fragment, so the `:` of a Rust
+    # path separates the module from the fragment rather than joining them.
+    check_eq("a `::` prefix", path_fragments("Segment::read_raw.rs"), [("read_raw.rs", None)])
+    check_eq("every class character", path_fragments("A9_/z.rs"), [("A9_/z.rs", None)])
+    check_eq("a bare separator", path_fragments("/.rs"), [("/.rs", None)])
+
+def _test_several_fragments_in_one_pattern(_ctx):
+    check_eq(
+        "two pinned fragments",
+        path_fragments("a.rs:12 and b.rs:7"),
+        [("a.rs", 12), ("b.rs", 7)],
+    )
+    check_eq(
+        "an escaped one and a bare one",
+        path_fragments("mod\\.rs.*x.rs:3"),
+        [("mod.rs", None), ("x.rs", 3)],
+    )
+
+def _test_a_match_consumes_its_own_suffix(_ctx):
+    # The `rs` of one fragment's `.rs` cannot open the next: `foo.rs.rs` names
+    # one file, not `foo.rs` and `rs.rs`.
+    check_eq("no overlap", path_fragments("foo.rs.rs"), [("foo.rs", None)])
+
+def _test_the_suffix_needs_no_boundary_after_it(_ctx):
+    # Nothing terminates the fragment, because an entry is a regex and what
+    # follows `.rs` is usually more pattern. `a.rsb` is what that costs.
+    check_eq("no trailing boundary", path_fragments("a.rsb"), [("a.rs", None)])
+
+def _test_a_pinned_line_is_read_only_when_digits_follow_the_colon(_ctx):
+    check_eq("digits then prose", path_fragments("x.rs:12a"), [("x.rs", 12)])
+    check_eq("leading zeros", path_fragments("x.rs:007"), [("x.rs", 7)])
+    check_eq("a colon and nothing", path_fragments("x.rs:"), [("x.rs", None)])
+    check_eq("a second colon", path_fragments("x.rs::94"), [("x.rs", None)])
+
+def _array(entries):
+    return [
+        "test_tool = \"nextest\"",
+        "",
+        "exclude_re = [",
+    ] + entries + [
+        "]",
+        "",
+        "other = 1",
+    ]
+
+def _test_the_array_is_read_past_comments_and_blank_lines(_ctx):
+    lines = _array([
+        "    # A comment about the entry below.",
+        "    \"txn_index\\\\.rs:94\",",
+        "",
+        "    #",
+        "    \"replace == with != in read_full_at\",",
+    ])
+    check_eq(
+        "the two entries",
+        exclude_patterns("mutants.toml", lines),
+        ["txn_index\\.rs:94", "replace == with != in read_full_at"],
+    )
+
+def _test_toml_escapes_are_decoded(_ctx):
+    # `\\` and `\"` are the only escapes the entries use, and both have to
+    # survive: a doubled backslash in the file is the single one the regex
+    # sees, and the fragment scan reads that single one.
+    lines = _array(["    \"a\\\\b\\\"c\","])
+    check_eq("decoded", exclude_patterns("mutants.toml", lines), ["a\\b\"c"])
+
+def _test_an_empty_array_yields_no_patterns(_ctx):
+    check_eq("empty", exclude_patterns("mutants.toml", _array([])), [])
+    check_eq("comments only", exclude_patterns("mutants.toml", _array(["    # nothing"])), [])
+
+def _test_a_trailing_entry_without_a_comma_is_read(_ctx):
+    check_eq("no trailing comma", exclude_patterns("mutants.toml", _array(["    \"x\""])), ["x"])
+
+def _test_a_missing_array_is_seen_as_missing(_ctx):
+    # `exclude_patterns` turns each of these into a `fail`, which a test cannot
+    # catch; `scan_exclude_re` is the seam that lets one assert what the reader
+    # saw before it decided.
+    found = scan_exclude_re(["exclude_globs = [", "    \"a\",", "]"])
+    check_eq("no opening", found.openings, [])
+    check_eq("no patterns", found.patterns, [])
+
+def _test_a_second_array_is_seen(_ctx):
+    found = scan_exclude_re(["exclude_re = [", "]", "exclude_re = [", "]"])
+    check_eq("both openings", found.openings, [1, 3])
+
+def _test_an_unclosed_array_is_seen_as_unclosed(_ctx):
+    # The silent short read this reader must never do: without the `closed`
+    # flag, an array whose `]` went missing would look like a shorter list of
+    # entries and every entry past the damage would stop being checked.
+    found = scan_exclude_re(["exclude_re = [", "    \"a\",", "    \"b\","])
+    check_eq("opened", found.openings, [1])
+    check_eq("not closed", found.closed, False)
+    check_eq("what it did read", found.patterns, ["a", "b"])
+
+def _test_a_line_the_reader_cannot_read_is_reported_not_skipped(_ctx):
+    found = scan_exclude_re([
+        "exclude_re = [",
+        "    \"a\",",
+        "    'b',",
+        "    \"c\", \"d\",",
+        "    \"e\",  # why",
+        "    \"unterminated,",
+        "    \"tab\\there\",",
+        "    \"f\",",
+        "]",
+    ])
+    check_eq("the readable entries", found.patterns, ["a", "f"])
+    check_eq(
+        "the unreadable ones, with their line numbers",
+        found.unparsed,
+        [
+            (3, "'b',"),
+            (4, "\"c\", \"d\","),
+            (5, "\"e\",  # why"),
+            (6, "\"unterminated,"),
+            (7, "\"tab\\there\","),
+        ],
+    )
+    check_eq("closed", found.closed, True)
+
+def _test_matching_files_matches_on_a_path_boundary(_ctx):
+    check_eq(
+        "a whole segment, not a name suffix",
+        matching_files("io.rs", _TREE),
+        ["crates/log/src/segment/io.rs", "crates/raft/src/io.rs"],
+    )
+    check_eq(
+        "a multi-segment fragment",
+        matching_files("segment/io.rs", _TREE),
+        ["crates/log/src/segment/io.rs"],
+    )
+    check_eq("nothing", matching_files("gone.rs", _TREE), [])
+
+def _test_a_whole_relative_path_matches_itself(_ctx):
+    check_eq(
+        "the repo-root-relative path",
+        matching_files("crates/raft/src/io.rs", _TREE),
+        ["crates/raft/src/io.rs"],
+    )
+
+def _test_a_live_entry_is_not_reported(_ctx):
+    check_eq(
+        "live",
+        dead_fragments(
+            [
+                "segment/io\\.rs:94.*replace read_at ",
+                "replace == with != in read_full_at",
+            ],
+            _TREE,
+        ),
+        [],
+    )
+
+def _test_a_dead_path_is_reported(_ctx):
+    check_eq(
+        "a path nothing under crates/ ends with",
+        dead_fragments(["moved/away\\.rs.*replace x", "segment.rs:10"], _TREE),
+        [(
+            "moved/away\\.rs.*replace x",
+            "moved/away.rs",
+            "no file under crates/ matches this path",
+        )],
+    )
+
+def _test_a_line_past_the_end_of_the_file_is_reported(_ctx):
+    check_eq(
+        "pinned past the facade file",
+        dead_fragments(["segment\\.rs:64"], _TREE),
+        [(
+            "segment\\.rs:64",
+            "segment.rs",
+            "pinned to line 64, but the longest matching file has only 40 lines",
+        )],
+    )
+
+def _test_a_fragment_matching_several_files_is_held_to_the_longest(_ctx):
+    # `io.rs` names both a 120-line and a 30-line file. A line inside the
+    # longer one is live -- cargo-mutants' own regex matches either file, so
+    # the entry still suppresses something.
+    check_eq("inside the longest", dead_fragments(["io\\.rs:120"], _TREE), [])
+    check_eq(
+        "past every match",
+        dead_fragments(["io\\.rs:121"], _TREE),
+        [(
+            "io\\.rs:121",
+            "io.rs",
+            "pinned to line 121, but the longest matching file has only 120 lines",
+        )],
+    )
+
+def _test_every_problem_is_reported_not_only_the_first(_ctx):
+    check_eq(
+        "one triple per dead fragment, in entry order",
+        dead_fragments(
+            ["gone\\.rs.*a", "segment\\.rs:64", "io\\.rs:30", "also_gone.rs:2 and gone.rs"],
+            _TREE,
+        ),
+        [
+            ("gone\\.rs.*a", "gone.rs", "no file under crates/ matches this path"),
+            (
+                "segment\\.rs:64",
+                "segment.rs",
+                "pinned to line 64, but the longest matching file has only 40 lines",
+            ),
+            (
+                "also_gone.rs:2 and gone.rs",
+                "also_gone.rs",
+                "no file under crates/ matches this path",
+            ),
+            (
+                "also_gone.rs:2 and gone.rs",
+                "gone.rs",
+                "no file under crates/ matches this path",
+            ),
+        ],
+    )
+
+check_mutants_config_tests = suite("check-mutants-config", [
+    _test_a_bare_fragment_and_its_escaped_twin,
+    _test_fragments_of_the_shapes_the_config_holds,
+    _test_an_entry_with_no_fragment_names_nothing,
+    _test_the_run_stops_at_a_character_a_path_cannot_hold,
+    _test_several_fragments_in_one_pattern,
+    _test_a_match_consumes_its_own_suffix,
+    _test_the_suffix_needs_no_boundary_after_it,
+    _test_a_pinned_line_is_read_only_when_digits_follow_the_colon,
+    _test_the_array_is_read_past_comments_and_blank_lines,
+    _test_toml_escapes_are_decoded,
+    _test_an_empty_array_yields_no_patterns,
+    _test_a_trailing_entry_without_a_comma_is_read,
+    _test_a_missing_array_is_seen_as_missing,
+    _test_a_second_array_is_seen,
+    _test_an_unclosed_array_is_seen_as_unclosed,
+    _test_a_line_the_reader_cannot_read_is_reported_not_skipped,
+    _test_matching_files_matches_on_a_path_boundary,
+    _test_a_whole_relative_path_matches_itself,
+    _test_a_live_entry_is_not_reported,
+    _test_a_dead_path_is_reported,
+    _test_a_line_past_the_end_of_the_file_is_reported,
+    _test_a_fragment_matching_several_files_is_held_to_the_longest,
+    _test_every_problem_is_reported_not_only_the_first,
+])
+
+test_check_mutants_config = suite_task(check_mutants_config_tests)

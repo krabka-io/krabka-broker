@@ -1,0 +1,250 @@
+"""Every KFC carries the seven sections its README mandates, and the status it states.
+
+`docs/KFCs/README.md` is the template: a "Required Sections" table naming the
+seven headings a KFC carries, in the Apache Kafka KIP order, and an index table
+carrying one row per KFC with that KFC's status. Neither table is generated, so
+a new KFC, a renamed section, or a status that moves from `Draft` to `Adopted`
+in one place and not the other drifts silently. This is what notices.
+
+The template is read from the README rather than written down here, so the two
+cannot disagree about what a KFC has to carry.
+
+    aspect check-kfcs
+"""
+
+load("./repo.axl", "is_file", "read_lines")
+
+# The number of rows the README's "Required Sections" table carries. The count
+# is fixed because the sections are the KIP's, and a README that lists some
+# other number is a README this task cannot read a template out of.
+REQUIRED_SECTION_COUNT = 7
+
+_HEADING_PREFIX = "## "
+_REQUIRED_SECTIONS_HEADING = "## Required Sections"
+_INDEX_HEADING = "## Index"
+_STATUS_HEADING = "## Status"
+_INDEX_ROW_PREFIX = "| [KFC-"
+_FENCE = "```"
+_BOLD = "**"
+
+def _section_lines(lines, heading):
+    """The lines under `heading`, up to the next level-two heading."""
+    found = []
+    inside = False
+    for line in lines:
+        if line.startswith(heading):
+            inside = True
+        elif inside and line.startswith(_HEADING_PREFIX):
+            break
+        elif inside:
+            found.append(line)
+    return found
+
+def _first_cell(line):
+    """The first cell of a table row, without the spaces that pad it."""
+    rest = line[1:].lstrip(" ")
+    end = rest.find("|")
+    return rest.rstrip(" ") if end < 0 else rest[:end].rstrip(" ")
+
+def _is_rule(cell):
+    """Whether a cell is a table rule such as `---`, `:---` or `:-:`."""
+    body = cell.removeprefix(":").removesuffix(":")
+    return body != "" and body.count("-") == len(body)
+
+def required_sections(readme_lines):
+    """The section names the README's "Required Sections" table lists, in order.
+
+    The table's header cell and its rule are rows of the same table, so both
+    are stepped over; every other first cell is a section name.
+    """
+    found = []
+    for line in _section_lines(readme_lines, _REQUIRED_SECTIONS_HEADING):
+        if not line.startswith("| "):
+            continue
+        cell = _first_cell(line)
+        if cell != "Section" and not _is_rule(cell):
+            found.append(cell)
+    return found
+
+def _link_target(line):
+    """The file an index row links to, or "" when the line is not an index row.
+
+    An index row opens `| [KFC-<number>](<file>)`, and the number is what
+    separates it from the header and the rule of the same table.
+    """
+    if not line.startswith(_INDEX_ROW_PREFIX):
+        return ""
+    rest = line[len(_INDEX_ROW_PREFIX):]
+    label_end = rest.find("](")
+    if label_end < 1 or not rest[:label_end].isdigit():
+        return ""
+    target = rest[label_end + 2:]
+    close = target.find(")")
+    return "" if close < 1 else target[:close]
+
+def _last_cell(line):
+    """The last cell of a table row, without the spaces that pad it.
+
+    A row ends with a pipe, so the cell before the trailing empty one is the
+    last one a reader sees.
+    """
+    cells = line.split("|")
+    return "" if len(cells) < 2 else cells[len(cells) - 2].strip()
+
+def index_rows(readme_lines):
+    """The README index as `{file name: status}`, one entry per KFC row."""
+    rows = {}
+    for line in _section_lines(readme_lines, _INDEX_HEADING):
+        file = _link_target(line)
+        if file:
+            rows[file] = _last_cell(line)
+    return rows
+
+def level_two_headings(lines):
+    """A document's level-two headings, in file order, without their `## `.
+
+    Fenced code is stepped over, so a `## ` line inside an example of a KFC's
+    own markup is not a heading of the document that shows it.
+    """
+    found = []
+    in_fence = False
+    for line in lines:
+        if line.startswith(_FENCE):
+            in_fence = not in_fence
+        elif not in_fence and line.startswith(_HEADING_PREFIX):
+            found.append(line[len(_HEADING_PREFIX):])
+    return found
+
+def _bold_opening(line):
+    """The text of a leading `**...**`, or `None` when the line has none.
+
+    The value is a run of characters with no asterisk in it, so the first
+    asterisk after the opening pair has to open the closing pair.
+    """
+    if not line.startswith(_BOLD):
+        return None
+    rest = line[len(_BOLD):]
+    end = rest.find("*")
+    if end < 1 or not rest[end:].startswith(_BOLD):
+        return None
+    return rest[:end]
+
+def status_value(lines):
+    """The status a document's Status section opens with, or "" when it opens with none.
+
+    The section opens with its value in bold and ends it with a full stop --
+    `**Adopted.**` -- and the value is what the README index carries.
+    """
+    for line in _section_lines(lines, _STATUS_HEADING):
+        bold = _bold_opening(line)
+        if bold != None:
+            return bold.removesuffix(".")
+    return ""
+
+def problems(kfcs, expected, index, existing, directory):
+    """Every complaint about the KFCs of `directory`, in report order.
+
+    A KFC is `struct(name, headings, status)`: the file's base name, the
+    level-two headings it carries in file order, and the value its Status
+    section opens with. `expected` is the README's required section list,
+    `index` its `{file name: status}` index, and `existing` the names of the
+    files that sit in `directory`.
+    """
+    found = []
+    if not kfcs:
+        found.append("no KFC-*.md files under %s" % directory)
+
+    for kfc in kfcs:
+        if kfc.headings != expected:
+            found.append(
+                "%s: level-two headings are [%s], the README requires [%s] in that order" %
+                (kfc.name, "|".join(kfc.headings), "|".join(expected)),
+            )
+        if not kfc.status:
+            found.append(
+                "%s: the Status section does not open with a bold status value such as **Adopted.**" %
+                kfc.name,
+            )
+        elif kfc.name not in index:
+            found.append("%s: no row in the README index names it" % kfc.name)
+        elif kfc.status != index[kfc.name]:
+            found.append(
+                "%s: Status section says '%s', the README index says '%s'" %
+                (kfc.name, kfc.status, index[kfc.name]),
+            )
+
+    present = {name: True for name in existing}
+    for file in sorted(index):
+        if file not in present:
+            found.append("README index names %s, which does not exist" % file)
+    return found
+
+def is_kfc(name):
+    """Whether a file name is a KFC's, which is `KFC-*.md`."""
+    return name.startswith("KFC-") and name.endswith(".md")
+
+def report(fs, directory):
+    """The check's outcome for `directory`, as `struct(code, problems, count)`.
+
+    `code` is the exit status: 2 when the README carries no template to check
+    against, 1 when a KFC does not match the one it carries, and 0 for a tree
+    that matches. `count` is the number of KFCs read.
+    """
+    readme = directory + "/README.md"
+    if not is_file(fs, readme):
+        return struct(code = 2, problems = ["%s not found" % readme], count = 0)
+
+    readme_lines = read_lines(fs, readme)
+    expected = required_sections(readme_lines)
+    if len(expected) != REQUIRED_SECTION_COUNT:
+        return struct(
+            code = 2,
+            problems = [
+                "expected %d required sections in %s, found %d" %
+                (REQUIRED_SECTION_COUNT, readme, len(expected)),
+            ],
+            count = 0,
+        )
+
+    existing = sorted([entry.path for entry in fs.read_dir(directory) if entry.is_file])
+    kfcs = []
+    for name in existing:
+        if is_kfc(name):
+            lines = read_lines(fs, directory + "/" + name)
+            kfcs.append(struct(
+                name = name,
+                headings = level_two_headings(lines),
+                status = status_value(lines),
+            ))
+
+    found = problems(kfcs, expected, index_rows(readme_lines), existing, directory)
+    return struct(code = 1 if found else 0, problems = found, count = len(kfcs))
+
+def _directory(ctx):
+    """The tree to check: `--dir`, or `docs/KFCs` when the flag is not given."""
+    if not ctx.args.dir:
+        return ctx.std.env.bazel_root_dir() + "/docs/KFCs"
+    if ctx.args.dir.startswith("/"):
+        return ctx.args.dir
+    return ctx.std.env.current_dir() + "/" + ctx.args.dir
+
+def _impl(ctx: TaskContext) -> int:
+    result = report(ctx.std.fs, _directory(ctx))
+    for problem in result.problems:
+        ctx.std.io.stderr.write(problem + "\n")
+    if result.code != 0:
+        return result.code
+
+    ctx.std.io.stdout.write("check-kfcs: %d KFCs match the README template\n" % result.count)
+    return 0
+
+check_kfcs = task(
+    summary = "Check every KFC against the template its README mandates",
+    implementation = _impl,
+    args = {
+        "dir": args.string(
+            default = "",
+            description = "The directory of KFCs to check, instead of docs/KFCs.",
+        ),
+    },
+)

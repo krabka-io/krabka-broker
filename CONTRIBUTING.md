@@ -51,7 +51,7 @@ preferred check for container-backed tests.
 The mutation gate for the consensus engine is:
 
 ```sh
-bash tools/check-mutants.sh //crates/raft:raft_mutants
+aspect mutants-shard --target //crates/raft:raft_mutants
 ```
 
 Changes to a Creusot kernel or contract also need the commands in the

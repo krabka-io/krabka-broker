@@ -107,7 +107,7 @@ exclude_re = [
     # definitions instead of a path-and-line regex here: cargo-mutants reads
     # the attribute from source, so it works on a function a normal build does
     # not compile, and it cannot rot the way a regex keyed to an old path or
-    # line number can. `tools/lint/creusot_skip.py` keeps every such function
+    # line number can. `aspect check-creusot-skip` keeps every such function
     # covered.
     #
     # The rest of `verified`'s survivors are equivalent mutants: a comparison

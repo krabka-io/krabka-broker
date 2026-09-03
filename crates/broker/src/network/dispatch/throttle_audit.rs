@@ -92,7 +92,7 @@ enum QuotaReach {
 /// for all seven -- see [`QuotaReach`].
 ///
 /// Mirrored as rows in the generated `docs/KIP_MATRIX.md`.
-/// `tools/generate-kip-matrix.py` parses this constant, renders one row per
+/// `aspect generate-kip-matrix` parses this constant, renders one row per
 /// entry, and fails unless the set it parses is exactly the set of rows it
 /// renders, so the page cannot omit a divergence added here; CI regenerates
 /// the page and fails on a diff.

@@ -54,7 +54,7 @@ One per condition the registry tells operators to alert on.
 
 ## Keeping the contract
 
-`tools/check-metrics-contract.py docs/operations/metrics-body.txt` fails on
+`aspect check-metrics-contract` fails on
 any series the dashboard or the rules name that the body does not carry.
 `bazel test //crates/broker:metrics_contract_test` runs the same check
 against a live registry and fails when `metrics-body.txt` is stale. When a

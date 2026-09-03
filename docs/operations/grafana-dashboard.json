@@ -37,7 +37,7 @@
   ],
   "title": "krabka-broker",
   "uid": "krabka-broker",
-  "description": "Reference dashboard for krabka-broker. Every series it names is checked against the registry by tools/check-metrics-contract.py.",
+  "description": "Reference dashboard for krabka-broker. Every series it names is checked against the registry by `aspect check-metrics-contract`.",
   "tags": [
     "krabka",
     "kafka"

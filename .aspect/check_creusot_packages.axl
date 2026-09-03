@@ -1,0 +1,295 @@
+"""The proofs job proves every workspace package Creusot speaks about.
+
+A crate enters Creusot's scope the moment it depends on `creusot-std` or carries
+a `requires`/`ensures` contract, and nothing links that to the package list
+`tools/creusot/prove.sh` runs `cargo creusot` over. A crate that gains a
+contract and is never added to that list is verified by nobody while looking
+verified; this is what notices.
+
+The list itself lives here, in `PROVED_PACKAGES`, because the check runs on the
+host and `prove.sh` runs as the entrypoint of the proof container image, where
+the Aspect CLI does not exist. So the second half of this check reads
+`prove.sh` and asserts that its `packages=(...)` array still names exactly the
+packages named here: two copies of a list that cannot drift are as good as one.
+
+    aspect check-creusot-packages
+"""
+
+load("./repo.axl", "walk_suffix")
+
+# The packages the proofs job proves, and the script that must still name them.
+PROVED_PACKAGES = ["krabka-verified"]
+PROVE_SCRIPT = "tools/creusot/prove.sh"
+
+# Depending on this is enough on its own: a crate pulls it in to write specs,
+# so it is in Creusot's scope whether or not it carries a contract yet.
+CREUSOT_DEPENDENCY = "creusot-std"
+
+# The two contract attributes, written bare or wrapped in `cfg_attr(creusot,
+# ...)` so a normal build never sees them.
+CONTRACT_ATTRIBUTES = ["requires", "ensures"]
+
+# The characters the attribute scan treats as whitespace. Newline is one of
+# them: a `cfg_attr` contract is routinely spread over four lines, and the
+# pattern this replaced used `\s`, which matches a newline too.
+_WHITESPACE = " \t\n\r\x0b\x0c"
+
+# What a word is made of, which is what decides that `#[requires(..)]` is a
+# contract and `#[requires_lock(..)]` is not.
+_WORD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+
+_MANIFEST_SUFFIX = "/Cargo.toml"
+
+# The array `prove.sh` drives its loop from, the loop, and the command the loop
+# runs. Losing any of the three would leave a package listed but not proved.
+_ARRAY_PREFIX = "packages=("
+_ITERATION = 'for package in "${packages[@]}"'
+_PROOF_COMMAND = "cargo creusot --package"
+
+def _skip_whitespace(text, index):
+    """The first index at or after `index` that is not whitespace."""
+    for position in range(index, len(text)):
+        if text[position] not in _WHITESPACE:
+            return position
+    return len(text)
+
+def _at(text, index, token):
+    """Whether `token` sits at `index`."""
+    return text[index:index + len(token)] == token
+
+def _keyword_at(text, index):
+    """Whether a whole contract attribute name sits at `index`.
+
+    Whole is the point: the name has to end where a word ends, so a longer
+    identifier that merely opens with `requires` is not one of these.
+    """
+    for keyword in CONTRACT_ATTRIBUTES:
+        after = index + len(keyword)
+        if _at(text, index, keyword) and (after >= len(text) or text[after] not in _WORD):
+            return True
+    return False
+
+def _blank_to_line_start(text, index):
+    """Whether only whitespace separates `index` from the start of its line.
+
+    An attribute opens a line; a `#` with code before it on the same line is
+    something else, and a `#` inside a comment is preceded by the comment's
+    slashes.
+    """
+    start = text.rfind("\n", 0, index) + 1
+    for position in range(start, index):
+        if text[position] not in _WHITESPACE:
+            return False
+    return True
+
+def _contract_at(text, index):
+    """Whether the `#` at `index` opens a Creusot contract attribute."""
+    position = _skip_whitespace(text, index + 1)
+    if not _at(text, position, "["):
+        return False
+    position = _skip_whitespace(text, position + 1)
+    if _keyword_at(text, position):
+        return True
+
+    if not _at(text, position, "cfg_attr"):
+        return False
+    position = _skip_whitespace(text, position + len("cfg_attr"))
+    if not _at(text, position, "("):
+        return False
+    position = _skip_whitespace(text, position + 1)
+    if not _at(text, position, "creusot"):
+        return False
+    position = _skip_whitespace(text, position + len("creusot"))
+    if not _at(text, position, ","):
+        return False
+    position = _skip_whitespace(text, position + 1)
+    return _keyword_at(text, position)
+
+def has_contract(text):
+    """Whether `text` holds a Creusot contract attribute.
+
+    Every `#` that opens its line is a candidate, and each is parsed forward
+    through whitespace that may cross newlines.
+    """
+    index = 0
+
+    # One iteration per `#` at most, and there cannot be more of those than
+    # there are characters.
+    for _ in range(len(text) + 1):
+        found = text.find("#", index)
+        if found < 0:
+            return False
+        if _blank_to_line_start(text, found) and _contract_at(text, found):
+            return True
+        index = found + 1
+    fail("has_contract: the text holds more `#` characters than this sweep can reach")
+
+def workspace_packages(metadata):
+    """The workspace members of a decoded `cargo metadata --no-deps` document.
+
+    Each is `struct(name, directory, has_dependency)`: the package name, the
+    directory holding its manifest, and whether it depends on `creusot-std`.
+    Packages outside the workspace are dropped, so a dependency of a member
+    that happens to carry contracts is not mistaken for one.
+    """
+    members = {identifier: True for identifier in metadata["workspace_members"]}
+    found = []
+    for package in metadata["packages"]:
+        if package["id"] not in members:
+            continue
+        manifest = package["manifest_path"]
+        if not manifest.endswith(_MANIFEST_SUFFIX):
+            fail("cargo metadata reports a manifest that is not a Cargo.toml: " + manifest)
+        found.append(struct(
+            name = package["name"],
+            directory = manifest[:-len(_MANIFEST_SUFFIX)],
+            has_dependency = _depends_on_creusot(package),
+        ))
+    return sorted(found, key = lambda package: package.name)
+
+def _depends_on_creusot(package):
+    for dependency in package["dependencies"]:
+        if dependency["name"] == CREUSOT_DEPENDENCY:
+            return True
+    return False
+
+def creusot_packages(packages, contracts):
+    """The names of the `packages` Creusot has something to say about.
+
+    `contracts` maps a package name to whether any of its Rust sources holds a
+    contract attribute; a name it does not carry holds none.
+    """
+    return sorted([
+        package.name
+        for package in packages
+        if package.has_dependency or contracts.get(package.name, False)
+    ])
+
+def uncovered(discovered, covered):
+    """The discovered packages that `covered` does not name, sorted."""
+    named = {name: True for name in covered}
+    return sorted([name for name in discovered if name not in named])
+
+def prove_packages(text):
+    """The package names `prove.sh`'s `packages=(...)` array holds.
+
+    `None` when the script holds no such array on a single line, which the
+    caller reports rather than reading as an empty list: an array this task
+    cannot read and an array naming nothing are different failures.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(_ARRAY_PREFIX):
+            continue
+        body, closed, _ = stripped[len(_ARRAY_PREFIX):].partition(")")
+        if not closed:
+            return None
+        words = body.replace("\t", " ").split(" ")
+        return [word.strip("\"'") for word in words if word.strip("\"'")]
+    return None
+
+def script_problems(text, proved):
+    """Every complaint about `prove.sh`'s text, given the packages `proved`."""
+    found = []
+    declared = prove_packages(text)
+    if declared == None:
+        found.append(
+            "%s holds no single-line `%s...)` array for this check to read" %
+            (PROVE_SCRIPT, _ARRAY_PREFIX),
+        )
+    elif sorted(declared) != sorted(proved):
+        found.append(
+            "%s proves %s, but PROVED_PACKAGES holds %s" %
+            (PROVE_SCRIPT, _names(declared), _names(proved)),
+        )
+    if text.find(_ITERATION) < 0:
+        found.append("%s no longer loops over its packages array" % PROVE_SCRIPT)
+    if text.find(_PROOF_COMMAND) < 0:
+        found.append("%s no longer runs `%s`" % (PROVE_SCRIPT, _PROOF_COMMAND))
+    return found
+
+def _names(packages):
+    return ", ".join(sorted(packages)) if packages else "nothing"
+
+def _metadata(ctx, root):
+    """The workspace's `cargo metadata` document, decoded."""
+    result = (
+        ctx.std.process.command("cargo")
+            .args(["metadata", "--no-deps", "--format-version=1", "--locked"])
+            .current_dir(root)
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    if result.status.code != 0:
+        fail("cargo metadata failed:\n" + result.stderr.strip())
+    return json.decode(result.stdout)
+
+def _holds_contract(fs, package):
+    """Whether any Rust source under the crate carries a contract attribute.
+
+    The sweep stops at the first source that does: only the answer matters, and
+    the largest crate here holds well over a thousand files.
+    """
+    for relative in walk_suffix(fs, package.directory, ".rs"):
+        if has_contract(fs.read_to_string(package.directory + "/" + relative)):
+            return True
+    return False
+
+def discover(fs, packages):
+    """`creusot_packages`, with each crate's sources swept off `fs`.
+
+    Kept apart from the pure half so the sweep can be pointed at a fixture
+    tree, and so `_impl` reads the workspace exactly as a test does.
+    """
+    contracts = {}
+    for package in packages:
+        contracts[package.name] = _holds_contract(fs, package)
+    return creusot_packages(packages, contracts)
+
+def _covered(ctx):
+    """The packages coverage is checked against: the constant, or the override."""
+    if not ctx.args.packages:
+        return PROVED_PACKAGES
+    return [name.strip() for name in ctx.args.packages.split(",") if name.strip()]
+
+def _impl(ctx: TaskContext) -> int:
+    fs = ctx.std.fs
+    root = ctx.std.env.bazel_root_dir()
+
+    packages = workspace_packages(_metadata(ctx, root))
+    if not packages:
+        ctx.std.io.stderr.write("cargo metadata reports no workspace members\n")
+        return 1
+
+    discovered = discover(fs, packages)
+
+    found = []
+    missing = uncovered(discovered, _covered(ctx))
+    if missing:
+        found.append("Creusot packages missing from the proofs job: " + ", ".join(missing))
+    found = found + script_problems(fs.read_to_string(root + "/" + PROVE_SCRIPT), PROVED_PACKAGES)
+
+    for problem in found:
+        ctx.std.io.stderr.write(problem + "\n")
+    if found:
+        return 1
+
+    ctx.std.io.stdout.write(
+        "check-creusot-packages: %d of %d workspace packages need Creusot, all proved\n" %
+        (len(discovered), len(packages)),
+    )
+    return 0
+
+check_creusot_packages = task(
+    summary = "Check that the proofs job proves every Creusot workspace package",
+    implementation = _impl,
+    args = {
+        "packages": args.string(
+            default = "",
+            description = "Comma-separated packages to check coverage against, " +
+                          "in place of PROVED_PACKAGES.",
+        ),
+    },
+)

@@ -71,5 +71,8 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-${{ inputs.crate }}
           repository-cache: true
-      - run: >-
-          bash tools/check-mutants.sh '${{ needs.prepare.outputs.target }}' '${{ matrix.shard.index }}' '${{ matrix.shard.total }}'
+      - run: |
+          aspect mutants-shard \
+            --target '${{ needs.prepare.outputs.target }}' \
+            --index '${{ matrix.shard.index }}' \
+            --count '${{ matrix.shard.total }}'

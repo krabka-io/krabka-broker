@@ -1,0 +1,204 @@
+"""Unit tests for `check_creusot_skip.axl`."""
+
+load("./check_creusot_skip.axl", "SKIP", "creusot_fns", "fn_name", "read_sources", "unskipped")
+load("./testing.axl", "check_eq", "suite", "suite_task", "temp_tree")
+
+# The pairing the check is looking for, and the same function without it.
+_SKIPPED = "#[cfg(creusot)]\n" + SKIP + "\n#[logic]\npub fn ok() -> Int {}\n"
+_BARE = "#[cfg(creusot)]\n#[logic]\npub fn missing() -> Int {}\n"
+
+def _source(path, text):
+    return struct(path = path, text = text)
+
+def _test_fn_name_reads_a_declaration(_ctx):
+    for line, want in [
+        ("fn plain() {}", "plain"),
+        ("pub fn exported() {}", "exported"),
+        ("pub(crate) fn scoped() {}", "scoped"),
+        ("pub(super) fn parent() {}", "parent"),
+        ("    pub fn indented() {}", "indented"),
+        ("\tfn tabbed() {}", "tabbed"),
+        ("pub  fn  spaced () {}", "spaced"),
+        ("fn generic<T>(t: T) {}", "generic"),
+        ("fn with_underscores99() {}", "with_underscores99"),
+    ]:
+        check_eq("fn name of %r" % line, fn_name(line), want)
+
+def _test_fn_name_rejects_a_non_declaration(_ctx):
+    # Each of these opens with the letters of a declaration and is not one:
+    # a `pub` the visibility grammar does not cover leaves a line that neither
+    # starts with `fn` nor carries a visibility, which is the answer the check
+    # wants -- it reports functions it can name.
+    for line in [
+        "use std::clone::Clone;",
+        "    g();",
+        "pub(in crate::log) fn hidden() {}",
+        "pub(crate)fn unspaced() {}",
+        "pub() fn empty_scope() {}",
+        "pub (crate) fn detached() {}",
+        "publish fn confusable() {}",
+        "pubfn glued() {}",
+        "async fn later() {}",
+        "fn() {}",
+        "fn ",
+        "struct Fn;",
+        "",
+    ]:
+        check_eq("%r declares no fn" % line, fn_name(line), "")
+
+def _test_a_file_without_the_cfg_holds_nothing(_ctx):
+    check_eq("no cfg", creusot_fns("fn plain() {}\n"), [])
+
+def _test_the_cfg_on_a_fn_is_found(_ctx):
+    check_eq(
+        "an attribute stack between the cfg and the fn",
+        creusot_fns("#[cfg(creusot)]\n" + SKIP + "\n#[logic]\npub fn a() -> Int {}\n"),
+        [(1, "a")],
+    )
+
+def _test_the_cfg_on_a_use_is_not(_ctx):
+    check_eq("a use is out of this check's concern", creusot_fns("#[cfg(creusot)]\nuse std::clone::Clone;\n"), [])
+
+def _test_the_cfg_on_a_statement_is_not(_ctx):
+    check_eq(
+        "a statement inside a function body is not an item",
+        creusot_fns("fn f() {\n    #[cfg(creusot)]\n    g();\n}\n"),
+        [],
+    )
+
+def _test_a_doc_comment_and_a_multi_line_attribute_are_stepped_over(_ctx):
+    check_eq(
+        "the fn under a wrapped #[requires(...)]",
+        creusot_fns(
+            "#[cfg(creusot)]\n/// Doc.\n#[requires(a@ > 0\n    && b@ > 0)]\npub fn h(a: i32, b: i32) {}\n",
+        ),
+        [(1, "h")],
+    )
+
+def _test_two_in_one_file(_ctx):
+    check_eq(
+        "both cfgs, each at its own line",
+        creusot_fns("#[cfg(creusot)]\npub fn one() {}\n\n#[cfg(creusot)]\npub fn two() {}\n"),
+        [(1, "one"), (4, "two")],
+    )
+
+def _test_blank_lines_do_not_hide_the_fn(_ctx):
+    check_eq(
+        "a blank line between the cfg and the fn",
+        creusot_fns("#[cfg(creusot)]\n\n#[logic]\n\nfn spaced() {}\n"),
+        [(1, "spaced")],
+    )
+
+def _test_an_inner_doc_comment_is_stepped_over(_ctx):
+    check_eq("//! between the two", creusot_fns("#[cfg(creusot)]\n//! Module note.\nfn inner() {}\n"), [(1, "inner")])
+
+def _test_a_nested_bracket_does_not_end_the_attribute_early(_ctx):
+    # The `[u8; 4]` closes a bracket the `#[ensures` line opened, so a scan
+    # that stopped at the first `]` would land on the array's line, not on the
+    # `fn` under it.
+    check_eq(
+        "bracket depth, not the first close",
+        creusot_fns("#[cfg(creusot)]\n#[ensures(result@ ==\n    [1u8; 4]@)]\nfn arrayed() {}\n"),
+        [(1, "arrayed")],
+    )
+
+def _test_a_trailing_cfg_holds_nothing(_ctx):
+    check_eq("nothing under the cfg at all", creusot_fns("#[cfg(creusot)]\n"), [])
+
+def _test_an_unskipped_fn_is_reported(_ctx):
+    check_eq(
+        "the bare fn, at the cfg's line",
+        unskipped([_source("crates/verified/src/bare.rs", _BARE)]),
+        [("crates/verified/src/bare.rs", 1, "missing")],
+    )
+
+def _test_a_skipped_fn_passes(_ctx):
+    check_eq("the pairing", unskipped([_source("crates/verified/src/skipped.rs", _SKIPPED)]), [])
+
+def _test_the_skip_above_the_cfg_does_not_count(_ctx):
+    # cargo-mutants reads the attributes of the item as written, so a skip
+    # above the `#[cfg(creusot)]` is on the same function -- but the check
+    # wants the pairing adjacent and in one order, because that is what a
+    # reader scans for.
+    check_eq(
+        "the wrong order",
+        unskipped([_source(
+            "crates/verified/src/wrong_order.rs",
+            SKIP + "\n#[cfg(creusot)]\n#[logic]\npub fn reversed() -> Int {}\n",
+        )]),
+        [("crates/verified/src/wrong_order.rs", 2, "reversed")],
+    )
+
+def _test_every_offender_in_a_tree_is_reported(_ctx):
+    check_eq(
+        "one report per offender, in path order",
+        unskipped([
+            _source("crates/verified/src/bare.rs", _BARE),
+            _source("crates/verified/src/skipped.rs", _SKIPPED),
+            _source(
+                "crates/verified/src/wrong_order.rs",
+                SKIP + "\n#[cfg(creusot)]\n#[logic]\npub fn reversed() -> Int {}\n",
+            ),
+            _source("crates/verified/src/unrelated.rs", "pub fn plain() {}\n"),
+        ]),
+        [
+            ("crates/verified/src/bare.rs", 1, "missing"),
+            ("crates/verified/src/wrong_order.rs", 2, "reversed"),
+        ],
+    )
+
+def _test_read_sources_reads_the_verified_tree(ctx):
+    root = temp_tree(ctx, {
+        "crates/verified/src/lib.rs": _SKIPPED,
+        "crates/verified/src/log/proof.rs": _BARE,
+        "crates/verified/src/notes.md": "not a source",
+        "crates/log/src/lib.rs": _BARE,
+    })
+    check_eq(
+        "the .rs files under crates/verified/src, and nothing else",
+        read_sources(ctx.std.fs, root),
+        [
+            struct(path = "crates/verified/src/lib.rs", text = _SKIPPED),
+            struct(path = "crates/verified/src/log/proof.rs", text = _BARE),
+        ],
+    )
+
+def _test_a_tree_with_an_offender_fails_and_the_fixed_tree_passes(ctx):
+    root = temp_tree(ctx, {
+        "crates/verified/src/bare.rs": _BARE,
+        "crates/verified/src/skipped.rs": _SKIPPED,
+    })
+    check_eq(
+        "the offender the report names",
+        unskipped(read_sources(ctx.std.fs, root)),
+        [("crates/verified/src/bare.rs", 1, "missing")],
+    )
+
+    ctx.std.fs.write(
+        root + "/crates/verified/src/bare.rs",
+        "#[cfg(creusot)]\n" + SKIP + "\n#[logic]\npub fn missing() -> Int {}\n",
+    )
+    check_eq("the fixed tree", unskipped(read_sources(ctx.std.fs, root)), [])
+
+check_creusot_skip_tests = suite("check-creusot-skip", [
+    _test_fn_name_reads_a_declaration,
+    _test_fn_name_rejects_a_non_declaration,
+    _test_a_file_without_the_cfg_holds_nothing,
+    _test_the_cfg_on_a_fn_is_found,
+    _test_the_cfg_on_a_use_is_not,
+    _test_the_cfg_on_a_statement_is_not,
+    _test_a_doc_comment_and_a_multi_line_attribute_are_stepped_over,
+    _test_two_in_one_file,
+    _test_blank_lines_do_not_hide_the_fn,
+    _test_an_inner_doc_comment_is_stepped_over,
+    _test_a_nested_bracket_does_not_end_the_attribute_early,
+    _test_a_trailing_cfg_holds_nothing,
+    _test_an_unskipped_fn_is_reported,
+    _test_a_skipped_fn_passes,
+    _test_the_skip_above_the_cfg_does_not_count,
+    _test_every_offender_in_a_tree_is_reported,
+    _test_read_sources_reads_the_verified_tree,
+    _test_a_tree_with_an_offender_fails_and_the_fixed_tree_passes,
+])
+
+test_check_creusot_skip = suite_task(check_creusot_skip_tests)

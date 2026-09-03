@@ -213,7 +213,7 @@ checks enforce that:
   that [`metrics-body.txt`](metrics-body.txt) equals that body, so the
   checked-in copy cannot go stale. `bazel test //crates/broker:metrics_contract_test`
   runs it.
-- `tools/check-metrics-contract.py docs/operations/metrics-body.txt` does the
+- `aspect check-metrics-contract` does the
   same name check in the CI docs job, which has no Rust toolchain, against
   the checked-in copy.
 

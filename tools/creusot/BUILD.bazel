@@ -8,12 +8,13 @@ changed none of those inputs. The Bazel disk cache did not spare it: that cache
 lives in the GitHub Actions cache, where this gigabyte-scale toolchain layer
 competes for one 10 GB repository-wide quota with every other namespace.
 
-The registry is the durable cache instead. `image-tag.sh` digests exactly the
-inputs above into a tag, CI pulls that tag when the registry already holds it,
-and only a tree that changes what the image contains builds and publishes one.
+The registry is the durable cache instead. `aspect creusot-image-tag` digests
+exactly the inputs above into a tag, CI pulls that tag when the registry already
+holds it, and only a tree that changes what the image contains builds and
+publishes one.
 
     bazel run //tools/creusot:image_load                          # local daemon
-    bazel run //tools/creusot:push -- --tag "$(tools/creusot/image-tag.sh)"
+    bazel run //tools/creusot:push -- --tag "$(aspect creusot-image-tag)"
 """
 
 load("@rules_apko//apko:defs.bzl", "apko_image")

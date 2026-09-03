@@ -7,7 +7,7 @@
 //!
 //! It is also the source of truth for the per-KIP rows of the generated
 //! `docs/KIP_MATRIX.md`. [`KIP_ANNOTATIONS`] holds one [`KipAnnotation`] per
-//! KIP that any file under `crates/` names. `tools/generate-kip-matrix.py`
+//! KIP that any file under `crates/` names. `aspect generate-kip-matrix`
 //! parses that table as text, between the `BEGIN KIP_ANNOTATIONS` and
 //! `END KIP_ANNOTATIONS` marker comments, and fails when a KIP appears in
 //! `crates/` without a row here, when a row names a KIP that no file mentions,
@@ -1334,7 +1334,7 @@ mod tests {
     ///
     /// Cargo exports `CARGO_MANIFEST_DIR`, from which the repository root is
     /// two levels up. Bazel stages no source tree for a unit test, so there
-    /// the check has nothing to look at and returns; `tools/generate-kip-matrix.py`
+    /// the check has nothing to look at and returns; `aspect generate-kip-matrix`
     /// makes the same check in CI's docs job, against the checked-out tree,
     /// and also checks that a `path::function` entry names a function the
     /// file defines.

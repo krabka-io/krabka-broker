@@ -114,7 +114,7 @@ pub mod schema_units {
 /// The JSON Schema for [`FileConfig`], as a JSON value.
 ///
 /// `krabka-broker --print-config-schema` prints this document, the checked-in
-/// copy is `docs/config-schema.json`, and `tools/generate-config-reference.py`
+/// copy is `docs/config-schema.json`, and `aspect generate-config-reference`
 /// renders `docs/config-reference.md` from it. `crabka-docgen` builds the same
 /// value in process. Every `///` comment on a config field becomes the
 /// `description` of that field, so the doc comments are the reference text.

@@ -1,0 +1,306 @@
+"""Unit tests for `check_creusot_packages.axl`."""
+
+load(
+    "./check_creusot_packages.axl",
+    "creusot_packages",
+    "discover",
+    "has_contract",
+    "prove_packages",
+    "script_problems",
+    "uncovered",
+    "workspace_packages",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task", "temp_tree")
+
+# The script the check reads, as it stands: the fixture every `script_problems`
+# case is a mutation of.
+_PROVE_SCRIPT = """#!/bin/bash
+set -euo pipefail
+
+packages=(krabka-verified)
+
+for package in "${packages[@]}"; do
+  cargo creusot --package "${package}"
+done
+"""
+
+# The sources the Python self-test wrote into its throwaway workspace, one per
+# way a crate can enter Creusot's scope. Reused by the fixture cases and by the
+# workspace sweep below so the two cannot disagree about what they mean.
+_BY_REQUIRES = "#[requires(true)]\npub fn checked() {}\n"
+_BY_CFG_REQUIRES = "#[cfg_attr(\n    creusot,\n    requires(true)\n)]\npub fn checked_cfg() {}\n"
+_BY_CFG_ENSURES = "#[ cfg_attr ( creusot , ensures(true) ) ]\npub fn ensured_cfg() {}\n"
+_BY_ENSURES = "#[ensures(true)]\npub fn third() {}\n"
+_ORDINARY = "pub fn ordinary() {}\n"
+
+def _package(name, directory = "/w/crates/x", has_dependency = False):
+    return struct(name = name, directory = directory, has_dependency = has_dependency)
+
+def _member(name):
+    return "path+file:///w/crates/%s#%s@0.1.0" % (name, name)
+
+def _manifest(name, dependencies):
+    return {
+        "id": _member(name),
+        "name": name,
+        "manifest_path": "/w/crates/%s/Cargo.toml" % name,
+        "dependencies": [{"name": dependency} for dependency in dependencies],
+    }
+
+def _test_a_bare_contract_attribute_is_a_contract(_ctx):
+    check_eq("requires", has_contract(_BY_REQUIRES), True)
+    check_eq("ensures", has_contract(_BY_ENSURES), True)
+
+def _test_a_cfg_attr_contract_is_a_contract(_ctx):
+    check_eq("split over lines", has_contract(_BY_CFG_REQUIRES), True)
+    check_eq("spaced out", has_contract(_BY_CFG_ENSURES), True)
+    check_eq("no spaces at all", has_contract("#[cfg_attr(creusot,ensures(true))]\n"), True)
+
+def _test_whitespace_between_the_tokens_does_not_matter(_ctx):
+    # Everything the replaced pattern spelled `\s*` -- and `\s` matches a
+    # newline, which is why the four-line form above is a contract at all.
+    check_eq("indented", has_contract("    #[requires(true)]\n"), True)
+    check_eq("tabbed", has_contract("\t#[ requires (true)]\n"), True)
+    check_eq("hash apart from bracket", has_contract("# [ requires(true) ]\n"), True)
+    check_eq("newline after the bracket", has_contract("#[\n  requires(true)\n]\n"), True)
+    check_eq(
+        "a newline between every token",
+        has_contract("#[cfg_attr\n(\ncreusot\n,\nrequires(true))]\n"),
+        True,
+    )
+
+def _test_a_contract_after_other_attributes_is_found(_ctx):
+    check_eq(
+        "the second attribute",
+        has_contract("#[derive(Debug)]\n#[requires(true)]\npub fn f() {}\n"),
+        True,
+    )
+
+def _test_an_attribute_name_must_end_where_a_word_ends(_ctx):
+    check_eq("a longer identifier", has_contract("#[requiresx(true)]\n"), False)
+    check_eq("no argument list", has_contract("#[requires]\n"), True)
+    check_eq("truncated file", has_contract("#[ensures"), True)
+
+def _test_a_cfg_attr_over_another_condition_is_not_a_contract(_ctx):
+    check_eq("under cfg(test)", has_contract("#[cfg_attr(test, requires(true))]\n"), False)
+    check_eq("a longer condition", has_contract("#[cfg_attr(creusotx, requires(true))]\n"), False)
+    check_eq("a longer attribute", has_contract("#[cfg_attrx(creusot, requires(true))]\n"), False)
+    check_eq("not a contract", has_contract("#[cfg_attr(creusot, invariant(true))]\n"), False)
+
+def _test_a_hash_that_does_not_open_its_line_is_not_an_attribute(_ctx):
+    check_eq("after code", has_contract("let x = 1; #[requires(true)]\n"), False)
+    check_eq("in a line comment", has_contract("// #[requires(true)]\n"), False)
+    check_eq("in a doc comment", has_contract("//! #[requires(true)]\n"), False)
+
+def _test_ordinary_rust_holds_no_contract(_ctx):
+    check_eq("plain function", has_contract(_ORDINARY), False)
+    check_eq("a derive", has_contract("#[derive(Debug)]\npub struct S;\n"), False)
+    check_eq("an inner attribute", has_contract("#![allow(dead_code)]\n"), False)
+    check_eq("nothing at all", has_contract(""), False)
+
+def _test_workspace_packages_reads_the_members(_ctx):
+    metadata = {
+        "workspace_members": [_member("by-dependency"), _member("ordinary")],
+        "packages": [
+            _manifest("ordinary", ["serde"]),
+            _manifest("by-dependency", ["creusot-std", "serde"]),
+            {
+                "id": "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.0",
+                "name": "serde",
+                "manifest_path": "/registry/serde/Cargo.toml",
+                "dependencies": [{"name": "creusot-std"}],
+            },
+        ],
+    }
+    check_eq(
+        "the members, sorted, with the registry package dropped",
+        workspace_packages(metadata),
+        [
+            struct(
+                name = "by-dependency",
+                directory = "/w/crates/by-dependency",
+                has_dependency = True,
+            ),
+            struct(
+                name = "ordinary",
+                directory = "/w/crates/ordinary",
+                has_dependency = False,
+            ),
+        ],
+    )
+
+def _test_creusot_packages_takes_either_route_in(_ctx):
+    packages = [
+        _package("by-dependency", has_dependency = True),
+        _package("by-contract"),
+        _package("ordinary"),
+    ]
+    check_eq(
+        "the dependency and the contract each suffice",
+        creusot_packages(packages, {"by-contract": True, "ordinary": False}),
+        ["by-contract", "by-dependency"],
+    )
+    check_eq(
+        "a package the contract map does not name holds none",
+        creusot_packages([_package("ordinary")], {}),
+        [],
+    )
+
+def _test_uncovered_is_what_the_proofs_job_does_not_name(_ctx):
+    check_eq("all covered", uncovered(["a", "b"], ["a", "b", "c"]), [])
+    check_eq("one missing", uncovered(["a", "b"], ["a"]), ["b"])
+    check_eq("nothing covered", uncovered(["b", "a"], []), ["a", "b"])
+
+def _test_prove_packages_reads_the_array(_ctx):
+    check_eq("the script as it stands", prove_packages(_PROVE_SCRIPT), ["krabka-verified"])
+    check_eq("several packages", prove_packages("packages=(a b)\n"), ["a", "b"])
+    check_eq("quoted", prove_packages("packages=(\"a\" 'b')\n"), ["a", "b"])
+    check_eq("indented, with a comment", prove_packages("  packages=(a) # why\n"), ["a"])
+    check_eq("an empty array", prove_packages("packages=()\n"), [])
+
+def _test_prove_packages_cannot_read_what_is_not_there(_ctx):
+    check_eq("no array", prove_packages("#!/bin/bash\ncargo creusot\n"), None)
+    check_eq("unclosed", prove_packages("packages=(\n  krabka-verified\n)\n"), None)
+
+def _test_the_script_as_it_stands_has_no_problems(_ctx):
+    check_eq("agreed", script_problems(_PROVE_SCRIPT, ["krabka-verified"]), [])
+
+def _test_a_drifted_array_is_reported(_ctx):
+    check_eq(
+        "the script proves a package this task does not",
+        script_problems(_PROVE_SCRIPT, ["krabka-ids"]),
+        ["tools/creusot/prove.sh proves krabka-verified, but PROVED_PACKAGES holds krabka-ids"],
+    )
+    check_eq(
+        "the script proves nothing",
+        script_problems(_PROVE_SCRIPT.replace("packages=(krabka-verified)", "packages=()"), ["a"]),
+        ["tools/creusot/prove.sh proves nothing, but PROVED_PACKAGES holds a"],
+    )
+    check_eq(
+        "order does not count as drift",
+        script_problems(_PROVE_SCRIPT.replace("(krabka-verified)", "(b a)"), ["a", "b"]),
+        [],
+    )
+
+def _test_a_script_that_no_longer_proves_the_array_is_reported(_ctx):
+    check_eq(
+        "the array is there but nothing reads it",
+        script_problems("packages=(krabka-verified)\n", ["krabka-verified"]),
+        [
+            "tools/creusot/prove.sh no longer loops over its packages array",
+            "tools/creusot/prove.sh no longer runs `cargo creusot --package`",
+        ],
+    )
+
+def _test_a_missing_array_is_reported(_ctx):
+    check_eq(
+        "nothing to compare against",
+        script_problems(_PROVE_SCRIPT.replace("packages=(krabka-verified)", ""), ["x"]),
+        [
+            "tools/creusot/prove.sh holds no single-line `packages=(...)` array " +
+            "for this check to read",
+        ],
+    )
+
+def _test_discover_sweeps_a_crate_source_tree(ctx):
+    root = temp_tree(ctx, {
+        "by-contract/src/deep/nested.rs": _BY_CFG_ENSURES,
+        "by-contract/src/lib.rs": _ORDINARY,
+        "by-dependency/src/lib.rs": _ORDINARY,
+        "ordinary/src/lib.rs": _ORDINARY,
+        "ordinary/notes.md": _BY_REQUIRES,
+    })
+    packages = [
+        _package("by-contract", directory = root + "/by-contract"),
+        _package("by-dependency", directory = root + "/by-dependency", has_dependency = True),
+        _package("ordinary", directory = root + "/ordinary"),
+    ]
+    check_eq(
+        "a contract anywhere under the crate counts, and only in Rust",
+        discover(ctx.std.fs, packages),
+        ["by-contract", "by-dependency"],
+    )
+
+def _cargo(ctx, workspace, argv):
+    result = (
+        ctx.std.process.command("cargo")
+            .args(argv)
+            .current_dir(workspace)
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    if result.status.code != 0:
+        fail("cargo %s failed:\n%s" % (" ".join(argv), result.stderr.strip()))
+    return result.stdout
+
+def _crate(name, source, dependency = False):
+    manifest = '[package]\nname = "%s"\nversion = "0.1.0"\nedition = "2024"\n' % name
+    if dependency:
+        manifest += '\n[dependencies]\ncreusot-std = { path = "../../../creusot-std" }\n'
+    return {
+        "workspace/crates/%s/Cargo.toml" % name: manifest,
+        "workspace/crates/%s/src/lib.rs" % name: source,
+    }
+
+def _test_a_real_cargo_workspace_is_swept_end_to_end(ctx):
+    # The Python self-test built this workspace and ran cargo over it; keeping
+    # that shape is what pins `workspace_packages` to the JSON cargo actually
+    # emits rather than to a fixture recorded once and never revisited.
+    files = {
+        "workspace/Cargo.toml": '[workspace]\nmembers = ["crates/*"]\nresolver = "2"\n',
+        "creusot-std/Cargo.toml": '[package]\nname = "creusot-std"\nversion = "0.1.0"\nedition = "2024"\n',
+        "creusot-std/src/lib.rs": "",
+    }
+    for crate in [
+        _crate("by-dependency", "", dependency = True),
+        _crate("by-requires", _BY_REQUIRES),
+        _crate("by-cfg-requires", _BY_CFG_REQUIRES),
+        _crate("by-cfg-ensures", _BY_CFG_ENSURES),
+        _crate("third-kernel", _BY_ENSURES),
+        _crate("ordinary", _ORDINARY),
+    ]:
+        files.update(crate)
+
+    workspace = temp_tree(ctx, files) + "/workspace"
+    _cargo(ctx, workspace, ["generate-lockfile", "--offline"])
+    metadata = json.decode(
+        _cargo(ctx, workspace, ["metadata", "--no-deps", "--format-version=1", "--locked"]),
+    )
+
+    discovered = discover(ctx.std.fs, workspace_packages(metadata))
+    check_eq(
+        "every route into Creusot's scope, and nothing else",
+        discovered,
+        ["by-cfg-ensures", "by-cfg-requires", "by-dependency", "by-requires", "third-kernel"],
+    )
+    check_eq(
+        "what a half-populated proofs job would miss",
+        uncovered(discovered, ["by-dependency", "by-requires"]),
+        ["by-cfg-ensures", "by-cfg-requires", "third-kernel"],
+    )
+
+check_creusot_packages_tests = suite("check-creusot-packages", [
+    _test_a_bare_contract_attribute_is_a_contract,
+    _test_a_cfg_attr_contract_is_a_contract,
+    _test_whitespace_between_the_tokens_does_not_matter,
+    _test_a_contract_after_other_attributes_is_found,
+    _test_an_attribute_name_must_end_where_a_word_ends,
+    _test_a_cfg_attr_over_another_condition_is_not_a_contract,
+    _test_a_hash_that_does_not_open_its_line_is_not_an_attribute,
+    _test_ordinary_rust_holds_no_contract,
+    _test_workspace_packages_reads_the_members,
+    _test_creusot_packages_takes_either_route_in,
+    _test_uncovered_is_what_the_proofs_job_does_not_name,
+    _test_prove_packages_reads_the_array,
+    _test_prove_packages_cannot_read_what_is_not_there,
+    _test_the_script_as_it_stands_has_no_problems,
+    _test_a_drifted_array_is_reported,
+    _test_a_script_that_no_longer_proves_the_array_is_reported,
+    _test_a_missing_array_is_reported,
+    _test_discover_sweeps_a_crate_source_tree,
+    _test_a_real_cargo_workspace_is_swept_end_to_end,
+])
+
+test_check_creusot_packages = suite_task(check_creusot_packages_tests)

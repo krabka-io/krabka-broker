@@ -1,0 +1,54 @@
+"""Run one shard of a `rules_rs_mutants` sweep.
+
+The pinned runner reads Bazel's standard test-sharding variables even when it
+is launched with `bazel run`, which is how a sweep is split across a matrix of
+runners: `--test_sharding_strategy=disabled` keeps Bazel from also sharding the
+underlying test, and the two variables tell the runner which slice is its own.
+
+    aspect mutants-shard --target //crates/raft:raft_mutants --index 0 --count 8
+"""
+
+# Bazel's own sharding protocol, which the mutants runner reuses.
+SHARD_INDEX_VAR = "TEST_SHARD_INDEX"
+SHARD_COUNT_VAR = "TEST_TOTAL_SHARDS"
+
+def bazel_argv(target):
+    """The `bazel` arguments that run one shard of `target`."""
+    return ["run", "--test_sharding_strategy=disabled", target]
+
+def shard_env(index, count):
+    """The sharding variables for slice `index` of `count`, or a complaint."""
+    if count < 1:
+        return None, "shard count must be at least 1, got %d" % count
+    if index < 0 or index >= count:
+        return None, "shard index %d is outside 0..%d" % (index, count - 1)
+    return {SHARD_INDEX_VAR: str(index), SHARD_COUNT_VAR: str(count)}, ""
+
+def _impl(ctx: TaskContext) -> int:
+    target = ctx.args.target
+    if not target:
+        ctx.std.io.stderr.write("no target: pass one, such as //crates/raft:raft_mutants\n")
+        return 2
+
+    environment, problem = shard_env(ctx.args.index, ctx.args.count)
+    if problem:
+        ctx.std.io.stderr.write(problem + "\n")
+        return 2
+
+    command = ctx.std.process.command("bazel").args(bazel_argv(target))
+    for name, value in environment.items():
+        command = command.env(name, value)
+
+    # Neither stream is piped: a sweep runs for tens of minutes and its progress
+    # is the only sign it is alive.
+    return command.current_dir(ctx.std.env.bazel_root_dir()).spawn().wait().code
+
+mutants_shard = task(
+    summary = "Run one shard of a cargo-mutants sweep over a Bazel mutants target",
+    implementation = _impl,
+    args = {
+        "target": args.string(default = "", description = "The `*_mutants` Bazel target."),
+        "index": args.int(default = 0, description = "This shard, counted from 0."),
+        "count": args.int(default = 1, description = "How many shards the sweep is split into."),
+    },
+)

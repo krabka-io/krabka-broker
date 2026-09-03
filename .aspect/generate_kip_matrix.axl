@@ -1,0 +1,1221 @@
+"""Render `docs/KIP_MATRIX.md` from the evidence the tree already carries.
+
+The page is one row per KIP that any file under `crates/` names, followed by
+the JVM differential evidence: the on-disk log contract, the advertised
+`ApiVersions` table, and the KIP-219 throttle-echo divergences. Every column is
+read back out of the sources -- `KIP_ANNOTATIONS` in the API catalog, each
+crate's `BUILD.bazel` `docker` map, `//bazel/images` and the digests
+`//MODULE.bazel` pins -- so a claim cannot enter the tree without the evidence
+beside it. CI regenerates the page and diffs it against the checked-in copy.
+
+The parsing is deliberately textual: nothing here compiles Rust, and a source
+whose shape it cannot read is a hard failure rather than a silently thinner
+page.
+
+    aspect generate-kip-matrix
+"""
+
+load("./repo.axl", "is_file", "walk")
+
+_TESTS = "crates/log/tests/integration.rs"
+_LOG_BUILD = "crates/log/BUILD.bazel"
+_BROKER_BUILD = "crates/broker/BUILD.bazel"
+_IMAGES = "bazel/images/BUILD.bazel"
+_MODULE = "MODULE.bazel"
+_API_VERSIONS = "crates/broker/tests/fixtures/api_versions/divergence.json"
+_API_VERSIONS_ORACLE = "crates/broker/tests/api_versions_differential/oracle.rs"
+_THROTTLE_AUDIT = "crates/broker/src/network/dispatch/throttle_audit.rs"
+_API_CATALOG = "crates/broker/src/api_catalog.rs"
+_CRATES = "crates"
+_DEFAULT_OUTPUT = "docs/KIP_MATRIX.md"
+
+# The on-disk log contract rows: direction, what it establishes, and the test.
+ROWS = [
+    (
+        "JVM -> krabka",
+        "Open and read a JVM-written Kafka log directory",
+        "read_jvm_produced_log_dir",
+    ),
+    (
+        "krabka -> JVM",
+        "Restart Kafka over a krabka-written log directory and consume it",
+        "jvm_consumes_rust_written_log_dir",
+    ),
+]
+
+# How `divergence.json` labels a row, and how the matrix says it.
+VERDICTS = {
+    "same": "match",
+    "range_differs": "range differs",
+    "krabka_only": "krabka only",
+    "kafka_only": "Kafka only",
+}
+
+# KIP-219 (throttle-then-respond) responses whose `ThrottleTimeMs` is not the
+# leading field of the response body, so the dispatch loop -- which reports a
+# request-quota delay by patching a leading int32 -- cannot reach it.
+#
+# The rows below carry only the schema-layout half. The `(api_key, versions)`
+# set and the per-API runtime reach are both parsed out of
+# `THROTTLE_ECHO_DIVERGENCES` in the audit module, and rendering fails unless
+# the parsed set is exactly the set below, so a divergence added to the Rust
+# constant cannot be dropped from this page.
+THROTTLE_ECHO_ROWS = {
+    (0, "1-13"): (
+        "Produce",
+        "Sits behind the `Responses` array, at an offset the response header " +
+        "does not fix",
+    ),
+    (18, "1-5"): (
+        "ApiVersions",
+        "Sits behind the `ApiKeys` array, at an offset the response header " +
+        "does not fix",
+    ),
+    (38, "1-3"): (
+        "CreateDelegationToken",
+        "Last field, behind the principal strings, the token timestamps and " +
+        "the HMAC",
+    ),
+    (39, "1-2"): (
+        "RenewDelegationToken",
+        "Last field, behind `ErrorCode` and the new expiry timestamp",
+    ),
+    (40, "1-2"): (
+        "ExpireDelegationToken",
+        "Last field, behind `ErrorCode` and the new expiry timestamp",
+    ),
+    (41, "1-3"): (
+        "DescribeDelegationToken",
+        "Last field, behind `ErrorCode` and the variable-length token list",
+    ),
+    (47, "0"): (
+        "OffsetDelete",
+        "Leads with `ErrorCode`; the field is at a fixed offset of 2, but the " +
+        "dispatch loop patches leading fields only",
+    ),
+}
+
+# What each `QuotaReach` variant of the audit constant means on the wire. The
+# variant is the audit's own claim about the dispatch entry's
+# `RequestQuotaPolicy`, pinned there by
+# `recorded_reach_matches_the_dispatch_registry`.
+QUOTA_REACH_EFFECT = {
+    "SelfAccounted": "None. The handler charges its own quota and sets `ThrottleTimeMs` on " +
+                     "the typed response before encoding, so the client does see the delay",
+    "FallbackAccounted": "An ordinary request can be held by the request quota, and the " +
+                         "response it waits behind reports `throttle_time_ms = 0`",
+    "UnsupportedVersionOnly": "The ordinary path is `InlineExempt`, so it is never held. Only a " +
+                              "request outside the advertised version range is, and that reply " +
+                              "reports `throttle_time_ms = 0`",
+}
+
+_THROTTLE_AUDIT_TEST = "throttle_echo_divergences_are_the_recorded_ones"
+_THROTTLE_REACH_TEST = "recorded_reach_matches_the_dispatch_registry"
+
+_ANNOTATION_BEGIN = "// BEGIN KIP_ANNOTATIONS"
+_ANNOTATION_END = "// END KIP_ANNOTATIONS"
+
+STATUS = {
+    "Implemented": "Implemented",
+    "Partial": "Partial",
+    "OutOfScope": "Out of scope",
+}
+
+# The one non-JVM client suite, and what it drives.
+_LIBRDKAFKA = "crates/broker/tests/librdkafka_conformance.rs"
+_LIBRDKAFKA_TEST = "round_trip_group_join_and_api_versions_with_kcat"
+_CLIENT_EVIDENCE = ["NotCovered", "Kcat"]
+
+# The scope decision the out-of-scope rows cite, and the words the cited line
+# has to still say.
+_MIXED_QUORUM_WORDS = "Mixed JVM and Krabka controller quorums"
+
+# Image keys that are a Kafka broker, as opposed to a client or object store.
+KAFKA_IMAGE_PREFIXES = ["apache_kafka_", "cp_kafka_"]
+
+_WHITESPACE = " \t\n\r\x0b\x0c"
+
+# A bound on every scan that Starlark's missing `while` turns into a `range`.
+# The inputs are source files of a few thousand lines, so exhausting one of
+# these means the input is not what this task can read.
+_SCAN_LIMIT = 100000
+
+def is_word_char(character):
+    """Whether `character` is one of Python's `\\w`: alphanumeric or `_`."""
+    return character == "_" or character.isalnum()
+
+def _at_word_boundary(text, at):
+    """Whether a match starting at `at` opens on a `\\b`, given it starts with a word char."""
+    return at == 0 or not is_word_char(text[at - 1])
+
+def _skip_whitespace(text, at):
+    """The first index at or after `at` that is not whitespace."""
+    for _ in range(_SCAN_LIMIT):
+        if at >= len(text) or not (text[at] in _WHITESPACE):
+            return at
+        at += 1
+    fail("generate-kip-matrix: unbounded whitespace run")
+
+def _quoted(text, at):
+    """The `"..."` starting at `at`, or `None` when `at` does not open one.
+
+    Returns `struct(value, end)` where `end` is the index just past the closing
+    quote. The value may be empty; a caller that needs `[^"]+` checks for it.
+    """
+    if at >= len(text) or text[at] != '"':
+        return None
+    close = text.find('"', at + 1)
+    if close < 0:
+        return None
+    return struct(value = text[at + 1:close], end = close + 1)
+
+def const_str_value(text, declaration):
+    """The string a `... const NAME: &str = "...";` line assigns, or `""`.
+
+    `declaration` is everything up to and including the opening quote, so the
+    caller picks the visibility -- `const `, `pub const `, `pub(crate) const `.
+    The original pattern anchored at a line start with no leading whitespace,
+    which is what these declarations look like, so the scan is per line.
+    """
+    for line in text.splitlines():
+        if not line.startswith(declaration):
+            continue
+        rest = line[len(declaration) - 1:]
+        found = _quoted(rest, 0)
+        if found != None and found.value and rest[found.end:found.end + 1] == ";":
+            return found.value
+    return ""
+
+def defines_fn(text, name, prefix = "fn "):
+    """Whether a line of `text` opens with `prefix` + `name` + `()`.
+
+    `prefix` is `fn ` or `async fn `; the original anchored both at column
+    zero, which is where a free function in these suites sits.
+    """
+    opening = prefix + name + "()"
+    for line in text.splitlines():
+        if line.startswith(opening):
+            return True
+    return False
+
+def declares_fn(text, name):
+    """Whether `text` declares `fn <name>` anywhere, taking arguments or generics.
+
+    This is the looser `\\bfn NAME\\s*[(<]` of the test checker: it accepts a
+    method as well as a free function, at any indentation, and it distinguishes
+    `fn read` from `fn read_all` because the character after the name has to
+    open a parameter or generic list.
+    """
+    opening = "fn " + name
+    at = 0
+    for _ in range(_SCAN_LIMIT):
+        found = text.find(opening, at)
+        if found < 0:
+            return False
+        after = _skip_whitespace(text, found + len(opening))
+        if _at_word_boundary(text, found) and text[after:after + 1] in ("(", "<"):
+            return True
+        at = found + 1
+    fail("generate-kip-matrix: unbounded scan for fn %s" % name)
+
+def image_for(images, key):
+    """The tag `//bazel/images` loads image `key` under, or `""`."""
+    opening = '"%s"' % key
+    for line in images.splitlines():
+        stripped = line.lstrip(_WHITESPACE)
+        if not stripped.startswith(opening):
+            continue
+        at = _skip_whitespace(stripped, len(opening))
+        if stripped[at:at + 1] != ":":
+            continue
+        found = _quoted(stripped, _skip_whitespace(stripped, at + 1))
+        if found != None and found.value:
+            return found.value
+    return ""
+
+def digest_for(module, key):
+    """The digest `//MODULE.bazel` pins image `key` to, or `""`.
+
+    The pin is the last field of the tuple, whatever the fields before it are:
+    the rules_img work widened the row from `(name, tag, digest)` to
+    `(name, registry, repository, tag, digest)`, and a pattern that counted the
+    fields in between silently stopped matching.
+    """
+    opening = '("%s",' % key
+    for line in module.splitlines():
+        stripped = line.lstrip(_WHITESPACE)
+        if not stripped.startswith(opening):
+            continue
+        at = len(opening)
+        fields = 0
+        for _ in range(64):
+            found = _quoted(stripped, _skip_whitespace(stripped, at))
+            if found == None or not found.value:
+                break
+            closer = stripped[found.end:found.end + 1]
+            if closer == ",":
+                fields += 1
+                at = found.end + 1
+            elif closer == ")":
+                if fields and found.value.startswith("sha256:") and len(found.value) > len("sha256:"):
+                    return found.value
+                break
+            else:
+                break
+    return ""
+
+def kip_mentions(text):
+    """Every `KIP-<n>` that `text` names as a whole word, sorted and deduplicated."""
+    found = {}
+    at = 0
+    for _ in range(_SCAN_LIMIT):
+        opening = text.find("KIP-", at)
+        if opening < 0:
+            break
+        digits = opening + len("KIP-")
+        end = digits
+        for _ in range(_SCAN_LIMIT):
+            if end < len(text) and text[end].isdigit():
+                end += 1
+            else:
+                break
+        at = opening + 1
+
+        # `\bKIP-\d+\b`: a word character on either side defeats the boundary,
+        # and backtracking the digit run cannot rescue it because a digit is
+        # itself a word character.
+        if end == digits or not _at_word_boundary(text, opening):
+            continue
+        if end < len(text) and is_word_char(text[end]):
+            continue
+        found[text[opening:end]] = True
+    return sorted(found)
+
+def kip_order_key(key):
+    """KIP rows first, by number; the scope-only rows after them, by name.
+
+    The third element keeps every comparison within one type, which Starlark
+    needs and Python got away with because the leading rank always differed.
+    """
+    if key.startswith("KIP-"):
+        return (0, int(key[len("KIP-"):]), "")
+    return (1, 0, key)
+
+def kip_order(keys):
+    """`keys`, in the order the matrix lists them."""
+    return sorted(keys, key = kip_order_key)
+
+def parse_divergences(audit, source = _THROTTLE_AUDIT):
+    """Read `THROTTLE_ECHO_DIVERGENCES` out of the audit module.
+
+    Returns one `(api_key, version range, QuotaReach variant)` triple per
+    entry, with the range rendered the way the table shows it.
+    """
+    start = audit.find("const THROTTLE_ECHO_DIVERGENCES")
+    if start < 0:
+        fail("missing THROTTLE_ECHO_DIVERGENCES in %s" % source)
+    end = audit.find("\n];", start)
+    if end < 0:
+        fail("unterminated THROTTLE_ECHO_DIVERGENCES in %s" % source)
+
+    rows = []
+    at = start
+    for _ in range(_SCAN_LIMIT):
+        opening = audit.find("(", at)
+        if opening < 0 or opening >= end:
+            break
+        at = opening + 1
+        entry = _divergence_at(audit[opening:end])
+        if entry == None:
+            continue
+        if entry[2] not in QUOTA_REACH_EFFECT:
+            fail("unknown QuotaReach variant %s in %s" % (entry[2], source))
+        rows.append(entry)
+        at = opening + entry[3]
+    if not rows:
+        fail("THROTTLE_ECHO_DIVERGENCES parsed empty in %s" % source)
+    return [(key, versions, reach) for key, versions, reach, _ in rows]
+
+def _divergence_at(text):
+    """`(api_key, version range, variant, length)` for the tuple opening `text`.
+
+    `text` starts at the `(`. This is the `(\\d+, \\d+, \\d+, QuotaReach::\\w+)`
+    of the original, with the optional trailing comma the Rust formatter may
+    leave behind.
+    """
+    at = _skip_whitespace(text, 1)
+    numbers = []
+    for _ in range(3):
+        end = at
+        for _ in range(32):
+            if end < len(text) and text[end].isdigit():
+                end += 1
+            else:
+                break
+        if end == at:
+            return None
+        numbers.append(text[at:end])
+
+        # The original put no `\s*` before these commas, so neither does this.
+        if text[end:end + 1] != ",":
+            return None
+        at = _skip_whitespace(text, end + 1)
+
+    if not text[at:].startswith("QuotaReach::"):
+        return None
+    at += len("QuotaReach::")
+    end = at
+    for _ in range(64):
+        if end < len(text) and is_word_char(text[end]):
+            end += 1
+        else:
+            break
+    if end == at:
+        return None
+    reach = text[at:end]
+
+    at = _skip_whitespace(text, end)
+    if text[at:at + 1] == ",":
+        at = _skip_whitespace(text, at + 1)
+    if text[at:at + 1] != ")":
+        return None
+
+    low, high = numbers[1], numbers[2]
+    return (int(numbers[0]), low if low == high else "%s-%s" % (low, high), reach, at + 1)
+
+def annotation_bodies(text):
+    """The body of every `KipAnnotation { ... },` literal in `text`.
+
+    The original matched non-greedily up to the first `\\n\\s*},`, so a nested
+    literal is not a thing this reads and a stray `KipAnnotation` that does not
+    open a brace -- the element type of the slice, say -- is skipped.
+    """
+    bodies = []
+    at = 0
+    for _ in range(_SCAN_LIMIT):
+        opening = text.find("KipAnnotation", at)
+        if opening < 0:
+            break
+        at = opening + 1
+        brace = _skip_whitespace(text, opening + len("KipAnnotation"))
+        if text[brace:brace + 1] != "{":
+            continue
+        end = _entry_end(text, brace + 1)
+        if end < 0:
+            continue
+        bodies.append(text[brace + 1:end])
+        at = end
+    return bodies
+
+def _entry_end(text, start):
+    """The newline that closes the entry body opening at `start`, or -1."""
+    at = start
+    for _ in range(_SCAN_LIMIT):
+        newline = text.find("\n", at)
+        if newline < 0:
+            return -1
+        if text[_skip_whitespace(text, newline + 1):][:2] == "},":
+            return newline
+        at = newline + 1
+    fail("generate-kip-matrix: unbounded scan for the end of a KipAnnotation")
+
+def _field_at(body, name):
+    """The index just past `name:` where it stands as its own word, or -1."""
+    opening = name + ":"
+    at = 0
+    for _ in range(1000):
+        found = body.find(opening, at)
+        if found < 0:
+            return -1
+        if _at_word_boundary(body, found):
+            return found + len(opening)
+        at = found + 1
+    fail("generate-kip-matrix: unbounded scan for field %s" % name)
+
+def annotation_string(body, name, source = _API_CATALOG):
+    """The `name: "..."` field of an annotation body."""
+    at = _field_at(body, name)
+    found = _quoted(body, _skip_whitespace(body, at)) if at >= 0 else None
+    if found == None:
+        fail("KipAnnotation entry without a parsable `%s` in %s" % (name, source))
+    return found.value
+
+def annotation_variant(body, name, enum, source = _API_CATALOG):
+    """The variant of `name: Enum::Variant` in an annotation body."""
+    at = _field_at(body, name)
+    if at >= 0:
+        at = _skip_whitespace(body, at)
+        if body[at:].startswith(enum + "::"):
+            start = at + len(enum) + 2
+            end = start
+            for _ in range(64):
+                if end < len(body) and is_word_char(body[end]):
+                    end += 1
+                else:
+                    break
+            if end > start:
+                return body[start:end]
+    fail("KipAnnotation entry without a parsable `%s` in %s" % (name, source))
+
+def annotation_tests(body, source = _API_CATALOG):
+    """The paths of the `tests: &[...]` field of an annotation body."""
+    at = _field_at(body, "tests")
+    if at >= 0:
+        at = _skip_whitespace(body, at)
+        if body[at:at + 2] == "&[":
+            close = body.find("]", at + 2)
+            if close >= 0:
+                return _quoted_strings(body[at + 2:close])
+    fail("KipAnnotation entry without a parsable `tests` in %s" % source)
+
+def _quoted_strings(text):
+    """Every `"..."` in `text`, in order, the way `findall` walks it."""
+    found = []
+    at = 0
+    for _ in range(1000):
+        opening = text.find('"', at)
+        if opening < 0:
+            return found
+        entry = _quoted(text, opening)
+        if entry == None:
+            return found
+        found.append(entry.value)
+        at = entry.end
+    fail("generate-kip-matrix: unbounded scan for quoted strings")
+
+def parse_annotations(catalog, source = _API_CATALOG):
+    """Read `KIP_ANNOTATIONS` out of the API catalog, one record per row."""
+    start = catalog.find(_ANNOTATION_BEGIN)
+    end = catalog.find(_ANNOTATION_END)
+    if start < 0 or end < start:
+        fail("missing %s/%s markers in %s" % (_ANNOTATION_BEGIN, _ANNOTATION_END, source))
+
+    rows = []
+    seen = {}
+    for body in annotation_bodies(catalog[start:end]):
+        status = annotation_variant(body, "status", "KipStatus", source)
+        clients = annotation_variant(body, "clients", "ClientEvidence", source)
+        if status not in STATUS:
+            fail("unknown KipStatus variant %s in %s" % (status, source))
+        if clients not in _CLIENT_EVIDENCE:
+            fail("unknown ClientEvidence variant %s in %s" % (clients, source))
+        key = annotation_string(body, "key", source)
+        if key in seen:
+            fail("duplicate KIP_ANNOTATIONS keys in %s" % source)
+        seen[key] = True
+        rows.append(struct(
+            key = key,
+            claim = annotation_string(body, "claim", source),
+            status = status,
+            module = annotation_string(body, "module", source),
+            tests = annotation_tests(body, source),
+            clients = clients,
+            note = annotation_string(body, "note", source),
+        ))
+    if not rows:
+        fail("KIP_ANNOTATIONS parsed empty in %s" % source)
+    return rows
+
+def catalog_outside_annotations(catalog):
+    """`catalog` with the annotation block cut out.
+
+    The block is the claim the inventory is checked against, so counting the
+    KIPs it names would keep a stale row alive by citing itself.
+    """
+    start = catalog.find(_ANNOTATION_BEGIN)
+    end = catalog.find(_ANNOTATION_END)
+    if start < 0 or end < start:
+        return catalog
+    return catalog[:start] + catalog[end:]
+
+def docker_map(build, source = ""):
+    """The `docker = {...}` map of a crate's `crate_tests` call: stem to image keys.
+
+    The block is delimited by balanced braces rather than by its last line,
+    because the map's values are themselves multi-line lists. `#` comments are
+    dropped first: several of the entries carry a sentence about why an image
+    is there, and a commented-out key would otherwise read as a live one.
+    """
+    start = build.find("docker = {")
+    if start < 0:
+        return {}
+    begin = start + len("docker = ")
+    close = _matching_brace(build, begin)
+    if close < 0:
+        fail("unbalanced docker map in %s" % source)
+    return _docker_entries(_strip_comments(build[begin:close + 1]))
+
+def _matching_brace(text, begin):
+    """The index of the `}` that closes the `{` at `begin`, or -1."""
+    depth = 0
+    at = begin
+    for _ in range(_SCAN_LIMIT):
+        opening = text.find("{", at)
+        closing = text.find("}", at)
+        if closing < 0:
+            return -1
+        if opening >= 0 and opening < closing:
+            depth += 1
+            at = opening + 1
+        else:
+            depth -= 1
+            at = closing + 1
+            if depth == 0:
+                return closing
+    fail("generate-kip-matrix: unbounded brace scan")
+
+def _strip_comments(text):
+    """`text` with every `#` and what follows it on that line removed."""
+    return "\n".join([line.partition("#")[0] for line in text.split("\n")])
+
+def _docker_entries(block):
+    """The `"stem": ["image", ...]` pairs of a comment-free `docker` block."""
+    found = {}
+    at = 0
+    for _ in range(1000):
+        colon = block.find('":', at)
+        if colon < 0:
+            return found
+        at = colon + 1
+        start = colon
+        for _ in range(200):
+            if start > 0 and is_word_char(block[start - 1]):
+                start -= 1
+            else:
+                break
+        if start == colon or start == 0 or block[start - 1] != '"':
+            continue
+        opening = _skip_whitespace(block, colon + 2)
+        if block[opening:opening + 1] != "[":
+            continue
+        closing = block.find("]", opening + 1)
+        if closing < 0:
+            return found
+        found[block[start:colon]] = _quoted_words(block[opening + 1:closing])
+        at = closing + 1
+    fail("generate-kip-matrix: unbounded scan of a docker map")
+
+def _quoted_words(text):
+    """Every `"<word chars>"` in `text`, the way `findall` walks it."""
+    found = []
+    at = 0
+    for _ in range(1000):
+        opening = text.find('"', at)
+        if opening < 0:
+            return found
+        end = opening + 1
+        for _ in range(200):
+            if end < len(text) and is_word_char(text[end]):
+                end += 1
+            else:
+                break
+        if end > opening + 1 and text[end:end + 1] == '"':
+            found.append(text[opening + 1:end])
+            at = end + 1
+        else:
+            at = opening + 1
+    fail("generate-kip-matrix: unbounded scan for quoted words")
+
+def suite_stem(path):
+    """The crate and suite `path` belongs to, or `None` when it is not a suite.
+
+    `crates/<crate>/tests/<stem>.rs` and `crates/<crate>/tests/<stem>/<file>.rs`
+    both belong to suite `<stem>`. Anything under `src/` runs in process.
+    """
+    parts = path.split("/")
+    if len(parts) < 4 or parts[0] != "crates" or parts[2] != "tests":
+        return None
+    stem = parts[3][:-len(".rs")] if len(parts) == 4 else parts[3]
+    return struct(crate = parts[1], stem = stem)
+
+def kafka_image_keys(keys):
+    """The image keys of `keys` that name a Kafka broker rather than a client."""
+    return [
+        key
+        for key in keys
+        if key.startswith(KAFKA_IMAGE_PREFIXES[0]) or key.startswith(KAFKA_IMAGE_PREFIXES[1])
+    ]
+
+def librdkafka_clients(suite, source = _LIBRDKAFKA):
+    """The `(image, program, library)` the librdkafka conformance suite drives."""
+    opening = "CLIENTS: [(&str, &str, &str); 1] = [("
+    start = suite.find(opening)
+    if start < 0:
+        fail("missing matrix evidence in %s: %s" % (source, opening))
+
+    at = start + len(opening)
+    fields = []
+    for _ in range(3):
+        found = _quoted(suite, _skip_whitespace(suite, at))
+        if found == None or not found.value:
+            fail("unreadable CLIENTS entry in %s" % source)
+        fields.append(found.value)
+        at = found.end
+        if len(fields) < 3:
+            if suite[at:at + 1] != ",":
+                fail("unreadable CLIENTS entry in %s" % source)
+            at += 1
+    if suite[at:at + 1] == ",":
+        at += 1
+    if suite[_skip_whitespace(suite, at):][:2] != ")]":
+        fail("unreadable CLIENTS entry in %s" % source)
+    return tuple(fields)
+
+def citations(note):
+    """Every `crates/<path>.rs:<line>` in `note`, as `struct(start, end, path, line)`.
+
+    The spans are what `link_citations` rewrites, and the paths are what the
+    caller has to read before it can check the line exists.
+    """
+    found = []
+    at = 0
+    for _ in range(1000):
+        opening = note.find("crates/", at)
+        if opening < 0:
+            return found
+        at = opening + 1
+        if not _at_word_boundary(note, opening):
+            continue
+
+        # `[\\w./-]+\\.rs` is greedy and the `:` that follows is not in the
+        # class, so the run has to end at the extension: a shorter path would
+        # leave a class character where the colon has to be.
+        end = opening
+        for _ in range(1000):
+            if end < len(note) and (is_word_char(note[end]) or note[end] in "./-"):
+                end += 1
+            else:
+                break
+        path = note[opening:end]
+        if len(path) <= len("crates/") + len(".rs") or not path.endswith(".rs"):
+            continue
+        if note[end:end + 1] != ":":
+            continue
+        digits = end + 1
+        stop = digits
+        for _ in range(32):
+            if stop < len(note) and note[stop].isdigit():
+                stop += 1
+            else:
+                break
+        if stop == digits or (stop < len(note) and is_word_char(note[stop])):
+            continue
+        found.append(struct(start = opening, end = stop, path = path, line = int(note[digits:stop])))
+        at = stop
+    fail("generate-kip-matrix: unbounded scan for citations")
+
+def link_citations(note, line_counts):
+    """Turn `crates/x.rs:<line>` in a note into a link, after checking the line exists.
+
+    `line_counts` maps each cited path to how many lines the file has, which is
+    what makes this a pure rewrite of the string.
+    """
+    rendered = ""
+    at = 0
+    for citation in citations(note):
+        if citation.line > line_counts[citation.path]:
+            fail("citation %s:%d is past the end of the file" % (citation.path, citation.line))
+        rendered += note[at:citation.start]
+        rendered += "[`%s:%d`](../%s#L%d)" % (
+            citation.path,
+            citation.line,
+            citation.path,
+            citation.line,
+        )
+        at = citation.end
+    return rendered + note[at:]
+
+def log_contract_rows(pinned):
+    """The on-disk log evidence rows, against the image `pinned` names."""
+    return "\n".join([
+        "| %s | Implemented | %s | [`crates/log`](../crates/log) | [`%s`](../%s) | `%s` |" %
+        (direction, contract, test, _TESTS, pinned)
+        for direction, contract, test in ROWS
+    ])
+
+def _span(versions):
+    """A `min-max` version range, or what the table says for an absent key."""
+    if versions == None:
+        return "not advertised"
+    return "%d-%d" % (versions["min"], versions["max"])
+
+def api_versions_rows(report):
+    """The advertised-version rows of a decoded `divergence.json`."""
+    return "\n".join([
+        "| %s | %d | %s | %s | %s |" % (
+            row["name"],
+            row["api_key"],
+            _span(row["krabka"]),
+            _span(row["kafka"]),
+            VERDICTS[row["verdict"]],
+        )
+        for row in report["apis"]
+    ])
+
+def throttle_echo_rows(divergences):
+    """The KIP-219 throttle-echo divergence rows.
+
+    The parsed `(api_key, versions)` set has to be exactly the one this file
+    renders: the Rust constant is the record of what the audit found, and a
+    divergence added there must not be able to slip off the page.
+    """
+    parsed = [(key, versions) for key, versions, _ in divergences]
+    if sorted(parsed) != sorted(THROTTLE_ECHO_ROWS):
+        missing = sorted([row for row in parsed if row not in THROTTLE_ECHO_ROWS])
+        extra = sorted([row for row in THROTTLE_ECHO_ROWS if row not in parsed])
+        fail(
+            "THROTTLE_ECHO_DIVERGENCES and THROTTLE_ECHO_ROWS disagree: " +
+            "recorded but unrendered %r, rendered but unrecorded %r" % (missing, extra),
+        )
+    return "\n".join([
+        "| %s | %d | %s | %s | %s |" % (
+            THROTTLE_ECHO_ROWS[(key, versions)][0],
+            key,
+            versions,
+            THROTTLE_ECHO_ROWS[(key, versions)][1],
+            QUOTA_REACH_EFFECT[reach],
+        )
+        for key, versions, reach in divergences
+    ])
+
+def kcat_evidence(image, program, library):
+    """The client-family column for a row whose evidence is the kcat suite."""
+    return "%s %s (%s): [`%s`](../%s)" % (
+        program,
+        image.rsplit(":", 1)[1],
+        library,
+        _LIBRDKAFKA_TEST,
+        _LIBRDKAFKA,
+    )
+
+def kip_row(row, tests, images, kcat, note):
+    """One rendered per-KIP row.
+
+    `tests` are the already-linked test cells, `images` the Kafka image keys
+    the listed suites load, `kcat` the client-family cell, and `note` the note
+    with its citations linked and its pipes escaped.
+    """
+    return "| %s | %s | %s | [`%s`](../%s) | %s | %s | %s | %s |" % (
+        row.key,
+        STATUS[row.status],
+        row.claim,
+        row.module[len("crates/"):],
+        row.module,
+        "<br>".join(tests) or "none",
+        ", ".join(["`" + image + "`" for image in images]) or "in process",
+        kcat if row.clients == "Kcat" else "none",
+        note,
+    )
+
+def test_cell(test, path):
+    """The linked cell for one `path` or `path::function` test entry."""
+    return "[`%s`](../%s)" % (test[len("crates/"):], path)
+
+def image_legend(keys, images, module):
+    """The image-key legend, one row per key the page cites."""
+    return "\n".join([
+        "| `%s` | `%s@%s` |" % (key, image_for(images, key), digest_for(module, key))
+        for key in sorted(keys)
+    ])
+
+def render_page(kip_table, legend, log_image, log_rows, api_image, api_rows, throttle_rows):
+    """The whole page, from the sections already rendered."""
+    return _TEMPLATE.format(
+        kip_table = kip_table,
+        image_legend = legend,
+        log_image = log_image,
+        log_rows = log_rows,
+        api_image = api_image,
+        api_rows = api_rows,
+        throttle_rows = throttle_rows,
+    )
+
+# The page around the generated sections. It is prose, not data, so it lives
+# here whole rather than as a list of lines to be reassembled.
+_TEMPLATE = """# Kafka KIP compatibility matrix
+
+<!-- Generated by `aspect generate-kip-matrix`; do not edit by hand. -->
+
+This matrix records what the tree claims about Kafka compatibility and where
+the evidence for each claim is: one row per KIP that any file under `crates/`
+names, then the repository's JVM differential evidence, which is the Kafka
+on-disk log contract and the `ApiVersions` table every client negotiates
+against.
+
+## KIP status
+
+Every row comes from `KIP_ANNOTATIONS` in
+[`api_catalog`](../crates/broker/src/api_catalog.rs). The generator scans
+`crates/` for `KIP-<n>` mentions, except the crate CHANGELOGs, and fails when a
+KIP is named without a row here or a row names a KIP that nothing mentions, so a
+compatibility claim cannot enter `src/` without evidence beside it. It also
+fails when a row's owner or test does not exist, or when a `path::function`
+entry names a function the file does not define.
+
+- **Status** is `Implemented`, `Partial` (the note says what is missing), or
+  `Out of scope` (the note cites the decision).
+- **Owner** is the module that holds the behavior.
+- **Tests** establish the status. A test under `src/` is a unit or model test.
+- **Kafka image** is what the listed suites run against, read from each crate's
+  `BUILD.bazel` `docker` map and pinned below; `in process` means no suite in
+  the row starts a Kafka container.
+- **librdkafka** is the non-JVM client evidence:
+  [`librdkafka_conformance`](../crates/broker/tests/librdkafka_conformance.rs)
+  drives the stock `kcat` image against the broker.
+
+| KIP | Status | Contract | Owner | Tests | Kafka image | librdkafka | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+{kip_table}
+
+### Kafka images
+
+| Key | Image |
+| :--- | :--- |
+{image_legend}
+
+## On-disk log contract
+
+The suite covers timestamped record batches (KIP-32), segment and index
+discovery, and record key/value recovery in both directions. It ran against
+`{log_image}`.
+
+| Direction | Status | Contract | Owner | Differential test | Kafka image |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+{log_rows}
+
+## Advertised API versions
+
+`kafka-broker-api-versions` read both tables below.
+[`api_versions_differential`](../crates/broker/tests/api_versions_differential.rs)
+asserts krabka's against
+[`api_catalog`](../crates/broker/src/api_catalog.rs) and records the join in
+[`divergence.json`](../crates/broker/tests/fixtures/api_versions/divergence.json),
+which is where these two version columns come from. A range that moves, or a key
+that appears on one side only, changes that file and so changes this table.
+
+The oracle is `{api_image}`.
+
+It is a stock single-node KRaft broker, read on its PLAINTEXT *broker* listener.
+Both facts shape the Kafka column, so a `krabka only` verdict means "that broker
+did not advertise the key there", not "Kafka does not have the API". Two reasons
+account for every such row:
+
+- Kafka scopes an `ApiVersions` response to the listener it arrives on
+  (`ApiVersionsResponse.filterApis` takes a `ListenerType`), and answers the
+  controller-plane APIs on the controller listener, which this table does not
+  read. krabka runs both roles behind one listener and advertises the union.
+- Kafka advertises `GetTelemetrySubscriptions` and `PushTelemetry` only while a
+  client-telemetry exporter is configured, and this oracle configures none.
+  krabka advertises them unconditionally.
+
+| API | Key | krabka | Kafka | Verdict |
+| :--- | ---: | :--- | :--- | :--- |
+{api_rows}
+
+The Bazel Docker lane supplies each image from a digest-pinned OCI repository.
+CI regenerates this page and fails when the test names, lane, image tag, digest,
+recorded API versions, or checked-in output drift.
+
+## KIP-219 throttle-echo divergences
+
+The broker reports a request-quota delay by patching the leading
+`ThrottleTimeMs` int32 of an already-encoded response, so it can only echo the
+delay on responses whose schema puts that field first. Every advertised API is
+audited by
+[`throttle_audit`](../crates/broker/src/network/dispatch/throttle_audit.rs),
+which encodes each response at each advertised version and compares where
+`ThrottleTimeMs` lands against the broker's table.
+
+The APIs below carry `ThrottleTimeMs` behind another field, so the patch
+cannot reach it. That is a statement about the schema, not about what a client
+observes: whether a request-quota delay is ever applied to one of these APIs is
+decided separately, by its dispatch entry's `RequestQuotaPolicy`. The two
+columns are kept apart for that reason.
+
+* `SelfAccounted` entries charge the quota in the handler and set
+  `ThrottleTimeMs` on the typed response before encoding, so the buried field
+  costs nothing and the client does see the delay.
+* `ApplyFallbackAccounting` entries are the ones the dispatch loop charges and
+  delays, so a buried field there really does mean latency without a back-off
+  signal.
+* `InlineExempt` entries -- most of the admin, ACL and delegation-token
+  surface -- are exempt from the request quota on the ordinary path, so they
+  are never delayed by it. The unsupported-version reply path charges every
+  `api_key` regardless of policy, so a request outside the advertised version
+  range is the one case where such an API is held without an echo.
+
+`recorded_reach_matches_the_dispatch_registry` in the audit pins the last
+column against the assembled dispatch registry, so a policy change on any of
+these APIs fails the build until this page is regenerated. Echoing the field on
+any of them needs it set on the typed response before encoding rather than a
+byte patch.
+
+| API | api_key | Versions | Why the field cannot be patched | Runtime effect |
+| :--- | :--- | :--- | :--- | :--- |
+{throttle_rows}
+"""
+
+def _read(fs, root, relative):
+    return fs.read_to_string(root + "/" + relative)
+
+def _evidence(value, source, wanted):
+    """`value`, or a failure naming the shape `source` no longer has."""
+    _require(value, source, wanted)
+    return value
+
+def _require(present, source, wanted):
+    """Fail unless `source` still carries `wanted`.
+
+    Every one of these is a broken invariant in the tree rather than a
+    complaint to collect: the page cannot be rendered at all without the
+    evidence, so there is nothing to report and carry on from.
+    """
+    if not present:
+        fail("missing matrix evidence in %s: %s" % (source, wanted))
+
+def _image(pins, key):
+    return _evidence(image_for(pins.images, key), _IMAGES, '"%s": "..."' % key)
+
+def _digest(pins, key):
+    return _evidence(digest_for(pins.module, key), _MODULE, '("%s", ..., "sha256:...")' % key)
+
+def _pinned(pins, key):
+    return "%s@%s" % (_image(pins, key), _digest(pins, key))
+
+def _suite_image_key(build, source, stem):
+    """The single image key `stem`'s `docker` entry names."""
+    keys = docker_map(build, source).get(stem, [])
+    return _evidence(keys[0] if keys else "", source, '"%s": ["..."]' % stem)
+
+def _log_contract(fs, root, pins):
+    """The on-disk log evidence rows, and the image that produced them."""
+    tests = _read(fs, root, _TESTS)
+    for _, _, test in ROWS:
+        _require(defines_fn(tests, test, prefix = "async fn "), _TESTS, "async fn %s()" % test)
+
+    key = _suite_image_key(_read(fs, root, _LOG_BUILD), _LOG_BUILD, "integration")
+    image = _image(pins, key)
+    test_image = _evidence(
+        const_str_value(tests, 'const KAFKA_IMAGE: &str = "'),
+        _TESTS,
+        'const KAFKA_IMAGE: &str = "..."',
+    )
+    test_tag = _evidence(
+        const_str_value(tests, 'const KAFKA_TAG: &str = "'),
+        _TESTS,
+        'const KAFKA_TAG: &str = "..."',
+    )
+    if "%s:%s" % (test_image, test_tag) != image:
+        fail("test image %s:%s does not match Bazel image %s" % (test_image, test_tag, image))
+
+    pinned = "%s@%s" % (image, _digest(pins, key))
+    return log_contract_rows(pinned), pinned
+
+def _api_versions(fs, root, pins, broker_build):
+    """The advertised-version rows, and the oracle image they were read from.
+
+    Both version columns come from `divergence.json`, which
+    `//crates/broker:api_versions_differential` writes from a live krabka broker
+    beside a live Kafka broker. Nothing here re-derives them; what this checks is
+    that the oracle the file names is still the one the suite drives and the one
+    Bazel pins, so a stale recording cannot pass itself off as current evidence.
+    """
+    report = json.decode(_read(fs, root, _API_VERSIONS))
+    key = _suite_image_key(broker_build, _BROKER_BUILD, "api_versions_differential")
+    image = _image(pins, key)
+    suite_image = _evidence(
+        const_str_value(_read(fs, root, _API_VERSIONS_ORACLE), 'pub(crate) const ORACLE_IMAGE: &str = "'),
+        _API_VERSIONS_ORACLE,
+        'pub(crate) const ORACLE_IMAGE: &str = "..."',
+    )
+    for whose, named in [("suite", suite_image), ("recorded", report["oracle_image"])]:
+        if named != image:
+            fail("%s oracle %s does not match Bazel image %s" % (whose, named, image))
+    return api_versions_rows(report), _pinned(pins, key)
+
+def _throttle_echo(fs, root):
+    """The KIP-219 throttle-echo divergence rows."""
+    audit = _read(fs, root, _THROTTLE_AUDIT)
+    for test in [_THROTTLE_AUDIT_TEST, _THROTTLE_REACH_TEST]:
+        _require(defines_fn(audit, test), _THROTTLE_AUDIT, "fn %s()" % test)
+    return throttle_echo_rows(parse_divergences(audit))
+
+def _librdkafka_evidence(fs, root, pins, broker_build):
+    """What the librdkafka suite establishes, for the client-family column."""
+    suite = _read(fs, root, _LIBRDKAFKA)
+    _require(
+        defines_fn(suite, _LIBRDKAFKA_TEST, prefix = "async fn "),
+        _LIBRDKAFKA,
+        "async fn %s()" % _LIBRDKAFKA_TEST,
+    )
+
+    image, program, library = librdkafka_clients(suite)
+    keys = docker_map(broker_build, _BROKER_BUILD).get("librdkafka_conformance", [])
+    if not keys or image_for(pins.images, keys[0]) != image:
+        fail("librdkafka client image %s is not the one Bazel loads" % image)
+    _digest(pins, keys[0])
+    return kcat_evidence(image, program, library)
+
+def _kip_inventory(fs, root, catalog):
+    """Every `KIP-<n>` a file under `crates/` names.
+
+    The crate CHANGELOGs are history rather than a claim about the tree, and
+    the annotation block is the claim being checked, so neither counts. A file
+    the sweep cannot decode carries no readable claim either.
+    """
+    found = {}
+    for relative in walk(fs, root + "/" + _CRATES, relative_to = root):
+        if relative.rsplit("/", 1)[-1] == "CHANGELOG.md":
+            continue
+        if relative == _API_CATALOG:
+            text = catalog_outside_annotations(catalog)
+        else:
+            text = fs.try_read_to_string(root + "/" + relative)
+            if text == None:
+                continue
+        for kip in kip_mentions(text):
+            found[kip] = True
+    return found
+
+def _check_test(fs, root, key, test):
+    """Confirm the file (and function, if named) behind a test entry exists."""
+    path = test.partition("::")[0]
+    function = test.partition("::")[2]
+    if not is_file(fs, root + "/" + path):
+        fail("%s names a test file that does not exist: %s" % (key, path))
+    if function and not declares_fn(_read(fs, root, path), function):
+        fail("%s names a test that %s does not define: %s" % (key, path, function))
+    return path
+
+def _note_line_counts(fs, root, note, counts):
+    """Extend `counts` with the length of every file the note cites."""
+    for citation in citations(note):
+        if citation.path not in counts:
+            counts[citation.path] = len(_read(fs, root, citation.path).splitlines())
+    return counts
+
+def _kip_rows(fs, root, pins, broker_build):
+    """The per-KIP rows, and the image legend they refer to."""
+    catalog = _read(fs, root, _API_CATALOG)
+    rows = parse_annotations(catalog)
+    citation = _evidence(
+        const_str_value(catalog, 'pub const OUT_OF_SCOPE_CITATION: &str = "'),
+        _API_CATALOG,
+        'pub const OUT_OF_SCOPE_CITATION: &str = "..."',
+    )
+    mixed_quorum = _evidence(
+        const_str_value(catalog, 'pub const MIXED_QUORUM_KEY: &str = "'),
+        _API_CATALOG,
+        'pub const MIXED_QUORUM_KEY: &str = "..."',
+    )
+
+    cited_path, _, cited_line = citation.rpartition(":")
+    cited = _read(fs, root, cited_path).splitlines()[int(cited_line) - 1]
+    if cited.find(_MIXED_QUORUM_WORDS) < 0:
+        fail("%s no longer says '%s': %s" % (citation, _MIXED_QUORUM_WORDS, cited))
+
+    annotated = {row.key: True for row in rows}
+    claimed = _kip_inventory(fs, root, catalog)
+    unannotated = kip_order([key for key in claimed if key not in annotated])
+    if unannotated:
+        fail(
+            "KIPs named under crates/ without a KIP_ANNOTATIONS row in %s: %s" %
+            (_API_CATALOG, ", ".join(unannotated)),
+        )
+    stale = sorted([key for key in annotated if key.startswith("KIP-") and key not in claimed])
+    if stale:
+        fail(
+            "KIP_ANNOTATIONS rows for KIPs nothing under crates/ names: %s" % ", ".join(stale),
+        )
+    if mixed_quorum not in annotated:
+        fail("KIP_ANNOTATIONS has no %s row" % mixed_quorum)
+    ordered = [row.key for row in rows]
+    if ordered != kip_order(ordered):
+        fail("KIP_ANNOTATIONS is not in KIP order")
+
+    kcat = _librdkafka_evidence(fs, root, pins, broker_build)
+    kcat_test = "%s::%s" % (_LIBRDKAFKA, _LIBRDKAFKA_TEST)
+    maps = {"broker": docker_map(broker_build, _BROKER_BUILD)}
+    used = {}
+    rendered = []
+    for row in rows:
+        if not is_file(fs, root + "/" + row.module):
+            fail("%s names an owner that does not exist: %s" % (row.key, row.module))
+        if row.status == "OutOfScope":
+            if row.tests or not row.note:
+                fail("%s is out of scope; it needs a note and no tests" % row.key)
+        elif not row.tests:
+            fail("%s is %s without a test" % (row.key, row.status))
+        if row.key in (mixed_quorum, "KIP-590") and row.note.find(citation) < 0:
+            fail("%s does not cite %s" % (row.key, citation))
+        if row.clients == "Kcat" and kcat_test not in row.tests:
+            fail("%s claims kcat evidence without listing %s" % (row.key, _LIBRDKAFKA_TEST))
+
+        images = []
+        tests = []
+        for test in row.tests:
+            path = _check_test(fs, root, row.key, test)
+            suite = suite_stem(path)
+            if suite != None:
+                if suite.crate not in maps:
+                    build = _read(fs, root, "crates/%s/BUILD.bazel" % suite.crate)
+                    maps[suite.crate] = docker_map(build, "crates/%s/BUILD.bazel" % suite.crate)
+                for image in kafka_image_keys(maps[suite.crate].get(suite.stem, [])):
+                    if image not in images:
+                        images.append(image)
+            tests.append(test_cell(test, path))
+        for image in images:
+            used[image] = True
+
+        note = _note_line_counts(fs, root, row.note, {})
+        rendered.append(kip_row(
+            row,
+            tests,
+            images,
+            kcat,
+            link_citations(row.note, note).replace("|", "\\|"),
+        ))
+    return "\n".join(rendered), image_legend(used, pins.images, pins.module)
+
+def _output_path(root, requested):
+    """Where the page is written: the checked-in copy unless `--output` says otherwise."""
+    if not requested:
+        return root + "/" + _DEFAULT_OUTPUT
+    if requested.startswith("/"):
+        return requested
+    return root + "/" + requested
+
+def _impl(ctx: TaskContext) -> int:
+    fs = ctx.std.fs
+    root = ctx.std.env.bazel_root_dir()
+    pins = struct(images = _read(fs, root, _IMAGES), module = _read(fs, root, _MODULE))
+    broker_build = _read(fs, root, _BROKER_BUILD)
+
+    kip_table, legend = _kip_rows(fs, root, pins, broker_build)
+    log_rows, log_image = _log_contract(fs, root, pins)
+    api_rows, api_image = _api_versions(fs, root, pins, broker_build)
+
+    path = _output_path(root, ctx.args.output)
+    fs.write(path, render_page(
+        kip_table,
+        legend,
+        log_image,
+        log_rows,
+        api_image,
+        api_rows,
+        _throttle_echo(fs, root),
+    ))
+    ctx.std.io.stdout.write("generate-kip-matrix: wrote %s\n" % path)
+    return 0
+
+generate_kip_matrix = task(
+    summary = "Render docs/KIP_MATRIX.md from the evidence under crates/",
+    implementation = _impl,
+    args = {
+        "output": args.string(
+            default = "",
+            description = "Where to write the page; relative to the repository root. " +
+                          "Defaults to docs/KIP_MATRIX.md.",
+        ),
+    },
+)

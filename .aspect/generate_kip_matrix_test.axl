@@ -1,0 +1,575 @@
+"""Unit tests for `generate_kip_matrix.axl`."""
+
+load(
+    "./generate_kip_matrix.axl",
+    "annotation_bodies",
+    "api_versions_rows",
+    "catalog_outside_annotations",
+    "citations",
+    "const_str_value",
+    "declares_fn",
+    "defines_fn",
+    "digest_for",
+    "docker_map",
+    "image_for",
+    "image_legend",
+    "is_word_char",
+    "kafka_image_keys",
+    "kcat_evidence",
+    "kip_mentions",
+    "kip_order",
+    "kip_order_key",
+    "kip_row",
+    "librdkafka_clients",
+    "link_citations",
+    "log_contract_rows",
+    "parse_annotations",
+    "parse_divergences",
+    "render_page",
+    "suite_stem",
+    "test_cell",
+    "throttle_echo_rows",
+)
+load("./testing.axl", "check", "check_eq", "suite", "suite_task")
+
+def _test_word_characters(_ctx):
+    check_eq("underscore is a word character", is_word_char("_"), True)
+    check_eq("a digit is", is_word_char("4"), True)
+    check_eq("a hyphen is not", is_word_char("-"), False)
+    check_eq("a dot is not", is_word_char("."), False)
+
+def _test_const_str_value(_ctx):
+    source = "\n".join([
+        "use std::fmt;",
+        'const KAFKA_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka";',
+        'const KAFKA_TAG: &str = "6.1.1";',
+        'pub(crate) const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";',
+    ])
+    check_eq(
+        "the image",
+        const_str_value(source, 'const KAFKA_IMAGE: &str = "'),
+        "mirror.gcr.io/confluentinc/cp-kafka",
+    )
+    check_eq("the tag", const_str_value(source, 'const KAFKA_TAG: &str = "'), "6.1.1")
+    check_eq(
+        "the visibility is part of the declaration",
+        const_str_value(source, 'pub(crate) const ORACLE_IMAGE: &str = "'),
+        "mirror.gcr.io/apache/kafka:4.3.1",
+    )
+    check_eq(
+        "a missing constant",
+        const_str_value(source, 'const MISSING: &str = "'),
+        "",
+    )
+
+def _test_const_str_value_is_anchored_and_terminated(_ctx):
+    # The original anchored at column zero and required the closing `";`, so an
+    # indented declaration, an empty value and a value the line does not
+    # terminate all read as absent.
+    check_eq(
+        "an indented declaration",
+        const_str_value('    const NAME: &str = "x";', 'const NAME: &str = "'),
+        "",
+    )
+    check_eq("an empty value", const_str_value('const NAME: &str = "";', 'const NAME: &str = "'), "")
+    check_eq(
+        "an unterminated value",
+        const_str_value('const NAME: &str = "x"', 'const NAME: &str = "'),
+        "",
+    )
+    check_eq(
+        "a later line still matches",
+        const_str_value(
+            "\n".join(['    const NAME: &str = "wrong";', 'const NAME: &str = "right";']),
+            'const NAME: &str = "',
+        ),
+        "right",
+    )
+
+def _test_defines_fn(_ctx):
+    source = "\n".join([
+        "#[tokio::test]",
+        "async fn read_jvm_produced_log_dir() {",
+        "fn helper() {",
+        "    fn nested() {",
+    ])
+    check_eq("an async test", defines_fn(source, "read_jvm_produced_log_dir", prefix = "async fn "), True)
+    check_eq("a plain fn", defines_fn(source, "helper"), True)
+    check_eq("the prefix matters", defines_fn(source, "read_jvm_produced_log_dir"), False)
+    check_eq("an indented fn is not at column zero", defines_fn(source, "nested"), False)
+    check_eq("an absent fn", defines_fn(source, "absent"), False)
+
+def _test_declares_fn(_ctx):
+    source = "\n".join([
+        "    fn round_trip(&self) {",
+        "    fn encodes_at<T: Encode>(value: T) {",
+        "    fn read_all() {",
+        "    let handler = myfn other();",
+    ])
+    check_eq("a method", declares_fn(source, "round_trip"), True)
+    check_eq("a generic function", declares_fn(source, "encodes_at"), True)
+    check_eq("a prefix of a longer name is not the name", declares_fn(source, "read"), False)
+    check_eq("the whole name is", declares_fn(source, "read_all"), True)
+    check_eq("`fn` needs its own word boundary", declares_fn(source, "other"), False)
+    check_eq("an absent function", declares_fn(source, "absent"), False)
+
+def _test_image_for(_ctx):
+    images = "\n".join([
+        "IMAGES = {",
+        '    "apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1",',
+        '    "kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1",',
+        "}",
+    ])
+    check_eq("a Kafka image", image_for(images, "apache_kafka_4_3_1"), "mirror.gcr.io/apache/kafka:4.3.1")
+    check_eq("the client image", image_for(images, "kcat_1_7_1"), "mirror.gcr.io/edenhill/kcat:1.7.1")
+    check_eq("an unknown key", image_for(images, "cp_kafka_7_5_0"), "")
+    check_eq(
+        "a key that only prefixes a real one",
+        image_for(images, "apache_kafka_4_3"),
+        "",
+    )
+
+def _test_digest_for_reads_the_last_field(_ctx):
+    # The pin is the last quoted field whatever the fields before it are. An
+    # earlier pattern counted them and stopped matching when rules_img widened
+    # the row from `(name, tag, digest)` to five fields.
+    narrow = '        ("cp_kafka_7_5_0", "7.5.0", "sha256:beef"),'
+    wide = '        ("cp_kafka_7_5_0", "mirror.gcr.io", "confluentinc/cp-kafka", "7.5.0", "sha256:beef"),'
+    check_eq("a three-field row", digest_for(narrow, "cp_kafka_7_5_0"), "sha256:beef")
+    check_eq("the same row, widened", digest_for(wide, "cp_kafka_7_5_0"), "sha256:beef")
+    check_eq("an unknown key", digest_for(wide, "kcat_1_7_1"), "")
+
+def _test_digest_for_needs_a_trailing_digest(_ctx):
+    check_eq(
+        "a digest that is not the last field",
+        digest_for('("k", "sha256:beef", "7.5.0")', "k"),
+        "",
+    )
+    check_eq(
+        "a row with nothing between the key and the digest",
+        digest_for('("k", "sha256:beef")', "k"),
+        "",
+    )
+    check_eq(
+        "a last field that is not a digest",
+        digest_for('("k", "mirror.gcr.io", "7.5.0")', "k"),
+        "",
+    )
+
+def _test_parse_divergences(_ctx):
+    audit = "\n".join([
+        "const THROTTLE_ECHO_DIVERGENCES: &[(ApiKeyCode, ApiVersion, ApiVersion, QuotaReach)] = &[",
+        "    (0, 1, 13, QuotaReach::SelfAccounted),          // Produce",
+        "    (18, 1, 5, QuotaReach::FallbackAccounted),      // ApiVersions",
+        "    (47, 0, 0, QuotaReach::UnsupportedVersionOnly), // OffsetDelete",
+        "];",
+        "",
+        "fn unrelated(a: u8) {}",
+    ])
+    check_eq(
+        "one triple per entry, with the range the table shows",
+        parse_divergences(audit),
+        [
+            (0, "1-13", "SelfAccounted"),
+            (18, "1-5", "FallbackAccounted"),
+            (47, "0", "UnsupportedVersionOnly"),
+        ],
+    )
+
+def _test_parse_divergences_tolerates_formatting(_ctx):
+    audit = "\n".join([
+        "const THROTTLE_ECHO_DIVERGENCES: &[(u16, u16, u16, QuotaReach)] = &[",
+        "    (",
+        "        38,",
+        "        1,",
+        "        3,",
+        "        QuotaReach::UnsupportedVersionOnly,",
+        "    ),",
+        "];",
+    ])
+    check_eq(
+        "a row the formatter broke across lines, with a trailing comma",
+        parse_divergences(audit),
+        [(38, "1-3", "UnsupportedVersionOnly")],
+    )
+
+_DIVERGENCES = [
+    (0, "1-13", "SelfAccounted"),
+    (18, "1-5", "FallbackAccounted"),
+    (38, "1-3", "UnsupportedVersionOnly"),
+    (39, "1-2", "UnsupportedVersionOnly"),
+    (40, "1-2", "UnsupportedVersionOnly"),
+    (41, "1-3", "UnsupportedVersionOnly"),
+    (47, "0", "UnsupportedVersionOnly"),
+]
+
+def _test_throttle_echo_rows(_ctx):
+    rows = throttle_echo_rows(_DIVERGENCES).splitlines()
+    check_eq("one row per divergence", len(rows), len(_DIVERGENCES))
+    check_eq(
+        "the Produce row",
+        rows[0],
+        "| Produce | 0 | 1-13 | Sits behind the `Responses` array, at an offset the " +
+        "response header does not fix | None. The handler charges its own quota and sets " +
+        "`ThrottleTimeMs` on the typed response before encoding, so the client does see the delay |",
+    )
+    check_eq(
+        "the OffsetDelete row, whose range is a single version",
+        rows[6],
+        "| OffsetDelete | 47 | 0 | Leads with `ErrorCode`; the field is at a fixed offset of 2, " +
+        "but the dispatch loop patches leading fields only | The ordinary path is `InlineExempt`, " +
+        "so it is never held. Only a request outside the advertised version range is, and that " +
+        "reply reports `throttle_time_ms = 0` |",
+    )
+
+_ANNOTATIONS = "\n".join([
+    "// BEGIN KIP_ANNOTATIONS",
+    "pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[",
+    "    KipAnnotation {",
+    '        key: "KIP-13",',
+    '        claim: "Producer and consumer byte-rate quotas",',
+    "        status: KipStatus::Implemented,",
+    '        module: "crates/broker/src/quota/mod.rs",',
+    "        tests: &[",
+    '            "crates/broker/tests/client_quotas.rs",',
+    '            "crates/broker/tests/client_quotas/throttling.rs",',
+    "        ],",
+    "        clients: ClientEvidence::NotCovered,",
+    '        note: "",',
+    "    },",
+    "    KipAnnotation {",
+    '        key: "mixed-quorum",',
+    '        claim: "A controller quorum with both JVM and Krabka voters",',
+    "        status: KipStatus::OutOfScope,",
+    '        module: "crates/raft/src/lib.rs",',
+    "        tests: &[],",
+    "        clients: ClientEvidence::Kcat,",
+    '        note: "Outside the target: crates/raft/src/lib.rs:52.",',
+    "    },",
+    "];",
+    "// END KIP_ANNOTATIONS",
+])
+
+def _test_annotation_bodies(_ctx):
+    bodies = annotation_bodies(_ANNOTATIONS)
+    check_eq("one body per literal", len(bodies), 2)
+    check_eq("the element type is not a literal", bodies[0].find("KIP_ANNOTATIONS"), -1)
+    check_eq("the body opens after the brace", bodies[0].splitlines()[0], "")
+    check_eq(
+        "and stops before the closing line",
+        bodies[0].splitlines()[-1],
+        '        note: "",',
+    )
+
+def _test_parse_annotations(_ctx):
+    rows = parse_annotations(_ANNOTATIONS, "catalog.rs")
+    check_eq(
+        "the first row",
+        rows[0],
+        struct(
+            key = "KIP-13",
+            claim = "Producer and consumer byte-rate quotas",
+            status = "Implemented",
+            module = "crates/broker/src/quota/mod.rs",
+            tests = [
+                "crates/broker/tests/client_quotas.rs",
+                "crates/broker/tests/client_quotas/throttling.rs",
+            ],
+            clients = "NotCovered",
+            note = "",
+        ),
+    )
+    check_eq(
+        "the scope row, whose tests are empty and whose note is not",
+        rows[1],
+        struct(
+            key = "mixed-quorum",
+            claim = "A controller quorum with both JVM and Krabka voters",
+            status = "OutOfScope",
+            module = "crates/raft/src/lib.rs",
+            tests = [],
+            clients = "Kcat",
+            note = "Outside the target: crates/raft/src/lib.rs:52.",
+        ),
+    )
+
+def _test_catalog_outside_annotations(_ctx):
+    catalog = "before\n// BEGIN KIP_ANNOTATIONS\nKIP-13\n// END KIP_ANNOTATIONS\nafter"
+    check_eq(
+        "the block the inventory must not count itself from",
+        catalog_outside_annotations(catalog),
+        "before\n// END KIP_ANNOTATIONS\nafter",
+    )
+    check_eq("no markers, no cut", catalog_outside_annotations("plain"), "plain")
+
+def _test_kip_mentions(_ctx):
+    check_eq(
+        "sorted and deduplicated",
+        kip_mentions("KIP-848 and KIP-98, then KIP-848 again"),
+        ["KIP-848", "KIP-98"],
+    )
+    check_eq("a link fragment still counts", kip_mentions("(KIP-500)."), ["KIP-500"])
+
+def _test_kip_mentions_needs_whole_words(_ctx):
+    check_eq("a word character in front", kip_mentions("xKIP-13"), [])
+    check_eq("a word character behind", kip_mentions("KIP-13a"), [])
+    check_eq("no digits at all", kip_mentions("KIP-"), [])
+    check_eq("a hyphen behind is a boundary", kip_mentions("KIP-13-rc"), ["KIP-13"])
+    check_eq("a non-word character in front is a boundary", kip_mentions("-KIP-13."), ["KIP-13"])
+
+def _test_kip_order(_ctx):
+    check_eq(
+        "KIPs by number, then the scope rows by name",
+        kip_order(["mixed-quorum", "KIP-98", "KIP-13", "KIP-848", "byte-rate"]),
+        ["KIP-13", "KIP-98", "KIP-848", "byte-rate", "mixed-quorum"],
+    )
+    check_eq("a KIP sorts on its number", kip_order_key("KIP-848"), (0, 848, ""))
+    check_eq("a scope row sorts on its name", kip_order_key("mixed-quorum"), (1, 0, "mixed-quorum"))
+
+_BUILD = "\n".join([
+    "crate_tests(",
+    "    name = \"broker\",",
+    "    docker = {",
+    "        # One image, used twice: as the client and as the broker.",
+    '        "api_versions_differential": ["apache_kafka_4_3_1"],',
+    '        "jvm_acceptance_tiered": [',
+    '            "cp_kafka_6_1_1",',
+    '            "minio",',
+    "        ],",
+    '        # "retired_suite": ["cp_kafka_3_1_2"],',
+    '        "librdkafka_conformance": ["kcat_1_7_1"],',
+    "    },",
+    '    env = {"CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)"},',
+    ")",
+])
+
+def _test_docker_map(_ctx):
+    check_eq(
+        "stem to image keys, with the nested map after it left out",
+        docker_map(_BUILD),
+        {
+            "api_versions_differential": ["apache_kafka_4_3_1"],
+            "jvm_acceptance_tiered": ["cp_kafka_6_1_1", "minio"],
+            "librdkafka_conformance": ["kcat_1_7_1"],
+        },
+    )
+    check_eq("no docker map", docker_map("crate_tests(name = \"log\")"), {})
+
+def _test_docker_map_ignores_commented_entries(_ctx):
+    check_eq(
+        "a commented-out key is not a live one",
+        "retired_suite" in docker_map(_BUILD),
+        False,
+    )
+
+def _test_suite_stem(_ctx):
+    check_eq(
+        "a suite file",
+        suite_stem("crates/broker/tests/client_quotas.rs"),
+        struct(crate = "broker", stem = "client_quotas"),
+    )
+    check_eq(
+        "a file inside a suite directory",
+        suite_stem("crates/broker/tests/client_quotas/throttling.rs"),
+        struct(crate = "broker", stem = "client_quotas"),
+    )
+    check_eq("a unit test runs in process", suite_stem("crates/broker/src/quota/mod.rs"), None)
+    check_eq("a crate root", suite_stem("crates/log/lib.rs"), None)
+
+def _test_kafka_image_keys(_ctx):
+    check_eq(
+        "only the broker images reach the column",
+        kafka_image_keys(["cp_kafka_6_1_1", "minio", "kcat_1_7_1", "apache_kafka_4_3_1", "minio_mc"]),
+        ["cp_kafka_6_1_1", "apache_kafka_4_3_1"],
+    )
+
+def _test_citations(_ctx):
+    note = "reads it (crates/broker/src/handlers/init_producer_id.rs:157), so a stale epoch"
+    found = citations(note)
+    check_eq("one citation", len(found), 1)
+    check_eq("the path", found[0].path, "crates/broker/src/handlers/init_producer_id.rs")
+    check_eq("the line", found[0].line, 157)
+    check_eq("the span ends at the digits", note[found[0].start:found[0].end], "crates/broker/src/handlers/init_producer_id.rs:157")
+
+def _test_citations_needs_a_whole_reference(_ctx):
+    check_eq("no line number", citations("see crates/raft/src/lib.rs and stop"), [])
+    check_eq("no .rs extension", citations("see crates/raft/src/lib.md:52."), [])
+    check_eq("a word character behind the line", citations("see crates/raft/src/lib.rs:52a."), [])
+    check_eq("a word character in front", citations("xcrates/raft/src/lib.rs:52."), [])
+    check_eq("a path outside crates/", citations("see docs/raft.rs:52."), [])
+    check_eq("a bare directory", citations("crates/.rs:1"), [])
+
+def _test_link_citations(_ctx):
+    note = "out of scope: crates/raft/src/lib.rs:52. See crates/raft/src/lib.rs:60 too."
+    check_eq(
+        "both citations become links and the prose survives",
+        link_citations(note, {"crates/raft/src/lib.rs": 80}),
+        "out of scope: [`crates/raft/src/lib.rs:52`](../crates/raft/src/lib.rs#L52). " +
+        "See [`crates/raft/src/lib.rs:60`](../crates/raft/src/lib.rs#L60) too.",
+    )
+    check_eq("a note with nothing to link", link_citations("plain note", {}), "plain note")
+
+def _test_librdkafka_clients(_ctx):
+    suite = "\n".join([
+        "const CLIENTS: [(&str, &str, &str); 1] = [(",
+        '    "mirror.gcr.io/edenhill/kcat:1.7.1",',
+        '    "kcat",',
+        '    "librdkafka 1.8.2",',
+        ")];",
+    ])
+    check_eq(
+        "image, program and library",
+        librdkafka_clients(suite),
+        ("mirror.gcr.io/edenhill/kcat:1.7.1", "kcat", "librdkafka 1.8.2"),
+    )
+
+def _test_log_contract_rows(_ctx):
+    rows = log_contract_rows("mirror.gcr.io/confluentinc/cp-kafka:6.1.1@sha256:beef").splitlines()
+    check_eq("one row per direction", len(rows), 2)
+    check_eq(
+        "the JVM-first row",
+        rows[0],
+        "| JVM -> krabka | Implemented | Open and read a JVM-written Kafka log directory | " +
+        "[`crates/log`](../crates/log) | " +
+        "[`read_jvm_produced_log_dir`](../crates/log/tests/integration.rs) | " +
+        "`mirror.gcr.io/confluentinc/cp-kafka:6.1.1@sha256:beef` |",
+    )
+
+def _test_api_versions_rows(_ctx):
+    report = {"apis": [
+        {
+            "api_key": 0,
+            "name": "Produce",
+            "krabka": {"min": 0, "max": 13},
+            "kafka": {"min": 0, "max": 13},
+            "verdict": "same",
+        },
+        {
+            "api_key": 72,
+            "name": "GetTelemetrySubscriptions",
+            "krabka": {"min": 0, "max": 0},
+            "kafka": None,
+            "verdict": "krabka_only",
+        },
+    ]}
+    check_eq(
+        "a matching key and one the oracle never advertised",
+        api_versions_rows(report),
+        "| Produce | 0 | 0-13 | 0-13 | match |\n" +
+        "| GetTelemetrySubscriptions | 72 | 0-0 | not advertised | krabka only |",
+    )
+
+def _test_kcat_evidence(_ctx):
+    check_eq(
+        "the client-family cell names the tag, not the whole image",
+        kcat_evidence("mirror.gcr.io/edenhill/kcat:1.7.1", "kcat", "librdkafka 1.8.2"),
+        "kcat 1.7.1 (librdkafka 1.8.2): " +
+        "[`round_trip_group_join_and_api_versions_with_kcat`]" +
+        "(../crates/broker/tests/librdkafka_conformance.rs)",
+    )
+
+def _row(status = "Implemented", clients = "NotCovered"):
+    return struct(
+        key = "KIP-13",
+        claim = "Producer and consumer byte-rate quotas",
+        status = status,
+        module = "crates/broker/src/quota/mod.rs",
+        tests = [],
+        clients = clients,
+        note = "",
+    )
+
+def _test_kip_row(_ctx):
+    check_eq(
+        "a row with tests and an image",
+        kip_row(
+            _row(),
+            [test_cell("crates/broker/tests/client_quotas.rs", "crates/broker/tests/client_quotas.rs")],
+            ["cp_kafka_6_1_1"],
+            "kcat 1.7.1",
+            "",
+        ),
+        "| KIP-13 | Implemented | Producer and consumer byte-rate quotas | " +
+        "[`broker/src/quota/mod.rs`](../crates/broker/src/quota/mod.rs) | " +
+        "[`broker/tests/client_quotas.rs`](../crates/broker/tests/client_quotas.rs) | " +
+        "`cp_kafka_6_1_1` | none |  |",
+    )
+
+def _test_kip_row_without_evidence(_ctx):
+    check_eq(
+        "an out-of-scope row runs in process and lists no test",
+        kip_row(_row(status = "OutOfScope", clients = "Kcat"), [], [], "kcat 1.7.1", "a note"),
+        "| KIP-13 | Out of scope | Producer and consumer byte-rate quotas | " +
+        "[`broker/src/quota/mod.rs`](../crates/broker/src/quota/mod.rs) | " +
+        "none | in process | kcat 1.7.1 | a note |",
+    )
+
+def _test_test_cell(_ctx):
+    check_eq(
+        "a function entry is shown whole but links to the file",
+        test_cell(
+            "crates/log/tests/integration.rs::read_jvm_produced_log_dir",
+            "crates/log/tests/integration.rs",
+        ),
+        "[`log/tests/integration.rs::read_jvm_produced_log_dir`](../crates/log/tests/integration.rs)",
+    )
+
+def _test_image_legend(_ctx):
+    images = 'IMAGES = {\n    "cp_kafka_6_1_1": "cp-kafka:6.1.1",\n    "apache_kafka_4_3_1": "kafka:4.3.1",\n}'
+    module = "\n".join([
+        '        ("apache_kafka_4_3_1", "mirror.gcr.io", "apache/kafka", "4.3.1", "sha256:aaa"),',
+        '        ("cp_kafka_6_1_1", "mirror.gcr.io", "confluentinc/cp-kafka", "6.1.1", "sha256:bbb"),',
+    ])
+    check_eq(
+        "the legend is sorted by key",
+        image_legend({"cp_kafka_6_1_1": True, "apache_kafka_4_3_1": True}, images, module),
+        "| `apache_kafka_4_3_1` | `kafka:4.3.1@sha256:aaa` |\n" +
+        "| `cp_kafka_6_1_1` | `cp-kafka:6.1.1@sha256:bbb` |",
+    )
+
+def _test_render_page(_ctx):
+    page = render_page("KIP", "LEGEND", "log-image", "LOG", "api-image", "API", "THROTTLE")
+    check_eq("the title", page.splitlines()[0], "# Kafka KIP compatibility matrix")
+    check_eq("the page ends with the throttle rows", page.endswith("\nTHROTTLE\n"), True)
+    for section in ["KIP", "LEGEND", "LOG", "API"]:
+        check(page.find("\n" + section + "\n") >= 0, "the %s section is substituted" % section)
+    check(page.find("It ran against\n`log-image`.") >= 0, "the log image is named")
+    check(page.find("The oracle is `api-image`.") >= 0, "the oracle is named")
+
+generate_kip_matrix_tests = suite("generate-kip-matrix", [
+    _test_word_characters,
+    _test_const_str_value,
+    _test_const_str_value_is_anchored_and_terminated,
+    _test_defines_fn,
+    _test_declares_fn,
+    _test_image_for,
+    _test_digest_for_reads_the_last_field,
+    _test_digest_for_needs_a_trailing_digest,
+    _test_parse_divergences,
+    _test_parse_divergences_tolerates_formatting,
+    _test_throttle_echo_rows,
+    _test_annotation_bodies,
+    _test_parse_annotations,
+    _test_catalog_outside_annotations,
+    _test_kip_mentions,
+    _test_kip_mentions_needs_whole_words,
+    _test_kip_order,
+    _test_docker_map,
+    _test_docker_map_ignores_commented_entries,
+    _test_suite_stem,
+    _test_kafka_image_keys,
+    _test_citations,
+    _test_citations_needs_a_whole_reference,
+    _test_link_citations,
+    _test_librdkafka_clients,
+    _test_log_contract_rows,
+    _test_api_versions_rows,
+    _test_kcat_evidence,
+    _test_kip_row,
+    _test_kip_row_without_evidence,
+    _test_test_cell,
+    _test_image_legend,
+    _test_render_page,
+])
+
+test_generate_kip_matrix = suite_task(generate_kip_matrix_tests)

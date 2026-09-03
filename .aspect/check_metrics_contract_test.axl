@@ -1,0 +1,390 @@
+"""Unit tests for `check_metrics_contract.axl`."""
+
+load(
+    "./check_metrics_contract.axl",
+    "dashboard_expressions",
+    "exported_sample_names",
+    "referenced_names",
+    "rule_fields",
+    "series_names",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _test_a_type_line_expands_by_kind(_ctx):
+    check_eq(
+        "a counter exports the _total sample",
+        exported_sample_names("# TYPE krabka_broker_bytes_in counter"),
+        ["krabka_broker_bytes_in_total"],
+    )
+    check_eq(
+        "a gauge exports its bare name",
+        exported_sample_names("# TYPE krabka_broker_partitions_led gauge"),
+        ["krabka_broker_partitions_led"],
+    )
+    check_eq(
+        "an unknown exports its bare name",
+        exported_sample_names("# TYPE krabka_broker_thing unknown"),
+        ["krabka_broker_thing"],
+    )
+    check_eq(
+        "a histogram exports three samples",
+        exported_sample_names("# TYPE krabka_broker_latency histogram"),
+        [
+            "krabka_broker_latency_bucket",
+            "krabka_broker_latency_count",
+            "krabka_broker_latency_sum",
+        ],
+    )
+
+def _test_only_type_lines_are_read(_ctx):
+    body = "\n".join([
+        "# HELP krabka_broker_bytes_in Bytes received.",
+        "# TYPE krabka_broker_bytes_in counter",
+        'krabka_broker_bytes_in_total{topic="orders"} 0',
+        "# EOF",
+        "",
+    ])
+    check_eq(
+        "help lines, sample lines and the trailer carry no names",
+        exported_sample_names(body),
+        ["krabka_broker_bytes_in_total"],
+    )
+
+def _test_a_body_with_no_type_lines_exports_nothing(_ctx):
+    check_eq("an empty body", exported_sample_names(""), [])
+    check_eq(
+        "a body of samples alone",
+        exported_sample_names('krabka_broker_bytes_in_total{topic="orders"} 0'),
+        [],
+    )
+
+def _test_a_type_line_without_a_kind_is_skipped(_ctx):
+    # A truncated line names no kind, so there is nothing to expand and
+    # nothing to reject; the `# TYPE ` prefix on its own is the same.
+    check_eq("no kind", exported_sample_names("# TYPE krabka_broker_bytes_in"), [])
+    check_eq("no name either", exported_sample_names("# TYPE "), [])
+    check_eq("not a type line", exported_sample_names("#TYPE krabka_broker_a gauge"), [])
+
+def _test_type_lines_tolerate_extra_whitespace(_ctx):
+    check_eq(
+        "runs of spaces and tabs separate the fields",
+        exported_sample_names("# TYPE \tkrabka_broker_a   gauge  \n# TYPE krabka_broker_b gauge"),
+        ["krabka_broker_a", "krabka_broker_b"],
+    )
+
+def _test_names_are_reported_once_and_sorted(_ctx):
+    body = "\n".join([
+        "# TYPE krabka_broker_z gauge",
+        "# TYPE krabka_broker_a counter",
+        "# TYPE krabka_broker_z gauge",
+    ])
+    check_eq(
+        "a repeated family collapses",
+        exported_sample_names(body),
+        ["krabka_broker_a_total", "krabka_broker_z"],
+    )
+
+def _test_dashboard_expressions_come_out_in_document_order(_ctx):
+    decoded = json.decode("""
+        {
+          "panels": [
+            {"title": "a", "targets": [{"expr": "first"}, {"expr": "second"}]},
+            {"title": "b", "targets": [{"expr": "third"}]}
+          ]
+        }
+    """)
+    check_eq("document order", dashboard_expressions(decoded), ["first", "second", "third"])
+
+def _test_an_expr_is_found_at_any_depth(_ctx):
+    decoded = json.decode("""
+        {"rows": [{"panels": [{"collapsed": {"targets": [{"expr": "deep"}]}}]}]}
+    """)
+    check_eq("nested under four levels", dashboard_expressions(decoded), ["deep"])
+
+def _test_a_non_string_expr_is_walked_rather_than_collected(_ctx):
+    # Only a string `expr` is an expression. An object under that key is a
+    # shape this does not know, so the walk keeps descending through it.
+    decoded = json.decode('{"expr": {"expr": "inner"}}')
+    check_eq("the inner string wins", dashboard_expressions(decoded), ["inner"])
+    check_eq(
+        "a numeric expr contributes nothing",
+        dashboard_expressions(json.decode('{"expr": 3, "targets": [{"expr": "x"}]}')),
+        ["x"],
+    )
+
+def _test_a_dashboard_with_no_expr_yields_nothing(_ctx):
+    check_eq(
+        "no queries",
+        dashboard_expressions(json.decode('{"title": "krabka", "panels": []}')),
+        [],
+    )
+    check_eq("a bare scalar document", dashboard_expressions(json.decode('"expr"')), [])
+
+def _test_a_repeated_expression_is_kept_once_per_occurrence(_ctx):
+    decoded = json.decode('{"a": [{"expr": "same"}, {"expr": "same"}]}')
+    check_eq("both occurrences", dashboard_expressions(decoded), ["same", "same"])
+
+def _test_a_plain_rule_field(_ctx):
+    check_eq(
+        "one line, one value",
+        rule_fields("        expr: krabka_broker_a > 0", "expr"),
+        ["krabka_broker_a > 0"],
+    )
+    check_eq(
+        "the field a rule opens its list entry with",
+        rule_fields("      - expr: krabka_broker_a > 0", "expr"),
+        ["krabka_broker_a > 0"],
+    )
+    check_eq(
+        "several spaces after the list marker",
+        rule_fields("    -   expr: krabka_broker_a", "expr"),
+        ["krabka_broker_a"],
+    )
+    check_eq(
+        "tabs indent too",
+        rule_fields("\t\texpr: krabka_broker_a", "expr"),
+        ["krabka_broker_a"],
+    )
+
+def _test_a_list_marker_needs_whitespace_after_it(_ctx):
+    # `-expr:` is a scalar that opens with a dash, not a list item holding a
+    # field, and the original's `-\s+` did not match it either.
+    check_eq("no space after the dash", rule_fields("    -expr: krabka_broker_a", "expr"), [])
+
+def _test_rule_field_values_lose_their_quotes(_ctx):
+    check_eq("double quotes", rule_fields('  expr: "a > 0"', "expr"), ["a > 0"])
+    check_eq("single quotes", rule_fields("  expr: 'a > 0'", "expr"), ["a > 0"])
+    check_eq("quotes inside stay", rule_fields('  expr: a{t="x"} > 0', "expr"), ['a{t="x"} > 0'])
+
+def _test_an_empty_rule_field_is_an_empty_value(_ctx):
+    check_eq("nothing after the colon", rule_fields("  expr:", "expr"), [""])
+    check_eq("trailing spaces only", rule_fields("  expr:   ", "expr"), [""])
+
+def _test_a_field_matches_only_its_own_key(_ctx):
+    text = "\n".join([
+        "  expression: not this one",
+        "  myexpr: nor this one",
+        "  exp: nor this",
+        "  foo: expr: nor a value that looks like a key",
+        "  expr: this one",
+    ])
+    check_eq("the key is the whole word before the colon", rule_fields(text, "expr"), ["this one"])
+
+def _test_a_block_scalar_folds_onto_one_line(_ctx):
+    for header in ["|", ">", "|-", ">-"]:
+        text = "\n".join([
+            "  expr: " + header,
+            "    sum(",
+            "    krabka_broker_a)",
+            "  for: 5m",
+        ])
+        check_eq(
+            "a %s block joins with single spaces" % header,
+            rule_fields(text, "expr"),
+            ["sum( krabka_broker_a)"],
+        )
+
+def _test_a_block_ends_at_the_first_line_back_out_to_the_key(_ctx):
+    text = "\n".join([
+        "  expr: |",
+        "    kept",
+        "  for: 5m",
+        "  expr: second",
+    ])
+    check_eq("the sibling key ends it", rule_fields(text, "expr"), ["kept", "second"])
+
+def _test_a_blank_line_stays_inside_a_block(_ctx):
+    # A blank line carries no indent to compare, so it belongs to the block
+    # rather than ending it -- and it folds to an empty piece in the join.
+    text = "\n".join(["  expr: |", "    a", "", "    b", "  for: 5m"])
+    check_eq("the blank folds to a second space", rule_fields(text, "expr"), ["a  b"])
+
+def _test_a_block_can_run_to_the_end_of_the_file(_ctx):
+    check_eq(
+        "no key follows it",
+        rule_fields("  expr: |\n    a\n    b", "expr"),
+        ["a b"],
+    )
+
+def _test_an_empty_block_is_an_empty_value(_ctx):
+    check_eq("nothing is indented under it", rule_fields("  expr: |\n  for: 5m", "expr"), [""])
+
+def _test_a_block_opened_by_a_list_item_field(_ctx):
+    # The indent is measured before the `- `, so the fields that follow the
+    # marker sit deeper than the key and fold into its block. This is what the
+    # original did, and no rule in the tree opens a block this way.
+    text = "\n".join([
+        "      - expr: |",
+        "          krabka_broker_a",
+        "        for: 5m",
+        "      - alert: Next",
+    ])
+    check_eq(
+        "the block runs to the next list item",
+        rule_fields(text, "expr"),
+        ["krabka_broker_a for: 5m"],
+    )
+
+def _test_any_field_name_can_be_read(_ctx):
+    text = "\n".join([
+        "        annotations:",
+        "          summary: something happened",
+        "          runbook: docs/operations/runbooks/a.md",
+        "          runbook: docs/operations/runbooks/b.md",
+    ])
+    check_eq(
+        "runbooks come out in file order, duplicates kept",
+        rule_fields(text, "runbook"),
+        ["docs/operations/runbooks/a.md", "docs/operations/runbooks/b.md"],
+    )
+
+def _test_an_empty_text_has_no_fields(_ctx):
+    check_eq("nothing to scan", rule_fields("", "expr"), [])
+
+def _test_a_series_name_needs_a_word_boundary_before_it(_ctx):
+    for text in [
+        "xkrabka_broker_foo",
+        "_krabka_broker_foo",
+        "9krabka_broker_foo",
+        "Akrabka_broker_foo",
+    ]:
+        check_eq("%r starts no name" % text, series_names(text), [])
+    for text in ["krabka_broker_foo", "rate(krabka_broker_foo[5m])", " krabka_broker_foo"]:
+        check_eq("%r names one series" % text, series_names(text), ["krabka_broker_foo"])
+
+def _test_a_bare_prefix_names_nothing(_ctx):
+    # The original required at least one character past the prefix, and a
+    # rejected prefix must not swallow the name that follows it.
+    check_eq("the prefix alone", series_names("krabka_broker_"), [])
+    check_eq(
+        "a real name after a bare prefix",
+        series_names("krabka_broker_ and krabka_broker_b"),
+        ["krabka_broker_b"],
+    )
+
+def _test_a_name_stops_at_the_first_character_it_cannot_hold(_ctx):
+    check_eq(
+        "a label selector ends the name",
+        series_names('krabka_broker_foo{topic="x"} > 0'),
+        ["krabka_broker_foo"],
+    )
+    check_eq(
+        "a trailing underscore is part of it",
+        series_names("krabka_broker_a_"),
+        ["krabka_broker_a_"],
+    )
+    check_eq(
+        "the prefix repeated is one long name",
+        series_names("krabka_broker_krabka_broker_x"),
+        ["krabka_broker_krabka_broker_x"],
+    )
+
+def _test_every_name_in_an_expression_is_found(_ctx):
+    check_eq(
+        "in order of appearance",
+        series_names("sum(krabka_broker_b) / sum(krabka_broker_a)"),
+        ["krabka_broker_b", "krabka_broker_a"],
+    )
+    check_eq("no krabka series", series_names("up > 0"), [])
+    check_eq("nothing at all", series_names(""), [])
+
+def _test_referenced_names_are_deduplicated_and_sorted(_ctx):
+    check_eq(
+        "one entry per name, in sort order",
+        referenced_names([
+            "rate(krabka_broker_z_total[5m])",
+            "krabka_broker_a > 0",
+            "krabka_broker_z_total / krabka_broker_a",
+        ]),
+        ["krabka_broker_a", "krabka_broker_z_total"],
+    )
+    check_eq("no expressions", referenced_names([]), [])
+    check_eq("an empty expression", referenced_names([""]), [])
+
+def _test_the_pieces_agree_on_a_small_contract(_ctx):
+    # The three readers meet only here, so this is what proves a name the
+    # dashboard and the rules spell is the name a `# TYPE` line expands to.
+    body = "\n".join([
+        "# TYPE krabka_broker_partitions_led gauge",
+        "# TYPE krabka_broker_requests counter",
+        "# TYPE krabka_broker_request_latency histogram",
+    ])
+    dashboard = json.decode("""
+        {"panels": [{"targets": [
+          {"expr": "krabka_broker_partitions_led"},
+          {"expr": "histogram_quantile(0.99, krabka_broker_request_latency_bucket)"}
+        ]}]}
+    """)
+    rules = "\n".join([
+        "      - alert: Requests",
+        "        expr: rate(krabka_broker_requests_total[5m]) > 0",
+        "        annotations:",
+        "          runbook: docs/operations/runbooks/requests.md",
+    ])
+
+    exported = exported_sample_names(body)
+    referenced = referenced_names(dashboard_expressions(dashboard) + rule_fields(rules, "expr"))
+    check_eq(
+        "every referenced name is exported",
+        [name for name in referenced if name not in exported],
+        [],
+    )
+    check_eq(
+        "and all three were actually found",
+        referenced,
+        [
+            "krabka_broker_partitions_led",
+            "krabka_broker_request_latency_bucket",
+            "krabka_broker_requests_total",
+        ],
+    )
+    check_eq(
+        "the runbook is read too",
+        rule_fields(rules, "runbook"),
+        ["docs/operations/runbooks/requests.md"],
+    )
+
+def _test_an_unexported_name_is_visible_as_a_difference(_ctx):
+    exported = exported_sample_names("# TYPE krabka_broker_a gauge")
+    referenced = referenced_names(["krabka_broker_a", "krabka_broker_typo"])
+    check_eq(
+        "the typo is what the task reports",
+        [name for name in referenced if name not in exported],
+        ["krabka_broker_typo"],
+    )
+
+check_metrics_contract_tests = suite("check-metrics-contract", [
+    _test_a_type_line_expands_by_kind,
+    _test_only_type_lines_are_read,
+    _test_a_body_with_no_type_lines_exports_nothing,
+    _test_a_type_line_without_a_kind_is_skipped,
+    _test_type_lines_tolerate_extra_whitespace,
+    _test_names_are_reported_once_and_sorted,
+    _test_dashboard_expressions_come_out_in_document_order,
+    _test_an_expr_is_found_at_any_depth,
+    _test_a_non_string_expr_is_walked_rather_than_collected,
+    _test_a_dashboard_with_no_expr_yields_nothing,
+    _test_a_repeated_expression_is_kept_once_per_occurrence,
+    _test_a_plain_rule_field,
+    _test_a_list_marker_needs_whitespace_after_it,
+    _test_rule_field_values_lose_their_quotes,
+    _test_an_empty_rule_field_is_an_empty_value,
+    _test_a_field_matches_only_its_own_key,
+    _test_a_block_scalar_folds_onto_one_line,
+    _test_a_block_ends_at_the_first_line_back_out_to_the_key,
+    _test_a_blank_line_stays_inside_a_block,
+    _test_a_block_can_run_to_the_end_of_the_file,
+    _test_an_empty_block_is_an_empty_value,
+    _test_a_block_opened_by_a_list_item_field,
+    _test_any_field_name_can_be_read,
+    _test_an_empty_text_has_no_fields,
+    _test_a_series_name_needs_a_word_boundary_before_it,
+    _test_a_bare_prefix_names_nothing,
+    _test_a_name_stops_at_the_first_character_it_cannot_hold,
+    _test_every_name_in_an_expression_is_found,
+    _test_referenced_names_are_deduplicated_and_sorted,
+    _test_the_pieces_agree_on_a_small_contract,
+    _test_an_unexported_name_is_visible_as_a_difference,
+])
+
+test_check_metrics_contract = suite_task(check_metrics_contract_tests)
