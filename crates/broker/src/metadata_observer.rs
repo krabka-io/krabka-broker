@@ -9,9 +9,9 @@
 //! The controller prunes that log behind KIP-630 snapshots, so the observer
 //! also speaks the two halves of snapshotting a follower does: a fetch below
 //! the controller's log start is answered with a snapshot id, which the
-//! observer installs over `FetchSnapshot` ([`snapshot`]), and what it has
-//! applied is checkpointed in a directory of its own ([`store`]) so a restart
-//! resumes there instead of at offset 0.
+//! observer installs over `FetchSnapshot` (the `snapshot` module), and what it
+//! has applied is checkpointed in a directory of its own (the `store` module)
+//! so a restart resumes there instead of at offset 0.
 
 use std::sync::{
     Arc,
@@ -58,7 +58,7 @@ pub struct ObserverConfig {
     pub node_id: NodeId,
     /// The node's `__cluster_metadata` directory. The observer keeps its
     /// KIP-630 checkpoints in a subdirectory of their own under it, beside a
-    /// controller's rather than in it — [`store`] says why.
+    /// controller's rather than in it — the `store` module says why.
     pub data_dir: std::path::PathBuf,
     /// Records applied between the checkpoints the observer writes for itself.
     /// `0` disables them, leaving only the snapshots fetched from a controller
