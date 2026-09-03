@@ -76,7 +76,8 @@ pub struct Log {
     ///
     /// The segment names carry the derived half of the start across a restart;
     /// this half has no such witness, so [`Log::set_log_start_offset`] writes
-    /// it to `log-start-offset-checkpoint` and [`Log::open`] reads it back.
+    /// it durably to `log-start-offset-checkpoint` and [`Log::open`] reads it
+    /// back, reconciling the file with what the log actually holds.
     start_offset_override: Option<Offset>,
 
     /// Last-Stable-Offset: the offset before the first record of any

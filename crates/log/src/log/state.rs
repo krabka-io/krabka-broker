@@ -73,10 +73,11 @@ impl Log {
                 "set_log_start_offset: new_start must be >= 0".into(),
             ));
         }
+        // The checkpoint is durable when this returns, directory sync
+        // included: `DeleteRecords` is acknowledged as soon as the trim does,
+        // and a trimmed partition can then sit idle with no later `sync()` to
+        // pay a deferred debt.
         log_start_offset_checkpoint::write(&self.dir, new_start)?;
-        // The rename that published the checkpoint is durable only once the
-        // parent directory is synced; pay that debt with the next `sync()`.
-        self.dir_sync_needed = true;
         self.start_offset_override = Some(new_start);
         Ok(())
     }

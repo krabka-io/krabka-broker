@@ -477,9 +477,40 @@ fn open_restores_a_log_start_trimmed_inside_the_active_segment() {
 }
 
 #[test]
+fn open_rewrites_a_checkpoint_past_the_log_end_so_appends_cannot_revive_it() {
+    // The hazard: a checkpoint above the log end is inert against the log that
+    // reads it, but appends move the log end. Left on disk, it comes back in
+    // range on a later open and hides records appended after it was written.
+    let dir = tempdir().unwrap();
+    {
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.set_log_start_offset(Offset(7)).unwrap();
+        log.sync().unwrap();
+    }
+
+    // Reopen empty: 7 is past the log end, so it resolves to the log end.
+    {
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        assert!(log.log_start_offset() == Offset(0));
+        // Records the stale checkpoint would have hidden.
+        log.append(&mut sample_batch(9)).unwrap();
+        log.sync().unwrap();
+    }
+
+    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+
+    assert!(log.log_start_offset() == Offset(0));
+    assert!(log.log_end_offset() == Offset(9));
+}
+
+#[test]
 fn open_clamps_a_checkpoint_that_the_segments_contradict() {
-    // Reopening must never move the start below what the surviving segment
-    // names already prove is gone, nor past the last record still present.
+    // Reopening resolves the checkpoint against what the log actually holds.
+    // Below the derived start, the deleted segment names already cover it, so
+    // the derived start wins. Past the log end, every record still present is
+    // below a start that was already acknowledged -- they are all trimmed --
+    // so the log start is the log end and the log reads empty. A crash between
+    // a trim and the fsync of the records it trimmed past arrives here.
     enum Case {
         BelowDerivedStart,
         PastLogEnd,
@@ -487,7 +518,7 @@ fn open_clamps_a_checkpoint_that_the_segments_contradict() {
 
     for (case, expected_start) in [
         (Case::BelowDerivedStart, Offset(2)),
-        (Case::PastLogEnd, Offset(2)),
+        (Case::PastLogEnd, Offset(3)),
     ] {
         let dir = tempdir().unwrap();
         {
@@ -516,6 +547,12 @@ fn open_clamps_a_checkpoint_that_the_segments_contradict() {
         let log = Log::open(dir.path(), LogConfig::default()).unwrap();
 
         assert!(log.log_start_offset() == expected_start);
+        // Whatever it resolved to is what is now on disk, so the next open
+        // reads a value that already agrees with the log.
+        drop(log);
+        assert!(
+            crate::log_start_offset_checkpoint::read(dir.path()).unwrap() == Some(expected_start)
+        );
     }
 }
 

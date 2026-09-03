@@ -65,8 +65,16 @@ fn parse(contents: &str) -> Result<Offset, LogError> {
     Ok(Offset(offset))
 }
 
-/// Rewrite the checkpoint atomically. The temporary file is synced before the
-/// rename, so a crash leaves either the old value or the new one.
+/// Rewrite the checkpoint atomically and durably. The temporary file is synced
+/// before the rename, and the parent directory after it, so the checkpoint is
+/// on stable storage by the time this returns.
+///
+/// The directory sync is not deferred to [`crate::Log::sync`] the way a new
+/// segment name is. A `DeleteRecords` is acknowledged to the client as soon as
+/// the trim returns, and a trimmed partition is often idle afterwards, so there
+/// may be no later `sync` to pay the debt: a crash would drop the rename and
+/// serve the deleted records again. A trim is an administrative operation, so
+/// the extra fsync costs nothing that matters.
 pub(crate) fn write(dir: &Path, log_start_offset: Offset) -> Result<(), LogError> {
     let path = name::log_start_offset_checkpoint_path(dir);
     let tmp = path.with_extension("tmp");
@@ -77,6 +85,23 @@ pub(crate) fn write(dir: &Path, log_start_offset: Offset) -> Result<(), LogError
         file.sync_data().map_err(LogError::Io)?;
     }
     fs::rename(&tmp, &path).map_err(LogError::Io)?;
+    sync_dir(dir)
+}
+
+/// `fsync` the partition directory so the rename above is durable.
+///
+/// Rust's standard directory-open path is supported on Unix. Windows provides
+/// no equivalent through `std`, which is the same split [`crate::Log::sync`]
+/// already lives with; the file contents are synced before the rename on both.
+fn sync_dir(dir: &Path) -> Result<(), LogError> {
+    #[cfg(unix)]
+    {
+        fs::File::open(dir)
+            .and_then(|handle| handle.sync_all())
+            .map_err(LogError::Io)?;
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
     Ok(())
 }
 

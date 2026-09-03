@@ -174,14 +174,26 @@ impl Log {
         log.rebuild_producer_and_transaction_state()?;
         // Restore a log start that the segment names cannot express: a trim
         // that landed inside a segment left its records on disk, and only the
-        // checkpoint says they are gone. Clamp to `[derived_start, log_end]` --
-        // a checkpoint at or below the derived start is already covered by the
-        // deleted segments, and one past the end would hide live records.
-        if let Some(checkpointed) = log_start_offset_checkpoint::read(&log.dir)?
-            && checkpointed > log.log_start_offset()
-            && checkpointed <= log.log_end_offset()
-        {
-            log.start_offset_override = Some(checkpointed);
+        // checkpoint says they are gone.
+        if let Some(checkpointed) = log_start_offset_checkpoint::read(&log.dir)? {
+            // Clamp into `[derived_start, log_end]`. Below the derived start
+            // the deleted segments already cover it. Above the log end the
+            // whole surviving log is below a start that was acknowledged, so
+            // every record left is one the trim removed: the log start is the
+            // log end. A crash between a trim and the fsync of the records it
+            // trimmed past lands here.
+            let derived_start = log.log_start_offset();
+            let effective = checkpointed.clamp(derived_start, log.log_end_offset());
+            if effective > derived_start {
+                log.start_offset_override = Some(effective);
+            }
+            if effective != checkpointed {
+                // Persist what was resolved instead of leaving the
+                // out-of-range value on disk. It is inert against this log,
+                // but appends move the log end, and the next open would find
+                // the stale value back in range and hide live records.
+                log_start_offset_checkpoint::write(&log.dir, effective)?;
+            }
         }
         // Recovery needs no durable watermark: the schedule is in the records,
         // so the first advance rebuilds it from the log start.
