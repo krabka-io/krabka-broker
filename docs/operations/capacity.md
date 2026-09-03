@@ -96,6 +96,13 @@ With `[remote_storage]`, local disk holds only the segments newer than
 disk is then ingest times local retention times the replication factor. A
 Fetch below the local retention shows up in the remote phase.
 
+The replication factor in that formula is there because every replica of a
+tiered topic enforces `local.retention.*` on its own disk, followers included,
+not only the leader. A follower drops a segment once the shared remote-log
+metadata says the leader finished copying it, so a follower's footprint tracks
+`local.retention.*` rather than `retention.*`, and a leadership change moves no
+bytes.
+
 ## Scrape size
 
 The `/metrics` body grows with the label sets that are live. The

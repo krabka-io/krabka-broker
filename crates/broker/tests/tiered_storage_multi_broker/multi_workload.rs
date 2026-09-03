@@ -1,12 +1,13 @@
 //! The produce-side workload: creating the tiered topic, filling it until the
-//! leader's copy task has tiered segments, and counting what landed in the
-//! shared remote directory.
+//! leader's copy task has tiered segments, counting what landed in the shared
+//! remote directory, and watching the local eviction that follows on the
+//! *follower's* disk.
 //!
-//! These three steps run against the leader before it is killed, and they are
-//! the only part of the suite that writes anything. Keeping them together
-//! leaves the failover test with a two-call setup and puts the
-//! `remote.storage.enable` / `local.retention.bytes` configuration that makes
-//! the eviction happen in one place.
+//! These steps all run before the leader is killed, and they are the only part
+//! of the suite that writes anything. Keeping them together leaves the
+//! failover test with a short setup and puts the `remote.storage.enable` /
+//! `local.retention.bytes` configuration that makes the eviction happen in one
+//! place, beside the two directory walks that observe it.
 
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,51 @@ fn count_remote_log_files(root: &std::path::Path) -> usize {
     let mut count = 0;
     walk(root, &mut count);
     count
+}
+
+/// Counts `*.log` files directly under one partition's local log directory.
+/// A tiered partition that has evicted everything it copied is down to its
+/// active segment, so this reaching 1 is the eviction having happened.
+fn count_local_segment_files(partition_dir: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(partition_dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("log"))
+        .count()
+}
+
+/// Waits until local retention has taken every sealed segment off the
+/// *follower's* disk, leaving only its active segment.
+///
+/// The follower never runs the copy task. It evicts because the RLMM it shares
+/// with the leader reports those segments `CopySegmentFinished`, which is the
+/// whole KIP-405 follower-retention claim. Before that behavior existed this
+/// poll ran to its deadline: the follower held every segment it had fetched
+/// until it was elected.
+///
+/// `log_dir` is the follower broker's log directory root; the partition's own
+/// directory is the Kafka-conventional `<topic>-<partition>` below it.
+pub(crate) async fn await_follower_local_eviction(log_dir: &std::path::Path) {
+    let partition_dir = log_dir.join(format!("{TOPIC}-0"));
+    let deadline = Instant::now() + Duration::from_mins(1);
+    loop {
+        // An open log always holds its active segment, so one `*.log` file is
+        // the floor and anything above it is a sealed segment still on disk.
+        // Zero means the follower has not materialized the partition yet.
+        let segments = count_local_segment_files(&partition_dir);
+        if segments == 1 {
+            return;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the follower's {} holds {segments} segment file(s), expected only \
+             the active one; local retention does not run on follower replicas",
+            partition_dir.display()
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
 }
 
 pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {

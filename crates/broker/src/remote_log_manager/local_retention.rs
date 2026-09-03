@@ -1,5 +1,10 @@
-//! Local-retention eviction: which copied sealed segments a leader may drop
+//! Local-retention eviction: which copied sealed segments a replica may drop
 //! from its own disk once the remote tier holds them.
+//!
+//! Leader and follower alike run this pass. What makes a sealed segment
+//! droppable is the RLMM saying the leader finished copying it, and the RLMM
+//! is shared, so a follower reaches the same answer over its own disk that the
+//! leader reaches over the leader's.
 //!
 //! The pure walk that picks the deletion target sits beside the pass that
 //! applies it, because the two share one contiguous-prefix rule.
@@ -77,6 +82,10 @@ pub(crate) fn local_retention_target(
 /// remote copy is `CopySegmentFinished` and that fall outside the
 /// per-topic local-retention window. Returns the count of segments
 /// that this pass physically removed from disk.
+///
+/// This runs on every replica of a tiered partition. On a follower the copy
+/// pass belongs to another broker, so `rlmm` is the only thing that says a
+/// segment is safe to drop -- which is exactly what it says on the leader too.
 pub(crate) fn local_retention_pass(
     tp: &TopicIdPartition,
     partition: &Partition,
