@@ -43,7 +43,10 @@ impl Engine {
         let hwm = self.log.hwm();
         let advanced = committed_records_since_snapshot(hwm, self.last_snapshot_end_offset);
         let records_due = snapshot_interval_reached(advanced, self.snapshot_interval_records);
-        let bytes_due = self.committed_bytes_since_snapshot_reached();
+        let bytes_due = snapshot_bytes_reached(
+            self.bytes_since_snapshot,
+            self.max_bytes_between_snapshots.bytes_u64(),
+        );
         let elapsed_ms = self.now().0.saturating_sub(self.last_snapshot_at_ms);
         let max_snapshot_interval_ms =
             u64::try_from(self.max_snapshot_interval.millis_i64()).unwrap_or(0);
@@ -54,29 +57,6 @@ impl Engine {
         tracing::Span::current().record("hwm", hwm.0);
         if let Err(error) = self.write_snapshot_and_prune() {
             tracing::error!(?error, "kraft: snapshot/prune failed");
-        }
-    }
-
-    /// Whether the verbatim log bytes committed since the last snapshot have
-    /// reached `max_bytes_between_snapshots`. Bounds the read at that many
-    /// bytes: a read that fills the window proves at least that much data is
-    /// pending without ever reading more than the threshold itself.
-    fn committed_bytes_since_snapshot_reached(&self) -> bool {
-        let max_bytes = self.max_bytes_between_snapshots.bytes_u64();
-        if max_bytes == 0 {
-            return false;
-        }
-        match self.log.read_committed(
-            self.last_snapshot_end_offset,
-            self.max_bytes_between_snapshots,
-        ) {
-            Ok(raw) => {
-                snapshot_bytes_reached(u64::try_from(raw.total).unwrap_or(u64::MAX), max_bytes)
-            }
-            Err(error) => {
-                tracing::error!(?error, "kraft: failed to measure bytes since last snapshot");
-                false
-            }
         }
     }
 
@@ -179,6 +159,7 @@ impl Engine {
         self.log.prune_to(end_offset)?;
         self.last_snapshot_end_offset = end_offset;
         self.last_snapshot_at_ms = self.now().0;
+        self.bytes_since_snapshot = 0;
         retain_latest_checkpoint(&checkpoint_dir(&self.data_dir));
         Ok(())
     }

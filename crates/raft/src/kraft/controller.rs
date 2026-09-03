@@ -204,6 +204,16 @@ struct Engine {
     /// restarted node measures the time-based cap from its own start rather
     /// than immediately firing.
     last_snapshot_at_ms: u64,
+    /// Verbatim log bytes applied since the last checkpoint, tracked
+    /// incrementally as batches are applied rather than re-measured by
+    /// reading the log: a read bounded by the byte cap can under-count
+    /// (a batch that would cross the cap does not fit the remaining budget
+    /// and is excluded), and an unbounded read would rescan the whole
+    /// pending backlog on every engine tick. Reset to `0` on every snapshot,
+    /// including `0` on a fresh restart, so a restart under-counts until
+    /// enough new records flow in — the same restart tradeoff
+    /// `last_snapshot_at_ms` already makes for the time-based cap.
+    bytes_since_snapshot: u64,
     /// The first committed metadata-version downgrade whose mandatory exact
     /// checkpoint, reload, and prune has not completed locally yet. Capturing
     /// the image and post-record boundary prevents later committed records from

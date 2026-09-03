@@ -181,6 +181,7 @@ impl KraftController {
             metadata_snapshot_fetch_max,
             last_snapshot_end_offset,
             last_snapshot_at_ms: 0,
+            bytes_since_snapshot: 0,
             downgrade_snapshot_pending,
             #[cfg(test)]
             downgrade_snapshot_failures_remaining: 0,

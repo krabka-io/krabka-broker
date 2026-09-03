@@ -6,7 +6,6 @@ use std::{collections::HashMap, time::Duration};
 
 use krabka_raft::kraft::{
     NodeId, PeerSender, checkpoint_dir,
-    controller::checkpoint::{latest_checkpoint_id, load_checkpoint_by_id},
     transport::{api_key, wire},
 };
 
@@ -186,11 +185,20 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
         (follower_ctrl.quorum_snapshot().log_start_offset > 0).then_some(())
     })
     .await;
+    // `checkpoint_dir` is also the metadata log's own segment directory (it
+    // holds `.log`/`.index`/`leader-epoch-checkpoint` alongside `.checkpoint`
+    // files), so filter for the checkpoint retention keeps to exactly one.
     let follower_dir = dirs[&follower].path().to_path_buf();
-    let (end_offset, epoch) = latest_checkpoint_id(&checkpoint_dir(&follower_dir))
-        .expect("the follower's independent prune left a checkpoint on disk");
-    let want_bytes = load_checkpoint_by_id(&checkpoint_dir(&follower_dir), end_offset, epoch)
-        .expect("the follower's own checkpoint is readable");
+    let checkpoint_entries: Vec<_> = std::fs::read_dir(checkpoint_dir(&follower_dir))
+        .expect("read checkpoint dir")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read checkpoint dir entries")
+        .into_iter()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "checkpoint"))
+        .collect();
+    assert2::assert!(checkpoint_entries.len() == 1);
+    let want_bytes =
+        std::fs::read(checkpoint_entries[0].path()).expect("read the follower's checkpoint file");
 
     // A lagging peer (node 3, never registered — this exercises the wire
     // protocol directly rather than through election/discovery) asks the
@@ -215,7 +223,8 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
     else {
         panic!("follower did not return a decodable Fetch response");
     };
-    assert2::assert!(snapshot_id == Some((end_offset, epoch)));
+    let (end_offset, epoch) =
+        snapshot_id.expect("fetch below the follower's own log_start returns a snapshot id");
     assert2::assert!(records.is_empty());
 
     // Fetch the whole snapshot from the follower directly, exactly as a

@@ -471,6 +471,33 @@ mod tests {
     }
 
     #[test]
+    fn metadata_max_snapshot_interval_accepts_zero_and_whole_millis_only() {
+        for (source, expect_ok) in [
+            (
+                "[runtime]\nmetadata_max_snapshot_interval = \"0ms\"\n",
+                true,
+            ),
+            (
+                "[runtime]\nmetadata_max_snapshot_interval = \"1ms\"\n",
+                true,
+            ),
+            ("[runtime]\nmetadata_max_snapshot_interval = \"1h\"\n", true),
+            // A positive sub-millisecond value truncates to 0ms under
+            // `millis_i64()`, which the engine reads as "disabled" — so it
+            // must be rejected here rather than silently doing nothing.
+            (
+                "[runtime]\nmetadata_max_snapshot_interval = \"250us\"\n",
+                false,
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let result = file.apply_to(&mut cfg);
+            assert!(result.is_ok() == expect_ok, "{source}: {result:?}");
+        }
+    }
+
+    #[test]
     fn existing_file_inputs_reject_invalid_refined_values() {
         let cases = [
             ("heartbeat_interval = \"0ms\"\n", "heartbeat_interval"),
