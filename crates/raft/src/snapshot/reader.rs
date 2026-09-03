@@ -27,6 +27,7 @@ impl SnapshotReader {
         let mut stage = SnapshotReadStage::Header;
         let mut kraft_version = None;
         let mut voters = None;
+        let mut last_contained_log_timestamp = 0;
         // A context image accumulating decoded records in log order so each
         // subsequent `from_kraft_value` resolves topic ids / whole-map config
         // merges / ACL ids against prior records. The cluster id is irrelevant
@@ -40,7 +41,8 @@ impl SnapshotReader {
                         return Err(invalid_snapshot_order());
                     };
                     match (stage, ControlRecord::decode(key, value)?) {
-                        (SnapshotReadStage::Header, ControlRecord::SnapshotHeader(_)) => {
+                        (SnapshotReadStage::Header, ControlRecord::SnapshotHeader(header)) => {
+                            last_contained_log_timestamp = header.last_contained_log_timestamp;
                             stage = SnapshotReadStage::KRaftVersion;
                         }
                         (SnapshotReadStage::KRaftVersion, ControlRecord::KRaftVersion(record)) => {
@@ -100,6 +102,7 @@ impl SnapshotReader {
                 (None, None) => None,
                 _ => return Err(invalid_snapshot_order()),
             },
+            last_contained_log_timestamp,
             metadata_records: records,
         })
     }

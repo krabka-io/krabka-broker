@@ -1,9 +1,14 @@
 //! KIP-630 snapshot catch-up: a voter that joins with an empty log, far behind
 //! the leader's pruned `log_start`, converges on the leader's metadata image
-//! through `FetchSnapshot` rather than through log replication.
+//! through `FetchSnapshot` rather than through log replication, and keeps that
+//! transfer alive when the node serving it rolls to a newer checkpoint.
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    time::Duration,
+};
 
+use krabka_protocol::records::RecordBatch;
 use krabka_raft::kraft::{
     NodeId, PeerSender, checkpoint_dir,
     transport::{api_key, wire},
@@ -16,6 +21,23 @@ use crate::{
     },
     sim_net::SimNet,
 };
+
+/// The `.checkpoint` artifacts a node currently holds, by file name. The
+/// checkpoint directory is also the metadata log's own segment directory, so
+/// the extension filter is what separates checkpoints from `.log` / `.index`.
+fn checkpoint_names(dir: &std::path::Path) -> BTreeSet<String> {
+    std::fs::read_dir(checkpoint_dir(dir))
+        .expect("read checkpoint dir")
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "checkpoint")
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
 
 /// 5. KIP-630 snapshot catch-up, the Slice-4 acceptance. A lagging controller
 ///    follower whose own log is empty and far behind the leader's pruned
@@ -185,20 +207,16 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
         (follower_ctrl.quorum_snapshot().log_start_offset > 0).then_some(())
     })
     .await;
-    // `checkpoint_dir` is also the metadata log's own segment directory (it
-    // holds `.log`/`.index`/`leader-epoch-checkpoint` alongside `.checkpoint`
-    // files), so filter for the checkpoint retention keeps to exactly one.
+    // Retention keeps the latest checkpoint and the one before it (#365), so a
+    // node that has rolled at least once holds two and never more. Names are
+    // fixed-width and zero-padded, so the greatest name is the latest id, and
+    // that is the one a Fetch below the log start points at.
     let follower_dir = dirs[&follower].path().to_path_buf();
-    let checkpoint_entries: Vec<_> = std::fs::read_dir(checkpoint_dir(&follower_dir))
-        .expect("read checkpoint dir")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("read checkpoint dir entries")
-        .into_iter()
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "checkpoint"))
-        .collect();
-    assert2::assert!(checkpoint_entries.len() == 1);
-    let want_bytes =
-        std::fs::read(checkpoint_entries[0].path()).expect("read the follower's checkpoint file");
+    let names = checkpoint_names(&follower_dir);
+    assert2::assert!((1..=2).contains(&names.len()), "{names:?}");
+    let latest = names.last().expect("a checkpoint exists");
+    let want_bytes = std::fs::read(checkpoint_dir(&follower_dir).join(latest))
+        .expect("read the follower's latest checkpoint file");
 
     // A lagging peer (node 3, never registered — this exercises the wire
     // protocol directly rather than through election/discovery) asks the
@@ -260,6 +278,192 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
         }
     }
     assert2::assert!(got_bytes == want_bytes);
+
+    for &id in &live {
+        if let Some(c) = net.get(id) {
+            c.shutdown().await;
+        }
+    }
+}
+
+/// A `FetchSnapshot` that is mid-transfer when the serving node rolls to a
+/// newer checkpoint finishes on the id it started on (#365).
+///
+/// Before retention kept the previous checkpoint, the roll deleted the id
+/// under the reader: `load_checkpoint_by_id` missed, the leader answered
+/// `SNAPSHOT_NOT_FOUND` (98), and the reader dropped its reassembly and began
+/// again from position 0 against the newer id. A reader slower than one
+/// `metadata_snapshot_interval_records` never escapes that, which is exactly
+/// the reader snapshots exist for. Kafka has no reference count either — the
+/// previous snapshot simply stays until retention expires it.
+///
+/// The lagging peer here drives the wire directly, chunk by chunk, which is
+/// the same `FetchSnapshot` loop `Engine::on_fetch_snapshot_response` runs;
+/// stepping it by hand is what makes "the leader rolled between two chunks"
+/// exact rather than a race.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {
+    let net = SimNet::new();
+    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let cid = uuid::Uuid::from_u128(502);
+    let interval = 5u64;
+
+    let mut dirs: HashMap<NodeId, tempfile::TempDir> = HashMap::new();
+    for &id in &[NodeId(1), NodeId(2)] {
+        let idx = usize::try_from(id.0 - 1).unwrap();
+        let (ctrl, dir) = build_engine_with_snapshot_interval(
+            id,
+            &ids,
+            cid,
+            STAGGERED_TIMEOUTS[idx],
+            &net,
+            interval,
+        );
+        net.register(id, ctrl);
+        dirs.insert(id, dir);
+    }
+    let live = [NodeId(1), NodeId(2)];
+    let (leader, _epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
+    let leader_dir = dirs[&leader].path().to_path_buf();
+
+    let submit = async |name: String, id: u128| {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            net.get(leader)
+                .unwrap()
+                .submit_change(vec![topic_record(&name, id)]),
+        )
+        .await
+        .expect("submit did not hang")
+        .expect("submit ok");
+    };
+
+    // A first checkpoint, with distinct topics so the image it holds is
+    // recognizable when the transfer below reassembles it.
+    for i in 0..usize::try_from(interval).unwrap() * 3 {
+        submit(format!("r{i}"), 3000 + i as u128).await;
+    }
+    await_until(Duration::from_secs(10), || {
+        (!checkpoint_names(&leader_dir).is_empty()).then_some(())
+    })
+    .await;
+    let before_roll = checkpoint_names(&leader_dir);
+
+    // The lagging peer asks for records from 0, below the leader's pruned
+    // log start, and is pointed at that checkpoint.
+    let fetch = wire::PeerRequest::Fetch {
+        from: NodeId(3),
+        fetch_epoch: 0,
+        fetch_offset: 0,
+    }
+    .encode();
+    let body = net
+        .send(leader, api_key::FETCH, fetch)
+        .await
+        .expect("fetch to the leader succeeds");
+    let Some(wire::PeerResponse::Fetch { snapshot_id, .. }) =
+        wire::PeerResponse::decode_fetch(&body)
+    else {
+        panic!("leader did not return a decodable Fetch response");
+    };
+    let id = snapshot_id.expect("a fetch below the leader's log start returns a snapshot id");
+
+    // One chunk, small enough that the transfer is unmistakably incomplete.
+    // It is cut on the snapshot header batch's own boundary: KIP-595 names the
+    // field `unalignedRecords`, but this codec decodes it leniently as record
+    // batches and drops a trailing fragment, so a chunk ending mid-batch would
+    // arrive empty. What this test needs is a transfer left open across the
+    // roll, not a particular chunk size.
+    let checkpoint_file = checkpoint_dir(&leader_dir).join(
+        before_roll
+            .iter()
+            .next_back()
+            .expect("the leader wrote a checkpoint"),
+    );
+    let on_disk = std::fs::read(&checkpoint_file).expect("read the leader's checkpoint");
+    let chunk_bytes = {
+        let mut cursor: &[u8] = &on_disk;
+        RecordBatch::decode(&mut cursor).expect("decode the snapshot header batch");
+        i32::try_from(on_disk.len() - cursor.len()).expect("a header batch fits an i32")
+    };
+    let mut assembled = Vec::new();
+    let chunk = async |position: usize, max_bytes: i32| {
+        let req = wire::PeerRequest::FetchSnapshot {
+            from: NodeId(3),
+            snapshot_id: id,
+            position: i64::try_from(position).unwrap(),
+            max_bytes,
+        }
+        .encode();
+        let body = net
+            .send(leader, api_key::FETCH_SNAPSHOT, req)
+            .await
+            .expect("fetch snapshot chunk from the leader succeeds");
+        let Some(wire::PeerResponse::FetchSnapshot {
+            snapshot_id,
+            size,
+            bytes,
+            error_code,
+            ..
+        }) = wire::PeerResponse::decode_fetch_snapshot(&body)
+        else {
+            panic!("leader did not return a decodable FetchSnapshot response");
+        };
+        // The id must never change under the reader, and 98 is the
+        // `SNAPSHOT_NOT_FOUND` that used to send it back to position 0.
+        assert2::assert!((snapshot_id, error_code) == (id, 0));
+        (size, bytes)
+    };
+    let (size, first) = chunk(0, chunk_bytes).await;
+    assembled.extend_from_slice(&first);
+    let total = usize::try_from(size).unwrap();
+    assert2::assert!(assembled.len() < total, "the transfer is partway");
+
+    // Now roll the leader onto a NEW checkpoint while that transfer is open.
+    // One record at a time, so the roll lands as soon as the interval is
+    // crossed and the id being read is one behind the latest, not two.
+    for i in 0..usize::try_from(interval).unwrap() * 2 {
+        submit(format!("s{i}"), 4000 + i as u128).await;
+        if checkpoint_names(&leader_dir) != before_roll {
+            break;
+        }
+    }
+    let after_roll = checkpoint_names(&leader_dir);
+    assert2::assert!(
+        after_roll != before_roll,
+        "the leader rolled: {after_roll:?}"
+    );
+
+    // Finish the original transfer against the rolled leader.
+    while assembled.len() < total {
+        let (_, bytes) = chunk(assembled.len(), i32::MAX).await;
+        assert2::assert!(!bytes.is_empty(), "the transfer made progress");
+        assembled.extend_from_slice(&bytes);
+    }
+
+    // What it reassembled is a real snapshot, and it is the image the id names
+    // (the pre-roll topics) rather than a truncated or mixed artifact.
+    let records = krabka_raft::deserialize_metadata_snapshot(&assembled)
+        .expect("the reassembled snapshot decodes");
+    let topics: BTreeSet<String> = records
+        .iter()
+        .filter_map(|record| match record {
+            krabka_metadata::MetadataRecord::V1Topic(topic) => Some(topic.name.clone()),
+            _ => None,
+        })
+        .collect();
+    // The id names a boundary from before the roll, so it holds the burst's
+    // topics and none of the records committed to force the roll. A restart
+    // onto the newer id would have carried those.
+    assert2::assert!(topics.contains("r0"), "{topics:?}");
+    assert2::assert!(
+        topics.len() >= usize::try_from(interval).unwrap(),
+        "{topics:?}"
+    );
+    assert2::assert!(
+        topics.iter().all(|name| name.starts_with('r')),
+        "{topics:?}"
+    );
 
     for &id in &live {
         if let Some(c) = net.get(id) {

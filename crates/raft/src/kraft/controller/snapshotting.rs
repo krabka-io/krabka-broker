@@ -10,7 +10,7 @@ use krabka_units::prelude::{ByteSizeExt as _, TimeExt as _};
 
 use super::{
     Engine,
-    checkpoint::{latest_checkpoint_id, retain_latest_checkpoint, write_checkpoint},
+    checkpoint::{latest_checkpoint_id, retain_recent_checkpoints, write_checkpoint},
     checkpoint_dir,
     offsets::{
         committed_records_since_snapshot, snapshot_bytes_reached, snapshot_interval_reached,
@@ -60,9 +60,29 @@ impl Engine {
         }
     }
 
+    /// (KIP-630) `SnapshotHeaderRecord.last_contained_log_timestamp` for a
+    /// snapshot covering `[0, end_offset)`: the create-time of the batch
+    /// holding the last record it contains, which is what Kafka's
+    /// `MetadataLoader` passes to `KafkaRaftClient.createSnapshot` as the
+    /// append time of the last batch folded in.
+    ///
+    /// A boundary at the log start has no readable record below it, because a
+    /// previous checkpoint already pruned the prefix away or installed over
+    /// it. The last record such a snapshot contains is the very one the
+    /// previous checkpoint named, so the stamp carries forward rather than
+    /// reverting a live create-time to the epoch. It stays `0` only on a node
+    /// that has never checkpointed, where nothing has ever named one.
+    fn last_contained_ts(&self, end_offset: Offset) -> i64 {
+        self.log
+            .timestamp_below(end_offset)
+            .unwrap_or(self.last_snapshot_timestamp_ms)
+    }
+
     pub fn write_snapshot_and_prune(&mut self) -> Result<(), RaftError> {
-        let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, 0)?;
+        let last_contained_ts = self.last_contained_ts(self.log.hwm());
+        let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, last_contained_ts)?;
         let end_offset = self.write_snapshot_checkpoint(&bytes)?;
+        self.last_snapshot_timestamp_ms = last_contained_ts;
         self.prune_to_snapshot(end_offset)?;
         Ok(())
     }
@@ -78,7 +98,8 @@ impl Engine {
                 "injected metadata downgrade snapshot failure".into(),
             ));
         }
-        let bytes = crate::snapshot::SnapshotWriter::serialize(&pending.image, 0)?;
+        let last_contained_ts = self.last_contained_ts(pending.end_offset);
+        let bytes = crate::snapshot::SnapshotWriter::serialize(&pending.image, last_contained_ts)?;
         // KIP-1155 is a snapshot reload, not only a checkpoint write. Decode
         // the exact bytes first and rebuild every metadata index from their
         // lower-version record representation before discarding the log
@@ -103,6 +124,7 @@ impl Engine {
             pending.epoch,
             &bytes,
         )?;
+        self.last_snapshot_timestamp_ms = last_contained_ts;
 
         // Rebuild the committed suffix before pruning. This preserves records
         // committed after the downgrade failure while keeping the checkpoint
@@ -160,7 +182,7 @@ impl Engine {
         self.last_snapshot_end_offset = end_offset;
         self.last_snapshot_at_ms = self.now().0;
         self.bytes_since_snapshot = 0;
-        retain_latest_checkpoint(&checkpoint_dir(&self.data_dir));
+        retain_recent_checkpoints(&checkpoint_dir(&self.data_dir));
         Ok(())
     }
 
@@ -177,16 +199,19 @@ impl Engine {
         fields(node = self.me.0, epoch = self.core.quorum_state().leader_epoch, end_offset = self.log.hwm().0),
         err
     )]
-    pub fn do_trigger_snapshot(&self) -> Result<(), RaftError> {
+    pub fn do_trigger_snapshot(&mut self) -> Result<(), RaftError> {
         if self.downgrade_snapshot_pending.is_some() {
             return Err(RaftError::ChangeRejected(
                 "mandatory metadata downgrade snapshot is pending".into(),
             ));
         }
-        let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, 0)?;
         let end_offset = self.log.hwm();
+        let last_contained_ts = self.last_contained_ts(end_offset);
+        let bytes = crate::snapshot::SnapshotWriter::serialize(&self.image, last_contained_ts)?;
         let epoch = i32::try_from(self.core.quorum_state().leader_epoch).unwrap_or(i32::MAX);
         // Checkpoint filenames encode the raw offset (on-disk boundary).
-        write_checkpoint(&checkpoint_dir(&self.data_dir), end_offset.0, epoch, &bytes)
+        write_checkpoint(&checkpoint_dir(&self.data_dir), end_offset.0, epoch, &bytes)?;
+        self.last_snapshot_timestamp_ms = last_contained_ts;
+        Ok(())
     }
 }

@@ -56,7 +56,7 @@ impl KraftController {
     pub fn spawn(config: KraftConfig, log: KraftLog, data_dir: PathBuf) -> Self {
         let cluster_id = config.cluster_id;
         let image = MetadataImage::new(cluster_id);
-        Self::spawn_with_image(config, log, data_dir, image, Offset(0), None)
+        Self::spawn_with_image(config, log, data_dir, image, Offset(0), 0, None)
             .expect("fresh controller cannot have a pending downgrade checkpoint")
     }
 
@@ -69,6 +69,7 @@ impl KraftController {
         data_dir: PathBuf,
         image: MetadataImage,
         last_snapshot_end_offset: Offset,
+        last_snapshot_timestamp_ms: i64,
         downgrade_snapshot_pending: Option<PendingDowngradeSnapshot>,
     ) -> Result<Self, RaftError> {
         let KraftConfig {
@@ -180,6 +181,7 @@ impl KraftController {
             max_snapshot_interval,
             metadata_snapshot_fetch_max,
             last_snapshot_end_offset,
+            last_snapshot_timestamp_ms,
             last_snapshot_at_ms: 0,
             bytes_since_snapshot: 0,
             downgrade_snapshot_pending,
@@ -264,8 +266,13 @@ impl KraftController {
         let mut image = MetadataImage::new(cluster_id);
         let mut snapshot_control = None;
         let mut last_snapshot_end_offset = Offset(0);
+        let mut last_snapshot_timestamp_ms = 0;
         if let Some(bytes) = load_latest_checkpoint(&checkpoint_dir(&data_dir))? {
             let contents = crate::snapshot::SnapshotReader::read(&bytes)?;
+            // The records this checkpoint contains are below its boundary and
+            // gone from the log, so its header is the only place their
+            // create-time survives a restart.
+            last_snapshot_timestamp_ms = contents.last_contained_log_timestamp;
             image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
             if let Some(control) = contents.control_state {
                 image.apply(&MetadataRecord::V1KRaftVersion(
@@ -353,6 +360,7 @@ impl KraftController {
             data_dir,
             image,
             last_snapshot_end_offset,
+            last_snapshot_timestamp_ms,
             downgrade_snapshot_pending,
         )
     }
