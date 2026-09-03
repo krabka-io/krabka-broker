@@ -34,7 +34,8 @@ const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 /// Kafka `OFFSET_OUT_OF_RANGE`.
 pub(crate) const OFFSET_OUT_OF_RANGE: i16 = 1;
-/// The `ListOffsets` sentinel for the earliest available offset (KIP-79).
+/// Request timestamp sentinel (-2): resolve the earliest available offset.
+/// Kafka's `ListOffsetsRequest.EARLIEST_TIMESTAMP`.
 const EARLIEST_TIMESTAMP: i64 = -2;
 
 /// A log read back over the wire.
