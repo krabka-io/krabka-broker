@@ -4,7 +4,9 @@
 //! which is what a suite needs when it only drives the JVM tools against a
 //! single node.
 
-use krabka_broker::{Broker, BrokerConfig};
+use std::path::Path;
+
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
 use krabka_log::LogConfig;
 
 use super::ports::{broker0_advertised, broker0_listen, controller_addr_0};
@@ -25,6 +27,26 @@ pub(crate) async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfil
 pub(crate) async fn start_host_broker_with(
     adjust: impl FnOnce(&mut BrokerConfig),
 ) -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handle = start_host_broker_in_with(dir.path(), adjust).await;
+    (handle, dir)
+}
+
+/// [`start_host_broker`] on a log directory the caller owns.
+///
+/// A restart case shuts the handle down and calls this again with the same
+/// path, which the other two helpers cannot express: they own the temporary
+/// directory and hand it back alongside the handle, so the second boot would
+/// land on an empty one.
+pub(crate) async fn start_host_broker_in(dir: &Path) -> krabka_broker::BrokerHandle {
+    start_host_broker_in_with(dir, |_| {}).await
+}
+
+/// The one copy of the single-node config every helper above boots.
+async fn start_host_broker_in_with(
+    dir: &Path,
+    adjust: impl FnOnce(&mut BrokerConfig),
+) -> krabka_broker::BrokerHandle {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -32,15 +54,14 @@ pub(crate) async fn start_host_broker_with(
         )
         .with_test_writer()
         .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
     let controller_addr: std::net::SocketAddr =
         controller_addr_0().parse().expect("allocated addr");
-    let config = BrokerConfig {
+    let mut config = BrokerConfig {
         broker_id: 1,
         listen_addr,
         advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
+        log_dir: dir.to_path_buf(),
         log_config: LogConfig::default(),
         node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
@@ -50,10 +71,9 @@ pub(crate) async fn start_host_broker_with(
         replica_lag_time_max: krabka_units::millis(30_000),
         controller_election_timeout: krabka_units::secs(5),
         controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+        bootstrap_mode: bootstrap_mode(dir),
         ..BrokerConfig::default()
     };
-    let mut config = config;
     adjust(&mut config);
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!(
@@ -62,7 +82,21 @@ pub(crate) async fn start_host_broker_with(
         listen = broker0_listen()
     );
     tracing::info!(listen = %broker0_listen(), advertised = %broker0_advertised(), "broker started for jvm acceptance");
-    (handle, dir)
+    handle
+}
+
+/// `Bootstrap` on a fresh directory, `Rejoin` once a committed raft log is
+/// there, the same choice `detect_bootstrap_mode` makes in the broker binary.
+///
+/// A first boot is always the former. The second boot of a restart case is the
+/// latter, and asking for `Bootstrap` on top of a non-empty metadata log is
+/// rejected at controller start.
+fn bootstrap_mode(dir: &Path) -> BootstrapMode {
+    if krabka_raft::metadata_log_nonempty(&dir.join("__cluster_metadata")) {
+        BootstrapMode::Rejoin
+    } else {
+        BootstrapMode::Bootstrap
+    }
 }
 
 /// Like [`start_host_broker`] but configures a second JBOD data directory

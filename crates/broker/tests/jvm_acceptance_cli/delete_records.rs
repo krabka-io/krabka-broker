@@ -4,8 +4,9 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE, broker0_advertised, docker_run_kafka_tool, nc_check_connectivity,
-    start_host_broker,
+    KAFKA_IMAGE, broker0_advertised, docker_run_kafka_tool, docker_run_kafka_tool_with_mount,
+    nc_check_connectivity, start_host_broker, start_host_broker_in, wait_jvm_partition_leader,
+    write_temp_file,
 };
 
 /// `kafka-delete-records --offset-json-file <(...)`: produce 20
@@ -18,12 +19,75 @@ async fn kafka_delete_records_trims_log() {
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
+    create_topic(TOPIC);
+    produce_lines(TOPIC, 20);
+
+    let out = delete_records_to(TOPIC, 10);
+    assert!(
+        out.contains("low_watermark") || out.contains("10"),
+        "delete-records output missing low_watermark: {out}"
+    );
+}
+
+/// A trim that lands inside the active segment stays in force across a broker
+/// restart, as the JVM tools see it.
+///
+/// The offsets before a `DeleteRecords` are not on disk anywhere once the
+/// segment they live in is still open for append: nothing rolls, nothing is
+/// deleted, and only the recorded log start offset says they are gone. This
+/// case boots the second broker on the first one's log directory and asks
+/// `kafka-get-offsets --time -2` again, which is the request a JVM consumer
+/// makes when it resets to `earliest`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn kafka_delete_records_trim_survives_a_broker_restart() {
+    const TOPIC: &str = "krabka-delete-recs-restart-itest";
+    /// Inside the first (and only) segment, which 20 records do not fill.
+    const TRIM_TO: i64 = 7;
+
+    // The directory outlives both brokers, so the second boot reopens the log
+    // the first one trimmed.
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let broker = start_host_broker_in(dir.path()).await;
+    nc_check_connectivity();
+
+    create_topic(TOPIC);
+    wait_jvm_partition_leader(&broker, TOPIC, 0, 1).await;
+    produce_lines(TOPIC, 20);
+    delete_records_to(TOPIC, TRIM_TO);
+
+    assert!(
+        jvm_earliest_offset(TOPIC) == TRIM_TO,
+        "earliest offset before the restart"
+    );
+
+    // The JVM broker binds fixed ports, and so does this one: the first broker
+    // has to be all the way down before the second can take the listener.
+    broker.shutdown().await;
+
+    let broker = start_host_broker_in(dir.path()).await;
+    wait_jvm_partition_leader(&broker, TOPIC, 0, 1).await;
+    broker
+        .wait_until_local_partition_leader(TOPIC, 0, krabka_broker::NodeId(1))
+        .await;
+
+    assert!(
+        jvm_earliest_offset(TOPIC) == TRIM_TO,
+        "earliest offset after the restart"
+    );
+
+    broker.shutdown().await;
+}
+
+/// One partition at replication factor one, which is all a single node hosts.
+fn create_topic(topic: &str) {
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
         "--if-not-exists",
         "--topic",
-        TOPIC,
+        topic,
         "--partitions",
         "1",
         "--replication-factor",
@@ -31,8 +95,11 @@ async fn kafka_delete_records_trims_log() {
         "--bootstrap-server",
         broker0_advertised(),
     ]);
+}
 
-    // Produce 20 records via console-producer stdin.
+/// Produce `count` records to `topic` through `kafka-console-producer`, one
+/// line per record on the tool's stdin.
+fn produce_lines(topic: &str, count: usize) {
     let mut child = std::process::Command::new("docker")
         .args([
             "run",
@@ -44,7 +111,7 @@ async fn kafka_delete_records_trims_log() {
             "--bootstrap-server",
             broker0_advertised(),
             "--topic",
-            TOPIC,
+            topic,
         ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -54,7 +121,7 @@ async fn kafka_delete_records_trims_log() {
     {
         use std::io::Write;
         let stdin = child.stdin.as_mut().expect("stdin");
-        for i in 0..20 {
+        for i in 0..count {
             writeln!(stdin, "msg-{i}").expect("write");
         }
     }
@@ -66,52 +133,59 @@ async fn kafka_delete_records_trims_log() {
         String::from_utf8_lossy(&prod_out.stdout),
         String::from_utf8_lossy(&prod_out.stderr),
     );
+}
 
-    // Build offset-json on the host so we can pass it into the container.
-    // The cp-kafka container runs as a non-root user; on Linux,
-    // `tempfile::NamedTempFile` creates the file 0600, so the bind-mount is
-    // unreadable inside the container. Relax to 0644 so the container's uid
-    // can read it. WSL/Docker-Desktop ignores this, but native Linux CI
-    // enforces it strictly.
+/// Trim `topic`-0 up to `offset` with `kafka-delete-records`, returning the
+/// tool's stdout.
+///
+/// The offset-json file is built on the host and bind-mounted in. The cp-kafka
+/// container runs as a non-root user, and `write_temp_file` is what relaxes the
+/// `0600` a tempfile is created with to a mode that user can read; native Linux
+/// CI enforces that strictly, where WSL and Docker Desktop do not.
+fn delete_records_to(topic: &str, offset: i64) -> String {
     let json = format!(
-        r#"{{"partitions":[{{"topic":"{TOPIC}","partition":0,"offset":10}}],"version":1}}"#
+        r#"{{"partitions":[{{"topic":"{topic}","partition":0,"offset":{offset}}}],"version":1}}"#
     );
-    let tmp = tempfile::NamedTempFile::new().expect("tmp");
-    std::fs::write(tmp.path(), &json).expect("write json");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))
-            .expect("chmod offsets.json");
-    }
-    let host_path = tmp.path().to_path_buf();
-    let mount = format!("{}:/offsets.json:ro", host_path.display());
+    let file = write_temp_file("offsets.json", &json);
+    let mount = format!("{}:/offsets.json:ro", file.host_path());
 
-    let out = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
+    let out = docker_run_kafka_tool_with_mount(
+        &mount,
+        &[
             "kafka-delete-records",
             "--bootstrap-server",
             broker0_advertised(),
             "--offset-json-file",
             "/offsets.json",
-        ])
-        .output()
-        .expect("spawn delete-records");
-    assert!(
-        out.status.success(),
-        "delete-records failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
+        ],
     );
-    let s = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        s.contains("low_watermark") || s.contains("10"),
-        "delete-records output missing low_watermark: {s}"
-    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The earliest offset the JVM tools report for `topic`-0.
+///
+/// `kafka-get-offsets --time -2` is `ListOffsets` at the earliest timestamp,
+/// which answers with the log start offset. The tool prints one
+/// `topic:partition:offset` row per partition.
+fn jvm_earliest_offset(topic: &str) -> i64 {
+    let out = docker_run_kafka_tool(&[
+        "kafka-get-offsets",
+        "--bootstrap-server",
+        broker0_advertised(),
+        "--topic-partitions",
+        &format!("{topic}:0"),
+        "--time",
+        "-2",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let prefix = format!("{topic}:0:");
+    let line = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("kafka-get-offsets printed no row for {topic}-0: {stdout}"));
+    line.rsplit(':')
+        .next()
+        .and_then(|offset| offset.parse::<i64>().ok())
+        .unwrap_or_else(|| panic!("kafka-get-offsets row is not an offset: {line}"))
 }
