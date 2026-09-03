@@ -277,3 +277,203 @@ where
     }
     Ok(cur.to_vec())
 }
+
+/// A presented certificate whose Subject DN matches no
+/// `ssl.principal.mapping.rules` rule must close the connection.
+///
+/// Kafka's `SslPrincipalMapper.getName` throws `NoMatchingRule` there and the
+/// channel never builds. The two ways this could regress are both privilege
+/// promotions: admitting the peer under its raw DN, or falling through to
+/// `ANONYMOUS`. Either would turn an operator's exhaustive rule list into a
+/// door that anyone holding a CA-signed cert walks through.
+///
+/// The client is set up exactly as the passing test above -- same fixture
+/// cert, same DN in `super_users` -- so the only difference is the rule list.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unmappable_certificate_dn_closes_the_connection() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let log_dir = tempfile::tempdir().unwrap();
+    let pem_dir = tempfile::tempdir().unwrap();
+    let server_cert_path = write_fixture(pem_dir.path(), "server.pem", DEV_CERT);
+    let server_key_path = write_fixture(pem_dir.path(), "server.key", DEV_KEY);
+    let client_ca_path = write_fixture(pem_dir.path(), "client_ca.pem", DEV_CLIENT_CA);
+
+    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    cfg.listeners = vec![ListenerSpec {
+        name: "SSL".to_string(),
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        advertised: "127.0.0.1:0".to_string(),
+        protocol: ListenerProtocol::Ssl,
+        tls_config: None,
+        sasl_mechanisms: None,
+        // Matches only `OU=ServiceUsers` DNs, and there is no `DEFAULT` tail.
+        // The fixture client is `OU=integration`, so nothing matches it.
+        principal_mapper: krabka_broker::SslPrincipalMapper::parse(&[
+            "RULE:^CN=(.*?),OU=ServiceUsers.*$/$1/",
+        ])
+        .expect("the rule list parses"),
+    }];
+    cfg.inter_broker_listener_name = "SSL".to_string();
+    cfg.tls_config = Some(TlsConfig {
+        cert_chain_path: server_cert_path,
+        private_key_path: server_key_path,
+        trust_roots_path: None,
+        client_ca_path: Some(client_ca_path),
+        client_auth: ClientAuthMode::Required,
+    });
+    // Both regressions would produce a *response* rather than a closed
+    // connection: a DN pass-through authorizes as this super-user and
+    // succeeds, an ANONYMOUS fall-through comes back
+    // CLUSTER_AUTHORIZATION_FAILED. Only the refusal ends the connection with
+    // no reply at all, which is what this test reads.
+    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
+
+    let handle = Broker::start(cfg).await.expect("broker must start");
+    let addr = handle.listen_addr();
+
+    let server_cert_der: CertificateDer<'static> =
+        CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
+            .next()
+            .expect("dev server cert present")
+            .expect("dev server cert parses")
+            .clone();
+    let connector = TlsConnector::from(client_config_with_pinned_server_and_client_cert(
+        server_cert_der,
+    ));
+
+    let tcp = TcpStream::connect(addr).await.expect("tcp connect");
+    let server_name = ServerName::try_from("crabka-dev").unwrap();
+    // The handshake itself is fine: the cert chains to the configured client
+    // CA. The refusal happens after it, when the DN meets the rule list.
+    let mut tls = connector
+        .connect(server_name, tcp)
+        .await
+        .expect("mTLS handshake must succeed");
+
+    let req = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: "unmappable-dn".into(),
+            num_partitions: 1,
+            replication_factor: 1,
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    req.encode(&mut body, 7).expect("encode CreateTopics");
+
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        round_trip(&mut tls, 19, 7, 1, true, &body),
+    )
+    .await
+    .expect("the broker must close rather than hang");
+
+    assert!(
+        outcome.is_err(),
+        "an unmappable cert DN must not be served -- got a response: {outcome:?}"
+    );
+
+    handle.shutdown().await;
+}
+
+/// A TLS listener that does not require a client certificate still has to
+/// serve the peer that presents none.
+///
+/// This is the other half of the refusal above: `peer_cert_principal` returns
+/// `Ok(None)` here -- the `ANONYMOUS` session -- and `Err(())` there, and the
+/// two must not collapse into one another. If "no certificate" started
+/// closing the connection, every `ClientAuthMode::Optional` listener would
+/// stop serving plain TLS clients; the refusal test above holds the opposite
+/// direction, so between them the branch cannot be flattened either way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let log_dir = tempfile::tempdir().unwrap();
+    let pem_dir = tempfile::tempdir().unwrap();
+    let server_cert_path = write_fixture(pem_dir.path(), "server.pem", DEV_CERT);
+    let server_key_path = write_fixture(pem_dir.path(), "server.key", DEV_KEY);
+    let client_ca_path = write_fixture(pem_dir.path(), "client_ca.pem", DEV_CLIENT_CA);
+
+    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    cfg.listeners = vec![ListenerSpec {
+        name: "SSL".to_string(),
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        advertised: "127.0.0.1:0".to_string(),
+        protocol: ListenerProtocol::Ssl,
+        tls_config: None,
+        sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+    }];
+    cfg.inter_broker_listener_name = "SSL".to_string();
+    cfg.tls_config = Some(TlsConfig {
+        cert_chain_path: server_cert_path,
+        private_key_path: server_key_path,
+        trust_roots_path: None,
+        client_ca_path: Some(client_ca_path),
+        client_auth: ClientAuthMode::Optional,
+    });
+    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
+
+    let handle = Broker::start(cfg).await.expect("broker must start");
+    let addr = handle.listen_addr();
+
+    let server_cert_der: CertificateDer<'static> =
+        CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
+            .next()
+            .expect("dev server cert present")
+            .expect("dev server cert parses")
+            .clone();
+    let client_cfg = ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedServerVerifier {
+            pinned: server_cert_der,
+        }))
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(client_cfg));
+
+    let tcp = TcpStream::connect(addr).await.expect("tcp connect");
+    let server_name = ServerName::try_from("crabka-dev").unwrap();
+    let mut tls = connector
+        .connect(server_name, tcp)
+        .await
+        .expect("a certificate-less TLS handshake must succeed on an Optional listener");
+
+    let req = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: "anonymous-tls".into(),
+            num_partitions: 1,
+            replication_factor: 1,
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    req.encode(&mut body, 7).expect("encode CreateTopics");
+
+    // The broker answers, which is the whole claim: the session was built.
+    // The refusal test above sends the same request over the same listener
+    // shape and gets no answer at all.
+    let resp_bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        round_trip(&mut tls, 19, 7, 1, true, &body),
+    )
+    .await
+    .expect("the broker must not hang")
+    .expect("the broker must answer a certificate-less TLS connection");
+    let mut cur: &[u8] = &resp_bytes;
+    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
+
+    assert!(resp.topics.len() == 1);
+    assert!(
+        resp.topics[0].error_code == 0,
+        "the ANONYMOUS session must be served — got {:?}",
+        resp.topics[0]
+    );
+
+    handle.shutdown().await;
+}

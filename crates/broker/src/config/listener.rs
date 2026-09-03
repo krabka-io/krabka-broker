@@ -453,6 +453,154 @@ mod tests {
             .expect("per-listener mechanisms satisfy SASL validation");
     }
 
+    /// `BrokerConfig` derives `Debug` and this enum sits inside it, so any
+    /// `{:?}` of the config -- a startup log line, a panic message, a test
+    /// failure -- would print the inter-broker password if this rendering
+    /// regressed to a derive.
+    #[test]
+    fn debug_renders_the_username_but_never_the_password() {
+        let cases = [
+            InterBrokerCredentials::Plain {
+                username: "broker-user".into(),
+                password: "hunter2-plain".into(),
+            },
+            InterBrokerCredentials::Scram {
+                mechanism: SaslMechanism::ScramSha512,
+                username: "broker-user".into(),
+                password: "hunter2-scram".into(),
+            },
+        ];
+        for credentials in cases {
+            let rendered = format!("{credentials:?}");
+            assert!(
+                rendered.contains("broker-user"),
+                "username must stay visible: {rendered}"
+            );
+            assert!(
+                !rendered.contains("hunter2"),
+                "password leaked into Debug: {rendered}"
+            );
+            assert!(
+                rendered.contains("<redacted>"),
+                "the password field must still be shown as redacted: {rendered}"
+            );
+        }
+    }
+
+    /// The passwordless variants carry operational detail an operator reads
+    /// out of a log, so redaction must not have swallowed them too.
+    #[test]
+    fn debug_keeps_the_passwordless_variants_legible() {
+        let gssapi = format!(
+            "{:?}",
+            InterBrokerCredentials::Gssapi {
+                keytab_path: "/etc/krabka/broker.keytab".into(),
+                client_principal: "krabka/broker-0@EXAMPLE.COM".into(),
+                service_name: "kafka".into(),
+                kdc_url: "tcp://kdc:88".into(),
+            }
+        );
+        assert!(gssapi.contains("broker.keytab"), "{gssapi}");
+        assert!(gssapi.contains("krabka/broker-0@EXAMPLE.COM"), "{gssapi}");
+        assert!(gssapi.contains("kafka"), "{gssapi}");
+        assert!(gssapi.contains("tcp://kdc:88"), "{gssapi}");
+
+        let oauth = format!(
+            "{:?}",
+            InterBrokerCredentials::OAuthBearer {
+                token_path: "/var/run/krabka/token".into(),
+            }
+        );
+        assert!(oauth.contains("/var/run/krabka/token"), "{oauth}");
+    }
+
+    /// The mechanism the outbound client negotiates with, and what
+    /// `validate_outbound_sasl` checks the listener's enabled list against: a
+    /// wrong arm here silently authenticates as the wrong mechanism.
+    #[test]
+    fn mechanism_reports_the_credential_variants_sasl_mechanism() {
+        let cases = [
+            (
+                InterBrokerCredentials::Plain {
+                    username: "u".into(),
+                    password: "p".into(),
+                },
+                SaslMechanism::Plain,
+            ),
+            (
+                InterBrokerCredentials::Scram {
+                    mechanism: SaslMechanism::ScramSha256,
+                    username: "u".into(),
+                    password: "p".into(),
+                },
+                SaslMechanism::ScramSha256,
+            ),
+            (
+                InterBrokerCredentials::Scram {
+                    mechanism: SaslMechanism::ScramSha512,
+                    username: "u".into(),
+                    password: "p".into(),
+                },
+                SaslMechanism::ScramSha512,
+            ),
+            (
+                InterBrokerCredentials::Gssapi {
+                    keytab_path: "/k".into(),
+                    client_principal: "c".into(),
+                    service_name: "kafka".into(),
+                    kdc_url: "tcp://kdc:88".into(),
+                },
+                SaslMechanism::Gssapi,
+            ),
+            (
+                InterBrokerCredentials::OAuthBearer {
+                    token_path: "/t".into(),
+                },
+                SaslMechanism::OAuthBearer,
+            ),
+        ];
+        for (credentials, expected) in cases {
+            assert!(credentials.mechanism() == expected, "{credentials:?}");
+        }
+    }
+
+    /// With no `listeners` configured the broker still has to bind and
+    /// advertise something; the synthesised entry is what clients get back in
+    /// `Metadata`, so it must carry the legacy fields verbatim.
+    #[test]
+    fn an_empty_listener_list_synthesises_one_from_the_legacy_fields() {
+        let c = BrokerConfig {
+            listeners: vec![],
+            listen_addr: "127.0.0.1:19092".parse().unwrap(),
+            advertised_listener: "broker-0:19092".to_string(),
+            ..BrokerConfig::default()
+        };
+
+        let listeners = c.effective_listeners();
+
+        assert!(listeners.len() == 1);
+        assert!(listeners[0].name == "PLAINTEXT");
+        assert!(listeners[0].bind_addr == c.listen_addr);
+        assert!(listeners[0].advertised == "broker-0:19092");
+        assert!(listeners[0].protocol == ListenerProtocol::Plaintext);
+        assert!(listeners[0].tls_config.is_none());
+        assert!(listeners[0].sasl_mechanisms.is_none());
+    }
+
+    /// A configured list must be returned as-is rather than replaced by the
+    /// legacy single-listener fallback.
+    #[test]
+    fn a_configured_listener_list_is_returned_unchanged() {
+        let c = base();
+
+        let listeners = c.effective_listeners();
+
+        let names: Vec<&str> = listeners.iter().map(|l| l.name.as_str()).collect();
+        let configured: Vec<&str> = c.listeners.iter().map(|l| l.name.as_str()).collect();
+        assert!(names == configured);
+        assert!(listeners.len() > 1);
+    }
+
     #[test]
     fn rejects_gssapi_mechanism_without_gssapi_config() {
         let c = BrokerConfig {
@@ -536,6 +684,96 @@ mod connections_max_idle_tests {
         assert!(
             config(secs(600), &[("EXTERNAL", millis(0))])
                 .connections_max_idle_for("EXTERNAL")
+                .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod connections_max_reauth_tests {
+    use assert2::assert;
+    use krabka_units::{Time, convert::TimeExt as _, millis, secs};
+
+    use crate::config::BrokerConfig;
+
+    /// A broker-wide KIP-368 window with the named per-listener overrides.
+    fn config(broker_wide: Option<Time>, overrides: &[(&str, Time)]) -> BrokerConfig {
+        BrokerConfig {
+            connections_max_reauth: broker_wide,
+            connections_max_reauth_overrides: overrides
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), *value))
+                .collect(),
+            ..BrokerConfig::default()
+        }
+    }
+
+    /// Kafka's `connections.max.reauth.ms` defaults to 0, which means sessions
+    /// never expire. A default that started expiring sessions would disconnect
+    /// every SASL client on a timer nobody asked for.
+    #[test]
+    fn nothing_configured_expires_no_session() {
+        assert!(
+            BrokerConfig::default()
+                .connections_max_reauth_for("SASL_SSL")
+                .is_none()
+        );
+    }
+
+    /// The whole point of the override: one listener re-authenticates on a
+    /// different cadence from the rest, and a listener with no override still
+    /// gets the broker-wide window.
+    #[test]
+    fn a_listener_override_wins_over_the_broker_wide_window() {
+        let config = config(Some(secs(3600)), &[("EXTERNAL", secs(60))]);
+
+        assert!(config.connections_max_reauth_for("EXTERNAL") == Some(secs(60)));
+        assert!(config.connections_max_reauth_for("INTERNAL") == Some(secs(3600)));
+    }
+
+    /// An override with no broker-wide window configured still applies: the
+    /// `or(connections_max_reauth)` fallback must not swallow the match.
+    #[test]
+    fn a_listener_override_applies_without_a_broker_wide_window() {
+        let config = config(None, &[("EXTERNAL", secs(60))]);
+
+        assert!(config.connections_max_reauth_for("EXTERNAL") == Some(secs(60)));
+        assert!(config.connections_max_reauth_for("INTERNAL").is_none());
+    }
+
+    /// Kafka spells the property `listener.name.<lowercased>.connections.max.
+    /// reauth.ms` while the listener itself is conventionally uppercase, so an
+    /// override written the Kafka way still has to find its listener.
+    #[test]
+    fn an_override_matches_its_listener_without_ascii_case() {
+        let config = config(Some(secs(3600)), &[("sasl_ssl", secs(60))]);
+
+        assert!(config.connections_max_reauth_for("SASL_SSL") == Some(secs(60)));
+    }
+
+    /// A non-positive window means "expire nothing", broker-wide and
+    /// per-listener alike -- and a zero override must not silently fall back
+    /// to the broker-wide window it was written to disable.
+    #[test]
+    fn a_non_positive_window_expires_nothing() {
+        assert!(
+            config(Some(millis(0)), &[])
+                .connections_max_reauth_for("SASL_SSL")
+                .is_none()
+        );
+        assert!(
+            config(Some(Time::from_millis(-1)), &[])
+                .connections_max_reauth_for("SASL_SSL")
+                .is_none()
+        );
+        assert!(
+            config(Some(secs(3600)), &[("SASL_SSL", millis(0))])
+                .connections_max_reauth_for("SASL_SSL")
+                .is_none()
+        );
+        assert!(
+            config(Some(secs(3600)), &[("SASL_SSL", Time::from_millis(-1))])
+                .connections_max_reauth_for("SASL_SSL")
                 .is_none()
         );
     }
