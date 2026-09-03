@@ -1,5 +1,5 @@
 name: reclaim runner disk
-description: Delete the preinstalled toolchains and images a hermetic Bazel build never reads.
+description: Delete the preinstalled toolchains a hermetic Bazel build never reads.
 
 runs:
   using: composite
@@ -15,13 +15,52 @@ runs:
     # `/opt/hostedtoolcache` in full, rather than the CodeQL directory alone:
     # its Python, Node, Go, Ruby and PyPy trees are about 9 GB between them and
     # no step in these jobs resolves a tool through it.
+    #
+    # No `docker system prune`. Three jobs use this action, and not one of them
+    # needs a Docker daemon:
+    #
+    #   * `ci` builds with `--build_tag_filters=-docker`, so every
+    #     daemon-driven target is filtered out of `//...` before it is built,
+    #     and //tools/creusot's image graph is `manual` on top of that. Its
+    #     `bazel test //packaging/...` reaches exactly one test,
+    #     `//packaging:image_binaries_test`, which asserts against the built
+    #     layer and manifest files and is daemon-free by design;
+    #     `//packaging:image_docker_test` is tagged `docker` and excluded by
+    #     `.bazelrc`'s `test --test_tag_filters=-docker`.
+    #   * `coverage` runs `bazel coverage //crates/...` under
+    #     `coverage --test_tag_filters=-docker,-timing-sensitive`.
+    #   * `docs-pages`'s `build` job only renders rustdoc and assembles a site
+    #     directory from it.
+    #
+    # The jobs that do drive Docker -- `docker`, `gssapi`, `proofs`,
+    # `delivery` -- never call this action. So the prune reclaimed nothing that
+    # was in anyone's way: it walked a runner image set these jobs do not pull
+    # from and do not add to, and cost about four minutes of the `ci` job and
+    # about two of `coverage` to do it. Deleting it is also what makes this
+    # action independent of Docker being installed at all.
+    #
+    # The deletions run concurrently rather than as one `rm -rf` argument list.
+    # `/usr/share/dotnet` and `/opt/hostedtoolcache` dominate the total, and a
+    # single `rm` walks the paths in order, so the two big trees were serialised
+    # behind and ahead of a dozen small ones. One background `rm` per path lets
+    # the unlinks interleave, and `wait` is the join.
+    #
+    # This is deliberately best-effort: a backgrounded failure does not trip
+    # `-e`, and `wait` with no arguments returns zero however its children
+    # exited, so no statuses are collected. That is the behavior we want. The
+    # step reclaims space; a path that cannot be removed is not a build error,
+    # and the only failure mode that matters -- not enough space -- is reported
+    # by the `df -h /` below, which is the instrument the disk-pressure work in
+    # this repository reads. A path that is simply absent was never an error to
+    # begin with: `rm -rf` exits 0 on one, which is also why the unmatched
+    # `/usr/share/az_*` glob is harmless.
     - shell: bash
       run: |
         set -euo pipefail
         echo "::group::free space before"
         df -h /
         echo "::endgroup::"
-        sudo rm -rf \
+        for path in \
           /opt/az \
           /opt/ghc \
           /opt/hostedtoolcache \
@@ -34,8 +73,10 @@ runs:
           /usr/share/az_* \
           /usr/share/dotnet \
           /usr/share/miniconda \
-          /usr/share/swift
-        sudo docker system prune --all --force --volumes
+          /usr/share/swift; do
+          sudo rm -rf "${path}" &
+        done
+        wait
         echo "::group::free space after"
         df -h /
         echo "::endgroup::"
