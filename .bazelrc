@@ -105,6 +105,29 @@ test:docker --test_tag_filters=docker
 # `--config=rbe` to resolve, and this is the least it can be.
 build:rbe --remote_timeout=600
 
+# `codspeed` builds a C shim through `cc` in its build script and bundles the
+# resulting archive into the rlib. Those objects carry the build script's own
+# working directory in their debug info, and rules_rs's process wrapper then
+# scans every rustc output for the *compile* action's working directory and
+# fails the build when it finds it.
+#
+# Locally the two never match: Bazel gives each sandboxed action its own
+# `.../sandbox/linux-sandbox/<n>/execroot/_main`, so the path the build script
+# baked in is not the path the compile is checked against, and the scan passes.
+# A BuildBuddy executor runs every action in the same fixed `/buildbuddy-execroot`,
+# the two paths become one string, and the scan fires:
+#
+#     compiled Rust output ...libcodspeed-*.rlib embeds the absolute working
+#     directory /buildbuddy-execroot
+#
+# The non-hermeticity is the crate's, and local sandboxing is what hides it.
+# Until it is fixed upstream, keep both of its actions -- the build script and
+# the compile -- on the runner, where they behave as they do on every build
+# that is not remote. They still read and write the remote cache; only the
+# execution is pinned. Everything else in the graph still runs remotely, which
+# is where the time goes.
+build:rbe --strategy_regexp=crates__codspeed=sandboxed
+
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.
 build --@rules_rs_mutants//mutants:cargo_mutants_binary=@mutants//:cargo-mutants__cargo-mutants
