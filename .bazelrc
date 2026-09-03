@@ -154,13 +154,26 @@ build:rbe --remote_timeout=600
 # `util/process_wrapper/main.rs` runs the scan) and rejects it. On a BuildBuddy
 # executor that directory is `/buildbuddy-execroot`.
 #
-# `bazel coverage` is what surfaces it. `--collect_code_coverage` and
-# `--instrumentation_filter` discard the analysis cache and rekey the graph, so
-# these actions genuinely execute instead of being served from the cache: the
-# reproducing invocation logged `806 remote`, while `bazel build --config=rbe`
-# over the same closure in the same run logged `1287 remote` and passed.
+# What decides it is which actions genuinely execute, not which command runs
+# them, and an earlier version of this comment had that wrong. Two runs on #451
+# settle it. With the pin lifted, `bazel build --config=rbe` executed 83 actions
+# remotely -- every rustc among them, `//crates/broker:broker_test` at 104s --
+# and passed, because `codspeed` and `ring` were not among the 83. Then
+# `bazel coverage --config=rbe --noremote_accept_cached` executed 2413 with no
+# cache hits at all, reached `codspeed`, and failed:
 #
-# That timing is what makes it a bad gate rather than an occasional failure. On
+#     INFO: 4090 processes: 1677 internal, 2413 remote.
+#     Error: ProcessWrapperError("compiled Rust output ...libcodspeed-*.rlib
+#     embeds the absolute working directory /buildbuddy-execroot")
+#
+# `bazel coverage` is the reliable way to reach those crates rather than the
+# cause: `--collect_code_coverage` and `--instrumentation_filter` rekey the
+# graph, so third-party crates execute instead of being served. A `bazel build`
+# that reached them would fail identically. So a green `build` on RBE is luck
+# about which actions the cache happened to cover, which is worth knowing before
+# anyone reads one as evidence that this is fixed.
+#
+# That is also what makes it a bad gate rather than an occasional failure. On
 # a warm cache almost nothing executes, so RBE is green exactly when it
 # contributes nothing, and executes -- and can fail -- on the cold-cache runs
 # it exists for: a `Cargo.lock` bump, a `.bazelrc` change, a broker refactor.
