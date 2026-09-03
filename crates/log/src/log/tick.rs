@@ -110,6 +110,14 @@ impl Log {
         for base in to_evict {
             let _ = retention::delete_segment_files(&self.dir, base);
         }
+        // Ordinary retention deletes the records outright: nothing holds them
+        // any more, so the global floor follows the files off disk (Kafka's
+        // `deleteSegments` → `maybeIncrementLogStartOffset`). This is the
+        // opposite of the tiered eviction in `delete_local_segments_through`,
+        // which leaves the floor behind because the remote tier still answers
+        // for those offsets. The early return above keeps a tiered topic out
+        // of this path entirely.
+        self.set_log_start_offset(self.first_local_offset())?;
         Ok(())
     }
 }

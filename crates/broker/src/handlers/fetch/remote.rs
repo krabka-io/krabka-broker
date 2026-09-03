@@ -51,16 +51,26 @@ pub(super) async fn try_remote_read(
     part: &Partition,
 ) -> Option<usize> {
     let reader = broker.remote_reader.clone()?;
-    let (remote_storage_enable, delivery_policy, delivery_uncertainty_ms) = {
+    let (remote_storage_enable, delivery_policy, delivery_uncertainty_ms, log_start) = {
         let log = part.log.lock().expect("log mutex poisoned");
         let config = log.config_snapshot();
         (
             config.remote_storage_enable,
             config.delivery_policy,
             config.delivery_clock_uncertainty.millis_i64_trunc(),
+            log.log_start_offset(),
         )
     };
     if !remote_storage_enable {
+        return None;
+    }
+    // KIP-405: the remote tier serves `[log_start, local_log_start)` and
+    // nothing below. An offset under the global floor was deleted by
+    // `DeleteRecords` or by remote retention, so it stays
+    // `OFFSET_OUT_OF_RANGE` even while the RLMM still lists the segment that
+    // held it. Kafka's `ReplicaManager.handleOffsetOutOfRangeError` builds a
+    // `DelayedRemoteFetch` under the same condition.
+    if p.fetch_offset < log_start.0 {
         return None;
     }
     if p.topic_id == WireUuid::ZERO {
@@ -216,9 +226,161 @@ pub(super) async fn try_remote_read(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_log::{DeliveryPolicy, Log, LogConfig};
     use krabka_units::prelude::millis;
+
+    /// KIP-405 splits the floors, and only the global one bounds the remote
+    /// tier: an offset a `DeleteRecords` deleted is gone from every tier, so
+    /// the fetch stays `OFFSET_OUT_OF_RANGE` even while the RLMM still lists
+    /// the segment that held it. Kafka's
+    /// `ReplicaManager.handleOffsetOutOfRangeError` builds its
+    /// `DelayedRemoteFetch` under the same `logStartOffset <= fetchOffset`
+    /// condition.
+    ///
+    /// The two cases run against one tiered partition in one order, so the
+    /// second is measured against a tier that has just been shown to answer.
+    /// `try_remote_read` reaching `fetch_batch` in the second case would
+    /// therefore have served the same batch it served in the first; an
+    /// untouched `p.out` is what says it never got there.
+    #[tokio::test]
+    async fn a_fetch_below_the_global_log_start_never_reaches_the_remote_tier() {
+        use std::sync::Arc;
+
+        use krabka_ids::{LeaderEpoch, PartitionIndex};
+        use krabka_log::Offset;
+        use krabka_protocol::primitives::uuid::Uuid as WireUuid;
+
+        use crate::{
+            broker::Broker,
+            codes,
+            remote_log_manager::{ArchiveMode, copy_eligible},
+        };
+
+        const TOPIC: &str = "tiered-delete-records";
+
+        /// A batch wide enough that a 256-byte segment rolls every few
+        /// appends, so the log seals segments the copy pass can tier.
+        fn tiered_batch() -> krabka_protocol::records::RecordBatch {
+            let mut batch = krabka_protocol::records::RecordBatch {
+                last_offset_delta: 1,
+                ..Default::default()
+            };
+            for offset_delta in 0..2 {
+                batch.records.push(krabka_protocol::records::Record {
+                    offset_delta,
+                    value: Some(bytes::Bytes::from(vec![b'x'; 64])),
+                    ..Default::default()
+                });
+            }
+            batch
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let remote_dir = tempfile::tempdir().expect("remote tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: remote_dir.path().to_path_buf(),
+        });
+        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+
+        // A tiered partition with several sealed segments, none of them local
+        // any more: exactly the shape the remote read path exists for.
+        let part_dir = dir.path().join(format!("{TOPIC}-0"));
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let mut log = Log::open(
+            &part_dir,
+            LogConfig {
+                segment_size: krabka_units::bytes(256),
+                remote_storage_enable: true,
+                ..LogConfig::default()
+            },
+        )
+        .expect("open partition log");
+        for _ in 0..12 {
+            let mut batch = tiered_batch();
+            log.append(&mut batch).expect("append");
+        }
+        let exports = log.tierable_segments();
+        assert!(exports.len() >= 2, "the test needs sealed segments to tier");
+        let tiered_through = exports.last().expect("sealed segments").last_offset + 1;
+
+        let topic_id = uuid::Uuid::from_u128(0x7157);
+        let tp = krabka_remote_storage::TopicIdPartition::new(topic_id, TOPIC, 0);
+        let reader = broker.remote_reader.clone().expect("remote reader");
+        let copied = copy_eligible(
+            &tp,
+            1,
+            LeaderEpoch(0),
+            exports,
+            ArchiveMode::Mutable,
+            &reader.rsm,
+            &reader.rlmm,
+        )
+        .await;
+        assert!(copied > 0, "the copy pass should have tiered every segment");
+
+        log.delete_local_segments_through(tiered_through)
+            .expect("evict the copied segments");
+        let part = crate::broker::spawn_partition(
+            TOPIC.to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            log,
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+
+        let out_of_range = || super::PendingRead {
+            topic_name: TOPIC.into(),
+            topic_id: WireUuid(topic_id.into_bytes()),
+            partition_index: 0,
+            current_leader_epoch: 0,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            max_bytes: 1_048_576,
+            read_committed: false,
+            is_follower_fetch: false,
+            partition: Some(Arc::clone(&part)),
+            out: krabka_protocol::owned::fetch_response::PartitionData {
+                error_code: codes::OFFSET_OUT_OF_RANGE,
+                ..Default::default()
+            },
+            cpu_micros: 0,
+        };
+
+        // The floor has not moved, so offset 0 is the remote tier's to serve.
+        let mut served = out_of_range();
+        let bytes_served = super::try_remote_read(&broker, &mut served, &part).await;
+        check!(bytes_served.is_some_and(|n| n > 0), "the tier answers");
+        check!(served.out.error_code == codes::NONE);
+
+        // `DeleteRecords` to offset 5. The remote segment that holds offset 0
+        // is still listed in the RLMM and still in the archive, and it must
+        // stop being reachable all the same.
+        part.log
+            .lock()
+            .expect("log mutex poisoned")
+            .set_log_start_offset(Offset(5))
+            .expect("move the log start");
+
+        let mut refused = out_of_range();
+        let bytes_served = super::try_remote_read(&broker, &mut refused, &part).await;
+        check!(bytes_served == None, "no tier answers below the floor");
+        check!(refused.out.error_code == codes::OFFSET_OUT_OF_RANGE);
+        check!(refused.out.records.is_none());
+
+        // The floor itself still reads: the band above it is the tier's.
+        let mut at_floor = out_of_range();
+        at_floor.fetch_offset = 5;
+        let bytes_served = super::try_remote_read(&broker, &mut at_floor, &part).await;
+        check!(bytes_served.is_some_and(|n| n > 0), "the floor is readable");
+
+        broker_handle.shutdown().await;
+    }
 
     #[test]
     fn a_remote_batch_is_held_back_until_its_activation_time_plus_the_bound() {

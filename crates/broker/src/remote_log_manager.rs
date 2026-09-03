@@ -48,8 +48,11 @@ mod rlmm;
 mod test_support;
 
 pub(crate) use self::{
-    archive::ArchiveMode, copy::copy_eligible, delete::cascade_remote_partition_delete,
-    local_retention::local_retention_pass, remote_retention::remote_retention_pass,
+    archive::ArchiveMode,
+    copy::copy_eligible,
+    delete::cascade_remote_partition_delete,
+    local_retention::local_retention_pass,
+    remote_retention::{RemoteRetentionBounds, remote_retention_pass},
 };
 
 /// Default cadence of the tiered-storage sweep (copy and retention passes).
@@ -129,18 +132,19 @@ async fn tick_all(
         if partition.current_leader.load(Ordering::Relaxed) != node_id {
             continue;
         }
-        // Read config + sealed-segment list under the log lock, then drop it.
-        let (log_config, exports) = {
+        // Read config, the global log start and the sealed-segment list under
+        // one hold of the log lock, then drop it. The floor rides along with
+        // the config because remote retention measures a segment against it,
+        // and a value read under a second lock could describe a different
+        // `DeleteRecords` than the segment list does.
+        let (log_config, log_start_offset, exports) = {
             let log = partition.log.lock().expect("log mutex poisoned");
             let cfg = log.config_snapshot();
             if !cfg.remote_storage_enable {
                 continue;
             }
-            (cfg, log.tierable_segments())
+            (cfg, log.log_start_offset(), log.tierable_segments())
         };
-        if exports.is_empty() {
-            continue;
-        }
         let Some(topic_id) = image.topic(&partition.topic).map(|t| t.topic_id) else {
             // Topic vanished from the metadata image between snapshots; skip.
             continue;
@@ -149,16 +153,23 @@ async fn tick_all(
         let leader_epoch =
             krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
         let tp = TopicIdPartition::new(topic_id, partition.topic.clone(), partition.index.get());
-        copy_eligible(
-            &tp,
-            broker_id,
-            leader_epoch,
-            exports.clone(),
-            archive,
-            rsm,
-            rlmm,
-        )
-        .await;
+        // Only the copy pass has nothing to do without sealed local segments.
+        // The retention passes below still do: a partition whose whole local
+        // log has already been evicted is exactly the one whose remote
+        // segments age out, or fall below a `DeleteRecords` floor, with no
+        // local segment left to notice it.
+        if !exports.is_empty() {
+            copy_eligible(
+                &tp,
+                broker_id,
+                leader_epoch,
+                exports.clone(),
+                archive,
+                rsm,
+                rlmm,
+            )
+            .await;
+        }
         // KFC-9: the copy above stays allowed on a frozen topic, and both
         // retention passes below stop. A freeze refuses every operation that
         // removes data from the topic's log, and a copy removes none: it adds
@@ -188,7 +199,31 @@ async fn tick_all(
         // local segment that the archive already holds is the whole point of
         // tiering, and it deletes nothing from the remote tier.
         local_retention_pass(&tp, &partition, &exports, &log_config, rlmm, now_ms());
-        remote_retention_pass(&tp, broker_id, &log_config, archive, rsm, rlmm, now_ms()).await;
+        let outcome = remote_retention_pass(
+            &tp,
+            broker_id,
+            RemoteRetentionBounds {
+                log_config: &log_config,
+                archive,
+                log_start_offset,
+                now_ms: now_ms(),
+            },
+            rsm,
+            rlmm,
+        )
+        .await;
+        // The records the pass deleted are now in no tier at all, so the
+        // partition's global floor follows them (Kafka's
+        // `handleLogStartOffsetUpdate`). `set_log_start_offset` only moves
+        // forward, so a `DeleteRecords` that landed while the pass ran keeps
+        // the higher of the two floors.
+        if let Some(new_start) = outcome.log_start {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            if let Err(error) = log.set_log_start_offset(new_start) {
+                debug!(topic = %partition.topic, partition = tp.partition, %error,
+                       "remote-log-manager: could not advance the log start after a remote delete");
+            }
+        }
     }
 }
 

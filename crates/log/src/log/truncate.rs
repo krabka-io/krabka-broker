@@ -221,16 +221,11 @@ impl Log {
             let _ = retention::delete_segment_files(&self.dir, *base);
         }
 
-        // If target falls inside the active segment (or between the first
-        // remaining sealed segment's base and `target`), advance the
-        // start override.
-        let new_log_start = self
-            .segments
-            .first()
-            .map_or(active_base, Segment::base_offset);
-        if target > new_log_start {
-            self.set_log_start_offset(target)?;
-        }
+        // Every dropped segment ended below `target`, so the first offset
+        // still in the log is `target` itself: either it falls inside the
+        // first surviving sealed segment or inside the active one. The early
+        // return above already established `target > log_start`.
+        self.set_log_start_offset(target)?;
         let result = self.log_start_offset();
         tracing::Span::current().record("new_log_start", result.0);
         Ok(result)

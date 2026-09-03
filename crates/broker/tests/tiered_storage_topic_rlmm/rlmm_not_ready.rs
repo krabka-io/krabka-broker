@@ -17,7 +17,7 @@ use tempfile::TempDir;
 
 use crate::{
     rlmm_cluster::{await_tiered_config, build_client},
-    rlmm_round_trip::count_remote_log_files,
+    rlmm_round_trip::remote_log_files,
     run_broker_test, support,
 };
 
@@ -145,7 +145,7 @@ async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
 
     // The RLMM is still NotReady, so add_remote_log_segment_metadata returns
     // NotReady and the copy task must have skipped every segment.
-    let tiered = count_remote_log_files(remote_dir.path());
+    let tiered = remote_log_files(remote_dir.path()).len();
     assert!(
         tiered == 0,
         "expected no tiered objects while RLMM not ready, found {tiered}"

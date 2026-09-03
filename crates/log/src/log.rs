@@ -65,15 +65,18 @@ pub struct Log {
     segments: Vec<Segment>,
     active: Option<Segment>,
     dir_sync_needed: bool,
-    /// Override for `log_start_offset()`. When `Some(n)`, the effective
-    /// `log_start` is `max(derived_from_segments, n)`. `trim_to_offset` uses
-    /// this in the active-segment case to advance the log start pointer
-    /// without deletion of on-disk segments. Integration tests also use it to
-    /// simulate retention-driven truncation. KIP-405's
-    /// `local_log_start_offset` co-advances with this pointer, so
-    /// [`Log::local_log_start_offset`] delegates here. There is a single
-    /// source of truth.
-    start_offset_override: Option<Offset>,
+    /// The global log start (Kafka's `logStartOffset`): the first offset any
+    /// reader may ask for, wherever the records for it live.
+    ///
+    /// It is a pointer of its own rather than a value derived from the
+    /// segments on disk, because KIP-405 gives a tiered partition two floors
+    /// and only one of them follows local files. `DeleteRecords`, ordinary
+    /// retention, a trim and a reset move this one; dropping a local segment
+    /// whose copy is in the remote tier does not, and that is what leaves the
+    /// band `[log_start_offset(), local_log_start_offset())` for the remote
+    /// read path to serve. [`Log::local_log_start_offset`] is the second
+    /// floor.
+    log_start: Offset,
 
     /// Last-Stable-Offset: the offset before the first record of any
     /// in-flight transaction. Defaults to `log_end_offset()` when no

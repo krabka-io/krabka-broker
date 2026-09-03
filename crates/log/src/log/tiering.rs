@@ -75,18 +75,29 @@ fn epochs_for_range(
 }
 
 impl Log {
-    /// First absolute offset still present on this broker's local disk
-    /// (KIP-405).
+    /// First absolute offset still readable from this broker's local disk
+    /// (KIP-405): Kafka's `localLogStartOffset`.
     ///
-    /// This method delegates to [`Log::log_start_offset`]. The two pointers
-    /// co-advance.
+    /// It is the base offset of the oldest segment on disk, raised to the
+    /// global [`Log::log_start_offset`] when a `DeleteRecords` floor sits
+    /// above the files that are still there. Dropping a local segment whose
+    /// copy is in the remote tier moves this pointer and leaves the global one
+    /// where it was, so the offsets in `[log_start_offset(),
+    /// local_log_start_offset())` are exactly the ones the remote tier serves.
     #[must_use]
     pub fn local_log_start_offset(&self) -> Offset {
-        self.log_start_offset()
+        self.first_local_offset().max(self.log_start_offset())
     }
 
-    /// Delete every sealed segment whose `last_offset < target` from disk,
-    /// then advance `log_start_offset` to `target` (KIP-405).
+    /// Delete every sealed segment whose `last_offset < target` from disk
+    /// (KIP-405).
+    ///
+    /// Only [`Log::local_log_start_offset`] moves. The global
+    /// [`Log::log_start_offset`] stays where it was, because the records are
+    /// still in the remote tier and a fetch for them must reach it rather than
+    /// answer `OFFSET_OUT_OF_RANGE`. Kafka splits the two floors the same way:
+    /// `local.retention.*` moves `localLogStartOffset` and leaves
+    /// `logStartOffset` to `DeleteRecords` and to remote-segment deletion.
     ///
     /// This method never touches the active segment. It returns the number of
     /// segments removed. It does nothing and returns `Ok(0)` when
@@ -153,10 +164,6 @@ impl Log {
         for base in &to_drop {
             let _ = retention::delete_segment_files(&self.dir, *base);
         }
-
-        // Advance the (single) log-start pointer. `local_log_start_offset`
-        // delegates here, so the local floor moves in lockstep.
-        self.start_offset_override = Some(target);
 
         Ok(removed)
     }

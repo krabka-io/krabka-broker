@@ -145,6 +145,13 @@ impl Log {
         span.record("segments", segments.len() + 1);
         span.record("log_end", lso.0);
 
+        // Nothing durable carries the global floor across a restart yet, so a
+        // reopened log starts it at the oldest offset on disk: the same value
+        // the old derived-from-segments accessor answered.
+        let log_start = segments
+            .first()
+            .map_or_else(|| active.base_offset(), Segment::base_offset);
+
         let mut log = Self {
             dir,
             config,
@@ -152,7 +159,7 @@ impl Log {
             segments,
             active: Some(active),
             dir_sync_needed,
-            start_offset_override: None,
+            log_start,
             lso,
             pending: HashMap::new(),
             pending_stamp_ranges: HashMap::new(),

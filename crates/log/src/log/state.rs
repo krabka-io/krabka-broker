@@ -32,28 +32,39 @@ impl Log {
         &self.dir
     }
 
-    /// First absolute offset still in the log.
+    /// First absolute offset any reader may ask for, wherever the records for
+    /// it live: Kafka's global `logStartOffset`.
+    ///
+    /// On a tiered topic (KIP-405) this can sit below
+    /// [`Log::local_log_start_offset`], and the offsets between the two are
+    /// the ones the remote tier serves. A fetch below *this* floor is
+    /// `OFFSET_OUT_OF_RANGE` and no tier answers it.
     #[must_use]
     pub fn log_start_offset(&self) -> Offset {
-        let derived = if let Some(first) = self.segments.first() {
+        self.log_start
+    }
+
+    /// The first offset the segments on disk begin at, before the global
+    /// floor is applied.
+    pub(super) fn first_local_offset(&self) -> Offset {
+        if let Some(first) = self.segments.first() {
             first.base_offset()
         } else if let Some(active) = &self.active {
             active.base_offset()
         } else {
             Offset(0)
-        };
-        if let Some(o) = self.start_offset_override {
-            return derived.max(o);
         }
-        derived
     }
 
-    /// Advance `log_start_offset` to `new_start`.
+    /// Move the global log start up to `new_start`.
     ///
-    /// `new_start` must be in `[current log_start, log_end]`.
-    /// `trim_to_offset` uses this method for the active-segment case, and the
-    /// broker's `DeleteRecords` handler uses it too. This method does NOT
-    /// truncate on-disk segments. It only moves the in-memory start pointer.
+    /// The pointer only ever moves forward, the way Kafka's
+    /// `maybeIncrementLogStartOffset` does: a request that names an offset at
+    /// or below the current floor is a no-op. `trim_to_offset` uses this
+    /// method for the active-segment case, the broker's `DeleteRecords`
+    /// handler uses it, and the `RemoteLogManager` uses it after a remote
+    /// segment is deleted. This method does NOT truncate on-disk segments. It
+    /// only moves the in-memory start pointer.
     ///
     /// `new_start` must be non-negative.
     ///
@@ -66,7 +77,7 @@ impl Log {
                 "set_log_start_offset: new_start must be >= 0".into(),
             ));
         }
-        self.start_offset_override = Some(new_start);
+        self.log_start = self.log_start.max(new_start);
         Ok(())
     }
 
@@ -114,8 +125,9 @@ impl Log {
             let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
         }
 
-        // Clear the start override so the derived value takes over.
-        self.start_offset_override = None;
+        // A hard reset re-bases the log, so the global floor follows it down
+        // as well as up: no record below `new_base` exists in any tier.
+        self.log_start = new_base;
 
         let mut new_active = Segment::create(&self.dir, new_base)?;
         new_active.set_io(self.io.clone());

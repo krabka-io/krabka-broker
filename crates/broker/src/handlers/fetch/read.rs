@@ -427,6 +427,13 @@ fn plan_read(
 ) -> (Offset, VisibilityWindow, ReadPlan) {
     let mut log = partition.log.lock().expect("log mutex poisoned");
     let log_start = log.log_start_offset();
+    // KIP-405 keeps two floors, and this one is the floor of the *local* read:
+    // on a tiered partition the offsets in `[log_start, local_log_start)` are
+    // in the remote tier, so the window has to call them out of range for the
+    // fetch to fall through to `try_remote_read`. The two are equal on every
+    // other topic. The response still reports the global `log_start` below,
+    // which is the value Kafka puts in `logStartOffset`.
+    let local_log_start = log.local_log_start_offset();
     let log_end = log.log_end_offset();
     let deliverable = deliverable_offset(
         &mut log,
@@ -438,7 +445,7 @@ fn plan_read(
         follower_fetch,
         read_committed,
         FetchWatermarks {
-            log_start,
+            log_start: local_log_start,
             hw: high_watermark,
             lso: log.lso(),
             log_end,

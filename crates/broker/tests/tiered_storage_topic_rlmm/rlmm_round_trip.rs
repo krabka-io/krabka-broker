@@ -125,7 +125,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
     // no broker metric, so poll the remote dir directly (bounded loop).
     let copy_deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if count_remote_log_files(remote_dir) >= 1 {
+        if !remote_log_files(remote_dir).is_empty() {
             break;
         }
         assert!(
@@ -205,26 +205,29 @@ async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
         .unwrap_or_default()
 }
 
-/// Count current `*.log` files and legacy files named `log` under `root`.
-/// Each one is the `LocalTieredStorage` segment-bytes object for a copied
-/// segment.
-pub(crate) fn count_remote_log_files(root: &std::path::Path) -> usize {
-    fn walk(dir: &std::path::Path, count: &mut usize) {
+/// Current `*.log` files and legacy files named `log` under `root`. Each one
+/// is the `LocalTieredStorage` segment-bytes object for a copied segment.
+///
+/// The paths, rather than a count, because a test that watches for a deletion
+/// while the copy task is still adding segments needs to name the objects it
+/// expects to lose.
+pub(crate) fn remote_log_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                walk(&path, count);
+                walk(&path, found);
             } else if path.extension().and_then(|extension| extension.to_str()) == Some("log")
                 || path.file_name().and_then(|name| name.to_str()) == Some("log")
             {
-                *count += 1;
+                found.push(path);
             }
         }
     }
-    let mut count = 0;
-    walk(root, &mut count);
-    count
+    let mut found = Vec::new();
+    walk(root, &mut found);
+    found
 }

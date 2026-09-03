@@ -3,7 +3,7 @@
 //! follows a successful offload.
 
 use assert2::check;
-use krabka_units::prelude::bytes;
+use krabka_units::prelude::{bytes, mebibytes};
 use tempfile::tempdir;
 
 use super::*;
@@ -306,15 +306,68 @@ fn delete_local_segments_through_keeps_active_segment() {
     check!(log.tierable_segments().is_empty());
 }
 
+/// KIP-405 gives a tiered partition two floors, and a local eviction moves
+/// only one of them: the records are still in the remote tier, so the global
+/// `log_start_offset` a fetch is measured against must stay where it was.
+/// When the two moved together, an offset whose copy the archive still held
+/// answered `OFFSET_OUT_OF_RANGE` from the local floor and `ListOffsets`
+/// reported an earliest offset that skipped everything tiered.
 #[test]
-fn delete_local_segments_through_advances_local_start_pointer() {
+fn delete_local_segments_through_moves_only_the_local_start_pointer() {
+    let dir = tempdir().unwrap();
+    let mut log = rolled_log(dir.path(), &LogConfig::default());
+    let exports = log.tierable_segments();
+    let start_before = log.log_start_offset();
+    let target = exports[1].last_offset + 1;
+
+    log.delete_local_segments_through(target).unwrap();
+
+    assert2::assert!(log.local_log_start_offset() == target);
+    assert2::assert!(log.log_start_offset() == start_before);
+}
+
+/// The band between the two floors is the remote tier's to serve, so a local
+/// read of it fails rather than answering with the first batch a surviving
+/// segment happens to begin with. Below the global floor there is nothing
+/// anywhere, and the error says so.
+#[test]
+fn a_read_between_the_two_floors_is_the_remote_tier_s_to_serve() {
     let dir = tempdir().unwrap();
     let mut log = rolled_log(dir.path(), &LogConfig::default());
     let exports = log.tierable_segments();
     let target = exports[1].last_offset + 1;
     log.delete_local_segments_through(target).unwrap();
-    assert2::assert!(log.local_log_start_offset() == target);
-    assert2::assert!(log.log_start_offset() == target);
+    log.set_log_start_offset(exports[0].base_offset + 1)
+        .unwrap();
+    let global = log.log_start_offset();
+
+    check!(
+        matches!(
+            log.read(global - 1, mebibytes(1)),
+            Err(LogError::OffsetTooLow { .. })
+        ),
+        "below the global floor no tier answers"
+    );
+    for offset in [global, target - 1] {
+        check!(
+            matches!(
+                log.read(offset, mebibytes(1)),
+                Err(LogError::OffsetBelowLocalStart { .. })
+            ),
+            "offset {offset} is tiered"
+        );
+        check!(
+            matches!(
+                log.read_raw(offset, log.log_end_offset(), mebibytes(1)),
+                Err(LogError::OffsetBelowLocalStart { .. })
+            ),
+            "offset {offset} is tiered, raw read"
+        );
+    }
+    check!(
+        log.read(target, mebibytes(1)).is_ok(),
+        "the local floor itself still reads"
+    );
 }
 
 #[test]
