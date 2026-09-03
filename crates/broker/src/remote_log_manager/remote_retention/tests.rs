@@ -679,20 +679,29 @@ fn the_breach_and_the_time_window_take_the_union_of_either() {
 /// `ListOffsets(earliest)` keeps naming an offset no tier can serve.
 #[tokio::test]
 async fn a_breach_eviction_reports_the_floor_the_log_start_must_follow() {
+    let log_dir = tempfile::tempdir().unwrap();
     let remote_dir = tempfile::tempdir().unwrap();
+    let log = rolled_log(log_dir.path());
+    let exports = log.tierable_segments();
+    assert!(exports.len() >= 2, "the test needs a prefix to evict");
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    for (index, md) in [
-        synth_remote_md(10, 0, 9, 9_500, 100),
-        synth_remote_md(11, 10, 19, 9_500, 100),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        rlmm.add_remote_log_segment_metadata(md)
-            .unwrap_or_else(|error| panic!("seed segment {index}: {error}"));
-    }
-    // A topic that keeps its records forever: only the floor can evict.
+    let copied = copy_eligible(
+        &tp(),
+        1,
+        LeaderEpoch(0),
+        exports.clone(),
+        ArchiveMode::Mutable,
+        &rsm,
+        &rlmm,
+    )
+    .await;
+    assert!(copied == exports.len());
+
+    // A `DeleteRecords` floor one past the oldest copied segment, and a topic
+    // that keeps its records forever: the breach is the only axis that can
+    // evict anything here.
+    let floor = exports[0].last_offset + 1;
     let cfg = LogConfig {
         retention: None,
         retention_size: None,
@@ -705,8 +714,8 @@ async fn a_breach_eviction_reports_the_floor_the_log_start_must_follow() {
         RemoteRetentionBounds {
             log_config: &cfg,
             archive: ArchiveMode::Mutable,
-            log_start_offset: Offset(10),
-            now_ms: 10_000,
+            log_start_offset: floor,
+            now_ms: 1,
         },
         &rsm,
         &rlmm,
@@ -714,8 +723,11 @@ async fn a_breach_eviction_reports_the_floor_the_log_start_must_follow() {
     .await;
 
     check!(outcome.deleted == 1);
-    check!(outcome.log_start == Some(Offset(10)));
+    check!(outcome.log_start == Some(floor));
     let left = rlmm.list_remote_log_segments(&tp()).unwrap();
-    check!(left.len() == 1);
-    check!(left[0].start_offset() == 10);
+    check!(left.len() == exports.len() - 1);
+    check!(
+        left.iter().all(|md| md.end_offset() >= floor.0),
+        "only the breached prefix goes"
+    );
 }

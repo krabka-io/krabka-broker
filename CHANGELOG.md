@@ -20,6 +20,17 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
+- `DeleteRecords` on a tiered topic (KIP-405) now takes the deleted prefix out
+  of the remote tier as well as out of the local log. A partition keeps two
+  floors the way Kafka does: `logStartOffset`, which `DeleteRecords`, retention
+  and remote-segment deletion move, and `localLogStartOffset`, which follows
+  the segments on disk. A fetch below the global floor answers
+  `OFFSET_OUT_OF_RANGE` instead of being served from the archive, remote
+  retention frees the segments that fell below it whatever `retention.ms` and
+  `retention.bytes` say, and `ListOffsets(earliest)` follows the floor up after
+  those deletes. Dropping a copied segment from local disk no longer moves the
+  global floor, so the offsets the archive still holds stay readable. The floor
+  is still in memory only and a restart forgets it.
 - A broker-only node no longer stalls forever after a restart once the
   controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
   observer metadata fetch now answers a pruned fetch offset with the KIP-630
