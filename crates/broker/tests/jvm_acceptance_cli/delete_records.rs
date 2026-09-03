@@ -4,9 +4,9 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE, broker0_advertised, docker_run_kafka_tool, docker_run_kafka_tool_with_mount,
-    nc_check_connectivity, start_host_broker, start_host_broker_in, wait_jvm_partition_leader,
-    write_temp_file,
+    KAFKA_IMAGE, KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool,
+    docker_run_kafka_tool_with_image, docker_run_kafka_tool_with_mount, nc_check_connectivity,
+    start_host_broker, start_host_broker_in, wait_jvm_partition_leader, write_temp_file,
 };
 
 /// `kafka-delete-records --offset-json-file <(...)`: produce 20
@@ -167,16 +167,26 @@ fn delete_records_to(topic: &str, offset: i64) -> String {
 /// `kafka-get-offsets --time -2` is `ListOffsets` at the earliest timestamp,
 /// which answers with the log start offset. The tool prints one
 /// `topic:partition:offset` row per partition.
+///
+/// This one call needs [`KAFKA_IMAGE_TXN`] rather than the suite's default
+/// [`KAFKA_IMAGE`]: the `kafka-get-offsets` wrapper script arrived in Kafka
+/// 3.0, and `cp-kafka:6.1.1` is Kafka 2.7, where the container exits 127 with
+/// `executable file not found in $PATH`. `jvm_barrier_markers.rs` reads
+/// offsets off the newer image for the same reason. Only the tool container
+/// changes; the broker under test is still the one this case booted.
 fn jvm_earliest_offset(topic: &str) -> i64 {
-    let out = docker_run_kafka_tool(&[
-        "kafka-get-offsets",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic-partitions",
-        &format!("{topic}:0"),
-        "--time",
-        "-2",
-    ]);
+    let out = docker_run_kafka_tool_with_image(
+        KAFKA_IMAGE_TXN,
+        &[
+            "kafka-get-offsets",
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--topic-partitions",
+            &format!("{topic}:0"),
+            "--time",
+            "-2",
+        ],
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let prefix = format!("{topic}:0:");
     let line = stdout
