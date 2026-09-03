@@ -99,7 +99,7 @@ pub(crate) async fn flush_once(
         .diskless_wal_flush_bytes_total
         .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
 
-    let entries = match batch_index_entries(&object) {
+    let entries = match batch_index_entries(&object, crate::time_util::now_ms()) {
         Ok(entries) => entries,
         Err(error) => {
             metrics.diskless_wal_flush_failures_total.inc();
@@ -177,8 +177,16 @@ pub(crate) async fn flush_once(
     Ok(Some(record))
 }
 
+/// One index entry per v2 batch in the object.
+///
+/// `flushed_at_ms` stands in for a batch that carries Kafka's "no timestamp"
+/// sentinel, the way `LogSegment.largestTimestamp` falls back to the segment
+/// file's modification time when its `maxTimestampSoFar` is negative. Without
+/// it a producer that sends no timestamp would make `retention.ms` unable to
+/// place the range at all.
 fn batch_index_entries(
     object: &bytes::Bytes,
+    flushed_at_ms: i64,
 ) -> Result<Vec<WalIndexEntry>, crate::error::BrokerError> {
     let mut entries = Vec::new();
     for run in crate::diskless::wal_object::parse_wal_object(object)
@@ -212,6 +220,11 @@ fn batch_index_entries(
                 byte_len: u32::try_from(byte_len).map_err(|_| {
                     crate::error::BrokerError::Txn("diskless WAL batch exceeds 4 GiB".into())
                 })?,
+                max_timestamp_ms: if batch.max_timestamp < 0 {
+                    flushed_at_ms
+                } else {
+                    batch.max_timestamp
+                },
             });
             byte_start = byte_start.checked_add(byte_len).ok_or_else(|| {
                 crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
@@ -252,8 +265,12 @@ mod tests {
     #[test]
     fn flush_index_has_one_range_per_batch() {
         let topic_id = Uuid::from_u128(10);
-        let batches = [4, 5].map(|base_offset| RecordBatch {
+        // The second batch carries Kafka's "no timestamp" sentinel, which the
+        // index has to replace with the flush time so `retention.ms` can place
+        // the range at all.
+        let batches = [(4, 700), (5, -1)].map(|(base_offset, max_timestamp)| RecordBatch {
             base_offset,
+            max_timestamp,
             records: vec![Record {
                 value: Some(Bytes::from_static(b"v")),
                 ..Default::default()
@@ -267,12 +284,14 @@ mod tests {
         let object = crate::diskless::wal_object::WalObjectBuilder::new()
             .finish_with_run(topic_id, 0, 4, 5, &run);
 
-        let entries = batch_index_entries(&object).unwrap();
+        let entries = batch_index_entries(&object, 4_242).unwrap();
 
         assert!(entries.len() == 2);
         assert!(entries[0].first_offset == 4 && entries[0].last_offset == 4);
         assert!(entries[1].first_offset == 5 && entries[1].last_offset == 5);
         assert!(entries[0].byte_start + u64::from(entries[0].byte_len) == entries[1].byte_start);
+        assert!(entries[0].max_timestamp_ms == 700);
+        assert!(entries[1].max_timestamp_ms == 4_242);
     }
 
     #[tokio::test]
@@ -459,6 +478,7 @@ mod tests {
                 last_offset: 2,
                 byte_start: 0,
                 byte_len: 1,
+                max_timestamp_ms: 0,
             }],
         };
 

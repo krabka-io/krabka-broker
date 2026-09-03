@@ -2802,6 +2802,7 @@ dependencies = [
  "krabka-records-legacy",
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
+ "krabka-restore",
  "krabka-schema-serde",
  "krabka-security",
  "krabka-telemetry",

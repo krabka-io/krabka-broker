@@ -457,3 +457,119 @@ fn reopen_seals_recovered_segments_at_next_base_minus_one() {
         assert2::assert!(pair[0].last_offset + 1 == pair[1].base_offset);
     }
 }
+
+#[test]
+fn open_restores_a_log_start_trimmed_inside_the_active_segment() {
+    let dir = tempdir().unwrap();
+    {
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.append(&mut sample_batch(5)).unwrap();
+        // One segment holds every record, so no segment name witnesses the
+        // trim: only the checkpoint can carry it across the reopen.
+        log.set_log_start_offset(Offset(3)).unwrap();
+        log.sync().unwrap();
+    }
+
+    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+
+    assert!(log.log_start_offset() == Offset(3));
+    assert!(log.log_end_offset() == Offset(5));
+}
+
+#[test]
+fn open_rewrites_a_checkpoint_past_the_log_end_so_appends_cannot_revive_it() {
+    // The hazard: a checkpoint above the log end is inert against the log that
+    // reads it, but appends move the log end. Left on disk, it comes back in
+    // range on a later open and hides records appended after it was written.
+    let dir = tempdir().unwrap();
+    {
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.set_log_start_offset(Offset(7)).unwrap();
+        log.sync().unwrap();
+    }
+
+    // Reopen empty: 7 is past the log end, so it resolves to the log end.
+    {
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        assert!(log.log_start_offset() == Offset(0));
+        // Records the stale checkpoint would have hidden.
+        log.append(&mut sample_batch(9)).unwrap();
+        log.sync().unwrap();
+    }
+
+    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+
+    assert!(log.log_start_offset() == Offset(0));
+    assert!(log.log_end_offset() == Offset(9));
+}
+
+#[test]
+fn open_clamps_a_checkpoint_that_the_segments_contradict() {
+    // Reopening resolves the checkpoint against what the log actually holds.
+    // Below the derived start, the deleted segment names already cover it, so
+    // the derived start wins. Past the log end, every record still present is
+    // below a start that was already acknowledged -- they are all trimmed --
+    // so the log start is the log end and the log reads empty. A crash between
+    // a trim and the fsync of the records it trimmed past arrives here.
+    enum Case {
+        BelowDerivedStart,
+        PastLogEnd,
+    }
+
+    for (case, expected_start) in [
+        (Case::BelowDerivedStart, Offset(2)),
+        (Case::PastLogEnd, Offset(3)),
+    ] {
+        let dir = tempdir().unwrap();
+        {
+            let mut log = Log::open(
+                dir.path(),
+                LogConfig {
+                    segment_size: bytes(1),
+                    ..LogConfig::default()
+                },
+            )
+            .unwrap();
+            log.append(&mut sample_batch(1)).unwrap();
+            log.append(&mut sample_batch(1)).unwrap();
+            log.append(&mut sample_batch(1)).unwrap();
+            // Drops the sealed segments below offset 2, so the derived start
+            // is 2 and the log end is 3.
+            log.trim_to_offset(Offset(2)).unwrap();
+            log.sync().unwrap();
+        }
+        let checkpointed = match case {
+            Case::BelowDerivedStart => Offset(1),
+            Case::PastLogEnd => Offset(9),
+        };
+        crate::log_start_offset_checkpoint::write(dir.path(), checkpointed).unwrap();
+
+        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+
+        assert!(log.log_start_offset() == expected_start);
+        // Whatever it resolved to is what is now on disk, so the next open
+        // reads a value that already agrees with the log.
+        drop(log);
+        assert!(
+            crate::log_start_offset_checkpoint::read(dir.path()).unwrap() == Some(expected_start)
+        );
+    }
+}
+
+#[test]
+fn reset_to_drops_the_checkpoint_so_a_reopen_starts_at_the_new_base() {
+    let dir = tempdir().unwrap();
+    {
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.append(&mut sample_batch(5)).unwrap();
+        log.set_log_start_offset(Offset(3)).unwrap();
+        log.reset_to(Offset(100)).unwrap();
+        log.sync().unwrap();
+        assert!(!name::log_start_offset_checkpoint_path(dir.path()).exists());
+    }
+
+    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+
+    assert!(log.log_start_offset() == Offset(100));
+    assert!(log.log_end_offset() == Offset(100));
+}

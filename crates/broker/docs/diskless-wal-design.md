@@ -63,13 +63,67 @@ The object framing in [`diskless/wal_object.rs`](../src/diskless/wal_object.rs) 
 
 The index key is `(topic_id, partition, first_offset)`, so Kafka compaction keeps the newest record per logical range and a deleted topic's ranges can be tombstoned. `WalIndexCache` in [`diskless/wal_index.rs`](../src/diskless/wal_index.rs) applies keyed values, legacy unkeyed values, and tombstones through the proved `diskless_wal_replay_decision` kernel, so a keyed value stays authoritative whatever order the partitions of the index topic deliver in.
 
+#### Retention
+
+Retention on a diskless topic is the index's job, because the index is the
+only thing that says which objects a partition's records live in. On every
+flush tick, before the flush itself, the flusher runs the three Kafka
+predicates from `UnifiedLog.deleteOldSegments` over each led partition's
+projected ranges -- unless a KFC-9 write freeze covers the topic, which stops
+this pass as it stops the cleaner and the remote-log-manager's two retention
+passes -- through the proved `diskless_retention_prefix` kernel: a
+range whose `max_timestamp_ms` is older than `retention.ms`, an oldest range
+the `retention.bytes` budget cannot keep, and a range that ends below the
+partition's `DeleteRecords` floor. The kernel walks oldest first and stops at
+the first range it must keep, as Kafka does, and it never expires the newest
+range -- Kafka keeps the active segment for the same reason, and here that
+range is also what keeps `flushed_frontier` pointing past the last flushed
+offset. Each expired range gets one keyed tombstone on the index topic and
+leaves the projection, and `krabka_broker_diskless_wal_expired_ranges_total`
+counts them.
+
+The object the ranges lived in is freed by the reclaimer, on a later sweep and
+only once nothing references it. One object carries runs from several
+partitions, so a partition whose ranges all expire can still leave that object
+in the bucket until its co-tenants expire too. The bucket therefore trails
+retention by up to one object's worth of co-tenancy plus the reclaim grace.
+
+`DeleteRecords` needs no extra RPC, but it does need a record of its own. The
+trim moves the WAL frontier and the local log start already, and the floor
+predicate tombstones the index ranges on the next tick. The floor itself cannot
+be read off the local log, because a diskless partition's log start is the
+flusher's trim frontier rather than a delete point. For the same reason the
+handler measures the request against the offset the partition actually starts
+at -- the one `ListOffsets(EARLIEST)` answers -- rather than against a local
+log start the flusher has usually already moved past everything an operator
+would want to delete.
+
+So the floor is published to the index topic as a keyed
+`WalDeleteFloorRecord`, under a key whose encoding is a different length from a
+range key so the two decoders on the replay path cannot read one another's. The
+handler publishes it and waits for the projection to carry it *before* the trim
+is acknowledged: a client told its records are gone must not see them again.
+From that moment a cold read below the floor misses, the fetch stays
+`OFFSET_OUT_OF_RANGE`, and `ListOffsets(EARLIEST)` answers the floor -- on
+every broker, because every projection replays the same record.
+
+The range tombstones could not stand in for that record, which is why it
+exists. A range that straddles the floor still holds live records at and above
+it, so retention must keep it; the newest range is never expired either. Both
+come back out of a replay still covering the offsets below the floor, so a
+projection rebuilt without the floor record would serve deleted offsets again
+and go on doing it, not merely until the next tick. The floor only ever moves
+forward, so neither a stale retry nor a compacted replay that delivers an older
+record last can widen what a consumer sees, and a deleted topic's floors are
+tombstoned alongside its ranges.
+
 ### Slice 4: Reads from the hot tail and the object store
 
 A fetch on a diskless partition first consults the `HotTailCache` in [`diskless/hot_tail.rs`](../src/diskless/hot_tail.rs). `QuorumWalStore::sync_durable` inserts every batch that just became quorum-durable, so the cache only ever holds committed bytes. The lookup in [`handlers/fetch/read.rs`](../src/handlers/fetch/read.rs) runs only for `read_uncommitted` fetches, answers with whole batches, and honours the fetch window's limit offset, so it can never hand out a batch the log read path would have held back. Trim, truncate, and reset all invalidate the partition's cache entries through `WalStore::invalidate_hot_tail`.
 
 A fetch whose offset is below the local log start would answer `OFFSET_OUT_OF_RANGE` on an ordinary partition. [`diskless/read.rs`](../src/diskless/read.rs) intercepts that case: it looks the offset up in the index projection, extends the byte span across contiguous ranges inside the same object up to the request's byte cap, issues one ranged object GET, and returns the first whole batch at or after the requested offset. The three selection steps are the proved kernels `diskless_logical_range`, `diskless_span_extension`, and `diskless_batch_step`. A miss falls back to the ordinary out-of-range answer. A storage error answers `KAFKA_STORAGE_ERROR`.
 
-`ListOffsets` earliest includes the smallest offset the index covers, through the `list_offsets_earliest` kernel, so a consumer that seeks to the beginning lands on an object-backed offset rather than the trimmed local start.
+`ListOffsets` earliest includes the smallest offset the index still answers for -- the smallest indexed first offset, raised to the partition's `DeleteRecords` floor -- through the `list_offsets_earliest` kernel, so a consumer that seeks to the beginning lands on an object-backed offset rather than the trimmed local start, and never below a floor an operator set.
 
 ### Slice 5: Crash windows and recovery
 
@@ -124,6 +178,14 @@ An incomplete rack-distinct placement could be filled with a same-rack broker, w
 ### Trim behind the committed index, with a safety lag
 
 The local log start advances only to `min(committed_index_frontier, high_watermark - safety_lag)`, by the proved `diskless_trim_decision` kernel, and only after the flusher has seen its own index records return through the projection. The safety lag, default one offset, keeps the newest committed batch local so the hot tail and the local read path stay warm. Followers trim to the leader's log start on every fetch, so a trim propagates without a separate RPC.
+
+### Retention expires index ranges, not objects
+
+An object is shared by several partitions, so retention cannot delete one: the
+unit retention can act on is the index range. Expiring a range unreferences its
+slice of the object, and the object goes when its last range does. This costs a
+delay between what retention says is gone and what the bucket still holds, and
+buys a flusher that can keep packing many partitions into one object.
 
 ### Reclaim waits for a grace period and a projection check
 

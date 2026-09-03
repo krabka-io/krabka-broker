@@ -16,7 +16,7 @@ use crate::{
     config::LogConfig,
     error::LogError,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
-    name,
+    log_start_offset_checkpoint, name,
     producer_snapshot::{self, ProducerSnapshotEntry},
     segment::Segment,
     txn_index::TxnIndex,
@@ -53,19 +53,31 @@ impl Log {
     /// `new_start` must be in `[current log_start, log_end]`.
     /// `trim_to_offset` uses this method for the active-segment case, and the
     /// broker's `DeleteRecords` handler uses it too. This method does NOT
-    /// truncate on-disk segments. It only moves the in-memory start pointer.
+    /// truncate on-disk segments. It only moves the start pointer.
+    ///
+    /// The new value is checkpointed to `log-start-offset-checkpoint` before
+    /// this method returns, so a start that no segment name witnesses -- a trim
+    /// that landed inside a segment -- survives a reopen. Without that,
+    /// [`Log::open`] derives the start from the first surviving base offset and
+    /// serves records that a `DeleteRecords` already deleted.
     ///
     /// `new_start` must be non-negative.
     ///
     /// # Errors
     ///
-    /// Returns [`LogError::InvalidArgument`] if `new_start` is negative.
+    /// Returns [`LogError::InvalidArgument`] if `new_start` is negative, and
+    /// [`LogError::Io`] if the checkpoint cannot be written.
     pub fn set_log_start_offset(&mut self, new_start: Offset) -> Result<(), LogError> {
         if new_start < 0 {
             return Err(LogError::InvalidArgument(
                 "set_log_start_offset: new_start must be >= 0".into(),
             ));
         }
+        // The checkpoint is durable when this returns, directory sync
+        // included: `DeleteRecords` is acknowledged as soon as the trim does,
+        // and a trimmed partition can then sit idle with no later `sync()` to
+        // pay a deferred debt.
+        log_start_offset_checkpoint::write(&self.dir, new_start)?;
         self.start_offset_override = Some(new_start);
         Ok(())
     }
@@ -114,8 +126,11 @@ impl Log {
             let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
         }
 
-        // Clear the start override so the derived value takes over.
+        // Clear the start override, and the checkpoint that would restore it
+        // on the next open, so the derived value takes over. The log now holds
+        // no records, so `new_base` is the whole truth about where it starts.
         self.start_offset_override = None;
+        log_start_offset_checkpoint::remove(&self.dir)?;
 
         let mut new_active = Segment::create(&self.dir, new_base)?;
         new_active.set_io(self.io.clone());

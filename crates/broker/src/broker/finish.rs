@@ -214,6 +214,7 @@ fn spawn_diskless_bootstrap(
     let cache = Arc::clone(&handle.index);
     let ready = Arc::new(AtomicBool::new(false));
     let flusher = DisklessFlusherStartup {
+        index_log_slot: handle.index_log_slot(),
         partitions: Arc::clone(&broker.partitions),
         image_rx: broker.controller.watch_image(),
         object_store: handle.object_store(),

@@ -380,6 +380,9 @@ krabka_broker_diskless_wal_flush_bytes_total 0
 # HELP krabka_broker_diskless_wal_flush_failures Diskless WAL object flushes that failed after an attempt began..
 # TYPE krabka_broker_diskless_wal_flush_failures counter
 krabka_broker_diskless_wal_flush_failures_total 0
+# HELP krabka_broker_diskless_wal_expired_ranges Committed diskless WAL index ranges tombstoned by retention or DeleteRecords..
+# TYPE krabka_broker_diskless_wal_expired_ranges counter
+krabka_broker_diskless_wal_expired_ranges_total 0
 # HELP krabka_broker_diskless_wal_cold_read_hits Diskless WAL cold reads served from object storage..
 # TYPE krabka_broker_diskless_wal_cold_read_hits counter
 krabka_broker_diskless_wal_cold_read_hits_total 0

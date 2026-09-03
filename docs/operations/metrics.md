@@ -154,6 +154,7 @@ any of these.
 | `krabka_broker_diskless_wal_flush_failures_total` | counter | - | - | Flushes that failed after an attempt began. [Runbook](runbooks/diskless-wal-flush-failures.md). |
 | `krabka_broker_diskless_wal_index_projection_lag` | gauge | `topic_id`, `partition` | - | Durable offsets the committed object index does not cover yet. |
 | `krabka_broker_diskless_wal_trim_frontier` | gauge | `topic_id`, `partition` | - | Local log-start offset after trimming. The gap to the durable watermark is the hot tail. |
+| `krabka_broker_diskless_wal_expired_ranges_total` | counter | - | - | Committed index ranges tombstoned by `retention.ms`, `retention.bytes`, or a `DeleteRecords` floor. |
 | `krabka_broker_diskless_wal_cold_read_hits_total` | counter | - | - | Cold reads served from the object store. |
 | `krabka_broker_diskless_wal_cold_read_misses_total` | counter | - | - | Cold reads with no matching committed index entry. |
 | `krabka_broker_diskless_wal_cold_read_errors_total` | counter | - | - | Cold reads that failed in the object store. [Runbook](runbooks/diskless-wal-flush-failures.md). |

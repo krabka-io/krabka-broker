@@ -15,7 +15,8 @@ use crate::{args::restore_args, fixture::build_fixture};
 /// 2. Read back the restored data: every partition's log holds exactly the
 /// batches this fixture archived for it, each at its original absolute
 /// offset (part of the whole-`RecordBatch` equality below, since
-/// `base_offset` is a field of it).
+/// `base_offset` is a field of it), and starts where the archive starts
+/// rather than at zero.
 #[tokio::test]
 async fn restored_partitions_read_back_the_original_batches_at_their_original_offsets() {
     let fixture = build_fixture();
@@ -28,8 +29,20 @@ async fn restored_partitions_read_back_the_original_batches_at_their_original_of
     for partition in fixture.partitions() {
         let dir = name::partition_dir(&log_dir, partition.topic, partition.partition);
         let log = Log::open(&dir, LogConfig::default()).expect("reopen restored partition");
+        // Reading from the partition's own first archived offset rather than
+        // from zero: `payments-1`'s archive begins above zero, and `Log::read`
+        // raises `OffsetTooLow` below the log start rather than clamping.
+        check!(
+            log.log_start_offset() == Offset(partition.base_offset()),
+            "{}-{}",
+            partition.topic,
+            partition.partition,
+        );
         let read = log
-            .read(Offset(0), LogConfig::default().segment_size)
+            .read(
+                Offset(partition.base_offset()),
+                LogConfig::default().segment_size,
+            )
             .expect("read restored partition");
         check!(
             read.batches == partition.expected_batches(),

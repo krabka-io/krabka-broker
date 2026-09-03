@@ -42,6 +42,11 @@ impl IndexLogSource for KafkaIndexLogSource {
 }
 
 pub(super) struct DisklessFlusherStartup {
+    /// Where each new index log is published so `DeleteRecords` can write its
+    /// floor through whichever incarnation is live. Cleared while the
+    /// bootstrap is rebuilding one.
+    pub(super) index_log_slot:
+        Arc<arc_swap::ArcSwapOption<crate::diskless::index_log::DisklessIndexLog>>,
     pub(super) partitions: Arc<PartitionRegistry>,
     pub(super) image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     pub(super) object_store: Arc<dyn object_store::ObjectStore>,
@@ -117,6 +122,9 @@ async fn bootstrap_from_source(
                     topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
                     "diskless WAL index projection started; flusher waits for its replay"
                 );
+                flusher
+                    .index_log_slot
+                    .store(Some(Arc::new(index_log.clone())));
                 // `flusher.ready` flips inside `run`, once the projection has
                 // replayed the index topic and the first tick may fire.
                 let exit = crate::diskless::flusher::run(
@@ -134,6 +142,9 @@ async fn bootstrap_from_source(
                     shutdown.clone(),
                 )
                 .await;
+                // A rebuilt log replaces this one, so no writer may keep
+                // publishing through the incarnation that just stopped.
+                flusher.index_log_slot.store(None);
                 match exit {
                     crate::diskless::flusher::FlusherExit::ShutDown => return,
                     crate::diskless::flusher::FlusherExit::ReplayStalled => {
@@ -168,6 +179,7 @@ mod tests {
             krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
         ));
         DisklessFlusherStartup {
+            index_log_slot: Arc::new(arc_swap::ArcSwapOption::empty()),
             partitions: Arc::new(PartitionRegistry::new()),
             image_rx,
             object_store: Arc::new(object_store::memory::InMemory::new()),
@@ -251,6 +263,7 @@ mod tests {
                 last_offset: 2,
                 byte_start: 0,
                 byte_len: 10,
+                max_timestamp_ms: 0,
             }],
         })
         .await
@@ -323,6 +336,7 @@ mod tests {
             krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
         ));
         let flusher = DisklessFlusherStartup {
+            index_log_slot: Arc::new(arc_swap::ArcSwapOption::empty()),
             partitions: Arc::new(PartitionRegistry::new()),
             image_rx,
             object_store: Arc::new(object_store::memory::InMemory::new()),

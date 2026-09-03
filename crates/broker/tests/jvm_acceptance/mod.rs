@@ -49,7 +49,9 @@ mod wait;
 // carries `allow(dead_code)`.
 #[allow(unused_imports)]
 pub(crate) use self::{
-    broker::{start_host_broker, start_host_broker_jbod, start_host_broker_with},
+    broker::{
+        start_host_broker, start_host_broker_in, start_host_broker_jbod, start_host_broker_with,
+    },
     delegation_tokens::{
         extract_jvm_kv, start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,
     },
@@ -80,7 +82,8 @@ pub(crate) use self::{
     },
     tiered::{start_host_broker_with_minio_tier, start_two_brokers_with_minio_tier},
     tiered_workload::{
-        consume_records, create_tiered_topic, produce_records, wait_for_minio_segments,
+        consume_record_values, consume_records, create_tiered_topic, produce_records,
+        wait_for_minio_segments, wait_for_settled_minio_segments,
     },
     tls::{prepare_jks_truststore, start_sasl_ssl_broker, start_ssl_broker},
     two_broker_cluster::{
