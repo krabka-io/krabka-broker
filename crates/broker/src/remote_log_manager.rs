@@ -1,12 +1,24 @@
-//! `RemoteLogManager`: the KIP-405 tiered-storage copy path.
+//! `RemoteLogManager`: the KIP-405 tiered-storage sweep.
 //!
-//! Every `interval`, the manager walks the partition registry. For each
-//! partition where this broker is the leader and the topic has
-//! `remote.storage.enable=true`, it copies the partition's sealed log
-//! segments that are not yet in the remote tier to a
-//! [`RemoteStorageManager`]. It records each copy in a
-//! [`RemoteLogMetadataManager`] (`CopySegmentStarted` →
-//! `CopySegmentFinished`).
+//! Every `interval`, the manager walks the partition registry and sweeps each
+//! partition whose topic has `remote.storage.enable=true`. Leadership splits
+//! the sweep, the way Kafka splits it between `RemoteLogManager`'s leader and
+//! follower tasks:
+//!
+//! - Where this broker leads the partition, it copies the sealed log segments
+//!   that are not yet in the remote tier to a [`RemoteStorageManager`],
+//!   recording each copy in a [`RemoteLogMetadataManager`]
+//!   (`CopySegmentStarted` → `CopySegmentFinished`), and it enforces the
+//!   topic's remote retention against that tier. Both are the leader's alone:
+//!   one writer per partition owns the remote tier.
+//! - **Every** replica, leader and follower alike, enforces local retention on
+//!   its own disk. A follower's sealed segment is droppable for the same
+//!   reason the leader's is -- the RLMM says the leader finished copying it --
+//!   and the RLMM is shared, so the follower reads the same
+//!   `CopySegmentFinished` set. Without this a follower would hold every
+//!   segment it ever fetched until it was elected, and its disk would grow to
+//!   the full `retention.ms` footprint rather than the `local.retention.ms`
+//!   one.
 //!
 //! This is the copy path. Their own modules implement local-retention deletion
 //! of copied segments and the remote read path on `Fetch`. The
@@ -15,8 +27,8 @@
 //!
 //! A KFC-9 write freeze splits the sweep in two. The copy runs on a frozen
 //! topic, because it adds a replica and takes nothing away, and tiering a
-//! frozen topic is what a migration wants. Both retention passes stop, because
-//! each one removes data from the topic's log.
+//! frozen topic is what a migration wants. Both retention passes stop, on
+//! every replica, because each one removes data from the topic's log.
 
 use std::{
     sync::{Arc, atomic::Ordering},
@@ -126,9 +138,10 @@ async fn tick_all(
     let snapshot: Vec<Arc<Partition>> = partitions.arcs();
     let image = controller.current_image();
     for partition in snapshot {
-        if partition.current_leader.load(Ordering::Relaxed) != node_id {
-            continue;
-        }
+        // Leadership decides which halves of the sweep run, not whether it
+        // runs at all: the copy and the remote-retention pass are the
+        // leader's, local retention is every replica's.
+        let is_leader = partition.current_leader.load(Ordering::Relaxed) == node_id;
         // Read config + sealed-segment list under the log lock, then drop it.
         let (log_config, exports) = {
             let log = partition.log.lock().expect("log mutex poisoned");
@@ -145,20 +158,23 @@ async fn tick_all(
             // Topic vanished from the metadata image between snapshots; skip.
             continue;
         };
-        // Atomic stores the raw epoch; wrap for the remote-storage metadata seam.
-        let leader_epoch =
-            krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
         let tp = TopicIdPartition::new(topic_id, partition.topic.clone(), partition.index.get());
-        copy_eligible(
-            &tp,
-            broker_id,
-            leader_epoch,
-            exports.clone(),
-            archive,
-            rsm,
-            rlmm,
-        )
-        .await;
+        if is_leader {
+            // Atomic stores the raw epoch; wrap for the remote-storage
+            // metadata seam.
+            let leader_epoch =
+                krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
+            copy_eligible(
+                &tp,
+                broker_id,
+                leader_epoch,
+                exports.clone(),
+                archive,
+                rsm,
+                rlmm,
+            )
+            .await;
+        }
         // KFC-9: the copy above stays allowed on a frozen topic, and both
         // retention passes below stop. A freeze refuses every operation that
         // removes data from the topic's log, and a copy removes none: it adds
@@ -188,7 +204,9 @@ async fn tick_all(
         // local segment that the archive already holds is the whole point of
         // tiering, and it deletes nothing from the remote tier.
         local_retention_pass(&tp, &partition, &exports, &log_config, rlmm, now_ms());
-        remote_retention_pass(&tp, broker_id, &log_config, archive, rsm, rlmm, now_ms()).await;
+        if is_leader {
+            remote_retention_pass(&tp, broker_id, &log_config, archive, rsm, rlmm, now_ms()).await;
+        }
     }
 }
 
@@ -202,7 +220,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
     use krabka_log::LogConfig;
     use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
@@ -349,20 +367,65 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn tick_all_skips_partition_led_by_other_node() {
+    /// What one [`tick_all`] over a follower replica of `orders` left behind:
+    /// what the remote tier holds, and what is still sealed on local disk.
+    struct FollowerSweep {
+        sealed_before: usize,
+        remote_finished: usize,
+        local_sealed_after: usize,
+    }
+
+    /// Drive one sweep over an `orders` partition that node 2 leads, with this
+    /// broker (node 1) hosting a follower replica of it. The topic's local
+    /// budget is zero, so every segment the RLMM reports copied is past the
+    /// local-retention window the moment the sweep sees it.
+    ///
+    /// When `leader_already_copied`, the copy the real leader would have run
+    /// is run first against the same RSM and RLMM. That is what a follower
+    /// meets in a cluster: the metadata is shared, so the follower reads the
+    /// leader's `CopySegmentFinished` set off `__remote_log_metadata` without
+    /// ever having copied a byte itself.
+    async fn follower_sweep(leader_already_copied: bool) -> FollowerSweep {
         let log_dir = tempfile::tempdir().unwrap();
         let remote_dir = tempfile::tempdir().unwrap();
         let partitions = PartitionRegistry::new();
-        let partition = rolled_tiered_partition(log_dir.path());
+        let partition = rolled_tiered_partition_with_config(
+            log_dir.path(),
+            LogConfig {
+                segment_size: bytes(256),
+                remote_storage_enable: true,
+                local_retention_size: Some(NO_BYTES),
+                retention: None,
+                retention_size: None,
+                ..LogConfig::default()
+            },
+        );
         partition.current_leader.store(2, Ordering::Relaxed);
-        partitions.insert("orders".into(), PartitionIndex(0), partition);
+        let exports = partition
+            .log
+            .lock()
+            .expect("partition log mutex poisoned")
+            .tierable_segments();
+        let sealed_before = exports.len();
+        partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
 
         let controller = fixed_source(image_with_orders_topic());
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
+        if leader_already_copied {
+            copy_eligible(
+                &tp(),
+                2,
+                krabka_ids::LeaderEpoch(0),
+                exports,
+                ArchiveMode::Mutable,
+                &rsm,
+                &rlmm,
+            )
+            .await;
+        }
 
         tick_all(
             &partitions,
@@ -375,7 +438,64 @@ mod tests {
         )
         .await;
 
-        assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+        let remote_finished = rlmm
+            .list_remote_log_segments(&tp())
+            .unwrap()
+            .iter()
+            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
+            .count();
+        let local_sealed_after = partition
+            .log
+            .lock()
+            .expect("partition log mutex poisoned")
+            .tierable_segments()
+            .len();
+        FollowerSweep {
+            sealed_before,
+            remote_finished,
+            local_sealed_after,
+        }
+    }
+
+    #[tokio::test]
+    async fn tick_all_on_a_follower_evicts_locally_and_never_copies() {
+        // KIP-405 splits the sweep by leadership, not by replica: the copy is
+        // the leader's alone, and local retention runs on every replica. A
+        // follower that skipped it would hold `retention.ms` worth of disk
+        // while the leader held `local.retention.ms` worth.
+        let cases = [
+            ("a follower whose leader has not copied yet", false),
+            ("a follower whose leader already copied", true),
+        ];
+        for (label, leader_already_copied) in cases {
+            let outcome = follower_sweep(leader_already_copied).await;
+
+            check!(
+                outcome.sealed_before >= 2,
+                "{label}: the fixture needs multiple sealed segments"
+            );
+            // The follower never adds to the remote tier: whatever is there
+            // is what the leader's copy put there.
+            let want_remote = if leader_already_copied {
+                outcome.sealed_before
+            } else {
+                0
+            };
+            check!(
+                outcome.remote_finished == want_remote,
+                "{label}: segments in the remote tier after the sweep"
+            );
+            // ...but it does drop its own copy of what the leader finished.
+            let want_local = if leader_already_copied {
+                0
+            } else {
+                outcome.sealed_before
+            };
+            check!(
+                outcome.local_sealed_after == want_local,
+                "{label}: sealed segments still on the follower's disk"
+            );
+        }
     }
 
     #[tokio::test]

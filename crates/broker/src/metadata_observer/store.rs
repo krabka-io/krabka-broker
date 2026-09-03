@@ -163,7 +163,9 @@ impl ObserverStore {
     }
 
     /// Write one checkpoint and drop every older one, keeping the directory
-    /// single-snapshot the way a controller's is. A failed write is not fatal:
+    /// single-snapshot. The controller's directory keeps the previous
+    /// checkpoint too, for a peer whose `FetchSnapshot` is mid-transfer when
+    /// it rolls; nothing fetches from this one. A failed write is not fatal:
     /// the observer keeps serving from memory and resumes from the previous
     /// checkpoint, or from the log start, after a restart.
     fn write(&mut self, id: (i64, i32), bytes: &[u8]) {

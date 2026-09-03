@@ -50,6 +50,38 @@ pub fn build_with_snapshot_interval(
     build_full(me, ids, TEST_ELECTION_TIMEOUT, snapshot_interval_records)
 }
 
+/// Like [`build_with_snapshot_interval`], but with a caller-chosen
+/// `max_bytes_between_snapshots` instead of a record-count interval.
+pub fn build_with_max_bytes_between_snapshots(
+    me: NodeId,
+    ids: &[NodeId],
+    max_bytes_between_snapshots: krabka_units::prelude::ByteSize,
+) -> (KraftController, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = KraftLog::open(dir.path()).expect("open log");
+    let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
+    let ctrl = KraftController::spawn(
+        KraftConfig {
+            me,
+            cluster_id: uuid::Uuid::nil(),
+            initial_state: state,
+            election_timeout: TEST_ELECTION_TIMEOUT,
+            heartbeat_interval: None,
+            controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
+            metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
+            metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
+            peers: Arc::new(NullPeerSender),
+            snapshot_interval_records: 0,
+            max_bytes_between_snapshots,
+            max_snapshot_interval: krabka_units::prelude::millis(0),
+            metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
+        },
+        log,
+        dir.path().to_path_buf(),
+    );
+    (ctrl, dir)
+}
+
 pub fn build_full(
     me: NodeId,
     ids: &[NodeId],
@@ -94,6 +126,8 @@ pub fn build_full_with_policy(
             metadata_raft_fetch_max,
             peers: Arc::new(NullPeerSender),
             snapshot_interval_records,
+            max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
+            max_snapshot_interval: krabka_units::prelude::millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         },
         log,
@@ -175,8 +209,13 @@ pub fn build_engine_only_with_policy(
             was_leader,
             held_epoch,
             snapshot_interval_records: 0,
+            max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
+            max_snapshot_interval: krabka_units::prelude::millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             last_snapshot_end_offset: Offset(0),
+            last_snapshot_timestamp_ms: 0,
+            last_snapshot_at_ms: 0,
+            bytes_since_snapshot: 0,
             downgrade_snapshot_pending: None,
             downgrade_snapshot_failures_remaining: 0,
             snapshot_fetch: None,

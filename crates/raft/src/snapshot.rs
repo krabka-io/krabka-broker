@@ -46,5 +46,10 @@ pub(crate) struct SnapshotContents {
     /// KIP-853 controls. Snapshots written before dynamic membership omit
     /// these batches and recover membership from the level-0 configuration.
     pub(crate) control_state: Option<SnapshotControlState>,
+    /// The header's `last_contained_log_timestamp`: the create-time of the
+    /// last batch this snapshot contains. A node that installs or recovers
+    /// from the artifact carries it forward, because the record it names is
+    /// below the boundary and no longer in any log to re-read.
+    pub(crate) last_contained_log_timestamp: i64,
     pub(crate) metadata_records: Vec<MetadataRecord>,
 }

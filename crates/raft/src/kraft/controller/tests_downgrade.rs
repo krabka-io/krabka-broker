@@ -180,6 +180,8 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
         MetadataRaftFetchMax::default(),
         Arc::new(NullPeerSender),
         0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
     )
     .expect("restart completes mandatory downgrade recovery");
@@ -256,6 +258,8 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
         MetadataRaftFetchMax::default(),
         Arc::new(NullPeerSender),
         0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
     )
     .expect("restart finishes checkpoint-before-prune recovery");
@@ -302,6 +306,8 @@ async fn restart_propagates_persistent_downgrade_recovery_error() {
         MetadataRaftFetchMax::default(),
         Arc::new(NullPeerSender),
         0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
     );
     let Err(error) = result else {

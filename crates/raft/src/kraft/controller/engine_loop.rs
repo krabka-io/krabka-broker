@@ -85,6 +85,10 @@ impl Engine {
                 }
             }
             self.retry_pending_downgrade_snapshot();
+            // A quiet log still needs to snapshot on the time cap: an apply
+            // that advances the HWM already retriggers this check, but an
+            // idle voter only ticks the loop on its timers.
+            self.maybe_snapshot_and_prune();
         }
         // Fail any parked submitters so callers don't hang on shutdown.
         for w in self.commit_waiters.drain(..) {

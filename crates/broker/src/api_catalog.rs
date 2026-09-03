@@ -375,6 +375,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_tiered.rs",
             "crates/remote-storage/tests/jvm_tiered_storage.rs",
             "crates/restore/tests/roundtrip.rs",
+            "crates/broker/tests/tiered_storage_multi_broker.rs",
         ],
         clients: ClientEvidence::NotCovered,
         note: "",

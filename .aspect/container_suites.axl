@@ -1,6 +1,9 @@
 """Select the container suites a change must run."""
 
-_BROKER_TARGET_PREFIX = "//crates/broker:"
+load("./changes.axl", "run", "valid_base")
+
+_BROKER_PACKAGE = "//crates/broker"
+_BROKER_TARGET_PREFIX = _BROKER_PACKAGE + ":"
 _DOCKER_TEST_SUFFIX = "_docker_test"
 
 # The suites live under `//crates`, all but one: the container image and the
@@ -274,6 +277,202 @@ def _select(paths, available_targets):
         targets.append(_IMAGE_SUITE_TARGET)
     return sorted(targets)
 
+# How many matrix entries the selection is allowed to become. GitHub runs at
+# most twenty jobs from one workflow at a time, and the container suites are
+# both the slowest thing on a PR and the widest: with one entry per target the
+# matrix stopped fitting, and the jobs past the cap did not start until the
+# first of the earlier twenty had finished. That puts a second suite's runtime
+# on the critical path for no extra parallelism, and it does so silently -- the
+# matrix still says every suite ran. A dozen groups fit in one wave with room
+# for the rest of the workflow's jobs beside them, and a group of two suites
+# costs the sum of two suites rather than a wave.
+_MAX_JOBS = 12
+
+def _suite_name(label):
+    """The short, human-facing name of a container suite target."""
+    name = label.split(":")[1]
+    if name.endswith(_DOCKER_TEST_SUFFIX):
+        name = name[:-len(_DOCKER_TEST_SUFFIX)]
+    return name
+
+def _package(label):
+    """The Bazel package half of a label: everything before the colon."""
+    return label.split(":")[0]
+
+def _packages(targets):
+    """The sorted target list bucketed by package, as `[package, members]`.
+
+    One pass, because a sorted label list already has each package's targets
+    contiguous: they share the whole `//path:` prefix, and no label from
+    another package can sort between two that do.
+    """
+    buckets = []
+    for label in targets:
+        package = _package(label)
+        if buckets and buckets[-1][0] == package:
+            buckets[-1][1].append(label)
+        else:
+            buckets.append([package, [label]])
+    return buckets
+
+def _chunks(items, count):
+    """`items` split into `count` contiguous chunks, as evenly as possible.
+
+    Contiguous rather than dealt round-robin, and that is the whole point of
+    this function. Neighbours in a sorted label list are the targets with the
+    most to share -- the same crate, the same fixture image, the same analysis
+    -- and a group is one `bazel test` invocation, so putting neighbours in one
+    group is what makes a group cheaper than the suites in it run separately.
+    Dealing them out instead maximally scatters exactly the targets that would
+    otherwise have shared a compile.
+
+    The first `len(items) % count` chunks take one extra member, so no chunk is
+    more than one target larger than another. The caller never passes a `count`
+    above `len(items)`: an empty `targets` string would run `bazel test` with
+    no argument, which tests nothing and passes.
+    """
+    size = len(items) // count
+    wide = len(items) % count
+    chunks = []
+    start = 0
+    for index in range(count):
+        length = size + 1 if index < wide else size
+        chunks.append(items[start:start + length])
+        start += length
+    return chunks
+
+def _capacity(members):
+    """How many groups a package's targets can usefully be split across.
+
+    One per container suite it holds. A package's other docker-tagged targets
+    are the layers of a fixture image -- `base`, `base_oci`, `image_load` --
+    and those are one build however many labels it takes to spell it: splitting
+    them across jobs does not halve anything, it makes two runners build the
+    same image. So a package with no suite in it is worth exactly one group,
+    and the seats its target count would otherwise have won go to a package
+    that can spend them on an actual second suite.
+    """
+    suites = 0
+    for label in members:
+        if label.endswith(_DOCKER_TEST_SUFFIX):
+            suites += 1
+    return suites if suites else 1
+
+def _total(values):
+    running = 0
+    for value in values:
+        running += value
+    return running
+
+def _allocate(counts, capacities, budget):
+    """How many groups each package gets out of `budget`, by largest remainder.
+
+    Every package gets one group before anything else is shared out. A group
+    that straddled two packages would put two unrelated crates' compiles on one
+    runner, which is the cost this grouping exists to avoid, so the budget buys
+    subdivision within a package and never a merge across one.
+
+    What is left is shared out in proportion to how many targets each package
+    holds: floor every exact share, then hand the seats that flooring lost to
+    the packages whose dropped fractions were largest. Remainders are compared
+    as the integer numerators `spare * count - share * total` rather than as
+    fractions, because integers make the ordering exact and Starlark has no
+    reason to introduce a float here. Ties go to the larger package and then to
+    the earlier one, so the allocation is a function of the sorted input alone
+    and a re-run of the same commit produces the same matrix.
+
+    `capacities` caps what a package can hold, so the deal is by target count
+    but never buys a group that would run nothing new. The cap strands seats --
+    a package of one cannot use the second group its fraction won -- so the
+    strays are dealt round by round, in the same remainder order, to whoever
+    can still hold one. The loop is bounded by the budget because each pass
+    spends at least one seat or ends the deal.
+    """
+    total = _total(counts)
+    spare = budget - len(counts)
+
+    allocation = []
+    remainders = []
+    for index, count in enumerate(counts):
+        share = (spare * count) // total
+        capacity = capacities[index]
+        allocation.append(1 + share if 1 + share < capacity else capacity)
+        remainders.append(spare * count - share * total)
+
+    order = sorted(
+        [index for index in range(len(counts))],
+        key = lambda index: (-remainders[index], -counts[index], index),
+    )
+    for _ in range(budget):
+        stray = budget - _total(allocation)
+        if stray <= 0:
+            break
+        spent = 0
+        for index in order:
+            if spent < stray and allocation[index] < capacities[index]:
+                allocation[index] += 1
+                spent += 1
+        if spent == 0:
+            break
+    return allocation
+
+def _group_name(members):
+    """What a matrix entry calls itself, and so what a red check is named.
+
+    A container suite's own name when the group runs one -- that is the string
+    a reviewer greps the logs for. A group that runs none is the fixture-image
+    package, whose targets are `base`, `image_load` and the like: names that
+    say nothing on their own, so it is named for the package that holds them.
+    The `+N` counts the members behind the first, because the full list does
+    not fit in a check name and a count is enough to find the job.
+    """
+    name = ""
+    for label in members:
+        if label.endswith(_DOCKER_TEST_SUFFIX):
+            name = _suite_name(label)
+            break
+    if not name:
+        name = _package(members[0]).rsplit("/", 1)[-1]
+    if len(members) > 1:
+        name += "+" + str(len(members) - 1)
+    return name
+
+def _entry(members):
+    return {"name": _group_name(members), "targets": " ".join(members)}
+
+def _group(targets):
+    """`targets` binned into at most `_MAX_JOBS` matrix entries.
+
+    Package first, then contiguous chunks within a package: a group is one
+    `bazel test` invocation, so its members should be the targets that share an
+    analysis and a compile. Grouping across packages would hand one runner two
+    unrelated crates to build, and dealing within one would hand two runners
+    the same fixture to build twice.
+
+    When there are more packages than the budget the constraint has to give
+    somewhere, and it gives on the package boundary rather than on the budget:
+    the sorted list is chunked whole, which still keeps each package's targets
+    together and still lands inside the concurrency cap.
+    """
+    if not targets:
+        return []
+
+    packages = _packages(targets)
+    if len(packages) > _MAX_JOBS:
+        return [_entry(members) for members in _chunks(targets, _MAX_JOBS)]
+
+    allocation = _allocate(
+        [len(bucket[1]) for bucket in packages],
+        [_capacity(bucket[1]) for bucket in packages],
+        _MAX_JOBS,
+    )
+
+    groups = []
+    for index, bucket in enumerate(packages):
+        for members in _chunks(bucket[1], allocation[index]):
+            groups.append(_entry(members))
+    return groups
+
 def _check(condition, message):
     if not condition:
         fail(message)
@@ -376,34 +575,196 @@ def _self_test():
         "broker manifest must select every suite",
     )
 
-def _run(ctx, executable, argv):
-    result = (
-        ctx.std.process.command(executable)
-            .args(argv)
-            .current_dir(ctx.std.env.bazel_root_dir())
-            .stdout("piped")
-            .stderr("piped")
-            .spawn()
-            .wait_with_output()
-    )
-    if result.status.code != 0:
-        detail = result.stderr.strip()
-        fail("command failed: " + executable + " " + " ".join(argv) + ("\n" + detail if detail else ""))
-    return result.stdout.splitlines()
+    _group_self_test()
 
-def _valid_base(ctx, base):
-    if not base:
-        return False
-    status = (
-        ctx.std.process.command("git")
-            .args(["cat-file", "-e", base + "^{commit}"])
-            .current_dir(ctx.std.env.bazel_root_dir())
-            .stdout("null")
-            .stderr("null")
-            .spawn()
-            .wait()
+def _padded(index):
+    """`index` as at least two digits, so the names sort the way they count."""
+    text = str(index)
+    return text if len(text) > 1 else "0" + text
+
+def _synthetic_name(index):
+    return "suite_" + _padded(index)
+
+def _synthetic_targets(package, count):
+    """`count` container suites in `package`, named so their sorted order shows."""
+    return [
+        package + ":" + _synthetic_name(index) + _DOCKER_TEST_SUFFIX
+        for index in range(count)
+    ]
+
+def _members(groups):
+    """Every label the groups carry, in the order the grouping put them."""
+    labels = []
+    for group in groups:
+        for label in group["targets"].split(" "):
+            labels.append(label)
+    return labels
+
+def _sizes(groups):
+    return [len(group["targets"].split(" ")) for group in groups]
+
+def _group_self_test():
+    _check(_group([]) == [], "an empty selection must produce no matrix entries at all")
+    _check(
+        _group([_target("jvm_features")]) ==
+        [{"name": "jvm_features", "targets": _target("jvm_features")}],
+        "a lone target must be its own group under its own suite name",
     )
-    return status.code == 0
+
+    # Below the cap nothing is grouped: a target per entry is what makes a red
+    # check name exactly one suite, and it is worth keeping wherever it fits.
+    few = _synthetic_targets(_BROKER_PACKAGE, 3)
+    _check(
+        _group(few) == [
+            {"name": _synthetic_name(index), "targets": few[index]}
+            for index in range(3)
+        ],
+        "a selection below the cap must stay one target per entry",
+    )
+
+    exactly = _synthetic_targets(_BROKER_PACKAGE, _MAX_JOBS)
+    _check(
+        [group["targets"] for group in _group(exactly)] == exactly,
+        "a selection at the cap must fill it exactly, one target per entry",
+    )
+    _check(
+        [group["name"] for group in _group(exactly)] == [_synthetic_name(i) for i in range(_MAX_JOBS)],
+        "at the cap every group must still be named for the one suite it runs",
+    )
+
+    _the_sorted_list_buckets_by_package()
+    _one_package_is_chunked_contiguously()
+    _packages_get_the_budget_in_proportion()
+    _a_fixture_package_is_never_subdivided()
+    _more_packages_than_the_budget_share_groups()
+    _a_group_without_a_suite_is_named_for_its_package()
+
+def _the_sorted_list_buckets_by_package():
+    # `//crates/broker/tests/...` sorts before `//crates/broker:...`, because
+    # `/` is below `:`. The bucketing relies on nothing but each package's
+    # labels being contiguous, which a sorted list guarantees whatever order
+    # the packages themselves come out in.
+    fixture = "//crates/broker/tests/fixtures/security/kdc"
+    targets = sorted(
+        _synthetic_targets(_BROKER_PACKAGE, 2) + [fixture + ":base", fixture + ":image"],
+    )
+    _check(
+        _packages(targets) == [
+            [fixture, [fixture + ":base", fixture + ":image"]],
+            [_BROKER_PACKAGE, _synthetic_targets(_BROKER_PACKAGE, 2)],
+        ],
+        "the bucketing must split the sorted list at its package boundaries",
+    )
+
+def _one_package_is_chunked_contiguously():
+    # Two full chunks and one over, so the first group takes three targets and
+    # the rest take two. What matters is that each group's members are
+    # neighbours: they are the targets that share a crate, and a group is one
+    # `bazel test` invocation, so neighbours are what a group is for.
+    many = _synthetic_targets(_BROKER_PACKAGE, _MAX_JOBS * 2 + 1)
+    groups = _group(many)
+    _check(len(groups) == _MAX_JOBS, "no selection may produce more entries than the concurrency cap")
+    _check(len(_members(groups)) == len(many), "no target may be put in two groups")
+    _check(sorted(_members(groups)) == many, "every selected target must appear in exactly one group")
+    _check(_members(groups) == many, "a package's targets must be chunked in order, not dealt out")
+    _check(_sizes(groups) == [3] + [2] * (_MAX_JOBS - 1), "chunks must differ by at most one target")
+    _check(
+        groups[0]["targets"] == " ".join(many[0:3]),
+        "a group's members must be contiguous in the sorted list",
+    )
+    _check(
+        groups[0]["name"] == _synthetic_name(0) + "+2",
+        "a group of three must name its first suite and count the two behind it",
+    )
+    _check(
+        groups[1]["name"] == _synthetic_name(3) + "+1",
+        "a group of two must name its first suite and count the one behind it",
+    )
+
+def _packages_get_the_budget_in_proportion():
+    # The shape of the real selection: one large package beside several small
+    # ones. Each small package must keep a group of its own -- grouping across
+    # packages is what hands one runner two unrelated crates to build -- and
+    # the large one must take everything the small ones leave.
+    big = _synthetic_targets(_BROKER_PACKAGE, 24)
+    small = [
+        "//crates/log:integration" + _DOCKER_TEST_SUFFIX,
+        "//crates/raft:kraft" + _DOCKER_TEST_SUFFIX,
+        "//packaging:image" + _DOCKER_TEST_SUFFIX,
+    ]
+    groups = _group(sorted(big + small))
+    _check(len(groups) == _MAX_JOBS, "the budget must be spent, not exceeded")
+    _check(sorted(_members(groups)) == sorted(big + small), "every target must survive the allocation")
+    for group in groups:
+        packages = {_package(label): True for label in group["targets"].split(" ")}
+        _check(len(packages) == 1, "no group may straddle two packages while the budget allows")
+    _check(
+        _sizes(groups) == [3, 3, 3, 3, 3, 3, 2, 2, 2, 1, 1, 1],
+        "the large package must take every group the small ones cannot use",
+    )
+
+def _a_fixture_package_is_never_subdivided():
+    # The real selection's shape. The fixture package's five targets are the
+    # layers of one image and not five suites, so however many seats its target
+    # count wins it takes one group: splitting it is what had five runners each
+    # building a piece of the same KDC image. The seats it cannot spend go to
+    # the package that can.
+    fixture = "//crates/broker/tests/fixtures/security/kdc"
+    layers = [fixture + ":" + name for name in ["base", "base_oci", "image", "image_load", "seed_layer"]]
+    suites = _synthetic_targets(_BROKER_PACKAGE, 25)
+    singles = [
+        "//crates/log:integration" + _DOCKER_TEST_SUFFIX,
+        "//crates/raft:kraft" + _DOCKER_TEST_SUFFIX,
+        "//crates/remote-storage:tiered" + _DOCKER_TEST_SUFFIX,
+        "//packaging:image" + _DOCKER_TEST_SUFFIX,
+    ]
+    groups = _group(sorted(layers + suites + singles))
+    _check(len(groups) == _MAX_JOBS, "the whole-repository selection must fit the budget exactly")
+    _check(
+        sorted(_members(groups)) == sorted(layers + suites + singles),
+        "every target must survive the whole-repository grouping",
+    )
+    _check(
+        groups[0] == {"name": "kdc+4", "targets": " ".join(layers)},
+        "a package of image layers must stay one group whatever the budget allows",
+    )
+    _check(
+        _sizes(groups) == [5, 4, 4, 4, 4, 3, 3, 3, 1, 1, 1, 1],
+        "the seats the fixture cannot spend must go to the package that can",
+    )
+
+def _more_packages_than_the_budget_share_groups():
+    # Thirteen packages, twelve groups. The package boundary is what gives, not
+    # the concurrency cap: a matrix over the cap does not run wider, it runs in
+    # two waves, which is the failure this whole grouping exists to avoid.
+    targets = sorted([
+        "//crates/pkg" + _padded(index) + ":suite" + _DOCKER_TEST_SUFFIX
+        for index in range(_MAX_JOBS + 1)
+    ])
+    groups = _group(targets)
+    _check(len(groups) == _MAX_JOBS, "more packages than the budget must still fit inside it")
+    _check(sorted(_members(groups)) == targets, "sharing a group must not drop a target")
+    _check(_members(groups) == targets, "a shared group's members must be contiguous in the sorted list")
+    _check(_sizes(groups) == [2] + [1] * (_MAX_JOBS - 1), "only as many groups as needed may share")
+
+def _a_group_without_a_suite_is_named_for_its_package():
+    # The fixture-image package: its targets are the layers of one image, named
+    # `base` and `image_load`, which say nothing on their own. A check named
+    # for the package is what tells a reviewer which fixture went red.
+    fixture = "//crates/broker/tests/fixtures/security/kdc"
+    layers = [fixture + ":" + name for name in ["base", "base_oci", "image", "image_load", "seed_layer"]]
+    _check(
+        _group(layers) == [{"name": "kdc+4", "targets": " ".join(layers)}],
+        "a package with no container suite in it must be named for the package",
+    )
+    _check(
+        _group([fixture + ":base"]) == [{"name": "kdc", "targets": fixture + ":base"}],
+        "a lone non-suite target must be named for its package, with no count",
+    )
+    _check(
+        _group_name([fixture + ":base", _target("jvm_features")]) == "jvm_features+1",
+        "a group holding a container suite must be named for the suite, not the package",
+    )
 
 def _is_build_wide(path):
     return path in ["MODULE.bazel", ".bazelrc", "Cargo.lock", "Cargo.toml"] or path.startswith("bazel/")
@@ -416,17 +777,17 @@ def _is_deleted_source(path):
     )
 
 def _affected_targets(ctx, base):
-    all_targets = sorted(_run(ctx, "bazel", ["query", "attr(tags, 'docker', " + _SUITE_SCOPE + ")"]))
-    if not _valid_base(ctx, base):
+    all_targets = sorted(run(ctx, "bazel", ["query", "attr(tags, 'docker', " + _SUITE_SCOPE + ")"]))
+    if not valid_base(ctx, base):
         return all_targets
 
     comparison = base + "...HEAD"
-    changed = _run(ctx, "git", ["diff", "--name-only", comparison])
+    changed = run(ctx, "git", ["diff", "--name-only", comparison])
     for path in changed:
         if _is_build_wide(path):
             return all_targets
 
-    deleted = _run(ctx, "git", ["diff", "--diff-filter=D", "--name-only", comparison])
+    deleted = run(ctx, "git", ["diff", "--diff-filter=D", "--name-only", comparison])
     for path in deleted:
         if _is_deleted_source(path):
             return all_targets
@@ -450,20 +811,18 @@ def _affected_targets(ctx, base):
             files.append(path)
     if files:
         expression = "attr(tags, 'docker', rdeps(" + _SUITE_SCOPE + ", set(" + " ".join(files) + ")))"
-        for label in _run(ctx, "bazel", ["query", expression]):
+        for label in run(ctx, "bazel", ["query", expression]):
             targets[label] = True
 
     return sorted(targets.keys())
 
 def _emit(ctx, targets):
-    suites = []
-    for label in targets:
-        name = label.split(":")[1]
-        if name.endswith(_DOCKER_TEST_SUFFIX):
-            name = name[:-len(_DOCKER_TEST_SUFFIX)]
-        suites.append({"target": label, "name": name})
-
-    encoded = json.encode(suites)
+    # `targets` is a space-separated string rather than a list because the
+    # workflow hands it straight to one `bazel test` invocation: a group of
+    # suites is one Bazel command, which shares the analysis phase and the
+    # runner's warm cache across the suites in it instead of paying for both
+    # once per suite.
+    encoded = json.encode(_group(targets))
     github_output = ctx.std.env.var("GITHUB_OUTPUT")
     if github_output:
         record = "suites=" + encoded + "\nany=" + ("true" if targets else "false") + "\n"

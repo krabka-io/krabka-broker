@@ -32,8 +32,21 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-prepare
+          # Redundant beside the remote cache, and it is what consumed the
+          # 10 GB repository-wide Actions quota. Off explicitly: omitting the
+          # input leaves setup-aspect's default disk cache switched on.
+          disk-cache: false
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
       - id: prepare
         env:
           CRATE: ${{ inputs.crate }}
@@ -69,8 +82,21 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ inputs.crate }}
+          # Redundant beside the remote cache, and it is what consumed the
+          # 10 GB repository-wide Actions quota. Off explicitly: omitting the
+          # input leaves setup-aspect's default disk cache switched on.
+          disk-cache: false
           repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
       - run: |
           aspect mutants-shard \
             --target '${{ needs.prepare.outputs.target }}' \

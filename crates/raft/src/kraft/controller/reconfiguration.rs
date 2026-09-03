@@ -99,7 +99,7 @@ impl Engine {
             self.controls.latest_version(),
         );
         let expected_base = self.log.log_end_offset();
-        let base = self.log.append(&mut batch)?;
+        let base = self.log.append(&mut batch, Self::wall_clock_ms())?;
         validate_append_result(
             "leader-change",
             expected_base,
@@ -283,7 +283,7 @@ impl Engine {
                 return;
             }
         };
-        let base = match self.log.append(&mut batch) {
+        let base = match self.log.append(&mut batch, Self::wall_clock_ms()) {
             Ok(base) => base,
             Err(error) => {
                 let _ = reply.send(Err(error));

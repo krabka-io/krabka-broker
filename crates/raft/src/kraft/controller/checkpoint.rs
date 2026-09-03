@@ -1,6 +1,6 @@
 //! The KIP-630 `.checkpoint` artifacts under the controller's metadata
 //! directory: their filename encoding, atomic write, id ordering, and the
-//! single-snapshot retention the engine keeps the directory at.
+//! two-snapshot retention the engine keeps the directory at.
 
 use crate::error::RaftError;
 
@@ -63,16 +63,32 @@ pub(crate) fn parse_checkpoint_name(name: &str) -> Option<(i64, i32)> {
 /// holds no checkpoint.
 #[must_use]
 pub fn latest_checkpoint_id(dir: &std::path::Path) -> Option<(i64, i32)> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut ids = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        if let Some(id) = parse_checkpoint_name(name) {
-            ids.push(id);
-        }
-    }
+    let ids = checkpoint_ids(dir);
     krabka_verified::latest_checkpoint_index(&ids).map(|index| ids[index])
+}
+
+/// Every parseable `(end_offset, epoch)` id in `dir`, in directory order. An
+/// absent directory and one holding no checkpoint are both empty.
+fn checkpoint_ids(dir: &std::path::Path) -> Vec<(i64, i32)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| parse_checkpoint_name(entry.file_name().to_str()?))
+        .collect()
+}
+
+/// The two newest ids in `dir`: the latest and the one before it. A directory
+/// holding a single checkpoint returns that id twice, which is what
+/// [`krabka_verified::checkpoint_id_retained`] expects for "there is no
+/// runner-up".
+fn recent_checkpoint_ids(dir: &std::path::Path) -> Option<((i64, i32), (i64, i32))> {
+    let mut ids = checkpoint_ids(dir);
+    let latest = ids.swap_remove(krabka_verified::latest_checkpoint_index(&ids)?);
+    let previous =
+        krabka_verified::latest_checkpoint_index(&ids).map_or(latest, |index| ids[index]);
+    Some((latest, previous))
 }
 
 #[must_use]
@@ -80,13 +96,40 @@ pub fn checkpoint_id_is_newer(candidate: (i64, i32), current: (i64, i32)) -> boo
     krabka_verified::checkpoint_id_newer(candidate.0, candidate.1, current.0, current.1)
 }
 
-/// Delete every `.checkpoint` in `dir` except the latest `(end_offset, epoch)`,
-/// keeping the checkpoint directory single-snapshot after a snapshot+prune or
+/// Delete every `.checkpoint` in `dir` except the two newest
+/// `(end_offset, epoch)` ids, after the controller's snapshot+prune or an
 /// install. Best-effort: read/remove errors are ignored.
+///
+/// The previous checkpoint stays because a `FetchSnapshot` reader is chunking
+/// a snapshot id byte range by byte range: deleting the id it started on the
+/// moment a newer one lands answers its next chunk with `SNAPSHOT_NOT_FOUND`
+/// and sends it back to position 0 against the newer id, which a follower
+/// slower than one snapshot interval never escapes. Kafka keeps the previous
+/// snapshot the same way, through retention alone rather than by tracking
+/// in-flight readers.
+pub fn retain_recent_checkpoints(dir: &std::path::Path) {
+    let Some((latest, previous)) = recent_checkpoint_ids(dir) else {
+        return;
+    };
+    retain_checkpoints(dir, latest, previous);
+}
+
+/// Delete every `.checkpoint` in `dir` except the latest `(end_offset, epoch)`.
+///
+/// This is the rule for a directory no peer fetches from — the broker
+/// observer's own resume store, which only its own restart reads — where the
+/// second copy [`retain_recent_checkpoints`] keeps for an in-flight
+/// `FetchSnapshot` reader would buy nothing.
 pub fn retain_latest_checkpoint(dir: &std::path::Path) {
     let Some(latest) = latest_checkpoint_id(dir) else {
         return;
     };
+    retain_checkpoints(dir, latest, latest);
+}
+
+/// Delete every `.checkpoint` in `dir` outside the two retained ids. Passing
+/// one id as both keeps exactly that one.
+fn retain_checkpoints(dir: &std::path::Path, latest: (i64, i32), previous: (i64, i32)) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -96,7 +139,9 @@ pub fn retain_latest_checkpoint(dir: &std::path::Path) {
         let Some((off, ep)) = parse_checkpoint_name(name) else {
             continue;
         };
-        if !krabka_verified::checkpoint_id_retained(off, ep, latest.0, latest.1) {
+        if !krabka_verified::checkpoint_id_retained(
+            off, ep, latest.0, latest.1, previous.0, previous.1,
+        ) {
             let _ = std::fs::remove_file(entry.path());
         }
     }

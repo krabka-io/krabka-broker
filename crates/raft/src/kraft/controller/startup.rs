@@ -6,7 +6,10 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord};
-use krabka_units::{fmt::Human as _, prelude::Time};
+use krabka_units::{
+    fmt::Human as _,
+    prelude::{ByteSize, Time},
+};
 use tokio::{
     sync::{mpsc, watch},
     time::Instant,
@@ -53,7 +56,7 @@ impl KraftController {
     pub fn spawn(config: KraftConfig, log: KraftLog, data_dir: PathBuf) -> Self {
         let cluster_id = config.cluster_id;
         let image = MetadataImage::new(cluster_id);
-        Self::spawn_with_image(config, log, data_dir, image, Offset(0), None)
+        Self::spawn_with_image(config, log, data_dir, image, Offset(0), 0, None)
             .expect("fresh controller cannot have a pending downgrade checkpoint")
     }
 
@@ -66,6 +69,7 @@ impl KraftController {
         data_dir: PathBuf,
         image: MetadataImage,
         last_snapshot_end_offset: Offset,
+        last_snapshot_timestamp_ms: i64,
         downgrade_snapshot_pending: Option<PendingDowngradeSnapshot>,
     ) -> Result<Self, RaftError> {
         let KraftConfig {
@@ -79,6 +83,8 @@ impl KraftController {
             metadata_raft_fetch_max,
             peers,
             snapshot_interval_records,
+            max_bytes_between_snapshots,
+            max_snapshot_interval,
             metadata_snapshot_fetch_max,
         } = config;
 
@@ -171,8 +177,13 @@ impl KraftController {
             was_leader: initial_was_leader,
             held_epoch: initial_epoch,
             snapshot_interval_records,
+            max_bytes_between_snapshots,
+            max_snapshot_interval,
             metadata_snapshot_fetch_max,
             last_snapshot_end_offset,
+            last_snapshot_timestamp_ms,
+            last_snapshot_at_ms: 0,
+            bytes_since_snapshot: 0,
             downgrade_snapshot_pending,
             #[cfg(test)]
             downgrade_snapshot_failures_remaining: 0,
@@ -233,6 +244,8 @@ impl KraftController {
         metadata_raft_fetch_max: MetadataRaftFetchMax,
         peers: Arc<dyn PeerSender>,
         snapshot_interval_records: u64,
+        max_bytes_between_snapshots: ByteSize,
+        max_snapshot_interval: Time,
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
@@ -253,8 +266,13 @@ impl KraftController {
         let mut image = MetadataImage::new(cluster_id);
         let mut snapshot_control = None;
         let mut last_snapshot_end_offset = Offset(0);
+        let mut last_snapshot_timestamp_ms = 0;
         if let Some(bytes) = load_latest_checkpoint(&checkpoint_dir(&data_dir))? {
             let contents = crate::snapshot::SnapshotReader::read(&bytes)?;
+            // The records this checkpoint contains are below its boundary and
+            // gone from the log, so its header is the only place their
+            // create-time survives a restart.
+            last_snapshot_timestamp_ms = contents.last_contained_log_timestamp;
             image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
             if let Some(control) = contents.control_state {
                 image.apply(&MetadataRecord::V1KRaftVersion(
@@ -334,12 +352,15 @@ impl KraftController {
                 metadata_raft_fetch_max,
                 peers,
                 snapshot_interval_records,
+                max_bytes_between_snapshots,
+                max_snapshot_interval,
                 metadata_snapshot_fetch_max,
             },
             log,
             data_dir,
             image,
             last_snapshot_end_offset,
+            last_snapshot_timestamp_ms,
             downgrade_snapshot_pending,
         )
     }
