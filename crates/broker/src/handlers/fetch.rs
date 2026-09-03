@@ -279,6 +279,11 @@ pub(crate) struct VisibilityWindow {
 /// and `lso <= hw`. KFC-1 adds `log_start <= deliverable <= hw`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct FetchWatermarks {
+    /// The floor below which this read is out of range. On a tiered partition
+    /// (KIP-405) that is the *local* log start, not the global one: the band
+    /// between the two belongs to the remote tier, and calling it out of range
+    /// is how the fetch reaches the remote read path. The
+    /// response's `log_start_offset` still reports the global floor.
     pub log_start: Offset,
     pub hw: Offset,
     pub lso: Offset,

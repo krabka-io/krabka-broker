@@ -33,10 +33,10 @@ jobs:
   # through coverage. On two runners each configuration gets its own disk.
   #
   # `coverage`'s `--test_tag_filters=-docker,-timing-sensitive` (`.bazelrc`)
-  # skips six suites whose wall-clock assertions the profiling instrumentation
+  # skips seven suites whose wall-clock assertions the profiling instrumentation
   # trips, and `bazel coverage //crates/...` never reaches
   # `//packaging:image_binaries_test`, which lives outside `//crates`. The
-  # `test` step below is what actually executes those seven targets on every
+  # `test` step below is what actually executes those eight targets on every
   # pull request; nothing else in this workflow does.
   ci:
     name: build · lint · format · test · docgen
@@ -88,7 +88,7 @@ jobs:
       - name: build
         run: aspect build --bazel-flag=--build_tag_filters=-docker //...
 
-      # The six suites `coverage` excludes as timing-sensitive, plus
+      # The seven suites `coverage` excludes as timing-sensitive, plus
       # `//packaging:image_binaries_test`, which sits outside `//crates` and so
       # is never reached by `bazel coverage //crates/...` either. Narrowed to
       # just those rather than a full `bazel test //...`, which would rerun the

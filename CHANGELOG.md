@@ -20,7 +20,24 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
-- A `DeleteRecords` trim now survives a broker restart even when it lands inside
+- `DeleteRecords` on a tiered topic (KIP-405) now takes the deleted prefix out
+  of the remote tier as well as out of the local log. A partition keeps two
+  floors the way Kafka does: `logStartOffset`, which `DeleteRecords`, retention
+  and remote-segment deletion move, and `localLogStartOffset`, which follows
+  the segments on disk. A fetch below the global floor answers
+  `OFFSET_OUT_OF_RANGE` instead of being served from the archive, remote
+  retention frees the segments that fell below it whatever `retention.ms` and
+  `retention.bytes` say, and `ListOffsets(earliest)` follows the floor up after
+  those deletes. Dropping a copied segment from local disk no longer moves the
+  global floor, so the offsets the archive still holds stay readable, and the
+  `log-start-offset-checkpoint` carries the global floor across a restart
+  rather than the local one: a reopened tiered partition still refuses what a
+  `DeleteRecords` deleted and still serves what only the archive holds. A log
+  whose floor no checkpoint witnesses reports none at all, so neither the
+  remote read nor the log-start breach acts on a floor that is only where the
+  surviving segments happen to begin.
+
+.- A `DeleteRecords` trim now survives a broker restart even when it lands inside
   the active segment. Segment deletion records a trim that reaches a segment
   boundary, but the remainder used to live only in memory, so a restart served
   the deleted records again and `ListOffsets EARLIEST` moved back down. Every

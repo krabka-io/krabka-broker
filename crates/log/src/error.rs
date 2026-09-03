@@ -45,6 +45,22 @@ pub enum LogError {
         log_start: Offset,
     },
 
+    /// A caller requested an offset that is at or above
+    /// [`Log::log_start_offset`](crate::Log::log_start_offset) but below
+    /// [`Log::local_log_start_offset`](crate::Log::local_log_start_offset).
+    ///
+    /// KIP-405: the records are in the remote tier and no local segment holds
+    /// them. The broker's fetch path answers `OFFSET_OUT_OF_RANGE` and then
+    /// falls through to the remote reader, which is where these offsets are
+    /// served from.
+    #[error("offset {requested} is tiered: below local log start {local_log_start}")]
+    OffsetBelowLocalStart {
+        /// Offset the caller asked for.
+        requested: Offset,
+        /// First offset the local segments still hold.
+        local_log_start: Offset,
+    },
+
     /// The encode or decode of a `RecordBatch` failed.
     #[error("records: {0}")]
     Records(#[from] krabka_protocol::records::RecordsError),

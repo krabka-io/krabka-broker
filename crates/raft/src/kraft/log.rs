@@ -533,7 +533,7 @@ mod tests {
         {
             let mut log = KraftLog::open(dir.path()).expect("open");
             for _ in 0..5 {
-                log.append(&mut batch(0, 1, b"x")).unwrap();
+                log.append(&mut batch(0, 1, b"x"), 0).unwrap();
             }
             log.advance_hwm(log.log_end_offset());
             // Every record is in one segment, so no segment name records the

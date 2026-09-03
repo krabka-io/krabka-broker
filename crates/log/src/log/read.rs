@@ -107,6 +107,31 @@ crate::sendfile_cfg! {
 }
 
 impl Log {
+    /// Reject an offset no local segment can answer.
+    ///
+    /// Below the global log start there is nothing anywhere, and the error
+    /// says so. Between the global floor and the local one (KIP-405) the
+    /// records are in the remote tier: the read fails all the same, so the
+    /// broker's fetch path falls through to the remote reader rather than
+    /// serving the first batch a surviving segment happens to start with.
+    fn check_locally_readable(&self, offset: Offset) -> Result<(), LogError> {
+        let log_start = self.log_start_offset();
+        if offset < log_start {
+            return Err(LogError::OffsetTooLow {
+                requested: offset,
+                log_start,
+            });
+        }
+        let local_log_start = self.local_log_start_offset();
+        if offset < local_log_start {
+            return Err(LogError::OffsetBelowLocalStart {
+                requested: offset,
+                local_log_start,
+            });
+        }
+        Ok(())
+    }
+
     /// Read batches from `offset` and return up to about `max_size` of
     /// `.log` data.
     ///
@@ -130,14 +155,8 @@ impl Log {
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn read(&self, offset: Offset, max_size: ByteSize) -> Result<ReadOutput, LogError> {
         let read_buffer_cap = self.config.read().unwrap().read_buffer_cap;
-        let log_start = self.log_start_offset();
         let log_end = self.log_end_offset();
-        if offset < log_start {
-            return Err(LogError::OffsetTooLow {
-                requested: offset,
-                log_start,
-            });
-        }
+        self.check_locally_readable(offset)?;
         if offset >= log_end {
             return Ok(ReadOutput {
                 start_offset: log_end,
@@ -208,13 +227,7 @@ impl Log {
         max_size: ByteSize,
     ) -> Result<RawRead, LogError> {
         let read_buffer_cap = self.config.read().unwrap().read_buffer_cap;
-        let log_start = self.log_start_offset();
-        if fetch_offset < log_start {
-            return Err(LogError::OffsetTooLow {
-                requested: fetch_offset,
-                log_start,
-            });
-        }
+        self.check_locally_readable(fetch_offset)?;
         if fetch_offset >= limit_offset {
             return Ok(RawRead::empty(fetch_offset));
         }
@@ -319,13 +332,7 @@ impl Log {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawReadDesc, LogError> {
-        let log_start = self.log_start_offset();
-        if fetch_offset < log_start {
-            return Err(LogError::OffsetTooLow {
-                requested: fetch_offset,
-                log_start,
-            });
-        }
+        self.check_locally_readable(fetch_offset)?;
         if fetch_offset >= limit_offset {
             return Ok(RawReadDesc::empty(fetch_offset));
         }

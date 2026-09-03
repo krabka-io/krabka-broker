@@ -65,20 +65,39 @@ pub struct Log {
     segments: Vec<Segment>,
     active: Option<Segment>,
     dir_sync_needed: bool,
-    /// Override for `log_start_offset()`. When `Some(n)`, the effective
-    /// `log_start` is `max(derived_from_segments, n)`. `trim_to_offset` uses
-    /// this in the active-segment case to advance the log start pointer
-    /// without deletion of on-disk segments. Integration tests also use it to
-    /// simulate retention-driven truncation. KIP-405's
-    /// `local_log_start_offset` co-advances with this pointer, so
-    /// [`Log::local_log_start_offset`] delegates here. There is a single
-    /// source of truth.
+    /// The global log start (Kafka's `logStartOffset`): the first offset any
+    /// reader may ask for, wherever the records for it live.
     ///
-    /// The segment names carry the derived half of the start across a restart;
-    /// this half has no such witness, so [`Log::set_log_start_offset`] writes
-    /// it durably to `log-start-offset-checkpoint` and [`Log::open`] reads it
-    /// back, reconciling the file with what the log actually holds.
-    start_offset_override: Option<Offset>,
+    /// It is a pointer of its own rather than a value derived from the
+    /// segments on disk, because KIP-405 gives a tiered partition two floors
+    /// and only one of them follows local files. `DeleteRecords`, ordinary
+    /// retention, a trim and a reset move this one; dropping a local segment
+    /// whose copy is in the remote tier does not, and that is what leaves the
+    /// band `[log_start_offset(), local_log_start_offset())` for the remote
+    /// read path to serve. [`Log::local_log_start_offset`] is the second
+    /// floor.
+    ///
+    /// The segment names witness only the local half. [`Log::open`] derives
+    /// this pointer from them and then restores the durable half from
+    /// `log-start-offset-checkpoint`, which [`Log::set_log_start_offset`]
+    /// writes.
+    start_offset: Offset,
+
+    /// Whether [`Self::start_offset`] is a floor someone deleted up to, rather
+    /// than one derived from the segments that happened to be on disk at
+    /// [`Log::open`].
+    ///
+    /// True once this process moves the floor, and true at open when
+    /// `log-start-offset-checkpoint` restored one. False on a log whose only
+    /// witness is its segment names: on a tiered partition whose local
+    /// segments were evicted, that derivation sits *above* everything the
+    /// archive holds. Three callers must not act on such a floor: the remote
+    /// read would refuse offsets the archive can still serve, the log-start
+    /// breach in remote retention would delete the archive, and the
+    /// `ListOffsets(earliest)` clamp would report an offset past every record
+    /// the tier still holds. [`Log::established_log_start`] is what they ask
+    /// instead.
+    start_offset_established: bool,
 
     /// Last-Stable-Offset: the offset before the first record of any
     /// in-flight transaction. Defaults to `log_end_offset()` when no
