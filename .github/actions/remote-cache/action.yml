@@ -40,17 +40,16 @@ description: Write the BuildBuddy configuration into user.bazelrc, when this run
 
 inputs:
   api-key:
-    description: >-
-      A BuildBuddy API key: one line, sent as the `x-buildbuddy-api-key`
-      header. Empty on a fork, whose pull requests cannot read secrets, and
-      empty until the secret is added -- both mean "build locally".
+    # One line, sent as the `x-buildbuddy-api-key` header. Empty on a fork,
+    # whose pull requests cannot read secrets, and empty until the secret is
+    # added -- both mean "build locally".
+    description: A BuildBuddy API key.
     required: false
     default: ""
   client-cert:
-    description: >-
-      A PEM client certificate, for organizations that authenticate the cache
-      over mTLS instead of with an API key. Must be set together with
-      `client-key`.
+    # For organizations that authenticate the cache over mTLS instead of with
+    # an API key. Must be set together with `client-key`.
+    description: A PEM client certificate.
     required: false
     default: ""
   client-key:
@@ -58,10 +57,10 @@ inputs:
     required: false
     default: ""
   upload:
-    description: >-
-      Whether this run may write to the cache. Only trusted contexts should:
-      a pull request reads the third-party closure and every unchanged crate,
-      which is the bulk of the win, and cannot poison an entry it never writes.
+    # Only trusted contexts should: a pull request reads the third-party
+    # closure and every unchanged crate, which is the bulk of the win, and
+    # cannot poison an entry it never writes.
+    description: Whether this run may write to the cache.
     required: false
     default: "false"
 
