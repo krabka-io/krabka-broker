@@ -80,7 +80,7 @@ impl EmptyImageWatch {
 
 /// Restore the image this node last checkpointed and report the offset to
 /// fetch from next. A node with no checkpoint starts at the log start.
-fn resume(config: &ObserverConfig, store: &ObserverStore, observer: &MetadataObserver) -> u64 {
+fn resume(config: &ObserverConfig, store: &mut ObserverStore, observer: &MetadataObserver) -> u64 {
     let Some((image, fetch_offset)) = store.resume(config.cluster_id) else {
         return 0;
     };
@@ -100,7 +100,7 @@ pub(super) async fn run_loop(
     shutdown: CancellationToken,
 ) {
     let mut store = ObserverStore::open(&config.data_dir, config.snapshot_interval_records);
-    let mut fetch_offset: u64 = resume(&config, &store, &observer);
+    let mut fetch_offset: u64 = resume(&config, &mut store, &observer);
     let mut target_idx: usize = 0;
     let mut empty_image = EmptyImageWatch::default();
     loop {

@@ -13,15 +13,23 @@
 //! streams more bytes than the configured maximum aborts here exactly as it
 //! does there.
 //!
-//! The request asks for the whole artifact in one range, bounded by the same
-//! `snapshot_fetch_max` that bounds reassembly. `FetchSnapshot` carries the
+//! The request asks for as much of the artifact as one response can hold:
+//! whichever is smaller of `snapshot_fetch_max` and what fits inside this
+//! connection's frame budget. Both bounds matter. `FetchSnapshot` carries the
 //! bytes in the KIP-595 `unalignedRecords` field, and that field decodes
 //! leniently: a range that stops part-way through a record batch has the
-//! partial batch dropped, so a chunk cut at an arbitrary byte arrives empty. A
-//! whole artifact is a complete run of batches and survives. The loop below
-//! still requests successive ranges — the responder may serve fewer bytes than
-//! asked for — and gives up on a range that carries nothing rather than
-//! re-asking for the same position forever.
+//! partial batch dropped, so a range cut at an arbitrary byte arrives empty,
+//! while a whole artifact — a complete run of batches — survives. And a range
+//! larger than the frame budget cannot be delivered at all: the responder
+//! closes the connection rather than sending an oversized frame. Asking for
+//! more than either bound turns a snapshot that is merely too big into a
+//! connection that keeps dying.
+//!
+//! The loop below still requests successive ranges — the responder may serve
+//! fewer bytes than asked for — and gives up on a range that carries nothing
+//! rather than re-asking for the same position forever. A snapshot larger than
+//! the frame budget therefore fails cleanly, with a warning, instead of
+//! stalling.
 
 use std::sync::Arc;
 
@@ -37,11 +45,37 @@ use krabka_raft::{
         },
     },
 };
-use krabka_units::convert::ByteSizeExt as _;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _, kibibytes};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use super::{ObserverConfig, store::ObserverStore};
+
+/// Room left inside the connection's frame budget for everything wrapping the
+/// snapshot bytes: the response header and the `FetchSnapshot` envelope around
+/// the `unalignedRecords` field. Generous — the envelope is a topic name, a few
+/// ints and the snapshot id — because overshooting the frame maximum costs the
+/// whole connection while undershooting costs one extra range.
+const SNAPSHOT_RESPONSE_OVERHEAD: ByteSize = kibibytes(64);
+
+/// The largest byte range this observer may ask for: as much as it will
+/// reassemble, capped by what one response frame on this connection can carry.
+fn range_max_bytes(config: &ObserverConfig) -> i32 {
+    let frame_budget = config
+        .client_frame_max
+        .size()
+        .bytes_u64()
+        .saturating_sub(SNAPSHOT_RESPONSE_OVERHEAD.bytes_u64());
+    let capped = config
+        .snapshot_fetch_max
+        .byte_size()
+        .bytes_u64()
+        .min(frame_budget)
+        // A frame budget smaller than the overhead would ask for nothing at
+        // all, and a zero-byte range never makes progress.
+        .max(1);
+    i32::try_from(capped).unwrap_or(i32::MAX)
+}
 
 /// Fetch, install, and persist `snapshot_id` from the controller on `conn`.
 ///
@@ -95,10 +129,9 @@ async fn transfer(
             from: config.node_id,
             snapshot_id,
             position,
-            // KIP-595 `FetchSnapshot.MaxBytes` is an `int32`; the ceiling on
-            // what this node will reassemble converts here, at the wire
-            // boundary, so the responder is free to send the whole artifact.
-            max_bytes: config.snapshot_fetch_max.byte_size().bytes_i32(),
+            // KIP-595 `FetchSnapshot.MaxBytes` is an `int32`; the range bound
+            // converts here, at the wire boundary.
+            max_bytes: range_max_bytes(config),
         }
         .encode();
         let body = match conn
@@ -301,6 +334,40 @@ mod tests {
         assert!(restored.topic("pruned-away").is_some());
 
         mock.stop();
+    }
+
+    /// The range a request asks for is bounded by both limits that can stop a
+    /// response reaching this node: what it will reassemble, and what one frame
+    /// on this connection can carry. Asking past the frame maximum does not
+    /// yield a big response — it makes the responder close the connection, so
+    /// every retry fails and the node never becomes ready.
+    #[test]
+    fn a_snapshot_range_never_exceeds_the_connections_frame_budget() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = observer_config(Uuid::nil(), dir.path().to_path_buf());
+
+        // The default reassembly ceiling is 1 GiB and the frame maximum is
+        // 100 MiB, so the frame is what bounds the request.
+        let frame_max = i32::try_from(config.client_frame_max.bytes()).expect("frame max fits");
+        let asked = range_max_bytes(&config);
+        assert!(
+            asked < frame_max,
+            "asked {asked} against frame max {frame_max}"
+        );
+        assert!(
+            asked > frame_max / 2,
+            "the budget should be nearly the whole frame"
+        );
+
+        // A lower reassembly ceiling wins instead, and it is asked for whole.
+        let smaller = ObserverConfig {
+            snapshot_fetch_max: krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax::new(
+                krabka_units::kibibytes(512),
+            )
+            .expect("valid maximum"),
+            ..observer_config(Uuid::nil(), dir.path().to_path_buf())
+        };
+        assert!(range_max_bytes(&smaller) == 512 * 1024);
     }
 
     /// A responder that answers with a range carrying no bytes leaves the

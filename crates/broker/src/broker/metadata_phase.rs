@@ -201,9 +201,11 @@ async fn start_metadata_source(
             client_id: format!("krabka-broker-{}-observer", config.broker_id),
             cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
             node_id: config.node_id,
-            // Same directory a controller on this node would use, so the
-            // metadata checkpoints of the two roles are interchangeable on
-            // disk and a node can be re-roled without losing its image.
+            // The metadata log directory. The observer keeps its checkpoints
+            // in a subdirectory of their own beside the controller's, never in
+            // it: an observer checkpoint carries no KIP-853 control state and
+            // has no log to match its boundary, so a controller must not load
+            // one. See `metadata_observer::store`.
             data_dir: config.log_dir.join("__cluster_metadata"),
             snapshot_interval_records: config.metadata_snapshot_interval_records,
             snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
