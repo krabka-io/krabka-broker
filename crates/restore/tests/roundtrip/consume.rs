@@ -411,6 +411,17 @@ async fn a_restored_broker_restarts_and_appends_at_the_archived_end_offset() {
     check!(part.error_code == 0, "Produce: {part:?}");
     check!(part.base_offset == expected_offset);
 
+    // The `acks=1` ack is sent before the writer recomputes the high
+    // watermark (`crates/broker/src/partition_writer/produce.rs` acks every
+    // append, then advances the HW), so a Fetch issued the instant Produce
+    // returns can still be capped at the pre-append watermark and answer with
+    // the archived batches alone. Waiting for the watermark to cover the new
+    // record is a condition wait on real state, not a delay.
+    cluster
+        .broker
+        .wait_until_high_watermark(TOPIC, PARTITION, expected_offset + 1)
+        .await;
+
     // And the appended record reads back at that offset, after the archived
     // batches, through the same fetch path.
     let batches = fetch_from(

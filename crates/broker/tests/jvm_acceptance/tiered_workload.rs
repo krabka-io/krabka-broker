@@ -167,6 +167,107 @@ pub(crate) async fn wait_for_minio_segments(bucket: &str, min_log_objects: usize
     );
 }
 
+/// The artifact suffixes a KIP-405 copy writes for every segment, and that
+/// `krabka_restore::verify_segment` requires before it will restore one.
+///
+/// `.txnindex` is absent for a segment with no aborted transaction, so it is
+/// not on this list. The order matches the order
+/// `S3RemoteStorage::copy_segment_objects` uploads them in: `.log` lands
+/// first, which is exactly why counting `.log` objects does not mean a
+/// segment is fully copied.
+const SEGMENT_ARTIFACTS: [&str; 5] = [
+    ".log",
+    ".index",
+    ".timeindex",
+    ".snapshot",
+    ".leader_epoch_checkpoint",
+];
+
+/// The key each `mc ls --recursive` line names. It is the last
+/// whitespace-separated field of the line, after the date, size and class.
+fn listed_key(line: &str) -> Option<&str> {
+    line.split_whitespace().last()
+}
+
+/// Group `listing`'s keys by segment and report `(complete, seen)`: how many
+/// segments hold every entry of [`SEGMENT_ARTIFACTS`], and how many segments
+/// the listing mentions at all.
+fn segment_completeness(listing: &str) -> (usize, usize) {
+    let mut segments: std::collections::BTreeMap<&str, std::collections::BTreeSet<&str>> =
+        std::collections::BTreeMap::new();
+    for key in listing.lines().filter_map(listed_key) {
+        // The suffixes share no common tail -- `.timeindex` does not end with
+        // `.index` -- so at most one matches, and the stem before it names the
+        // segment.
+        if let Some(suffix) = SEGMENT_ARTIFACTS
+            .iter()
+            .find(|suffix| key.ends_with(**suffix))
+        {
+            let stem = &key[..key.len() - suffix.len()];
+            segments.entry(stem).or_default().insert(suffix);
+        }
+    }
+    let complete = segments
+        .values()
+        .filter(|found| found.len() == SEGMENT_ARTIFACTS.len())
+        .count();
+    (complete, segments.len())
+}
+
+/// Poll `mc ls --recursive local/<bucket>` until the archive holds at least
+/// `min_segments` FULLY copied segments and no partly copied one, then return
+/// the listing.
+///
+/// [`wait_for_minio_segments`] counts `.log` objects, which is enough for a
+/// test that reads the archive back through the broker that wrote it: a
+/// half-copied segment is simply not read. A caller that restores the bucket
+/// with no broker behind it needs more, because
+/// `krabka_restore::verify_segment` raises `TornCopy` for a segment missing
+/// any of [`SEGMENT_ARTIFACTS`], and `copy_segment_objects` uploads the `.log`
+/// before them.
+///
+/// The wait also requires the listing to stop changing, because the copy task
+/// is spawned detached and `BrokerHandle::shutdown` cancels its token without
+/// joining it: a caller that shuts the source cluster down mid-copy leaves a
+/// torn segment in the bucket forever. The producer has already finished by
+/// the time this runs, so the set of sealed segments is finite, and a listing
+/// that is complete and unchanged for longer than one `RemoteLogManager` tick
+/// means the copy task has run out of work -- a terminal condition, not a
+/// guess at how long a copy takes.
+///
+/// The poll runs at 500 ms intervals for up to 30 s. It panics if the archive
+/// never settles.
+pub(crate) async fn wait_for_settled_minio_segments(bucket: &str, min_segments: usize) -> String {
+    // Identical consecutive listings that count as settled. The tiered
+    // harness runs the `RemoteLogManager` at a 1 s tick and copies one segment
+    // per partition per tick, so three unchanged 500 ms polls span a whole
+    // tick that started no new copy.
+    const STABLE_POLLS: usize = 3;
+
+    let mut previous = String::new();
+    let mut stable = 0usize;
+    let mut listing = String::new();
+    let mut complete = 0usize;
+    let mut seen = 0usize;
+    for _ in 0..60 {
+        // intentional: bounded poll of an external process (MinIO via `mc ls`);
+        // no krabka metric reflects object arrival in the bucket.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        listing = minio_list_objects(bucket);
+        (complete, seen) = segment_completeness(&listing);
+        stable = if listing == previous { stable + 1 } else { 0 };
+        if complete >= min_segments && complete == seen && stable >= STABLE_POLLS {
+            return listing;
+        }
+        previous.clone_from(&listing);
+    }
+    panic!(
+        "expected ≥{min_segments} fully copied segments in MinIO and no torn copy, settled; \
+         saw {complete} complete of {seen} after {stable} unchanged polls. \
+         Bucket listing:\n{listing}"
+    );
+}
+
 /// Consume up to `max` records from `topic` (partition 0, from-beginning)
 /// with the JVM console consumer. Returns the number of non-empty output
 /// lines.

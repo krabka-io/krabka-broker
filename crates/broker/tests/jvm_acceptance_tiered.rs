@@ -483,7 +483,13 @@ async fn restored_cluster_serves_the_jvm_console_consumer() {
 
     create_tiered_topic(&broker, TOPIC).await;
     produce_records(TOPIC, RECORDS);
-    wait_for_minio_segments(MINIO_BUCKET, 2).await;
+    // Not `wait_for_minio_segments`: that returns as soon as the `.log`
+    // objects appear, and `copy_segment_objects` uploads the `.log` before the
+    // indexes, producer snapshot and leader-epoch checkpoint that
+    // `verify_segment` requires. Shutting the source cluster down on such a
+    // listing leaves a torn segment the restore then refuses. This waits for
+    // whole segments and for the copy task to run out of work.
+    wait_for_settled_minio_segments(MINIO_BUCKET, 2).await;
 
     // The source cluster is gone from here on: the restore reads the bucket,
     // and nothing else. Dropping its log directory is what makes that true --
