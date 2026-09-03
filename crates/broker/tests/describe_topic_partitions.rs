@@ -20,6 +20,7 @@ use krabka_protocol::owned::{
     describe_topic_partitions_request::{
         Cursor as RequestCursor, DescribeTopicPartitionsRequest, TopicRequest,
     },
+    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };
 
 // Bit positions (subset; cross-check'd with the KIP-430 unit tests).
@@ -217,6 +218,133 @@ async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
     assert!(
         part.last_known_elr.as_deref() == Some(&[][..]),
         "last_known_elr must be empty list, not null"
+    );
+
+    p.broker.shutdown().await;
+}
+
+/// The `DescribeTopicPartitions` request the ELR-downgrade case sends twice,
+/// once on either side of the downgrade.
+fn describe_request() -> DescribeTopicPartitionsRequest {
+    DescribeTopicPartitionsRequest {
+        topics: vec![TopicRequest {
+            name: "t".into(),
+            ..Default::default()
+        }],
+        response_partition_limit: 2000,
+        cursor: None,
+        ..Default::default()
+    }
+}
+
+/// KIP-966: a downgrade of `eligible.leader.replicas.version` to 0 clears the
+/// memberships the feature published, so `DescribeTopicPartitions` reports an
+/// empty `Elr` afterwards.
+///
+/// This is the read side of Kafka's `generateRecordsForCleaningElr`. The
+/// membership is seeded as the topic-config override the controller publishes,
+/// which is how krabka carries ELR, and the downgrade goes through
+/// `UpdateFeatures` exactly as `kafka-features downgrade` sends it.
+#[tokio::test]
+async fn a_feature_downgrade_empties_the_reported_elr() {
+    let p = support::start().await;
+    create_topic(&p, "t", 1).await;
+
+    p.broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: "eligible.leader.replicas.version".into(),
+                level: 1,
+            },
+        ))
+        .await
+        .expect("finalize eligible.leader.replicas.version");
+    p.broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1TopicConfig(
+            krabka_metadata::TopicConfigRecord {
+                topic: "t".into(),
+                overrides: [
+                    ("min.insync.replicas".to_string(), "2".to_string()),
+                    ("krabka.elr".to_string(), "0:2,3:".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        ))
+        .await
+        .expect("publish an ELR");
+
+    let before = p
+        .client
+        .send(describe_request())
+        .await
+        .expect("describe before");
+    assert!(
+        before.topics[0].partitions[0]
+            .eligible_leader_replicas
+            .as_deref()
+            == Some(&[2, 3][..]),
+        "precondition: the published membership is reported: {:?}",
+        before.topics[0].partitions[0]
+    );
+
+    let downgrade = p
+        .client
+        .send(UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: "eligible.leader.replicas.version".into(),
+                max_version_level: 0,
+                // 2 = SAFE_DOWNGRADE, what `kafka-features downgrade` sends.
+                upgrade_type: 2,
+                ..Default::default()
+            }],
+            timeout_ms: 10_000,
+            ..Default::default()
+        })
+        .await
+        .expect("UpdateFeatures");
+    assert!(
+        downgrade.error_code == 0,
+        "UpdateFeatures rejected the request: {downgrade:?}"
+    );
+
+    // The clearing records ride in the same batch as the feature record, so
+    // they are committed together; the describe below waits only for this
+    // broker to have applied that batch.
+    //
+    // intentional poll: the only signal that the batch applied is the state
+    // it changes, which is what is being asserted.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let after = loop {
+        let resp = p
+            .client
+            .send(describe_request())
+            .await
+            .expect("describe after");
+        let cleared = resp.topics[0].partitions[0]
+            .eligible_leader_replicas
+            .as_deref()
+            == Some(&[][..]);
+        if cleared || std::time::Instant::now() > deadline {
+            break resp;
+        }
+        tokio::task::yield_now().await;
+    };
+    let part = &after.topics[0].partitions[0];
+    check!(
+        part.eligible_leader_replicas.as_deref() == Some(&[][..]),
+        "the downgrade must clear the ELR, got {:?}",
+        part.eligible_leader_replicas
+    );
+    check!(part.last_known_elr.as_deref() == Some(&[][..]));
+    // KIP-584 treats level 0 as a delete, so the feature leaves the finalized
+    // map rather than sitting at 0; `feature_enabled` reads both as off.
+    check!(
+        p.broker
+            .controller_image_for_test()
+            .finalized_feature("eligible.leader.replicas.version")
+            == None,
+        "the downgrade must remove the finalized feature"
     );
 
     p.broker.shutdown().await;

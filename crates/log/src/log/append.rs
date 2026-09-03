@@ -6,21 +6,35 @@
 //! the producer state, and the leader-epoch checkpoint move identically.
 
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::records::{RecordBatch, TimestampType};
 use tracing::instrument;
 
 use super::{
     Log,
     control::{ControlBatchKind, control_batch_kind},
 };
-use crate::{error::LogError, producer_snapshot, segment::Segment, txn_index::TxnIndex};
+use crate::{
+    config::{DeliveryPolicy, ScheduleOrder},
+    error::LogError,
+    producer_snapshot, retention,
+    segment::Segment,
+    txn_index::TxnIndex,
+};
 
 impl Log {
-    /// Append a `RecordBatch` and return the assigned `base_offset`.
+    /// Append a `RecordBatch` and return the assigned `base_offset` together
+    /// with the log-append stamp the batch carries away from this call.
     ///
     /// The log overwrites the batch's `base_offset` with the next assigned
     /// offset. `last_offset_delta` sets how many absolute offsets this batch
     /// consumes.
+    ///
+    /// The second element is `Some(ms)` exactly when the partition's
+    /// `message.timestamp.type` is `LogAppendTime`, and it is the broker clock
+    /// reading this append stamped into the batch. It is Kafka's
+    /// `LogAppendInfo.logAppendTime`, which `ProduceResponse.logAppendTimeMs`
+    /// reports; `None` is a `CreateTime` partition, which Kafka answers with
+    /// `-1`.
     #[instrument(
         level = "debug",
         skip_all,
@@ -29,13 +43,17 @@ impl Log {
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn append(&mut self, batch: &mut RecordBatch) -> Result<Offset, LogError> {
+    pub fn append(&mut self, batch: &mut RecordBatch) -> Result<(Offset, Option<i64>), LogError> {
+        // KFC-1, before an offset is assigned and before anything is written,
+        // so a refused batch leaves the log exactly as it found it.
+        self.reject_backwards_schedule(batch.max_timestamp)?;
         // `partition_leader_epoch` is the raw KIP-320 wire `int32`; wrap it into
         // the domain newtype at this boundary.
         let leader_epoch = LeaderEpoch(batch.partition_leader_epoch);
         let assigned_base = self.append_at_expected_offset();
         tracing::Span::current().record("assigned_base", assigned_base.0);
         batch.base_offset = assigned_base.0;
+        let log_append_time_ms = self.stamp_owned_log_append_time(batch);
         self.append_preserving_offset(batch, None)?;
         // Record epoch transition when the epoch is valid and exceeds the
         // previously recorded epoch (or no epoch has been recorded yet).
@@ -49,7 +67,95 @@ impl Log {
             self.rollback_failed_append(assigned_base)?;
             return Err(error);
         }
-        Ok(assigned_base)
+        Ok((assigned_base, log_append_time_ms))
+    }
+
+    /// Refuse a batch that would make a scheduled partition's schedule run
+    /// backwards, which is KFC-1's `delivery.schedule.monotonic`.
+    ///
+    /// `delivery_ms` is the batch's `max_timestamp`, which on a
+    /// [`DeliveryPolicy::Scheduled`] partition is the time its records become
+    /// visible. KFC-1 defines the rejection against "the largest delivery time
+    /// already in the partition", and the log answers that as an existence
+    /// query: one record scheduled strictly after this batch is one record
+    /// this batch would hold up.
+    ///
+    /// Visibility is offset-ordered for a classic group, because a group's
+    /// position is one offset and a record it reads past is unreachable for it
+    /// forever. A batch that comes due before an earlier one therefore stalls
+    /// everything behind it rather than overtaking it, and the setting turns
+    /// that silent stall into an error at the producer that caused it.
+    ///
+    /// The two offset-assigning leader appends call this, and they call it
+    /// under the same lock acquisition that writes the batch. That is the
+    /// whole point of the check living here: a test taken before the append
+    /// admits two producers, or two jobs of one writer group, that then land
+    /// out of order.
+    ///
+    /// [`Log::offset_for_timestamp`] skips a segment whose own cached maximum
+    /// sits below the target, so a schedule that runs forward — the accepted
+    /// case — costs one integer comparison per segment and no disk read. Only
+    /// a rejected batch pays for an index lookup and a bounded scan. An
+    /// immediate partition, and a scheduled one that did not ask for the
+    /// setting, read two config fields and stop.
+    ///
+    /// # Errors
+    /// Returns [`LogError::ScheduleRunsBackwards`] when the partition already
+    /// holds a record whose delivery time is strictly after `delivery_ms`.
+    pub(super) fn reject_backwards_schedule(&self, delivery_ms: i64) -> Result<(), LogError> {
+        let monotonic = {
+            let config = self.config.read().unwrap();
+            config.delivery_policy == DeliveryPolicy::Scheduled
+                && config.schedule_order == ScheduleOrder::Monotonic
+        };
+        if !monotonic {
+            return Ok(());
+        }
+        // Nothing can be scheduled after `i64::MAX`, so a batch that names it
+        // is never the one that runs backwards.
+        let Some(later) = delivery_ms.checked_add(1) else {
+            return Ok(());
+        };
+        if self.offset_for_timestamp(later).is_some() {
+            return Err(LogError::ScheduleRunsBackwards { delivery_ms });
+        }
+        Ok(())
+    }
+
+    /// Stamp Kafka's log-append time onto an owned batch, when the partition
+    /// asks for it, and report the stamp.
+    ///
+    /// This is `LogValidator`'s `batch.setMaxTimestamp(LOG_APPEND_TIME, now)`:
+    /// on a `message.timestamp.type=LogAppendTime` partition every batch
+    /// carries the broker's clock at append instead of the producer's own
+    /// timestamps. Exactly two header fields move, the timestamp-type
+    /// attribute bit and `max_timestamp`; `base_timestamp` and the per-record
+    /// deltas stay as the producer wrote them, and a reader substitutes
+    /// `max_timestamp` for every record while the bit is set. The owned path
+    /// re-encodes the batch on the way to the segment, so its CRC follows on
+    /// its own.
+    ///
+    /// Only the offset-assigning append paths call this. Kafka runs
+    /// `LogValidator` under `validateAndAssignOffsets`, which is exactly the
+    /// leader append, and never on `appendAsFollower`: a follower stores the
+    /// leader's bytes as they arrived, already stamped, and re-stamping them
+    /// with the follower's own clock would give the two replicas different
+    /// bytes for one offset.
+    fn stamp_owned_log_append_time(&self, batch: &mut RecordBatch) -> Option<i64> {
+        let now = self.log_append_time_stamp()?;
+        batch.attributes = batch
+            .attributes
+            .with_timestamp_type(TimestampType::LogAppendTime);
+        batch.max_timestamp = now;
+        Some(now)
+    }
+
+    /// The broker clock reading this append stamps, or `None` on a
+    /// `CreateTime` partition, which stamps nothing.
+    pub(super) fn log_append_time_stamp(&self) -> Option<i64> {
+        let log_append_time =
+            self.config.read().unwrap().message_timestamp_type == TimestampType::LogAppendTime;
+        log_append_time.then(|| retention::now_ms(std::time::SystemTime::now()))
     }
 
     /// Append a commit-marker batch with a coordinator-supplied transaction
@@ -70,6 +176,11 @@ impl Log {
         self.validate_commit_stamp_batch(batch)?;
         let assigned_base = self.append_at_expected_offset();
         batch.base_offset = assigned_base.0;
+        // A marker is an offset-assigning append too. Kafka runs the same
+        // `LogValidator` over an `AppendOrigin.COORDINATOR` append as over a
+        // client one, so a `LogAppendTime` partition stamps its markers as
+        // well as its data batches.
+        self.stamp_owned_log_append_time(batch);
         self.append_preserving_offset(batch, Some(stamp))?;
         self.observe_stamp(stamp);
         Ok(assigned_base)

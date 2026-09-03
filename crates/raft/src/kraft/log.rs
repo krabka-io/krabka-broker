@@ -86,7 +86,10 @@ impl KraftLog {
         // so one stamp is the create-time of all of them.
         batch.base_timestamp = append_timestamp_ms;
         batch.max_timestamp = append_timestamp_ms;
-        Ok(self.log.append(batch)?)
+        // The metadata log is always `CreateTime`, so the log stamps nothing
+        // and the second element of the append result is always `None`.
+        let (base_offset, _log_append_time_ms) = self.log.append(batch)?;
+        Ok(base_offset)
     }
 
     /// Follower path: appends a batch at the leader-assigned `offset`.

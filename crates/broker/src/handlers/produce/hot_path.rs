@@ -18,6 +18,7 @@ use bytes::Bytes;
 use krabka_compression::{CompressionType, RecordDecompressionPolicy};
 use krabka_log::Log;
 
+pub use super::topic_settings::TimestampPolicy;
 use super::{
     append::build_produce_data,
     framing::PartitionPayload,
@@ -61,6 +62,11 @@ pub struct HotPathSettings<'a> {
     /// The topic's `compression.type`. `None` is producer pass-through, which
     /// is what keeps a batch on the verbatim path.
     pub topic_compression: Option<CompressionType>,
+    /// The topic's `message.timestamp.type` and the two
+    /// `message.timestamp.{before,after}.max.ms` windows. The default policy
+    /// bounds nothing, which is what keeps the walk over record timestamps off
+    /// the hot path.
+    pub timestamps: TimestampPolicy,
     pub decompression_policy: RecordDecompressionPolicy,
     pub metrics: &'a BrokerMetrics,
     pub leader_epoch: i32,
@@ -87,12 +93,14 @@ pub fn append_one_batch(
         PathChoice::Dispatch => prepare_batch(
             PartitionPayload::Slice(records),
             settings.topic_compression,
+            settings.timestamps,
             &settings.topic_name,
             settings.metrics,
             settings.decompression_policy,
         )?,
         PathChoice::ForceOwned => owned_fallback(
             records,
+            settings.timestamps,
             &settings.topic_name,
             settings.metrics,
             settings.decompression_policy,

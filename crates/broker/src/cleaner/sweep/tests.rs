@@ -9,7 +9,9 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
-use crate::cleaner::test_support::{compactable_partition, record_count};
+use crate::cleaner::test_support::{
+    compactable_partition, compactable_partition_with_config, record_count,
+};
 
 #[tokio::test]
 async fn tick_all_compacts_only_local_leader_compact_topics() {
@@ -26,6 +28,16 @@ async fn tick_all_compacts_only_local_leader_compact_topics() {
             false,
         ),
         ("local-delete", 7, krabka_log::CleanupPolicy::Delete, false),
+        // Kafka derives `compact` from the policy list by membership, so a
+        // `compact,delete` topic is the cleaner's work exactly as a `compact`
+        // one is. Kafka Streams writes that value on every windowed-store
+        // changelog topic.
+        (
+            "local-compact-and-delete",
+            7,
+            krabka_log::CleanupPolicy::CompactAndDelete,
+            true,
+        ),
     ];
     let cases: Vec<_> = specs
         .into_iter()
@@ -57,6 +69,53 @@ async fn tick_all_compacts_only_local_leader_compact_topics() {
             "case: {topic} (before={before}, after={after}, expect_compacted={expect_compacted})"
         );
     }
+}
+
+/// Kafka's cleanable test, from the sweep's side: a partition whose dirty
+/// region is too small a share of the log earns no pass, and the same
+/// partition earns one once `max.compaction.lag.ms` has elapsed over it.
+#[tokio::test]
+async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
+    let dir = tempfile::tempdir().expect("log root");
+    let registry = PartitionRegistry::new();
+    let base = krabka_log::LogConfig {
+        cleanup_policy: krabka_log::CleanupPolicy::Compact,
+        segment_size: krabka_units::bytes(256),
+        // No share of the log short of all of it is worth a pass.
+        min_cleanable_dirty_ratio: krabka_units::fraction(1.0),
+        ..Default::default()
+    };
+    let partition =
+        compactable_partition_with_config(&dir, "too-clean", 0, NodeId(7), base.clone());
+    let before = record_count(&partition);
+    registry.insert(
+        "too-clean".into(),
+        PartitionIndex(0),
+        Arc::clone(&partition),
+    );
+
+    let metrics = BrokerMetrics::new();
+    tick_all(&registry, None, NodeId(7), &metrics).await;
+    assert!(
+        record_count(&partition) == before,
+        "ratio must hold it back"
+    );
+
+    // The partition's records are older than a one-millisecond max lag, so
+    // the next sweep owes it a pass however clean the ratio says it is.
+    partition
+        .log
+        .lock()
+        .expect("partition log lock")
+        .set_config(krabka_log::LogConfig {
+            max_compaction_lag: Some(krabka_units::millis(1)),
+            ..base
+        });
+    tick_all(&registry, None, NodeId(7), &metrics).await;
+    assert!(
+        record_count(&partition) < before,
+        "the max lag must force a pass"
+    );
 }
 
 // ── KFC-9 topic write freeze ─────────────────────────────────────

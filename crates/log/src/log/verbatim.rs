@@ -4,13 +4,35 @@
 //! Only `base_offset` and `partition_leader_epoch` are patched into the
 //! bytes, and both sit outside the CRC region, so the producer's body and
 //! checksum reach disk exactly as they arrived.
+//!
+//! A `message.timestamp.type=LogAppendTime` partition is the one exception:
+//! it also rewrites the timestamp-type attribute bit, `max_timestamp`, and
+//! the CRC over them, which is exactly the three fields Kafka's
+//! `LogValidator` rewrites. The producer's records are still stored as they
+//! arrived.
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
+use krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType};
 use tracing::instrument;
 
 use super::Log;
 use crate::error::LogError;
+
+/// Byte range of the `crc` field in the v2 batch header: the four bytes that
+/// sit immediately before the region the CRC covers.
+const CRC_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START - 4..CRC_COVERAGE_START;
+
+/// Byte range of `attributes` in the v2 batch header. It is the first field
+/// the CRC covers, so it starts at [`CRC_COVERAGE_START`] and is two bytes
+/// wide.
+const ATTRIBUTES_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START..CRC_COVERAGE_START + 2;
+
+/// Byte range of `max_timestamp` in the v2 batch header: `attributes` (2) plus
+/// `last_offset_delta` (4) plus `base_timestamp` (8) after
+/// [`CRC_COVERAGE_START`], and eight bytes wide.
+const MAX_TIMESTAMP_RANGE: std::ops::Range<usize> =
+    CRC_COVERAGE_START + 14..CRC_COVERAGE_START + 22;
 
 /// A producer batch that the log appends **verbatim**, with no decode and
 /// no re-encode.
@@ -50,9 +72,48 @@ pub struct VerbatimBatch {
     pub is_transactional: bool,
 }
 
+impl VerbatimBatch {
+    /// This batch with Kafka's log-append time stamped into it.
+    ///
+    /// This is `LogValidator`'s `batch.setMaxTimestamp(LOG_APPEND_TIME, now)`
+    /// applied to wire bytes rather than to a decoded batch: it moves the
+    /// timestamp-type attribute bit, `max_timestamp`, and the CRC that covers
+    /// them, and nothing else. `base_timestamp` and the per-record deltas stay
+    /// as the producer wrote them, exactly as in Kafka, because a reader
+    /// substitutes `max_timestamp` for every record while the bit is set.
+    ///
+    /// The three fields sit at fixed offsets in the header, so the patch needs
+    /// no decode. Two of them are inside the CRC region, which is why this is
+    /// the one place the passthrough path recomputes a CRC: over the patched
+    /// header tail and the producer's own body, which never changes. The batch
+    /// bytes are copied once, so only a `LogAppendTime` partition pays for the
+    /// copy and a `CreateTime` one keeps the zero-copy append whole.
+    #[must_use]
+    fn stamped_with_log_append_time(&self, now: i64) -> Self {
+        let mut bytes = BytesMut::from(&self.bytes[..]);
+        let attributes = Attributes(i16::from_be_bytes([
+            bytes[ATTRIBUTES_RANGE.start],
+            bytes[ATTRIBUTES_RANGE.start + 1],
+        ]))
+        .with_timestamp_type(TimestampType::LogAppendTime);
+        bytes[ATTRIBUTES_RANGE].copy_from_slice(&attributes.0.to_be_bytes());
+        bytes[MAX_TIMESTAMP_RANGE].copy_from_slice(&now.to_be_bytes());
+        // The CRC covers the header from `attributes` to the end of the batch,
+        // and the body follows the header without a gap, so one pass over the
+        // tail of the buffer is the whole covered region.
+        let crc = crc32c::crc32c(&bytes[CRC_COVERAGE_START..]);
+        bytes[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
+        Self {
+            bytes: bytes.freeze(),
+            max_timestamp: now,
+            ..self.clone()
+        }
+    }
+}
+
 impl Log {
     /// Append a producer batch **verbatim** and return the assigned
-    /// `base_offset`.
+    /// `base_offset` plus the log-append stamp, as [`Log::append`] does.
     ///
     /// The log does not decode or re-encode the batch, and it takes
     /// `base_offset` from the log's current end. This is the produce
@@ -76,10 +137,24 @@ impl Log {
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn append_verbatim(&mut self, batch: &VerbatimBatch) -> Result<Offset, LogError> {
+    pub fn append_verbatim(
+        &mut self,
+        batch: &VerbatimBatch,
+    ) -> Result<(Offset, Option<i64>), LogError> {
+        // KFC-1, before an offset is assigned and before anything is written,
+        // so a refused batch leaves the log exactly as it found it.
+        self.reject_backwards_schedule(batch.max_timestamp)?;
         let leader_epoch = batch.leader_epoch;
         let assigned_base = self.append_at_expected_offset();
         tracing::Span::current().record("assigned_base", assigned_base.0);
+        // A batch too short to hold a header cannot be patched. Passing it on
+        // unchanged lets the segment append report the truncation it already
+        // reports, rather than turning it into a panic here.
+        let stamp = self
+            .log_append_time_stamp()
+            .filter(|_| batch.bytes.len() >= HEADER_LEN);
+        let stamped = stamp.map(|now| batch.stamped_with_log_append_time(now));
+        let batch = stamped.as_ref().unwrap_or(batch);
         self.append_verbatim_preserving_offset(batch, assigned_base)?;
         if leader_epoch.is_known()
             && self
@@ -91,7 +166,7 @@ impl Log {
             self.rollback_failed_append(assigned_base)?;
             return Err(error);
         }
-        Ok(assigned_base)
+        Ok((assigned_base, stamp))
     }
 
     /// Append a producer batch **verbatim** at a caller-supplied base offset.

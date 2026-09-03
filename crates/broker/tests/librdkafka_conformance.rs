@@ -1,4 +1,12 @@
-//! Stock kcat client against krabka.
+//! The stock librdkafka client against krabka.
+//!
+//! Only one entry: no published image carries a CLI linked against a current
+//! librdkafka. `kcat` has had no release since 1.7.1 and its own build script
+//! pins librdkafka 1.8.2, so Confluent's `cp-kcat:8.2.3` -- a 2026 build --
+//! still reports `Version 1.7.1 (... librdkafka 1.8.2)`, exactly what
+//! `edenhill/kcat:1.7.1` reports. A librdkafka 2.x run would therefore need an
+//! image built here rather than a pinned published one; see the note on
+//! [`CLIENTS`]. The table stays a table so that adding one is a row.
 
 mod jvm_acceptance;
 mod support;
@@ -13,11 +21,33 @@ use krabka_client_admin::{AdminClient, CreateTopicSpec};
 
 use crate::jvm_acceptance::{broker0_advertised, start_host_broker};
 
-const CLIENTS: [(&str, &str, &str); 1] = [(
-    "mirror.gcr.io/edenhill/kcat:1.7.1",
-    "kcat",
-    "librdkafka 1.8.2",
-)];
+/// One librdkafka client this suite runs the whole round trip against.
+struct ClientCase {
+    /// The image, pinned in `MODULE.bazel` and named in the
+    /// `librdkafka_conformance` entry of the `docker` map in `BUILD.bazel`.
+    image: &'static str,
+    /// The binary inside it.
+    program: &'static str,
+    /// How the KIP matrix names this client's library. The generator reads
+    /// this field out of the table, so it is the string the matrix shows.
+    library: &'static str,
+    /// The substring of the client's own `-V` banner that proves it: the
+    /// banner is what says which librdkafka the binary is linked against.
+    version_marker: &'static str,
+}
+
+/// Every librdkafka client this suite drives.
+///
+/// The 1.x client has neither KIP-848 (`group.protocol=consumer`) nor KIP-714
+/// (metrics push), so this suite says nothing about either: it establishes the
+/// version-negotiation and flexible-version rows of the KIP matrix and the
+/// classic-protocol round trip, and nothing more.
+const CLIENTS: [ClientCase; 1] = [ClientCase {
+    image: "mirror.gcr.io/edenhill/kcat:1.7.1",
+    program: "kcat",
+    library: "librdkafka 1.8.2",
+    version_marker: "librdkafka 1.8.2",
+}];
 
 fn run_client(image: &str, program: &str, args: &[&str], input: Option<&str>) -> Output {
     let mut child = Command::new("docker")
@@ -64,7 +94,16 @@ async fn round_trip_group_join_and_api_versions_with_kcat() {
         .await
         .expect("admin client");
 
-    for (index, (image, program, expected_library)) in CLIENTS.iter().enumerate() {
+    for (
+        index,
+        ClientCase {
+            image,
+            program,
+            library,
+            version_marker,
+        },
+    ) in CLIENTS.iter().enumerate()
+    {
         let version = run_client(image, program, &["-V"], None);
         let version = format!(
             "{}{}",
@@ -72,8 +111,8 @@ async fn round_trip_group_join_and_api_versions_with_kcat() {
             String::from_utf8_lossy(&version.stderr)
         );
         assert!(
-            version.contains(expected_library),
-            "{program} is not linked to {expected_library}: {version}"
+            version.contains(version_marker),
+            "{program} is not linked to {library}: {version}"
         );
 
         let topic = format!("librdkafka-conformance-{index}");
@@ -150,10 +189,10 @@ async fn round_trip_group_join_and_api_versions_with_kcat() {
             "{program} round-trip mismatch: {}",
             String::from_utf8_lossy(&consumed.stdout)
         );
+        let trace = String::from_utf8_lossy(&consumed.stderr);
         assert!(
-            String::from_utf8_lossy(&consumed.stderr).contains("JoinGroup"),
-            "{program} did not join a consumer group: {}",
-            String::from_utf8_lossy(&consumed.stderr)
+            trace.contains("JoinGroup"),
+            "{program} did not join a consumer group: {trace}"
         );
     }
 

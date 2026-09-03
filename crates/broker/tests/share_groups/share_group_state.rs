@@ -13,11 +13,19 @@ use crate::share_group_harness::{
     boot, broker_config, connect, create_topic, describe, heartbeat, topic_id,
 };
 
+/// Kafka's `PartitionFactory.UNINITIALIZED_START_OFFSET`: the share state
+/// exists but where the partition starts has not been decided yet.
+const UNINITIALIZED_START_OFFSET: i64 = -1;
+
 /// KIP-932 group-coordinator lifecycle. When a share group joins a topic with
 /// `P` partitions, the coordinator initializes the per-partition share state in
-/// the `__share_group_state` persister. Each entry has `start_offset` 0 and a
-/// present state, not the missing-key sentinel. The heartbeat hook runs after
-/// the reconcile.
+/// the `__share_group_state` persister. Each entry has a present state, not the
+/// missing-key sentinel, and `start_offset`
+/// [`UNINITIALIZED_START_OFFSET`]: the coordinator records that the
+/// partition exists and leaves where it starts to the share partition, which
+/// resolves the group's `share.auto.offset.reset` on its first load, as
+/// Kafka's `SharePartition.maybeInitialize` does. The heartbeat hook runs
+/// after the reconcile.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lifecycle_initializes_share_state() {
     let (broker, bootstrap, _d) = boot().await;
@@ -69,8 +77,9 @@ async fn lifecycle_initializes_share_state() {
             .await
             .unwrap();
         assert!(
-            start_offset == 0,
-            "partition {p} initialized at start_offset 0, got {start_offset}"
+            start_offset == UNINITIALIZED_START_OFFSET,
+            "partition {p} initialized at start_offset {UNINITIALIZED_START_OFFSET}, \
+             got {start_offset}"
         );
     }
 }

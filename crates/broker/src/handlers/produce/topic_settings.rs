@@ -1,8 +1,12 @@
 //! The per-topic produce settings that the handler resolves once per topic
 //! out of the metadata image, before it walks that topic's partitions.
 
+use krabka_protocol::records::TimestampType;
+
 use crate::config_keys::{
-    COMPRESSION_TYPE, configured_min_insync_replicas, parse_compression_type,
+    COMPRESSION_TYPE, MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS,
+    MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, configured_min_insync_replicas,
+    parse_compression_type,
 };
 
 /// Resolve `min.insync.replicas` for a topic from the metadata image.
@@ -48,11 +52,125 @@ pub(super) fn resolve_topic_compression(
         .flatten()
 }
 
+/// A topic's KIP-32 timestamp policy at produce time: whose clock the stored
+/// records carry, and how far a producer's own timestamp may sit from the
+/// broker's clock.
+///
+/// Kafka keeps the three settings together in `LogValidator`, and so does
+/// this: `message.timestamp.type` decides whether the window applies at all,
+/// because `validateTimestamp` tests a record's timestamp only under
+/// `CreateTime`. A `LogAppendTime` topic overwrites every timestamp with the
+/// broker's clock at append, so there is nothing left for the window to
+/// refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimestampPolicy {
+    /// The topic's `message.timestamp.type`.
+    timestamp_type: TimestampType,
+    /// `message.timestamp.before.max.ms`: how far behind the broker's clock a
+    /// producer timestamp may sit. `None` is Kafka's `Long.MAX_VALUE` default,
+    /// which removes the bound.
+    before_max_ms: Option<i64>,
+    /// `message.timestamp.after.max.ms`: how far ahead of the broker's clock a
+    /// producer timestamp may sit. `None` is the same default and the same
+    /// meaning.
+    after_max_ms: Option<i64>,
+}
+
+impl Default for TimestampPolicy {
+    /// Kafka's defaults: the producer's own timestamps, and neither window
+    /// bounded. Every topic that configured none of the three keys resolves to
+    /// this, and so does the benchmark seam.
+    fn default() -> Self {
+        Self {
+            timestamp_type: TimestampType::CreateTime,
+            before_max_ms: None,
+            after_max_ms: None,
+        }
+    }
+}
+
+impl TimestampPolicy {
+    /// Whether any record timestamp in a batch has to be looked at.
+    ///
+    /// False on every topic that left both windows at their defaults, which is
+    /// every topic that did not ask for the check, and on a `LogAppendTime`
+    /// topic whatever the windows say. The produce path then reads no clock
+    /// and walks no records.
+    pub(super) fn bounds_records(self) -> bool {
+        self.timestamp_type == TimestampType::CreateTime
+            && (self.before_max_ms.is_some() || self.after_max_ms.is_some())
+    }
+
+    /// Whether `timestamp_ms` is outside the window `now_ms` puts it in, which
+    /// Kafka answers with `INVALID_TIMESTAMP` for the whole batch.
+    ///
+    /// This is `LogValidator.recordHasInvalidTimestamp`: the record is refused
+    /// when it is more than `before.max.ms` older than the broker's clock or
+    /// more than `after.max.ms` newer than it. `NO_TIMESTAMP` (-1) is exempt,
+    /// as it is in Kafka, because such a record carries no timestamp to judge.
+    /// The arithmetic saturates rather than wrapping: a producer that sends
+    /// `i64::MIN` must be refused, not admitted by an overflow.
+    pub(super) fn rejects_record(self, timestamp_ms: i64, now_ms: i64) -> bool {
+        if !self.bounds_records() || timestamp_ms == NO_TIMESTAMP {
+            return false;
+        }
+        let difference = now_ms.saturating_sub(timestamp_ms);
+        self.before_max_ms.is_some_and(|before| difference > before)
+            || self
+                .after_max_ms
+                .is_some_and(|after| difference.saturating_neg() > after)
+    }
+}
+
+/// Kafka's `RecordBatch.NO_TIMESTAMP`: a record that carries no create time.
+const NO_TIMESTAMP: i64 = -1;
+
+/// Resolve a topic's produce-time timestamp policy from the metadata image.
+///
+/// Every topic has one, so this returns a value rather than an `Option`: the
+/// default is `CreateTime` with both windows open, which is Kafka's default and
+/// costs the produce path one boolean test per batch.
+///
+/// An unparseable window falls back to "no bound", the same direction the other
+/// produce-side config reads fall back in. `AlterConfigs` already refused the
+/// value, so a string here that does not parse means a corrupt metadata image,
+/// and refusing every write to the topic over one is the worse answer.
+pub(super) fn resolve_timestamp_policy(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+) -> TimestampPolicy {
+    let configs = image.topic_config(topic);
+    let value = |key: &str| configs.and_then(|c| c.get(key)).map(String::as_str);
+    let timestamp_type = if value(MESSAGE_TIMESTAMP_TYPE) == Some(MESSAGE_TIMESTAMP_TYPE_LOG_APPEND)
+    {
+        TimestampType::LogAppendTime
+    } else {
+        TimestampType::CreateTime
+    };
+    TimestampPolicy {
+        timestamp_type,
+        before_max_ms: parse_timestamp_window(value(MESSAGE_TIMESTAMP_BEFORE_MAX_MS)),
+        after_max_ms: parse_timestamp_window(value(MESSAGE_TIMESTAMP_AFTER_MAX_MS)),
+    }
+}
+
+/// One `message.timestamp.{before,after}.max.ms` value as a bound.
+///
+/// `None` is "no bound": the key is unset, it carries Kafka's `Long.MAX_VALUE`
+/// default, or it carries a value that does not parse. A negative value is a
+/// bound of its own in Kafka -- the config's minimum is 0 -- so nothing here
+/// clamps one.
+fn parse_timestamp_window(value: Option<&str>) -> Option<i64> {
+    value
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|ms| *ms != i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_compression::CompressionType;
     use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
     use uuid::Uuid;
@@ -214,5 +332,151 @@ mod tests {
                 "compression.type {config_value:?}"
             );
         }
+    }
+
+    /// Kafka's `LogValidator.recordHasInvalidTimestamp`, which is
+    /// `now - timestamp > before.max.ms || timestamp - now > after.max.ms`,
+    /// applied only under `CreateTime` and only to a record that carries a
+    /// timestamp at all.
+    #[test]
+    fn the_window_is_kafkas_record_timestamp_test() {
+        const NOW: i64 = 1_000_000;
+        let policy = |timestamp_type, before, after| TimestampPolicy {
+            timestamp_type,
+            before_max_ms: before,
+            after_max_ms: after,
+        };
+        let cases = [
+            (
+                "a topic that configured neither window admits any timestamp",
+                policy(TimestampType::CreateTime, None, None),
+                0,
+                false,
+            ),
+            (
+                "exactly at the past bound is still inside the window",
+                policy(TimestampType::CreateTime, Some(100), None),
+                NOW - 100,
+                false,
+            ),
+            (
+                "one millisecond past the past bound is outside it",
+                policy(TimestampType::CreateTime, Some(100), None),
+                NOW - 101,
+                true,
+            ),
+            (
+                "exactly at the future bound is still inside the window",
+                policy(TimestampType::CreateTime, None, Some(100)),
+                NOW + 100,
+                false,
+            ),
+            (
+                "one millisecond past the future bound is outside it",
+                policy(TimestampType::CreateTime, None, Some(100)),
+                NOW + 101,
+                true,
+            ),
+            (
+                "the past bound says nothing about a future timestamp",
+                policy(TimestampType::CreateTime, Some(100), None),
+                NOW + 100_000,
+                false,
+            ),
+            (
+                "NO_TIMESTAMP carries no time to judge, so Kafka exempts it",
+                policy(TimestampType::CreateTime, Some(100), Some(100)),
+                -1,
+                false,
+            ),
+            (
+                "a LogAppendTime topic overwrites the timestamp, so it ignores the window",
+                policy(TimestampType::LogAppendTime, Some(100), Some(100)),
+                0,
+                false,
+            ),
+            (
+                "an absurd timestamp saturates rather than wrapping into the window",
+                policy(TimestampType::CreateTime, Some(100), Some(100)),
+                i64::MIN,
+                true,
+            ),
+        ];
+        for (label, policy, timestamp_ms, want_rejected) in cases {
+            check!(
+                policy.rejects_record(timestamp_ms, NOW) == want_rejected,
+                "{label}"
+            );
+        }
+    }
+
+    /// The three keys the produce path resolves per topic, and the defaults it
+    /// resolves for a topic that set none of them.
+    #[test]
+    fn resolve_timestamp_policy_reads_the_three_keys() {
+        let cases = [
+            (
+                "an unconfigured topic is CreateTime with both windows open",
+                vec![],
+                TimestampPolicy::default(),
+            ),
+            (
+                "LogAppendTime alone",
+                vec![(MESSAGE_TIMESTAMP_TYPE, "LogAppendTime")],
+                TimestampPolicy {
+                    timestamp_type: TimestampType::LogAppendTime,
+                    before_max_ms: None,
+                    after_max_ms: None,
+                },
+            ),
+            (
+                "both windows",
+                vec![
+                    (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "1000"),
+                    (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "2000"),
+                ],
+                TimestampPolicy {
+                    timestamp_type: TimestampType::CreateTime,
+                    before_max_ms: Some(1_000),
+                    after_max_ms: Some(2_000),
+                },
+            ),
+            (
+                "Kafka's Long.MAX_VALUE default spells `no bound`",
+                vec![(MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "9223372036854775807")],
+                TimestampPolicy::default(),
+            ),
+            (
+                "an unparseable window falls back to no bound",
+                vec![(MESSAGE_TIMESTAMP_AFTER_MAX_MS, "soon")],
+                TimestampPolicy::default(),
+            ),
+            (
+                "an unknown timestamp type is CreateTime, the default",
+                vec![(MESSAGE_TIMESTAMP_TYPE, "WallClock")],
+                TimestampPolicy::default(),
+            ),
+        ];
+        for (label, overrides, want) in cases {
+            let mut img = image_with_topic("t", &[1]);
+            let mut map = BTreeMap::new();
+            for (key, value) in overrides {
+                map.insert(key.to_string(), value.to_string());
+            }
+            img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "t".into(),
+                overrides: map,
+            }));
+            check!(resolve_timestamp_policy(&img, "t") == want, "{label}");
+        }
+    }
+
+    /// A topic the image does not know resolves to the defaults rather than
+    /// refusing every write to it.
+    #[test]
+    fn resolve_timestamp_policy_defaults_on_an_unknown_topic() {
+        let img = MetadataImage::new(Uuid::nil());
+
+        check!(resolve_timestamp_policy(&img, "ghost") == TimestampPolicy::default());
     }
 }

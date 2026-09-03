@@ -73,5 +73,7 @@ pub(crate) mod unclean_restart;
 mod tests;
 
 pub(crate) use self::{
-    maintain::ElrPublisher, state::TopicElr, unclean_restart::withdraw_elr_membership,
+    maintain::ElrPublisher,
+    state::TopicElr,
+    unclean_restart::{clear_published_elr, withdraw_elr_membership},
 };

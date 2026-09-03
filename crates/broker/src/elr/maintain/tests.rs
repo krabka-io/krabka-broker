@@ -50,6 +50,7 @@ fn image(
     current: &PartitionRecord,
 ) -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
+    crate::test_support::finalize_elr_version(&mut image);
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: TOPIC.into(),
         topic_id: uuid::Uuid::from_u128(1),
@@ -419,4 +420,54 @@ fn one_record_carries_every_partition_the_batch_moved() {
                 .collect(),
             })]
     );
+}
+
+/// KIP-966 is gated on `eligible.leader.replicas.version`, the way Kafka's
+/// `ReplicationControlManager` builds every `PartitionChangeBuilder` with
+/// `setEligibleLeaderReplicasEnabled(isElrEnabled())`. At level 0 the
+/// publisher appends nothing, so no partition ever gains an eligible or
+/// last-known-eligible set; at level 1 it appends what the rules imply. The
+/// same batch and the same image differ only by the finalized level.
+#[test]
+fn the_publisher_appends_nothing_below_feature_level_one() {
+    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
+    let shrink = MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1]));
+
+    for (case, enabled, want_appended) in [
+        ("the feature is off", false, 0),
+        ("the feature is finalized at 1", true, 1),
+    ] {
+        // `image` finalizes the feature; the off case builds the same image
+        // without that record.
+        let mut img = if enabled {
+            image(Some("2"), None, &before)
+        } else {
+            let mut plain = MetadataImage::new(uuid::Uuid::nil());
+            plain.apply(&MetadataRecord::V1Topic(TopicRecord {
+                name: TOPIC.into(),
+                topic_id: uuid::Uuid::from_u128(1),
+                partitions: 1,
+                replication_factor: 3,
+            }));
+            plain.apply(&MetadataRecord::V1Partition(before.clone()));
+            plain.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: TOPIC.into(),
+                overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
+                    .into_iter()
+                    .collect(),
+            }));
+            plain
+        };
+        // The publisher reads the image, so it must not be mutated further.
+        let _ = &mut img;
+
+        let mut changes = vec![shrink.clone()];
+        ElrPublisher::new(&img).extend(&mut changes);
+
+        assert!(
+            changes.len() == 1 + want_appended,
+            "{case}: appended {} record(s), want {want_appended}: {changes:?}",
+            changes.len() - 1
+        );
+    }
 }

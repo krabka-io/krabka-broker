@@ -13,7 +13,29 @@ use krabka_log::{Log, Offset};
 use tokio::runtime::{Handle, RuntimeFlavor};
 
 use super::storage::{lock_log, storage_failure_error};
-use crate::partition::ProduceData;
+use crate::partition::{AppendedBatch, ProduceData};
+
+/// The writer's answer for a batch the log both placed and, when the partition
+/// asks for it, stamped.
+fn appended((base_offset, log_append_time_ms): (Offset, Option<i64>)) -> AppendedBatch {
+    AppendedBatch {
+        base_offset,
+        log_append_time_ms,
+    }
+}
+
+/// The writer's answer for an append at a caller-assigned offset.
+///
+/// These appends carry no log-append stamp. Kafka stamps under
+/// `validateAndAssignOffsets`, which is the offset-assigning leader append
+/// alone: a follower stores the leader's already-stamped bytes, and re-stamping
+/// them would give one offset two different encodings across replicas.
+fn at_offset(base_offset: Offset) -> AppendedBatch {
+    AppendedBatch {
+        base_offset,
+        log_append_time_ms: None,
+    }
+}
 
 /// Append a whole group of produce jobs under a single lock acquisition.
 ///
@@ -28,7 +50,10 @@ use crate::partition::ProduceData;
 fn append_produce_batch(
     log: &Mutex<Log>,
     datas: Vec<ProduceData>,
-) -> (Vec<Result<Offset, crate::error::BrokerError>>, Offset) {
+) -> (
+    Vec<Result<AppendedBatch, crate::error::BrokerError>>,
+    Offset,
+) {
     let mut guard = lock_log(log);
     let target = guard.config_snapshot().compression_type;
     let mut results = Vec::with_capacity(datas.len());
@@ -36,6 +61,7 @@ fn append_produce_batch(
         let r = match data {
             ProduceData::Verbatim(batch) => guard
                 .append_verbatim(&batch)
+                .map(appended)
                 .map_err(crate::error::BrokerError::from),
             ProduceData::Owned(mut batch) => {
                 if let Some(target) = target
@@ -45,16 +71,22 @@ fn append_produce_batch(
                 }
                 guard
                     .append(&mut batch)
+                    .map(appended)
                     .map_err(crate::error::BrokerError::from)
             }
             ProduceData::OwnedControl(mut batch) => guard
                 .append(&mut batch)
+                .map(appended)
                 .map_err(crate::error::BrokerError::from),
             ProduceData::OwnedCommitMarker {
                 mut batch,
                 commit_stamp,
             } => guard
                 .append_with_commit_stamp(&mut batch, commit_stamp)
+                .map(|base_offset| AppendedBatch {
+                    base_offset,
+                    log_append_time_ms: None,
+                })
                 .map_err(crate::error::BrokerError::from),
         };
         results.push(r);
@@ -69,7 +101,10 @@ fn append_produce_batch_at(
     log: &Mutex<Log>,
     base: Offset,
     datas: Vec<ProduceData>,
-) -> (Vec<Result<Offset, crate::error::BrokerError>>, Offset) {
+) -> (
+    Vec<Result<AppendedBatch, crate::error::BrokerError>>,
+    Offset,
+) {
     let mut guard = lock_log(log);
     let target = guard.config_snapshot().compression_type;
     let mut next = base;
@@ -79,6 +114,7 @@ fn append_produce_batch_at(
         let result = match data {
             ProduceData::Verbatim(batch) => guard
                 .append_verbatim_at(&batch, next)
+                .map(at_offset)
                 .map_err(crate::error::BrokerError::from),
             ProduceData::Owned(mut batch) => {
                 if let Some(target) = target
@@ -88,19 +124,19 @@ fn append_produce_batch_at(
                 }
                 guard
                     .append_at(&mut batch, next)
-                    .map(|()| next)
+                    .map(|()| at_offset(next))
                     .map_err(crate::error::BrokerError::from)
             }
             ProduceData::OwnedControl(mut batch) => guard
                 .append_at(&mut batch, next)
-                .map(|()| next)
+                .map(|()| at_offset(next))
                 .map_err(crate::error::BrokerError::from),
             ProduceData::OwnedCommitMarker {
                 mut batch,
                 commit_stamp,
             } => guard
                 .append_at_with_commit_stamp(&mut batch, next, commit_stamp)
-                .map(|()| next)
+                .map(|()| at_offset(next))
                 .map_err(crate::error::BrokerError::from),
         };
         next = Offset(next.0 + count);
@@ -122,7 +158,13 @@ fn append_produce_batch_at(
 pub(crate) async fn run_produce_append_batch(
     log: Arc<Mutex<Log>>,
     datas: Vec<ProduceData>,
-) -> Result<(Vec<Result<Offset, crate::error::BrokerError>>, Offset), crate::error::BrokerError> {
+) -> Result<
+    (
+        Vec<Result<AppendedBatch, crate::error::BrokerError>>,
+        Offset,
+    ),
+    crate::error::BrokerError,
+> {
     match Handle::current().runtime_flavor() {
         RuntimeFlavor::MultiThread => catch_unwind(AssertUnwindSafe(|| {
             tokio::task::block_in_place(move || append_produce_batch(&log, datas))
@@ -138,7 +180,13 @@ pub(crate) async fn run_produce_append_batch_at(
     log: Arc<Mutex<Log>>,
     base: Offset,
     datas: Vec<ProduceData>,
-) -> Result<(Vec<Result<Offset, crate::error::BrokerError>>, Offset), crate::error::BrokerError> {
+) -> Result<
+    (
+        Vec<Result<AppendedBatch, crate::error::BrokerError>>,
+        Offset,
+    ),
+    crate::error::BrokerError,
+> {
     match Handle::current().runtime_flavor() {
         RuntimeFlavor::MultiThread => catch_unwind(AssertUnwindSafe(|| {
             tokio::task::block_in_place(move || append_produce_batch_at(&log, base, datas))
@@ -197,7 +245,7 @@ mod tests {
             ],
         );
 
-        assert!(results[0].as_ref().unwrap() == &Offset(0));
+        assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
         assert!(matches!(
             &results[1],
             Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
@@ -226,7 +274,7 @@ mod tests {
             ],
         );
 
-        assert!(results[0].as_ref().unwrap() == &Offset(0));
+        assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
         assert!(matches!(
             &results[1],
             Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
@@ -237,7 +285,7 @@ mod tests {
         let (results, leo) =
             append_produce_batch_at(&log, Offset(2), vec![ProduceData::Owned(sample_batch(1))]);
 
-        assert!(results[0].as_ref().unwrap() == &Offset(2));
+        assert!(results[0].as_ref().unwrap().base_offset == Offset(2));
         assert!(leo == Offset(3));
     }
 
@@ -261,7 +309,7 @@ mod tests {
         let (results, leo) = append_produce_batch(&log, vec![ProduceData::Owned(original)]);
         assert!(results.len() == 1);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
-        assert!(assigned == 0);
+        assert!(assigned.base_offset == 0);
         assert!(leo == 2);
 
         let read = log
@@ -298,7 +346,7 @@ mod tests {
 
         let (results, _) = append_produce_batch(&log, vec![ProduceData::OwnedControl(marker)]);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
-        assert!(assigned == 0);
+        assert!(assigned.base_offset == 0);
 
         let read = log
             .lock()
@@ -332,7 +380,15 @@ mod tests {
 
         let (results, _) =
             append_produce_batch_at(&log, Offset(0), vec![ProduceData::OwnedControl(marker)]);
-        assert!(results.into_iter().next().unwrap().expect("append ok") == 0);
+        assert!(
+            results
+                .into_iter()
+                .next()
+                .unwrap()
+                .expect("append ok")
+                .base_offset
+                == 0
+        );
 
         let read = log
             .lock()

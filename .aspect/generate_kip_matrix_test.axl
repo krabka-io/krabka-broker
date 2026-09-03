@@ -411,16 +411,28 @@ def _test_link_citations(_ctx):
 
 def _test_librdkafka_clients(_ctx):
     suite = "\n".join([
-        "const CLIENTS: [(&str, &str, &str); 1] = [(",
-        '    "mirror.gcr.io/edenhill/kcat:1.7.1",',
-        '    "kcat",',
-        '    "librdkafka 1.8.2",',
-        ")];",
+        "const CLIENTS: [ClientCase; 2] = [",
+        "    ClientCase {",
+        '        image: "mirror.gcr.io/edenhill/kcat:1.7.1",',
+        '        program: "kcat",',
+        '        library: "librdkafka 1.8.2",',
+        '        version_marker: "librdkafka 1.8.2",',
+        "    },",
+        "    ClientCase {",
+        '        image: "mirror.gcr.io/example/rdkafka-example:2",',
+        '        program: "rdkafka_example",',
+        '        library: "librdkafka 2.x",',
+        '        version_marker: "librdkafka 2.",',
+        "    },",
+        "];",
     ])
     check_eq(
-        "image, program and library",
+        "one triple per client, in table order",
         librdkafka_clients(suite),
-        ("mirror.gcr.io/edenhill/kcat:1.7.1", "kcat", "librdkafka 1.8.2"),
+        [
+            ("mirror.gcr.io/edenhill/kcat:1.7.1", "kcat", "librdkafka 1.8.2"),
+            ("mirror.gcr.io/example/rdkafka-example:2", "rdkafka_example", "librdkafka 2.x"),
+        ],
     )
 
 def _test_log_contract_rows(_ctx):

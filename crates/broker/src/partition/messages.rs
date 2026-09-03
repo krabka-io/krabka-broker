@@ -63,6 +63,23 @@ impl ProduceData {
     }
 }
 
+/// What the writer reports back for one appended batch.
+///
+/// This is Kafka's `LogAppendInfo` narrowed to the two values a produce
+/// response takes from the append itself: where the batch landed and, on a
+/// `message.timestamp.type=LogAppendTime` partition, the broker clock the log
+/// stamped into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppendedBatch {
+    /// The offset the log assigned to the batch's first record.
+    pub base_offset: Offset,
+    /// Kafka's `LogAppendInfo.logAppendTime`, which the produce response
+    /// carries as `logAppendTimeMs`. `Some(ms)` only on a `LogAppendTime`
+    /// partition; `None` under `CreateTime`, which the response reports as
+    /// the `-1` Kafka reports.
+    pub log_append_time_ms: Option<i64>,
+}
+
 /// Produce-path message sent from the Produce handler to the partition's
 /// writer task. The writer assigns `base_offset`, overwrites whatever the
 /// handler put there, and replies with the assigned value.
@@ -70,9 +87,9 @@ impl ProduceData {
 pub struct ProduceJob {
     /// The records to append (verbatim passthrough or owned fallback).
     pub data: ProduceData,
-    /// Oneshot that the writer uses to report success, with the assigned
-    /// base offset, or failure back to the handler.
-    pub ack: oneshot::Sender<Result<Offset, BrokerError>>,
+    /// Oneshot that the writer uses to report a successful append, or failure,
+    /// back to the handler.
+    pub ack: oneshot::Sender<Result<AppendedBatch, BrokerError>>,
 }
 
 /// All message kinds the partition's writer task accepts.

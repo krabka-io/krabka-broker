@@ -42,6 +42,10 @@ fn controller_listen() -> &'static str {
     &ports().2
 }
 const KAFKA_IMAGE_NEXT_GEN: &str = "mirror.gcr.io/apache/kafka:4.0.0";
+/// Kafka 4.3.1 is the oracle for broker-side subscription regexes: from 4.1 the
+/// console consumer subscribes with `SubscriptionPattern` when
+/// `group.protocol=consumer`, so `--include` reaches the broker as the
+/// heartbeat's `SubscribedTopicRegex` instead of being compiled client-side.
 const KAFKA_IMAGE_CLASSIC: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 
 async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
@@ -442,3 +446,17 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
 
     drop(broker);
 }
+
+// A `SubscribedTopicRegex` that does not compile is answered
+// `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, but
+// there is no JVM-lane case for it: no stock JVM client sends an invalid
+// pattern to the broker. `KafkaConsumer.subscribe(Pattern)` and
+// `kafka-console-consumer --include` compile it locally with
+// `java.util.regex`, so `apache/kafka:4.3.1` fails inside
+// `ConsoleConsumer$ConsumerWrapper` with `PatternSyntaxException: Unclosed
+// group` before opening a connection. Only a compiled 4.x application using
+// the `SubscriptionPattern` overload sends the string through, and no image
+// here carries both a JDK and the 4.x client jars. The broker behaviour is
+// pinned over the wire instead, by
+// `consumer_group_next_gen::an_invalid_subscribed_topic_regex_fails_the_heartbeat`,
+// and in `coordinator::unified::actor::member_state`'s unit tests.

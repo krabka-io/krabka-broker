@@ -104,7 +104,16 @@ _FEATURE_RULES = [
         "crates/broker/src/coordinator/unified/replay_streams",
         "crates/broker/src/coordinator/unified/streams_conversion",
         "crates/broker/src/handlers/streams_group",
-    ], ["jvm_streams_groups"]),
+    ], ["jvm_streams_groups", "jvm_streams_app"]),
+    # A distributed Kafka Connect worker backs its config, offset and status
+    # stores with `KafkaBasedLog`: three compacted topics it creates, the end
+    # offsets it reads before it will serve, and the replay from the beginning
+    # that follows. Those two are the broker surfaces the worker will not boot
+    # without, so they are what selects the suite.
+    ([
+        "crates/broker/src/cleaner",
+        "crates/broker/src/handlers/list_offsets",
+    ], ["jvm_connect_distributed"]),
     ([
         "crates/broker/src/features.rs",
         "crates/broker/src/handlers/update_features",
@@ -487,13 +496,18 @@ def _self_test():
         _select(["crates/broker/src/share_partition/state.rs"], available) == [_target("jvm_share_groups")],
         "share source must select share groups",
     )
+
+    # Both streams suites, and neither consumer-group one: the compiled
+    # `KafkaStreams` topology and the `StreamsGroupHeartbeat` admin case read
+    # the same broker surface, so a change to it has to run both.
+    streams_suites = sorted([_target("jvm_streams_app"), _target("jvm_streams_groups")])
     _check(
-        _select(["crates/broker/src/coordinator/unified/streams/metadata.rs"], available) == [_target("jvm_streams_groups")],
-        "streams source must not select consumer group next-gen",
+        _select(["crates/broker/src/coordinator/unified/streams/metadata.rs"], available) == streams_suites,
+        "streams source must select both streams suites and not consumer group next-gen",
     )
     _check(
-        _select(["crates/broker/src/coordinator/unified/replay_streams.rs"], available) == [_target("jvm_streams_groups")],
-        "streams replay source must not select consumer group next-gen",
+        _select(["crates/broker/src/coordinator/unified/replay_streams.rs"], available) == streams_suites,
+        "streams replay source must select both streams suites and not consumer group next-gen",
     )
     _check(
         _select(["crates/broker/src/coordinator/unified/group.rs"], available) == [_target("jvm_consumer_group_next_gen")],

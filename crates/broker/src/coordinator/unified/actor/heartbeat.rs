@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 use super::{
     ActorServices, ErrorCode, FALLBACK_HEARTBEAT_INTERVAL_MS, MetadataProvider, chrono_now_ms,
     downgrade::maybe_downgrade,
-    member_state::{build_member, reported_owned, run_reconcile, update_member_state},
+    member_state::{reported_owned, run_reconcile, try_build_member, update_member_state},
     pending_records::PendingRecords,
     persistence::{flush_pending, snapshot_pending_after_change},
 };
@@ -191,7 +191,15 @@ pub(crate) fn step_heartbeat(
                 pending: PendingRecords::default(),
             };
         }
-        let m = build_member(&new_member_id, req, client, now);
+        let m = match try_build_member(&new_member_id, req, client, now) {
+            Ok(m) => m,
+            Err(message) => {
+                return HeartbeatStep {
+                    response: invalid_regex_resp(message, config),
+                    pending: PendingRecords::default(),
+                };
+            }
+        };
         state.add_or_update_member(m);
         run_reconcile(state, config, metadata);
         state.advance_member_epoch(&new_member_id);
@@ -221,7 +229,16 @@ pub(crate) fn step_heartbeat(
 
     // ─── Steady-state: update last_seen / subscription / owned ───
     let previous_target_epoch = state.target.epoch;
-    let any_change = update_member_state(state, config, metadata, req, client, now, cur_epoch);
+    let any_change = match update_member_state(state, config, metadata, req, client, now, cur_epoch)
+    {
+        Ok(changed) => changed,
+        Err(message) => {
+            return HeartbeatStep {
+                response: invalid_regex_resp(message, config),
+                pending: PendingRecords::default(),
+            };
+        }
+    };
     let pending = if any_change {
         snapshot_pending_after_change(
             state,
@@ -298,6 +315,16 @@ fn base_resp(
 
 fn error_resp(error_code: ErrorCode, config: &NextGenConfig) -> ConsumerGroupHeartbeatResponse {
     base_resp(error_code, 0, config)
+}
+
+/// The `INVALID_REGULAR_EXPRESSION` (128) rejection Kafka answers to a
+/// heartbeat whose `SubscribedTopicRegex` does not compile. Kafka carries the
+/// exception's message in `error_message`, so do the same.
+fn invalid_regex_resp(message: String, config: &NextGenConfig) -> ConsumerGroupHeartbeatResponse {
+    ConsumerGroupHeartbeatResponse {
+        error_message: Some(message),
+        ..error_resp(codes::INVALID_REGULAR_EXPRESSION, config)
+    }
 }
 
 fn build_assignment_resp(

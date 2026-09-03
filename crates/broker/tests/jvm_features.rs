@@ -447,3 +447,56 @@ async fn kafka_features_describe_and_round_trip() {
     observer.shutdown().await;
     handle.shutdown().await;
 }
+
+/// KIP-966: `eligible.leader.replicas.version` is a row the stock tool can
+/// describe, enable and disable.
+///
+/// `kafka-features describe` lists every feature the broker advertises in
+/// `ApiVersions.supported_features`, so the row is there before anyone
+/// finalizes it, at the release default of 0 — `ELRV_1` bootstraps at
+/// 4.1-IV0, above the highest `metadata.version` krabka advertises. An
+/// operator then turns it on with `upgrade` and off again with `downgrade`,
+/// which is what a runbook or a Terraform apply that pins the flag does. The
+/// broker-side effect of each level (the controller publishing or clearing
+/// ELR) is pinned by the in-process tests; this case pins that the JVM tool
+/// can drive it at all, which is the bug the row's absence caused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Docker"]
+async fn kafka_features_describes_and_round_trips_elr() {
+    const ELR: &str = "eligible.leader.replicas.version";
+
+    let (handle, _dir) = start_host_broker().await;
+
+    let desc = kafka_features(&["describe"]);
+    assert!(
+        desc.status.success(),
+        "describe failed: {}",
+        String::from_utf8_lossy(&desc.stderr)
+    );
+    let out = String::from_utf8_lossy(&desc.stdout);
+    assert!(out.contains(ELR), "describe must list {ELR}:\n{out}");
+    assert!(
+        finalized_level(&out, ELR).unwrap_or(0) == 0,
+        "{ELR} must start disabled:\n{out}"
+    );
+
+    for (verb, want) in [("upgrade", 1), ("downgrade", 0)] {
+        let spec = format!("{ELR}={want}");
+        let out = kafka_features(&[verb, "--feature", &spec]);
+        assert!(
+            out.status.success(),
+            "{verb} {spec} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let desc = kafka_features(&["describe"]);
+        let text = String::from_utf8_lossy(&desc.stdout);
+        // A level-0 finalize is KIP-584's delete, so the finalized level is
+        // either absent or 0 after the downgrade; both read as disabled.
+        assert!(
+            finalized_level(&text, ELR).unwrap_or(0) == i64::from(want),
+            "{ELR} should read {want} after {verb}:\n{text}"
+        );
+    }
+
+    handle.shutdown().await;
+}

@@ -9,6 +9,8 @@
 //! openraft's debug assertions race on the hosted Windows scheduler, so these
 //! tests are gated off Windows, like the other multi-node suites.
 
+use std::time::{Duration, Instant};
+
 use assert2::assert;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId};
 use krabka_raft::reconfig::{ReconfigOutcome, RemoveVoter};
@@ -129,13 +131,34 @@ async fn remove_voter_shrinks_quorum() {
         .voter_directory_id_for_test(victim)
         .expect("victim's directory id present in image");
 
-    let outcome = leader
-        .remove_voter_for_test(RemoveVoter {
-            id: victim,
-            directory_id: victim_dir,
-        })
-        .await
-        .expect("remove_voter RPC");
+    // KIP-853 serialises reconfigurations, and the auto-join that grew the
+    // quorum to three clears its in-flight state a moment after the record it
+    // appended commits -- so a removal issued the instant the image reports
+    // three voters can still be refused with `ReconfigInProgress`. That is the
+    // transient the broker's own `AddRaftVoter` handler maps to
+    // `REQUEST_TIMED_OUT`, which is to say the one a real admin client retries,
+    // and it is what this test does rather than racing the window. A refusal
+    // that never clears still fails, on the deadline.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let outcome = loop {
+        match leader
+            .remove_voter_for_test(RemoveVoter {
+                id: victim,
+                directory_id: victim_dir,
+            })
+            .await
+        {
+            Ok(outcome) => break outcome,
+            Err(krabka_raft::RaftError::ReconfigInProgress) => {
+                assert!(
+                    Instant::now() <= deadline,
+                    "remove_voter kept reporting ReconfigInProgress",
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => panic!("remove_voter RPC: {error:?}"),
+        }
+    };
     assert!(
         matches!(outcome, ReconfigOutcome::Committed),
         "remove_voter should commit on the leader, got {outcome:?}"

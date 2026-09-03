@@ -21,6 +21,9 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         find_coordinator_request::FindCoordinatorRequest,
+        incremental_alter_configs_request::{
+            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
+        },
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         share_acknowledge_request::{
             AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AckAckBatch,
@@ -147,6 +150,47 @@ pub async fn bootstrap_share_state(
             .wait_until_partition_present(SHARE_STATE_TOPIC, p)
             .await;
     }
+    set_auto_offset_reset_earliest(client, group).await;
+}
+
+/// Kafka resource type id for `GROUP`.
+const RESOURCE_TYPE_GROUP: i8 = 32;
+
+/// `config_operation` SET = 0 in the `IncrementalAlterConfigs` wire protocol.
+const CONFIG_OP_SET: i8 = 0;
+
+/// Put the group on `share.auto.offset.reset=earliest`, which is what every
+/// test in this binary assumes: each one produces its records before the first
+/// member joins and then expects to acquire them.
+///
+/// Kafka's default is `latest`, and a share partition with no persisted state
+/// resolves the strategy the first time it is loaded, so without this the
+/// records produced above are behind the resolved start offset and no fetch
+/// ever sees them. This is the same `kafka-configs --entity-type groups
+/// --alter` a share-group operator runs to replay a topic from its beginning.
+pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
+    let resp = client
+        .send(IncrementalAlterConfigsRequest {
+            resources: vec![AlterConfigsResource {
+                resource_type: RESOURCE_TYPE_GROUP,
+                resource_name: group.into(),
+                configs: vec![AlterableConfig {
+                    name: "share.auto.offset.reset".into(),
+                    config_operation: CONFIG_OP_SET,
+                    value: Some("earliest".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("IncrementalAlterConfigs(group)");
+    assert!(
+        resp.responses[0].error_code == 0,
+        "share.auto.offset.reset=earliest rejected: {:?}",
+        resp.responses[0].error_message
+    );
 }
 
 pub async fn wait_for_share_init(

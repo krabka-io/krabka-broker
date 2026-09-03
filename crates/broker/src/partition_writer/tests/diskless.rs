@@ -75,7 +75,7 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
     .expect("send job");
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
-    assert!(assigned == 0);
+    assert!(assigned.base_offset == 0);
     tokio::time::timeout(std::time::Duration::from_secs(1), sync_started_rx)
         .await
         .expect("wal sync_durable did not start")
@@ -153,7 +153,7 @@ async fn diskless_acked_record_survives_reopen() {
         .expect("send job");
 
         let assigned = ack_rx.await.expect("ack recv").expect("append ok");
-        assert2::assert!((assigned) == (0));
+        assert2::assert!((assigned.base_offset) == (0));
 
         drop(tx);
         tokio::time::timeout(std::time::Duration::from_secs(10), writer)

@@ -8,7 +8,9 @@
 //! durability scenario: [`quorum_round_trip`] for the three-node produce and
 //! consume across a controller-leader kill, [`replica_byte_compare`] for the
 //! byte-identical replica segments, [`transactional_eos`] for the committed and
-//! aborted transaction isolation levels, [`acks_all`] for the steady-state
+//! aborted transaction isolation levels, [`transactional_tv2`] for the same
+//! split under a Kafka 4.x client on `transaction.version=2` plus the
+//! `kafka-transactions` admin tool, [`acks_all`] for the steady-state
 //! high-watermark gate, and [`leader_crash`] for that same gate across a
 //! partition-leader crash.
 //!
@@ -30,3 +32,5 @@ mod replica_byte_compare;
 mod support;
 #[path = "jvm_acceptance_durability/transactional_eos.rs"]
 mod transactional_eos;
+#[path = "jvm_acceptance_durability/transactional_tv2.rs"]
+mod transactional_tv2;

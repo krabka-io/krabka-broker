@@ -57,10 +57,12 @@ pub(crate) use self::{
     },
     docker::{
         ClientPropsFile, KAFKA_IMAGE, KAFKA_IMAGE_ELR, KAFKA_IMAGE_LEGACY, KAFKA_IMAGE_TIERED,
-        KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, TempFileMount, docker_run_kafka_tool,
-        docker_run_kafka_tool_with_image, docker_run_kafka_tool_with_image_and_mount,
-        docker_run_kafka_tool_with_image_and_mounts, docker_run_kafka_tool_with_mount,
-        nc_check_connectivity, write_client_props, write_temp_file,
+        KAFKA_IMAGE_TXN, STREAMS_APP_JAVA, TRANSACTIONAL_PRODUCER_JAVA, TempFileMount,
+        docker_run_kafka_tool, docker_run_kafka_tool_allowing_failure,
+        docker_run_kafka_tool_allowing_failure_with_image, docker_run_kafka_tool_with_image,
+        docker_run_kafka_tool_with_image_and_mount, docker_run_kafka_tool_with_image_and_mounts,
+        docker_run_kafka_tool_with_mount, nc_check_connectivity, tool_output, write_client_props,
+        write_temp_file,
     },
     minio::{
         MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_CLIENT_IMAGE, MINIO_IMAGE, MINIO_SECRET_KEY,

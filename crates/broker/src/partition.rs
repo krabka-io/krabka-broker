@@ -40,7 +40,7 @@ mod watermark;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use self::messages::{ProduceData, ProduceJob, SwapOutcome, WriterMessage};
+pub use self::messages::{AppendedBatch, ProduceData, ProduceJob, SwapOutcome, WriterMessage};
 // Only watermark's own tests name crate::partition::HwTimeout.
 #[cfg(test)]
 pub use self::watermark::HwTimeout;

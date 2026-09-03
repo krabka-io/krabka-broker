@@ -133,7 +133,7 @@ fn log_read_raw_spans_multiple_segments() {
     let mut expected_bases = Vec::new();
     for off in 0..n {
         let mut b = test_batch_at(off);
-        let base = log.append(&mut b).unwrap();
+        let (base, _) = log.append(&mut b).unwrap();
         expected_bases.push(base);
         b.encode(&mut wire).unwrap();
     }

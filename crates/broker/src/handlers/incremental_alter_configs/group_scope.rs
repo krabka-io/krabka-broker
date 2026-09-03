@@ -111,34 +111,55 @@ mod tests {
     }
 
     #[test]
-    fn group_config_accepts_share_offset_reset_earliest() {
-        let resource = AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_GROUP,
-            resource_name: "share-workers".into(),
-            configs: vec![AlterableConfig {
-                name: KEY_SHARE_AUTO_OFFSET_RESET.into(),
-                config_operation: OP_SET,
-                value: Some("earliest".into()),
+    fn group_config_takes_every_share_offset_reset_strategy_kafka_accepts() {
+        // `ShareGroupAutoOffsetResetStrategy` accepts `latest`, `earliest`,
+        // and `by_duration:<ISO-8601 duration>`, and refuses anything else.
+        for (value, want_code) in [
+            ("latest", codes::NONE),
+            ("earliest", codes::NONE),
+            ("by_duration:PT1H", codes::NONE),
+            ("by_duration:-PT1H", codes::INVALID_CONFIG),
+            ("by_duration:", codes::INVALID_CONFIG),
+            ("none", codes::INVALID_CONFIG),
+        ] {
+            let resource = AlterConfigsResource {
+                resource_type: RESOURCE_TYPE_GROUP,
+                resource_name: "share-workers".into(),
+                configs: vec![AlterableConfig {
+                    name: KEY_SHARE_AUTO_OFFSET_RESET.into(),
+                    config_operation: OP_SET,
+                    value: Some(value.into()),
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut records = Vec::new();
-        handle_group_scoped(
-            &resource,
-            &MetadataImage::new(uuid::Uuid::nil()),
-            &StreamsGroupConfig::default(),
-            &mut out,
-            &mut records,
-        );
-        assert!(out.error_code == codes::NONE);
-        assert!(matches!(
-            records.as_slice(),
-            [MetadataRecord::V1GroupConfig(record)]
-                if record.configs.get(KEY_SHARE_AUTO_OFFSET_RESET).map(String::as_str)
-                    == Some("earliest")
-        ));
+            };
+            let mut out = AlterConfigsResourceResponse::default();
+            let mut records = Vec::new();
+            handle_group_scoped(
+                &resource,
+                &MetadataImage::new(uuid::Uuid::nil()),
+                &StreamsGroupConfig::default(),
+                &mut out,
+                &mut records,
+            );
+            assert!(
+                out.error_code == want_code,
+                "{KEY_SHARE_AUTO_OFFSET_RESET}={value}"
+            );
+            if want_code == codes::NONE {
+                assert!(
+                    matches!(
+                        records.as_slice(),
+                        [MetadataRecord::V1GroupConfig(record)]
+                            if record.configs.get(KEY_SHARE_AUTO_OFFSET_RESET).map(String::as_str)
+                                == Some(value)
+                    ),
+                    "{KEY_SHARE_AUTO_OFFSET_RESET}={value}"
+                );
+            } else {
+                assert!(records.is_empty(), "{KEY_SHARE_AUTO_OFFSET_RESET}={value}");
+            }
+        }
     }
 
     #[test]

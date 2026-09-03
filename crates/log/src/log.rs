@@ -99,6 +99,23 @@ pub struct Log {
     /// instead.
     start_offset_established: bool,
 
+    /// Whether a compaction pass has run over this log since it was opened,
+    /// which is what makes its first sealed segment a *clean* prefix.
+    ///
+    /// Kafka keeps the same fact in `cleaner-offset-checkpoint`: the dirty
+    /// region is everything above the last cleaned offset, and on a log
+    /// nothing has cleaned yet that is the whole log. A pass collapses every
+    /// cleanable sealed segment into one, so afterwards the first sealed
+    /// segment *is* the last pass's output, and treating it as clean is what
+    /// keeps `min.cleanable.dirty.ratio` from asking for a pass that would
+    /// rewrite an already-deduplicated segment for nothing.
+    ///
+    /// It is in memory only. A reopened log reads as never cleaned, which
+    /// costs one extra pass and never skips a needed one; Kafka's checkpoint
+    /// is durable, and making this one durable is the same change on both
+    /// sides of a restart.
+    compacted_once: bool,
+
     /// Last-Stable-Offset: the offset before the first record of any
     /// in-flight transaction. Defaults to `log_end_offset()` when no
     /// transactions are in flight.

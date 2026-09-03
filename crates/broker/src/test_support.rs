@@ -26,6 +26,7 @@ use std::{
         Arc, Mutex,
         atomic::{self, AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use bytes::{Bytes, BytesMut};
@@ -69,6 +70,58 @@ impl crate::authorizer::Authorizer for DenyAll {
 /// The name matters. Authorization decisions and audit records key on this
 /// subject, so each handler passes the identity its scenario expects, such as
 /// `"alice"`, `"admin"`, or `"ANONYMOUS"`.
+/// Finalize `eligible.leader.replicas.version` at 1 in `image`.
+///
+/// KIP-966 ELR maintenance is gated on the feature, and its release default is
+/// 0 at every `metadata.version` krabka supports, so a fixture that wants the
+/// controller to publish an ELR has to finalize it the way an operator's
+/// `kafka-features upgrade` would. The tests that assert the feature is *off*
+/// build their image without calling this.
+pub(crate) fn finalize_elr_version(image: &mut MetadataImage) {
+    image.apply(&MetadataRecord::V1FeatureLevel(
+        krabka_metadata::FeatureLevelRecord {
+            name: crate::features::ELR_VERSION.into(),
+            level: 1,
+        },
+    ));
+}
+
+/// Finalize `eligible.leader.replicas.version` at 1 on a running broker, and
+/// wait until its own image reports the level.
+///
+/// The image-level [`finalize_elr_version`] cannot serve a test that boots a
+/// broker: the level has to arrive as a committed record, the way an
+/// operator's `kafka-features upgrade --feature
+/// eligible.leader.replicas.version=1` delivers it.
+pub(crate) async fn finalize_elr_version_on(broker: &crate::Broker) {
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: crate::features::ELR_VERSION.into(),
+                level: 1,
+            },
+        )])
+        .await
+        .expect("submit eligible.leader.replicas.version");
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if broker
+                .controller
+                .current_image()
+                .finalized_feature(crate::features::ELR_VERSION)
+                == Some(1)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("eligible.leader.replicas.version visible");
+}
+
 pub(crate) fn principal(name: &str) -> Principal {
     Principal {
         name: name.into(),

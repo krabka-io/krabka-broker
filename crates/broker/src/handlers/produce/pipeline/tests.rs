@@ -60,6 +60,7 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
                 payload: PartitionPayload::Slice(payload),
             },
             topic_compression: None,
+            timestamps: TimestampPolicy::default(),
             max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
             delivery: None,
             topic_name: "orders".into(),
@@ -86,7 +87,8 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
         },
     )
     .await
-    .expect("process partition");
+    .expect("process partition")
+    .expect_done();
 
     let expected = PartitionProduceResponse {
         index: 0,
@@ -155,6 +157,7 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
                 payload: PartitionPayload::Slice(payload),
             },
             topic_compression: None,
+            timestamps: TimestampPolicy::default(),
             max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
             delivery: None,
             topic_name: "orders".into(),
@@ -182,7 +185,8 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
         },
     )
     .await
-    .expect("process partition");
+    .expect("process partition")
+    .expect_done();
 
     let expected = PartitionProduceResponse {
         index: 0,

@@ -13,11 +13,13 @@ use krabka_units::{
 };
 
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
-    SEGMENT_BYTES,
-    delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
-    validation::parse_compression_type,
+    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, INDEX_INTERVAL_BYTES,
+    LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES,
+    MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO,
+    MIN_COMPACTION_LAG_MS, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
+    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES, SEGMENT_MS,
+    delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
+    validation::{parse_cleanup_policy, parse_compression_type},
 };
 
 /// Merge `overrides` over `base` and return a fresh `LogConfig` to push
@@ -69,10 +71,51 @@ pub(crate) fn apply_to_log_config(
                 }
             }
             CLEANUP_POLICY => {
-                out.cleanup_policy = if v == "compact" {
-                    krabka_log::CleanupPolicy::Compact
+                if let Ok(policy) = parse_cleanup_policy(v) {
+                    out.cleanup_policy = policy;
+                }
+            }
+            SEGMENT_MS => {
+                if let Ok(ms) = v.parse::<i64>()
+                    && ms >= 1
+                {
+                    out.segment_roll_interval = Time::from_millis(ms);
+                }
+            }
+            INDEX_INTERVAL_BYTES => {
+                if let Ok(b) = v.parse::<i32>()
+                    && let Ok(b) = u64::try_from(b)
+                {
+                    out.index_interval = ByteSize::from_bytes(b);
+                }
+            }
+            MIN_COMPACTION_LAG_MS => {
+                if let Ok(ms) = v.parse::<i64>()
+                    && ms >= 0
+                {
+                    out.min_compaction_lag = Time::from_millis(ms);
+                }
+            }
+            MAX_COMPACTION_LAG_MS => {
+                if let Ok(ms) = v.parse::<i64>()
+                    && ms >= 1
+                {
+                    // Kafka's default is `Long.MAX_VALUE`, which is how an
+                    // operator spells "no bound"; the log carries that as
+                    // `None` rather than as a Time no clock can reach.
+                    out.max_compaction_lag = (ms != i64::MAX).then(|| Time::from_millis(ms));
+                }
+            }
+            MIN_CLEANABLE_DIRTY_RATIO => {
+                if let Ok(ratio) = super::validation::parse_dirty_ratio(v) {
+                    out.min_cleanable_dirty_ratio = ratio;
+                }
+            }
+            MESSAGE_TIMESTAMP_TYPE => {
+                out.message_timestamp_type = if v == MESSAGE_TIMESTAMP_TYPE_LOG_APPEND {
+                    krabka_protocol::records::TimestampType::LogAppendTime
                 } else {
-                    krabka_log::CleanupPolicy::Delete
+                    krabka_protocol::records::TimestampType::CreateTime
                 };
             }
             COMPRESSION_TYPE => {
@@ -83,11 +126,27 @@ pub(crate) fn apply_to_log_config(
             REMOTE_STORAGE_ENABLE => {
                 out.remote_storage_enable = v == "true";
             }
+            REMOTE_LOG_COPY_DISABLE => {
+                out.remote_tier.copy_disable = v == "true";
+            }
+            REMOTE_LOG_DELETE_ON_DISABLE => {
+                out.remote_tier.delete_on_disable = v == "true";
+            }
             DELIVERY_MODE => {
                 out.delivery_policy = if v == DELIVERY_MODE_SCHEDULED {
                     krabka_log::DeliveryPolicy::Scheduled
                 } else {
                     krabka_log::DeliveryPolicy::Immediate
+                };
+            }
+            DELIVERY_SCHEDULE_MONOTONIC => {
+                // The log enforces this one, under the same lock acquisition
+                // that writes the batch, so it travels with `delivery.mode`
+                // into `Log.config` rather than being resolved per produce.
+                out.schedule_order = if v == "true" {
+                    krabka_log::ScheduleOrder::Monotonic
+                } else {
+                    krabka_log::ScheduleOrder::Unordered
                 };
             }
             DELETE_RETENTION_MS => {
@@ -246,6 +305,77 @@ mod tests {
         overrides.insert(CLEANUP_POLICY.to_string(), "compact".to_string());
         let out = apply_to_log_config(&overrides, &krabka_log::LogConfig::default());
         assert!(out.cleanup_policy == krabka_log::CleanupPolicy::Compact);
+    }
+
+    #[test]
+    fn apply_cleanup_policy_compact_and_delete_propagates() {
+        for value in ["compact,delete", "delete,compact"] {
+            let mut overrides = BTreeMap::new();
+            overrides.insert(CLEANUP_POLICY.to_string(), value.to_string());
+            let out = apply_to_log_config(&overrides, &LogConfig::default());
+            assert!(
+                out.cleanup_policy == krabka_log::CleanupPolicy::CompactAndDelete,
+                "cleanup.policy={value}"
+            );
+        }
+    }
+
+    /// The keys Kafka's `TopicConfig` carries that krabka now maps onto the
+    /// log a partition runs with.
+    #[test]
+    fn apply_maps_the_remaining_kafka_keys_onto_the_log_config() {
+        let overrides = maplit::btreemap! {
+        SEGMENT_MS.to_string() => "60000".to_string(),
+        INDEX_INTERVAL_BYTES.to_string() => "8192".to_string(),
+        MIN_COMPACTION_LAG_MS.to_string() => "30000".to_string(),
+        MAX_COMPACTION_LAG_MS.to_string() => "120000".to_string(),
+        MIN_CLEANABLE_DIRTY_RATIO.to_string() => "0.25".to_string(),
+        MESSAGE_TIMESTAMP_TYPE.to_string() => "LogAppendTime".to_string()};
+
+        let out = apply_to_log_config(&overrides, &LogConfig::default());
+
+        assert!(
+            out == LogConfig {
+                segment_roll_interval: minutes(1),
+                index_interval: bytes(8192),
+                min_compaction_lag: millis(30_000),
+                max_compaction_lag: Some(millis(120_000)),
+                min_cleanable_dirty_ratio: krabka_units::fraction(0.25),
+                message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+                ..LogConfig::default()
+            }
+        );
+    }
+
+    /// Kafka's `max.compaction.lag.ms` default is `Long.MAX_VALUE`, which is
+    /// how an operator spells "no bound".
+    #[test]
+    fn apply_max_compaction_lag_long_max_means_unbounded() {
+        let base = LogConfig {
+            max_compaction_lag: Some(millis(1000)),
+            ..LogConfig::default()
+        };
+        let mut o = BTreeMap::new();
+        o.insert(MAX_COMPACTION_LAG_MS.into(), "9223372036854775807".into());
+        let out = apply_to_log_config(&o, &base);
+        assert!(out.max_compaction_lag == None);
+    }
+
+    /// Stored-only keys reach the applier like any other override and must
+    /// leave the log a partition runs with exactly as it was.
+    #[test]
+    fn apply_ignores_the_keys_no_log_behaviour_reads() {
+        let overrides = maplit::btreemap! {
+        super::super::SEGMENT_INDEX_BYTES.to_string() => "1048576".to_string(),
+        super::super::SEGMENT_JITTER_MS.to_string() => "5000".to_string(),
+        super::super::FILE_DELETE_DELAY_MS.to_string() => "1000".to_string(),
+        super::super::FLUSH_MESSAGES.to_string() => "10".to_string(),
+        super::super::FLUSH_MS.to_string() => "10".to_string(),
+        super::super::PREALLOCATE.to_string() => "true".to_string()};
+
+        let out = apply_to_log_config(&overrides, &LogConfig::default());
+
+        assert!(out == LogConfig::default());
     }
 
     #[test]

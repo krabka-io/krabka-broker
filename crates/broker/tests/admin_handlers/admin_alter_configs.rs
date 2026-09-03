@@ -100,7 +100,7 @@ async fn alter_configs_rejects_unknown_key() {
             resource_type: RESOURCE_TYPE_TOPIC,
             resource_name: "t-bad-cfg".into(),
             configs: vec![AlterableConfig {
-                name: "flush.ms".into(),
+                name: "not.a.topic.config".into(),
                 value: Some("1000".into()),
                 ..Default::default()
             }],
@@ -121,8 +121,8 @@ async fn alter_configs_rejects_unknown_key() {
             .error_message
             .as_deref()
             .unwrap_or("")
-            .contains("flush.ms"),
-        "expected error_message to mention `flush.ms`, got {:?}",
+            .contains("not.a.topic.config"),
+        "expected error_message to mention `not.a.topic.config`, got {:?}",
         resp.responses[0].error_message
     );
 }

@@ -18,6 +18,11 @@ pub struct ReplicationRuntimeConfig {
     /// Maximum leader wait for a replication fetch.
     pub fetch_max_wait: Time,
     /// Minimum bytes that satisfy a replication fetch.
+    ///
+    /// It reaches the leader as the request's `min_bytes`, and a krabka leader
+    /// honours it as a floor the way Kafka does: the fetch is held until that
+    /// many bytes are readable across its partitions or `fetch_max_wait`
+    /// expires, however many appends it takes to get there.
     pub fetch_min: ByteSize,
     /// Delay after a replication throttle budget is exhausted.
     pub throttle_exhausted_backoff: Time,

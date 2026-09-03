@@ -294,6 +294,13 @@ impl SharePersister {
         // Map the per-partition result into a `SharePartitionState`. A
         // non-zero error_code or an absent partition entry is treated as
         // "no state" (the caller starts from an empty acquisition window).
+        //
+        // A `start_offset` of `UNINITIALIZED_START_OFFSET` is state, not the
+        // absence of it: the group coordinator registered the partition and
+        // stamped a state epoch, and only where the group starts is still
+        // open. It passes through as it does on the local path, so the caller
+        // sees the same row on either side of the routing decision and keeps
+        // the epoch its write-back must carry.
         let part_result = resp
             .results
             .into_iter()
@@ -305,13 +312,10 @@ impl SharePersister {
         if pr.error_code != 0 {
             return Ok(None);
         }
-        let Some(start_offset) = initialized_start_offset(pr.start_offset) else {
-            return Ok(None);
-        };
         Ok(Some(SharePartitionState {
             state_epoch: pr.state_epoch,
             leader_epoch: 0,
-            start_offset,
+            start_offset: Offset(pr.start_offset),
             delivery_complete_count: 0,
             state_batches: pr
                 .state_batches
@@ -558,10 +562,6 @@ fn check_partition_result<R: PartitionResults>(
     )))
 }
 
-fn initialized_start_offset(raw: i64) -> Option<Offset> {
-    (raw >= 0).then_some(Offset(raw))
-}
-
 #[cfg(test)]
 mod tests {
     use krabka_protocol::owned::initialize_share_group_state_response::{
@@ -587,12 +587,6 @@ mod tests {
             }],
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn negative_start_offset_is_uninitialized_state() {
-        assert2::assert!(initialized_start_offset(-1).is_none());
-        assert2::assert!((initialized_start_offset(0)) == (Some(Offset(0))));
     }
 
     #[test]

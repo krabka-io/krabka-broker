@@ -78,6 +78,9 @@ fn set_isr(img: &mut MetadataImage, isr: &[u64]) {
 /// Publish `krabka.elr` for partition 0 of topic `t`, in the grammar
 /// `TopicElr::parse` reads: these node ids are eligible, none are last-known.
 fn publish_elr(img: &mut MetadataImage, eligible: &[u64]) {
+    // Publishing an ELR presupposes the KIP-966 feature is on: its release
+    // default is 0, and the controller keeps no ELR below level 1.
+    crate::test_support::finalize_elr_version(img);
     let ids = eligible
         .iter()
         .map(ToString::to_string)

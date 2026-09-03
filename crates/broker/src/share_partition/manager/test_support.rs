@@ -4,8 +4,10 @@
 //! build their manager from here, so every test runs against the same mock
 //! metadata source and the same lock duration.
 
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, LogConfig, Offset};
 use krabka_metadata::{MetadataImage, NodeId};
 use krabka_security::ListenerProtocol;
 
@@ -52,7 +54,19 @@ pub(super) fn manager() -> Arc<SharePartitionLeaderManager> {
 /// `current_leader_of` and the related methods thus resolve real topic and
 /// partition leadership.
 pub(super) fn manager_with_image(image: Arc<MetadataImage>) -> Arc<SharePartitionLeaderManager> {
-    let reg = Arc::new(PartitionRegistry::new());
+    manager_with_image_and_partitions(image, Arc::new(PartitionRegistry::new()))
+}
+
+/// A manager whose controller serves `image` and whose local partitions are
+/// `reg`.
+///
+/// The share-partition start a fresh cell resolves reads both: the image
+/// carries the topic and the group config, and the registry carries the log
+/// the strategy resolves against.
+pub(super) fn manager_with_image_and_partitions(
+    image: Arc<MetadataImage>,
+    reg: Arc<PartitionRegistry>,
+) -> Arc<SharePartitionLeaderManager> {
     let controller = fake_source(image);
     let coord = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
@@ -103,4 +117,55 @@ pub(super) fn manager_with_unlimited_fallback(fallback: usize) -> Arc<ShareParti
         Arc::new(ShareGroupConfig::default()),
         fallback,
     ))
+}
+
+/// Opens a real data partition under `log_dir`, appends `batches`, publishes
+/// `hw` as its high watermark, and registers it in `reg`.
+///
+/// Each batch is `(timestamp_ms, values)`, and every record in it carries that
+/// timestamp, which is what a `by_duration` strategy resolves against.
+pub(super) async fn open_data_partition(
+    reg: &PartitionRegistry,
+    log_dir: &Path,
+    topic: &str,
+    partition: i32,
+    batches: &[(i64, &[&'static [u8]])],
+    hw: Offset,
+) {
+    let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
+    std::fs::create_dir_all(&part_dir).expect("create partition dir");
+    let log = Log::open(&part_dir, LogConfig::default()).expect("open partition log");
+    let part = crate::broker::spawn_partition(
+        topic.to_string(),
+        PartitionIndex(partition),
+        log_dir.to_path_buf(),
+        log,
+        crate::log_dir_status::LogDirRegistry::default(),
+        Arc::new(crate::producer_state::ProducerState::new()),
+        false,
+    );
+    for (timestamp_ms, values) in batches {
+        let mut batch = krabka_protocol::records::RecordBatch {
+            last_offset_delta: i32::try_from(values.len() - 1).expect("record count fits"),
+            base_timestamp: *timestamp_ms,
+            max_timestamp: *timestamp_ms,
+            records: values
+                .iter()
+                .enumerate()
+                .map(|(idx, value)| krabka_protocol::records::Record {
+                    offset_delta: i32::try_from(idx).expect("offset delta fits"),
+                    value: Some(bytes::Bytes::from_static(value)),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        part.log
+            .lock()
+            .expect("partition log lock")
+            .append(&mut batch)
+            .expect("append records");
+    }
+    part.replica_state.lock().await.hw = hw;
+    reg.insert(topic.into(), PartitionIndex(partition), part);
 }

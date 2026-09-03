@@ -73,10 +73,14 @@ pub(super) fn topic_config_record(
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &merged)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_remote_storage_disable(current, &merged)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     // KIP-133: the operator-declared policy, on the map the topic ends up
     // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
     // and its `RequestMetadata` carries no partition count and no replication
-    // factor, so neither is passed here.
+    // factor, so neither is passed here. It runs after the built-in
+    // validators, as `ConfigAdminManager` does: a config the broker itself
+    // refuses never reaches the policy.
     crate::topic_policy::check(policy, &resource.resource_name, None, None, &merged)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {

@@ -63,10 +63,14 @@ pub(super) fn topic_config_record(
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_remote_storage_disable(current, &overrides)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     // KIP-133: the operator-declared policy, on the map the topic ends up
     // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
     // and its `RequestMetadata` carries no partition count and no replication
-    // factor, so neither is passed here.
+    // factor, so neither is passed here. It runs after the built-in
+    // validators, as `ConfigAdminManager` does: a config the broker itself
+    // refuses never reaches the policy.
     crate::topic_policy::check(policy, &resource.resource_name, None, None, &overrides)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
     // Both validations read the client's map alone, so the carry-over comes
@@ -131,6 +135,62 @@ mod tests {
             message.contains(crate::config_keys::DELIVERY_MODE),
             "got: {message}"
         );
+    }
+
+    /// Kafka's `LogConfig.validate` refuses tiered storage on a compacted
+    /// topic, and `AlterConfigs` is one of the three paths that surface the
+    /// `ConfigException` as `INVALID_CONFIG`. The policy test is a membership
+    /// test over the list, so `compact,delete` is refused beside `compact`.
+    #[test]
+    fn topic_replacement_rejects_tiered_storage_on_a_compacted_topic() {
+        let image = image_with_topic("orders");
+
+        for policy in ["compact", "compact,delete", "delete,compact"] {
+            let (code, message) = topic_config_record(
+                &topic_resource(
+                    "orders",
+                    &[
+                        (crate::config_keys::CLEANUP_POLICY, policy),
+                        (crate::config_keys::REMOTE_STORAGE_ENABLE, "true"),
+                    ],
+                ),
+                &image,
+            )
+            .expect_err("tiered storage on a compacted topic must be rejected");
+
+            check!(code == codes::INVALID_CONFIG, "cleanup.policy={policy}");
+            check!(
+                message == "Tiered storage is not supported for compacted topics",
+                "cleanup.policy={policy}"
+            );
+        }
+    }
+
+    /// The same replacement without compaction is ordinary, so the refusal
+    /// above is the pair and not the tiered-storage key alone.
+    #[test]
+    fn topic_replacement_accepts_tiered_storage_on_a_delete_policy_topic() {
+        let image = image_with_topic("orders");
+
+        let record = topic_config_record(
+            &topic_resource(
+                "orders",
+                &[
+                    (crate::config_keys::CLEANUP_POLICY, "delete"),
+                    (crate::config_keys::REMOTE_STORAGE_ENABLE, "true"),
+                ],
+            ),
+            &image,
+        )
+        .expect("a tiered delete-policy topic is valid");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: maplit::btreemap! {
+            crate::config_keys::CLEANUP_POLICY.to_string() => "delete".to_string(),
+            crate::config_keys::REMOTE_STORAGE_ENABLE.to_string() => "true".to_string()},
+        });
+        assert!(record == expected);
     }
 
     #[test]

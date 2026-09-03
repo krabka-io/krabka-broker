@@ -164,6 +164,9 @@ impl Log {
             // The checkpoint restore below is what may set it: see
             // `Log::established_log_start`.
             start_offset_established: false,
+            // Nothing has cleaned this log yet, so every sealed segment is
+            // dirty until the first pass says otherwise.
+            compacted_once: false,
             lso,
             pending: HashMap::new(),
             pending_stamp_ranges: HashMap::new(),

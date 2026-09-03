@@ -3,13 +3,25 @@
 
 use std::collections::BTreeMap;
 
+use krabka_log::CleanupPolicy;
+
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE,
+    CLEANUP_POLICY, COMPRESSION_TYPE, MAX_COMPACTION_LAG_MS, MESSAGE_TIMESTAMP_TYPE,
+    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
+    REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
     diskless::validate_diskless_combination,
     qos::{QOS_TIER, validate_qos_tier},
-    registry::{self, BOOLEAN_VALUES, ConfigScope, ValueCheck},
+    registry::{self, BOOLEAN_VALUES, CLEANUP_POLICY_VALUES, ConfigScope, ValueCheck},
 };
+
+/// Kafka's refusal when a topic asks for tiered storage and compaction at
+/// once. `LogConfig.validate` calls `validateNoRemoteStorageForCompactedTopic`
+/// whenever `remote.storage.enable` is true and the cleanup policy contains
+/// `compact`, and every alter path surfaces the `ConfigException` it throws as
+/// `INVALID_CONFIG`.
+pub(crate) const REMOTE_STORAGE_COMPACTED_MESSAGE: &str =
+    "Tiered storage is not supported for compacted topics";
 
 /// Validate a single key/value pair. `Err(reason)` carries an
 /// operator-readable explanation that the handler propagates into the
@@ -30,7 +42,9 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
         ValueCheck::I64AtLeast(min) => parse_i64_at_least(min, value).map(|_| ()),
         ValueCheck::I32AtLeast(min) => parse_i32_at_least(min, value).map(|_| ()),
         ValueCheck::Parsed => match key {
+            CLEANUP_POLICY => parse_cleanup_policy(value).map(|_| ()),
             COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
+            MIN_CLEANABLE_DIRTY_RATIO => parse_dirty_ratio(value).map(|_| ()),
             QOS_TIER => validate_qos_tier(value),
             crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
             | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY => {
@@ -97,15 +111,28 @@ pub(crate) fn validate_topic_config_map(
 /// record would then be deleted without a single delivery, which is the
 /// failure scheduled delivery exists to prevent.
 ///
+/// Kafka states the second: `remote.storage.enable=true` and a cleanup policy
+/// containing `compact` exclude each other. `LogConfig.validate` refuses the
+/// pair in `validateNoRemoteStorageForCompactedTopic`, and because the test is
+/// a membership test over the policy list, `compact,delete` is refused beside
+/// `compact`.
+///
+/// KFC-1 states a third: `message.timestamp.type=LogAppendTime` and
+/// `delivery.mode=scheduled` exclude each other. A scheduled topic reads each
+/// batch's `max_timestamp` as its activation time, and log-append stamping
+/// overwrites exactly that field with the broker's clock at append. The pair
+/// would silently deliver every record at once, and the schedule the producer
+/// wrote would be unrecoverable, because the overwrite destroys it.
+///
 /// The other two are the data-path rules in [`validate_diskless_combination`]:
 /// `krabka.diskless=true` excludes both `remote.storage.enable=true` and
 /// `delivery.mode=scheduled`.
 pub(crate) fn validate_config_combination(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let compacting = overrides
-        .get(CLEANUP_POLICY)
-        .is_some_and(|policy| policy == "compact");
+    let compacting = overrides.get(CLEANUP_POLICY).is_some_and(|policy| {
+        parse_cleanup_policy(policy).is_ok_and(CleanupPolicy::contains_compact)
+    });
     let scheduled = overrides
         .get(DELIVERY_MODE)
         .is_some_and(|mode| mode == DELIVERY_MODE_SCHEDULED);
@@ -118,7 +145,143 @@ pub(crate) fn validate_config_combination(
              be deleted without a single delivery"
         ));
     }
+    let log_append_time = overrides
+        .get(MESSAGE_TIMESTAMP_TYPE)
+        .is_some_and(|value| value == MESSAGE_TIMESTAMP_TYPE_LOG_APPEND);
+    if log_append_time && scheduled {
+        return Err(format!(
+            "{MESSAGE_TIMESTAMP_TYPE}={MESSAGE_TIMESTAMP_TYPE_LOG_APPEND} cannot be combined \
+             with {DELIVERY_MODE}={DELIVERY_MODE_SCHEDULED}: a scheduled topic reads a batch's \
+             max timestamp as its activation time, and log-append stamping overwrites that \
+             field with the broker's clock, so every record would come due at once"
+        ));
+    }
+    let tiered = overrides
+        .get(REMOTE_STORAGE_ENABLE)
+        .is_some_and(|enabled| enabled == "true");
+    if compacting && tiered {
+        return Err(REMOTE_STORAGE_COMPACTED_MESSAGE.to_owned());
+    }
+    validate_compaction_lag_order(overrides)?;
     validate_diskless_combination(overrides)
+}
+
+/// Kafka's `LogConfig.validateValues`: the cleaner cannot be told to protect a
+/// record for longer than the deadline that forces it to be compacted.
+///
+/// Each key alone passes its own range check, so the rule belongs here, where
+/// the whole map is in hand. A key the request leaves alone is read at its
+/// registry default, which is what Kafka's `props` carries for an unset key:
+/// `min.compaction.lag.ms` 0 and `max.compaction.lag.ms` `i64::MAX`, so an
+/// alter that sets only one of the two is still checked against the other.
+fn validate_compaction_lag_order(overrides: &BTreeMap<String, String>) -> Result<(), String> {
+    let lag = |name: &str| -> Option<i64> {
+        overrides
+            .get(name)
+            .map(String::as_str)
+            .or_else(|| registry::lookup(ConfigScope::Topic, name).and_then(|row| row.default))
+            .and_then(|value| value.trim().parse::<i64>().ok())
+    };
+    let (Some(min), Some(max)) = (lag(MIN_COMPACTION_LAG_MS), lag(MAX_COMPACTION_LAG_MS)) else {
+        return Ok(());
+    };
+    if min > max {
+        return Err(format!(
+            "conflict topic config setting {MIN_COMPACTION_LAG_MS} ({min}) > \
+             {MAX_COMPACTION_LAG_MS} ({max})"
+        ));
+    }
+    Ok(())
+}
+
+/// Kafka's KIP-950 `LogConfig.validateRemoteStorageConfigs`: turning tiered
+/// storage off is refused unless the operator has said what should happen to
+/// the segments already in the tier.
+///
+/// `remote.storage.enable` going `true -> false` erases the topic's remote
+/// copies and raises its log start offset to the local log start, so Kafka
+/// makes the operator ask for that explicitly with
+/// `remote.log.delete.on.disable=true`. The alternative it names in the same
+/// message is the read-only tier: keep `remote.storage.enable=true` and set
+/// `remote.log.copy.disable=true`, which stops new copies while the history
+/// stays readable.
+///
+/// `current` is the topic's stored override map and `next` the map the alter
+/// installs, so this is the only rule here that reads both: the others decide
+/// a map on its own.
+///
+/// # Errors
+/// Returns the refusal message when the alter turns tiered storage off
+/// without `remote.log.delete.on.disable=true` in the resulting map.
+pub(crate) fn validate_remote_storage_disable(
+    current: Option<&BTreeMap<String, String>>,
+    next: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let enabled = |map: Option<&BTreeMap<String, String>>| {
+        map.and_then(|map| map.get(REMOTE_STORAGE_ENABLE))
+            .is_some_and(|value| value == "true")
+    };
+    if !enabled(current) || enabled(Some(next)) {
+        return Ok(());
+    }
+    let deleting = next
+        .get(REMOTE_LOG_DELETE_ON_DISABLE)
+        .is_some_and(|value| value == "true");
+    if deleting {
+        return Ok(());
+    }
+    Err(format!(
+        "It is invalid to disable remote storage without deleting remote data. If you want to          keep the remote data, but turn to read only, please set          {REMOTE_STORAGE_ENABLE}=true,{REMOTE_LOG_COPY_DISABLE}=true. If you want to disable          remote storage and delete all remote data, please set          {REMOTE_STORAGE_ENABLE}=false,{REMOTE_LOG_DELETE_ON_DISABLE}=true."
+    ))
+}
+
+/// Parse Kafka's `cleanup.policy` list into the policy a partition runs under.
+///
+/// The value is a comma-separated list, and Kafka derives two independent
+/// booleans from it: `compact` when the list names `compact`, `delete` when it
+/// names `delete`. Either order and either name alone is accepted, and so is
+/// `compact,delete`, which Kafka Streams writes on every windowed-store
+/// changelog topic. An empty list, an empty element and an unknown name are
+/// all refused.
+pub(crate) fn parse_cleanup_policy(value: &str) -> Result<CleanupPolicy, String> {
+    let mut compact = false;
+    let mut delete = false;
+    for name in value.split(',') {
+        match name.trim() {
+            "compact" => compact = true,
+            "delete" => delete = true,
+            other => {
+                return Err(format!(
+                    "{CLEANUP_POLICY}={other} not supported; expected {}, or both separated by a comma",
+                    list_values(CLEANUP_POLICY_VALUES)
+                ));
+            }
+        }
+    }
+    match (compact, delete) {
+        (true, true) => Ok(CleanupPolicy::CompactAndDelete),
+        (true, false) => Ok(CleanupPolicy::Compact),
+        (false, true) => Ok(CleanupPolicy::Delete),
+        // `split` always yields one element, so this is the empty value alone.
+        (false, false) => Err(format!(
+            "{CLEANUP_POLICY}= not supported; expected {}, or both separated by a comma",
+            list_values(CLEANUP_POLICY_VALUES)
+        )),
+    }
+}
+
+/// Parse Kafka's `min.cleanable.dirty.ratio`, a `DOUBLE` between 0 and 1
+/// inclusive. `apache/kafka:4.3.1` refuses anything outside that range with
+/// `Invalid value 2.0 for configuration min.cleanable.dirty.ratio: Value must
+/// be no more than 1`.
+pub(crate) fn parse_dirty_ratio(value: &str) -> Result<krabka_units::Ratio, String> {
+    let parsed: f64 = value
+        .parse()
+        .map_err(|_| format!("expected a number, got `{value}`"))?;
+    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+        return Err(format!("value `{value}` must be between 0 and 1"));
+    }
+    Ok(krabka_units::fraction(parsed))
 }
 
 /// Map the wire-side `compression.type` value to the matching

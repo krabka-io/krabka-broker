@@ -85,12 +85,19 @@ crate_tests(
         # One image, used twice: as the client that reads krabka's advertised
         # table and as the Kafka broker that table is compared against.
         "api_versions_differential": ["apache_kafka_4_3_1"],
+        # The `fetch.min.bytes` floor, sent as identical bytes to krabka and to
+        # a stock broker of the newest pinned release. The hermetic half of the
+        # same exchange is `fetch_min_bytes`, which needs no image.
+        "fetch_min_bytes_jvm": ["apache_kafka_4_3_1"],
         "jvm_acceptance_cli": [
             "apache_kafka_4_3_1",
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
+        # transactional_tv2 compiles the JVM producer where a `javac` exists
+        # (cp-kafka:7.5.0) and runs the class under the 4.3.1 client jars.
         "jvm_acceptance_durability": [
+            "apache_kafka_4_3_1",
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
@@ -124,6 +131,13 @@ crate_tests(
         # describe asks `DescribeCluster` whether the broker exists before it
         # prints anything, which no older tool does.
         "jvm_broker_loggers": ["apache_kafka_4_3_1"],
+        # A stock `connect-distributed` worker (the Apache image carries both
+        # `connect-distributed.sh` and the FileStream connector jar) plus the
+        # Confluent tools this suite reads the internal topic configs with.
+        "jvm_connect_distributed": [
+            "apache_kafka_4_3_1",
+            "cp_kafka_7_5_0",
+        ],
         "jvm_consumer_group_next_gen": [
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",
@@ -141,11 +155,16 @@ crate_tests(
         "jvm_role_separated_admin": ["apache_kafka_4_3_1"],
         "jvm_share_groups": ["apache_kafka_4_1_0"],
         "jvm_static_quorum_spike": ["apache_kafka_4_0_0"],
+        # The compiled `KafkaStreams` topology: `cp-kafka:7.5.0` ships the
+        # `javac` that builds it, and the Apache image the KIP-1071
+        # `group.protocol=streams` run needs.
+        "jvm_streams_app": [
+            "apache_kafka_4_3_1",
+            "cp_kafka_7_5_0",
+        ],
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
         "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
-        "librdkafka_conformance": [
-            "kcat_1_7_1",
-        ],
+        "librdkafka_conformance": ["kcat_1_7_1"],
         # One image, used twice: as the `kafka-topics` client that reads
         # krabka's answer and as the Kafka broker the same command is run
         # against for the differential.

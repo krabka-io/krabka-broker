@@ -82,6 +82,13 @@ fn seed_records() -> Vec<MetadataRecord> {
 /// replica cross the threshold on its own.
 fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
     vec![
+        // KIP-966 maintenance is gated on the feature, whose release default
+        // is 0, so every seed here finalizes it the way an operator's
+        // `kafka-features upgrade` would.
+        MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+            name: crate::features::ELR_VERSION.into(),
+            level: 1,
+        }),
         MetadataRecord::V1Topic(TopicRecord {
             name: TOPIC.into(),
             topic_id: uuid::Uuid::from_bytes(TOPIC_ID_BYTES),

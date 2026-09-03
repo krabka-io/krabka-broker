@@ -279,7 +279,7 @@ fn assigned_append_uses_reconciled_frontier_floor() {
     log.reconcile_next_offset(Offset(3));
 
     let mut batch = test_batch_at(0);
-    let assigned = log.append(&mut batch).unwrap();
+    let (assigned, _) = log.append(&mut batch).unwrap();
 
     assert!(assigned == Offset(3));
     assert!(batch.base_offset == 3);
@@ -300,7 +300,7 @@ fn invalid_interval_is_write_free_and_a_corrected_retry_succeeds() {
     assert!(log.producer_state_snapshot().is_empty());
 
     let mut retry = sample_batch(1);
-    assert!(log.append(&mut retry).unwrap() == Offset(0));
+    assert!(log.append(&mut retry).unwrap().0 == Offset(0));
     assert!(log.log_end_offset() == Offset(1));
 }
 
@@ -336,7 +336,7 @@ fn sidecar_failure_rolls_back_bytes_frontiers_and_allows_retry() {
     assert!(log.active_txn_index.entries().is_empty());
     assert!(log.stamp_for_offset(Offset(0)).is_none());
 
-    assert!(log.append(&mut sample_batch(1)).unwrap() == Offset(0));
+    assert!(log.append(&mut sample_batch(1)).unwrap().0 == Offset(0));
     assert!(log.log_end_offset() == Offset(1));
     assert!(log.lso() == Offset(1));
     assert!(log.stamp_for_offset(Offset(0)).is_some());
@@ -400,7 +400,7 @@ fn post_roll_failure_restores_the_previous_active_segment() {
     assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
     assert!(log.stamp_for_offset(Offset(1)).is_none());
 
-    assert!(log.append(&mut sample_batch(1)).unwrap() == Offset(1));
+    assert!(log.append(&mut sample_batch(1)).unwrap().0 == Offset(1));
     assert!(log.log_end_offset() == Offset(2));
 }
 
@@ -428,7 +428,7 @@ fn post_roll_partial_write_restores_the_previous_active_segment() {
     assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
 
     log.test_set_io(std::sync::Arc::new(crate::io::FileIo));
-    assert!(log.append(&mut sample_batch(1)).unwrap() == Offset(1));
+    assert!(log.append(&mut sample_batch(1)).unwrap().0 == Offset(1));
     assert!(log.log_end_offset() == Offset(2));
 }
 
@@ -438,8 +438,8 @@ fn append_assigns_monotonic_offsets() {
     let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
     let mut b1 = sample_batch(3);
     let mut b2 = sample_batch(2);
-    let first_offset = log.append(&mut b1).unwrap();
-    let second_offset = log.append(&mut b2).unwrap();
+    let (first_offset, _) = log.append(&mut b1).unwrap();
+    let (second_offset, _) = log.append(&mut b2).unwrap();
     assert2::assert!(first_offset == Offset(0));
     assert2::assert!(second_offset == Offset(3));
     assert2::assert!(log.log_end_offset() == Offset(5));
@@ -568,4 +568,198 @@ fn append_records_epoch_transition() {
                 }
             ]
     );
+}
+
+/// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
+/// configures one, with everything else at its default.
+fn log_append_time_log() -> (tempfile::TempDir, Log) {
+    let dir = tempdir().unwrap();
+    let log = Log::open(
+        dir.path(),
+        LogConfig {
+            message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    (dir, log)
+}
+
+/// The first record of the only batch the log holds, read back off disk.
+fn only_batch(log: &Log) -> RecordBatch {
+    let end = log.log_end_offset();
+    let raw = log
+        .read_raw(Offset(0), end, krabka_units::prelude::mebibytes(10))
+        .unwrap();
+    let mut cursor: &[u8] = &raw.bytes;
+    RecordBatch::decode(&mut cursor).expect("the stored batch decodes, so its CRC is valid")
+}
+
+/// Kafka's `LogValidator` rewrites exactly three header fields on a
+/// `LogAppendTime` topic: the timestamp-type attribute bit, `max_timestamp`,
+/// and the CRC over them. `base_timestamp` and the per-record deltas are the
+/// producer's own, because a reader substitutes `max_timestamp` for every
+/// record while the bit is set.
+#[test]
+fn log_append_time_stamps_the_batch_and_leaves_the_producer_timestamps_alone() {
+    let (dir, mut log) = log_append_time_log();
+    let mut produced = test_batch_at(0);
+    produced.base_timestamp = 1_000;
+    produced.max_timestamp = 1_000;
+    let before = crate::retention::now_ms(std::time::SystemTime::now());
+
+    let (base_offset, stamp) = log.append(&mut produced).unwrap();
+
+    let after = crate::retention::now_ms(std::time::SystemTime::now());
+    let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
+    check!(base_offset == Offset(0));
+    check!((before..=after).contains(&stamp));
+    // The whole stored batch, not a field at a time: everything but the three
+    // rewritten fields is what the producer sent.
+    let expected = RecordBatch {
+        base_offset: 0,
+        partition_leader_epoch: produced.partition_leader_epoch,
+        attributes: produced
+            .attributes
+            .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime),
+        last_offset_delta: produced.last_offset_delta,
+        base_timestamp: 1_000,
+        max_timestamp: stamp,
+        producer_id: produced.producer_id,
+        producer_epoch: produced.producer_epoch,
+        base_sequence: produced.base_sequence,
+        records: produced.records.clone(),
+    };
+    check!(only_batch(&log) == expected);
+    drop(dir);
+}
+
+/// The default topic stamps nothing, so the produce response has no
+/// `logAppendTimeMs` to report and the records keep the producer's clock.
+#[test]
+fn create_time_leaves_the_batch_untouched_and_reports_no_stamp() {
+    let (dir, mut log) = test_log();
+    let mut produced = test_batch_at(0);
+    let expected = RecordBatch {
+        base_offset: 0,
+        ..produced.clone()
+    };
+
+    let (base_offset, stamp) = log.append(&mut produced).unwrap();
+
+    check!(base_offset == Offset(0));
+    check!(stamp == None);
+    check!(only_batch(&log) == expected);
+    drop(dir);
+}
+
+/// Kafka builds the time index from the rewritten `max_timestamp`, so a
+/// `ListOffsets` by time on a `LogAppendTime` topic answers in append time: the
+/// producer's own timestamp finds nothing, and the stamp finds the batch.
+#[test]
+fn offset_for_timestamp_answers_in_append_time() {
+    let (dir, mut log) = log_append_time_log();
+    let mut produced = test_batch_at(0);
+    // Far enough in the past that no clock reading can collide with it.
+    produced.base_timestamp = 1_000;
+    produced.max_timestamp = 1_000;
+
+    let (_base_offset, stamp) = log.append(&mut produced).unwrap();
+
+    let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
+    check!(log.offset_for_timestamp(1_000) == Some((Offset(0), stamp)));
+    check!(log.offset_for_timestamp(stamp) == Some((Offset(0), stamp)));
+    check!(log.offset_for_timestamp(stamp + 1) == None);
+    drop(dir);
+}
+
+/// A log on a topic with `delivery.mode=scheduled` and, when `monotonic`,
+/// `delivery.schedule.monotonic=true`.
+fn scheduled_log(monotonic: crate::config::ScheduleOrder) -> (tempfile::TempDir, Log) {
+    let dir = tempdir().unwrap();
+    let log = Log::open(
+        dir.path(),
+        LogConfig {
+            delivery_policy: crate::config::DeliveryPolicy::Scheduled,
+            schedule_order: monotonic,
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    (dir, log)
+}
+
+/// A one-record batch whose delivery time — its `max_timestamp` on a
+/// scheduled partition — is `delivery_ms`.
+fn batch_delivered_at(delivery_ms: i64) -> RecordBatch {
+    let mut batch = test_batch_at(0);
+    batch.base_timestamp = delivery_ms;
+    batch.max_timestamp = delivery_ms;
+    batch
+}
+
+/// KFC-1 `delivery.schedule.monotonic`. The delivery times the partition holds
+/// run out to `2_000`, and a batch is refused exactly when its own delivery time
+/// is strictly below that. Both offset-assigning leader appends enforce it, and
+/// a refusal appends nothing.
+#[test]
+fn a_monotonic_scheduled_log_refuses_a_batch_that_precedes_its_schedule() {
+    /// `(delivery_ms, refused, label)`.
+    const CASES: [(i64, bool, &str); 5] = [
+        (2_001, false, "after the largest delivery time held"),
+        (2_000, false, "equal to it, which does not run backwards"),
+        (1_999, true, "one millisecond before it"),
+        (1_500, true, "between the two batches already scheduled"),
+        (0, true, "behind the whole schedule"),
+    ];
+
+    for (delivery_ms, refused, label) in CASES {
+        for verbatim in [false, true] {
+            let (dir, mut log) = scheduled_log(crate::config::ScheduleOrder::Monotonic);
+            for seeded in [1_000, 2_000] {
+                log.append(&mut batch_delivered_at(seeded))
+                    .expect("seed the partition schedule");
+            }
+            let end = log.log_end_offset();
+
+            let result = if verbatim {
+                let (_wire, batch) =
+                    verbatim_from(&batch_delivered_at(delivery_ms), LeaderEpoch(1));
+                log.append_verbatim(&batch).map(|(base, _stamp)| base)
+            } else {
+                log.append(&mut batch_delivered_at(delivery_ms))
+                    .map(|(base, _stamp)| base)
+            };
+
+            check!(
+                matches!(
+                    &result,
+                    Err(LogError::ScheduleRunsBackwards { delivery_ms: refused_ms })
+                        if *refused_ms == delivery_ms
+                ) == refused,
+                "case: {label}, verbatim: {verbatim}"
+            );
+            // A refused batch leaves the log exactly where it found it; an
+            // admitted one extends it by its single record.
+            let want_end = if refused { end } else { Offset(end.0 + 1) };
+            check!(log.log_end_offset() == want_end, "case: {label}");
+            drop(dir);
+        }
+    }
+}
+
+/// The same schedule without the setting, and the same schedule on a topic
+/// that delivers immediately. Neither reads the schedule at all, so both
+/// admit the batch that the case above refuses.
+#[test]
+fn only_a_monotonic_scheduled_log_reads_the_schedule() {
+    let (dir, mut log) = scheduled_log(crate::config::ScheduleOrder::Unordered);
+    log.append(&mut batch_delivered_at(2_000)).unwrap();
+    check!(log.append(&mut batch_delivered_at(0)).is_ok());
+    drop(dir);
+
+    let (dir, mut log) = test_log();
+    log.append(&mut batch_delivered_at(2_000)).unwrap();
+    check!(log.append(&mut batch_delivered_at(0)).is_ok());
+    drop(dir);
 }

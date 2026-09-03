@@ -41,9 +41,13 @@
 //! clean reaches neither.
 //!
 //! Kafka gates the whole thing on the `eligible.leader.replicas.version`
-//! feature. krabka has no such feature to finalize -- the registry in
-//! `krabka_metadata` does not carry it -- so the state is maintained
-//! unconditionally, which is also what the read side already assumes.
+//! feature: `ReplicationControlManager` builds every `PartitionChangeBuilder`
+//! with `setEligibleLeaderReplicasEnabled(isElrEnabled())`, so at level 0 no
+//! partition ever gains an eligible or last-known-eligible set. krabka
+//! registers the same feature, and [`ElrPublisher::extend`] publishes nothing
+//! while it is below level 1. The read side needs no gate of its own: a
+//! cluster that never published an ELR has none to read, and a downgrade to 0
+//! clears what an earlier level 1 left behind.
 //!
 //! ## What gets published
 //!
@@ -65,7 +69,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord};
 
 use super::state::{PartitionElr, TopicElr, wire_node_ids};
-use crate::config_keys::{ELIGIBLE_LEADER_REPLICAS, effective_min_insync_replicas};
+use crate::{
+    config_keys::{ELIGIBLE_LEADER_REPLICAS, effective_min_insync_replicas},
+    features::{ELR_VERSION, feature_enabled},
+};
 
 /// Appends the ELR state implied by a batch of controller changes to that
 /// batch.
@@ -129,6 +136,9 @@ impl<'a> ElrPublisher<'a> {
     /// stale ELR rather than one that names a partition state no record ever
     /// established.
     pub(crate) fn extend(&self, changes: &mut Vec<MetadataRecord>) {
+        if !feature_enabled(self.image, ELR_VERSION, 1) {
+            return;
+        }
         let published = self.topic_config_records(changes);
         changes.extend(published);
     }

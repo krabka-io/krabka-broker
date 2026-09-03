@@ -90,6 +90,19 @@ pub enum LogError {
     /// A caller supplied an invalid argument.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// KFC-1 `delivery.schedule.monotonic`: the appended batch's delivery time
+    /// precedes a delivery time the partition already holds, so the batch
+    /// would make the partition's schedule run backwards.
+    ///
+    /// The log raises it because the log is what serializes appends: the test
+    /// and the write it guards are one critical section here and nowhere
+    /// above. The broker answers it with `INVALID_TIMESTAMP` (32).
+    #[error("delivery time {delivery_ms} precedes a delivery time already in the partition")]
+    ScheduleRunsBackwards {
+        /// The refused batch's delivery time, which is its `max_timestamp`.
+        delivery_ms: i64,
+    },
 }
 
 #[cfg(test)]

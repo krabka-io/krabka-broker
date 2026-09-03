@@ -252,3 +252,116 @@ fn non_txn_verbatim_batch_with_valid_pid_advances_lso() {
     assert2::assert!(log.lso() == Offset(2));
     drop(dir);
 }
+
+/// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
+/// configures one, with everything else at its default.
+fn log_append_time_log() -> (tempfile::TempDir, Log) {
+    let dir = tempdir().unwrap();
+    let log = Log::open(
+        dir.path(),
+        LogConfig {
+            message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    (dir, log)
+}
+
+/// The passthrough path stamps the same three header fields the owned path
+/// stamps, in place in the producer's own bytes: the timestamp-type attribute
+/// bit, `max_timestamp`, and the CRC that covers them. Everything else on the
+/// wire, the record bodies included, is byte-for-byte what the producer sent,
+/// which is what keeps the path a passthrough.
+#[test]
+fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
+    let (dir, mut log) = log_append_time_log();
+    let mut producer = test_batch_at(0);
+    producer.base_offset = 999;
+    producer.partition_leader_epoch = -1;
+    producer.base_timestamp = 1_000;
+    producer.max_timestamp = 1_000;
+    let (wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+
+    let (base_offset, stamp) = log.append_verbatim(&vb).unwrap();
+
+    let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
+    assert!(base_offset == Offset(0));
+    // The expectation is the producer's bytes with the three fields patched,
+    // plus the two fields every verbatim append patches outside the CRC.
+    let mut expected = wire.to_vec();
+    expected[0..8].copy_from_slice(&0i64.to_be_bytes());
+    expected[12..16].copy_from_slice(&4i32.to_be_bytes());
+    let attributes = producer
+        .attributes
+        .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime);
+    expected[ATTRIBUTES_RANGE].copy_from_slice(&attributes.0.to_be_bytes());
+    expected[MAX_TIMESTAMP_RANGE].copy_from_slice(&stamp.to_be_bytes());
+    let crc = crc32c::crc32c(&expected[CRC_COVERAGE_START..]);
+    expected[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
+
+    let stored = log
+        .read_raw(Offset(0), log.log_end_offset(), mebibytes(10))
+        .unwrap();
+    assert!(&stored.bytes[..] == &expected[..]);
+    // And the stored bytes decode, which is the CRC check the reader runs.
+    let mut cursor: &[u8] = &stored.bytes;
+    let decoded = RecordBatch::decode(&mut cursor).unwrap();
+    assert!(
+        decoded
+            == RecordBatch {
+                base_offset: 0,
+                partition_leader_epoch: 4,
+                attributes,
+                last_offset_delta: producer.last_offset_delta,
+                base_timestamp: 1_000,
+                max_timestamp: stamp,
+                producer_id: producer.producer_id,
+                producer_epoch: producer.producer_epoch,
+                base_sequence: producer.base_sequence,
+                records: producer.records.clone(),
+            }
+    );
+    drop(dir);
+}
+
+/// The time index follows the stamp on the passthrough path too, so a
+/// `ListOffsets` by time answers in append time rather than in producer time.
+#[test]
+fn verbatim_offset_for_timestamp_answers_in_append_time() {
+    let (dir, mut log) = log_append_time_log();
+    let mut producer = test_batch_at(0);
+    producer.base_timestamp = 1_000;
+    producer.max_timestamp = 1_000;
+    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
+
+    let (_base_offset, stamp) = log.append_verbatim(&vb).unwrap();
+
+    let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
+    check!(log.offset_for_timestamp(1_000) == Some((Offset(0), stamp)));
+    check!(log.offset_for_timestamp(stamp + 1) == None);
+    drop(dir);
+}
+
+/// A `CreateTime` partition is the default, and the passthrough path keeps
+/// every byte the producer sent apart from the two fields outside the CRC.
+#[test]
+fn verbatim_create_time_reports_no_stamp() {
+    let (dir, mut log) = test_log();
+    let mut producer = test_batch_at(0);
+    producer.base_offset = 999;
+    let (wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+
+    let (base_offset, stamp) = log.append_verbatim(&vb).unwrap();
+
+    assert!(base_offset == Offset(0));
+    assert!(stamp == None);
+    let mut expected = wire.to_vec();
+    expected[0..8].copy_from_slice(&0i64.to_be_bytes());
+    expected[12..16].copy_from_slice(&4i32.to_be_bytes());
+    let stored = log
+        .read_raw(Offset(0), log.log_end_offset(), mebibytes(10))
+        .unwrap();
+    assert!(&stored.bytes[..] == &expected[..]);
+    drop(dir);
+}

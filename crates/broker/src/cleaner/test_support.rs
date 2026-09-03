@@ -32,13 +32,30 @@ pub(super) fn compactable_partition(
     leader: NodeId,
     cleanup_policy: krabka_log::CleanupPolicy,
 ) -> Arc<Partition> {
+    compactable_partition_with_config(
+        root,
+        topic,
+        partition_id,
+        leader,
+        krabka_log::LogConfig {
+            cleanup_policy,
+            segment_size: krabka_units::bytes(256),
+            ..Default::default()
+        },
+    )
+}
+
+/// The same fixture over a caller-chosen `LogConfig`, for the cleaner's
+/// dirty-ratio and compaction-lag tests.
+pub(super) fn compactable_partition_with_config(
+    root: &TempDir,
+    topic: &str,
+    partition_id: i32,
+    leader: NodeId,
+    cfg: krabka_log::LogConfig,
+) -> Arc<Partition> {
     let part_dir = crate::log_dir::partition_dir(root.path(), topic, partition_id);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
-    let cfg = krabka_log::LogConfig {
-        cleanup_policy,
-        segment_size: krabka_units::bytes(256),
-        ..Default::default()
-    };
     let mut log = krabka_log::Log::open(&part_dir, cfg).expect("open compactable log");
     for idx in 0..12 {
         let mut batch = keyed_batch(idx, b"duplicate-key", format!("v{idx}").as_bytes());

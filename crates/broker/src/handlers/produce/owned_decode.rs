@@ -174,6 +174,7 @@ mod tests {
         let prepared = prepare_batch(
             PartitionPayload::Owned(RecordsPayload::Legacy(legacy.freeze())),
             None,
+            crate::handlers::produce::hot_path::TimestampPolicy::default(),
             &Arc::from("orders"),
             &crate::metrics::BrokerMetrics::new(),
             RecordDecompressionPolicy::default(),

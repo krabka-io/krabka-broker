@@ -5,12 +5,22 @@
 //! Automatic replica placement is site-aware. See [`crate::site_placement`]
 //! for the site spread and the leadership pinning it gives. An explicit
 //! `assignments` field still wins, as it does in Kafka.
+//!
+//! KIP-525: a v5+ row reports what the topic was created as -- its partition
+//! count, its replication factor, and its whole effective configuration, the
+//! list [`crate::handlers::describe_configs`] answers a `TOPIC` resource with.
+//! A client that reads it needs no follow-up `DescribeConfigs`, which is what
+//! Terraform's `kafka_topic`, Connect's `TopicAdmin` and Streams'
+//! `InternalTopicManager` do. Kafka gates the whole disclosure on a second,
+//! per-topic ACL check -- `DescribeConfigs` on `Topic(name)` -- and a denial
+//! withholds it behind `topicConfigErrorCode` without failing the create.
 
 use bytes::Bytes;
 use krabka_protocol::{
     Decode,
     owned::{
-        create_topics_request::CreateTopicsRequest, create_topics_response::CreatableTopicResult,
+        create_topics_request::CreateTopicsRequest,
+        create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
@@ -29,12 +39,15 @@ mod tests;
 
 pub(crate) use self::placement::{round_robin_replicas, site_broker_views};
 use self::{
-    authorization::cluster_create_denied,
+    authorization::{cluster_create_denied, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
     mutation_quota::mutation_count,
     placement::resolve_assignments,
     records::{topic_config_overrides, topic_records},
-    response::{create_topics_response, encode_response, finish_response, topic_error_result},
+    response::{
+        create_topics_response, effective_topic_configs, encode_response, finish_response,
+        topic_error_result,
+    },
 };
 use crate::{
     broker::Broker,
@@ -106,18 +119,7 @@ pub(crate) async fn handle(
     let req = CreateTopicsRequest::decode(&mut cursor, version)?;
     let image = broker.controller.current_image();
     if cluster_create_denied(broker, &image, ctx) {
-        let results = req
-            .topics
-            .iter()
-            .map(|topic| {
-                topic_error_result(
-                    topic.name.clone(),
-                    codes::CLUSTER_AUTHORIZATION_FAILED,
-                    Some("create-topics denied".into()),
-                )
-            })
-            .collect();
-        return encode_response(&create_topics_response(results, 0), version);
+        return encode_response(&cluster_denied_response(&req), version);
     }
 
     let controller = broker.controller.clone();
@@ -357,17 +359,104 @@ pub(crate) async fn handle(
         };
 
         if error_code == codes::NONE {
-            result.num_partitions = i32::try_from(assignments.len()).unwrap_or(i32::MAX);
-            result.replication_factor = assignments
-                .first()
-                .and_then(|replicas| i16::try_from(replicas.len()).ok())
-                .unwrap_or(-1);
-            // KIP-525 (v5+): return an empty configs list to satisfy
-            // clients that unconditionally call `configs().stream()`.
-            result.configs = Some(Vec::new());
+            disclose_created_topic(
+                broker,
+                ctx,
+                &image,
+                version,
+                &CreatedTopic {
+                    controller: &controller,
+                    assignments: &assignments,
+                    overrides: &config_overrides,
+                },
+                &mut result,
+            );
         }
         results.push(result);
     }
 
     finish_response(broker, ctx, results, validate_only, quota.delay(), version)
+}
+
+/// Fill in what KIP-525 discloses about a topic the create just made: its
+/// partition count, its replication factor and, on v5+, its whole effective
+/// configuration.
+///
+/// Split out of [`handle`] because the disclosure is one decision with two
+/// outcomes -- told or withheld -- and reads none of the create's own state
+/// beyond the row it fills.
+/// What the create decided about one topic, as the KIP-525 disclosure reads
+/// it: where to resolve the effective configuration from, the replica
+/// assignment the row's counts come from, and the override map the request
+/// carried.
+struct CreatedTopic<'a> {
+    controller: &'a std::sync::Arc<dyn crate::metadata_source::MetadataSource>,
+    assignments: &'a [Vec<krabka_raft::NodeId>],
+    overrides: &'a std::collections::BTreeMap<String, String>,
+}
+
+fn disclose_created_topic(
+    broker: &Broker,
+    ctx: &crate::handlers::RequestContext<'_>,
+    image: &krabka_metadata::MetadataImage,
+    version: i16,
+    created: &CreatedTopic<'_>,
+    result: &mut CreatableTopicResult,
+) {
+    // KIP-525 (v5+): the row carries what the topic was created as, so
+    // a client needs no follow-up DescribeConfigs. Kafka gates the
+    // whole disclosure -- the effective configs, the partition count
+    // and the replication factor -- on `DescribeConfigs` on
+    // `Topic(name)`, and stamps `topicConfigErrorCode` when the
+    // principal may not be told. The create itself already happened
+    // either way. Below v5 none of those fields are on the wire, so
+    // the check is not worth an authorizer call.
+    let describable = version < 5 || !describe_configs_denied(broker, image, ctx, &result.name);
+    if describable {
+        result.num_partitions = i32::try_from(created.assignments.len()).unwrap_or(i32::MAX);
+        result.replication_factor = created
+            .assignments
+            .first()
+            .and_then(|replicas| i16::try_from(replicas.len()).ok())
+            .unwrap_or(-1);
+        if version >= 5 {
+            // The overrides the create wrote -- or, on a `validate_only`
+            // row, would have written -- resolved against the current
+            // image. This is Kafka's
+            // `computeEffectiveTopicConfigs(creationConfigs)`: it builds
+            // the row from the request's own map, and `validateOnly`
+            // discards the records alone.
+            result.configs = Some(effective_topic_configs(
+                &created.controller.current_image(),
+                &result.name,
+                created.overrides,
+            ));
+        }
+    } else {
+        // Kafka leaves the partition count and the replication factor
+        // at -1 here too: `AdminClient` fails every accessor on the
+        // create result once `topicConfigErrorCode` is set, so a value
+        // in either field would never be read.
+        result.configs = Some(Vec::new());
+        result.topic_config_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+    }
+}
+
+/// Every topic row answered `CLUSTER_AUTHORIZATION_FAILED`, which is what a
+/// request that fails the whole-request `Cluster` `Create` gate gets: the
+/// handler learns nothing else about the topics, so no row can carry a
+/// different verdict.
+fn cluster_denied_response(req: &CreateTopicsRequest) -> CreateTopicsResponse {
+    let results = req
+        .topics
+        .iter()
+        .map(|topic| {
+            topic_error_result(
+                topic.name.clone(),
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                Some("create-topics denied".into()),
+            )
+        })
+        .collect();
+    create_topics_response(results, 0)
 }

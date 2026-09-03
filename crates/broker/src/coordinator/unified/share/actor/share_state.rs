@@ -8,8 +8,11 @@ use std::collections::HashSet;
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::records::{PendingShareRecords, flush_pending, state_partition_metadata_from};
-use crate::coordinator::unified::{
-    GroupCoordinator, offsets_log::OffsetsLog, share::state::ShareGroupState,
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, offsets_log::OffsetsLog, share::state::ShareGroupState,
+    },
+    share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
 };
 
 /// KIP-932 lifecycle hook. It runs AFTER `reconcile`, off the
@@ -22,8 +25,11 @@ use crate::coordinator::unified::{
 /// The hook is best-effort. A persister error leaves the partition
 /// un-recorded, so the next heartbeat retries it, and the error never fails
 /// the heartbeat. `state_epoch` is the group epoch, which is monotonic and
-/// bumps on every membership change. `start_offset` is 0, because a
-/// freshly-initialized share partition starts at the beginning.
+/// bumps on every membership change. `start_offset` is `-1`, Kafka's
+/// `PartitionFactory.UNINITIALIZED_START_OFFSET`: the coordinator records that
+/// the partition exists without deciding where it starts, and the share
+/// partition itself resolves the group's `share.auto.offset.reset` when it is
+/// first loaded, exactly as `SharePartition.maybeInitialize` does.
 pub(super) async fn reconcile_share_state(
     state: &mut ShareGroupState,
     offsets_log: &dyn OffsetsLog,
@@ -70,7 +76,7 @@ pub(super) async fn reconcile_share_state(
                 topic_uuid,
                 partition,
                 state_epoch,
-                krabka_log::Offset(0),
+                krabka_log::Offset(UNINITIALIZED_START_OFFSET),
             )
             .await
         {

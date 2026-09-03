@@ -252,7 +252,7 @@ mod tests {
         let lso_before = log.lso();
 
         let mut built = build_barrier_batch(&sample(), log.log_end_offset(), 0);
-        let assigned = log.append(&mut built).expect("append barrier marker");
+        let (assigned, _) = log.append(&mut built).expect("append barrier marker");
 
         assert!(log.lso() == lso_before);
         let read = log

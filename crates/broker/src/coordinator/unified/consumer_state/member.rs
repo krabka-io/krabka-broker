@@ -93,6 +93,9 @@ pub struct MemberState {
 pub enum CompiledRegex {
     #[default]
     Absent,
+    /// A pattern that did not compile. Only replay can produce this: the
+    /// heartbeat path rejects a bad pattern with
+    /// `INVALID_REGULAR_EXPRESSION` before it is stored.
     Invalid,
     Valid(Regex),
 }
@@ -113,6 +116,13 @@ impl MemberState {
     /// as [`CompiledRegex::Invalid`], with one warning. The reconciler then
     /// neither retries the compile nor treats the pattern as "match
     /// everything".
+    ///
+    /// The live heartbeat path never reaches that arm: a
+    /// `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile
+    /// is answered `INVALID_REGULAR_EXPRESSION` (128) before any member state
+    /// is touched, exactly as Kafka does. [`CompiledRegex::Invalid`] is
+    /// therefore reachable only from replay, where a persisted pattern is
+    /// restored without going back through that gate.
     pub fn set_regex(&mut self, pattern: Option<String>) {
         self.compiled_regex = match pattern.as_deref() {
             None => CompiledRegex::Absent,

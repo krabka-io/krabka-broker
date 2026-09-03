@@ -100,6 +100,13 @@ pub struct TxnEntry {
     pub prev_producer_id: ProducerId,
     pub next_producer_id: ProducerId,
     pub next_producer_epoch: i16,
+    /// KIP-360 in-memory fencing state, not part of `TransactionLogValue` and
+    /// therefore reset by replay. `last_producer_epoch` is the epoch the entry
+    /// held before an epoch fence was prepared for an abort, and
+    /// `has_failed_epoch_fence` says that abort then failed, so the producer
+    /// that still holds `last_producer_epoch` may retry its `InitProducerId`.
+    pub last_producer_epoch: i16,
+    pub has_failed_epoch_fence: bool,
     pub last_update_ms: i64,
     pub start_ms: i64,
 }
@@ -127,6 +134,8 @@ impl TxnEntry {
             prev_producer_id: ProducerId(-1),
             next_producer_id: ProducerId(-1),
             next_producer_epoch: -1,
+            last_producer_epoch: -1,
+            has_failed_epoch_fence: false,
             last_update_ms: now_ms,
             start_ms: now_ms,
         }

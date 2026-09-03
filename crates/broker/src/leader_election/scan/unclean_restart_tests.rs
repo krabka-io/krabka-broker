@@ -47,6 +47,7 @@ async fn restart_batch(image: &MetadataImage, alive_nodes: &[u64]) -> FailoverPl
 #[tokio::test]
 async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
     let mut image = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+    crate::test_support::finalize_elr_version(&mut image);
     set_topic_config(&mut image, "t", MIN_INSYNC_REPLICAS, "3");
 
     let plan = restart_batch(&image, &[1, 2]).await;
@@ -88,6 +89,7 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
 #[tokio::test]
 async fn a_published_membership_is_withdrawn_without_a_partition_change() {
     let mut image = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
+    crate::test_support::finalize_elr_version(&mut image);
     set_topic_config(&mut image, "t", ELIGIBLE_LEADER_REPLICAS, "0:3:");
 
     let plan = restart_batch(&image, &[1, 2]).await;

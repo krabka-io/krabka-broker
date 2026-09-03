@@ -5,7 +5,7 @@ use assert2::assert;
 
 use super::*;
 use crate::handlers::update_features::{
-    test_support::{VERSION, metadata_update, validate_only},
+    test_support::{VERSION, elr_update, metadata_update, validate_only},
     upgrade_type::{UPGRADE_TYPE_SAFE_DOWNGRADE, UPGRADE_TYPE_UNSAFE_DOWNGRADE},
 };
 
@@ -360,4 +360,136 @@ fn downgrade_type_cannot_raise_a_finalized_feature() {
             .is_some_and(|message| message.contains("newer"))
     );
     assert!(records.is_empty());
+}
+
+/// An image at `metadata_version`, with `eligible.leader.replicas.version`
+/// finalized at `elr_level` when one is given and a published ELR on topic
+/// `orders` when `published` is.
+fn elr_image(
+    metadata_version: i16,
+    elr_level: Option<i16>,
+    published: Option<&str>,
+) -> krabka_metadata::MetadataImage {
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+        level: metadata_version,
+    }));
+    if let Some(level) = elr_level {
+        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: crate::features::ELR_VERSION.into(),
+            level,
+        }));
+    }
+    if let Some(published) = published {
+        image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+            name: "orders".into(),
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 3,
+        }));
+        image.apply(&MetadataRecord::V1TopicConfig(
+            krabka_metadata::TopicConfigRecord {
+                topic: "orders".into(),
+                overrides: [
+                    (
+                        crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                        "2".to_string(),
+                    ),
+                    (
+                        crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+                        published.to_string(),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        ));
+    }
+    image
+}
+
+/// KIP-966: finalizing the feature back to 0 clears the memberships it
+/// published, the way Kafka's controller emits its own cleaning records. The
+/// clearing records go in ahead of the feature record, so a replay that stops
+/// between them has forgotten the memberships rather than kept them under a
+/// feature that still reads as on.
+#[test]
+fn an_elr_downgrade_clears_the_published_state_before_the_feature_record() {
+    let image = elr_image(
+        crate::features::METADATA_VERSION_MAX,
+        Some(1),
+        Some("0:2,3:"),
+    );
+    let request = validate_only(vec![elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
+    let (results, records) = validate_updates(&request, &image, VERSION);
+
+    assert!(results[0].error_code == codes::NONE, "{results:?}");
+    assert!(
+        records
+            == vec![
+                MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
+                    topic: "orders".into(),
+                    overrides: [(
+                        crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                        "2".to_string(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                }),
+                MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: crate::features::ELR_VERSION.into(),
+                    level: 0,
+                }),
+            ],
+        "{records:?}"
+    );
+}
+
+/// A cluster that never turned the feature on has nothing to clear, so the
+/// downgrade is the feature record alone.
+#[test]
+fn an_elr_downgrade_without_published_state_emits_only_the_feature_record() {
+    let image = elr_image(crate::features::METADATA_VERSION_MAX, Some(1), None);
+    let request = validate_only(vec![elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
+    let (results, records) = validate_updates(&request, &image, VERSION);
+
+    assert!(results[0].error_code == codes::NONE, "{results:?}");
+    assert!(
+        records
+            == vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: crate::features::ELR_VERSION.into(),
+                level: 0,
+            })],
+        "{records:?}"
+    );
+}
+
+/// KIP-1022: `ELRV_1` depends on `metadata.version` at 4.0-IV1, the level
+/// whose `PartitionRecord` carries the ELR fields, so a cluster below it
+/// cannot finalize the feature.
+#[test]
+fn elr_level_one_requires_the_elr_metadata_version() {
+    for (case, metadata_version, want_code) in [
+        (
+            "below 4.0-IV1",
+            krabka_metadata::metadata_version::ELR_MIN_LEVEL - 1,
+            codes::INVALID_UPDATE_VERSION,
+        ),
+        (
+            "at 4.0-IV1",
+            krabka_metadata::metadata_version::ELR_MIN_LEVEL,
+            codes::NONE,
+        ),
+        (
+            "above 4.0-IV1",
+            crate::features::METADATA_VERSION_MAX,
+            codes::NONE,
+        ),
+    ] {
+        let image = elr_image(metadata_version, None, None);
+        let request = validate_only(vec![elr_update(1, 1)]);
+        let (results, _records) = validate_updates(&request, &image, VERSION);
+        assert!(results[0].error_code == want_code, "{case}: {results:?}");
+    }
 }

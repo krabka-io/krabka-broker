@@ -137,6 +137,8 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/transactions.rs",
             "crates/broker/tests/transactions/txn_fencing.rs",
+            "crates/broker/tests/jvm_streams_app.rs",
+            "crates/broker/tests/jvm_connect_distributed.rs",
         ],
         clients: ClientEvidence::NotCovered,
         note: "",
@@ -347,14 +349,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-360",
         claim: "Epoch bump when a transactional producer re-initialises",
-        status: KipStatus::Partial,
-        module: "crates/broker/src/handlers/init_producer_id/identity.rs",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/init_producer_id/transactional.rs",
         tests: &[
-            "crates/broker/tests/transactions/txn_fencing.rs::fenced_producer_cannot_commit",
-            "crates/broker/tests/transaction_version/txnver_full_cycle.rs",
+            "crates/broker/tests/transactions/txn_fencing.rs::init_producer_id_fences_a_stale_producer_identity",
+            "crates/broker/tests/jvm_acceptance_durability/transactional_eos.rs::transactional_console_producer_eos",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "`InitProducerId` reads the request's current `producer_id` and `producer_epoch` only for a KIP-939 recovery (crates/broker/src/handlers/init_producer_id.rs:157), so a re-initialisation that carries a stale epoch is not answered with `PRODUCER_FENCED`.",
+        note: "",
     },
     KipAnnotation {
         key: "KIP-368",
@@ -560,11 +562,11 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-525",
         claim: "CreateTopics v5 returns the created topic's configuration",
-        status: KipStatus::Partial,
+        status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/create_topics.rs",
         tests: &["crates/broker/tests/admin_handlers.rs"],
         clients: ClientEvidence::NotCovered,
-        note: "The response carries an empty `configs` list, so a client that reads it does not fail. The list does not carry the topic's values.",
+        note: "",
     },
     KipAnnotation {
         key: "KIP-534",
@@ -624,7 +626,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_features.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`.",
     },
     KipAnnotation {
         key: "KIP-590",
@@ -781,7 +783,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/group_version.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker.",
     },
     KipAnnotation {
         key: "KIP-853",
@@ -872,6 +874,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-950",
+        claim: "Tiered storage disablement: remote.log.copy.disable and remote.log.delete.on.disable",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager.rs",
+        tests: &[
+            "crates/broker/src/config_keys/validation/tests.rs",
+            "crates/broker/tests/jvm_acceptance_tiered.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "`remote.storage.enable` going true -> false is refused unless `remote.log.delete.on.disable=true` comes with it, and the flip then erases the partition's remote segments and raises its log start offset to the local log start. `remote.log.copy.disable=true` is the read-only tier: no new copies, reads and remote retention unchanged. Under a WORM archive the cascade clears the partition's remote metadata and removes nothing from the archive, as a `DeleteTopics` cascade does.",
+    },
+    KipAnnotation {
         key: "KIP-951",
         claim: "Leader hints in the Produce and Fetch responses",
         status: KipStatus::Implemented,
@@ -892,9 +906,10 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/unclean_recovery.rs",
             "crates/broker/tests/describe_topic_partitions.rs",
             "crates/broker/tests/jvm_acceptance_cli/elr_columns.rs",
+            "crates/broker/tests/jvm_features.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "ELR maintenance is gated on the `eligible.leader.replicas.version` feature, as Kafka gates it on `FeatureControlManager.isElrFeatureEnabled()`: at level 0 the controller publishes no eligible or last-known-eligible set, and a downgrade to 0 clears what an earlier level 1 published. The release default is 0 at every `metadata.version` krabka advertises, because `ELRV_1` bootstraps at 4.1-IV0; level 1 declares Kafka's KIP-1022 dependency on `metadata.version` at 4.0-IV1. krabka carries the state as the controller-managed `krabka.elr` topic override rather than in `PartitionRecord`, so it does not consume ELR fields written by a JVM controller.",
     },
     KipAnnotation {
         key: "KIP-996",
@@ -948,6 +963,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/streams_groups.rs",
             "crates/broker/tests/streams_classic_upgrade.rs",
             "crates/broker/tests/jvm_streams_groups.rs",
+            "crates/broker/tests/jvm_streams_app.rs",
         ],
         clients: ClientEvidence::NotCovered,
         note: "",

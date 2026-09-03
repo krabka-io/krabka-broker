@@ -11,7 +11,10 @@ use krabka_protocol::records::{
 };
 
 use super::super::{PartitionPayload, PreparedSource, prepare_batch};
-use crate::{handlers::produce::append::build_produce_data, partition::ProduceData};
+use crate::{
+    handlers::produce::{append::build_produce_data, topic_settings::TimestampPolicy},
+    partition::ProduceData,
+};
 
 /// The topic name these cases record under, as the shared handle the metric
 /// label sets clone.
@@ -94,6 +97,7 @@ fn dispatch_slice(
     let prepared = prepare_batch(
         PartitionPayload::Slice(slice),
         topic_compression,
+        TimestampPolicy::default(),
         &topic(),
         &m,
         RecordDecompressionPolicy::default(),
@@ -138,6 +142,7 @@ fn fallback_when_null_field() {
     let err = prepare_batch(
         PartitionPayload::Null,
         None,
+        TimestampPolicy::default(),
         &topic(),
         &m,
         RecordDecompressionPolicy::default(),
@@ -165,6 +170,7 @@ fn rejects_client_log_append_time() {
     let err = prepare_batch(
         PartitionPayload::Slice(wire),
         None,
+        TimestampPolicy::default(),
         &topic(),
         &crate::metrics::BrokerMetrics::new(),
         RecordDecompressionPolicy::default(),
@@ -181,6 +187,7 @@ fn rejects_client_control_batch() {
     let err = prepare_batch(
         PartitionPayload::Slice(wire),
         None,
+        TimestampPolicy::default(),
         &topic(),
         &crate::metrics::BrokerMetrics::new(),
         RecordDecompressionPolicy::default(),
@@ -228,6 +235,7 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
             let err = prepare_batch(
                 payload,
                 None,
+                TimestampPolicy::default(),
                 &topic(),
                 &crate::metrics::BrokerMetrics::new(),
                 RecordDecompressionPolicy::default(),
@@ -251,6 +259,7 @@ fn fallback_on_corrupt_crc_slice() {
     let err = prepare_batch(
         PartitionPayload::Slice(Bytes::from(wire)),
         None,
+        TimestampPolicy::default(),
         &topic(),
         &m,
         RecordDecompressionPolicy::default(),
@@ -268,6 +277,7 @@ fn rejects_crc_valid_malformed_record_body() {
     let error = prepare_batch(
         PartitionPayload::Slice(Bytes::from(wire)),
         None,
+        TimestampPolicy::default(),
         &topic(),
         &crate::metrics::BrokerMetrics::new(),
         RecordDecompressionPolicy::default(),
@@ -287,6 +297,7 @@ fn fallback_on_multiple_batches_in_slice() {
     let err = prepare_batch(
         PartitionPayload::Slice(two.freeze()),
         None,
+        TimestampPolicy::default(),
         &topic(),
         &crate::metrics::BrokerMetrics::new(),
         RecordDecompressionPolicy::default(),
@@ -404,6 +415,7 @@ fn header_fields_drive_dedup_on_verbatim_path() {
     let prepared = prepare_batch(
         PartitionPayload::Slice(wire.clone()),
         None,
+        TimestampPolicy::default(),
         &topic(),
         &m,
         RecordDecompressionPolicy::default(),

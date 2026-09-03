@@ -46,7 +46,7 @@ async fn writer_appends_and_acks() {
     .expect("send job");
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
-    assert!(assigned == 0);
+    assert!(assigned.base_offset == 0);
 
     // Second append assigns offset 3.
     let (ack, ack_rx) = oneshot::channel();
@@ -56,7 +56,14 @@ async fn writer_appends_and_acks() {
     }))
     .await
     .expect("send job 2");
-    assert!(ack_rx.await.expect("ack recv 2").expect("append 2 ok") == 3);
+    assert!(
+        ack_rx
+            .await
+            .expect("ack recv 2")
+            .expect("append 2 ok")
+            .base_offset
+            == 3
+    );
 
     drop(tx);
     writer.await.expect("writer join");
@@ -167,7 +174,14 @@ async fn durable_sync_ack_waits_for_diskless_wal() {
     }))
     .await
     .expect("send produce");
-    assert!(append_ack_rx.await.expect("append ack").expect("append") == 0);
+    assert!(
+        append_ack_rx
+            .await
+            .expect("append ack")
+            .expect("append")
+            .base_offset
+            == 0
+    );
 
     let (durable_ack, mut durable_ack_rx) = oneshot::channel();
     tx.send(WriterMessage::SyncDurable {
@@ -226,7 +240,7 @@ async fn writer_appends_and_acks_on_multi_thread_runtime() {
     .expect("send job");
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
-    assert!(assigned == 0);
+    assert!(assigned.base_offset == 0);
 
     drop(tx);
     writer.await.expect("writer join");
@@ -285,7 +299,7 @@ async fn writer_appends_verbatim_byte_exact() {
     .await
     .expect("send verbatim job");
     let assigned = ack_rx.await.expect("ack").expect("append ok");
-    assert!(assigned == 0);
+    assert!(assigned.base_offset == 0);
 
     // Read back: bytes 21.. must equal the producer's, only offset+epoch changed.
     let r = log

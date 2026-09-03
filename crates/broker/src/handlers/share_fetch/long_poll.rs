@@ -24,11 +24,15 @@ pub(super) enum LongPollOutcome {
     TimedOut,
 }
 
-pub(super) async fn long_poll(
-    broker: &Broker,
-    pending: &[PendingPartition],
-    max_wait_ms: i32,
-) -> LongPollOutcome {
+/// Arms one waiter on every notify a `ShareFetch` can be woken by, before the
+/// first acquire pass runs.
+///
+/// The arming is the whole point of the split: every producer path signals
+/// with `notify_waiters`, which wakes only the waiters already registered and
+/// leaves no permit behind. A waiter armed after the acquire pass would miss
+/// a record produced during it, and the request would then sleep out its whole
+/// `max_wait_ms` with records sitting in the log.
+pub(super) fn arm_waits(broker: &Broker, pending: &[PendingPartition]) -> Vec<WaitFut> {
     let notifies = pending
         .iter()
         .filter(|partition| partition.leadable)
@@ -47,18 +51,29 @@ pub(super) async fn long_poll(
             ]
         })
         .collect();
-    let max_wait = Duration::from_millis(u64::from(u32::try_from(max_wait_ms).unwrap_or(0)));
-    wait_for_notifications(notifies, max_wait).await
+    armed(notifies)
 }
 
-async fn wait_for_notifications(notifies: Vec<Arc<Notify>>, max_wait: Duration) -> LongPollOutcome {
-    let Some(_) = notifies.first() else {
-        return LongPollOutcome::NoPartitions;
-    };
-    let waits: Vec<WaitFut> = notifies
+fn armed(notifies: Vec<Arc<Notify>>) -> Vec<WaitFut> {
+    notifies
         .into_iter()
-        .map(|n| Box::pin(async move { n.notified().await }) as WaitFut)
-        .collect();
+        .map(|notify| {
+            let mut wait = Box::pin(notify.notified_owned());
+            wait.as_mut().enable();
+            wait as WaitFut
+        })
+        .collect()
+}
+
+pub(super) async fn long_poll(waits: Vec<WaitFut>, max_wait_ms: i32) -> LongPollOutcome {
+    let max_wait = Duration::from_millis(u64::from(u32::try_from(max_wait_ms).unwrap_or(0)));
+    wait_for_notifications(waits, max_wait).await
+}
+
+async fn wait_for_notifications(waits: Vec<WaitFut>, max_wait: Duration) -> LongPollOutcome {
+    if waits.is_empty() {
+        return LongPollOutcome::NoPartitions;
+    }
     match tokio::time::timeout(max_wait, futures_util::future::select_all(waits)).await {
         Ok(_) => LongPollOutcome::Notified,
         Err(_) => LongPollOutcome::TimedOut,
@@ -81,13 +96,33 @@ mod tests {
         let notified = Arc::new(Notify::new());
         notified.notify_one();
         assert!(
-            wait_for_notifications(vec![notified], Duration::from_secs(1)).await
+            wait_for_notifications(armed(vec![notified]), Duration::from_secs(1)).await
                 == LongPollOutcome::Notified
         );
 
         assert!(
-            wait_for_notifications(vec![Arc::new(Notify::new())], Duration::from_secs(1)).await
+            wait_for_notifications(armed(vec![Arc::new(Notify::new())]), Duration::from_secs(1))
+                .await
                 == LongPollOutcome::TimedOut
+        );
+    }
+
+    /// `notify_waiters` wakes only the waiters that are already registered, so
+    /// a `ShareFetch` that arms its waiters after the acquire pass misses a
+    /// record produced during it. Arming before the pass is what makes the
+    /// notification that lands in that window still count.
+    #[tokio::test(start_paused = true)]
+    async fn a_notification_between_arming_and_parking_still_wakes_the_poll() {
+        let notify = Arc::new(Notify::new());
+        let waits = armed(vec![Arc::clone(&notify)]);
+
+        // The window the arming closes: this fires while the acquire pass is
+        // still running, with nothing parked on the notify yet.
+        notify.notify_waiters();
+
+        assert!(
+            wait_for_notifications(waits, Duration::from_secs(30)).await
+                == LongPollOutcome::Notified
         );
     }
 }

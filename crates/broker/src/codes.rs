@@ -157,6 +157,12 @@ kafka_codes! {
     /// `TRANSACTION_COORDINATOR_FENCED` (52): the marker came from an older
     /// transaction-coordinator generation than the partition has observed.
     TRANSACTION_COORDINATOR_FENCED = 52;
+    /// `PRODUCER_FENCED` (90, KIP-360): the request carried a
+    /// `(producer_id, producer_epoch)` pair that the transaction coordinator
+    /// no longer recognises as the transactional id's live producer. A JVM
+    /// client raises `ProducerFencedException`, which is fatal to that
+    /// producer instance.
+    PRODUCER_FENCED = 90;
     /// `TRANSACTION_ABORTABLE` (120, KIP-890) — the operation failed but the
     /// transaction can still be aborted by the client; e.g.
     /// `AddPartitionsToTxn` verify-only found a partition that is not part of
@@ -505,6 +511,12 @@ krabka_private_codes! {
 pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
     use crate::error::BrokerError;
     match err {
+        // KFC-1 `delivery.schedule.monotonic`. The log refuses a batch whose
+        // delivery time precedes one the partition already holds, and the
+        // refusal is a statement about the batch's timestamp, not a server
+        // fault: the produce row carries the same code the produce-side
+        // `delivery.max.delay.ms` bound answers with.
+        BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards { .. }) => INVALID_TIMESTAMP,
         BrokerError::UnsupportedApi { .. } => UNSUPPORTED_VERSION,
         BrokerError::PartitionWriterDied { .. } => NOT_LEADER_OR_FOLLOWER,
         BrokerError::GroupInvalidState { .. } => REBALANCE_IN_PROGRESS,

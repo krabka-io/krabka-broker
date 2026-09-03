@@ -251,6 +251,7 @@ mod tests {
             // from the replica set, and the published ELR still names it.
             let mut image = std::sync::Arc::try_unwrap(img(&[1, 2, 3], isr, &[], &[3], 1))
                 .expect("the fixture holds the only reference");
+            crate::test_support::finalize_elr_version(&mut image);
             image.apply(&MetadataRecord::V1TopicConfig(
                 krabka_metadata::TopicConfigRecord {
                     topic: "foo".into(),

@@ -404,6 +404,13 @@ mod wire_tests {
             overrides.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), elr.to_string());
         }
         vec![
+            // KIP-966 ELR maintenance is gated on the feature, whose release
+            // default is 0, so the seed finalizes it the way an operator's
+            // `kafka-features upgrade` would.
+            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+                name: crate::features::ELR_VERSION.into(),
+                level: 1,
+            }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 node_id: REGISTERED,
                 // The controller stamps the real epoch on submit; this is the

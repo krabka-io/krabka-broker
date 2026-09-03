@@ -110,7 +110,10 @@ mod stamp_index;
 mod stamp_source;
 mod txn_index;
 
-pub use config::{CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DeliveryPolicy, LogConfig};
+pub use config::{
+    CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DeliveryPolicy, LogConfig, RemoteTierFlags,
+    ScheduleOrder,
+};
 pub use delivery::{DeliveryAdvance, batch_is_deliverable};
 pub use error::LogError;
 pub use filter::{FilteredBatch, filter_batch};

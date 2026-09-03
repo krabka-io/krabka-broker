@@ -8,11 +8,14 @@ use std::sync::Arc;
 use bytes::Bytes;
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::records::{
-    Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
+    Attributes, RecordBatch, RecordBatchBorrowed, RecordsPayload, TimestampType, ValidatedBatch,
+    validate_one_v2_batch,
 };
 use krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission};
 
-use super::{framing::PartitionPayload, owned_decode::decode_owned_batch};
+use super::{
+    framing::PartitionPayload, owned_decode::decode_owned_batch, topic_settings::TimestampPolicy,
+};
 use crate::codes;
 
 /// All the per-batch HEADER fields that the broker's produce gates need.
@@ -152,6 +155,7 @@ fn encoded_len(batch: &RecordBatch) -> Option<usize> {
 pub(super) fn prepare_batch(
     payload: PartitionPayload,
     topic_compression: Option<krabka_compression::CompressionType>,
+    timestamps: TimestampPolicy,
     topic_name: &Arc<str>,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
@@ -161,7 +165,9 @@ pub(super) fn prepare_batch(
         PartitionPayload::Owned(rp) => {
             let batch = decode_owned_batch(rp, topic_name, metrics, policy)?;
             validate_owned_client_batch(&batch)?;
-            return Ok(PreparedBatch::from_owned(batch));
+            let prepared = PreparedBatch::from_owned(batch);
+            validate_record_timestamps(&prepared, timestamps, policy)?;
+            return Ok(prepared);
         }
         PartitionPayload::Null => return Err(codes::INVALID_REQUEST),
         PartitionPayload::Slice(b) => b,
@@ -172,7 +178,7 @@ pub(super) fn prepare_batch(
     // move or the final `Verbatim(bytes)` construction.
     let validated = match validate_one_v2_batch(&bytes) {
         Ok(batch) if batch.total_len == bytes.len() => batch,
-        _ => return owned_fallback(bytes, topic_name, metrics, policy),
+        _ => return owned_fallback(bytes, timestamps, topic_name, metrics, policy),
     };
     let header = ValidatedHeader::from(&validated);
     let attributes = header.attributes;
@@ -182,13 +188,66 @@ pub(super) fn prepare_batch(
     if let Some(target) = topic_compression
         && target != attributes.compression()
     {
-        return owned_fallback(bytes, topic_name, metrics, policy);
+        return owned_fallback(bytes, timestamps, topic_name, metrics, policy);
     }
     validated
         .validate_records(policy)
         .map_err(|_| codes::INVALID_RECORD)?;
 
-    Ok(PreparedBatch::from_header(header, bytes))
+    let prepared = PreparedBatch::from_header(header, bytes);
+    validate_record_timestamps(&prepared, timestamps, policy)?;
+    Ok(prepared)
+}
+
+/// Apply the topic's `message.timestamp.before.max.ms` and
+/// `message.timestamp.after.max.ms` window to every record in the batch.
+///
+/// This is Kafka's `LogValidator.validateTimestamp`, which walks the records of
+/// each batch and fails the whole batch with `INVALID_TIMESTAMP` (32) as soon
+/// as one record's timestamp falls outside the window around the broker's
+/// clock. A record's timestamp is the batch's `base_timestamp` plus that
+/// record's own delta, which is how the v2 format stores it, so the walk is
+/// over deltas and not over absolute values.
+///
+/// A topic that left both windows at Kafka's `Long.MAX_VALUE` default, and a
+/// `LogAppendTime` topic, ask nothing of this function: it reads no clock and
+/// touches no record for them, which is every topic by default. Only a topic
+/// that configured a window pays for the walk, and on the verbatim path that
+/// walk is a second borrowed pass over bytes the CRC check already read. The
+/// bytes stay the producer's own either way; nothing here decodes into the
+/// append.
+fn validate_record_timestamps(
+    prepared: &PreparedBatch,
+    timestamps: TimestampPolicy,
+    policy: RecordDecompressionPolicy,
+) -> Result<(), i16> {
+    if !timestamps.bounds_records() {
+        return Ok(());
+    }
+    let now_ms = crate::time_util::now_ms();
+    let refuse = |timestamp_ms: i64| {
+        if timestamps.rejects_record(timestamp_ms, now_ms) {
+            Err(codes::INVALID_TIMESTAMP)
+        } else {
+            Ok(())
+        }
+    };
+    match &prepared.source {
+        PreparedSource::Owned(batch) => batch.records.iter().try_for_each(|record| {
+            refuse(batch.base_timestamp.saturating_add(record.timestamp_delta))
+        }),
+        PreparedSource::Verbatim(bytes) => {
+            let mut cursor: &[u8] = bytes;
+            let borrowed = RecordBatchBorrowed::decode_borrow_with_policy(&mut cursor, policy)
+                .map_err(|_| codes::INVALID_RECORD)?;
+            let base_timestamp = borrowed.header().base_timestamp.get();
+            for record in &borrowed {
+                let record = record.map_err(|_| codes::INVALID_RECORD)?;
+                refuse(base_timestamp.saturating_add(record.timestamp_delta))?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// The owned-decode fallback for a v≥3 records slice that the verbatim
@@ -202,6 +261,7 @@ pub(super) fn prepare_batch(
 /// message-format clients) and surfaces `INVALID_RECORD` on malformed bytes.
 pub(super) fn owned_fallback(
     bytes: Bytes,
+    timestamps: TimestampPolicy,
     topic_name: &Arc<str>,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
@@ -209,7 +269,9 @@ pub(super) fn owned_fallback(
     match RecordsPayload::from_bytes_with_policy(bytes, policy) {
         Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
             validate_owned_client_batch(&batch)?;
-            Ok(PreparedBatch::from_owned(batch))
+            let prepared = PreparedBatch::from_owned(batch);
+            validate_record_timestamps(&prepared, timestamps, policy)?;
+            Ok(prepared)
         }),
         Err(_) => Err(codes::INVALID_RECORD),
     }

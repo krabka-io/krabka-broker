@@ -36,6 +36,10 @@ pub(super) fn metadata_update(level: i16, upgrade_type: i8) -> FeatureUpdateKey 
     feature_update(crate::features::METADATA_VERSION, level, upgrade_type)
 }
 
+pub(super) fn elr_update(level: i16, upgrade_type: i8) -> FeatureUpdateKey {
+    feature_update(crate::features::ELR_VERSION, level, upgrade_type)
+}
+
 pub(super) fn validate_only(updates: Vec<FeatureUpdateKey>) -> UpdateFeaturesRequest {
     UpdateFeaturesRequest {
         feature_updates: updates,
