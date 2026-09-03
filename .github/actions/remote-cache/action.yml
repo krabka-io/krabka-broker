@@ -93,6 +93,17 @@ runs:
           # The 9.2 name. `--experimental_remote_cache_async` still resolves to
           # it, but only as a deprecated alias.
           echo "build --remote_cache_async"
+          # zstd on the wire. BuildBuddy measure 60-70% fewer bytes
+          # transferred, and transfer is exactly what the free tier bills --
+          # 100 GB of it -- so this is the difference between the quota
+          # lasting a week and lasting a quarter. It also helps a runner whose
+          # bottleneck is network rather than CPU, which is what a cache hit
+          # makes every one of these jobs.
+          #
+          # No threshold flag: `--experimental_remote_cache_compression_threshold`
+          # already defaults to 100 bytes on 9.2, which is what keeps zstd off
+          # blobs too small to gain from it.
+          echo "build --remote_cache_compression"
         }
 
         # `test` and `coverage` inherit `build`, so one block covers the
