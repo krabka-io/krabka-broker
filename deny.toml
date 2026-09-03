@@ -10,13 +10,6 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
-    # quick-xml DoS advisories (quadratic duplicate-attribute check and
-    # unbounded namespace-declaration allocation). Patched in quick-xml
-    # >= 0.41. The sole 0.39 copy enters through object_store 0.13.2 and parses
-    # S3-compatible endpoint responses on the tiered-storage path, not
-    # client-supplied XML. Drop these when object_store takes quick-xml 0.41.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
     # RSA "Marvin" timing side-channel. Pulled in transitively by `picky`
     # (a hard dependency of the vendored `sspi` Kerberos stack). Our GSSAPI
     # path is auth-only over AES keytab keys and performs no RSA private-key
