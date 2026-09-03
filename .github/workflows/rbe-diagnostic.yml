@@ -58,10 +58,16 @@ jobs:
           client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
           upload: "false"
 
-      # The whole point. `--verbose_failures` prints the rustc command line the
-      # executor ran, `--subcommands` prints it for every action reached, and
-      # `--announce_rc` proves which flags were actually in force. `|| true`
-      # because the interesting steps are the ones after this fails.
+      # `--noremote_accept_cached` is the flag that makes this a reproduction
+      # at all, and both earlier runs lacked it. 33726077901 and 33726429927
+      # each reported `1287 remote cache hit, 623 internal` here and completed
+      # successfully: nothing executed remotely, so neither run ever triggered
+      # the failure it exists to study, and the flags they compared came from
+      # cache-hit printouts. Codex caught this on #448.
+      #
+      # `--verbose_failures` then prints the rustc command line the executor
+      # ran, `--subcommands` prints it per action, `--announce_rc` proves which
+      # flags were in force. `|| true` because the interesting steps follow.
       - name: compile codspeed remotely and keep going
         run: |
           bazel build --config=rbe \
@@ -69,6 +75,7 @@ jobs:
             --subcommands=pretty_print \
             --announce_rc \
             --remote_download_outputs=all \
+            --noremote_accept_cached \
             '@@rules_rs++crate+crates__codspeed-5.0.1//:codspeed' \
             2>&1 | tee "${RUNNER_TEMP}/remote.log" || true
 
@@ -92,48 +99,68 @@ jobs:
           grep -E 'processes:|Build completed|Build did NOT' "${RUNNER_TEMP}/local.log" || true
           echo "::endgroup::"
 
-      # Whichever rustc invocations the two logs captured, side by side. The
-      # remote one is the failing case and the local one is the working case,
-      # so a diff of their flags is the shortest path to the cause.
-      - name: what differed between the two command lines
+      # Only the codspeed compile. Reading the whole phase log and then
+      # `sort -u`-ing it, as the first version did, strips the action context:
+      # a flag that shows up in one phase can belong to any crate in the
+      # closure that happened to execute there, so an apparent remote/local
+      # difference can be about an entirely different target. Codex flagged
+      # this on #448 and it was right. `awk` cuts the one SUBCOMMAND block.
+      - name: the codspeed compile command, in each phase
         run: |
-          set -euo pipefail
           for phase in remote local; do
-            echo "::group::${phase}: rustc flags"
-            grep -o -e '--remap-path-prefix=[^ ]*' \
-                    -e '-Lnative=[^ ]*' \
-                    -e '--subst [^ ]*' \
-                    -e '--env-file [^ ]*' \
-                    -e '--check-output-for-working-dir [^ ]*' \
-              "${RUNNER_TEMP}/${phase}.log" | sort -u || echo "(none captured)"
+            echo "::group::${phase}: the codspeed subcommand block"
+            awk '/SUBCOMMAND.*crates__codspeed/,/^# Runner:/' \
+              "${RUNNER_TEMP}/${phase}.log" | head -200 || true
             echo "::endgroup::"
           done
 
-      # If the local build produced an rlib, what absolute paths does it carry?
-      # That says which *kind* of path is retained -- an OUT_DIR, a native
-      # search path, a source path -- without needing the remote artifact,
-      # because the shape is the same and only the prefix differs.
+      # The env files themselves, not just their names on the command line.
+      # `--env-file` points at a file, so printing the argument says nothing
+      # about whether OUT_DIR or CARGO_MANIFEST_DIR inside it carries an
+      # absolute path -- which is the remaining live hypothesis. Also Codex's.
+      - name: what the env files actually contain
+        run: |
+          for f in $(find -L bazel-out/ -name '*codspeed*.env' 2>/dev/null | head -5); do
+            echo "::group::${f}"
+            grep -a -E 'OUT_DIR|CARGO_MANIFEST|^PWD|execroot|buildbuddy' "${f}" || echo "(no path-like vars)"
+            echo "::endgroup::"
+          done
+
+      # Does the locally built rlib retain ANY local absolute path?
+      #
+      # Two bugs in the previous version, both found by Codex, both of which
+      # produced the answer I wanted rather than the true one. `grep -q` closes
+      # the pipe, `strings` takes SIGPIPE, and under `pipefail` the status is
+      # 141 -- so the `if` fell through to "NO" whether or not the string was
+      # there. And the needle was `bazel info execution_root`, the persistent
+      # outer execroot, while a sandboxed action runs under
+      # `.../sandbox/linux-sandbox/<n>/execroot/_main`, which does not contain
+      # it. So: dump `strings` to a file once, grep the file, and use
+      # `/home/runner` as the needle, since every local absolute path on this
+      # runner begins with it and no remapped path does.
       - name: absolute paths inside the locally built rlib
         run: |
-          set -euo pipefail
-          # `-L`: bazel-out is a symlink, and plain `find` will not descend it.
-          # That is why the first run reported no rlib even though Bazel had
-          # just named one.
+          set -uo pipefail
           rlib="$(find -L bazel-out/ -name 'libcodspeed-*.rlib' -print -quit 2>/dev/null || true)"
           if [ -z "${rlib}" ]; then
-            echo "no rlib was produced; the local build did not get that far"
+            echo "no rlib on disk; nothing to inspect"
             exit 0
           fi
           echo "found ${rlib}"
-          echo "::group::absolute paths it embeds"
-          strings "${rlib}" | grep -o '/[a-zA-Z0-9_./+-]\{20,\}' | sort -u | head -60
-          echo "::endgroup::"
-          echo "::group::does it embed this build's own execroot"
-          if strings "${rlib}" | grep -qF "$(bazel info execution_root)"; then
-            echo "YES -- the local rlib embeds the local execroot, so the scan"
-            echo "passes locally for some reason other than the path being absent"
+          strings "${rlib}" >"${RUNNER_TEMP}/rlib.strings" || true
+          echo "::group::any path under /home/runner (a local absolute path)"
+          if grep -c '/home/runner' "${RUNNER_TEMP}/rlib.strings"; then
+            echo "^ count above. YES: the locally built rlib DOES retain local"
+            echo "absolute paths, so remapping is not what differs and the"
+            echo "remote failure needs another explanation."
+            grep -o '/home/runner[a-zA-Z0-9_./+-]*' "${RUNNER_TEMP}/rlib.strings" \
+              | sort -u | head -20
           else
-            echo "NO -- the local rlib does not embed the local execroot, which"
-            echo "is why the scan passes locally"
+            echo "NO: no /home/runner path survives in the rlib, so remapping"
+            echo "does neutralise it locally and fails to on the executor."
           fi
+          echo "::endgroup::"
+          echo "::group::the longest absolute paths it does carry"
+          grep -o '/[a-zA-Z0-9_./+-]\{20,\}' "${RUNNER_TEMP}/rlib.strings" \
+            | sort -u | head -30 || echo "(none)"
           echo "::endgroup::"
