@@ -105,6 +105,13 @@ test:docker --test_tag_filters=docker
 test:docker-rbe --config=docker
 test:docker-rbe --config=rbe
 test:docker-rbe --modify_execution_info=^Rustc$=+no-remote-exec
+# A failing suite here prints the broker's whole INFO log -- `jvm_acceptance_tiered`
+# managed 8.6 MB -- and Bazel drops anything past this cap, printing
+# "exceeds maximum size ...; skipping" in place of the output. That is the only
+# copy CI keeps, so three suites failed in a run with no recoverable reason for
+# any of them. The cap is per test and only spent when a test fails, so the
+# ceiling costs nothing on a green run.
+test:docker-rbe --experimental_ui_max_stdouterr_bytes=20000000
 
 # Remote build execution, opt in per invocation with `--config=rbe`.
 #
