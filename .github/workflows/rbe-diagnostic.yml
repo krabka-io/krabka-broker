@@ -1,0 +1,127 @@
+name: rbe-diagnostic
+# Throwaway. Not for merge.
+#
+# `codspeed` and `ring` fail rules_rs's working-directory scan when they
+# execute on a BuildBuddy executor:
+#
+#     compiled Rust output ...libcodspeed-*.rlib embeds the absolute working
+#     directory /buildbuddy-execroot
+#
+# Three hypotheses have been wrong -- per-crate, two-action (pinning
+# `CargoBuildScriptRun` local did not help), and "no codegen works remotely"
+# (`build` passed with 13 remote executions). Each cost a full CI run, because
+# Bazel cannot fetch through the sandbox this was written in: `bazel build`
+# there dies fetching bats-core with a proxy 403, which is an organization
+# policy denial rather than anything configurable.
+#
+# So this reproduces the failure on the smallest possible target and asks for
+# everything a failing build can still say. The question it exists to settle is
+# whether the absolute path is *passed into* rustc -- a `-Lnative=` or an
+# `--env-file` value the build script contributed -- or generated inside it,
+# because the two have completely different fixes and no amount of reasoning
+# from the outside has separated them.
+#
+# Delete this file once the answer is written down.
+
+on:
+  push:
+    branches: [claude/ci-performance-options-p6gy11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: rbe-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reproduce:
+    name: reproduce the execroot scan failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: false
+          repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          upload: "false"
+
+      # The whole point. `--verbose_failures` prints the rustc command line the
+      # executor ran, `--subcommands` prints it for every action reached, and
+      # `--announce_rc` proves which flags were actually in force. `|| true`
+      # because the interesting steps are the ones after this fails.
+      - name: compile codspeed remotely and keep going
+        run: |
+          bazel build --config=rbe \
+            --verbose_failures \
+            --subcommands=pretty_print \
+            --announce_rc \
+            --remote_download_outputs=all \
+            '@@rules_rs++crate+crates__codspeed-5.0.1//:codspeed' \
+            2>&1 | tee "${RUNNER_TEMP}/remote.log" || true
+
+      # The same target with no executor. If this passes, the difference is
+      # remote execution alone and nothing about the crate or the cache; if it
+      # fails too, everything said about this so far is wrong.
+      - name: compile the same target locally for contrast
+        run: |
+          bazel build \
+            --verbose_failures \
+            --subcommands=pretty_print \
+            '@@rules_rs++crate+crates__codspeed-5.0.1//:codspeed' \
+            2>&1 | tee "${RUNNER_TEMP}/local.log" || true
+
+      # Whichever rustc invocations the two logs captured, side by side. The
+      # remote one is the failing case and the local one is the working case,
+      # so a diff of their flags is the shortest path to the cause.
+      - name: what differed between the two command lines
+        run: |
+          set -euo pipefail
+          for phase in remote local; do
+            echo "::group::${phase}: rustc flags"
+            grep -o -e '--remap-path-prefix=[^ ]*' \
+                    -e '-Lnative=[^ ]*' \
+                    -e '--subst [^ ]*' \
+                    -e '--env-file [^ ]*' \
+                    -e '--check-output-for-working-dir [^ ]*' \
+              "${RUNNER_TEMP}/${phase}.log" | sort -u || echo "(none captured)"
+            echo "::endgroup::"
+          done
+
+      # If the local build produced an rlib, what absolute paths does it carry?
+      # That says which *kind* of path is retained -- an OUT_DIR, a native
+      # search path, a source path -- without needing the remote artifact,
+      # because the shape is the same and only the prefix differs.
+      - name: absolute paths inside the locally built rlib
+        run: |
+          set -euo pipefail
+          rlib="$(find bazel-out -name 'libcodspeed-*.rlib' -print -quit 2>/dev/null || true)"
+          if [ -z "${rlib}" ]; then
+            echo "no rlib was produced; the local build did not get that far"
+            exit 0
+          fi
+          echo "found ${rlib}"
+          echo "::group::absolute paths it embeds"
+          strings "${rlib}" | grep -o '/[a-zA-Z0-9_./+-]\{20,\}' | sort -u | head -60
+          echo "::endgroup::"
+          echo "::group::does it embed this build's own execroot"
+          if strings "${rlib}" | grep -qF "$(bazel info execution_root)"; then
+            echo "YES -- the local rlib embeds the local execroot, so the scan"
+            echo "passes locally for some reason other than the path being absent"
+          else
+            echo "NO -- the local rlib does not embed the local execroot, which"
+            echo "is why the scan passes locally"
+          fi
+          echo "::endgroup::"
