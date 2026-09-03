@@ -30,13 +30,37 @@ pub(super) async fn handle_offset_out_of_range(
         return LoopAction::StopNotLeader;
     }
     let leader_log_start = partition_response.log_start_offset;
-    warn!(
-        topic = %cfg.topic,
-        partition = cfg.partition.get(),
-        leader_log_start,
-        "replicator.out_of_range; resetting local log to leader log_start"
-    );
     if let Some(partition) = cfg.partitions.get(&cfg.topic, cfg.partition) {
+        // Kafka's `fetchOffsetAndTruncate`: a full reset is for a follower
+        // that has fallen off the bottom of the leader's log, which is
+        // `leaderStartOffset > replicaEndOffset` and nothing else.
+        //
+        // On a tiered leader (KIP-405) the local log can start above the
+        // global one, and a fetch into that band is answered
+        // `OFFSET_OUT_OF_RANGE` so the remote tier can serve it. When the
+        // remote tier is momentarily unreachable the same code comes back with
+        // the true, lower `log_start_offset`. Resetting on that would delete a
+        // follower's good local log for a transient object-store failure, and
+        // do it again on every retry. Every non-tiered `OFFSET_OUT_OF_RANGE`
+        // still passes this test: the leader raises it precisely when the
+        // fetch offset is below its log start.
+        let local_log_end = partition.log_end_offset();
+        if leader_log_start <= local_log_end.0 {
+            warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                leader_log_start,
+                local_log_end = local_log_end.0,
+                "replicator.out_of_range above the leader's log start; retrying without a reset"
+            );
+            return LoopAction::Continue;
+        }
+        warn!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
+            leader_log_start,
+            "replicator.out_of_range; resetting local log to leader log_start"
+        );
         let _target_guard = match partition
             .lock_replication_target(task_replication_target(cfg))
             .await

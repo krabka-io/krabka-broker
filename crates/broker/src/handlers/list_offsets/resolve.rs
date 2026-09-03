@@ -108,10 +108,11 @@ pub(super) async fn resolve_partition(
     {
         return error_response(index, error_code);
     }
-    let (local_start, local_end, local_log_start, log_config) = {
+    let (local_start, deleted_below, local_end, local_log_start, log_config) = {
         let log = partition.log.lock().expect("log mutex poisoned");
         (
             log.log_start_offset().0,
+            log.established_log_start(),
             log.log_end_offset().0,
             log.local_log_start_offset().0,
             log.config_snapshot(),
@@ -154,7 +155,25 @@ pub(super) async fn resolve_partition(
                     krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_string(), index);
                 match await_remote(remote_timeout, reader.earliest_offset(&topic_partition)).await {
                     None => return error_response(index, codes::REQUEST_TIMED_OUT),
-                    Some(Ok(Some(remote_start))) => remote_candidate = Some(remote_start),
+                    // KIP-405: the global log start bounds the archive too. A
+                    // `DeleteRecords` moves the floor at once and the
+                    // expiration pass removes the breached segments on its own
+                    // tick, so in between the RLMM still lists a segment that
+                    // starts below the floor. Reporting its start as EARLIEST
+                    // would name an offset the fetch path refuses.
+                    //
+                    // Only a floor someone deleted up to bounds it. The one
+                    // `Log::open` infers from the segments left on disk sits
+                    // above the whole archive on a partition whose local
+                    // segments were evicted, and clamping to that would report
+                    // an EARLIEST past every record the tier still holds -- a
+                    // `--from-beginning` consumer would skip them all.
+                    Some(Ok(Some(remote_start))) => {
+                        remote_candidate = Some(match deleted_below {
+                            Some(floor) => remote_start.max(floor.0),
+                            None => remote_start,
+                        });
+                    }
                     Some(Ok(None)) => {}
                     Some(Err(error)) => tracing::warn!(topic = topic_name, partition = index,
                         error = %error, "list_offsets: remote earliest_offset failed"),

@@ -32,34 +32,61 @@ impl Log {
         &self.dir
     }
 
-    /// First absolute offset still in the log.
+    /// First absolute offset any reader may ask for, wherever the records for
+    /// it live: Kafka's global `logStartOffset`.
+    ///
+    /// On a tiered topic (KIP-405) this can sit below
+    /// [`Log::local_log_start_offset`], and the offsets between the two are
+    /// the ones the remote tier serves. A fetch below *this* floor is
+    /// `OFFSET_OUT_OF_RANGE` and no tier answers it.
     #[must_use]
     pub fn log_start_offset(&self) -> Offset {
-        let derived = if let Some(first) = self.segments.first() {
+        self.start_offset
+    }
+
+    /// The global floor, when this process is the one that moved it.
+    ///
+    /// `None` on a log whose floor was only inferred from the segments present
+    /// at [`Log::open`]. A caller that would *refuse* or *delete* on the
+    /// strength of the floor must use this rather than
+    /// [`Log::log_start_offset`]: on a tiered partition whose local segments
+    /// were evicted, the inferred floor sits above everything the archive
+    /// holds, so refusing below it hides readable records and deleting below
+    /// it destroys them. Nothing durable carries the floor across a restart
+    /// yet, so a reopened log answers `None` until something moves it again.
+    #[must_use]
+    pub fn established_log_start(&self) -> Option<Offset> {
+        self.start_offset_established.then_some(self.start_offset)
+    }
+
+    /// The first offset the segments on disk begin at, before the global
+    /// floor is applied.
+    pub(super) fn first_local_offset(&self) -> Offset {
+        if let Some(first) = self.segments.first() {
             first.base_offset()
         } else if let Some(active) = &self.active {
             active.base_offset()
         } else {
             Offset(0)
-        };
-        if let Some(o) = self.start_offset_override {
-            return derived.max(o);
         }
-        derived
     }
 
-    /// Advance `log_start_offset` to `new_start`.
+    /// Move the global log start up to `new_start`.
     ///
-    /// `new_start` must be in `[current log_start, log_end]`.
-    /// `trim_to_offset` uses this method for the active-segment case, and the
-    /// broker's `DeleteRecords` handler uses it too. This method does NOT
-    /// truncate on-disk segments. It only moves the start pointer.
+    /// The pointer only ever moves forward, the way Kafka's
+    /// `maybeIncrementLogStartOffset` does: a request that names an offset at
+    /// or below the current floor is a no-op. `trim_to_offset` uses this
+    /// method for the active-segment case, the broker's `DeleteRecords`
+    /// handler uses it, and the `RemoteLogManager` uses it after a remote
+    /// segment is deleted. This method does NOT truncate on-disk segments. It
+    /// only moves the start pointer.
     ///
     /// The new value is checkpointed to `log-start-offset-checkpoint` before
-    /// this method returns, so a start that no segment name witnesses -- a trim
-    /// that landed inside a segment -- survives a reopen. Without that,
-    /// [`Log::open`] derives the start from the first surviving base offset and
-    /// serves records that a `DeleteRecords` already deleted.
+    /// this method returns, so a start no segment name witnesses -- a trim
+    /// that landed inside a segment, or a tiered floor below every segment
+    /// still on disk -- survives a reopen. Without that, [`Log::open`] derives
+    /// the start from the first surviving base offset and serves records that
+    /// a `DeleteRecords` already deleted.
     ///
     /// `new_start` must be non-negative.
     ///
@@ -73,12 +100,17 @@ impl Log {
                 "set_log_start_offset: new_start must be >= 0".into(),
             ));
         }
+        let new_start = self.start_offset.max(new_start);
         // The checkpoint is durable when this returns, directory sync
         // included: `DeleteRecords` is acknowledged as soon as the trim does,
         // and a trimmed partition can then sit idle with no later `sync()` to
         // pay a deferred debt.
         log_start_offset_checkpoint::write(&self.dir, new_start)?;
-        self.start_offset_override = Some(new_start);
+        self.start_offset = new_start;
+        // Whoever calls this deleted the records below `new_start`, so the
+        // floor now means something a reader may be refused against, and the
+        // checkpoint carries that meaning across a reopen.
+        self.start_offset_established = true;
         Ok(())
     }
 
@@ -126,10 +158,13 @@ impl Log {
             let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
         }
 
-        // Clear the start override, and the checkpoint that would restore it
-        // on the next open, so the derived value takes over. The log now holds
-        // no records, so `new_base` is the whole truth about where it starts.
-        self.start_offset_override = None;
+        // A hard reset re-bases the local log after a divergence or a
+        // snapshot install. It says nothing about the remote tier, which may
+        // still hold lower offsets, so the floor moves without becoming a
+        // statement anything may be refused or deleted against -- and the
+        // checkpoint that would restore such a statement goes with it.
+        self.start_offset = new_base;
+        self.start_offset_established = false;
         log_start_offset_checkpoint::remove(&self.dir)?;
 
         let mut new_active = Segment::create(&self.dir, new_base)?;

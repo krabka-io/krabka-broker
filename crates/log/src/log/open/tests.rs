@@ -504,21 +504,28 @@ fn open_rewrites_a_checkpoint_past_the_log_end_so_appends_cannot_revive_it() {
 }
 
 #[test]
-fn open_clamps_a_checkpoint_that_the_segments_contradict() {
-    // Reopening resolves the checkpoint against what the log actually holds.
-    // Below the derived start, the deleted segment names already cover it, so
-    // the derived start wins. Past the log end, every record still present is
-    // below a start that was already acknowledged -- they are all trimmed --
-    // so the log start is the log end and the log reads empty. A crash between
-    // a trim and the fsync of the records it trimmed past arrives here.
+fn open_resolves_a_checkpoint_against_what_the_log_holds() {
+    // Reopening caps the checkpoint at the log end and leaves it alone below
+    // the derived start.
+    //
+    // Past the log end, every record still present is below a start that was
+    // already acknowledged -- they are all trimmed -- so the log start is the
+    // log end and the log reads empty. A crash between a trim and the fsync of
+    // the records it trimmed past arrives there.
+    //
+    // Below the derived start the checkpoint stands, because KIP-405 gives a
+    // tiered partition a global floor that belongs under its oldest local
+    // segment: raising it to meet the surviving files would hide the band the
+    // archive serves. `local_log_start_offset` is the floor that follows the
+    // files, and it is what a local read is measured against either way.
     enum Case {
         BelowDerivedStart,
         PastLogEnd,
     }
 
-    for (case, expected_start) in [
-        (Case::BelowDerivedStart, Offset(2)),
-        (Case::PastLogEnd, Offset(3)),
+    for (case, expected_start, expected_local_start) in [
+        (Case::BelowDerivedStart, Offset(1), Offset(2)),
+        (Case::PastLogEnd, Offset(3), Offset(3)),
     ] {
         let dir = tempdir().unwrap();
         {
@@ -547,6 +554,7 @@ fn open_clamps_a_checkpoint_that_the_segments_contradict() {
         let log = Log::open(dir.path(), LogConfig::default()).unwrap();
 
         assert!(log.log_start_offset() == expected_start);
+        assert!(log.local_log_start_offset() == expected_local_start);
         // Whatever it resolved to is what is now on disk, so the next open
         // reads a value that already agrees with the log.
         drop(log);

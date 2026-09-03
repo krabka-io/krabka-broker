@@ -145,6 +145,13 @@ impl Log {
         span.record("segments", segments.len() + 1);
         span.record("log_end", lso.0);
 
+        // The segment names witness only where the surviving files begin. The
+        // checkpoint below carries the rest, and is what turns this into a
+        // floor somebody deleted up to.
+        let start_offset = segments
+            .first()
+            .map_or_else(|| active.base_offset(), Segment::base_offset);
+
         let mut log = Self {
             dir,
             config,
@@ -152,7 +159,11 @@ impl Log {
             segments,
             active: Some(active),
             dir_sync_needed,
-            start_offset_override: None,
+            start_offset,
+            // Derived from the files on disk, not deleted up to by anyone.
+            // The checkpoint restore below is what may set it: see
+            // `Log::established_log_start`.
+            start_offset_established: false,
             lso,
             pending: HashMap::new(),
             pending_stamp_ranges: HashMap::new(),
@@ -176,17 +187,25 @@ impl Log {
         // that landed inside a segment left its records on disk, and only the
         // checkpoint says they are gone.
         if let Some(checkpointed) = log_start_offset_checkpoint::read(&log.dir)? {
-            // Clamp into `[derived_start, log_end]`. Below the derived start
-            // the deleted segments already cover it. Above the log end the
-            // whole surviving log is below a start that was acknowledged, so
-            // every record left is one the trim removed: the log start is the
-            // log end. A crash between a trim and the fsync of the records it
-            // trimmed past lands here.
-            let derived_start = log.log_start_offset();
-            let effective = checkpointed.clamp(derived_start, log.log_end_offset());
-            if effective > derived_start {
-                log.start_offset_override = Some(effective);
-            }
+            // Cap at the log end and nothing else. Above it, the whole
+            // surviving log is below a start that was acknowledged, so every
+            // record left is one the trim removed and the log start is the log
+            // end -- a crash between a trim and the fsync of the records it
+            // trimmed past lands there.
+            //
+            // There is deliberately no floor at the segment-derived start. On
+            // a tiered partition (KIP-405) the global floor belongs *below*
+            // the oldest local segment, in the band the archive serves, and
+            // raising the checkpoint to meet the surviving files would hide
+            // every offset the remote tier still holds -- and then write that
+            // loss back to disk. `Log::local_log_start_offset` is the floor
+            // that follows the files.
+            let effective = checkpointed.min(log.log_end_offset());
+            log.start_offset = effective;
+            // A checkpoint exists, so somebody deleted up to this floor: it is
+            // one a reader may be refused against and remote retention may
+            // delete against.
+            log.start_offset_established = true;
             if effective != checkpointed {
                 // Persist what was resolved instead of leaving the
                 // out-of-range value on disk. It is inert against this log,

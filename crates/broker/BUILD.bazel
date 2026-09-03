@@ -45,6 +45,14 @@ crate_tests(
     # by scheduling rather than by a timer, and so is the shape instrumentation
     # stretches most.
     #
+    # `stretch_cluster` is `durability` again across three sites: it stops a
+    # site's broker and then retries an acks=all produce against a 30-second
+    # deadline, which the controller can only satisfy once it has committed the
+    # ISR shrink for the replicas that went with the site. The same second half
+    # is what stretches -- it passed the uninstrumented `test` step and both
+    # local runs (~30s) on the commit whose `coverage` run failed it at 72s,
+    # with the coverage job running ~140 suites in parallel on four cores.
+    #
     # `deliver_at_time` measures elapsed time too and is deliberately absent:
     # its bound only separates a long poll woken by the delivery advance (~2s)
     # from one that waited out its 20s `max.wait.ms`. That wake is timer-driven,
@@ -55,6 +63,7 @@ crate_tests(
         "ip_quotas",
         "leader_election",
         "sharegroup_backlog",
+        "stretch_cluster",
     ],
     # The generated config schema and reference, and the example configs, are
     # checked in under //docs. `config_reference`, `docgen_contract` and

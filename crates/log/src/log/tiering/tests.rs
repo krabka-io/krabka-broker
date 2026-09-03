@@ -3,7 +3,7 @@
 //! follows a successful offload.
 
 use assert2::check;
-use krabka_units::prelude::bytes;
+use krabka_units::prelude::{bytes, mebibytes};
 use tempfile::tempdir;
 
 use super::*;
@@ -306,15 +306,68 @@ fn delete_local_segments_through_keeps_active_segment() {
     check!(log.tierable_segments().is_empty());
 }
 
+/// KIP-405 gives a tiered partition two floors, and a local eviction moves
+/// only one of them: the records are still in the remote tier, so the global
+/// `log_start_offset` a fetch is measured against must stay where it was.
+/// When the two moved together, an offset whose copy the archive still held
+/// answered `OFFSET_OUT_OF_RANGE` from the local floor and `ListOffsets`
+/// reported an earliest offset that skipped everything tiered.
 #[test]
-fn delete_local_segments_through_advances_local_start_pointer() {
+fn delete_local_segments_through_moves_only_the_local_start_pointer() {
+    let dir = tempdir().unwrap();
+    let mut log = rolled_log(dir.path(), &LogConfig::default());
+    let exports = log.tierable_segments();
+    let start_before = log.log_start_offset();
+    let target = exports[1].last_offset + 1;
+
+    log.delete_local_segments_through(target).unwrap();
+
+    assert2::assert!(log.local_log_start_offset() == target);
+    assert2::assert!(log.log_start_offset() == start_before);
+}
+
+/// The band between the two floors is the remote tier's to serve, so a local
+/// read of it fails rather than answering with the first batch a surviving
+/// segment happens to begin with. Below the global floor there is nothing
+/// anywhere, and the error says so.
+#[test]
+fn a_read_between_the_two_floors_is_the_remote_tier_s_to_serve() {
     let dir = tempdir().unwrap();
     let mut log = rolled_log(dir.path(), &LogConfig::default());
     let exports = log.tierable_segments();
     let target = exports[1].last_offset + 1;
     log.delete_local_segments_through(target).unwrap();
-    assert2::assert!(log.local_log_start_offset() == target);
-    assert2::assert!(log.log_start_offset() == target);
+    log.set_log_start_offset(exports[0].base_offset + 1)
+        .unwrap();
+    let global = log.log_start_offset();
+
+    check!(
+        matches!(
+            log.read(global - 1, mebibytes(1)),
+            Err(LogError::OffsetTooLow { .. })
+        ),
+        "below the global floor no tier answers"
+    );
+    for offset in [global, target - 1] {
+        check!(
+            matches!(
+                log.read(offset, mebibytes(1)),
+                Err(LogError::OffsetBelowLocalStart { .. })
+            ),
+            "offset {offset} is tiered"
+        );
+        check!(
+            matches!(
+                log.read_raw(offset, log.log_end_offset(), mebibytes(1)),
+                Err(LogError::OffsetBelowLocalStart { .. })
+            ),
+            "offset {offset} is tiered, raw read"
+        );
+    }
+    check!(
+        log.read(target, mebibytes(1)).is_ok(),
+        "the local floor itself still reads"
+    );
 }
 
 #[test]
@@ -340,4 +393,75 @@ fn delete_local_segments_through_rejects_negative_target() {
     let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
     let err = log.delete_local_segments_through(Offset(-1)).unwrap_err();
     assert2::assert!(matches!(err, LogError::InvalidArgument(_)));
+}
+
+/// Evicting a copied segment leaves the reopened log with no floor anything
+/// may be refused or deleted against.
+///
+/// A local eviction deletes no records -- the archive still answers for them
+/// -- so it writes no checkpoint, and [`Log::open`] can then only read a start
+/// off the segments that survived. On a tiered partition those begin above
+/// everything the archive holds. A remote read measured against that
+/// derivation would refuse offsets the tier can still serve, and the log-start
+/// breach in remote retention would delete the archive, so
+/// [`Log::established_log_start`] answers `None`.
+#[test]
+fn a_local_eviction_leaves_a_reopened_log_with_no_floor_to_refuse_against() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig::default();
+    let mut log = rolled_log(dir.path(), &config);
+    let exports = log.tierable_segments();
+    let evicted_through = exports[1].last_offset + 1;
+    log.delete_local_segments_through(evicted_through).unwrap();
+    drop(log);
+
+    let mut reopened = Log::open(dir.path(), config).unwrap();
+    check!(
+        reopened.log_start_offset() == evicted_through,
+        "the derivation is still the first surviving segment"
+    );
+    check!(
+        reopened.established_log_start() == None,
+        "but nobody deleted up to it, so nothing may be refused against it"
+    );
+
+    reopened.set_log_start_offset(evicted_through + 1).unwrap();
+    check!(
+        reopened.established_log_start() == Some(evicted_through + 1),
+        "a floor this process moved is one a reader may be refused against"
+    );
+}
+
+/// A `DeleteRecords` on a tiered partition survives the reopen, and stays
+/// below the segments that survived it.
+///
+/// This is the restart half of the issue: the checkpoint carries the *global*
+/// floor, so a reopened partition still refuses what an operator deleted while
+/// still serving the band above it from the archive. Raising the checkpoint to
+/// the first surviving segment -- which is where a single-floor log would put
+/// it -- would hide every offset the tier holds.
+#[test]
+fn a_delete_records_floor_under_the_local_segments_survives_a_reopen() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig::default();
+    let mut log = rolled_log(dir.path(), &config);
+    let exports = log.tierable_segments();
+    let deleted_through = exports[0].base_offset + 1;
+    let evicted_through = exports[1].last_offset + 1;
+    log.set_log_start_offset(deleted_through).unwrap();
+    log.delete_local_segments_through(evicted_through).unwrap();
+    log.sync().unwrap();
+    drop(log);
+
+    let reopened = Log::open(dir.path(), config).unwrap();
+
+    check!(
+        reopened.log_start_offset() == deleted_through,
+        "the operator's floor, not where the surviving files begin"
+    );
+    check!(reopened.established_log_start() == Some(deleted_through));
+    check!(
+        reopened.local_log_start_offset() == evicted_through,
+        "the band between the two is the archive's to serve"
+    );
 }

@@ -30,12 +30,16 @@ pub(super) fn catch_up(
 ) -> Result<CatchUpProgress, BrokerError> {
     // Snapshot both source bounds under one lock so a retention update cannot
     // produce an internally inconsistent start/end pair.
+    // The move copies local files, so the floor that bounds it is the local
+    // one (KIP-405): on a tiered partition the offsets below it are in the
+    // remote tier, and `Log::read` refuses them. Reading from the global floor
+    // instead would fail every pass and the move would never finish.
     let (current_start, current_leo) = {
         let current = part
             .log
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (current.log_start_offset(), current.log_end_offset())
+        (current.local_log_start_offset(), current.log_end_offset())
     };
     // Recover the guard if a panic elsewhere poisoned the mutex rather
     // than killing this (discarded-JoinHandle) replicator task.

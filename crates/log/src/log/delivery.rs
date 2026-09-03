@@ -49,7 +49,10 @@ impl Log {
             };
         }
 
-        let start = self.log_start_offset();
+        // The walk reads records, so it starts at the local floor: on a
+        // tiered topic the offsets below it are in the remote tier and the
+        // segments that held them are gone.
+        let start = self.local_log_start_offset();
         let end = self.log_end_offset();
         let cursor = self.bounded_watermark();
 
@@ -149,7 +152,7 @@ impl Log {
         if !scheduled {
             return Vec::new();
         }
-        let low = start.max(self.log_start_offset());
+        let low = start.max(self.local_log_start_offset());
         let high = end.min(self.log_end_offset() - 1);
         if low > high {
             return Vec::new();
@@ -201,7 +204,7 @@ impl Log {
     /// than reset at every mutation site.
     fn bounded_watermark(&self) -> Offset {
         self.delivery_watermark
-            .max(self.log_start_offset())
+            .max(self.local_log_start_offset())
             .min(self.log_end_offset())
     }
 

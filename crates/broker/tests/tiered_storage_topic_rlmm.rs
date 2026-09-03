@@ -16,9 +16,15 @@
 //!   segment and reads the records back at offset 0. This proves that the RLM
 //!   copy task's `CopySegment*` events round-trip through
 //!   `__remote_log_metadata` over the loopback.
+//! * [`delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it`][]:
+//!   KIP-405's two floors. A tiered offset reads back, then `DeleteRecords`
+//!   moves the global floor past it and the same read becomes
+//!   `OFFSET_OUT_OF_RANGE` while the expiration pass frees the remote bytes
+//!   below the new floor.
 //!
 //! [`topic_rlmm_activates_against_loopback`]: rlmm_loopback::topic_rlmm_activates_against_loopback
 //! [`topic_rlmm_copy_then_fetch_round_trip`]: rlmm_loopback::topic_rlmm_copy_then_fetch_round_trip
+//! [`delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it`]: rlmm_delete_records::delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it
 
 mod support;
 
@@ -28,6 +34,8 @@ mod support;
 // where every `.rs` file would become another test binary.
 #[path = "tiered_storage_topic_rlmm/rlmm_cluster.rs"]
 mod rlmm_cluster;
+#[path = "tiered_storage_topic_rlmm/rlmm_delete_records.rs"]
+mod rlmm_delete_records;
 #[path = "tiered_storage_topic_rlmm/rlmm_loopback.rs"]
 mod rlmm_loopback;
 #[path = "tiered_storage_topic_rlmm/rlmm_not_ready.rs"]
