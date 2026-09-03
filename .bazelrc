@@ -89,45 +89,21 @@ test:docker --test_tag_filters=docker
 # it wholesale. Deliberately not `test` or `stateright models` -- see those
 # steps in the workflow for why.
 #
-# It did not work on the first attempt, and the failure is worth recording
-# because none of it was configuration. On run 33719593644 the config resolved,
-# toolchain resolution picked the hermetic toolchain for the remote platform,
-# and Bazel uploaded action inputs and scheduled a hundred actions. The
-# scheduler then refused them:
+# Only one flag is here, and it is the one that needs no credential. Everything
+# that does -- the executor, the execution platform, the job count -- is written
+# into `user.bazelrc` by `.github/actions/remote-cache`, beside the API key that
+# makes it usable, and only when there is a key to write.
 #
-#     UNAVAILABLE: Error scheduling execution task:
-#     No registered executors in pool "" with os "linux" with arch "amd64"
-#
-# The account had a remote cache and nothing behind it to execute on. Executors
-# were enabled afterwards. If that error ever comes back, it is the pool that is
-# empty, not this file that is wrong.
-#
-# The execution platform is the one the `llvm` module already publishes rather
-# than a hand-written copy, and that is load-bearing: it carries
-# `@llvm//constraints/libc:gnu.2.28` beside the os and cpu constraints, and
-# without that constraint the C++ toolchain does not resolve on the executor at
-# all. It also pins `docker://ubuntu:22.04`, chosen by the people who build the
-# toolchain to match the glibc it targets. A platform written here would have to
-# track both and would rot silently when the toolchain moved.
-#
-# `--extra_execution_platforms` rather than `--host_platform`: the host platform
-# keeps resolving as it does for a local build, and only remote actions pick up
-# the container.
-#
-# No credential here. `.github/actions/remote-cache` writes the BuildBuddy
-# endpoint and API key into `user.bazelrc`, which the `try-import` at the bottom
-# of this file reads.
-#
-# When executors do exist, the steps to put this on are `lint`, `build` and
-# `docgen` in the `ci` job and the whole `coverage` job -- and deliberately not
-# `test` or `stateright models`, because `timing-sensitive` is exactly the tag
-# for suites that assert on wall clock and `cpu:4`, which stops Bazel starving
-# them locally, means nothing to a remote executor. The container suites need
-# `no-remote-exec` adding in //bazel/defs.bzl before `--config=rbe` could ever
-# reach the `docker` job: `no-sandbox` does not stop remote scheduling.
-build:rbe --remote_executor=grpcs://remote.buildbuddy.io
-build:rbe --extra_execution_platforms=@llvm//:rbe_linux_x86_64
-build:rbe --jobs=100
+# That split is what keeps a fork building. A fork's pull request sees no
+# secrets, so the action writes nothing, so `--config=rbe` expands to this line
+# alone and the build runs locally exactly as it always did. Putting
+# `--remote_executor` here instead would point every credential-less build at an
+# endpoint it cannot authenticate to, which is a failure rather than a fallback
+# -- and CI passes `--config=rbe` unconditionally, so there would be nothing to
+# catch it. `--remote_timeout` governs remote calls only, so on that path it
+# does nothing at all, which is the point: the config has to exist for
+# `--config=rbe` to resolve, and this is the least it can be.
+build:rbe --remote_timeout=600
 
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.

@@ -16,6 +16,12 @@ description: Write the BuildBuddy configuration into user.bazelrc, when this run
 #
 # Third, a developer's own `user.bazelrc` is untouched off CI.
 #
+# The same file carries the remote *execution* flags, under `--config=rbe`.
+# `.bazelrc` defines that config with one credential-free flag so it always
+# resolves; everything that needs a key is written here, so a fork -- which sees
+# no secret and gets no file -- falls back to a local build rather than to an
+# unauthenticated executor it cannot reach.
+#
 # BuildBuddy accepts either credential, and this takes whichever is present:
 # an API key as a request header, or a client certificate and its key over
 # mTLS. The certificate pair wins when both are set, because it is the more
@@ -104,6 +110,17 @@ runs:
           # already defaults to 100 bytes on 9.2, which is what keeps zstd off
           # blobs too small to gain from it.
           echo "build --remote_cache_compression"
+          # Remote *execution*, under `--config=rbe` so it applies only to the
+          # steps that ask for it. These live here rather than in `.bazelrc`
+          # for the same reason the API key does: they are useless without one.
+          # A fork's pull request sees no secret, this file is never written,
+          # and `--config=rbe` falls back to the single credential-free flag
+          # `.bazelrc` defines -- a local build, not an unauthenticated one.
+          echo "build:rbe --remote_executor=grpcs://remote.buildbuddy.io"
+          echo "build:rbe --extra_execution_platforms=@llvm//:rbe_linux_x86_64"
+          # Far past the runner's four cores: the point is to have more actions
+          # in flight than this machine could run itself.
+          echo "build:rbe --jobs=100"
         }
 
         # `test` and `coverage` inherit `build`, so one block covers the
