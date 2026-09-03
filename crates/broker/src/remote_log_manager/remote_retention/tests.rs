@@ -674,11 +674,15 @@ fn the_breach_and_the_time_window_take_the_union_of_either() {
     check!(out[1].start_offset() == 10, "past the time window");
 }
 
-/// The pass reports the floor the caller must raise `log_start_offset` to.
-/// Without it, a `DeleteRecords` frees the remote bytes but
-/// `ListOffsets(earliest)` keeps naming an offset no tier can serve.
+/// A breach eviction frees the archive and leaves the floor where the
+/// operator put it.
+///
+/// The reported floor is an *advance*, and a breach can never produce one: it
+/// removes only what is already below the floor. A time or size eviction is
+/// the case that moves it, which
+/// [`remote_retention_pass_evicts_old_segments_through_lifecycle`] covers.
 #[tokio::test]
-async fn a_breach_eviction_reports_the_floor_the_log_start_must_follow() {
+async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
     let log_dir = tempfile::tempdir().unwrap();
     let remote_dir = tempfile::tempdir().unwrap();
     let log = rolled_log(log_dir.path());
@@ -723,11 +727,71 @@ async fn a_breach_eviction_reports_the_floor_the_log_start_must_follow() {
     .await;
 
     check!(outcome.deleted == 1);
-    check!(outcome.log_start == Some(floor));
+    check!(
+        outcome.log_start == None,
+        "everything it removed was already under the floor"
+    );
     let left = rlmm.list_remote_log_segments(&tp()).unwrap();
     check!(left.len() == exports.len() - 1);
     check!(
         left.iter().all(|md| md.end_offset() >= floor.0),
         "only the breached prefix goes"
+    );
+}
+
+/// The floor may only cross a run of segments the pass removed without a gap.
+///
+/// `copy_eligible` skips a segment whose copy failed and carries on with the
+/// next one, so the finished list is not always a contiguous offset prefix.
+/// Publishing the last delete's end offset over such a gap would put the floor
+/// above a segment that is still on local disk and still readable.
+#[tokio::test]
+async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let remote_dir = tempfile::tempdir().unwrap();
+    let log = rolled_log(log_dir.path());
+    let exports = log.tierable_segments();
+    assert!(exports.len() >= 3, "the test needs a segment to skip over");
+    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
+    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    // Copy the first and the third segment and not the second, which is what
+    // a failed copy in the middle of a tick leaves behind.
+    let gapped = vec![exports[0].clone(), exports[2].clone()];
+    let copied = copy_eligible(
+        &tp(),
+        1,
+        LeaderEpoch(0),
+        gapped,
+        ArchiveMode::Mutable,
+        &rsm,
+        &rlmm,
+    )
+    .await;
+    assert!(copied == 2);
+
+    // Time retention past every segment, so both finished copies are
+    // deletable and the walk reaches the far side of the gap.
+    let cfg = LogConfig {
+        retention: Some(millis(1)),
+        ..LogConfig::default()
+    };
+    let outcome = remote_retention_pass(
+        &tp(),
+        1,
+        RemoteRetentionBounds {
+            log_config: &cfg,
+            archive: ArchiveMode::Mutable,
+            log_start_offset: NO_FLOOR,
+            now_ms: now_ms() + 1_000_000,
+        },
+        &rsm,
+        &rlmm,
+    )
+    .await;
+
+    check!(outcome.deleted == 2, "both copies are past the window");
+    check!(
+        outcome.log_start == Some(exports[0].last_offset + 1),
+        "the floor stops below the segment that was never copied"
     );
 }

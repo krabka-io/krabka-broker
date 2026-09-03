@@ -148,7 +148,7 @@ impl Log {
         // Nothing durable carries the global floor across a restart yet, so a
         // reopened log starts it at the oldest offset on disk: the same value
         // the old derived-from-segments accessor answered.
-        let log_start = segments
+        let start_offset = segments
             .first()
             .map_or_else(|| active.base_offset(), Segment::base_offset);
 
@@ -159,7 +159,7 @@ impl Log {
             segments,
             active: Some(active),
             dir_sync_needed,
-            log_start,
+            start_offset,
             lso,
             pending: HashMap::new(),
             pending_stamp_ranges: HashMap::new(),

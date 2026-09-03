@@ -41,7 +41,7 @@ impl Log {
     /// `OFFSET_OUT_OF_RANGE` and no tier answers it.
     #[must_use]
     pub fn log_start_offset(&self) -> Offset {
-        self.log_start
+        self.start_offset
     }
 
     /// The first offset the segments on disk begin at, before the global
@@ -77,7 +77,7 @@ impl Log {
                 "set_log_start_offset: new_start must be >= 0".into(),
             ));
         }
-        self.log_start = self.log_start.max(new_start);
+        self.start_offset = self.start_offset.max(new_start);
         Ok(())
     }
 
@@ -127,7 +127,7 @@ impl Log {
 
         // A hard reset re-bases the log, so the global floor follows it down
         // as well as up: no record below `new_base` exists in any tier.
-        self.log_start = new_base;
+        self.start_offset = new_base;
 
         let mut new_active = Segment::create(&self.dir, new_base)?;
         new_active.set_io(self.io.clone());

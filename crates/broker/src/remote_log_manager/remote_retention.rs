@@ -178,15 +178,30 @@ pub(crate) async fn remote_retention_pass(
         now_ms,
     );
     let mut outcome = RemoteRetentionOutcome::default();
+    // The floor may only cross offsets this pass actually removed, in one
+    // unbroken run up from where it stands. The finished list is not always a
+    // contiguous offset prefix: `copy_eligible` skips a segment whose copy
+    // failed and carries on with the next one, so a gap can sit between two
+    // finished segments. Publishing the last delete's end over such a gap
+    // would put the floor above a segment that is still on local disk and
+    // still readable, and make it unreadable.
+    let mut floor = log_start_offset;
+    let mut contiguous = true;
     for md in evict {
-        if delete_one_segment(tp, broker_id, &md, archive, rsm, rlmm).await {
-            outcome.deleted += 1;
-            outcome.log_start = Some(Offset(md.end_offset() + 1));
-        } else {
+        if !delete_one_segment(tp, broker_id, &md, archive, rsm, rlmm).await {
             // Stop at the first failure to preserve the contiguous-prefix
             // invariant — the next tick re-tries from the same base.
             break;
         }
+        outcome.deleted += 1;
+        if contiguous && md.start_offset() <= floor.0 {
+            floor = floor.max(Offset(md.end_offset() + 1));
+        } else {
+            contiguous = false;
+        }
+    }
+    if floor > log_start_offset {
+        outcome.log_start = Some(floor);
     }
     outcome
 }

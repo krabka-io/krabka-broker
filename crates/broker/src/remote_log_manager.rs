@@ -145,6 +145,17 @@ async fn tick_all(
             }
             (cfg, log.log_start_offset(), log.tierable_segments())
         };
+        // A sealed segment that ends below the global floor is deleted data,
+        // whatever its file is still doing on disk. Kafka's copy task starts
+        // at `max(logStartOffset, lastCopiedOffset)` for the same reason:
+        // without this the log-start breach in `remote_retention_pass` would
+        // delete the remote copy, the next tick would upload it again off the
+        // local file, and the two would cycle for as long as the file sat
+        // there.
+        let exports: Vec<krabka_log::SegmentExport> = exports
+            .into_iter()
+            .filter(|export| export.last_offset >= log_start_offset)
+            .collect();
         let Some(topic_id) = image.topic(&partition.topic).map(|t| t.topic_id) else {
             // Topic vanished from the metadata image between snapshots; skip.
             continue;
@@ -222,6 +233,14 @@ async fn tick_all(
             if let Err(error) = log.set_log_start_offset(new_start) {
                 debug!(topic = %partition.topic, partition = tp.partition, %error,
                        "remote-log-manager: could not advance the log start after a remote delete");
+            }
+            // The local files under the new floor go with it. No reader may
+            // ask for those offsets any more and no tier answers for them, so
+            // leaving the files behind would only hold disk and keep the copy
+            // filter above working around them on every tick.
+            if let Err(error) = log.delete_local_segments_through(new_start) {
+                debug!(topic = %partition.topic, partition = tp.partition, %error,
+                       "remote-log-manager: could not drop the local segments under the new floor");
             }
         }
     }
@@ -382,6 +401,64 @@ mod tests {
                 .iter()
                 .all(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
         );
+    }
+
+    /// A `DeleteRecords` floor takes the segments under it out of the copy
+    /// pass, and keeps them out on every later tick.
+    ///
+    /// Without the filter the log-start breach in `remote_retention_pass`
+    /// deletes the remote copy of a below-floor segment, the next tick uploads
+    /// it again off the local file the floor has not removed, and the two
+    /// cycle for as long as the file is there -- unbounded copies, deletes and
+    /// metadata for records nobody may read.
+    #[tokio::test]
+    async fn tick_all_never_copies_a_segment_under_the_log_start() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        let partitions = PartitionRegistry::new();
+        let partition = rolled_tiered_partition(log_dir.path());
+        // A floor at the second sealed segment's base, with every local file
+        // still on disk: `set_log_start_offset` moves the pointer and deletes
+        // nothing, which is the state a remote-retention advance leaves.
+        let (floor, export_count) = {
+            let mut log = partition.log.lock().expect("partition log mutex poisoned");
+            let exports = log.tierable_segments();
+            assert!(exports.len() >= 3, "test needs several sealed segments");
+            let floor = exports[1].base_offset;
+            log.set_log_start_offset(floor).expect("move the log start");
+            (floor, exports.len())
+        };
+        partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
+
+        let controller = fixed_source(image_with_orders_topic());
+        let rsm: Arc<dyn RemoteStorageManager> =
+            Arc::new(LocalTieredStorage::new(remote_dir.path()));
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+
+        // Two sweeps: the second is where a copy/delete cycle would show.
+        for sweep in 1..=2 {
+            tick_all(
+                &partitions,
+                &controller,
+                ArchiveMode::Mutable,
+                &rsm,
+                &rlmm,
+                NodeId(1),
+                1,
+            )
+            .await;
+
+            let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
+            assert!(
+                listed.len() == export_count - 1,
+                "sweep {sweep}: every segment but the one under the floor"
+            );
+            assert!(
+                listed.iter().all(|md| md.end_offset() >= floor.0),
+                "sweep {sweep}: nothing under the floor was copied"
+            );
+        }
     }
 
     #[tokio::test]

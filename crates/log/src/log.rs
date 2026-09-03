@@ -76,7 +76,7 @@ pub struct Log {
     /// band `[log_start_offset(), local_log_start_offset())` for the remote
     /// read path to serve. [`Log::local_log_start_offset`] is the second
     /// floor.
-    log_start: Offset,
+    start_offset: Offset,
 
     /// Last-Stable-Offset: the offset before the first record of any
     /// in-flight transaction. Defaults to `log_end_offset()` when no
