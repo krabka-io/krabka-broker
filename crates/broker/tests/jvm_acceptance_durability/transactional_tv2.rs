@@ -720,11 +720,19 @@ fn tool_row(out: &Output, headers: &[&str], key: &str) -> Vec<String> {
         matched.len() == 1,
         "expected exactly one {headers:?} row keyed {key}: {rows:?}",
     );
-    let row = matched[0].clone();
+    let mut row = matched[0].clone();
+    // `kafka-transactions describe` renders `TopicPartitions` empty for a
+    // transaction that holds none -- a completed one, which is exactly the
+    // state this suite drives an abort into -- and whitespace splitting cannot
+    // see a trailing empty column. Only the final column may be missing; a row
+    // short anywhere else is a real divergence.
     assert!(
-        row.len() == headers.len(),
+        row.len() == headers.len() || row.len() + 1 == headers.len(),
         "a {headers:?} row did not render every column: {row:?}",
     );
+    if row.len() + 1 == headers.len() {
+        row.push(String::new());
+    }
     row
 }
 
