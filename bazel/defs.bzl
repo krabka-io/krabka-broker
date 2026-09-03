@@ -18,6 +18,64 @@ load("@rules_rust//rust:defs.bzl", "rust_doc", "rust_doc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//tools/lint:linters.bzl", "clippy_test")
 
+def docker_test_exec_properties(recycling_key):
+    """Execution properties that put a container-driven suite on a microVM.
+
+    The suites need a Docker daemon, which is why they have always run on a
+    machine that already had one. A BuildBuddy executor can supply it instead:
+    `init-dockerd` starts a daemon inside a Firecracker microVM before the
+    action runs, so the test needs nothing from the machine that invoked Bazel.
+
+    Every key carries the `test.` prefix -- Bazel's built-in `test` exec group
+    -- so it reaches the test action alone and the actions that build the test
+    binary keep the default execution platform. See the `docker-rbe` block in
+    //.bazelrc for why those stay on the local machine.
+
+    Ignored outright when there is no remote executor, so a developer running
+    `bazel test --config=docker` is unaffected.
+
+    Args:
+        recycling_key: what makes two suites willing to share a recycled
+            microVM -- in practice the set of images they load. Suites that
+            name the same one find those images already loaded, so the
+            `docker load` in //bazel:docker_test.sh is the no-op it counts on.
+            Keyed rather than shared globally: a VM recycled into a suite that
+            wants different images has to load them anyway, and carries the
+            previous suite's disk to do it.
+
+    Returns:
+        A dict for a test rule's `exec_properties`.
+    """
+    return {
+        "test.workload-isolation-type": "firecracker",
+        "test.init-dockerd": "true",
+        # Two constraints pick this image, and only one of them was obvious.
+        # `@llvm//:rbe_linux_x86_64` pins `ubuntu:22.04`, which carries no
+        # Docker, so `init-dockerd` has nothing to start; a target's properties
+        # beat the platform's, and only for this exec group, so the compile
+        # actions still resolve against @llvm's. But BuildBuddy's *default*
+        # executor image is Ubuntu 16.04, and these binaries are built against
+        # `@llvm//constraints/libc:gnu.2.28`, so on that image a suite died
+        # before it ran a line:
+        #
+        #     jvm_tiered_storage_docker_bin: /lib/x86_64-linux-gnu/libc.so.6:
+        #     version `GLIBC_2.28' not found
+        #
+        # This one is Ubuntu 20.04 -- glibc 2.31, which satisfies that
+        # constraint -- and installs docker-ce and containerd.io from
+        # download.docker.com. Anything substituted here has to keep both
+        # properties: `rbe-ubuntu22-04` is newer but ships no Docker.
+        "test.container-image": "docker://gcr.io/flame-public/rbe-ubuntu20-04:latest",
+        "test.recycle-runner": "true",
+        "test.runner-recycling-key": "krabka-images:" + recycling_key,
+        # A real Kafka cluster, its JVMs, and the suite's own broker. One
+        # compute unit is one CPU and 2.5 GB, which none of these fit in.
+        "test.EstimatedComputeUnits": "4",
+        # The image tarballs are gigabytes before Docker unpacks them, and a
+        # recycled VM holds the last suite's as well.
+        "test.EstimatedFreeDiskBytes": "20000000000",
+    }
+
 # `[workspace.lints.rust] unsafe_code = "forbid"`. rules_rs 0.0.107 does not
 # yet plumb Cargo lint tables into the Bazel build, and this is the one lint
 # in that table whose guarantee must not lapse under a second build system.
@@ -340,55 +398,10 @@ def crate_tests(
                 "external",
                 "no-sandbox",
             ],
-            # The daemon the comment above calls the one thing Bazel cannot own
-            # is the one thing a BuildBuddy executor can: a Firecracker microVM
-            # with its own dockerd, started before the action runs. That is what
-            # lets these suites leave the GitHub runner.
-            #
-            # `test.` is the built-in `test` exec group, so every key here
-            # reaches the test action alone. The compile actions that produce
-            # `_docker_bin` keep the default execution platform, which matters
-            # -- see the `docker-rbe` block in //.bazelrc for why they stay on
-            # the local machine.
-            #
-            # Ignored outright when there is no remote executor, so a developer
-            # running `bazel test --config=docker` is unaffected.
-            exec_properties = {
-                "test.workload-isolation-type": "firecracker",
-                "test.init-dockerd": "true",
-                # Two constraints pick this image, and only one of them was
-                # obvious. `@llvm//:rbe_linux_x86_64` pins `ubuntu:22.04`, which
-                # carries no Docker, so `init-dockerd` has nothing to start; a
-                # target's properties beat the platform's, and only for this
-                # exec group, so the compile actions still resolve against
-                # @llvm's. But BuildBuddy's *default* executor image is Ubuntu
-                # 16.04, and the suite binaries are built against
-                # `@llvm//constraints/libc:gnu.2.28`, so on that image every
-                # suite died before it ran a line:
-                #
-                #     jvm_tiered_storage_docker_bin: /lib/x86_64-linux-gnu/libc.so.6:
-                #     version `GLIBC_2.28' not found
-                #
-                # This one is Ubuntu 20.04 -- glibc 2.31, which satisfies that
-                # constraint -- and installs docker-ce and containerd.io from
-                # download.docker.com. Anything substituted here has to keep
-                # both properties.
-                "test.container-image": "docker://gcr.io/flame-public/rbe-ubuntu20-04:latest",
-                # Keep the VM and hand it to the next suite that wants the same
-                # images: `docker load` is then the no-op //bazel:docker_test.sh
-                # counts on, rather than several hundred megabytes unpacked
-                # again. Keyed by the image set rather than shared globally --
-                # a VM recycled into a suite wanting different images has to
-                # load them anyway, and carries the previous suite's disk to do
-                # it.
-                "test.recycle-runner": "true",
-                "test.runner-recycling-key": "krabka-images:" + ",".join(sorted(docker[stem])),
-                # A real Kafka cluster, its JVMs, and the suite's own broker.
-                # One compute unit is one CPU and 2.5 GB, which none of these
-                # fit in.
-                "test.EstimatedComputeUnits": "4",
-                # The image tarballs are gigabytes before Docker unpacks them,
-                # and a recycled VM holds the last suite's as well.
-                "test.EstimatedFreeDiskBytes": "20000000000",
-            },
+            # The daemon the comment above calls the one thing Bazel cannot
+            # own is the one thing a BuildBuddy executor can. See
+            # `docker_test_exec_properties`.
+            exec_properties = docker_test_exec_properties(
+                ",".join(sorted(docker[stem])),
+            ),
         )

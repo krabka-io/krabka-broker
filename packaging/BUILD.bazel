@@ -24,6 +24,7 @@ load("@rules_img//img:load.bzl", "image_load")
 load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
 load("@rules_img//img:push.bzl", "image_push")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel:defs.bzl", "docker_test_exec_properties")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -147,6 +148,14 @@ sh_test(
         ":image_load",
         ":tools_layer",
     ],
+    # Same microVM treatment as every suite //bazel/defs.bzl generates. This
+    # one is written out by hand rather than produced by `crate_tests`, and
+    # under `--config=docker-rbe` that difference was the whole bug: without
+    # these it was still scheduled remotely, just onto a plain executor with no
+    # daemon on it, and failed with `image_docker_test: no reachable Docker
+    # daemon`. Its own recycling key because it loads the broker image rather
+    # than the Kafka set the suites share.
+    exec_properties = docker_test_exec_properties("packaging-image"),
     # The daemon is the one input Bazel cannot own: `no-sandbox` for its socket,
     # `external` so a pass is never cached against inputs that do not describe
     # the daemon's state.
