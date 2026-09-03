@@ -87,9 +87,24 @@ jobs:
 
       # No `--config=rbe`: this compiles, and rustc codegen actions cannot
       # currently execute on the remote. See the `build:rbe` block in .bazelrc.
+      # EXPERIMENT, not for merge as-is. Two flags added to answer one
+      # question: does every rustc codegen action survive execution on a
+      # BuildBuddy executor?
+      #
+      # `--noremote_accept_cached` is the whole experiment. Without it these
+      # actions are served from the cache `main` populated and the step passes
+      # having executed nothing -- which is exactly what invalidated two
+      # diagnostic runs during #448. With it, the full closure genuinely
+      # compiles on executors, `ring` included.
+      #
+      # If this step fails on `embeds the absolute working directory`, the
+      # rules_rs scan breaks remote codegen for real, CI cannot become one
+      # invocation, and both this and the `.bazelrc` change revert.
       - name: build
         run: |
           aspect build \
+            --bazel-flag=--config=rbe \
+            --bazel-flag=--noremote_accept_cached \
             --bazel-flag=--build_tag_filters=-docker \
             //...
 

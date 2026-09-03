@@ -91,20 +91,21 @@ test:docker --test_tag_filters=docker
 # `*_docker_test` in //bazel/defs.bzl, because it belongs to the test action
 # rather than to an invocation.
 #
-# What is here is the half that does not: Rust code generation stays on the
-# local machine. A rustc action that runs on a BuildBuddy executor can fail
-# rules_rs's working-directory scan -- the `build:rbe` block below has the
-# reproduction and the cause -- and a compile failure would take the job down
-# before a single container started, which would say nothing about whether the
-# microVMs work. `no-remote-exec` is not `no-remote-cache`: these actions still
-# read the remote cache and only execute locally on a miss.
+# EXPERIMENT, not for merge as-is. `--modify_execution_info=^Rustc$=+no-remote-exec`
+# used to be here, pinning Rust code generation to the runner because a rustc
+# action on a BuildBuddy executor can fail rules_rs's working-directory scan
+# (the `build:rbe` block below has the reproduction).
 #
-# `^Rustc$` and not `Rustc`: Bazel matches this regex anywhere in the mnemonic,
-# so the unanchored spelling would also catch `RustcMetadata`, which is the one
-# rustc action that is already known to run remotely.
+# It is lifted to settle a question the evidence never closed. Every observed
+# failure was under `bazel coverage`, which rekeys the graph via
+# `--collect_code_coverage`; `bazel build --config=rbe` has never failed and was
+# once observed executing `1287 remote` and succeeding. Whether a *full* build --
+# one that certainly contains `ring` as an executed action -- survives is
+# untested, and the answer decides whether CI can become one invocation.
+#
+# Restore the line if this run fails on `embeds the absolute working directory`.
 test:docker-rbe --config=docker
 test:docker-rbe --config=rbe
-test:docker-rbe --modify_execution_info=^Rustc$=+no-remote-exec
 # A failing suite here prints the broker's whole INFO log -- `jvm_acceptance_tiered`
 # managed 8.6 MB -- and Bazel drops anything past this cap, printing
 # "exceeds maximum size ...; skipping" in place of the output. That is the only
