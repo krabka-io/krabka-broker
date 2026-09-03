@@ -69,7 +69,9 @@ Retention on a diskless topic is the index's job, because the index is the
 only thing that says which objects a partition's records live in. On every
 flush tick, before the flush itself, the flusher runs the three Kafka
 predicates from `UnifiedLog.deleteOldSegments` over each led partition's
-projected ranges, through the proved `diskless_retention_prefix` kernel: a
+projected ranges -- unless a KFC-9 write freeze covers the topic, which stops
+this pass as it stops the cleaner and the remote-log-manager's two retention
+passes -- through the proved `diskless_retention_prefix` kernel: a
 range whose `max_timestamp_ms` is older than `retention.ms`, an oldest range
 the `retention.bytes` budget cannot keep, and a range that ends below the
 partition's `DeleteRecords` floor. The kernel walks oldest first and stops at
@@ -86,20 +88,34 @@ partitions, so a partition whose ranges all expire can still leave that object
 in the bucket until its co-tenants expire too. The bucket therefore trails
 retention by up to one object's worth of co-tenancy plus the reclaim grace.
 
-`DeleteRecords` needs no extra RPC: the trim moves the WAL frontier and the
-local log start already, and the floor predicate tombstones the index ranges on
-the next tick. The floor itself cannot be read off the local log, because a
-diskless partition's log start is the flusher's trim frontier rather than a
-delete point, so the handler records it on the projection instead. For the same
-reason the handler measures the request against the offset the partition
-actually starts at -- the one `ListOffsets(EARLIEST)` answers -- rather than
-against the local log start, which the flusher has usually already moved past
-everything an operator would want to delete. From the moment the floor lands a
-cold read below it misses, the fetch stays `OFFSET_OUT_OF_RANGE`, and
-`ListOffsets(EARLIEST)` answers the floor. That mirror is per broker and not
-durable; the tombstones are the durable half, so a broker that restarts inside
-the one tick between the trim and the tombstones serves the deleted offsets
-again until its first flush tick expires the ranges.
+`DeleteRecords` needs no extra RPC, but it does need a record of its own. The
+trim moves the WAL frontier and the local log start already, and the floor
+predicate tombstones the index ranges on the next tick. The floor itself cannot
+be read off the local log, because a diskless partition's log start is the
+flusher's trim frontier rather than a delete point. For the same reason the
+handler measures the request against the offset the partition actually starts
+at -- the one `ListOffsets(EARLIEST)` answers -- rather than against a local
+log start the flusher has usually already moved past everything an operator
+would want to delete.
+
+So the floor is published to the index topic as a keyed
+`WalDeleteFloorRecord`, under a key whose encoding is a different length from a
+range key so the two decoders on the replay path cannot read one another's. The
+handler publishes it and waits for the projection to carry it *before* the trim
+is acknowledged: a client told its records are gone must not see them again.
+From that moment a cold read below the floor misses, the fetch stays
+`OFFSET_OUT_OF_RANGE`, and `ListOffsets(EARLIEST)` answers the floor -- on
+every broker, because every projection replays the same record.
+
+The range tombstones could not stand in for that record, which is why it
+exists. A range that straddles the floor still holds live records at and above
+it, so retention must keep it; the newest range is never expired either. Both
+come back out of a replay still covering the offsets below the floor, so a
+projection rebuilt without the floor record would serve deleted offsets again
+and go on doing it, not merely until the next tick. The floor only ever moves
+forward, so neither a stale retry nor a compacted replay that delivers an older
+record last can widen what a consumer sees, and a deleted topic's floors are
+tombstoned alongside its ranges.
 
 ### Slice 4: Reads from the hot tail and the object store
 

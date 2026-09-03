@@ -7,7 +7,9 @@ use futures_util::StreamExt;
 use krabka_remote_storage_topic::{MetadataEventLog, PartitionStart};
 use tokio::sync::{Mutex, watch};
 
-use super::wal_index::{WalFlushRecord, WalIndexCache, WalIndexKey};
+use super::wal_index::{
+    WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexCache, WalIndexKey,
+};
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -103,9 +105,27 @@ impl DisklessIndexLog {
             let mut delivered: HashMap<i32, u64> =
                 pending.keys().map(|partition| (*partition, 0)).collect();
             while let Some(event) = stream.next().await {
+                // A floor key and a range key never decode as each other, so
+                // the two projections stay independent however the index
+                // topic's partitions interleave them.
+                let floor_key = event.key.as_deref().and_then(WalDeleteFloorKey::from_bytes);
                 if event.tombstone {
-                    if let Some(key) = event.key.as_deref().and_then(WalIndexKey::from_bytes) {
+                    if let Some(key) = floor_key {
+                        pump_cache.lock().await.clear_delete_floor(key);
+                    } else if let Some(key) = event.key.as_deref().and_then(WalIndexKey::from_bytes)
+                    {
                         pump_cache.lock().await.remove(key);
+                    }
+                } else if let Some(key) = floor_key {
+                    if let Ok(record) = WalDeleteFloorRecord::from_bytes(&event.payload) {
+                        pump_cache.lock().await.raise_delete_floor(
+                            key.topic_id,
+                            key.partition,
+                            record.floor,
+                        );
+                        applied_tx.send_modify(|generation| {
+                            *generation = generation.wrapping_add(1);
+                        });
                     }
                 } else if let Ok(record) = WalFlushRecord::from_bytes(&event.payload) {
                     let mut cache = pump_cache.lock().await;
@@ -230,6 +250,91 @@ impl DisklessIndexLog {
                 })?;
         }
         Ok(last_offset)
+    }
+
+    /// Publish one partition's `DeleteRecords` floor and wait until the
+    /// committed projection carries it.
+    ///
+    /// `DeleteRecords` acknowledges only after this returns, so a client that
+    /// was told its records are gone cannot see them again after a restart or
+    /// a leadership move.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the record cannot be published, or when the
+    /// projection does not report it within `timeout`.
+    pub(crate) async fn publish_delete_floor(
+        &self,
+        topic_id: uuid::Uuid,
+        partition: i32,
+        floor: i64,
+        timeout: Duration,
+    ) -> Result<(), crate::error::BrokerError> {
+        let key = WalDeleteFloorKey {
+            topic_id,
+            partition,
+        };
+        let bytes = WalDeleteFloorRecord {
+            topic_id,
+            partition,
+            floor,
+        }
+        .to_bytes()
+        .map_err(crate::error::BrokerError::Txn)?;
+        let key_bytes = key.to_bytes();
+        self.log
+            .publish_keyed(
+                index_partition(&key_bytes, self.log.partition_count()),
+                key_bytes,
+                Some(bytes),
+            )
+            .await
+            .map_err(|error| {
+                crate::error::BrokerError::Txn(format!("diskless delete floor publish: {error}"))
+            })?;
+
+        let mut applied = self.applied.clone();
+        tokio::time::timeout(timeout, async {
+            loop {
+                if self.cache.lock().await.delete_floor(topic_id, partition) >= floor {
+                    return true;
+                }
+                if applied.changed().await.is_err() {
+                    return false;
+                }
+            }
+        })
+        .await
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| {
+            crate::error::BrokerError::Txn("diskless delete floor projection timed out".into())
+        })
+    }
+
+    /// Tombstone one partition's floor, so a deleted topic leaves none behind.
+    pub(crate) async fn tombstone_delete_floor(
+        &self,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<(), crate::error::BrokerError> {
+        let key = WalDeleteFloorKey {
+            topic_id,
+            partition,
+        };
+        let bytes = key.to_bytes();
+        self.log
+            .publish_keyed(
+                index_partition(&bytes, self.log.partition_count()),
+                bytes,
+                None,
+            )
+            .await
+            .map_err(|error| {
+                crate::error::BrokerError::Txn(format!("diskless delete floor tombstone: {error}"))
+            })?;
+        self.cache.lock().await.clear_delete_floor(key);
+        Ok(())
     }
 
     /// Tombstone every projected range for a deleted topic.
@@ -469,6 +574,73 @@ mod tests {
             restarted.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8),
             "the racing append must be part of the replay target"
         );
+    }
+
+    /// The floor has to be a durable record, not a per-broker mirror.
+    ///
+    /// The range covering offsets 0-7 straddles a floor of 4, so retention
+    /// must keep it -- and it is the newest range besides, which retention
+    /// never expires. A projection rebuilt over the same index topic therefore
+    /// replays that range in full, and only the floor record stops it from
+    /// answering for the deleted offsets again.
+    #[tokio::test]
+    async fn a_delete_floor_survives_a_rebuilt_projection() {
+        let event_log = InProcessMetadataEventLog::new(1);
+        let topic_id = Uuid::from_u128(7);
+        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        seed.publish_flush(&flush_record("object-a", topic_id, 0, 7))
+            .await
+            .unwrap();
+        seed.publish_delete_floor(topic_id, 0, 4, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(seed.cache().lock().await.delete_floor(topic_id, 0) == 4);
+
+        let restarted = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        assert!(restarted.wait_until_caught_up(Duration::from_secs(5)).await);
+
+        let cache = restarted.cache();
+        let cache = cache.lock().await;
+        assert!(
+            cache.delete_floor(topic_id, 0) == 4,
+            "a restart must not resurrect the deleted offsets"
+        );
+        assert!(cache.earliest_covered(topic_id, 0) == Some(4));
+        assert!(cache.lookup_fetch_range(topic_id, 0, 3, 4096).is_none());
+        assert!(cache.lookup_fetch_range(topic_id, 0, 4, 4096).is_some());
+        // The range itself is intact: retention may not expire it, because it
+        // still holds every offset from 4 up.
+        assert!(cache.flushed_frontier(topic_id, 0) == Some(8));
+        drop(cache);
+
+        // A tombstone takes the floor away with its topic.
+        restarted.tombstone_delete_floor(topic_id, 0).await.unwrap();
+        let after = DisklessIndexLog::start(event_log).await.unwrap();
+        assert!(after.wait_until_caught_up(Duration::from_secs(5)).await);
+        assert!(after.cache().lock().await.delete_floor(topic_id, 0) == 0);
+    }
+
+    /// A floor that only moves forward, so neither a stale client retry nor a
+    /// compacted replay that delivers an older record last can widen what a
+    /// consumer sees.
+    #[tokio::test]
+    async fn a_delete_floor_never_moves_backwards() {
+        let event_log = InProcessMetadataEventLog::new(1);
+        let topic_id = Uuid::from_u128(7);
+        let index = DisklessIndexLog::start(event_log).await.unwrap();
+        index
+            .publish_delete_floor(topic_id, 0, 9, Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        let stale = index
+            .publish_delete_floor(topic_id, 0, 2, Duration::from_millis(50))
+            .await;
+
+        // The publish itself is fine; the projection simply keeps the higher
+        // floor, which is what the wait reports against.
+        assert!(stale.is_ok());
+        assert!(index.cache().lock().await.delete_floor(topic_id, 0) == 9);
     }
 
     #[tokio::test]

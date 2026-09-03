@@ -65,6 +65,81 @@ impl From<&WalIndexEntry> for WalIndexKey {
     }
 }
 
+/// Stable Kafka compaction key for one partition's `DeleteRecords` floor.
+///
+/// The encoding is deliberately a different length from [`WalIndexKey`], so
+/// the two decoders on the replay path cannot read one another's keys however
+/// the index topic interleaves them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct WalDeleteFloorKey {
+    pub(crate) topic_id: Uuid,
+    pub(crate) partition: i32,
+}
+
+impl WalDeleteFloorKey {
+    /// A tag byte, the topic id, and the partition.
+    const LEN: usize = 1 + 16 + 4;
+    /// Distinguishes a floor key from a range key even at equal length.
+    const TAG: u8 = 0xF0;
+
+    #[must_use]
+    pub(crate) fn to_bytes(self) -> Bytes {
+        let mut bytes = Vec::with_capacity(Self::LEN);
+        bytes.push(Self::TAG);
+        bytes.extend_from_slice(self.topic_id.as_bytes());
+        bytes.extend_from_slice(&self.partition.to_be_bytes());
+        Bytes::from(bytes)
+    }
+
+    #[must_use]
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let bytes: &[u8; Self::LEN] = bytes.try_into().ok()?;
+        if bytes[0] != Self::TAG {
+            return None;
+        }
+        Some(Self {
+            topic_id: Uuid::from_bytes(bytes[1..17].try_into().ok()?),
+            partition: i32::from_be_bytes(bytes[17..].try_into().ok()?),
+        })
+    }
+}
+
+/// Durable record of one partition's `DeleteRecords` floor.
+///
+/// This is what makes a diskless trim survive a restart. The floor cannot be
+/// rebuilt from the range tombstones: a range that straddles the floor, and
+/// the newest range that retention never expires, both stay in the projection
+/// with records below the floor inside them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalDeleteFloorRecord {
+    pub topic_id: Uuid,
+    pub partition: i32,
+    pub floor: i64,
+}
+
+impl WalDeleteFloorRecord {
+    /// Serialize this record with the workspace `serde-wincode` codec.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if wincode cannot encode the record.
+    pub fn to_bytes(&self) -> Result<Bytes, String> {
+        <serde_wincode::SerdeCompat<Self> as wincode::Serialize>::serialize(self)
+            .map(Bytes::from)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Deserialize a record written by [`Self::to_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is not a valid encoded `WalDeleteFloorRecord`.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        <serde_wincode::SerdeCompat<Self> as wincode::Deserialize>::deserialize(bytes)
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Durable index event for one flushed diskless WAL object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalFlushRecord {
@@ -108,9 +183,11 @@ pub struct WalIndexCache {
     /// answering for them the moment the trim lands rather than one flush tick
     /// later, when the flusher has tombstoned the ranges that hold them.
     ///
-    /// The tombstones are the durable half. This map is not: a broker that
-    /// restarts inside that tick comes back with an empty one and serves the
-    /// deleted offsets again until its first flush tick expires the ranges.
+    /// This map is a projection of the keyed `WalDeleteFloorRecord`s on the
+    /// index topic, replayed like every other entry here, so a restart and a
+    /// leadership move both restore it. The range tombstones alone could not:
+    /// a range that straddles the floor, and the newest range that retention
+    /// never expires, keep records below the floor in the projection.
     delete_floors: HashMap<(Uuid, i32), i64>,
 }
 
@@ -230,10 +307,16 @@ impl WalIndexCache {
     }
 
     /// Raise one partition's `DeleteRecords` floor. The floor only moves
-    /// forward, so a stale retry cannot expose records an earlier trim removed.
+    /// forward, so neither a stale retry nor a replay that delivers an older
+    /// record after a newer one can expose records an earlier trim removed.
     pub(crate) fn raise_delete_floor(&mut self, topic_id: Uuid, partition: i32, floor: i64) {
         let entry = self.delete_floors.entry((topic_id, partition)).or_insert(0);
         *entry = (*entry).max(floor);
+    }
+
+    /// Drop one partition's floor after its keyed tombstone is committed.
+    pub(crate) fn clear_delete_floor(&mut self, key: WalDeleteFloorKey) {
+        self.delete_floors.remove(&(key.topic_id, key.partition));
     }
 
     /// The partition's `DeleteRecords` floor, or zero when none was set.
@@ -245,10 +328,15 @@ impl WalIndexCache {
             .unwrap_or(0)
     }
 
-    /// Drop the floors a deleted topic left behind, so the map does not grow
-    /// with every topic the cluster has ever trimmed.
-    pub(crate) fn forget_topic(&mut self, topic_id: Uuid) {
-        self.delete_floors.retain(|(id, _), _| *id != topic_id);
+    /// Partitions of `topic_id` that still carry a floor, so a deleted topic's
+    /// floors can be tombstoned rather than left on the index topic forever.
+    #[must_use]
+    pub(crate) fn delete_floor_partitions(&self, topic_id: Uuid) -> Vec<i32> {
+        self.delete_floors
+            .keys()
+            .filter(|(id, _)| *id == topic_id)
+            .map(|(_, partition)| *partition)
+            .collect()
     }
 
     /// Keys of the oldest ranges this partition's retention allows to expire,
@@ -688,8 +776,13 @@ mod tests {
         cache.raise_delete_floor(topic, 0, 1);
         assert!(cache.delete_floor(topic, 0) == 5);
         // And it leaves with its topic.
-        cache.forget_topic(topic);
+        assert!(cache.delete_floor_partitions(topic) == vec![0]);
+        cache.clear_delete_floor(WalDeleteFloorKey {
+            topic_id: topic,
+            partition: 0,
+        });
         assert!(cache.delete_floor(topic, 0) == 0);
+        assert!(cache.delete_floor_partitions(topic).is_empty());
     }
 
     #[test]

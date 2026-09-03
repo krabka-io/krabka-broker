@@ -130,7 +130,8 @@ async fn flush_tick(
     let image = context.image_rx.borrow().clone();
     tombstone_deleted_topics(context, &image).await?;
     let mut partitions = flushable_partitions(&context.partitions, &image, context.node_id).await;
-    expire_retention_breached_ranges(context, &partitions, crate::time_util::now_ms()).await?;
+    expire_retention_breached_ranges(context, &image, &partitions, crate::time_util::now_ms())
+        .await?;
     if !partitions.is_empty() {
         let start = rotation % partitions.len();
         partitions.rotate_left(start);
@@ -156,12 +157,18 @@ async fn tombstone_deleted_topics(
     for topic_id in topic_ids {
         if image.topic_by_id(&topic_id).is_none() {
             context.index_log.tombstone_topic(topic_id).await?;
-            context
+            let floors = context
                 .index_log
                 .cache()
                 .lock()
                 .await
-                .forget_topic(topic_id);
+                .delete_floor_partitions(topic_id);
+            for partition in floors {
+                context
+                    .index_log
+                    .tombstone_delete_floor(topic_id, partition)
+                    .await?;
+            }
         }
     }
     Ok(())
@@ -178,12 +185,35 @@ async fn tombstone_deleted_topics(
 /// no range in it is referenced. One object holds runs from several
 /// partitions, so a partition whose ranges all expire can still leave the
 /// object in the bucket until its co-tenants expire too.
+///
+/// KFC-9: a write freeze stops this pass, as it stops the cleaner and both of
+/// the remote-log-manager's retention passes. A frozen topic's prefix has to
+/// stay byte-identical, and expiring a range here would let the reclaimer
+/// delete the object bytes behind it. A thaw makes the next tick eligible
+/// again with no further operator step.
 async fn expire_retention_breached_ranges(
     context: &FlusherContext,
+    image: &MetadataImage,
     partitions: &[FlushPartition],
     now_ms: i64,
 ) -> Result<(), crate::error::BrokerError> {
     for partition in partitions {
+        if matches!(
+            crate::freeze::resolve::resolve_freeze_mutation(
+                image,
+                &partition.handle.topic,
+                true,
+                krabka_verified::FreezeMutationKind::Retention,
+            ),
+            crate::freeze::resolve::FreezeMutationResolution::Frozen(_)
+        ) {
+            tracing::debug!(
+                topic = %partition.handle.topic,
+                partition = partition.handle.index.get(),
+                "diskless WAL retention held by a write freeze"
+            );
+            continue;
+        }
         let config = partition
             .handle
             .log
@@ -621,7 +651,12 @@ mod tests {
         dir: &std::path::Path,
         topic_id: Uuid,
         ranges: &[(&str, i64, i64, i64)],
-    ) -> (FlusherContext, Arc<dyn ObjectStore>, Arc<Partition>) {
+    ) -> (
+        FlusherContext,
+        Arc<dyn ObjectStore>,
+        Arc<Partition>,
+        MetadataImage,
+    ) {
         let handle = test_partition(dir, "orders", 0, true, NodeId(1));
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert(
@@ -667,7 +702,7 @@ mod tests {
             partitions: 1,
             replication_factor: 1,
         }));
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
+        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image.clone()));
         (
             FlusherContext {
                 partitions,
@@ -681,6 +716,7 @@ mod tests {
             },
             store,
             handle,
+            image,
         )
     }
 
@@ -696,7 +732,7 @@ mod tests {
     async fn retention_ms_expires_an_aged_range_and_frees_its_object() {
         let dir = tempdir().unwrap();
         let topic_id = Uuid::from_u128(11);
-        let (context, store, handle) = seeded_retention_flusher(
+        let (context, store, handle, image) = seeded_retention_flusher(
             dir.path(),
             topic_id,
             &[
@@ -712,7 +748,7 @@ mod tests {
 
         // Far enough past both batches that only the "keep the newest range"
         // rule stands between retention and an empty index.
-        expire_retention_breached_ranges(&context, &partitions, 10_000)
+        expire_retention_breached_ranges(&context, &image, &partitions, 10_000)
             .await
             .unwrap();
         Reclaimer::new(Duration::ZERO).sweep(&context).await;
@@ -741,11 +777,70 @@ mod tests {
         assert!(body.contains("krabka_broker_diskless_wal_expired_ranges_total 1"));
     }
 
+    /// KFC-9 refuses retention eviction on a frozen topic, and says so for
+    /// local and remote retention alike. The diskless object tier is a third
+    /// place bytes can be removed from, so the same row binds here.
+    #[tokio::test]
+    async fn a_write_freeze_holds_the_retention_pass() {
+        let dir = tempdir().unwrap();
+        let topic_id = Uuid::from_u128(11);
+        let (context, store, handle, mut image) = seeded_retention_flusher(
+            dir.path(),
+            topic_id,
+            &[
+                ("diskless-wal/7/aged.ckwl", 0, 2, 1_000),
+                ("diskless-wal/7/fresh.ckwl", 3, 5, 5_000),
+            ],
+        )
+        .await;
+        let mut config = handle.log.lock().unwrap().config_snapshot();
+        config.retention = Some(krabka_units::millis(1));
+        handle.log.lock().unwrap().set_config(config);
+        image.apply(&MetadataRecord::V1TopicFreeze(
+            krabka_metadata::TopicFreezeRecord {
+                scope: "orders".to_owned(),
+                pattern_type: krabka_metadata::PatternType::Literal,
+                frozen: true,
+                reason: "a cutover is in flight".to_owned(),
+                set_by: "User:alice".to_owned(),
+                set_at_ms: 1_770_000_000_000,
+                proposal_id: Uuid::nil(),
+                key_id: String::new(),
+                signature: Vec::new(),
+            },
+        ));
+        let partitions = [flush_partition(topic_id, &handle)];
+
+        // The same clock and retention that expire the aged range in
+        // `retention_ms_expires_an_aged_range_and_frees_its_object`.
+        expire_retention_breached_ranges(&context, &image, &partitions, 10_000)
+            .await
+            .unwrap();
+        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+
+        assert!(
+            context
+                .index_log
+                .cache()
+                .lock()
+                .await
+                .lookup(topic_id, 0, 0)
+                .is_some()
+        );
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/7/aged.ckwl"))
+                .await
+                .is_ok(),
+            "a frozen topic's prefix has to stay byte-identical"
+        );
+    }
+
     #[tokio::test]
     async fn an_unlimited_retention_expires_nothing() {
         let dir = tempdir().unwrap();
         let topic_id = Uuid::from_u128(11);
-        let (context, store, handle) = seeded_retention_flusher(
+        let (context, store, handle, image) = seeded_retention_flusher(
             dir.path(),
             topic_id,
             &[
@@ -763,7 +858,7 @@ mod tests {
         handle.log.lock().unwrap().set_config(config);
         let partitions = [flush_partition(topic_id, &handle)];
 
-        expire_retention_breached_ranges(&context, &partitions, i64::MAX)
+        expire_retention_breached_ranges(&context, &image, &partitions, i64::MAX)
             .await
             .unwrap();
         Reclaimer::new(Duration::ZERO).sweep(&context).await;
@@ -789,7 +884,7 @@ mod tests {
     async fn a_delete_records_floor_expires_the_ranges_below_it() {
         let dir = tempdir().unwrap();
         let topic_id = Uuid::from_u128(11);
-        let (context, store, handle) = seeded_retention_flusher(
+        let (context, store, handle, image) = seeded_retention_flusher(
             dir.path(),
             topic_id,
             &[
@@ -809,7 +904,7 @@ mod tests {
             .raise_delete_floor(topic_id, 0, 3);
         let partitions = [flush_partition(topic_id, &handle)];
 
-        expire_retention_breached_ranges(&context, &partitions, 1_000)
+        expire_retention_breached_ranges(&context, &image, &partitions, 1_000)
             .await
             .unwrap();
         Reclaimer::new(Duration::ZERO).sweep(&context).await;

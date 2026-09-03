@@ -52,6 +52,7 @@ use krabka_protocol::{
         delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     },
 };
+use krabka_units::convert::TimeExt as _;
 use krabka_verified::{DeleteRecordsTrimDecision, FreezeMutationKind};
 use uuid::Uuid;
 
@@ -155,27 +156,55 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
-/// Record a completed trim as the partition's diskless `DeleteRecords` floor.
+/// Record the trim as the partition's diskless `DeleteRecords` floor, durably.
 ///
 /// A diskless partition's local log start is the flusher's trim frontier, not
 /// a delete point, so the object tier cannot read the floor off the log. The
-/// projection carries it instead: a cold read below the floor misses from here
-/// on, `ListOffsets(EARLIEST)` answers the floor, and the flusher's next tick
+/// index topic carries it instead, as a keyed record the projection replays
+/// like any other: a cold read below the floor misses from here on,
+/// `ListOffsets(EARLIEST)` answers the floor, and the flusher's next tick
 /// tombstones every index range that ends below it.
-async fn raise_diskless_delete_floor(
+///
+/// The range tombstones could not stand in for the record. A range that
+/// straddles the floor keeps live records, so retention must not expire it,
+/// and neither may the newest range; both would come back out of a replay
+/// still covering the offsets below the floor. So this runs *before* the trim
+/// is acknowledged, and a failure fails the row: a client told its records are
+/// gone must not see them again after a restart or a leadership move.
+///
+/// A partition with no object tier behind it has nothing to record.
+///
+/// # Errors
+///
+/// Returns an error when the floor cannot be published or does not reach the
+/// committed projection in time.
+async fn publish_diskless_delete_floor(
     env: &TrimEnv<'_>,
     topic: &str,
     part: &crate::partition::Partition,
     floor: Offset,
-) {
+) -> Result<(), crate::error::BrokerError> {
     let Some((handle, topic_id)) = diskless_index(env, topic, part) else {
-        return;
+        return Ok(());
     };
-    handle
-        .index
-        .lock()
+    // A rebuilding projection is the one case that must not be mistaken for
+    // "nothing to record": there is a floor to persist and nowhere to put it.
+    let Some(index_log) = handle.index_log() else {
+        return Err(crate::error::BrokerError::Txn(
+            "diskless WAL index log is rebuilding; the delete floor cannot be recorded".into(),
+        ));
+    };
+    index_log
+        .publish_delete_floor(
+            topic_id,
+            part.index.get(),
+            floor.0,
+            env.broker
+                .config
+                .diskless_wal_index_projection_timeout
+                .to_std(),
+        )
         .await
-        .raise_delete_floor(topic_id, part.index.get(), floor.0);
 }
 
 /// The offset a diskless partition actually starts at: the lower of the local
@@ -343,18 +372,23 @@ async fn trim_one(
         }
     };
 
+    // Ahead of the trim, so the acknowledgement below can never outrun the
+    // durable record of what was deleted.
+    if let Err(error) = publish_diskless_delete_floor(env, topic, &part, target).await {
+        tracing::warn!(
+            %topic, partition = index, %error,
+            "DeleteRecords could not record the diskless delete floor"
+        );
+        return error_partition_result(index, codes::UNKNOWN_SERVER_ERROR);
+    }
+
     match part.trim_to_offset(target).await {
         Ok(new_start) => {
             // On a diskless partition the local trim frontier is already past
             // `target` in the steady state, so `new_start` says nothing about
             // what a client can still read. The floor does, and it is also the
             // low watermark the response carries.
-            let low_watermark = if part.diskless {
-                raise_diskless_delete_floor(env, topic, &part, target).await;
-                target.0
-            } else {
-                new_start.0
-            };
+            let low_watermark = if part.diskless { target.0 } else { new_start.0 };
             audit_transition(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,

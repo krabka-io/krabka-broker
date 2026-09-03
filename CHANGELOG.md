@@ -36,7 +36,14 @@ the `krabka-*` names to crates.io.
   frontier, so a request below that frontier is no longer a silent no-op, and
   the object tier stops answering for the deleted offsets immediately: a fetch
   below the floor is `OFFSET_OUT_OF_RANGE` and `ListOffsets(EARLIEST)` reports
-  the floor.
+  the floor. The floor is a keyed record on `__diskless_wal_index`, published
+  and projected before the trim is acknowledged, so it survives a restart and a
+  leadership move on every broker. The range tombstones could not stand in for
+  it: a range that straddles the floor still holds live records, and neither it
+  nor the newest range may be expired.
+- A KFC-9 write freeze now holds the diskless retention pass, as it already
+  held the cleaner and the remote-log-manager's two retention passes. A frozen
+  topic's prefix stays byte-identical in the object tier too.
 
 - A broker-only node no longer stalls forever after a restart once the
   controller has snapshotted and pruned `__cluster_metadata` past offset 0. The

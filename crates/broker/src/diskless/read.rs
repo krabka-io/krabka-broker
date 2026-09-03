@@ -17,12 +17,38 @@ use crate::{broker::Broker, codes, handlers::fetch::PendingRead, partition::Part
 pub(crate) struct DisklessReadHandle {
     pub(crate) index: Arc<AsyncMutex<WalIndexCache>>,
     store: Arc<dyn ObjectStore>,
+    /// The index log the flusher currently owns, or `None` while the
+    /// bootstrap is between incarnations of it.
+    ///
+    /// A handler that has to *write* to the index topic -- `DeleteRecords`
+    /// recording its floor is the only one -- publishes through here rather
+    /// than holding its own clone, because a stalled replay makes the
+    /// bootstrap rebuild the log and a captured clone would go stale.
+    index_log: Arc<arc_swap::ArcSwapOption<super::index_log::DisklessIndexLog>>,
 }
 
 impl DisklessReadHandle {
     #[must_use]
     pub(crate) fn new(index: Arc<AsyncMutex<WalIndexCache>>, store: Arc<dyn ObjectStore>) -> Self {
-        Self { index, store }
+        Self {
+            index,
+            store,
+            index_log: Arc::new(arc_swap::ArcSwapOption::empty()),
+        }
+    }
+
+    /// The slot the diskless bootstrap publishes each new index log into.
+    #[must_use]
+    pub(crate) fn index_log_slot(
+        &self,
+    ) -> Arc<arc_swap::ArcSwapOption<super::index_log::DisklessIndexLog>> {
+        Arc::clone(&self.index_log)
+    }
+
+    /// The index log currently serving the projection, if one is running.
+    #[must_use]
+    pub(crate) fn index_log(&self) -> Option<Arc<super::index_log::DisklessIndexLog>> {
+        self.index_log.load_full()
     }
 
     /// Clone the raw object-store handle for the background WAL flusher.
