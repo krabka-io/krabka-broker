@@ -62,19 +62,40 @@ pub fn docker_bridge_gateway() -> String {
             "inspect",
             "bridge",
             "--format",
-            "{{(index .IPAM.Config 0).Gateway}}",
+            // Both fields, separated by a character neither can contain. A
+            // space would not do: `Gateway` can render empty, and
+            // `split_whitespace` would then hand back the subnet as if it were
+            // the gateway.
+            "{{(index .IPAM.Config 0).Gateway}}|{{(index .IPAM.Config 0).Subnet}}",
         ])
         .output()
         .expect("docker network inspect bridge");
     assert2::assert!(output.status.success(), "inspect Docker bridge gateway");
-    let gateway = String::from_utf8(output.stdout)
-        .expect("Docker bridge gateway is UTF-8")
-        .trim()
-        .to_owned();
-    gateway
-        .parse::<std::net::IpAddr>()
-        .expect("Docker bridge gateway is an IP address");
-    gateway
+    let rendered = String::from_utf8(output.stdout).expect("Docker bridge gateway is UTF-8");
+    bridge_gateway(&rendered).unwrap_or_else(|| {
+        panic!("no Docker bridge gateway in `docker network inspect bridge`: {rendered:?}")
+    })
+}
+
+/// The bridge gateway out of the `Gateway|Subnet` pair `docker network inspect`
+/// renders, falling back to the subnet's first address when the daemon reports
+/// no gateway of its own.
+///
+/// The daemon `init-dockerd` starts inside a `BuildBuddy` Firecracker microVM is
+/// one that reports none: it leaves `Gateway` empty while still reporting
+/// `Subnet`, and every scenario here then died on `AddrParseError(Ip)` with
+/// nothing in the message to say which field was missing. Docker gives the
+/// first address of the subnet to the bridge itself, so that address is the
+/// gateway whether or not the daemon spells it out.
+fn bridge_gateway(rendered: &str) -> Option<String> {
+    let (gateway, subnet) = rendered.trim().split_once('|')?;
+    if gateway.parse::<std::net::IpAddr>().is_ok() {
+        return Some(gateway.to_owned());
+    }
+    let (base, _prefix) = subnet.split_once('/')?;
+    let base: std::net::Ipv4Addr = base.parse().ok()?;
+    let first = u32::from(base).checked_add(1)?;
+    Some(std::net::Ipv4Addr::from(first).to_string())
 }
 
 /// Run a bundled Kafka CLI tool in a throwaway cp-kafka container on the
