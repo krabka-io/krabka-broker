@@ -399,6 +399,43 @@ mod tests {
     /// than on a connect timeout.
     const UNREACHABLE: &str = "127.0.0.1:1";
 
+    /// A restarted observer comes up on what it last checkpointed rather than on
+    /// an empty image at offset 0.
+    ///
+    /// The loop publishes the restored image and its applied offset before it
+    /// contacts anybody, so a node that was caught up before the restart serves
+    /// metadata immediately instead of replaying the log — or, once the
+    /// controller has pruned, instead of asking for records that are gone.
+    #[tokio::test]
+    async fn the_loop_resumes_from_the_checkpoint_this_node_last_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
+                name: "survives-the-restart".into(),
+                topic_id: Uuid::new_v4(),
+                partitions: 1,
+                replication_factor: 1,
+            },
+        ));
+        ObserverStore::open(dir.path(), 1).maybe_checkpoint(&image, 12);
+
+        // No voters and a dead timer, so the loop resumes and then stops
+        // without ever reaching a controller: what it holds came off disk.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable(), dir.path())).await;
+
+        assert!(
+            observer
+                .current_image()
+                .topic("survives-the-restart")
+                .is_some()
+        );
+        // The checkpoint covers records below offset 12, so the last applied
+        // one is 11 — the offset this node reports in its `BrokerHeartbeat`.
+        assert!(observer.current_metadata_offset() == 11);
+    }
+
     #[tokio::test]
     async fn the_loop_stops_when_a_voterless_park_cannot_be_armed() {
         // No voters: the loop's only move is to park, and the park cannot be

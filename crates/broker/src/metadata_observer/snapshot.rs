@@ -430,6 +430,69 @@ mod tests {
         mock.stop();
     }
 
+    /// A transfer can complete and still be worthless: the bytes arrive whole
+    /// but are not a checkpoint. The observer must not publish an image built
+    /// from them, must not persist them, and must report the round trip as
+    /// failed so its fetch offset stays where it was.
+    #[tokio::test]
+    async fn a_snapshot_that_will_not_decode_is_neither_published_nor_persisted() {
+        let cluster_id = Uuid::new_v4();
+        let snapshot_id = (4_096_i64, 7_i32);
+        let garbage = bytes::Bytes::from_static(b"this is not a KIP-630 checkpoint");
+        let served = garbage.clone();
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    return Some(metadata_fetch_redirect(snapshot_id));
+                }
+                if api_key == api_key::FETCH_SNAPSHOT {
+                    return Some(framed(
+                        &PeerResponse::FetchSnapshot {
+                            snapshot_id,
+                            size: i64::try_from(served.len()).unwrap(),
+                            position: 0,
+                            bytes: served.clone(),
+                            error_code: 0,
+                        }
+                        .encode(),
+                    ));
+                }
+                None
+            })
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = ObserverConfig {
+            voters: vec![(NodeId(1), mock.addr.to_string())],
+            ..observer_config(cluster_id, dir.path().to_path_buf())
+        };
+        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
+        let mut store = ObserverStore::open(dir.path(), 0);
+
+        let outcome = fetch_once(
+            &config,
+            &mock.addr.to_string(),
+            NodeId(1),
+            0,
+            &image_tx,
+            &mut store,
+        )
+        .await;
+
+        assert!(outcome.is_none());
+        assert!(image_tx.borrow().topics().next().is_none());
+        assert!(
+            ObserverStore::open(dir.path(), 0)
+                .resume(cluster_id)
+                .is_none()
+        );
+
+        mock.stop();
+    }
+
     /// A controller that has pruned past the snapshot it named answers the
     /// transfer with an error. The observer must not treat that as progress:
     /// it reports the round trip as failed, so the loop backs off, rotates, and
