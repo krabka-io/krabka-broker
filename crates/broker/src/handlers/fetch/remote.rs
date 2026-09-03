@@ -273,7 +273,7 @@ mod tests {
     ) -> std::sync::Arc<crate::partition::Partition> {
         use krabka_ids::{LeaderEpoch, PartitionIndex};
 
-        use crate::remote_log_manager::{ArchiveMode, copy_eligible};
+        use crate::remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier};
 
         /// A batch wide enough that a 256-byte segment rolls every few
         /// appends, so the log seals segments the copy pass can tier.
@@ -311,13 +311,11 @@ mod tests {
         let tp = krabka_remote_storage::TopicIdPartition::new(tiered_topic_id(), TIERED_TOPIC, 0);
         let reader = broker.remote_reader.clone().expect("remote reader");
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &reader.rsm, &reader.rlmm),
             &tp,
             1,
             LeaderEpoch(0),
             exports,
-            ArchiveMode::Mutable,
-            &reader.rsm,
-            &reader.rlmm,
         )
         .await;
         assert!(copied > 0, "the copy pass should have tiered every segment");

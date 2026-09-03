@@ -147,6 +147,7 @@ pub async fn start_with_operator_keys_sasl(
         protocol: krabka_security::ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     "SASL_PLAINTEXT".clone_into(&mut config.inter_broker_listener_name);
     config.enabled_sasl_mechanisms = vec![krabka_security::SaslMechanism::Plain];

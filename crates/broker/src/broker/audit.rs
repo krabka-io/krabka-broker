@@ -96,8 +96,21 @@ pub(super) fn start_audit_pipeline(
     Arc<krabka_audit::AuditLog>,
     Option<JoinHandle<()>>,
 ) {
+    // The decorator counts every Deny, so it goes on whether or not audit is
+    // enabled: with audit off the log below is the disabled one and drops the
+    // emit, leaving `authorization_denied_total` as the only denial record.
+    let install_auditing_authorizer =
+        |config: &mut BrokerConfig, log: &Arc<krabka_audit::AuditLog>| {
+            config.authorizer = Arc::new(crate::audit_authorizer::AuditingAuthorizer::new(
+                Arc::clone(&config.authorizer),
+                Arc::clone(log),
+                metrics.clone(),
+            ));
+        };
     if !config.audit_enabled {
-        return (None, krabka_audit::AuditLog::disabled(), None);
+        let log = krabka_audit::AuditLog::disabled();
+        install_auditing_authorizer(config, &log);
+        return (None, log, None);
     }
     let image = controller.current_image();
     let led_partition = (0_i32..)
@@ -205,10 +218,7 @@ pub(super) fn start_audit_pipeline(
         tracing::warn!("no audit partition led by this broker; audit records will drop");
         None
     };
-    config.authorizer = Arc::new(crate::audit_authorizer::AuditingAuthorizer::new(
-        Arc::clone(&config.authorizer),
-        log.clone(),
-    ));
+    install_auditing_authorizer(config, &log);
     (led_partition, log, writer_handle)
 }
 

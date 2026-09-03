@@ -61,6 +61,11 @@ pub(super) struct ReassignBatch {
     spent: HashSet<Uuid>,
     /// The cancels waiting on the append, to audit once it commits.
     applied: Vec<(String, Option<Uuid>)>,
+    /// The partitions that contributed a record to the append, in the
+    /// `"<topic>-<partition>"` spelling the audit resource carries. A row
+    /// already at its requested target plans no record and belongs in no audit
+    /// event, however successful its response row is.
+    pub(super) altered: HashSet<String>,
 }
 
 impl ReassignBatch {
@@ -170,6 +175,7 @@ pub(super) fn alter_one(
         Ok(Some(record)) => {
             let proposal_id = batch.spend(consumed);
             batch.records.push(MetadataRecord::V1Partition(record));
+            batch.altered.insert(cancel_target(topic, index));
             if target.is_none() {
                 batch
                     .applied
@@ -484,6 +490,61 @@ mod tests {
                 "{label}"
             );
             assert!(batch.records.is_empty(), "{label} must append nothing");
+        }
+        handle.shutdown().await;
+    }
+
+    /// A start whose target is already the partition's target plans no record,
+    /// and its successful row must not enter the audited set: an audit trail
+    /// that names it claims a reassignment that never happened.
+    #[tokio::test]
+    async fn only_a_start_that_plans_a_record_counts_as_altered() {
+        let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        })
+        .await;
+        let broker = handle.broker_arc_for_test();
+        let image = img_with(&[1, 2], &[1, 2], &[], &[], 1);
+        let principal = crate::test_support::principal("admin");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
+        let env = ReassignEnv {
+            broker: &broker,
+            image: &image,
+            ctx: &ctx,
+            allow_rf_change: true,
+        };
+
+        for (label, replicas, altered) in [
+            ("already at the requested target", vec![1, 2], false),
+            ("a target that moves a replica", vec![1, 3], true),
+        ] {
+            let mut batch = ReassignBatch::default();
+
+            let row = alter_one(
+                &env,
+                &mut batch,
+                "foo",
+                &ReassignablePartition {
+                    partition_index: 0,
+                    replicas: Some(replicas),
+                    ..Default::default()
+                },
+                FreezeMutationResolution::Admit,
+            );
+
+            check!(row.error_code == 0, "{label}");
+            check!(batch.records.is_empty() == !altered, "{label}");
+            check!(
+                batch.altered
+                    == if altered {
+                        ["foo-0".to_owned()].into()
+                    } else {
+                        HashSet::new()
+                    },
+                "{label}"
+            );
         }
         handle.shutdown().await;
     }

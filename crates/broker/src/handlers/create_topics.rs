@@ -19,7 +19,8 @@ use bytes::Bytes;
 use krabka_protocol::{
     Decode,
     owned::{
-        create_topics_request::CreateTopicsRequest, create_topics_response::CreatableTopicResult,
+        create_topics_request::CreateTopicsRequest,
+        create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
@@ -118,18 +119,7 @@ pub(crate) async fn handle(
     let req = CreateTopicsRequest::decode(&mut cursor, version)?;
     let image = broker.controller.current_image();
     if cluster_create_denied(broker, &image, ctx) {
-        let results = req
-            .topics
-            .iter()
-            .map(|topic| {
-                topic_error_result(
-                    topic.name.clone(),
-                    codes::CLUSTER_AUTHORIZATION_FAILED,
-                    Some("create-topics denied".into()),
-                )
-            })
-            .collect();
-        return encode_response(&create_topics_response(results, 0), version);
+        return encode_response(&cluster_denied_response(&req), version);
     }
 
     let controller = broker.controller.clone();
@@ -173,6 +163,9 @@ pub(crate) async fn handle(
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
     let preferred_site = resolve_preferred_leader_site(&image);
+    // KIP-108: a validate-only request runs every check and commits nothing,
+    // so the policy below sees it exactly as it sees a committing one.
+    let validate_only = req.validate_only;
 
     for topic_req in req.topics {
         let name = topic_req.name.clone();
@@ -268,52 +261,90 @@ pub(crate) async fn handle(
             continue;
         }
 
+        // The committing path learns of a name collision from
+        // `submit_change`, which decides it inside the quorum and is the
+        // race-safe answer. A dry run never gets there, so ask the image
+        // directly: Kafka's `validateOnly` reports `TopicExistsException` for
+        // an existing name, and it reports it ahead of the topic policy.
+        if validate_only && image.topic(&name).is_some() {
+            results.push(topic_error_result(name, codes::TOPIC_ALREADY_EXISTS, None));
+            continue;
+        }
+
+        // KIP-108: the operator-declared topic policy, on the effective
+        // partition count and replication factor the placement resolved and
+        // on the topic's own config overrides. Kafka calls
+        // `CreateTopicPolicy.validate` here too: after config validation, and
+        // before the records are generated.
+        if let Err(reason) = crate::topic_policy::check(
+            &broker.config.topic_policy,
+            &name,
+            Some(assignments.len()),
+            assignments.first().map(Vec::len),
+            &config_overrides,
+        ) {
+            results.push(topic_error_result(
+                name,
+                codes::POLICY_VIOLATION,
+                Some(reason),
+            ));
+            continue;
+        }
+
         let topic_id = Uuid::new_v4();
 
-        // Build the batch: one TopicRecord + N PartitionRecords.
-        let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
+        // A validate-only request has now passed every check the committing
+        // path runs, and commits nothing.
+        let error_code = if validate_only {
+            codes::NONE
+        } else {
+            // Build the batch: one TopicRecord + N PartitionRecords.
+            let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
 
-        let result = controller.submit_change(records).await;
-
-        let error_code = match result {
-            Ok(_) => {
-                materialize_topic(
-                    TopicMaterialization {
-                        partitions: &partitions_map,
-                        log_dirs: &log_dirs,
-                        log_config: &log_config,
-                        log_dir_status: &log_dir_status,
-                        producer_state: &producer_state,
-                        producer_id_expiration: broker.config.producer_id_expiration,
-                        max_produce_group: broker.config.max_produce_group,
-                        partition_writer_queue_depth: broker.config.partition_writer_queue_depth,
-                        diskless_wal_local_replica_count: broker
-                            .config
-                            .diskless_wal_local_replica_count,
-                        node_id,
-                        diskless,
-                        topic_id,
-                        hot_tail: &hot_tail,
-                        wal_shards: &wal_shards,
-                        controller: &controller,
-                    },
-                    &name,
-                    &assignments,
-                )
-                .await;
-                codes::NONE
-            }
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
-                codes::TOPIC_ALREADY_EXISTS
-            }
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
-                // E.g., `partitions <= 0` rejected by image::validate.
-                codes::INVALID_PARTITIONS
-            }
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => codes::NOT_CONTROLLER,
-            Err(e) => {
-                tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
-                codes::UNKNOWN_SERVER_ERROR
+            match controller.submit_change(records).await {
+                Ok(_) => {
+                    materialize_topic(
+                        TopicMaterialization {
+                            partitions: &partitions_map,
+                            log_dirs: &log_dirs,
+                            log_config: &log_config,
+                            log_dir_status: &log_dir_status,
+                            producer_state: &producer_state,
+                            producer_id_expiration: broker.config.producer_id_expiration,
+                            max_produce_group: broker.config.max_produce_group,
+                            partition_writer_queue_depth: broker
+                                .config
+                                .partition_writer_queue_depth,
+                            diskless_wal_local_replica_count: broker
+                                .config
+                                .diskless_wal_local_replica_count,
+                            node_id,
+                            diskless,
+                            topic_id,
+                            hot_tail: &hot_tail,
+                            wal_shards: &wal_shards,
+                            controller: &controller,
+                        },
+                        &name,
+                        &assignments,
+                    )
+                    .await;
+                    codes::NONE
+                }
+                Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
+                    codes::TOPIC_ALREADY_EXISTS
+                }
+                Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
+                    // E.g., `partitions <= 0` rejected by image::validate.
+                    codes::INVALID_PARTITIONS
+                }
+                Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
+                    codes::NOT_CONTROLLER
+                }
+                Err(e) => {
+                    tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
+                    codes::UNKNOWN_SERVER_ERROR
+                }
             }
         };
 
@@ -328,43 +359,104 @@ pub(crate) async fn handle(
         };
 
         if error_code == codes::NONE {
-            // KIP-525 (v5+): the row carries what the topic was created as, so
-            // a client needs no follow-up DescribeConfigs. Kafka gates the
-            // whole disclosure -- the effective configs, the partition count
-            // and the replication factor -- on `DescribeConfigs` on
-            // `Topic(name)`, and stamps `topicConfigErrorCode` when the
-            // principal may not be told. The create itself already happened
-            // either way. Below v5 none of those fields are on the wire, so
-            // the check is not worth an authorizer call.
-            let describable =
-                version < 5 || !describe_configs_denied(broker, &image, ctx, &result.name);
-            if describable {
-                result.num_partitions = i32::try_from(assignments.len()).unwrap_or(i32::MAX);
-                result.replication_factor = assignments
-                    .first()
-                    .and_then(|replicas| i16::try_from(replicas.len()).ok())
-                    .unwrap_or(-1);
-                if version >= 5 {
-                    // The image the create committed to, not the one the
-                    // request was authorized against: the overrides this very
-                    // request carried are part of the topic's effective
-                    // configuration.
-                    result.configs = Some(effective_topic_configs(
-                        &controller.current_image(),
-                        &result.name,
-                    ));
-                }
-            } else {
-                // Kafka leaves the partition count and the replication factor
-                // at -1 here too: `AdminClient` fails every accessor on the
-                // create result once `topicConfigErrorCode` is set, so a value
-                // in either field would never be read.
-                result.configs = Some(Vec::new());
-                result.topic_config_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            }
+            disclose_created_topic(
+                broker,
+                ctx,
+                &image,
+                version,
+                &CreatedTopic {
+                    controller: &controller,
+                    assignments: &assignments,
+                    overrides: &config_overrides,
+                },
+                &mut result,
+            );
         }
         results.push(result);
     }
 
-    finish_response(broker, ctx, results, quota.delay(), version)
+    finish_response(broker, ctx, results, validate_only, quota.delay(), version)
+}
+
+/// Fill in what KIP-525 discloses about a topic the create just made: its
+/// partition count, its replication factor and, on v5+, its whole effective
+/// configuration.
+///
+/// Split out of [`handle`] because the disclosure is one decision with two
+/// outcomes -- told or withheld -- and reads none of the create's own state
+/// beyond the row it fills.
+/// What the create decided about one topic, as the KIP-525 disclosure reads
+/// it: where to resolve the effective configuration from, the replica
+/// assignment the row's counts come from, and the override map the request
+/// carried.
+struct CreatedTopic<'a> {
+    controller: &'a std::sync::Arc<dyn crate::metadata_source::MetadataSource>,
+    assignments: &'a [Vec<krabka_raft::NodeId>],
+    overrides: &'a std::collections::BTreeMap<String, String>,
+}
+
+fn disclose_created_topic(
+    broker: &Broker,
+    ctx: &crate::handlers::RequestContext<'_>,
+    image: &krabka_metadata::MetadataImage,
+    version: i16,
+    created: &CreatedTopic<'_>,
+    result: &mut CreatableTopicResult,
+) {
+    // KIP-525 (v5+): the row carries what the topic was created as, so
+    // a client needs no follow-up DescribeConfigs. Kafka gates the
+    // whole disclosure -- the effective configs, the partition count
+    // and the replication factor -- on `DescribeConfigs` on
+    // `Topic(name)`, and stamps `topicConfigErrorCode` when the
+    // principal may not be told. The create itself already happened
+    // either way. Below v5 none of those fields are on the wire, so
+    // the check is not worth an authorizer call.
+    let describable = version < 5 || !describe_configs_denied(broker, image, ctx, &result.name);
+    if describable {
+        result.num_partitions = i32::try_from(created.assignments.len()).unwrap_or(i32::MAX);
+        result.replication_factor = created
+            .assignments
+            .first()
+            .and_then(|replicas| i16::try_from(replicas.len()).ok())
+            .unwrap_or(-1);
+        if version >= 5 {
+            // The overrides the create wrote -- or, on a `validate_only`
+            // row, would have written -- resolved against the current
+            // image. This is Kafka's
+            // `computeEffectiveTopicConfigs(creationConfigs)`: it builds
+            // the row from the request's own map, and `validateOnly`
+            // discards the records alone.
+            result.configs = Some(effective_topic_configs(
+                &created.controller.current_image(),
+                &result.name,
+                created.overrides,
+            ));
+        }
+    } else {
+        // Kafka leaves the partition count and the replication factor
+        // at -1 here too: `AdminClient` fails every accessor on the
+        // create result once `topicConfigErrorCode` is set, so a value
+        // in either field would never be read.
+        result.configs = Some(Vec::new());
+        result.topic_config_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+    }
+}
+
+/// Every topic row answered `CLUSTER_AUTHORIZATION_FAILED`, which is what a
+/// request that fails the whole-request `Cluster` `Create` gate gets: the
+/// handler learns nothing else about the topics, so no row can carry a
+/// different verdict.
+fn cluster_denied_response(req: &CreateTopicsRequest) -> CreateTopicsResponse {
+    let results = req
+        .topics
+        .iter()
+        .map(|topic| {
+            topic_error_result(
+                topic.name.clone(),
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                Some("create-topics denied".into()),
+            )
+        })
+        .collect();
+    create_topics_response(results, 0)
 }

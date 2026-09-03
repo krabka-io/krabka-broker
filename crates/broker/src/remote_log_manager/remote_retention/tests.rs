@@ -12,7 +12,7 @@ use uuid::Uuid;
 use super::*;
 use crate::remote_log_manager::{
     copy_eligible, now_ms,
-    test_support::{FakeWormArchive, rolled_log, seed_finished_segments, tp},
+    test_support::{FakeWormArchive, rolled_log, seed_finished_segments, tier, tp},
 };
 
 /// A partition whose `DeleteRecords` floor has never moved: offset 0, so no
@@ -275,13 +275,11 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
     let copied = copy_eligible(
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         &tp(),
         1,
         LeaderEpoch(0),
         exports.clone(),
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
     )
     .await;
     assert!(copied == exports.len());
@@ -343,13 +341,11 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
     copy_eligible(
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         &tp(),
         1,
         LeaderEpoch(0),
         exports.clone(),
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
     )
     .await;
 
@@ -707,13 +703,11 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
     let copied = copy_eligible(
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         &tp(),
         1,
         LeaderEpoch(0),
         exports.clone(),
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
     )
     .await;
     assert!(copied == exports.len());
@@ -775,13 +769,11 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
     // a failed copy in the middle of a tick leaves behind.
     let gapped = vec![exports[0].clone(), exports[2].clone()];
     let copied = copy_eligible(
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         &tp(),
         1,
         LeaderEpoch(0),
         gapped,
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
     )
     .await;
     assert!(copied == 2);
@@ -833,13 +825,11 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
     let copied = copy_eligible(
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         &tp(),
         1,
         LeaderEpoch(0),
         exports.clone(),
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
     )
     .await;
     assert!(copied == exports.len());

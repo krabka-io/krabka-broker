@@ -105,3 +105,81 @@ async fn authorized_broker_resource_is_applied() {
     };
     assert!(resp == expected);
 }
+
+/// A topic `AlterConfigs` replaces the whole override map, so the audit record
+/// has to name the keys the request deletes by omitting them as well as the
+/// ones it writes. A key restated at its stored value changed nothing, and a
+/// controller-managed key the record builder carries forward was never the
+/// client's to delete.
+///
+/// Keys only: a config value can be a password or a key store path, and none
+/// of them reach the record.
+#[test]
+fn a_topic_replacement_audits_every_key_whose_value_moves() {
+    use crate::{config_keys, handlers::audit_resource};
+
+    /// The topic's stored overrides, the complete replacement the request
+    /// carries, and the audit resources it earns.
+    type Audited<'a> = (
+        &'a str,
+        &'a [(&'a str, &'a str)],
+        &'a [(&'a str, &'a str)],
+        Vec<krabka_audit::AuditResource>,
+    );
+
+    let topic = |keys: &[&str]| {
+        let mut expected = vec![audit_resource("Topic", "orders")];
+        expected.extend(keys.iter().map(|key| audit_resource("ConfigKey", *key)));
+        expected
+    };
+    let cases: [Audited<'_>; 5] = [
+        (
+            "a replacement that drops a stored key",
+            &[
+                (config_keys::RETENTION_MS, "60000"),
+                (config_keys::CLEANUP_POLICY, "compact"),
+            ],
+            &[(config_keys::RETENTION_MS, "60000")],
+            topic(&[config_keys::CLEANUP_POLICY]),
+        ),
+        (
+            "a replacement that changes a stored value",
+            &[(config_keys::RETENTION_MS, "60000")],
+            &[(config_keys::RETENTION_MS, "120000")],
+            topic(&[config_keys::RETENTION_MS]),
+        ),
+        (
+            "a replacement that adds a key",
+            &[],
+            &[(config_keys::RETENTION_MS, "60000")],
+            topic(&[config_keys::RETENTION_MS]),
+        ),
+        (
+            "a replacement that restates every stored value",
+            &[(config_keys::RETENTION_MS, "60000")],
+            &[(config_keys::RETENTION_MS, "60000")],
+            topic(&[]),
+        ),
+        (
+            "a replacement that omits the controller-managed state",
+            &[
+                (config_keys::ELIGIBLE_LEADER_REPLICAS, "0:2,3:"),
+                (config_keys::RETENTION_MS, "60000"),
+            ],
+            &[(config_keys::RETENTION_MS, "60000")],
+            topic(&[]),
+        ),
+    ];
+
+    for (label, stored, replacement, expected) in cases {
+        let image =
+            crate::handlers::alter_configs::test_support::image_with_topic_config("orders", stored);
+
+        let audited = super::audit_resources_for(
+            &crate::handlers::alter_configs::test_support::topic_resource("orders", replacement),
+            &image,
+        );
+
+        assert!(audited == expected, "{label}");
+    }
+}

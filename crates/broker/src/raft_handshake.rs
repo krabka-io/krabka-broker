@@ -42,6 +42,14 @@ use self::sasl::run_inbound_sasl;
 /// authenticate, is the only code path that touches the cell.
 pub type ControllerHandleArc = Arc<OnceCell<Arc<ControllerHandle>>>;
 
+/// Late-bound handle to the broker's audit log.
+///
+/// The audit pipeline is built from the metadata source, so it does not exist
+/// until after the controller listener is already accepting connections. The
+/// cell is therefore filled once `Broker::start` has the log, and the SASL
+/// path emits nothing for the handful of connections that may land first.
+pub type AuditLogArc = Arc<OnceCell<Arc<krabka_audit::AuditLog>>>;
+
 /// API key constants. They match the wire-protocol IDs used elsewhere.
 const API_KEY_SASL_HANDSHAKE: i16 = 17;
 const API_KEY_SASL_AUTHENTICATE: i16 = 36;
@@ -60,9 +68,10 @@ pub struct BrokerRaftHandshake {
     pub enabled_sasl_mechanisms: Vec<SaslMechanism>,
     pub gssapi: Option<krabka_security::gssapi::GssapiConfig>,
     pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
-    pub oauthbearer_max_session_lifetime: Option<krabka_units::Time>,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,
+    /// Audit sink for the controller listener's own credential presentations.
+    pub audit_log: AuditLogArc,
     /// Maximum Kafka handshake frame body accepted before authentication.
     pub max_frame_bytes: usize,
     /// Authorizer that gates controller RPCs after authentication (H-1).
@@ -111,7 +120,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
         let mut authenticated_via_token = false;
         let mut cluster_alter_authorized = true;
         if self.protocol.requires_sasl() {
-            let (authenticated, via_token) = run_inbound_sasl(&mut *stream, self).await?;
+            let (authenticated, via_token) = run_inbound_sasl(&mut *stream, self, &peer).await?;
             self.authorize_cluster_action(&authenticated, &peer)?;
             cluster_alter_authorized = self.authorize_cluster_alter(&authenticated, &peer)?;
             principal = Some(authenticated);
@@ -149,9 +158,9 @@ mod tests {
             enabled_sasl_mechanisms: vec![],
             gssapi: None,
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-            oauthbearer_max_session_lifetime: None,
             protocol: ListenerProtocol::Plaintext,
             controller: Arc::new(OnceCell::new()),
+            audit_log: Arc::new(OnceCell::new()),
             max_frame_bytes: 4096,
             authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
         };

@@ -652,6 +652,95 @@ async fn duplicate_topic_reports_error_without_success_fields() {
 }
 
 #[tokio::test]
+async fn validate_only_answers_the_verdict_and_commits_nothing() {
+    /// One dry run: the topic name, and the row it has to answer with.
+    type DryRun<'a> = (&'a str, CreatableTopicResult);
+
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let committed = drive(&broker, &request(vec![topic("existing", 1, 1)]), &p, &peer).await;
+    assert!(committed.topics[0].error_code == codes::NONE);
+
+    let cases: [DryRun<'_>; 2] = [
+        (
+            // Kafka's `validateOnly` reports `TopicExistsException` for a name
+            // that is already taken, and the committing path never runs here
+            // to find that out.
+            "existing",
+            CreatableTopicResult {
+                name: "existing".into(),
+                error_code: codes::TOPIC_ALREADY_EXISTS,
+                num_partitions: -1,
+                replication_factor: -1,
+                ..Default::default()
+            },
+        ),
+        (
+            // KIP-525 answers a dry run with the configuration the topic
+            // *would* be created with: Kafka builds the row in `createTopic`
+            // from `computeEffectiveTopicConfigs(creationConfigs)`, and
+            // `validateOnly` discards the records alone. The list is filled in
+            // below, against the same image the handler resolved it from.
+            "fresh",
+            CreatableTopicResult {
+                name: "fresh".into(),
+                error_code: codes::NONE,
+                num_partitions: 1,
+                replication_factor: 1,
+                configs: None,
+                ..Default::default()
+            },
+        ),
+    ];
+
+    for (name, expected_row) in cases {
+        let req = CreateTopicsRequest {
+            validate_only: true,
+            ..request(vec![topic(name, 1, 1)])
+        };
+
+        let resp = drive(&broker, &req, &p, &peer).await;
+
+        assert!(resp.topics.len() == 1, "topic {name}");
+        // A refused row carries no configuration at all; the one that passed
+        // carries what the topic would have been created with. The dry run
+        // committed nothing, so that is the empty override map resolved
+        // against the image.
+        let configs = if expected_row.error_code == codes::NONE {
+            Some(effective_topic_configs(
+                &broker_handle.controller_image_for_test(),
+                name,
+                &std::collections::BTreeMap::new(),
+            ))
+        } else {
+            expected_row.configs.clone()
+        };
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            // A fresh topic_id is generated before the verdict on every row.
+            topics: vec![CreatableTopicResult {
+                topic_id: resp.topics[0].topic_id,
+                configs,
+                ..expected_row
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "topic {name}");
+    }
+
+    // The dry run for "fresh" passed every check and still committed nothing.
+    assert!(
+        broker_handle
+            .controller_image_for_test()
+            .topic("fresh")
+            .is_none()
+    );
+    broker_handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn strict_create_topics_rejects_after_quota_exhaustion() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     seed_controller_quota(&broker_handle, 2.0).await;
@@ -776,17 +865,21 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
 
     let image = broker_handle.controller_image_for_test();
     let described: Vec<CreatableTopicConfigs> =
-        crate::handlers::describe_configs::effective_topic_configs(&image, "mirrored")
-            .into_iter()
-            .map(|entry| CreatableTopicConfigs {
-                name: entry.name,
-                value: entry.value,
-                read_only: entry.read_only,
-                config_source: entry.config_source,
-                is_sensitive: entry.is_sensitive,
-                ..Default::default()
-            })
-            .collect();
+        crate::handlers::describe_configs::effective_topic_configs(
+            &image,
+            "mirrored",
+            image.topic_config("mirrored").expect("stored overrides"),
+        )
+        .into_iter()
+        .map(|entry| CreatableTopicConfigs {
+            name: entry.name,
+            value: entry.value,
+            read_only: entry.read_only,
+            config_source: entry.config_source,
+            is_sensitive: entry.is_sensitive,
+            ..Default::default()
+        })
+        .collect();
     assert!(resp.topics[0].configs.clone().expect("configs") == described);
     broker_handle.shutdown().await;
 }

@@ -21,7 +21,36 @@ use krabka_remote_storage::{
 use krabka_units::bytes;
 use uuid::Uuid;
 
-use crate::{partition::Partition, test_support::FakeMetadataSource};
+use crate::{
+    metrics::BrokerMetrics,
+    partition::Partition,
+    remote_log_manager::{ArchiveMode, RemoteTier},
+    test_support::FakeMetadataSource,
+};
+
+/// A `BrokerMetrics` shared by every tier a unit test builds.
+///
+/// One registry serves them all because these tests assert on the archive,
+/// not on the counters; a test that reads a counter builds its own metrics
+/// and its own [`RemoteTier`] so nothing else can move it.
+pub(crate) fn shared_test_metrics() -> &'static BrokerMetrics {
+    static METRICS: std::sync::OnceLock<BrokerMetrics> = std::sync::OnceLock::new();
+    METRICS.get_or_init(BrokerMetrics::new)
+}
+
+/// The tier a unit test sweeps, wired to the shared metrics.
+pub(crate) fn tier<'a>(
+    archive: ArchiveMode,
+    rsm: &'a Arc<dyn RemoteStorageManager>,
+    rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+) -> RemoteTier<'a> {
+    RemoteTier {
+        archive,
+        rsm,
+        rlmm,
+        metrics: shared_test_metrics(),
+    }
+}
 
 /// A stand-in write-once archive. Every copy seals a real (unsigned) WORM
 /// manifest over the segment's leader-epoch bytes, keeps that manifest in

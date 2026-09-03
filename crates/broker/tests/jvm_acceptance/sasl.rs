@@ -69,6 +69,7 @@ pub(crate) fn start_sasl_plaintext_broker(
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         }],
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
@@ -109,6 +110,17 @@ pub(crate) fn start_dual_mech_broker(
     admin: &str,
     admin_pass: &str,
 ) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    start_dual_mech_broker_with_reauth(admin, admin_pass, None)
+}
+
+/// [`start_dual_mech_broker`] with the KIP-368 `connections.max.reauth.ms`
+/// window set, so a JVM client on the listener must re-authenticate in band
+/// before `max_reauth` elapses or have its connection closed.
+pub(crate) fn start_dual_mech_broker_with_reauth(
+    admin: &str,
+    admin_pass: &str,
+    max_reauth: Option<krabka_units::Time>,
+) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
     use krabka_broker::config::ListenerSpec;
     use krabka_security::{ListenerProtocol, SaslMechanism};
 
@@ -145,6 +157,7 @@ pub(crate) fn start_dual_mech_broker(
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         }],
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![
@@ -153,6 +166,7 @@ pub(crate) fn start_dual_mech_broker(
             SaslMechanism::ScramSha512,
         ],
         super_users: maplit::hashset! {admin.to_string()},
+        connections_max_reauth: max_reauth,
         ..BrokerConfig::default()
     };
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
@@ -230,6 +244,7 @@ pub(crate) async fn start_oauthbearer_broker() -> (krabka_broker::BrokerHandle, 
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         }],
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::OAuthBearer],
@@ -295,6 +310,7 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         }],
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain],

@@ -37,6 +37,7 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
         protocol: ListenerProtocol::Plaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     config.inter_broker_listener_name = "PLAINTEXT".into();
     config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());

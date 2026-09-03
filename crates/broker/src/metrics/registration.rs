@@ -97,6 +97,7 @@ impl BrokerMetrics {
             client_software_versions: Family::default(),
             successful_authentication: Family::default(),
             failed_authentication: Family::default(),
+            authorization_denied: Family::default(),
             api_requests: Family::default(),
             unsupported_api_requests: Family::default(),
             request_duration_seconds: Family::new_with_constructor(|| {
@@ -120,6 +121,8 @@ impl BrokerMetrics {
             request_errors: Family::default(),
             tiered_storage_rlmm_topic_backed: Gauge::default(),
             tiered_storage_rlmm_bootstrap_attempts: Counter::default(),
+            worm_manifests_sealed_total: Counter::default(),
+            worm_manifest_seal_failures_total: Counter::default(),
             produce_message_conversions: Family::default(),
             fetch_message_conversions: Family::default(),
             unclean_leader_elections_total: Counter::default(),

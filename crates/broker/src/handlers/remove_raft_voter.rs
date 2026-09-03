@@ -98,6 +98,15 @@ pub(crate) async fn handle(
             .await,
     );
 
+    if error_code == codes::NONE {
+        crate::handlers::audit_admin_success(
+            broker.audit_log.as_ref(),
+            ctx,
+            "RemoveRaftVoter",
+            vec![crate::handlers::audit_resource("RaftVoter", id.to_string())],
+        );
+    }
+
     encode_resp(
         version,
         &RemoveRaftVoterResponse {

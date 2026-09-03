@@ -25,7 +25,7 @@
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
-use crate::{codes, config_keys};
+use crate::{codes, config_keys, topic_policy::TopicPolicy};
 
 /// Build the authoritative `V1TopicConfig` record for a topic resource. The
 /// request carries the *complete* set of non-default values, so the map this
@@ -33,6 +33,7 @@ use crate::{codes, config_keys};
 pub(super) fn topic_config_record(
     resource: &AlterConfigsResource,
     image: &krabka_metadata::MetadataImage,
+    policy: &TopicPolicy,
 ) -> Result<MetadataRecord, (i16, String)> {
     if image.topic(&resource.resource_name).is_none() {
         return Err((
@@ -64,6 +65,14 @@ pub(super) fn topic_config_record(
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_remote_storage_disable(current, &overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    // KIP-133: the operator-declared policy, on the map the topic ends up
+    // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
+    // and its `RequestMetadata` carries no partition count and no replication
+    // factor, so neither is passed here. It runs after the built-in
+    // validators, as `ConfigAdminManager` does: a config the broker itself
+    // refuses never reaches the policy.
+    crate::topic_policy::check(policy, &resource.resource_name, None, None, &overrides)
+        .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
     // Both validations read the client's map alone, so the carry-over comes
     // after them: a controller-managed key is not the client's to be judged
     // on, and it takes part in no cross-key rule.
@@ -88,6 +97,18 @@ mod tests {
     use crate::handlers::alter_configs::test_support::{
         image_with_topic, image_with_topic_config, topic_resource,
     };
+
+    /// The record builder under the empty policy, which is the state of a
+    /// broker with no `[topic_policy]` section. It shadows the glob-imported
+    /// name so the cases below read as the two-argument call they were
+    /// written as; the policy's own cases pass a real one to
+    /// [`super::topic_config_record`].
+    fn topic_config_record(
+        resource: &AlterConfigsResource,
+        image: &krabka_metadata::MetadataImage,
+    ) -> Result<MetadataRecord, (i16, String)> {
+        super::topic_config_record(resource, image, &TopicPolicy::default())
+    }
 
     #[test]
     fn topic_replacement_rejects_compaction_on_a_scheduled_topic() {
@@ -370,5 +391,66 @@ mod tests {
             overrides: maplit::btreemap! {crate::config_keys::RETENTION_MS.to_string() => "60000".to_string()},
         });
         assert!(record == expected);
+    }
+
+    #[test]
+    fn a_replacement_that_breaks_the_policy_is_a_policy_violation() {
+        let image = image_with_topic("orders");
+        let policy = TopicPolicy {
+            forbidden: [(
+                config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(),
+                "true".to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+            ..TopicPolicy::default()
+        };
+
+        let (code, message) = super::topic_config_record(
+            &topic_resource(
+                "orders",
+                &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
+            ),
+            &image,
+            &policy,
+        )
+        .expect_err("a forbidden value must be refused");
+
+        check!(code == codes::POLICY_VIOLATION);
+        check!(
+            message.contains(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_replacement_the_policy_allows_still_commits() {
+        let image = image_with_topic("orders");
+        let policy = TopicPolicy {
+            forbidden: [(
+                config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(),
+                "true".to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+            ..TopicPolicy::default()
+        };
+
+        let record = super::topic_config_record(
+            &topic_resource(
+                "orders",
+                &[(config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "false")],
+            ),
+            &image,
+            &policy,
+        )
+        .expect("the other value of a forbidden key is accepted");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: maplit::btreemap! {
+            config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_string() => "false".to_string()},
+        });
+        check!(record == expected);
     }
 }

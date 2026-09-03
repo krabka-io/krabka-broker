@@ -31,6 +31,8 @@ mod admin_describe_quorum;
 mod admin_harness;
 #[path = "admin_handlers/admin_listings.rs"]
 mod admin_listings;
+#[path = "admin_handlers/admin_topic_policy.rs"]
+mod admin_topic_policy;
 
 /// Kafka resource type id for a topic.
 const RESOURCE_TYPE_TOPIC: i8 = 2;

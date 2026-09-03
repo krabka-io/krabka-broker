@@ -275,7 +275,13 @@ pub(super) async fn start_broker_runtime(
         &supervisor_shutdown,
     );
     let kafka_swap_kickoff = kafka_swap_kickoff(config);
-    let remote = start_remote_storage(config, storage.0, controller, &supervisor_shutdown)?;
+    let remote = start_remote_storage(
+        config,
+        storage.0,
+        controller,
+        &metrics,
+        &supervisor_shutdown,
+    )?;
     let caches = start_runtime_watchers(
         config,
         controller,

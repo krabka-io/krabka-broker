@@ -184,9 +184,16 @@ maximum_cache_size = 50000
 expire_after_ms = 300000
 
 # SASL/OAUTHBEARER validation against an identity provider. Setting
-# `jwks_endpoint_uri` starts a background JWKS refresher at boot.
-#[oauthbearer]
-#jwks_endpoint_uri = "https://idp.example.com/.well-known/jwks.json"
+# `jwks_endpoint_uri` starts a background JWKS refresher at boot. With neither
+# `jwks_endpoint_uri` nor `introspection_endpoint_uri` set, a listener offering
+# OAUTHBEARER fails to start unless `allow_unsecured = true` opts into the
+# unsecured-JWS (`alg:none`) development validator. Never set that here.
+#
+# The `CLIENT` listener above offers OAUTHBEARER, so this section and its
+# endpoint are live rather than commented out: without them the broker refuses
+# to start.
+[oauthbearer]
+jwks_endpoint_uri = "https://idp.example.com/.well-known/jwks.json"
 #valid_issuer_uri = "https://idp.example.com/"
 #expected_audience = "krabka"
 #principal_claim_name = "sub"
@@ -194,6 +201,7 @@ expire_after_ms = 300000
 #jwks_expiry_seconds = 360
 #allowable_clock_skew_ms = 30000
 #idp_tls_trust = "/etc/krabka/tls/idp-ca.crt"
+#allow_unsecured = false
 
 # SASL/GSSAPI (Kerberos) needs a keytab and a reachable KDC.
 #[gssapi]

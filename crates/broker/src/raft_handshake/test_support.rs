@@ -88,9 +88,9 @@ pub(super) fn sasl_test_config() -> BrokerRaftHandshake {
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
         gssapi: None,
         oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-        oauthbearer_max_session_lifetime: None,
         protocol: ListenerProtocol::SaslPlaintext,
         controller: Arc::new(OnceCell::new()),
+        audit_log: Arc::new(OnceCell::new()),
         max_frame_bytes: 4096,
         authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
     }
@@ -119,12 +119,12 @@ pub(super) fn api_versions_body(version: i16) -> Vec<u8> {
     body.to_vec()
 }
 
-pub(super) fn sasl_authenticate_body() -> Vec<u8> {
+pub(super) fn sasl_authenticate_body(user: &str, password: &str) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.push(0);
-    payload.extend_from_slice(b"broker");
+    payload.extend_from_slice(user.as_bytes());
     payload.push(0);
-    payload.extend_from_slice(b"secret");
+    payload.extend_from_slice(password.as_bytes());
 
     let mut body = bytes::BytesMut::new();
     SaslAuthenticateRequest {

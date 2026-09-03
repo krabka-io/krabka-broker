@@ -150,9 +150,25 @@ sh_test(
     # The daemon is the one input Bazel cannot own: `no-sandbox` for its socket,
     # `external` so a pass is never cached against inputs that do not describe
     # the daemon's state.
+    #
+    # `no-remote-exec` keeps this one on the invoking machine, alone among the
+    # container suites. Two reasons, and the honest order is this one first: on
+    # a BuildBuddy microVM `image_load` reports success -- it prints the loaded
+    # blobs and the tag -- and `docker run` then cannot find the image:
+    #
+    #     docker.io/krabka-io/krabka-broker:dev
+    #     Unable to find image 'krabka-io/krabka-broker:dev' locally
+    #
+    # so the loader and the daemon are not sharing an image store there, and
+    # that is unresolved. The second reason is why it is not worth resolving:
+    # this test exists to run the binaries under *the base image's own loader
+    # and libc*, and a microVM substitutes a different docker and containerd for
+    # the ones the assertion is about. It is also a single `--help`, so it gains
+    # nothing from the fan-out the Kafka suites do.
     tags = [
         "docker",
         "external",
+        "no-remote-exec",
         "no-sandbox",
     ],
 )

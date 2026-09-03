@@ -85,14 +85,16 @@ pub(super) async fn process_resource(
     }
 
     let records = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => match topic_config_record(&resource, image) {
-            Ok(record) => vec![record],
-            Err((code, message)) => {
-                out.error_code = code;
-                out.error_message = Some(message);
-                return out;
+        RESOURCE_TYPE_TOPIC => {
+            match topic_config_record(&resource, image, &broker.config.topic_policy) {
+                Ok(record) => vec![record],
+                Err((code, message)) => {
+                    out.error_code = code;
+                    out.error_message = Some(message);
+                    return out;
+                }
             }
-        },
+        }
         RESOURCE_TYPE_BROKER => match broker_config_records(&resource, image) {
             Ok(records) => records,
             Err((code, message)) => {

@@ -21,7 +21,10 @@ use krabka_protocol::{
         renew_delegation_token_response::RenewDelegationTokenResponse,
     },
 };
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpStream,
+};
 
 use crate::wire::round_trip;
 
@@ -41,8 +44,8 @@ const EXPIRE_DT_VERSION: i16 = krabka_protocol::owned::expire_delegation_token_r
 const DESCRIBE_DT_VERSION: i16 =
     krabka_protocol::owned::describe_delegation_token_request::MAX_VERSION;
 
-pub(crate) async fn send_create_delegation_token(
-    stream: &mut TcpStream,
+pub(crate) async fn send_create_delegation_token<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
     corr_id: i32,
     req: &CreateDelegationTokenRequest,
 ) -> Result<CreateDelegationTokenResponse, io::Error> {

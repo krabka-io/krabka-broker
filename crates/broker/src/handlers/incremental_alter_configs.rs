@@ -90,10 +90,36 @@ pub(crate) async fn handle(
 
     let image = broker.controller.current_image();
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
+    let validate_only = req.validate_only;
+    let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
 
     for resource in req.resources {
-        responses.push(process_resource(broker, &image, ctx, resource, req.validate_only).await);
+        // The keys, never the values: a config value can be a password or a
+        // key store path, and the record only has to say who changed what.
+        let named: Vec<krabka_audit::AuditResource> =
+            std::iter::once(crate::handlers::audit_resource(
+                super::alter_configs::config_resource_type(resource.resource_type),
+                resource.resource_name.clone(),
+            ))
+            .chain(
+                resource.configs.iter().map(|config| {
+                    crate::handlers::audit_resource("ConfigKey", config.name.clone())
+                }),
+            )
+            .collect();
+        let response = process_resource(broker, &image, ctx, resource, validate_only).await;
+        // A `--dry-run` request stores nothing, so it changed no resource.
+        if response.error_code == codes::NONE && !validate_only {
+            audited.extend(named);
+        }
+        responses.push(response);
     }
+    crate::handlers::audit_admin_success(
+        broker.audit_log.as_ref(),
+        ctx,
+        "IncrementalAlterConfigs",
+        audited,
+    );
 
     let resp = IncrementalAlterConfigsResponse {
         responses,
@@ -180,14 +206,16 @@ async fn process_resource(
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
 
     match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => match topic_config_record(&resource, image) {
-            Ok(record) => to_submit.push(record),
-            Err((code, message)) => {
-                out.error_code = code;
-                out.error_message = Some(message);
-                return out;
+        RESOURCE_TYPE_TOPIC => {
+            match topic_config_record(&resource, image, &broker.config.topic_policy) {
+                Ok(record) => to_submit.push(record),
+                Err((code, message)) => {
+                    out.error_code = code;
+                    out.error_message = Some(message);
+                    return out;
+                }
             }
-        },
+        }
         RESOURCE_TYPE_BROKER => {
             handle_broker_scoped(&resource, image, &mut out, &mut to_submit);
             if out.error_code != codes::NONE {

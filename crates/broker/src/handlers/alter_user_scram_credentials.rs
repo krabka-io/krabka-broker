@@ -135,6 +135,20 @@ pub(crate) async fn handle(
         apply_submit_error(&mut user_results, &msg);
     }
 
+    // KIP-554 redaction: the request carries the client-side PBKDF2 output and
+    // the broker derives `stored_key` and `server_key` from it. None of the
+    // three reaches the audit record — only the user whose credential changed.
+    crate::handlers::audit_admin_success(
+        broker.audit_log.as_ref(),
+        ctx,
+        "AlterUserScramCredentials",
+        user_results
+            .iter()
+            .filter(|result| result.error_code == codes::NONE)
+            .map(|result| crate::handlers::audit_resource("User", result.user.clone()))
+            .collect(),
+    );
+
     AlterUserScramCredentialsResponse {
         results: user_results,
         ..Default::default()

@@ -35,7 +35,7 @@ mod response;
 /// `benches/perf_deferrals.rs`.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod response_framing;
-mod sasl;
+pub(crate) mod sasl;
 mod session;
 #[cfg(test)]
 mod test_support;
@@ -253,7 +253,8 @@ async fn serve_connection_stream<S>(
         &broker.config.enabled_sasl_mechanisms,
     )
     .to_owned();
-    let mut auth = initial_connection_auth(is_sasl_listener, mtls_principal);
+    let mut auth =
+        initial_connection_auth(is_sasl_listener, mtls_principal, &broker.audit_log, &peer);
     let connection_id = uuid::Uuid::new_v4().to_string();
     // Track live connections for the duration of this serve loop. The
     // gauge is decremented when `_conn` drops on any loop exit (EOF,
@@ -262,6 +263,10 @@ async fn serve_connection_stream<S>(
     // Resolved once: the listener's `connections.max.idle.ms`, with its
     // per-listener override already applied. `next_connection_frame` re-arms
     // the deadline from it on every frame read.
+    // Resolved once, like the idle window: the listener's KIP-368
+    // re-authentication window, which every mechanism handler clamps its
+    // session to.
+    let max_reauth = broker.config.connections_max_reauth_for(&spec.name);
     let frame_wait = FrameWaitPolicy {
         idle: broker.config.connections_max_idle_for(&spec.name),
         peer,
@@ -294,6 +299,25 @@ async fn serve_connection_stream<S>(
                 .record_connection_close(crate::metrics::ConnectionCloseReason::DecodeError);
             break;
         };
+        // KIP-368 session expiry, enforced where Kafka enforces it: on the
+        // request that arrives past the deadline, not on a timer racing the
+        // read. A client re-authenticates only when it next has something to
+        // send, so it routinely opens the exchange after its window closed;
+        // `expired_for_request` lets the two SASL api_keys through so that
+        // exchange runs, and ends the connection on anything else.
+        if is_sasl_listener && auth.expired_for_request(parsed.api_key, crate::time_util::now_ms())
+        {
+            tracing::info!(
+                api_key = parsed.api_key,
+                principal = ?auth.principal().map(|p| p.name.as_str()),
+                listener = %spec.name,
+                "SASL session expired, closing connection (KIP-368)"
+            );
+            broker
+                .metrics
+                .record_connection_close(crate::metrics::ConnectionCloseReason::SaslSessionExpired);
+            break;
+        }
         // Per-state request gate: on SASL listeners, gate every api_key
         // through `auth.allows_request(api_key)`. This covers:
         //   - Anonymous / Negotiating: only the pre-auth allowlist
@@ -327,12 +351,25 @@ async fn serve_connection_stream<S>(
             // named, or under the `Unknown` sentinel when none did. Without
             // it a peer that opens a connection on a SASL listener and
             // immediately sends Produce is closed and counted nowhere.
-            broker.metrics.record_authentication(
-                auth.negotiated_mechanism()
-                    .map_or(crate::metrics::UNKNOWN_LABEL, |mechanism| {
-                        mechanism.wire_name()
-                    }),
-                false,
+            let mech_label = auth
+                .negotiated_mechanism()
+                .map_or(crate::metrics::UNKNOWN_LABEL, |mechanism| {
+                    mechanism.wire_name()
+                });
+            broker.metrics.record_authentication(mech_label, false);
+            sasl::emit_authentication(
+                &broker.audit_log,
+                &peer,
+                mech_label,
+                auth.principal().map_or_else(
+                    || krabka_audit::AuditPrincipal {
+                        name: String::new(),
+                        auth_method: format!("{:?}", krabka_security::AuthMethod::Anonymous),
+                    },
+                    sasl::audit_principal,
+                ),
+                krabka_audit::AuditOutcome::Failure,
+                Some("request blocked by per-state auth gate".to_string()),
             );
             break;
         }
@@ -365,9 +402,16 @@ async fn serve_connection_stream<S>(
         // table because handlers receive only `&Broker` and have no way to
         // touch `auth`. Returning `Some(SaslFrameOutcome)` short-circuits
         // the normal registry path for that frame.
-        if let Some(outcome) = try_handle_sasl_frame(&broker, &parsed, &mut auth, &sasl_mechanisms)
-            .instrument(req_span.clone())
-            .await
+        if let Some(outcome) = try_handle_sasl_frame(
+            &broker,
+            &parsed,
+            &mut auth,
+            &sasl_mechanisms,
+            max_reauth,
+            &peer,
+        )
+        .instrument(req_span.clone())
+        .await
         {
             let SaslFrameOutcome {
                 response_bytes,
@@ -401,6 +445,7 @@ async fn serve_connection_stream<S>(
                 &parsed,
                 &auth,
                 &peer,
+                &spec.name,
                 req_span.clone(),
             )
             .await

@@ -15,7 +15,8 @@ use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, scram_jaas, start_dual_mech_broker, write_client_props,
+    nc_check_connectivity, plain_jaas, scram_jaas, start_dual_mech_broker,
+    start_dual_mech_broker_with_reauth, write_client_props,
 };
 
 /// End-to-end `SASL_PLAINTEXT` + SCRAM-SHA-512 drive of the JVM tools
@@ -377,6 +378,133 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
         let needle = format!("msg-{i}");
         assert!(s.contains(&needle), "consumer missing {needle}: {s:?}");
     }
+
+    broker.shutdown().await;
+}
+
+/// KIP-368 in-band re-authentication under a two-second
+/// `connections.max.reauth.ms`, driven by the JVM client's own re-auth code.
+///
+/// `kafka-verifiable-producer --throughput 1 --max-messages 10` keeps one
+/// connection open for about ten seconds, which spans five re-auth windows.
+/// The JVM `SaslClientAuthenticator` re-authenticates in band whenever it is
+/// past the window the broker reported in `session_lifetime_ms`, so a run
+/// that produces all ten records with no error is the client and the broker
+/// agreeing on the window and on the SCRAM re-auth exchange. Without the
+/// re-auth path, the broker would close the connection at the two-second
+/// mark and the tool would report send errors.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window() {
+    const TOPIC: &str = "krabka-sasl-scram-reauth-itest";
+    const ADMIN: &str = "admin";
+    const ADMIN_PASS: &str = "admin-secret";
+    const ALICE: &str = "alice";
+    const ALICE_PASS: &str = "alice-secret";
+
+    let (broker, _dir) =
+        start_dual_mech_broker_with_reauth(ADMIN, ADMIN_PASS, Some(krabka_units::secs(2))).await;
+    nc_check_connectivity();
+
+    let admin_props = write_client_props(&format!(
+        "security.protocol=SASL_PLAINTEXT\n\
+         sasl.mechanism=PLAIN\n\
+         sasl.jaas.config={}\n",
+        plain_jaas(ADMIN, ADMIN_PASS),
+    ));
+    docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        &admin_props.mount_str(),
+        &[
+            "kafka-configs",
+            "--alter",
+            "--entity-type",
+            "users",
+            "--entity-name",
+            ALICE,
+            "--add-config",
+            &format!("SCRAM-SHA-512=[password={ALICE_PASS}]"),
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--command-config",
+            "/client.properties",
+        ],
+    );
+    docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        &admin_props.mount_str(),
+        &[
+            "kafka-topics",
+            "--create",
+            "--if-not-exists",
+            "--topic",
+            TOPIC,
+            "--partitions",
+            "1",
+            "--replication-factor",
+            "1",
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--command-config",
+            "/client.properties",
+        ],
+    );
+    docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        &admin_props.mount_str(),
+        &[
+            "kafka-acls",
+            "--add",
+            "--allow-principal",
+            &format!("User:{ALICE}"),
+            "--operation",
+            "Write",
+            "--topic",
+            TOPIC,
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--command-config",
+            "/client.properties",
+        ],
+    );
+
+    // Ten records at one per second: about ten seconds on one connection,
+    // five times the two-second re-auth window.
+    let alice_props = write_client_props(&format!(
+        "security.protocol=SASL_PLAINTEXT\n\
+         sasl.mechanism=SCRAM-SHA-512\n\
+         sasl.jaas.config={}\n\
+         enable.idempotence=false\n\
+         acks=1\n",
+        scram_jaas(ALICE, ALICE_PASS),
+    ));
+    let out = docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        &alice_props.mount_str(),
+        &[
+            "kafka-verifiable-producer",
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--topic",
+            TOPIC,
+            "--max-messages",
+            "10",
+            "--throughput",
+            "1",
+            "--producer.config",
+            "/client.properties",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let acked = stdout.matches("producer_send_success").count();
+    assert!(
+        acked == 10,
+        "expected 10 acked records across the re-auth windows, got {acked}: {stdout}"
+    );
+    assert!(
+        !stdout.contains("producer_send_error"),
+        "producer reported send errors under in-band re-auth: {stdout}"
+    );
 
     broker.shutdown().await;
 }

@@ -206,13 +206,24 @@ pub(super) fn describe_one(
 /// this is the one computation krabka answers both with. The synonym chain and
 /// the documentation are left out because `CreatableTopicConfigs` has no
 /// fields for them.
+/// A topic's whole effective configuration, resolved against a caller-supplied
+/// override map rather than the stored one.
+///
+/// `CreateTopics` (KIP-525) is the caller, and the map it passes is the one the
+/// create writes. That is also the answer for a `validateOnly` request, where
+/// the topic never reaches the image: Kafka builds the same row from
+/// `computeEffectiveTopicConfigs(creationConfigs)` and discards only the
+/// *records*, so a dry run reports what the topic would be created as instead
+/// of the bare cluster defaults a lookup of an absent topic would give.
 pub(crate) fn effective_topic_configs(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
+    overrides: &std::collections::BTreeMap<String, String>,
 ) -> Vec<DescribeConfigsResourceResult> {
-    topic_configs(
+    topic_configs_with_overrides(
         image,
         topic,
+        Some(overrides),
         &|_| true,
         EntryOptions {
             include_synonyms: false,
@@ -232,7 +243,18 @@ fn topic_configs(
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
-    let overrides = image.topic_config(topic);
+    topic_configs_with_overrides(image, topic, image.topic_config(topic), wanted, options)
+}
+
+/// [`topic_configs`] against a caller-supplied override map, which is what a
+/// not-yet-committed topic has instead of a stored one.
+fn topic_configs_with_overrides(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+    overrides: Option<&std::collections::BTreeMap<String, String>>,
+    wanted: &impl Fn(&str) -> bool,
+    options: EntryOptions,
+) -> Vec<DescribeConfigsResourceResult> {
     let cluster_defaults = image.default_broker_config();
     let freeze = write_freeze_override(image, topic);
 

@@ -125,7 +125,11 @@ pub(crate) async fn handle(
         if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
             return Ok((cluster_authorization_failed(), version));
         }
-        let Some(authenticated_node) = broker.wal_shards.authenticated_node_id(ctx.principal)
+        let on_inter_broker_listener =
+            ctx.connection_listener_name == broker.config.inter_broker_listener_name;
+        let Some(authenticated_node) = broker
+            .wal_shards
+            .authenticated_node_id(ctx.principal, on_inter_broker_listener)
         else {
             return Ok((cluster_authorization_failed(), version));
         };
@@ -460,7 +464,8 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let principal = wal_peer_principal();
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
-        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
+        let listener = broker.config.inter_broker_listener_name.clone();
+        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, &listener);
 
         for version in [KIP_595_FETCH_VERSION, 18] {
             let request = fetch_request(
@@ -518,7 +523,8 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let principal = wal_peer_principal();
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
-        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
+        let listener = broker.config.inter_broker_listener_name.clone();
+        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, &listener);
         let request = fetch_request(
             QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
             krabka_raft::NodeId(2),
@@ -593,6 +599,41 @@ mod tests {
         let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
             .await
             .expect("deny WAL fetch");
+
+        assert!(response.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED);
+        assert!(response.responses.is_empty());
+        broker_handle.shutdown().await;
+    }
+
+    /// The `broker-<id>` naming convention only names a WAL voter on the
+    /// inter-broker listener. A client listener carries no such promise: any
+    /// client free to pick its own SASL username could otherwise call itself
+    /// `broker-2` and read another voter's WAL shard.
+    #[tokio::test]
+    async fn wal_fetch_on_a_client_listener_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = wal_peer_principal();
+        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let context =
+            RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "EXTERNAL");
+        let request = fetch_request(
+            QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
+            krabka_raft::NodeId(2),
+            0,
+            -1,
+            0,
+            krabka_units::mebibytes(1),
+        );
+        let mut encoded = BytesMut::new();
+        request
+            .encode(&mut encoded, KIP_595_FETCH_VERSION)
+            .expect("encode WAL fetch");
+
+        let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
+            .await
+            .expect("refuse WAL fetch");
 
         assert!(response.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED);
         assert!(response.responses.is_empty());

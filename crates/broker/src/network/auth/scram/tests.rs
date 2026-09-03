@@ -98,6 +98,7 @@ mod token_scram_fallback {
             },
             &mut auth,
             controller,
+            None,
         );
         assert!(resp1.error_code == 0, "round 1 must succeed for happy path");
 
@@ -110,6 +111,7 @@ mod token_scram_fallback {
             },
             &mut auth,
             controller,
+            None,
         );
         (auth, resp2)
     }
@@ -148,6 +150,7 @@ mod token_scram_fallback {
             },
             &mut auth,
             &*controller,
+            None,
         );
         // The server-first message is nonce-dependent, so pin
         // non-emptiness rather than exact bytes.
@@ -208,6 +211,7 @@ mod token_scram_fallback {
             },
             &mut auth,
             &*controller,
+            None,
         );
 
         check!(response.error_code == SASL_AUTHENTICATION_FAILED);
@@ -297,6 +301,7 @@ mod token_scram_fallback {
             },
             &mut auth,
             &*controller,
+            None,
         );
         assert!(
             resp.error_code == SASL_AUTHENTICATION_FAILED,
@@ -337,6 +342,7 @@ mod token_scram_fallback {
             },
             &mut auth,
             &*controller,
+            None,
         );
         assert!(
             resp.error_code == SASL_AUTHENTICATION_FAILED,

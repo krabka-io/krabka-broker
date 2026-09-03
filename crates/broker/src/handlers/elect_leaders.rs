@@ -173,6 +173,28 @@ pub(crate) async fn handle(
     // a false record of a data-losing election.
     batch.audit_applied(broker, ctx, submit_failure.as_deref());
 
+    // The gated transitions above audit themselves as `PrivilegedAction`. An
+    // ordinary preferred election spends no approval and would otherwise leave
+    // no record, so every partition that actually moved is audited here.
+    crate::handlers::audit_admin_success(
+        broker.audit_log.as_ref(),
+        ctx,
+        "ElectLeaders",
+        by_topic
+            .iter()
+            .flat_map(|(topic, rows)| {
+                rows.iter()
+                    .filter(|row| row.error_code == codes::NONE)
+                    .map(move |row| {
+                        crate::handlers::audit_resource(
+                            "Partition",
+                            format!("{topic}-{}", row.partition_id),
+                        )
+                    })
+            })
+            .collect(),
+    );
+
     // Build response.
     let replica_election_results: Vec<ReplicaElectionResult> = by_topic
         .into_iter()

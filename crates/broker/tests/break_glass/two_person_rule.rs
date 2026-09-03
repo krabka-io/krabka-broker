@@ -16,6 +16,7 @@ use crate::{
     cluster::boot,
     principals::{ALICE, BOB, CAROL, MALLORY, principal},
     proposals::{ACTION_DELETE_TOPIC, TTL_CONFIGURED, approve, open, propose, stored},
+    support,
     topics::{create_topic, delete_topic, topic_exists},
 };
 
@@ -206,4 +207,46 @@ async fn a_principal_outside_the_approver_set_is_refused() {
     check!(stored(&alice, id).await.approvals.is_empty());
 
     cluster.broker.shutdown().await;
+}
+
+/// An approval joins back to the login that made it.
+///
+/// The `PrivilegedAction` row says `User:bob` approved from an address. On its
+/// own that is a claim about a name; what makes it evidence is the
+/// `Authentication` row from the same session, which says that address
+/// presented Bob's credential to this broker. The two rows join by
+/// `principal.name` and `src_endpoint`, so this case reads the approval back
+/// off the audit topic and then finds its login.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approval_joins_to_the_login_that_made_it() {
+    let cluster = boot().await;
+    let alice = cluster.client(ALICE).await;
+    let bob = cluster.client(BOB).await;
+    create_topic(&alice, "doomed", 1).await;
+
+    let id = open(&alice, ACTION_DELETE_TOPIC, "doomed").await;
+    check!(approve(&bob, id).await.approvals_held == 1);
+
+    let records = support::wait_for_audit_record(&alice, "delete_topic.approved", |j| {
+        j["class_uid"] == 6003 && j["api"]["operation"] == "delete_topic.approved"
+    })
+    .await;
+    let approval = records
+        .iter()
+        .find(|j| j["class_uid"] == 6003 && j["api"]["operation"] == "delete_topic.approved")
+        .expect("the approve record just waited for");
+    check!(approval["actor"]["user"]["name"] == principal(BOB).as_str());
+
+    // The login the approval rests on: same person, same peer, and it
+    // succeeded.
+    let login = records.iter().find(|j| {
+        j["class_uid"] == 3002
+            && j["status_id"] == 1
+            && j["actor"]["user"]["name"] == approval["actor"]["user"]["name"]
+            && j["src_endpoint"] == approval["src_endpoint"]
+    });
+    assert!(
+        login.is_some(),
+        "no Authentication row joins to {approval:?}; rows were {records:?}"
+    );
 }

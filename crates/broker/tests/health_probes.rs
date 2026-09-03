@@ -63,6 +63,7 @@ fn loopback_config(log_dir: &std::path::Path) -> BrokerConfig {
         protocol: ListenerProtocol::Plaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "PLAINTEXT".into();
     cfg

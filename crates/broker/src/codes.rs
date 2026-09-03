@@ -551,6 +551,8 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::StretchWitnessRoleOutsideWitnessSite { .. }
         | BrokerError::StretchMinInsyncUnsafe { .. }
         | BrokerError::SaslListenerNoMechanisms { .. }
+        | BrokerError::PlainListenerNoCredentials { .. }
+        | BrokerError::SuperUserAnonymous
         | BrokerError::GssapiConfigMissing
         | BrokerError::Tls(_)
         | BrokerError::BootstrapFile { .. }

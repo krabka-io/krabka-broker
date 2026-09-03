@@ -44,6 +44,7 @@ mod tests {
             protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
         }
     }
 

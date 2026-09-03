@@ -111,6 +111,35 @@ macro_rules! operations_fields {
             /// from `DescribeConfigs`.
             pub connections_max_idle_overrides: BTreeMap<String, Time>,
 
+            /// KIP-368 `connections.max.reauth.ms`: the maximum lifetime of an
+            /// authenticated SASL session before the client must
+            /// re-authenticate in band. The broker reports the window to the
+            /// client as `SaslAuthenticate.session_lifetime_ms`, and closes
+            /// the connection when it elapses without a fresh
+            /// `SaslHandshake` + `SaslAuthenticate` pair carrying the same
+            /// principal.
+            ///
+            /// It applies to every mechanism. PLAIN, SCRAM and GSSAPI
+            /// credentials carry no lifetime of their own, so this is the only
+            /// ceiling on them; an OAUTHBEARER session or a KIP-48
+            /// delegation-token session expires at the earlier of its
+            /// credential's expiry and this window, as Kafka's
+            /// `SaslServerAuthenticator` computes it.
+            ///
+            /// `None`, and any non-positive value, disable re-authentication:
+            /// sessions then last until the credential's own expiry, if it has
+            /// one, and otherwise for the life of the connection. That is
+            /// Kafka's default of 0.
+            pub connections_max_reauth: Option<Time>,
+
+            /// Per-listener overrides of `connections_max_reauth`, keyed by
+            /// listener name. Kafka spells the same override
+            /// `listener.name.<name>.<mechanism>.connections.max.reauth.ms`;
+            /// krabka keys it by listener alone, because the window it
+            /// enforces is a property of the listener rather than of the
+            /// mechanism a client happens to pick on it.
+            pub connections_max_reauth_overrides: BTreeMap<String, Time>,
+
             /// Partition disk-usage scan cadence. A zero interval disables the
             /// scanner entirely and spawns no background task. Production default:
             /// 60s. On each tick the scanner walks every known (topic, partition)

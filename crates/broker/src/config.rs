@@ -31,7 +31,7 @@ mod validate;
 
 pub use self::{
     break_glass::{BackgroundUncleanRecovery, BreakGlassConfig},
-    broker_config::BrokerConfig,
+    broker_config::{BrokerConfig, PlainCredentials},
     feature_flags::BrokerFeatureFlags,
     freeze::FreezeConfig,
     listener::{InterBrokerCredentials, ListenerSpec},

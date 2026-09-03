@@ -8,8 +8,11 @@
 
 use krabka_units::{Time, convert::TimeExt as _};
 
-use super::oauthbearer::{
-    DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_INTROSPECTION_HTTP_TIMEOUT, FileOAuthBearerConfig,
+use super::{
+    FileConfigError,
+    oauthbearer::{
+        DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_INTROSPECTION_HTTP_TIMEOUT, FileOAuthBearerConfig,
+    },
 };
 
 fn configure_introspection_validator(
@@ -74,22 +77,40 @@ fn configure_introspection_validator(
     );
 }
 
+/// Whether any resolved listener offers SASL/OAUTHBEARER. A listener's own
+/// `sasl_mechanisms` wins over the broker-wide list, matching
+/// [`crate::config::BrokerConfig::validate`].
+fn oauthbearer_listener_enabled(cfg: &crate::config::BrokerConfig) -> bool {
+    cfg.listeners.iter().any(|listener| {
+        listener
+            .sasl_mechanisms
+            .as_ref()
+            .unwrap_or(&cfg.enabled_sasl_mechanisms)
+            .contains(&krabka_security::SaslMechanism::OAuthBearer)
+    })
+}
+
+/// Build the SASL/OAUTHBEARER validator named by `[oauthbearer]`.
+///
+/// # Errors
+///
+/// Returns [`FileConfigError::InvalidConfig`] when the table selects no
+/// endpoint, or is absent entirely — either of which would silently fall back
+/// to the unsecured-JWS (`alg:none`) validator — while a listener enables
+/// OAUTHBEARER and `allow_unsecured` is not `true`.
 pub(super) fn apply_oauthbearer(
     oauth: Option<FileOAuthBearerConfig>,
     cfg: &mut crate::config::BrokerConfig,
-) {
-    let Some(oauth) = oauth else { return };
+) -> Result<(), FileConfigError> {
+    // An absent `[oauthbearer]` table is an endpoint-less one: it must still
+    // reach the `(None, None)` arm below, or a listener enabling OAUTHBEARER
+    // would keep the unsecured (`alg:none`) validator without the opt-in.
+    let oauth = oauth.unwrap_or_default();
     // Thread the IdP trust-store path
     // unconditionally. Inert when no HTTPS-bound endpoint is set,
     // and harmlessly carried for the unsecured validator.
     cfg.oauthbearer_idp_tls_trust
         .clone_from(&oauth.idp_tls_trust);
-    // Optional session-lifetime cap. Carried unconditionally;
-    // the auth handler interprets None as "no cap".
-    cfg.oauthbearer_max_session_lifetime = oauth
-        .max_session_lifetime_seconds
-        .map(|seconds| Time::from_secs(i64::from(seconds)));
-
     // Compile the JsonPath expression once at load time;
     // a malformed expression panics with a descriptive error.
     let custom_claim_check_compiled = oauth.custom_claim_check.as_deref().map(|expr| {
@@ -190,7 +211,26 @@ pub(super) fn apply_oauthbearer(
             );
         }
         (None, None) => {
-            // Unsecured-JWS validation (development only).
+            // Unsecured-JWS validation (development only), behind an
+            // explicit opt-in so a misspelled endpoint key cannot quietly
+            // downgrade a listener to trust-the-client.
+            if oauth.allow_unsecured.unwrap_or(false) {
+                tracing::warn!(concat!(
+                    "[oauthbearer]: allow_unsecured = true - SASL/OAUTHBEARER tokens ",
+                    "are accepted without signature verification (alg:none). ",
+                    "Development only."
+                ));
+            } else if oauthbearer_listener_enabled(cfg) {
+                return Err(FileConfigError::InvalidConfig(
+                    concat!(
+                        "[oauthbearer]: a listener enables OAUTHBEARER but neither ",
+                        "jwks_endpoint_uri nor introspection_endpoint_uri is set; that ",
+                        "falls back to the unsecured-JWS (alg:none) validator. Configure ",
+                        "an endpoint, or set allow_unsecured = true for development."
+                    )
+                    .to_owned(),
+                ));
+            }
             let mut v = krabka_security::UnsecuredJwsValidator::default();
             if let Some(name) = oauth.principal_claim_name {
                 v.principal_claim_name = name;
@@ -209,6 +249,7 @@ pub(super) fn apply_oauthbearer(
             cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Unsecured(v);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -216,7 +257,7 @@ mod tests {
     use assert2::{assert, check};
     use krabka_units::{minutes, secs};
 
-    use crate::file_config::FileConfig;
+    use crate::file_config::{FileConfig, FileConfigError};
 
     #[test]
     fn apply_to_oauthbearer_jwks_selects_signed_validator() {
@@ -245,8 +286,58 @@ jwks_expiry_seconds = 360
         }
     }
 
+    /// A listener offering OAUTHBEARER plus an endpoint-less `[oauthbearer]`
+    /// table — the shape a misspelled `jwks_endpoint_uri` key produces.
+    fn oauthbearer_listener_toml(extra: &str) -> String {
+        format!(
+            r#"
+[[listeners]]
+name = "SASL"
+bind_addr = "0.0.0.0:9092"
+advertised = "host:9092"
+protocol = "SaslPlaintext"
+sasl_config = {{ enabled_mechanisms = ["OAUTHBEARER"] }}
+
+[oauthbearer]
+principal_claim_name = "sub"
+allowable_clock_skew_ms = 5000
+{extra}
+"#
+        )
+    }
+
     #[test]
-    fn apply_to_oauthbearer_without_jwks_stays_unsecured() {
+    fn apply_to_oauthbearer_without_endpoint_rejects_unsecured_fallback() {
+        let file: FileConfig = toml::from_str(&oauthbearer_listener_toml("")).expect("parse");
+        let mut cfg = crate::config::BrokerConfig::default();
+        let error = file
+            .apply_to(&mut cfg)
+            .expect_err("unsecured fallback must be rejected without allow_unsecured");
+        let FileConfigError::InvalidConfig(message) = &error else {
+            panic!("expected InvalidConfig; got {error:?}")
+        };
+        assert!(message.contains("allow_unsecured"));
+    }
+
+    #[test]
+    fn apply_to_oauthbearer_allow_unsecured_opts_into_unsecured_validator() {
+        let file: FileConfig =
+            toml::from_str(&oauthbearer_listener_toml("allow_unsecured = true")).expect("parse");
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        assert!(cfg.oauthbearer_jwks_endpoint.is_none());
+        match cfg.oauthbearer_validator {
+            krabka_security::OAuthBearerValidator::Unsecured(v) => {
+                assert!(v.allowable_clock_skew == secs(5));
+            }
+            other => {
+                panic!("allow_unsecured must keep the unsecured validator; got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn apply_to_oauthbearer_without_endpoint_stays_unsecured_when_no_listener_offers_it() {
         let src = r#"
 [oauthbearer]
 principal_claim_name = "sub"
@@ -256,14 +347,50 @@ allowable_clock_skew_ms = 5000
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());
-        match cfg.oauthbearer_validator {
-            krabka_security::OAuthBearerValidator::Unsecured(v) => {
-                assert!(v.allowable_clock_skew == secs(5));
-            }
-            other => {
-                panic!("no jwks_endpoint_uri must keep the unsecured validator; got {other:?}")
-            }
-        }
+        assert!(matches!(
+            cfg.oauthbearer_validator,
+            krabka_security::OAuthBearerValidator::Unsecured(_)
+        ));
+    }
+
+    #[test]
+    fn apply_to_missing_oauthbearer_table_rejects_unsecured_fallback() {
+        let src = r#"
+[[listeners]]
+name = "SASL"
+bind_addr = "0.0.0.0:9092"
+advertised = "host:9092"
+protocol = "SaslPlaintext"
+sasl_config = { enabled_mechanisms = ["OAUTHBEARER"] }
+"#;
+        let file: FileConfig = toml::from_str(src).expect("parse");
+        let mut cfg = crate::config::BrokerConfig::default();
+        let error = file
+            .apply_to(&mut cfg)
+            .expect_err("a missing [oauthbearer] table must not silently stay unsecured");
+        let FileConfigError::InvalidConfig(message) = &error else {
+            panic!("expected InvalidConfig; got {error:?}")
+        };
+        assert!(message.contains("allow_unsecured"));
+    }
+
+    #[test]
+    fn apply_to_missing_oauthbearer_table_applies_when_no_listener_offers_it() {
+        let src = r#"
+[[listeners]]
+name = "PLAIN"
+bind_addr = "0.0.0.0:9092"
+advertised = "host:9092"
+protocol = "Plaintext"
+"#;
+        let file: FileConfig = toml::from_str(src).expect("parse");
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        assert!(cfg.oauthbearer_jwks_endpoint.is_none());
+        assert!(matches!(
+            cfg.oauthbearer_validator,
+            krabka_security::OAuthBearerValidator::Unsecured(_)
+        ));
     }
 
     #[test]

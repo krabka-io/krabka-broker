@@ -43,12 +43,12 @@ pub(crate) use self::{
 };
 pub use self::{
     labels::{
-        ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-        BreakGlassStateLabel, ClientSoftwareLabel, ConnectionCloseReason,
-        ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, FetchDrainPath,
-        FetchDrainPathLabel, PartitionLabel, QuotaType, QuotaTypeLabel, ReplicaLagLabel,
-        SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
-        WalVoterLabel,
+        ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
+        BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, ClientSoftwareLabel,
+        ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel,
+        FetchDrainPath, FetchDrainPathLabel, PartitionLabel, QuotaType, QuotaTypeLabel,
+        ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+        WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
 };
@@ -273,6 +273,16 @@ pub struct BrokerMetrics {
     /// under the canonical wire name (`PLAIN`, `SCRAM-SHA-256`,
     /// `SCRAM-SHA-512`, `OAUTHBEARER`).
     pub failed_authentication: Family<SaslMechanismLabel, Counter>,
+    /// Cumulative count of authorization decisions that came back Deny,
+    /// labelled by the operation and the resource type the request asked
+    /// for. Kafka exports no equivalent metric: `StandardAuthorizer` only
+    /// writes a line to the `kafka.authorizer.logger` log4j logger, and
+    /// operators alert on log volume. Bumped by `AuditingAuthorizer`, which
+    /// wraps the configured authorizer whether or not audit is enabled, so
+    /// the counter is the one denial signal that survives `audit.enabled=false`.
+    /// Alert on `rate(...[5m]) > 0` sustained: a fleet that was authorized
+    /// yesterday and is denied today is an ACL change, not a client bug.
+    pub authorization_denied: Family<AuthorizationDeniedLabel, Counter>,
     /// Per-Kafka-API request counter. Bumped once per
     /// dispatched request from the network dispatcher, labelled by
     /// the `ApiKey` variant name (or `"Unknown"` for unrecognised
@@ -400,6 +410,22 @@ pub struct BrokerMetrics {
     /// Number of topic-backed RLMM bootstrap attempts; climbs while stuck
     /// retrying, flat once `tiered_storage_rlmm_topic_backed` flips to 1.
     pub tiered_storage_rlmm_bootstrap_attempts: Counter,
+    /// KFC-5: cumulative WORM manifests the archive sealed and handed back a
+    /// valid chain receipt for, one per segment copied into a write-once
+    /// archive. Flat while a WORM cluster is tiering means the copy path has
+    /// stopped, and the archive stops growing an attestation.
+    ///
+    /// Unlabelled on purpose: a topic label here would reopen the unbounded
+    /// per-topic series problem, and a seal failure is a cluster-level
+    /// condition an operator chases in the logs, which name the partition.
+    pub worm_manifests_sealed_total: Counter,
+    /// KFC-5: cumulative segment copies into a write-once archive that ended
+    /// without a usable manifest — the copy itself failed, the blocking task
+    /// panicked, or the backend returned no receipt or a receipt that did not
+    /// match the requested chain position. Each one leaves the segment in
+    /// `CopySegmentStarted` for the next tick to retry, so a sustained rate
+    /// means the archive is not advancing.
+    pub worm_manifest_seal_failures_total: Counter,
     /// Per-topic counter of v0/v1 → v2 record-batch
     /// up-conversions on the Produce path. Mirrors Kafka's
     /// `BrokerTopicMetrics.ProduceMessageConversionsPerSec`. Bumped
