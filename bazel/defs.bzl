@@ -340,4 +340,43 @@ def crate_tests(
                 "external",
                 "no-sandbox",
             ],
+            # The daemon the comment above calls the one thing Bazel cannot own
+            # is the one thing a BuildBuddy executor can: a Firecracker microVM
+            # with its own dockerd, started before the action runs. That is what
+            # lets these suites leave the GitHub runner.
+            #
+            # `test.` is the built-in `test` exec group, so every key here
+            # reaches the test action alone. The compile actions that produce
+            # `_docker_bin` keep the default execution platform, which matters
+            # -- see the `docker-rbe` block in //.bazelrc for why they stay on
+            # the local machine.
+            #
+            # Ignored outright when there is no remote executor, so a developer
+            # running `bazel test --config=docker` is unaffected.
+            exec_properties = {
+                "test.workload-isolation-type": "firecracker",
+                "test.init-dockerd": "true",
+                # `@llvm//:rbe_linux_x86_64` pins `ubuntu:22.04`, which carries
+                # no Docker, and `init-dockerd` has nothing to start without
+                # one. BuildBuddy's own executor image does. A target's
+                # properties beat the platform's, and only for this exec group,
+                # so the compile actions still resolve against @llvm's.
+                "test.container-image": "docker://gcr.io/flame-public/executor-docker-default:enterprise-v1.6.0",
+                # Keep the VM and hand it to the next suite that wants the same
+                # images: `docker load` is then the no-op //bazel:docker_test.sh
+                # counts on, rather than several hundred megabytes unpacked
+                # again. Keyed by the image set rather than shared globally --
+                # a VM recycled into a suite wanting different images has to
+                # load them anyway, and carries the previous suite's disk to do
+                # it.
+                "test.recycle-runner": "true",
+                "test.runner-recycling-key": "krabka-images:" + ",".join(sorted(docker[stem])),
+                # A real Kafka cluster, its JVMs, and the suite's own broker.
+                # One compute unit is one CPU and 2.5 GB, which none of these
+                # fit in.
+                "test.EstimatedComputeUnits": "4",
+                # The image tarballs are gigabytes before Docker unpacks them,
+                # and a recycled VM holds the last suite's as well.
+                "test.EstimatedFreeDiskBytes": "20000000000",
+            },
         )

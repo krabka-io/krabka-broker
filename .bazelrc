@@ -81,6 +81,31 @@ build --java_runtime_version=remotejdk_21
 test --test_tag_filters=-docker
 test:docker --test_tag_filters=docker
 
+# The same suites, with the daemon supplied by a BuildBuddy Firecracker microVM
+# instead of the runner.
+#
+#     bazel test --config=docker-rbe //...
+#
+# `ci` passes this on the container matrix. The per-target half of it -- the
+# microVM, its dockerd, the image the VM boots -- is `exec_properties` on each
+# `*_docker_test` in //bazel/defs.bzl, because it belongs to the test action
+# rather than to an invocation.
+#
+# What is here is the half that does not: Rust code generation stays on the
+# local machine. A rustc action that runs on a BuildBuddy executor can fail
+# rules_rs's working-directory scan -- the `build:rbe` block below has the
+# reproduction and the cause -- and a compile failure would take the job down
+# before a single container started, which would say nothing about whether the
+# microVMs work. `no-remote-exec` is not `no-remote-cache`: these actions still
+# read the remote cache and only execute locally on a miss.
+#
+# `^Rustc$` and not `Rustc`: Bazel matches this regex anywhere in the mnemonic,
+# so the unanchored spelling would also catch `RustcMetadata`, which is the one
+# rustc action that is already known to run remotely.
+test:docker-rbe --config=docker
+test:docker-rbe --config=rbe
+test:docker-rbe --modify_execution_info=^Rustc$=+no-remote-exec
+
 # Remote build execution, opt in per invocation with `--config=rbe`.
 #
 #     bazel build --config=rbe //...
