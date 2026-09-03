@@ -356,12 +356,24 @@ def crate_tests(
             exec_properties = {
                 "test.workload-isolation-type": "firecracker",
                 "test.init-dockerd": "true",
-                # `@llvm//:rbe_linux_x86_64` pins `ubuntu:22.04`, which carries
-                # no Docker, and `init-dockerd` has nothing to start without
-                # one. BuildBuddy's own executor image does. A target's
-                # properties beat the platform's, and only for this exec group,
-                # so the compile actions still resolve against @llvm's.
-                "test.container-image": "docker://gcr.io/flame-public/executor-docker-default:enterprise-v1.6.0",
+                # Two constraints pick this image, and only one of them was
+                # obvious. `@llvm//:rbe_linux_x86_64` pins `ubuntu:22.04`, which
+                # carries no Docker, so `init-dockerd` has nothing to start; a
+                # target's properties beat the platform's, and only for this
+                # exec group, so the compile actions still resolve against
+                # @llvm's. But BuildBuddy's *default* executor image is Ubuntu
+                # 16.04, and the suite binaries are built against
+                # `@llvm//constraints/libc:gnu.2.28`, so on that image every
+                # suite died before it ran a line:
+                #
+                #     jvm_tiered_storage_docker_bin: /lib/x86_64-linux-gnu/libc.so.6:
+                #     version `GLIBC_2.28' not found
+                #
+                # This one is Ubuntu 20.04 -- glibc 2.31, which satisfies that
+                # constraint -- and installs docker-ce and containerd.io from
+                # download.docker.com. Anything substituted here has to keep
+                # both properties.
+                "test.container-image": "docker://gcr.io/flame-public/rbe-ubuntu20-04:latest",
                 # Keep the VM and hand it to the next suite that wants the same
                 # images: `docker load` is then the no-op //bazel:docker_test.sh
                 # counts on, rather than several hundred megabytes unpacked
