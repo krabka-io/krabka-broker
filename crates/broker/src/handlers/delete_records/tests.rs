@@ -307,3 +307,148 @@ async fn a_refused_trim_deletes_nothing() {
     check!(part.log_start_offset() == before);
     broker_handle.shutdown().await;
 }
+
+// ── The trims that must not move the deletion frontier ───────────────
+
+/// The one row a `DeleteRecords` response carries for `topic-0`.
+fn one_row(topic: &str, low_watermark: i64, error_code: i16) -> Vec<DeleteRecordsTopicResult> {
+    vec![DeleteRecordsTopicResult {
+        name: topic.to_owned(),
+        partitions: vec![DeleteRecordsPartitionResult {
+            partition_index: 0,
+            low_watermark,
+            error_code,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+    }]
+}
+
+/// A trim the partition has already satisfied answers success and deletes
+/// nothing, and one past the log end is refused outright.
+///
+/// Both rows are load-bearing. A stale request that answered
+/// `OFFSET_OUT_OF_RANGE` would make an ordinary retry look like an error, and
+/// a request past the log end that answered success would claim records were
+/// deleted that the partition never held.
+#[tokio::test]
+async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
+    // `topic_holding_a_pending_batch` leaves the log start at 0 and the log
+    // end at 4, so offset 0 is the retry case and offset 100 is past the end.
+    let cases = [
+        ("delete-records-stale", 0_i64, 0_i64, codes::NONE),
+        (
+            "delete-records-beyond-end",
+            100,
+            -1,
+            codes::OFFSET_OUT_OF_RANGE,
+        ),
+    ];
+
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let admin = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&admin, &peer);
+
+    for (topic, offset, low_watermark, error_code) in cases {
+        topic_holding_a_pending_batch(&broker_handle, &broker, topic, None, &ctx).await;
+        let part = broker
+            .partitions
+            .get(topic, krabka_ids::PartitionIndex(0))
+            .expect("the partition is local");
+        let before = part.log_start_offset();
+
+        let resp = drive(&broker, &request(topic, &[(0, offset)]), &admin, &peer).await;
+
+        check!(
+            resp.topics == one_row(topic, low_watermark, error_code),
+            "{topic}"
+        );
+        check!(part.log_start_offset() == before, "{topic}");
+    }
+
+    broker_handle.shutdown().await;
+}
+
+/// KFC-9: a write freeze over the topic refuses the trim, and the records
+/// stay. The freeze answers ahead of every other check the trim makes, so a
+/// caller who could otherwise trim still cannot.
+#[tokio::test]
+async fn a_frozen_topic_refuses_a_trim() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let admin = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&admin, &peer);
+    let topic = "delete-records-frozen";
+    topic_holding_a_pending_batch(&broker_handle, &broker, topic, None, &ctx).await;
+    let part = broker
+        .partitions
+        .get(topic, krabka_ids::PartitionIndex(0))
+        .expect("the partition is local");
+    let before = part.log_start_offset();
+
+    broker_handle
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1TopicFreeze(
+            krabka_metadata::TopicFreezeRecord {
+                scope: topic.to_owned(),
+                pattern_type: krabka_metadata::PatternType::Literal,
+                frozen: true,
+                reason: "a compliance hold".to_owned(),
+                set_by: "User:carol".to_owned(),
+                set_at_ms: 1_770_000_000_000,
+                proposal_id: uuid::Uuid::nil(),
+                key_id: String::new(),
+                signature: Vec::new(),
+            },
+        ))
+        .await
+        .expect("the freeze record commits");
+    broker_handle
+        .wait_for_image(|image| {
+            crate::freeze::resolve::resolve_topic_freeze(image, topic).is_some()
+        })
+        .await;
+
+    let resp = drive(&broker, &request(topic, &[(0, -1)]), &admin, &peer).await;
+
+    assert!(
+        resp.topics == one_row(topic, -1, codes::POLICY_VIOLATION),
+        "{resp:?}"
+    );
+    check!(part.log_start_offset() == before);
+    broker_handle.shutdown().await;
+}
+
+/// Only the leader trims its local segments. A replica that has lost the
+/// leadership answers `NOT_LEADER_OR_FOLLOWER` and keeps its records, so the
+/// client re-resolves the leader rather than deleting on a stale replica.
+#[tokio::test]
+async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let admin = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&admin, &peer);
+    let topic = "delete-records-follower";
+    topic_holding_a_pending_batch(&broker_handle, &broker, topic, None, &ctx).await;
+    let part = broker
+        .partitions
+        .get(topic, krabka_ids::PartitionIndex(0))
+        .expect("the partition is local");
+    let before = part.log_start_offset();
+    part.current_leader.store(
+        broker.config.node_id.0 + 1,
+        std::sync::atomic::Ordering::Release,
+    );
+
+    let resp = drive(&broker, &request(topic, &[(0, -1)]), &admin, &peer).await;
+
+    assert!(
+        resp.topics == one_row(topic, -1, codes::NOT_LEADER_OR_FOLLOWER),
+        "{resp:?}"
+    );
+    check!(part.log_start_offset() == before);
+    broker_handle.shutdown().await;
+}

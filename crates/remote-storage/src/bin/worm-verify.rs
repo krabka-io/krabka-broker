@@ -629,6 +629,128 @@ mod tests {
         assert!(grade(&report, &args(None), Err("denied".into())) == ExitCode::FAILURE);
     }
 
+    /// `--key-id` and `--public-key` pair by position. An unequal count has to
+    /// be a usage error: silently zipping the shorter of the two would drop a
+    /// key the auditor meant to trust, and the manifests it signed would then
+    /// be reported as "signed by an untrusted key" -- a finding that reads as
+    /// tampering when it is really a typo in the command line.
+    #[test]
+    fn unequal_key_flag_counts_are_a_usage_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("worm.pub");
+        std::fs::write(&key_path, [7u8; 32]).unwrap();
+
+        let mut too_many_ids = args(None);
+        too_many_ids.key_id = vec!["k1".into(), "k2".into()];
+        too_many_ids.public_key = vec![key_path.clone()];
+        let error = trusted_keys(&too_many_ids).expect_err("2 ids and 1 key is rejected");
+        assert!(error.contains("pair by position"), "{error}");
+        assert!(error.contains("--key-id was given 2 time(s)"), "{error}");
+
+        let mut too_many_keys = args(None);
+        too_many_keys.key_id = vec!["k1".into()];
+        too_many_keys.public_key = vec![key_path.clone(), key_path];
+        let error = trusted_keys(&too_many_keys).expect_err("1 id and 2 keys is rejected");
+        assert!(error.contains("pair by position"), "{error}");
+    }
+
+    /// The pairing is positional, so key ids and key bytes must not drift
+    /// apart: a swap here would trust the rotated key's bytes under the
+    /// original key's id and reject every manifest in the archive.
+    #[test]
+    fn each_key_id_is_paired_with_the_public_key_in_the_same_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.pub");
+        let second = dir.path().join("second.pub");
+        std::fs::write(&first, [1u8; 32]).unwrap();
+        std::fs::write(&second, [2u8; 32]).unwrap();
+
+        let mut args = args(None);
+        args.key_id = vec!["first-id".into(), "second-id".into()];
+        args.public_key = vec![first, second];
+
+        let trusted = trusted_keys(&args).expect("both keys are read");
+
+        assert!(trusted.get("first-id") == Some(&[1u8; 32][..]));
+        assert!(trusted.get("second-id") == Some(&[2u8; 32][..]));
+        assert!(trusted.get("absent-id").is_none());
+    }
+
+    /// An unreadable key file must name the path. Falling through with an
+    /// empty trust set would downgrade a hard stop into an "untrusted key"
+    /// finding on every manifest, which hides the real cause.
+    #[test]
+    fn an_unreadable_public_key_names_the_path_it_could_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent.pub");
+        let mut args = args(None);
+        args.key_id = vec!["k1".into()];
+        args.public_key = vec![missing.clone()];
+
+        let error = trusted_keys(&args).expect_err("a missing key file is an error");
+
+        assert!(error.contains("read public key"), "{error}");
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    /// No `--key-id` at all is legal: the run then checks structure and
+    /// objects and reports every manifest as unsigned or untrusted rather
+    /// than refusing to start.
+    #[test]
+    fn no_key_flags_yields_an_empty_trust_set() {
+        let trusted = trusted_keys(&args(None)).expect("no keys is not an error");
+
+        assert!(trusted.get("any-id").is_none());
+    }
+
+    /// `--expect-head` is the only check that catches tail truncation, so the
+    /// parser must reject anything that is not a full 32-byte head rather than
+    /// silently accepting a short or non-hex value.
+    #[test]
+    fn expect_head_accepts_only_sixty_four_hex_characters() {
+        let head = "ab".repeat(32);
+
+        assert!(parse_head(&head).expect("64 hex characters parse") == ChainHead([0xab; 32]));
+
+        for bad in ["", &"ab".repeat(31), &format!("{head}ab"), &"zz".repeat(32)] {
+            let error = parse_head(bad).expect_err("not 64 hex characters");
+            assert!(error.contains("expected 64 hex characters"), "{error}");
+        }
+    }
+
+    /// `--local-dir` wins over `--bucket`, and the S3 side must hand back the
+    /// `S3Config` the multipart-upload listing needs: losing it turns the
+    /// incomplete-upload check into a silent no-op against a real bucket.
+    #[test]
+    fn the_store_source_follows_local_dir_then_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut local = args(None);
+        local.local_dir = Some(dir.path().to_path_buf());
+        local.bucket = Some("ignored".into());
+        let (_, s3) = open_store(&local).expect("a local directory opens");
+        assert!(s3.is_none(), "a local run has no bucket to list uploads in");
+
+        let mut bucket = args(None);
+        bucket.local_dir = None;
+        bucket.bucket = Some("archive-bucket".into());
+        bucket.region = "eu-west-1".into();
+        bucket.endpoint = Some("http://minio:9000".into());
+        bucket.allow_http = true;
+        let (_, s3) = open_store(&bucket).expect("an S3 bucket opens");
+        let s3 = s3.expect("the S3 config is carried through for the upload listing");
+        assert!(s3.bucket == "archive-bucket");
+        assert!(s3.region == "eu-west-1");
+        assert!(s3.endpoint.as_deref() == Some("http://minio:9000"));
+        assert!(s3.allow_http);
+
+        let mut neither = args(None);
+        neither.local_dir = None;
+        neither.bucket = None;
+        let error = open_store(&neither).expect_err("neither source is an error");
+        assert!(error.contains("--local-dir or --bucket"), "{error}");
+    }
+
     #[test]
     fn tampering_is_graded_before_multipart_errors() {
         let report = report(Some(VerifyBreak {

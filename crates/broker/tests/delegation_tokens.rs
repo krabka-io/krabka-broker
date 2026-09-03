@@ -83,3 +83,8 @@ mod super_user_bypass;
 
 #[path = "delegation_tokens/unauthenticated.rs"]
 mod unauthenticated;
+
+mod support;
+
+#[path = "delegation_tokens/audit.rs"]
+mod audit;

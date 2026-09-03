@@ -775,4 +775,306 @@ mod tests {
             check!(auth.negotiated_mechanism() == want, "{case}");
         }
     }
+
+    fn alice() -> Principal {
+        Principal {
+            name: "alice".to_string(),
+            auth_method: AuthMethod::SaslPlain,
+            groups: vec![],
+        }
+    }
+
+    /// The session a re-authentication is measured against: SCRAM-SHA-256
+    /// under a delegation token, so that a restore which drops either the
+    /// mechanism or the KIP-48 token flag is visible.
+    fn previous_session() -> AuthenticatedSnapshot {
+        AuthenticatedSnapshot {
+            principal: alice(),
+            mechanism: SaslMechanism::ScramSha256,
+            expires_at_ms: Some(9_000),
+            authenticated_via_token: true,
+        }
+    }
+
+    fn ok_response(session_lifetime_ms: i64) -> SaslAuthenticateResponse {
+        SaslAuthenticateResponse {
+            error_code: 0,
+            error_message: None,
+            auth_bytes: bytes::Bytes::new(),
+            session_lifetime_ms,
+            ..Default::default()
+        }
+    }
+
+    /// KIP-368 ceiling arithmetic. The window the broker advertises and the
+    /// instant it enforces have to agree, the earlier of the two ceilings has
+    /// to win in both directions, a `connections.max.reauth.ms` that is not
+    /// positive has to arm nothing the way Kafka arms nothing, and a
+    /// credential that has already expired has to report a zero window rather
+    /// than a negative one that a client would read as a huge window.
+    #[test]
+    fn session_expiry_takes_the_earlier_ceiling_and_never_reports_a_negative_window() {
+        let now = 1_000_000_i64;
+        let cases = [
+            ("no credential lifetime and no cap", None, None, (None, 0)),
+            (
+                "the cap is the only ceiling",
+                None,
+                Some(krabka_units::millis(30_000)),
+                (Some(now + 30_000), 30_000),
+            ),
+            (
+                "a zero cap arms no deadline",
+                None,
+                Some(krabka_units::millis(0)),
+                (None, 0),
+            ),
+            (
+                "a negative cap arms no deadline",
+                None,
+                Some(-krabka_units::millis(1)),
+                (None, 0),
+            ),
+            (
+                "the credential is the only ceiling",
+                Some(now + 5_000),
+                None,
+                (Some(now + 5_000), 5_000),
+            ),
+            (
+                "a credential shorter than the cap wins",
+                Some(now + 5_000),
+                Some(krabka_units::millis(30_000)),
+                (Some(now + 5_000), 5_000),
+            ),
+            (
+                "a cap shorter than the credential wins",
+                Some(now + 60_000),
+                Some(krabka_units::millis(30_000)),
+                (Some(now + 30_000), 30_000),
+            ),
+            (
+                "an already-expired credential reports no window",
+                Some(now - 5_000),
+                Some(krabka_units::millis(30_000)),
+                (Some(now - 5_000), 0),
+            ),
+        ];
+        for (case, credential, cap, want) in cases {
+            check!(session_expiry(now, credential, cap) == want, "{case}");
+        }
+
+        // A cap that runs the clock past `i64::MAX` leaves the credential as
+        // the only ceiling instead of overflowing.
+        check!(
+            session_expiry(
+                i64::MAX - 1,
+                Some(i64::MAX - 1),
+                Some(krabka_units::millis(30_000)),
+            ) == (Some(i64::MAX - 1), 0)
+        );
+    }
+
+    /// `begin_reauth` is the handlers' "is this a re-authentication?" test, so
+    /// it must answer no — and leave the connection alone — for every state
+    /// that is not one.
+    #[test]
+    fn begin_reauth_only_fires_for_a_reauthenticating_connection() {
+        let cases = [
+            ("anonymous", ConnectionAuth::Anonymous),
+            (
+                "negotiating",
+                ConnectionAuth::Negotiating {
+                    mechanism: SaslMechanism::Plain,
+                    exchange: SaslExchange::Plain,
+                    pending_token_expiry_ms: None,
+                },
+            ),
+            (
+                "authenticated",
+                ConnectionAuth::Authenticated {
+                    principal: alice(),
+                    mechanism: SaslMechanism::Plain,
+                    expires_at_ms: Some(9_000),
+                    authenticated_via_token: false,
+                },
+            ),
+        ];
+        for (case, mut auth) in cases {
+            let before = std::mem::discriminant(&auth);
+            check!(begin_reauth(&mut auth).is_none(), "{case}");
+            check!(std::mem::discriminant(&auth) == before, "{case}");
+        }
+    }
+
+    /// A re-authentication runs the mechanism's ordinary exchange, so
+    /// `begin_reauth` has to hand the handler a `Negotiating` state carrying
+    /// the *previous* session's mechanism and the KIP-48 token side-channel.
+    /// Dropping the mechanism would run the exchange under a default one, and
+    /// dropping the side-channel would lose a token session's expiry ceiling
+    /// between rounds.
+    #[test]
+    fn begin_reauth_hands_over_a_negotiating_state_with_the_previous_mechanism() {
+        let mut auth = ConnectionAuth::Reauthenticating {
+            previous: previous_session(),
+            exchange: SaslExchange::ScramPending,
+            pending_token_expiry_ms: Some(9_000),
+        };
+
+        let previous = begin_reauth(&mut auth).expect("a Reauthenticating connection yields one");
+        check!(previous.principal.name == "alice");
+        check!(previous.mechanism == SaslMechanism::ScramSha256);
+        check!(previous.expires_at_ms == Some(9_000));
+        check!(previous.authenticated_via_token);
+
+        match auth {
+            ConnectionAuth::Negotiating {
+                mechanism,
+                exchange,
+                pending_token_expiry_ms,
+            } => {
+                check!(mechanism == SaslMechanism::ScramSha256);
+                check!(matches!(exchange, SaslExchange::ScramPending));
+                check!(pending_token_expiry_ms == Some(9_000));
+            }
+            other => panic!("expected Negotiating, got {other:?}"),
+        }
+    }
+
+    /// A re-authentication that lands on the same principal stands, and the
+    /// new session's own ceiling replaces the old one — that is what re-arms
+    /// the KIP-368 window.
+    #[test]
+    fn finish_reauth_keeps_a_same_principal_session_and_its_new_window() {
+        let mut auth = ConnectionAuth::Authenticated {
+            principal: alice(),
+            mechanism: SaslMechanism::Plain,
+            expires_at_ms: Some(40_000),
+            authenticated_via_token: false,
+        };
+        let resp = finish_reauth(&mut auth, previous_session(), ok_response(30_000));
+
+        check!(resp == ok_response(30_000));
+        match auth {
+            ConnectionAuth::Authenticated {
+                principal,
+                expires_at_ms,
+                ..
+            } => {
+                check!(principal.name == "alice");
+                check!(expires_at_ms == Some(40_000));
+            }
+            other => panic!("expected Authenticated, got {other:?}"),
+        }
+    }
+
+    /// A multi-round mechanism's intermediate round answers `error_code == 0`
+    /// with no principal yet. That round must go back to `Reauthenticating`,
+    /// not be mistaken for a completed exchange: the request gate has to keep
+    /// refusing the data plane until the last round lands.
+    #[test]
+    fn finish_reauth_returns_an_unfinished_exchange_to_reauthenticating() {
+        let mut auth = ConnectionAuth::Negotiating {
+            mechanism: SaslMechanism::ScramSha256,
+            exchange: SaslExchange::ScramPending,
+            pending_token_expiry_ms: Some(9_000),
+        };
+        let server_first = SaslAuthenticateResponse {
+            auth_bytes: bytes::Bytes::from_static(b"r=nonce,s=salt,i=4096"),
+            ..ok_response(0)
+        };
+        let resp = finish_reauth(&mut auth, previous_session(), server_first.clone());
+
+        check!(resp == server_first);
+        match &auth {
+            ConnectionAuth::Reauthenticating {
+                previous,
+                pending_token_expiry_ms,
+                ..
+            } => {
+                check!(previous.principal.name == "alice");
+                check!(*pending_token_expiry_ms == Some(9_000));
+            }
+            other => panic!("expected Reauthenticating, got {other:?}"),
+        }
+        // The gate still refuses everything but the next round.
+        check!(!auth.allows_request(3));
+        check!(auth.allows_request(36));
+    }
+
+    /// KIP-368 forbids a principal switch mid-connection. The refusal has to
+    /// both answer `SASL_AUTHENTICATION_FAILED` and put the connection back on
+    /// the principal it already had, so a peer cannot promote itself by
+    /// re-authenticating as someone else.
+    #[test]
+    fn finish_reauth_refuses_a_principal_switch_and_restores_the_old_session() {
+        let mut auth = ConnectionAuth::Authenticated {
+            principal: Principal {
+                name: "mallory".to_string(),
+                auth_method: AuthMethod::SaslPlain,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::Plain,
+            expires_at_ms: Some(40_000),
+            authenticated_via_token: false,
+        };
+        let resp = finish_reauth(&mut auth, previous_session(), ok_response(30_000));
+
+        check!(
+            resp == SaslAuthenticateResponse {
+                error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
+                error_message: Some("re-authentication may not change the principal".to_string()),
+                auth_bytes: bytes::Bytes::new(),
+                session_lifetime_ms: 0,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+            }
+        );
+        match auth {
+            ConnectionAuth::Authenticated {
+                principal,
+                mechanism,
+                expires_at_ms,
+                authenticated_via_token,
+            } => {
+                check!(principal.name == "alice");
+                check!(mechanism == SaslMechanism::ScramSha256);
+                check!(expires_at_ms == Some(9_000));
+                check!(authenticated_via_token);
+            }
+            other => panic!("expected the previous session restored, got {other:?}"),
+        }
+    }
+
+    /// A re-authentication the mechanism rejected leaves the connection on its
+    /// existing session — a bad password must not log the peer out — and the
+    /// mechanism's own opaque failure reaches the wire unchanged, rather than
+    /// being relabelled as a principal switch.
+    #[test]
+    fn finish_reauth_restores_the_old_session_after_a_failed_exchange() {
+        let mut auth = ConnectionAuth::Anonymous;
+        let failure = SaslAuthenticateResponse {
+            error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
+            error_message: Some("authentication failed".to_string()),
+            auth_bytes: bytes::Bytes::new(),
+            session_lifetime_ms: 0,
+            ..Default::default()
+        };
+        let resp = finish_reauth(&mut auth, previous_session(), failure.clone());
+
+        check!(resp == failure);
+        match auth {
+            ConnectionAuth::Authenticated {
+                principal,
+                mechanism,
+                expires_at_ms,
+                authenticated_via_token,
+            } => {
+                check!(principal.name == "alice");
+                check!(mechanism == SaslMechanism::ScramSha256);
+                check!(expires_at_ms == Some(9_000));
+                check!(authenticated_via_token);
+            }
+            other => panic!("expected the previous session restored, got {other:?}"),
+        }
+    }
 }
