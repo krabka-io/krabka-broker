@@ -1,0 +1,58 @@
+"""Git helpers shared by this repository's `.axl` tasks.
+
+`repo.axl` reads the tree as it stands on disk; this reads what Git says has
+moved. They are siblings rather than one module because a task that only walks
+files should not have to load a process runner to do it, and because the two
+fail differently: a missing file is a bug in a sweep, whereas an unresolvable
+commit is an ordinary state of a CI checkout that every caller here has to
+survive rather than report.
+
+Both helpers run at the workspace root. A task's working directory is wherever
+the developer invoked `aspect`, which for a repository with nested crates is
+usually not the root, and `git diff` answers a different question from each.
+"""
+
+def run(ctx, executable, argv):
+    """The stdout lines of `executable argv...`, run at the workspace root.
+
+    A non-zero exit aborts the task rather than returning an empty list.  Every
+    caller is asking Git or Bazel a question whose answer decides how much of
+    CI runs, so a command that failed and a command that found nothing must not
+    look alike: the second narrows the build, and the first has to be loud.
+    """
+    result = (
+        ctx.std.process.command(executable)
+            .args(argv)
+            .current_dir(ctx.std.env.bazel_root_dir())
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    if result.status.code != 0:
+        detail = result.stderr.strip()
+        fail("command failed: " + executable + " " + " ".join(argv) + ("\n" + detail if detail else ""))
+    return result.stdout.splitlines()
+
+def valid_base(ctx, base):
+    """Whether `base` names a commit this checkout can resolve.
+
+    An empty `--base`, a shallow clone that does not reach the merge base, and
+    a branch that was force-pushed out from under the runner all arrive the
+    same way -- as a string Git cannot turn into a commit -- and every caller
+    treats all three alike, by widening to everything rather than comparing
+    against nothing.  `cat-file -e` is the cheapest form of the question: it
+    resolves the revision and checks the object is there, without reading it.
+    """
+    if not base:
+        return False
+    status = (
+        ctx.std.process.command("git")
+            .args(["cat-file", "-e", base + "^{commit}"])
+            .current_dir(ctx.std.env.bazel_root_dir())
+            .stdout("null")
+            .stderr("null")
+            .spawn()
+            .wait()
+    )
+    return status.code == 0

@@ -92,4 +92,11 @@ build --@rules_rs_mutants//mutants:cargo_mutants_binary=@mutants//:cargo-mutants
 build --@rules_rs_mutants//mutants:config=//:.cargo/mutants.toml
 
 # Optional developer-local overrides (registry mirrors, remote cache, etc.).
+#
+# CI writes this file too: `.github/actions/remote-cache` generates the
+# BuildBuddy block into it on every job that runs Bazel. It cannot live here,
+# because a `.bazelrc` cannot interpolate the API key out of the environment
+# and a key written here is a key committed. `try-import` rather than `import`
+# is what lets a fork's pull request -- which sees no secrets, so the action
+# writes nothing -- build locally with no error and no `if:` guard anywhere.
 try-import %workspace%/user.bazelrc
