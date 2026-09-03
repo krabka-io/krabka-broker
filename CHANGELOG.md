@@ -29,16 +29,36 @@ the `krabka-*` names to crates.io.
   retention frees the segments that fell below it whatever `retention.ms` and
   `retention.bytes` say, and `ListOffsets(earliest)` follows the floor up after
   those deletes. Dropping a copied segment from local disk no longer moves the
-  global floor, so the offsets the archive still holds stay readable.
+  global floor, so the offsets the archive still holds stay readable, and the
+  `log-start-offset-checkpoint` carries the global floor across a restart
+  rather than the local one: a reopened tiered partition still refuses what a
+  `DeleteRecords` deleted and still serves what only the archive holds. A log
+  whose floor no checkpoint witnesses reports none at all, so neither the
+  remote read nor the log-start breach acts on a floor that is only where the
+  surviving segments happen to begin.
 
-  The floor is still in memory only: nothing durable carries it across a
-  restart, so a reopened log can only infer one from the segments that
-  survived on disk. On a tiered partition whose local segments were evicted
-  that inference sits above the whole archive, so the three readers that would
-  act on it -- the remote read, the log-start breach in remote retention, and
-  the `ListOffsets(earliest)` clamp -- consult only a floor this process moved.
-  A restart therefore forgets a `DeleteRecords` rather than hiding or deleting
-  the archive.
+.- A `DeleteRecords` trim now survives a broker restart even when it lands inside
+  the active segment. Segment deletion records a trim that reaches a segment
+  boundary, but the remainder used to live only in memory, so a restart served
+  the deleted records again and `ListOffsets EARLIEST` moved back down. Every
+  `krabka_log::Log` now checkpoints its log start to a
+  `log-start-offset-checkpoint` file in the partition directory and reads it
+  back on open, clamped to the offsets the log actually holds. Apache Kafka
+  keeps the same value per log dir on a 60-second schedule; krabka writes it on
+  the trim itself. The metadata log's private copy of this checkpoint is gone in
+  favour of the shared one.
+
+- Follower replicas of a tiered topic now enforce `local.retention.ms` /
+  `local.retention.bytes` on their own disks, as KIP-405 has every replica do.
+  The tiered-storage sweep used to skip a partition outright unless this broker
+  led it, so a follower kept every segment it had ever fetched until it was
+  elected: its disk grew to the topic's full `retention.*` footprint while the
+  leader's held `local.retention.*` worth. The copy pass and remote retention
+  stay leader-only, because one writer per partition owns the remote tier.
+  Local retention now asks the remote-log metadata in offsets rather than in
+  segment boundaries, so a replica whose segments do not line up with the
+  leader's cannot drop a segment the tier holds only part of.
+
 - A broker-only node no longer stalls forever after a restart once the
   controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
   observer metadata fetch now answers a pruned fetch offset with the KIP-630

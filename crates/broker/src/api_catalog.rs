@@ -373,8 +373,10 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/broker/src/remote_log_manager.rs",
         tests: &[
             "crates/broker/tests/jvm_acceptance_tiered.rs",
+            "crates/broker/tests/tiered_storage_multi_broker.rs",
             "crates/remote-storage/tests/jvm_tiered_storage.rs",
             "crates/restore/tests/roundtrip.rs",
+            "crates/restore/tests/roundtrip/consume.rs",
         ],
         clients: ClientEvidence::NotCovered,
         note: "",

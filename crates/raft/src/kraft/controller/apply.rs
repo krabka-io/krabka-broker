@@ -66,6 +66,13 @@ impl Engine {
                         if !batch_base_in_apply_window(batch.base_offset, prev_hwm, applied_hwm) {
                             continue;
                         }
+                        // KIP-630's byte-size snapshot cap counts the whole
+                        // log, so this runs before the control-batch skip
+                        // below (a LeaderChange batch still occupies log
+                        // bytes even though it carries no metadata records).
+                        self.bytes_since_snapshot = self
+                            .bytes_since_snapshot
+                            .saturating_add(u64::try_from(batch.encoded_len()).unwrap_or(u64::MAX));
                         // The LeaderChange control batch carries no metadata records;
                         // never feed it to the metadata decoder.
                         if batch.attributes.is_control_batch() {

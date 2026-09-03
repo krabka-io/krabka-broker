@@ -1,16 +1,32 @@
-//! `DeleteRecords` (`api_key` 21): trimming a partition from a given offset, and
+//! `DeleteRecords` (`api_key` 21): trimming a partition from a given offset,
 //! the agreement between the response's `low_watermark` and the partition's
-//! `log_start_offset`.
+//! `log_start_offset`, and the durability of a trim that lands where no segment
+//! name can record it.
 
 use assert2::{assert, check};
-use krabka_protocol::owned::delete_records_request::{
-    DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+use krabka_broker::{NodeId, codes};
+use krabka_protocol::{
+    owned::{
+        delete_records_request::{
+            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+        },
+        delete_records_response::DeleteRecordsPartitionResult,
+        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_response::PartitionData,
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+        list_offsets_response::ListOffsetsPartitionResponse,
+    },
+    primitives::uuid::Uuid,
 };
 
 use crate::{
     admin_harness::{build_client, create_topic_helper},
-    support::start_n_node,
+    support::{self, start_n_node},
 };
+
+/// Request timestamp sentinel (-2) asking where the log starts. Kafka's
+/// `ListOffsetsRequest.EARLIEST_TIMESTAMP`.
+const EARLIEST_TIMESTAMP: i64 = -2;
 
 /// `DeleteRecords`: the test produces 100 records and then trims from offset
 /// 50. The response carries a valid `low_watermark`, and the broker's
@@ -29,21 +45,7 @@ async fn delete_records_trims_log_start() {
         .await
         .expect("produce_records_for_test");
 
-    let req = DeleteRecordsRequest {
-        topics: vec![DeleteRecordsTopic {
-            name: "t-dr".into(),
-            partitions: vec![DeleteRecordsPartition {
-                partition_index: 0,
-                offset: 50,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let resp = client.send(req).await.expect("delete_records");
-    let part_result = &resp.topics[0].partitions[0];
+    let part_result = trim(&client, "t-dr", 50).await;
     check!(
         part_result.error_code == 0,
         "delete_records error: {:?}",
@@ -68,4 +70,231 @@ async fn delete_records_trims_log_start() {
         log_start == part_result.low_watermark,
         "partition log_start_offset should equal low_watermark"
     );
+}
+
+/// The topic the restart case trims, kept clear of the one above so the two
+/// cases never share a partition directory.
+const RESTART_TOPIC: &str = "t-dr-restart";
+
+/// Records produced before the restart case trims. `segment.bytes` defaults to
+/// 1 GiB, so every one of them lands in the first, still-active segment.
+const RESTART_RECORDS: i64 = 100;
+
+/// Where the restart case moves the log start. It is strictly inside the one
+/// segment, so no segment name witnesses the trim: the records below it are
+/// still in the same file, and only the partition's own checkpoint says they
+/// are gone.
+const RESTART_TRIM_TO: i64 = 50;
+
+/// What a client can see of a trimmed partition: where `ListOffsets` says the
+/// log starts, and what a `Fetch` aimed below that point is answered with.
+///
+/// The two readings are one value so a case asserts against a whole expected
+/// struct rather than against four fields in sequence. A broker that forgot the
+/// trim answers offset 0, no error and 50 served records here, so the whole
+/// difference shows up in one failure.
+#[derive(Debug, PartialEq, Eq)]
+struct TrimmedView {
+    earliest_error_code: i16,
+    earliest_offset: i64,
+    fetch_error_code: i16,
+    fetch_log_start_offset: i64,
+    fetched_records: usize,
+}
+
+/// A `DeleteRecords` that lands inside the active segment survives a restart.
+///
+/// A trim onto a segment boundary needs nothing durable of its own: the
+/// segments below it are deleted, and the first surviving base offset *is* the
+/// log start. A trim inside a segment has no such witness, so the reopened log
+/// has to read the start back from its own checkpoint. Without that, the broker
+/// serves records an operator already deleted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_trim_inside_the_active_segment_survives_a_restart() {
+    // The directory outlives both brokers, which is what makes the second boot
+    // a restart rather than a fresh cluster.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let records = usize::try_from(RESTART_RECORDS).expect("record count fits usize");
+
+    {
+        let (broker, client) = support::start_with_dir(dir.path()).await;
+        create_topic_helper(&client, RESTART_TOPIC, 1).await;
+        broker
+            .wait_until_local_partition_leader(RESTART_TOPIC, 0, NodeId(1))
+            .await;
+        broker
+            .produce_records_for_test(RESTART_TOPIC, 0, records)
+            .await
+            .expect("produce_records_for_test");
+        // A trim is bounded by the high watermark, so the whole log has to be
+        // acknowledged before the requested offset is reachable.
+        broker
+            .wait_until_high_watermark(RESTART_TOPIC, 0, RESTART_RECORDS)
+            .await;
+
+        check!(
+            segment_base_offsets(dir.path(), RESTART_TOPIC) == vec![0],
+            "the case needs every record in one segment, or a deleted segment \
+             name would carry the trim on its own"
+        );
+
+        let trimmed = trim(&client, RESTART_TOPIC, RESTART_TRIM_TO).await;
+        check!(
+            trimmed.error_code == codes::NONE,
+            "delete_records: {trimmed:?}"
+        );
+        check!(trimmed.low_watermark == RESTART_TRIM_TO);
+        check!(
+            broker.partition_log_start_for_test(RESTART_TOPIC, 0) == Some(RESTART_TRIM_TO),
+            "the trim moved the live partition's log start"
+        );
+
+        broker.shutdown().await;
+    }
+
+    // Nothing about the trim is in the segment names: the file that holds the
+    // deleted records is still there, and it still starts at 0.
+    check!(segment_base_offsets(dir.path(), RESTART_TOPIC) == vec![0]);
+
+    let (broker, client) = support::start_with_dir(dir.path()).await;
+    broker
+        .wait_until_local_partition_leader(RESTART_TOPIC, 0, NodeId(1))
+        .await;
+
+    assert!(
+        trimmed_view(&client, RESTART_TOPIC, 0).await
+            == TrimmedView {
+                earliest_error_code: codes::NONE,
+                earliest_offset: RESTART_TRIM_TO,
+                fetch_error_code: codes::OFFSET_OUT_OF_RANGE,
+                fetch_log_start_offset: RESTART_TRIM_TO,
+                fetched_records: 0,
+            }
+    );
+
+    broker.shutdown().await;
+}
+
+/// Trim partition 0 of `topic` from `offset` and return the partition row.
+async fn trim(
+    client: &krabka_client_core::Client,
+    topic: &str,
+    offset: i64,
+) -> DeleteRecordsPartitionResult {
+    let mut resp = client
+        .send(DeleteRecordsRequest {
+            topics: vec![DeleteRecordsTopic {
+                name: topic.into(),
+                partitions: vec![DeleteRecordsPartition {
+                    partition_index: 0,
+                    offset,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("delete_records");
+    resp.topics.remove(0).partitions.remove(0)
+}
+
+/// Base offsets of the `.log` segment files in partition 0 of `topic`, sorted.
+///
+/// A case reads this to say out loud which segments exist, so "the trim landed
+/// inside the active segment" is a checked precondition rather than an
+/// assumption about the default `segment.bytes`.
+fn segment_base_offsets(log_dir: &std::path::Path, topic: &str) -> Vec<i64> {
+    let dir = krabka_log::name::partition_dir(log_dir, topic, 0);
+    let mut bases: Vec<i64> = std::fs::read_dir(&dir)
+        .expect("read partition dir")
+        .map(|entry| entry.expect("partition dir entry").file_name())
+        .filter_map(|name| krabka_log::name::parse_log_filename(&name.to_string_lossy()).ok())
+        .collect();
+    bases.sort_unstable();
+    bases
+}
+
+/// Read partition 0 of `topic` the way a client would: `ListOffsets` at the
+/// `EARLIEST` sentinel, and a `Fetch` from `fetch_offset`.
+async fn trimmed_view(
+    client: &krabka_client_core::Client,
+    topic: &str,
+    fetch_offset: i64,
+) -> TrimmedView {
+    let topic_id = support::topic_id_for(client, topic).await;
+    let earliest = list_earliest(client, topic).await;
+    let fetched = fetch_from(client, topic, topic_id, fetch_offset).await;
+    TrimmedView {
+        earliest_error_code: earliest.error_code,
+        earliest_offset: earliest.offset,
+        fetch_error_code: fetched.error_code,
+        fetch_log_start_offset: fetched.log_start_offset,
+        fetched_records: fetched
+            .records
+            .as_ref()
+            .and_then(krabka_protocol::records::RecordsPayload::as_v2)
+            .map_or(0, |batches| {
+                batches.iter().map(|batch| batch.records.len()).sum()
+            }),
+    }
+}
+
+/// `ListOffsets` for partition 0 of `topic` at Kafka's `EARLIEST_TIMESTAMP`,
+/// which is where the log starts.
+async fn list_earliest(
+    client: &krabka_client_core::Client,
+    topic: &str,
+) -> ListOffsetsPartitionResponse {
+    let mut resp = client
+        .send(ListOffsetsRequest {
+            replica_id: -1,
+            topics: vec![ListOffsetsTopic {
+                name: topic.into(),
+                partitions: vec![ListOffsetsPartition {
+                    partition_index: 0,
+                    timestamp: EARLIEST_TIMESTAMP,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("ListOffsets");
+    resp.topics.remove(0).partitions.remove(0)
+}
+
+/// One non-blocking `Fetch` of partition 0 of `topic` from `fetch_offset`.
+async fn fetch_from(
+    client: &krabka_client_core::Client,
+    topic: &str,
+    topic_id: Uuid,
+    fetch_offset: i64,
+) -> PartitionData {
+    let mut resp = client
+        .send(FetchRequest {
+            // A snapshot read: an empty answer comes back at once rather than
+            // parking in the long poll.
+            max_wait_ms: 0,
+            min_bytes: 1,
+            max_bytes: 1 << 20,
+            topics: vec![FetchTopic {
+                topic: topic.into(),
+                topic_id,
+                partitions: vec![FetchPartition {
+                    partition: 0,
+                    fetch_offset,
+                    partition_max_bytes: 1 << 20,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("Fetch");
+    resp.responses.remove(0).partitions.remove(0)
 }

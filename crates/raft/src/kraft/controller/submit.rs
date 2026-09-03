@@ -35,7 +35,12 @@ impl Engine {
         }
     }
 
-    fn wall_clock_ms() -> i64 {
+    /// Epoch milliseconds. Delegation-token deadlines are wall-clock by
+    /// definition, and so is the create-time stamped on every batch the leader
+    /// appends: `Engine::now` is monotonic from this process's own start, and
+    /// a snapshot header timestamp has to mean the same instant on every node
+    /// that reads it.
+    pub(super) fn wall_clock_ms() -> i64 {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         SystemTime::now()
@@ -450,7 +455,7 @@ impl Engine {
                 return;
             }
         };
-        let base = match self.log.append(&mut batch) {
+        let base = match self.log.append(&mut batch, Self::wall_clock_ms()) {
             Ok(off) => off,
             Err(e) => {
                 let _ = reply.send(Err(e));
@@ -505,7 +510,7 @@ impl Engine {
             }
         };
         let expected_base = self.log.log_end_offset();
-        let base = match self.log.append(&mut batch) {
+        let base = match self.log.append(&mut batch, Self::wall_clock_ms()) {
             Ok(off) => off,
             Err(e) => {
                 tracing::error!(?e, "kraft: test append failed");

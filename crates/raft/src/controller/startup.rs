@@ -138,6 +138,8 @@ impl Controller {
             config.metadata_raft_fetch_max,
             peers,
             config.snapshot_interval_records,
+            config.max_bytes_between_snapshots,
+            config.max_snapshot_interval,
             metadata_snapshot_fetch_max,
         )?;
 

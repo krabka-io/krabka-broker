@@ -1716,7 +1716,7 @@
             "null"
           ]
         },
-        "metadata_max_between_snapshots": {
+        "metadata_max_bytes_between_snapshots": {
           "default": null,
           "format": "byte-size",
           "type": [

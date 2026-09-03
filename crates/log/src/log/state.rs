@@ -16,7 +16,7 @@ use crate::{
     config::LogConfig,
     error::LogError,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
-    name,
+    log_start_offset_checkpoint, name,
     producer_snapshot::{self, ProducerSnapshotEntry},
     segment::Segment,
     txn_index::TxnIndex,
@@ -79,22 +79,37 @@ impl Log {
     /// method for the active-segment case, the broker's `DeleteRecords`
     /// handler uses it, and the `RemoteLogManager` uses it after a remote
     /// segment is deleted. This method does NOT truncate on-disk segments. It
-    /// only moves the in-memory start pointer.
+    /// only moves the start pointer.
+    ///
+    /// The new value is checkpointed to `log-start-offset-checkpoint` before
+    /// this method returns, so a start no segment name witnesses -- a trim
+    /// that landed inside a segment, or a tiered floor below every segment
+    /// still on disk -- survives a reopen. Without that, [`Log::open`] derives
+    /// the start from the first surviving base offset and serves records that
+    /// a `DeleteRecords` already deleted.
     ///
     /// `new_start` must be non-negative.
     ///
     /// # Errors
     ///
-    /// Returns [`LogError::InvalidArgument`] if `new_start` is negative.
+    /// Returns [`LogError::InvalidArgument`] if `new_start` is negative, and
+    /// [`LogError::Io`] if the checkpoint cannot be written.
     pub fn set_log_start_offset(&mut self, new_start: Offset) -> Result<(), LogError> {
         if new_start < 0 {
             return Err(LogError::InvalidArgument(
                 "set_log_start_offset: new_start must be >= 0".into(),
             ));
         }
-        self.start_offset = self.start_offset.max(new_start);
+        let new_start = self.start_offset.max(new_start);
+        // The checkpoint is durable when this returns, directory sync
+        // included: `DeleteRecords` is acknowledged as soon as the trim does,
+        // and a trimmed partition can then sit idle with no later `sync()` to
+        // pay a deferred debt.
+        log_start_offset_checkpoint::write(&self.dir, new_start)?;
+        self.start_offset = new_start;
         // Whoever calls this deleted the records below `new_start`, so the
-        // floor now means something a reader may be refused against.
+        // floor now means something a reader may be refused against, and the
+        // checkpoint carries that meaning across a reopen.
         self.start_offset_established = true;
         Ok(())
     }
@@ -146,9 +161,11 @@ impl Log {
         // A hard reset re-bases the local log after a divergence or a
         // snapshot install. It says nothing about the remote tier, which may
         // still hold lower offsets, so the floor moves without becoming a
-        // statement anything may be refused or deleted against.
+        // statement anything may be refused or deleted against -- and the
+        // checkpoint that would restore such a statement goes with it.
         self.start_offset = new_base;
         self.start_offset_established = false;
+        log_start_offset_checkpoint::remove(&self.dir)?;
 
         let mut new_active = Segment::create(&self.dir, new_base)?;
         new_active.set_io(self.io.clone());

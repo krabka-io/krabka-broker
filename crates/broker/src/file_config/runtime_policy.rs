@@ -61,15 +61,19 @@ impl RuntimeFileConfig {
         }
         set_runtime_size_bytes!(
             runtime,
-            metadata_max_between_snapshots,
+            metadata_max_bytes_between_snapshots,
             cfg.metadata_max_bytes_between_snapshots,
             whole_bytes_u64
         );
         // Zero disables the time-based snapshot cap, so it bypasses the
-        // positive-only macro.
+        // positive-only macro. The engine reads this cap in whole
+        // milliseconds (Kafka's own `metadata.log.max.snapshot.interval.ms`
+        // is an INT of milliseconds), so a sub-millisecond nonzero value must
+        // be rejected here rather than silently truncating to 0 and reading
+        // as disabled.
         if let Some(value) = runtime.metadata_max_snapshot_interval {
             cfg.metadata_max_snapshot_interval =
-                nonnegative_time("metadata_max_snapshot_interval", value)?;
+                disableable_millis_i32_time("metadata_max_snapshot_interval", value)?;
         }
         set_runtime_positive_u64!(
             runtime,

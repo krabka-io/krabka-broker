@@ -1,0 +1,141 @@
+"""Unit tests for `changed_scope.axl`."""
+
+load("./changed_scope.axl", "decide", "touches_rust")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+# A diff that changes nothing a compiler reads: this is the shape of the pull
+# request the whole task exists to make cheap.
+DOCS_ONLY = [
+    "docs/kfcs/KFC-1-deliver-at-time.md",
+    "docs/style_guides/code_style_guide.md",
+    "README.md",
+    "CHANGELOG.md",
+    ".github/workflows/ci.yml",
+    "renovate.json",
+]
+
+def _test_a_crate_source_needs_the_rust_jobs(_ctx):
+    check_eq("broker source", touches_rust(["crates/broker/src/barrier/cut.rs"]), True)
+
+def _test_a_crate_manifest_needs_the_rust_jobs(_ctx):
+    check_eq("crate manifest", touches_rust(["crates/raft/Cargo.toml"]), True)
+    check_eq("crate BUILD file", touches_rust(["crates/raft/BUILD.bazel"]), True)
+
+def _test_a_test_fixture_needs_the_rust_jobs(_ctx):
+    # A fixture is not compiled, but it is what a test asserts against, so a
+    # change to one can turn a passing suite red without touching a `.rs` file.
+    check_eq(
+        "fixture",
+        touches_rust(["crates/broker/tests/fixtures/security/kdc/krb5.conf"]),
+        True,
+    )
+
+def _test_the_workspace_manifest_and_lock_need_the_rust_jobs(_ctx):
+    check_eq("workspace manifest", touches_rust(["Cargo.toml"]), True)
+    check_eq("lock", touches_rust(["Cargo.lock"]), True)
+
+def _test_the_bazel_module_and_bazelrc_need_the_rust_jobs(_ctx):
+    check_eq("module", touches_rust(["MODULE.bazel"]), True)
+    check_eq("bazelrc", touches_rust([".bazelrc"]), True)
+
+def _test_the_pinned_toolchains_and_their_config_need_the_rust_jobs(_ctx):
+    # None of these is a `.rs` file, and every one of them changes what a Rust
+    # job produces or where its result goes. A Bazel or rustc bump is the whole
+    # point of running the build; a `clippy.toml` edit moves the lint gate; and
+    # `codecov.yml` decides what the coverage job's upload is compared against.
+    check_eq("bazel version", touches_rust([".bazelversion"]), True)
+    check_eq("module lock", touches_rust(["MODULE.bazel.lock"]), True)
+    check_eq("rust toolchain", touches_rust(["rust-toolchain.toml"]), True)
+    check_eq("clippy config", touches_rust(["clippy.toml"]), True)
+    check_eq("rustfmt config", touches_rust(["rustfmt.toml"]), True)
+    check_eq("codecov config", touches_rust(["codecov.yml"]), True)
+
+def _test_the_build_directories_need_the_rust_jobs(_ctx):
+    check_eq("rule definitions", touches_rust(["bazel/defs.bzl"]), True)
+    check_eq("image", touches_rust(["packaging/base.apko.yaml"]), True)
+    check_eq("toolchains", touches_rust(["tools/lint/linters.bzl"]), True)
+
+def _test_docs_that_are_rust_test_data_need_the_rust_jobs(_ctx):
+    # Every one of these is named in the `data` of a `//crates/broker` test
+    # target, and only `coverage` runs those suites -- the `ci` job's `test`
+    # step is narrowed to `--test_tag_filters=timing-sensitive`. Skipping
+    # `coverage` for them means no Rust contract test checks the edit at all.
+    check_eq("config schema", touches_rust(["docs/config-schema.json"]), True)
+    check_eq("config reference", touches_rust(["docs/config-reference.md"]), True)
+    check_eq(
+        "example config",
+        touches_rust(["docs/examples/broker-single-node.toml"]),
+        True,
+    )
+    check_eq(
+        "metrics contract",
+        touches_rust(["docs/operations/metrics-body.txt"]),
+        True,
+    )
+    check_eq(
+        "alert rules",
+        touches_rust(["docs/operations/alert-rules.yaml"]),
+        True,
+    )
+
+def _test_ordinary_docs_still_do_not_need_the_rust_jobs(_ctx):
+    # The carve-out has to stay narrow, or the gate stops paying for itself: a
+    # design doc, a KFC and a style guide reach no test's `data`.
+    check_eq("design doc", touches_rust(["docs/design/raft.md"]), False)
+    check_eq("kfc", touches_rust(["docs/KFCs/KFC-1-deliver-at-time.md"]), False)
+    check_eq("kip matrix", touches_rust(["docs/KIP_MATRIX.md"]), False)
+
+def _test_a_crate_readme_alone_does_not_need_the_rust_jobs(_ctx):
+    # The carve-out that makes the common documentation pull request cheap.
+    # `check-crate-readmes` and `check-crate-changelogs` still gate these.
+    check_eq(
+        "crate documentation",
+        touches_rust(["crates/broker/README.md", "crates/raft/CHANGELOG.md"]),
+        False,
+    )
+
+def _test_a_crate_readme_beside_a_source_still_needs_the_rust_jobs(_ctx):
+    check_eq(
+        "mixed diff",
+        touches_rust(["crates/broker/README.md", "crates/broker/src/lib.rs"]),
+        True,
+    )
+
+def _test_a_documentation_only_diff_does_not_need_the_rust_jobs(_ctx):
+    check_eq("docs only", touches_rust(DOCS_ONLY), False)
+
+def _test_an_empty_diff_does_not_need_the_rust_jobs(_ctx):
+    check_eq("no paths", touches_rust([]), False)
+    check_eq("blank lines", touches_rust(["", "   "]), False)
+
+def _test_an_unresolvable_base_runs_everything(_ctx):
+    # Fail open: a diff nobody could compute is not a diff that changed
+    # nothing. Without this branch an empty `--base` would read as a
+    # documentation-only change and skip the entire build.
+    check_eq("unknown diff", decide(False, []), True)
+    check_eq("unknown diff, docs listed", decide(False, DOCS_ONLY), True)
+
+def _test_a_resolved_base_defers_to_the_paths(_ctx):
+    check_eq("resolved and empty", decide(True, []), False)
+    check_eq("resolved and docs", decide(True, DOCS_ONLY), False)
+    check_eq("resolved and source", decide(True, ["crates/broker/src/lib.rs"]), True)
+
+changed_scope_tests = suite("changed-scope", [
+    _test_a_crate_source_needs_the_rust_jobs,
+    _test_a_crate_manifest_needs_the_rust_jobs,
+    _test_a_test_fixture_needs_the_rust_jobs,
+    _test_the_workspace_manifest_and_lock_need_the_rust_jobs,
+    _test_the_bazel_module_and_bazelrc_need_the_rust_jobs,
+    _test_the_pinned_toolchains_and_their_config_need_the_rust_jobs,
+    _test_docs_that_are_rust_test_data_need_the_rust_jobs,
+    _test_ordinary_docs_still_do_not_need_the_rust_jobs,
+    _test_the_build_directories_need_the_rust_jobs,
+    _test_a_crate_readme_alone_does_not_need_the_rust_jobs,
+    _test_a_crate_readme_beside_a_source_still_needs_the_rust_jobs,
+    _test_a_documentation_only_diff_does_not_need_the_rust_jobs,
+    _test_an_empty_diff_does_not_need_the_rust_jobs,
+    _test_an_unresolvable_base_runs_everything,
+    _test_a_resolved_base_defers_to_the_paths,
+])
+
+test_changed_scope = suite_task(changed_scope_tests)

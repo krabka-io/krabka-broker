@@ -23,8 +23,12 @@ pub struct KraftLog {
     hwm_path: PathBuf,
 }
 
+/// Read budget [`KraftLog::timestamp_below`] starts from. It only ever needs
+/// one batch, and `read_decoded` grows the window until one fits, so this is
+/// sized to make that the common case rather than to bound the result.
+const TIMESTAMP_READ_WINDOW: ByteSize = krabka_units::prelude::kibibytes(64);
+
 const HIGH_WATERMARK_FILE: &str = "high-watermark.checkpoint";
-const LOG_START_OFFSET_FILE: &str = "log-start-offset.checkpoint";
 
 impl KraftLog {
     /// Opens or creates the metadata log under `dir/@metadata-0`.
@@ -36,17 +40,9 @@ impl KraftLog {
         let hwm_path = dir.as_ref().join(HIGH_WATERMARK_FILE);
         let log_dir = dir.as_ref().join("@metadata-0");
         std::fs::create_dir_all(&log_dir).map_err(krabka_log::LogError::Io)?;
-        let mut log = Log::open(&log_dir, LogConfig::default())?;
-        if let Some(log_start_offset) =
-            std::fs::read_to_string(dir.as_ref().join(LOG_START_OFFSET_FILE))
-                .ok()
-                .and_then(|value| value.trim().parse::<i64>().ok())
-                .map(Offset)
-            && log_start_offset > log.log_start_offset()
-            && log_start_offset <= log.log_end_offset()
-        {
-            log.set_log_start_offset(log_start_offset)?;
-        }
+        // `krabka_log::Log` checkpoints its own log start, so a prune that
+        // advanced inside the active segment is already restored here.
+        let log = Log::open(&log_dir, LogConfig::default())?;
         let hwm = std::fs::read_to_string(&hwm_path)
             .ok()
             .and_then(|value| value.trim().parse::<i64>().ok())
@@ -69,12 +65,27 @@ impl KraftLog {
         self.hwm
     }
 
-    /// Leader path: appends a batch. krabka-log assigns the offset and records
-    /// the batch's `partition_leader_epoch`. Returns the assigned base offset.
+    /// Leader path: appends a batch stamped with `append_timestamp_ms`.
+    /// krabka-log assigns the offset and records the batch's
+    /// `partition_leader_epoch`. Returns the assigned base offset.
+    ///
+    /// The stamp is the batch's create-time, as Kafka's `BatchAccumulator`
+    /// stamps every batch the raft client appends with the current time. It is
+    /// what [`Self::last_committed_timestamp_ms`] reads back for a snapshot
+    /// header, and what a follower replicates verbatim through
+    /// [`Self::append_at`].
     ///
     /// # Errors
     /// Returns [`RaftError`] if the underlying append fails.
-    pub fn append(&mut self, batch: &mut RecordBatch) -> Result<Offset, RaftError> {
+    pub fn append(
+        &mut self,
+        batch: &mut RecordBatch,
+        append_timestamp_ms: i64,
+    ) -> Result<Offset, RaftError> {
+        // Every record in an engine-built batch carries `timestamp_delta` 0,
+        // so one stamp is the create-time of all of them.
+        batch.base_timestamp = append_timestamp_ms;
+        batch.max_timestamp = append_timestamp_ms;
         Ok(self.log.append(batch)?)
     }
 
@@ -124,6 +135,39 @@ impl KraftLog {
         }
     }
 
+    /// The append timestamp of the last record below `end_offset`: the
+    /// `max_timestamp` of the batch that contains `end_offset - 1`.
+    ///
+    /// KIP-630 stamps this into `SnapshotHeaderRecord`'s
+    /// `last_contained_log_timestamp`, where Kafka supplies the append time of
+    /// the last batch the snapshot contains. `None` when no such record is
+    /// readable here: the boundary is at or below the log start, because
+    /// everything under it was pruned or arrived inside an installed snapshot,
+    /// or it is beyond the log end.
+    #[must_use]
+    pub fn timestamp_below(&self, end_offset: Offset) -> Option<i64> {
+        let last = Offset(end_offset.0.checked_sub(1)?);
+        if last < self.log.log_start_offset() || last >= self.log.log_end_offset() {
+            return None;
+        }
+        let batches = self.read_decoded(last, TIMESTAMP_READ_WINDOW).ok()?;
+        // A sparse index floors the read to a batch boundary at or before
+        // `last`, and the window can carry batches past it, so the containing
+        // batch is the last one that still starts at or below `last`.
+        batches
+            .iter()
+            .take_while(|batch| batch.base_offset <= last.0)
+            .last()
+            .map(|batch| batch.max_timestamp)
+    }
+
+    /// The append timestamp of the last committed record (`hwm - 1`), for the
+    /// header of a snapshot taken at the high watermark.
+    #[must_use]
+    pub fn last_committed_timestamp_ms(&self) -> Option<i64> {
+        self.timestamp_below(self.hwm)
+    }
+
     /// Serves KIP-595 `Fetch`: verbatim batch bytes in
     /// `[offset, min(hwm, log_end))`.
     ///
@@ -160,20 +204,6 @@ impl KraftLog {
         Ok(())
     }
 
-    /// Persist the current logical log start so prefix pruning survives a
-    /// process restart even when it advances inside the active segment.
-    ///
-    /// # Errors
-    /// Returns [`RaftError`] if the checkpoint write fails.
-    pub fn persist_log_start_offset(&self) -> Result<(), RaftError> {
-        std::fs::write(
-            self.hwm_path.with_file_name(LOG_START_OFFSET_FILE),
-            self.log.log_start_offset().0.to_string(),
-        )
-        .map_err(krabka_log::LogError::Io)?;
-        Ok(())
-    }
-
     /// Prunes the committed prefix below `end_offset`: it advances the
     /// log-start pointer and trims the now-dead segments. This is a no-op when
     /// `end_offset` is at or below the current log start. The leader calls it
@@ -183,12 +213,10 @@ impl KraftLog {
     /// Returns [`RaftError`] if the underlying log operations fail.
     pub fn prune_to(&mut self, end_offset: Offset) -> Result<(), RaftError> {
         if end_offset <= self.log.log_start_offset() {
-            self.persist_log_start_offset()?;
             return Ok(());
         }
         self.log.set_log_start_offset(end_offset)?;
         self.log.trim_to_offset(end_offset)?;
-        self.persist_log_start_offset()?;
         Ok(())
     }
 
@@ -201,7 +229,6 @@ impl KraftLog {
     /// Returns [`RaftError`] if the underlying reset fails.
     pub fn install_snapshot(&mut self, end_offset: Offset) -> Result<(), RaftError> {
         self.log.reset_to(end_offset)?;
-        self.persist_log_start_offset()?;
         self.hwm = end_offset;
         self.persist_hwm();
         Ok(())
@@ -304,8 +331,8 @@ mod tests {
     #[test]
     fn append_assigns_sequential_offsets_and_reads_back() {
         let (mut log, _dir) = open_tmp();
-        let off0 = log.append(&mut batch(0, 1, b"a")).unwrap();
-        let off1 = log.append(&mut batch(0, 1, b"b")).unwrap();
+        let off0 = log.append(&mut batch(0, 1, b"a"), 0).unwrap();
+        let off1 = log.append(&mut batch(0, 1, b"b"), 0).unwrap();
         assert2::assert!((off0, off1, log.log_end_offset()) == (Offset(0), Offset(1), Offset(2)));
         // read back decoded
         let out = log.read_decoded(Offset(0), TEST_READ_BUDGET).unwrap();
@@ -318,11 +345,71 @@ mod tests {
     }
 
     #[test]
+    fn append_stamps_the_batch_create_time_the_snapshot_header_reads_back() {
+        let (mut log, _dir) = open_tmp();
+        // Two batches with distinct create-times, committed one at a time: the
+        // KIP-630 header timestamp names the last batch a snapshot *contains*,
+        // so it follows the high watermark rather than the log end.
+        let older = 1_700_000_000_000;
+        let newer = 1_700_000_111_222;
+        log.append(&mut batch(0, 1, b"a"), older).unwrap();
+        log.append(&mut batch(0, 1, b"b"), newer).unwrap();
+
+        log.advance_hwm(Offset(1));
+        let at_first = log.last_committed_timestamp_ms();
+        log.advance_hwm(Offset(2));
+
+        assert2::assert!(
+            (
+                at_first,
+                log.last_committed_timestamp_ms(),
+                log.timestamp_below(Offset(1)),
+                log.read_decoded(Offset(0), TEST_READ_BUDGET)
+                    .unwrap()
+                    .iter()
+                    .map(|batch| (batch.base_timestamp, batch.max_timestamp))
+                    .collect::<Vec<_>>(),
+            ) == (
+                Some(older),
+                Some(newer),
+                Some(older),
+                vec![(older, older), (newer, newer)],
+            )
+        );
+    }
+
+    #[test]
+    fn no_contained_record_has_no_timestamp() {
+        let (mut log, _dir) = open_tmp();
+        // Nothing committed yet: an empty log, and a log whose records are all
+        // still uncommitted, both have no last contained record to name.
+        let empty = log.last_committed_timestamp_ms();
+        log.append(&mut batch(0, 1, b"a"), 1_700_000_000_000)
+            .unwrap();
+        let uncommitted = log.last_committed_timestamp_ms();
+
+        // Committed, then pruned away: the boundary is now the log start, and
+        // the batch that carried the stamp is gone with the prefix.
+        log.advance_hwm(Offset(1));
+        log.prune_to(Offset(1)).unwrap();
+
+        assert2::assert!(
+            (
+                empty,
+                uncommitted,
+                log.last_committed_timestamp_ms(),
+                log.timestamp_below(Offset(0)),
+                log.timestamp_below(Offset(9)),
+            ) == (None, None, None, None, None)
+        );
+    }
+
+    #[test]
     fn append_return_matches_assigned_base_and_advances_public_end_offset() {
         let (mut log, _dir) = open_tmp();
 
-        let first = log.append(&mut batch(0, 1, b"a")).unwrap();
-        let second = log.append(&mut batch(0, 1, b"b")).unwrap();
+        let first = log.append(&mut batch(0, 1, b"a"), 0).unwrap();
+        let second = log.append(&mut batch(0, 1, b"b"), 0).unwrap();
         let decoded = log.read_decoded(Offset(0), TEST_READ_BUDGET).unwrap();
 
         check!(
@@ -343,7 +430,7 @@ mod tests {
     fn public_hwm_accessor_tracks_committed_offset_after_advance_and_snapshot() {
         let (mut log, _dir) = open_tmp();
         for _ in 0..3 {
-            log.append(&mut batch(0, 1, b"x")).unwrap();
+            log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         }
         log.advance_hwm(Offset(2));
         assert2::assert!(log.hwm() == 2);
@@ -372,8 +459,8 @@ mod tests {
     #[test]
     fn logview_reports_end_offset_and_last_epoch() {
         let (mut log, _dir) = open_tmp();
-        log.append(&mut batch(0, 1, b"a")).unwrap();
-        log.append(&mut batch(0, 3, b"b")).unwrap(); // epoch jumps to 3
+        log.append(&mut batch(0, 1, b"a"), 0).unwrap();
+        log.append(&mut batch(0, 3, b"b"), 0).unwrap(); // epoch jumps to 3
         assert2::assert!(LogView::end_offset(&log) == 2);
         assert2::assert!(LogView::last_epoch(&log) == 3);
     }
@@ -381,8 +468,8 @@ mod tests {
     #[test]
     fn logview_end_offset_for_epoch_maps_unknown_to_none() {
         let (mut log, _dir) = open_tmp();
-        log.append(&mut batch(0, 1, b"a")).unwrap(); // epoch 1 @ [0,1)
-        log.append(&mut batch(0, 2, b"b")).unwrap(); // epoch 2 @ [1,2)
+        log.append(&mut batch(0, 1, b"a"), 0).unwrap(); // epoch 1 @ [0,1)
+        log.append(&mut batch(0, 2, b"b"), 0).unwrap(); // epoch 2 @ [1,2)
         // epoch 1 ends where epoch 2 starts (offset 1); epoch 2 is current → end 2.
         // unknown future epoch → None
         for (_case, epoch, want) in [
@@ -404,7 +491,7 @@ mod tests {
     fn read_committed_never_returns_bytes_past_hwm() {
         let (mut log, _dir) = open_tmp();
         for _ in 0..5 {
-            log.append(&mut batch(0, 1, b"x")).unwrap();
+            log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         } // offsets 0..5
         log.advance_hwm(Offset(3));
         let r = log.read_committed(Offset(0), TEST_READ_BUDGET).unwrap();
@@ -419,7 +506,7 @@ mod tests {
     #[test]
     fn advance_hwm_is_monotonic_and_clamped_to_log_end() {
         let (mut log, _dir) = open_tmp();
-        log.append(&mut batch(0, 1, b"x")).unwrap(); // log_end = 1
+        log.append(&mut batch(0, 1, b"x"), 0).unwrap(); // log_end = 1
         log.advance_hwm(Offset(5)); // clamp to log_end
         assert2::assert!(log.hwm() == 1);
         log.advance_hwm(Offset(0)); // never regress
@@ -430,7 +517,7 @@ mod tests {
     fn prune_to_advances_log_start_and_is_noop_when_behind() {
         let (mut log, _dir) = open_tmp();
         for _ in 0..5 {
-            log.append(&mut batch(0, 1, b"x")).unwrap();
+            log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         }
         log.advance_hwm(log.log_end_offset());
         assert2::assert!(log.log_start_offset() == 0);
@@ -441,10 +528,29 @@ mod tests {
     }
 
     #[test]
+    fn prune_inside_the_active_segment_survives_a_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let mut log = KraftLog::open(dir.path()).expect("open");
+            for _ in 0..5 {
+                log.append(&mut batch(0, 1, b"x")).unwrap();
+            }
+            log.advance_hwm(log.log_end_offset());
+            // Every record is in one segment, so no segment name records the
+            // prune: `krabka_log::Log`'s checkpoint is what carries it.
+            log.prune_to(Offset(3)).unwrap();
+        }
+
+        let log = KraftLog::open(dir.path()).expect("reopen");
+
+        check!((log.log_start_offset().0, log.log_end_offset().0) == (3, 5));
+    }
+
+    #[test]
     fn install_snapshot_resets_log_to_empty_at_offset() {
         let (mut log, _dir) = open_tmp();
         for _ in 0..4 {
-            log.append(&mut batch(0, 1, b"x")).unwrap();
+            log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         }
         log.install_snapshot(Offset(100)).unwrap();
         check!(
@@ -454,7 +560,7 @@ mod tests {
                 log.hwm().0,
             ) == (100, 100, 100)
         );
-        let base = log.append(&mut batch(0, 1, b"x")).unwrap();
+        let base = log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         assert2::assert!(base == 100);
     }
 
@@ -462,7 +568,7 @@ mod tests {
     fn truncate_to_drops_log_end_and_hwm() {
         let (mut log, _dir) = open_tmp();
         for _ in 0..5 {
-            log.append(&mut batch(0, 1, b"x")).unwrap();
+            log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         }
         log.advance_hwm(Offset(5));
         log.truncate_to(Offset(2)).unwrap();
@@ -474,7 +580,7 @@ mod tests {
     fn truncate_below_log_start_returns_error() {
         let (mut log, _dir) = open_tmp();
         for _ in 0..4 {
-            log.append(&mut batch(0, 1, b"x")).unwrap();
+            log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         }
         log.prune_to(Offset(2)).unwrap();
 

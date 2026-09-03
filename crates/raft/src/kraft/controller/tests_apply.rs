@@ -34,7 +34,7 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
             scratch.apply(record);
         }
         let mut batch = metadata_record_batch(1, &blobs).expect("metadata batch");
-        engine.log.append(&mut batch).expect("append metadata");
+        engine.log.append(&mut batch, 0).expect("append metadata");
     }
     check!(
         engine
@@ -89,8 +89,8 @@ fn metadata_fetch_slice_excludes_negative_hwm_and_uncommitted_batches() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     let mut first = one_offset_batch(0, 1, b"a");
     let mut second = one_offset_batch(1, 1, b"b");
-    engine.log.append(&mut first).expect("append first");
-    engine.log.append(&mut second).expect("append second");
+    engine.log.append(&mut first, 0).expect("append first");
+    engine.log.append(&mut second, 0).expect("append second");
     engine.log.advance_hwm(Offset(1));
 
     assert2::assert!(

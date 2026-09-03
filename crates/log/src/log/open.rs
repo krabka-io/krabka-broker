@@ -28,7 +28,7 @@ use crate::{
     error::LogError,
     io::FileIo,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
-    name,
+    log_start_offset_checkpoint, name,
     producer_snapshot::{self, ProducerSnapshotEntry},
     segment::Segment,
     txn_index::TxnIndex,
@@ -145,9 +145,9 @@ impl Log {
         span.record("segments", segments.len() + 1);
         span.record("log_end", lso.0);
 
-        // Nothing durable carries the global floor across a restart yet, so a
-        // reopened log starts it at the oldest offset on disk: the same value
-        // the old derived-from-segments accessor answered.
+        // The segment names witness only where the surviving files begin. The
+        // checkpoint below carries the rest, and is what turns this into a
+        // floor somebody deleted up to.
         let start_offset = segments
             .first()
             .map_or_else(|| active.base_offset(), Segment::base_offset);
@@ -160,7 +160,8 @@ impl Log {
             active: Some(active),
             dir_sync_needed,
             start_offset,
-            // Inferred from the files on disk, not moved by anyone: see
+            // Derived from the files on disk, not deleted up to by anyone.
+            // The checkpoint restore below is what may set it: see
             // `Log::established_log_start`.
             start_offset_established: false,
             lso,
@@ -177,10 +178,45 @@ impl Log {
             delivery_watermark: Offset(0),
             delivery_pending_ms: None,
         };
+        // Producer-state replay walks whole batches, so it must start from the
+        // segment-derived floor, which is always a batch boundary. Restoring
+        // the checkpoint first would start it mid-batch on a trim that landed
+        // inside one.
+        log.rebuild_producer_and_transaction_state()?;
+        // Restore a log start that the segment names cannot express: a trim
+        // that landed inside a segment left its records on disk, and only the
+        // checkpoint says they are gone.
+        if let Some(checkpointed) = log_start_offset_checkpoint::read(&log.dir)? {
+            // Cap at the log end and nothing else. Above it, the whole
+            // surviving log is below a start that was acknowledged, so every
+            // record left is one the trim removed and the log start is the log
+            // end -- a crash between a trim and the fsync of the records it
+            // trimmed past lands there.
+            //
+            // There is deliberately no floor at the segment-derived start. On
+            // a tiered partition (KIP-405) the global floor belongs *below*
+            // the oldest local segment, in the band the archive serves, and
+            // raising the checkpoint to meet the surviving files would hide
+            // every offset the remote tier still holds -- and then write that
+            // loss back to disk. `Log::local_log_start_offset` is the floor
+            // that follows the files.
+            let effective = checkpointed.min(log.log_end_offset());
+            log.start_offset = effective;
+            // A checkpoint exists, so somebody deleted up to this floor: it is
+            // one a reader may be refused against and remote retention may
+            // delete against.
+            log.start_offset_established = true;
+            if effective != checkpointed {
+                // Persist what was resolved instead of leaving the
+                // out-of-range value on disk. It is inert against this log,
+                // but appends move the log end, and the next open would find
+                // the stale value back in range and hide live records.
+                log_start_offset_checkpoint::write(&log.dir, effective)?;
+            }
+        }
         // Recovery needs no durable watermark: the schedule is in the records,
         // so the first advance rebuilds it from the log start.
         log.delivery_watermark = log.log_start_offset();
-        log.rebuild_producer_and_transaction_state()?;
         Ok(log)
     }
 

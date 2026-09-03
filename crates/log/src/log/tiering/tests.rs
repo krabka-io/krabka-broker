@@ -395,18 +395,18 @@ fn delete_local_segments_through_rejects_negative_target() {
     assert2::assert!(matches!(err, LogError::InvalidArgument(_)));
 }
 
-/// A reopened tiered log whose local segments were evicted must not report a
-/// floor anything may be refused or deleted against.
+/// Evicting a copied segment leaves the reopened log with no floor anything
+/// may be refused or deleted against.
 ///
-/// Nothing durable carries the global floor across a restart yet, so
-/// [`Log::open`] can only read one off the segments that survived on disk --
-/// and on a tiered partition those start above everything the archive holds.
-/// A remote read measured against that inference would refuse offsets the
-/// tier can still serve, and the log-start breach in remote retention would
-/// delete the archive. [`Log::established_log_start`] answers `None` until
-/// this process moves the floor itself.
+/// A local eviction deletes no records -- the archive still answers for them
+/// -- so it writes no checkpoint, and [`Log::open`] can then only read a start
+/// off the segments that survived. On a tiered partition those begin above
+/// everything the archive holds. A remote read measured against that
+/// derivation would refuse offsets the tier can still serve, and the log-start
+/// breach in remote retention would delete the archive, so
+/// [`Log::established_log_start`] answers `None`.
 #[test]
-fn a_reopened_log_reports_no_floor_until_something_moves_one() {
+fn a_local_eviction_leaves_a_reopened_log_with_no_floor_to_refuse_against() {
     let dir = tempdir().unwrap();
     let config = LogConfig::default();
     let mut log = rolled_log(dir.path(), &config);
@@ -418,7 +418,7 @@ fn a_reopened_log_reports_no_floor_until_something_moves_one() {
     let mut reopened = Log::open(dir.path(), config).unwrap();
     check!(
         reopened.log_start_offset() == evicted_through,
-        "the inference is still the first surviving segment"
+        "the derivation is still the first surviving segment"
     );
     check!(
         reopened.established_log_start() == None,
@@ -429,5 +429,39 @@ fn a_reopened_log_reports_no_floor_until_something_moves_one() {
     check!(
         reopened.established_log_start() == Some(evicted_through + 1),
         "a floor this process moved is one a reader may be refused against"
+    );
+}
+
+/// A `DeleteRecords` on a tiered partition survives the reopen, and stays
+/// below the segments that survived it.
+///
+/// This is the restart half of the issue: the checkpoint carries the *global*
+/// floor, so a reopened partition still refuses what an operator deleted while
+/// still serving the band above it from the archive. Raising the checkpoint to
+/// the first surviving segment -- which is where a single-floor log would put
+/// it -- would hide every offset the tier holds.
+#[test]
+fn a_delete_records_floor_under_the_local_segments_survives_a_reopen() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig::default();
+    let mut log = rolled_log(dir.path(), &config);
+    let exports = log.tierable_segments();
+    let deleted_through = exports[0].base_offset + 1;
+    let evicted_through = exports[1].last_offset + 1;
+    log.set_log_start_offset(deleted_through).unwrap();
+    log.delete_local_segments_through(evicted_through).unwrap();
+    log.sync().unwrap();
+    drop(log);
+
+    let reopened = Log::open(dir.path(), config).unwrap();
+
+    check!(
+        reopened.log_start_offset() == deleted_through,
+        "the operator's floor, not where the surviving files begin"
+    );
+    check!(reopened.established_log_start() == Some(deleted_through));
+    check!(
+        reopened.local_log_start_offset() == evicted_through,
+        "the band between the two is the archive's to serve"
     );
 }

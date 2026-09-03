@@ -286,9 +286,9 @@ fn serve_fetch_records_returns_batches_only_for_offsets_inside_log() {
             .expect("one byte still serves the first batch"),
     );
     let mut batch = one_offset_batch(0, 1, b"a");
-    engine.log.append(&mut batch).expect("append");
+    engine.log.append(&mut batch, 0).expect("append");
     let mut batch = one_offset_batch(1, 1, b"b");
-    engine.log.append(&mut batch).expect("append");
+    engine.log.append(&mut batch, 0).expect("append");
 
     assert2::assert!(engine.serve_fetch_records(Offset(-1)).is_empty());
     assert2::assert!(engine.serve_fetch_records(Offset(2)).is_empty());
@@ -458,7 +458,7 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
         let mut batch = one_offset_batch(offset, 2, b"local");
         truncating
             .log
-            .append(&mut batch)
+            .append(&mut batch, 0)
             .expect("append local batch");
     }
     become_follower(&mut truncating, NodeId(2), 3);
@@ -499,7 +499,7 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
     let mut local = one_offset_batch(0, 2, b"already-replicated");
     advancing
         .log
-        .append(&mut local)
+        .append(&mut local, 0)
         .expect("append local batch");
     become_follower(&mut advancing, NodeId(2), 3);
     let watermark = wire::PeerResponse::Fetch {

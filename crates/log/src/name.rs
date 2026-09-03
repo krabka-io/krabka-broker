@@ -77,6 +77,15 @@ pub fn leader_epoch_checkpoint_path(dir: &Path) -> PathBuf {
     dir.join("leader-epoch-checkpoint")
 }
 
+/// Path to the per-partition `log-start-offset-checkpoint` file.
+///
+/// It holds the log start offset that no segment name records: the part of a
+/// trim that lands inside a segment rather than on a segment boundary.
+#[must_use]
+pub fn log_start_offset_checkpoint_path(dir: &Path) -> PathBuf {
+    dir.join("log-start-offset-checkpoint")
+}
+
 /// Suffix that the broker appends to a future-log partition directory while a KIP-113 intra-broker move runs.
 ///
 /// The directory at `<target_log_dir>/<topic>-<partition><FUTURE_SUFFIX>` collects copied batches. When the future log catches up, the broker renames it in place to `<topic>-<partition>`. The suffix mirrors Apache Kafka's `LogManager.FutureDirSuffix`, so what cp-kafka tooling such as `kafka-log-dirs` expects matches the bytes on disk.

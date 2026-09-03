@@ -76,15 +76,21 @@ pub struct Log {
     /// band `[log_start_offset(), local_log_start_offset())` for the remote
     /// read path to serve. [`Log::local_log_start_offset`] is the second
     /// floor.
+    ///
+    /// The segment names witness only the local half. [`Log::open`] derives
+    /// this pointer from them and then restores the durable half from
+    /// `log-start-offset-checkpoint`, which [`Log::set_log_start_offset`]
+    /// writes.
     start_offset: Offset,
 
-    /// Whether [`Self::start_offset`] is a floor this process moved, rather
-    /// than one inferred from the segments that happened to be on disk at
+    /// Whether [`Self::start_offset`] is a floor someone deleted up to, rather
+    /// than one derived from the segments that happened to be on disk at
     /// [`Log::open`].
     ///
-    /// Nothing durable carries the global floor across a restart yet, so a
-    /// reopened log can only infer one, and on a tiered partition whose local
-    /// segments were evicted that inference sits *above* everything the
+    /// True once this process moves the floor, and true at open when
+    /// `log-start-offset-checkpoint` restored one. False on a log whose only
+    /// witness is its segment names: on a tiered partition whose local
+    /// segments were evicted, that derivation sits *above* everything the
     /// archive holds. Three callers must not act on such a floor: the remote
     /// read would refuse offsets the archive can still serve, the log-start
     /// breach in remote retention would delete the archive, and the
