@@ -108,7 +108,7 @@ pub(super) fn create_delegation_token_adapter<'a>(
     _correlation_id: CorrelationId,
     body: &'a [u8],
     auth: &'a crate::network::auth::ConnectionAuth,
-    _peer: &'a std::net::SocketAddr,
+    peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
         use krabka_protocol::Decode;
@@ -131,6 +131,9 @@ pub(super) fn create_delegation_token_adapter<'a>(
             &broker.config.super_users,
         )
         .await;
+        if resp.error_code == crate::codes::NONE {
+            audit_token_operation(broker, auth, peer, "CreateDelegationToken", &resp.token_id);
+        }
         crate::handlers::encode_response(&resp, version)
     })
 }
@@ -141,7 +144,7 @@ pub(super) fn renew_delegation_token_adapter<'a>(
     _correlation_id: CorrelationId,
     body: &'a [u8],
     auth: &'a crate::network::auth::ConnectionAuth,
-    _peer: &'a std::net::SocketAddr,
+    peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
         use krabka_protocol::Decode;
@@ -151,6 +154,9 @@ pub(super) fn renew_delegation_token_adapter<'a>(
             &mut cur,
             version,
         )?;
+        // Resolve the token id before the mutation: the response carries only
+        // the new expiry, and a delete leaves nothing to look up afterwards.
+        let token_id = token_id_for_hmac(broker, req.hmac.as_ref());
         let resp = crate::handlers::renew_delegation_token::handle(
             &req,
             auth,
@@ -163,6 +169,11 @@ pub(super) fn renew_delegation_token_adapter<'a>(
             &broker.config.super_users,
         )
         .await;
+        if resp.error_code == crate::codes::NONE
+            && let Some(token_id) = token_id.as_deref()
+        {
+            audit_token_operation(broker, auth, peer, "RenewDelegationToken", token_id);
+        }
         crate::handlers::encode_response(&resp, version)
     })
 }
@@ -173,7 +184,7 @@ pub(super) fn expire_delegation_token_adapter<'a>(
     _correlation_id: CorrelationId,
     body: &'a [u8],
     auth: &'a crate::network::auth::ConnectionAuth,
-    _peer: &'a std::net::SocketAddr,
+    peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
         use krabka_protocol::Decode;
@@ -183,6 +194,7 @@ pub(super) fn expire_delegation_token_adapter<'a>(
             &mut cur,
             version,
         )?;
+        let token_id = token_id_for_hmac(broker, req.hmac.as_ref());
         let resp = crate::handlers::expire_delegation_token::handle(
             &req,
             auth,
@@ -191,6 +203,11 @@ pub(super) fn expire_delegation_token_adapter<'a>(
             &broker.config.super_users,
         )
         .await;
+        if resp.error_code == crate::codes::NONE
+            && let Some(token_id) = token_id.as_deref()
+        {
+            audit_token_operation(broker, auth, peer, "ExpireDelegationToken", token_id);
+        }
         crate::handlers::encode_response(&resp, version)
     })
 }
@@ -221,4 +238,43 @@ pub(super) fn describe_delegation_token_adapter<'a>(
         );
         crate::handlers::encode_response(&resp, version)
     })
+}
+
+/// The token id behind an `hmac`, read from the current metadata image.
+///
+/// `RenewDelegationToken` and `ExpireDelegationToken` address a token by its
+/// HMAC, and neither response echoes an id back. The audit record names the
+/// id, never the HMAC: the HMAC *is* the token's password equivalent, and an
+/// audit topic an auditor can read is not a place to keep one.
+fn token_id_for_hmac(broker: &Broker, hmac: &[u8]) -> Option<String> {
+    broker
+        .controller
+        .current_image()
+        .delegation_token_by_hmac(hmac)
+        .map(|token| token.token_id.clone())
+}
+
+/// Emits the `AdminOperation` record for a delegation-token mutation.
+///
+/// These apis authorize against the connection, so the principal comes from
+/// the `ConnectionAuth` rather than from a `RequestContext`. An unauthenticated
+/// connection never reaches a success path here, so there is nothing to audit
+/// for one.
+fn audit_token_operation(
+    broker: &Broker,
+    auth: &crate::network::auth::ConnectionAuth,
+    peer: &std::net::SocketAddr,
+    operation: &str,
+    token_id: &str,
+) {
+    if let crate::network::auth::ConnectionAuth::Authenticated { principal, .. } = auth {
+        crate::handlers::audit_admin_for(
+            broker.audit_log.as_ref(),
+            principal,
+            peer,
+            operation,
+            krabka_audit::AuditOutcome::Success,
+            vec![crate::handlers::audit_resource("DelegationToken", token_id)],
+        );
+    }
 }

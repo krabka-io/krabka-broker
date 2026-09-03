@@ -12,7 +12,7 @@ use krabka_security::ListenerProtocol;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::config::ListenerSpec;
+use crate::{SslPrincipalMapper, config::ListenerSpec, file_config::FileConfigError};
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 pub struct FileTlsConfig {
@@ -27,6 +27,23 @@ pub struct FileTlsConfig {
     pub client_ca_path: Option<std::path::PathBuf>,
     #[serde(default)]
     pub client_auth: FileClientAuthMode,
+    /// KIP-371 `ssl.principal.mapping.rules`: how the Subject DN of an mTLS
+    /// peer certificate becomes the principal name ACLs and `super_users` are
+    /// written against. Each entry is either `DEFAULT`, which uses the DN
+    /// itself, or `RULE:pattern/replacement/[L|U]`, where `pattern` has to
+    /// match the whole DN, `replacement` may reference capture groups as `$1`,
+    /// and a trailing `L` or `U` lowercases or uppercases the result. The
+    /// rules are tried in order and the first match wins. Defaults to
+    /// `["DEFAULT"]`, so a listener that says nothing keeps Kafka's behaviour
+    /// of using the full DN. A malformed entry is rejected at startup.
+    #[serde(default = "default_principal_mapping_rules")]
+    pub principal_mapping_rules: Vec<String>,
+}
+
+/// Kafka's `ssl.principal.mapping.rules` default: pass the Subject DN
+/// through unchanged.
+fn default_principal_mapping_rules() -> Vec<String> {
+    vec!["DEFAULT".to_owned()]
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -77,13 +94,36 @@ pub struct FileListener {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_idle: Option<krabka_units::Time>,
+    /// Per-listener KIP-368 `connections.max.reauth.ms`. Absent leaves this
+    /// listener on the broker-wide `connections_max_reauth`. Maps to an entry
+    /// in [`crate::BrokerConfig::connections_max_reauth_overrides`].
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub connections_max_reauth: Option<krabka_units::Time>,
 }
 
 impl FileListener {
-    #[must_use]
-    pub fn into_spec(self) -> ListenerSpec {
+    /// Converts this entry into the [`ListenerSpec`] the broker holds,
+    /// parsing the listener's KIP-371 principal mapping rules on the way.
+    ///
+    /// # Errors
+    ///
+    /// [`FileConfigError::InvalidConfig`] when a `principal_mapping_rules`
+    /// entry is not a rule.
+    pub fn into_spec(self) -> Result<ListenerSpec, FileConfigError> {
         use krabka_security::{ClientAuthMode, TlsConfig as BrokerTlsConfig};
-        ListenerSpec {
+        let principal_mapper = match self.tls_config.as_ref() {
+            Some(tls) => {
+                SslPrincipalMapper::parse(&tls.principal_mapping_rules).map_err(|error| {
+                    FileConfigError::InvalidConfig(format!(
+                        "invalid ssl principal mapping rule on listener {}: {error}",
+                        self.name
+                    ))
+                })?
+            }
+            None => SslPrincipalMapper::default(),
+        };
+        Ok(ListenerSpec {
             name: self.name,
             bind_addr: self.bind_addr,
             advertised: self.advertised,
@@ -100,7 +140,8 @@ impl FileListener {
                 },
             }),
             sasl_mechanisms: self.sasl_config.map(|s| s.enabled_mechanisms),
-        }
+            principal_mapper,
+        })
     }
 }
 
@@ -141,6 +182,7 @@ tls_config = { cert_path = "/tls/broker.crt", key_path = "/tls/broker.key", clie
             trust_roots_path: None,
             client_ca_path: Some(std::path::PathBuf::from("/tls/clients-ca.crt")),
             client_auth: FileClientAuthMode::Required,
+            principal_mapping_rules: vec!["DEFAULT".to_owned()],
         };
         assert!(*data_tls == expected);
     }
@@ -163,6 +205,89 @@ sasl_config = { enabled_mechanisms = ["SCRAM-SHA-512"] }
         let cfg: FileConfig = toml::from_str(toml).unwrap();
         let sasl = cfg.listeners[0].sasl_config.as_ref().unwrap();
         assert!(sasl.enabled_mechanisms == vec![krabka_security::SaslMechanism::ScramSha512]);
+    }
+
+    /// A listener that says nothing about mapping keeps Kafka's `DEFAULT`,
+    /// so the Subject DN is still the principal name.
+    #[test]
+    fn principal_mapping_rules_default_to_the_subject_dn() {
+        let toml = r#"
+[[listeners]]
+name = "mtls"
+bind_addr = "0.0.0.0:9094"
+advertised = "localhost:9094"
+protocol = "Ssl"
+tls_config = { cert_path = "/tls/c", key_path = "/tls/k" }
+"#;
+        let cfg: FileConfig = toml::from_str(toml).unwrap();
+        let tls = cfg.listeners[0].tls_config.as_ref().unwrap();
+        assert!(tls.principal_mapping_rules == vec!["DEFAULT".to_owned()]);
+        let spec = cfg.listeners[0].clone().into_spec().unwrap();
+        assert!(
+            spec.principal_mapper.apply("CN=alice,OU=x,O=y").as_deref()
+                == Some("CN=alice,OU=x,O=y")
+        );
+    }
+
+    /// The configured rules reach the listener the accept path reads them
+    /// from, so an mTLS peer's DN becomes the short name ACLs are written
+    /// against.
+    #[test]
+    fn apply_to_listener_parses_principal_mapping_rules() {
+        let toml = r#"
+broker_id = 0
+inter_broker_listener_name = "mtls"
+
+[[listeners]]
+name = "mtls"
+bind_addr = "0.0.0.0:9094"
+advertised = "localhost:9094"
+protocol = "Ssl"
+tls_config = { cert_path = "/tls/c", key_path = "/tls/k", client_auth = "Required", principal_mapping_rules = ["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"] }
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).expect("apply listener");
+        let listener = cfg
+            .listeners
+            .iter()
+            .find(|listener| listener.name == "mtls")
+            .expect("mtls listener present");
+        assert!(
+            listener
+                .principal_mapper
+                .apply("CN=alice,OU=integration,O=krabka")
+                .as_deref()
+                == Some("alice")
+        );
+        assert!(
+            listener
+                .principal_mapper
+                .apply("OU=integration,O=krabka")
+                .as_deref()
+                == Some("OU=integration,O=krabka")
+        );
+    }
+
+    /// A rule that is neither `DEFAULT` nor `RULE:pattern/replacement/[L|U]`
+    /// fails the config apply rather than silently mapping nothing.
+    #[test]
+    fn apply_to_listener_rejects_malformed_principal_mapping_rule() {
+        let toml = r#"
+[[listeners]]
+name = "mtls"
+bind_addr = "0.0.0.0:9094"
+advertised = "localhost:9094"
+protocol = "Ssl"
+tls_config = { cert_path = "/tls/c", key_path = "/tls/k", principal_mapping_rules = ["NOT_A_RULE:::"] }
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        let err = file.apply_to(&mut cfg).unwrap_err();
+        assert!(matches!(
+            err,
+            crate::file_config::FileConfigError::InvalidConfig(_)
+        ));
     }
 
     #[test]
@@ -235,8 +360,9 @@ protocol = "Plaintext"
             tls_config: None,
             sasl_config: None,
             connections_max_idle: None,
+            connections_max_reauth: None,
         };
-        let spec = fl.into_spec();
+        let spec = fl.into_spec().expect("no rules to reject");
         check!(spec.name == "X");
         check!(spec.bind_addr == "0.0.0.0:9094".parse::<SocketAddr>().unwrap());
         check!(spec.advertised == "h:9094");

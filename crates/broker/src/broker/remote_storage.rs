@@ -44,6 +44,7 @@ pub(super) fn start_remote_storage(
     config: &BrokerConfig,
     partitions: &Arc<PartitionRegistry>,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    metrics: &crate::metrics::BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> Result<RemoteStorageStartup, BrokerError> {
     let Some(backend) = config.remote_storage_backend.clone() else {
@@ -112,6 +113,7 @@ pub(super) fn start_remote_storage(
             archive,
             rsm: Arc::clone(&storage),
             rlmm: Arc::clone(&metadata),
+            metrics: metrics.clone(),
             node_id: config.node_id,
             broker_id: config.broker_id,
         },

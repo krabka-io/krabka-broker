@@ -271,8 +271,10 @@ async fn authenticate_during_reauth_same_principal_transitions_back_to_authentic
             },
             mechanism: SaslMechanism::OAuthBearer,
             expires_at_ms: Some(now_ms + 1_000), // about to expire
+            authenticated_via_token: false,
         },
         exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
     };
     let resp = handle_authenticate_oauthbearer(
         &oauthbearer_client_response(&token),
@@ -319,8 +321,10 @@ async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_
             },
             mechanism: SaslMechanism::OAuthBearer,
             expires_at_ms: Some(now_ms + 1_000),
+            authenticated_via_token: false,
         },
         exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
     };
     let resp = handle_authenticate_oauthbearer(
         &oauthbearer_client_response(&token),
@@ -346,7 +350,7 @@ async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_
 }
 
 // KIP-368 ceiling: the server-side
-// `max_session_lifetime_seconds` cap clamps both the response field and
+// `connections.max.reauth.ms` cap clamps both the response field and
 // the `Authenticated.expires_at_ms` stored on the connection.
 
 #[tokio::test]

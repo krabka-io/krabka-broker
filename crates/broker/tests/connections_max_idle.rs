@@ -78,6 +78,7 @@ fn loopback_listener(name: &str, protocol: ListenerProtocol) -> ListenerSpec {
         protocol,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }
 }
 

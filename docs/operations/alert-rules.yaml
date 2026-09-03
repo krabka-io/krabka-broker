@@ -146,6 +146,35 @@ groups:
           description: "The broker keeps retrying the __remote_log_metadata bootstrap and still answers from the fail-closed placeholder. Tiered reads and copies wait."
           runbook: docs/operations/runbooks/rlmm-bootstrap-stuck.md
 
+      - alert: KrabkaWormSealFailures
+        expr: rate(krabka_broker_worm_manifest_seal_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} cannot seal WORM manifests"
+          description: "Segment copies into the write-once archive end without a usable manifest, so the segment stays in CopySegmentStarted and the archive stops attesting. Check the broker log for the partition and the backend error; krabka_broker_worm_manifests_sealed_total flat alongside this confirms the chain is not advancing."
+          runbook: docs/operations/runbooks/worm-seal-failures.md
+
+      - alert: KrabkaAuthenticationFailures
+        expr: rate(krabka_broker_failed_authentication_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} rejects {{ $labels.mechanism }} authentications"
+          description: "SaslAuthenticate frames keep coming back with an error. The metric comment names no threshold; one reject a second over five minutes is a starting point. A stale credential and a credential-stuffing burst look the same here -- krabka_broker_successful_authentication_total beside it tells them apart."
+          runbook: docs/operations/runbooks/authentication-failures.md
+
+      - alert: KrabkaAuthorizationDenials
+        expr: rate(krabka_broker_authorization_denied_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} denies {{ $labels.operation }} on {{ $labels.resource_type }}"
+          description: "The authorizer has answered Deny continuously for ten minutes. A single Deny is normal; a sustained rate is usually an ACL change that locked out a fleet. Kafka has no equivalent metric -- it only logs to kafka.authorizer.logger."
+          runbook: docs/operations/runbooks/authorization-denials.md
+
       - alert: KrabkaAuditWriteFailures
         expr: rate(krabka_broker_audit_write_failures_total[5m]) > 0
         labels:

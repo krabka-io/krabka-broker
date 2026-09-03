@@ -121,6 +121,7 @@ pub(crate) async fn handle(
 
     let mut results: Vec<CreatePartitionsTopicResult> = Vec::with_capacity(req.topics.len());
     let preferred_site = resolve_preferred_leader_site(&image);
+    let validate_only = req.validate_only;
 
     for t in req.topics {
         let mut out = CreatePartitionsTopicResult {
@@ -186,7 +187,7 @@ pub(crate) async fn handle(
             continue;
         }
 
-        if req.validate_only {
+        if validate_only {
             results.push(out);
             continue;
         }
@@ -239,6 +240,20 @@ pub(crate) async fn handle(
         }
 
         results.push(out);
+    }
+
+    // A `--dry-run` request grows nothing, so it changed no topic.
+    if !validate_only {
+        crate::handlers::audit_admin_success(
+            broker.audit_log.as_ref(),
+            ctx,
+            "CreatePartitions",
+            results
+                .iter()
+                .filter(|result| result.error_code == codes::NONE)
+                .map(|result| crate::handlers::audit_resource("Topic", result.name.clone()))
+                .collect(),
+        );
     }
 
     // KIP-599: report the controller_mutation_rate throttle after response

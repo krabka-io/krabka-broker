@@ -39,8 +39,10 @@ mod runtime_core;
 mod runtime_policy;
 mod runtime_storage;
 mod runtime_transactions;
+mod sasl_plain;
 mod schema_registry;
 mod tail;
+mod topic_policy;
 mod validate;
 
 pub use self::{
@@ -57,7 +59,9 @@ pub use self::{
     process::{FileProcessConfig, FileStretchConfig},
     remote_storage::{FileKafkaRlmmConfig, FileRemoteStorageConfig},
     runtime_config::RuntimeFileConfig,
+    sasl_plain::FileSaslPlainConfig,
     schema_registry::FileSchemaRegistryConfig,
+    topic_policy::FileTopicPolicyConfig,
 };
 
 /// Schema-only stand-ins for the `krabka_units` value types.
@@ -252,6 +256,18 @@ pub struct FileConfig {
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_idle: Option<Time>,
 
+    /// KIP-368 `connections.max.reauth.ms`: how long an authenticated SASL
+    /// session may live before the client must re-authenticate in band.
+    /// Absent, or non-positive, disables re-authentication, which is Kafka's
+    /// default. It applies to every mechanism: PLAIN, SCRAM and GSSAPI
+    /// sessions are bounded by it alone, while an OAUTHBEARER or
+    /// delegation-token session expires at the earlier of its credential's
+    /// expiry and this window. A `[[listeners]]` entry may carry its own
+    /// `connections_max_reauth`, which wins for that listener.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub connections_max_reauth: Option<Time>,
+
     /// KIP-595 static controller quorum voter set. Each entry is
     /// `<node_id>@<host>:<port>` pointing at a broker's controller listener
     /// (port 9093). At apply time each entry is parsed (NOT DNS-resolved) and
@@ -307,10 +323,20 @@ pub struct FileConfig {
     pub delegation_token: Option<FileDelegationTokenConfig>,
 
     /// Principals that are unconditionally authorized for
-    /// all operations, including KIP-48 delegation-token `act-as`. The
-    /// operator emits `super_users = ["ANONYMOUS"]` when
-    /// `Kafka.spec.delegationToken` is set so its PLAINTEXT
-    /// inter-broker reconcile loop can mint per-`KafkaUser` tokens.
+    /// all operations, including KIP-48 delegation-token `act-as`.
+    ///
+    /// Super-user status does not substitute for authentication. The
+    /// delegation-token RPCs (`CreateDelegationToken`,
+    /// `RenewDelegationToken`, `ExpireDelegationToken`) require a principal
+    /// that authenticated with SASL or mTLS, and answer
+    /// `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or
+    /// one-way-TLS connection whatever this list holds. Listing
+    /// `"ANONYMOUS"` is therefore rejected by `BrokerConfig::validate`: it
+    /// cannot enable token issuance, and it would make every unauthenticated
+    /// client a super-user for all operations. Give the token-minting client
+    /// a SASL credential or a client certificate and list that principal
+    /// here.
+    ///
     /// `None` and `Some(empty)` are equivalent — both leave
     /// `BrokerConfig.super_users` empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -327,6 +353,11 @@ pub struct FileConfig {
     /// `type` field selects the authorizer implementation; for
     /// `type = "opa"`, the `[authorization.opa]` subtable is required.
     pub authorization: Option<FileAuthorizationConfig>,
+
+    /// `[sasl_plain]` section — where the broker's static SASL/PLAIN
+    /// credential table is read from. Absent leaves the table empty, which
+    /// `BrokerConfig::validate` refuses once a listener offers PLAIN.
+    pub sasl_plain: Option<FileSaslPlainConfig>,
 
     /// `[process]` section — `KRaft` `process.roles`. Absent / empty leaves
     /// the `BrokerConfig` default `[Controller, Broker]`.
@@ -371,4 +402,10 @@ pub struct FileConfig {
     /// transitions. Absent leaves the `BrokerConfig` defaults, which run no
     /// break-glass workflow.
     pub break_glass: Option<FileBreakGlassConfig>,
+
+    /// `[topic_policy]` section — the KIP-108 / KIP-133 rule set a topic must
+    /// satisfy before the controller commits its creation or its config
+    /// change. Absent declares no rule, which is Kafka's default of no policy
+    /// class.
+    pub topic_policy: Option<FileTopicPolicyConfig>,
 }

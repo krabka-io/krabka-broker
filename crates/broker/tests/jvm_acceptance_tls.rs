@@ -7,7 +7,8 @@
 //! The binary root carries only the module tree. [`ssl_handshake`] is the bare
 //! TLS case, [`sasl_ssl_stack`] adds SASL over it on a single broker, and
 //! [`inter_broker_plaintext`] and [`inter_broker_sasl_ssl`] are the two-broker
-//! cases that authenticate peer to peer.
+//! cases that authenticate peer to peer. [`mtls_principal_mapping`] is the one
+//! case that authenticates with the client certificate itself.
 //!
 //! Cargo compiles this file as its own test binary, so a `mod` declaration in
 //! it resolves against `tests/` rather than against a directory named for the
@@ -20,6 +21,8 @@ mod inter_broker_plaintext;
 #[path = "jvm_acceptance_tls/inter_broker_sasl_ssl.rs"]
 mod inter_broker_sasl_ssl;
 mod jvm_acceptance;
+#[path = "jvm_acceptance_tls/mtls_principal_mapping.rs"]
+mod mtls_principal_mapping;
 #[path = "jvm_acceptance_tls/sasl_ssl_stack.rs"]
 mod sasl_ssl_stack;
 #[path = "jvm_acceptance_tls/ssl_handshake.rs"]

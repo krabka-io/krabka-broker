@@ -9,7 +9,7 @@
 use krabka_security::ListenerProtocol;
 use krabka_units::Time;
 
-use super::{FileClientAuthMode, FileListener, FileTlsConfig};
+use super::{FileClientAuthMode, FileConfigError, FileListener, FileTlsConfig};
 
 pub(super) struct ListenerSettings {
     pub(super) listeners: Vec<FileListener>,
@@ -17,6 +17,7 @@ pub(super) struct ListenerSettings {
     pub(super) max_connections: Option<usize>,
     pub(super) max_connections_per_ip: Option<usize>,
     pub(super) connections_max_idle: Option<Time>,
+    pub(super) connections_max_reauth: Option<Time>,
     pub(super) server_properties: std::collections::BTreeMap<String, String>,
     pub(super) controller_listener_protocol: Option<ListenerProtocol>,
     pub(super) tls_config: Option<FileTlsConfig>,
@@ -26,7 +27,7 @@ pub(super) fn apply_listener_settings(
     settings: ListenerSettings,
     cfg: &mut crate::config::BrokerConfig,
     defaults: &crate::config::BrokerConfig,
-) {
+) -> Result<(), FileConfigError> {
     let had_file_listeners = !settings.listeners.is_empty();
     if had_file_listeners {
         // Read the per-listener idle overrides before `into_spec` consumes
@@ -41,11 +42,20 @@ pub(super) fn apply_listener_settings(
                     .map(|idle| (listener.name.clone(), idle))
             })
             .collect();
+        cfg.connections_max_reauth_overrides = settings
+            .listeners
+            .iter()
+            .filter_map(|listener| {
+                listener
+                    .connections_max_reauth
+                    .map(|reauth| (listener.name.clone(), reauth))
+            })
+            .collect();
         cfg.listeners = settings
             .listeners
             .into_iter()
             .map(FileListener::into_spec)
-            .collect();
+            .collect::<Result<_, _>>()?;
     }
     if let Some(name) = settings.inter_broker_listener_name {
         cfg.inter_broker_listener_name = name;
@@ -74,6 +84,11 @@ pub(super) fn apply_listener_settings(
         && cfg.connections_max_idle.is_none()
     {
         cfg.connections_max_idle = Some(idle);
+    }
+    if let Some(reauth) = settings.connections_max_reauth
+        && cfg.connections_max_reauth.is_none()
+    {
+        cfg.connections_max_reauth = Some(reauth);
     }
     if cfg.features.transaction_two_phase_commit_enable
         == defaults.features.transaction_two_phase_commit_enable
@@ -105,6 +120,7 @@ pub(super) fn apply_listener_settings(
             },
         });
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -298,6 +314,7 @@ client_auth = "Required"
                 protocol: krabka_security::ListenerProtocol::Plaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
+                principal_mapper: crate::SslPrincipalMapper::default(),
             }],
             ..BrokerConfig::default()
         };

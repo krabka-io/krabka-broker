@@ -3,6 +3,8 @@
 //! which the handler registry cannot reach, so the dispatch loop intercepts
 //! them here before it consults the registry.
 
+use std::net::SocketAddr;
+
 use bytes::{Bytes, BytesMut};
 use krabka_protocol::api_key::ApiKey;
 use krabka_units::convert::ByteSizeExt as _;
@@ -40,12 +42,14 @@ pub(super) async fn try_handle_sasl_frame(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
     sasl_mechanisms: &[krabka_security::SaslMechanism],
+    max_reauth: Option<krabka_units::Time>,
+    peer: &SocketAddr,
 ) -> Option<Result<SaslFrameOutcome, BrokerError>> {
     let api_key = parsed.api_key;
     if api_key != SASL_HANDSHAKE_KEY && api_key != SASL_AUTHENTICATE_KEY {
         return None;
     }
-    Some(handle_sasl_frame(broker, parsed, auth, sasl_mechanisms).await)
+    Some(handle_sasl_frame(broker, parsed, auth, sasl_mechanisms, max_reauth, peer).await)
 }
 
 async fn handle_sasl_frame(
@@ -53,6 +57,8 @@ async fn handle_sasl_frame(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
     sasl_mechanisms: &[krabka_security::SaslMechanism],
+    max_reauth: Option<krabka_units::Time>,
+    peer: &SocketAddr,
 ) -> Result<SaslFrameOutcome, BrokerError> {
     use krabka_protocol::{Decode, Encode};
 
@@ -77,7 +83,8 @@ async fn handle_sasl_frame(
                         crate::network::auth::handle_authenticate_plain(
                             &req,
                             auth,
-                            &broker.config.plain_credentials,
+                            broker.config.plain_credentials.as_map(),
+                            max_reauth,
                         )
                     }
                     krabka_security::SaslMechanism::ScramSha256
@@ -86,6 +93,7 @@ async fn handle_sasl_frame(
                             &req,
                             auth,
                             &*broker.controller,
+                            max_reauth,
                         )
                     }
                     krabka_security::SaslMechanism::OAuthBearer => {
@@ -99,7 +107,7 @@ async fn handle_sasl_frame(
                             &broker.config.oauthbearer_jwks_cache_generation,
                             &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
                             now_ms,
-                            broker.config.oauthbearer_max_session_lifetime,
+                            max_reauth,
                         )
                         .await
                     }
@@ -109,7 +117,9 @@ async fn handle_sasl_frame(
                             .gssapi
                             .as_ref()
                             .expect("GSSAPI enabled without config");
-                        crate::network::auth::handle_authenticate_gssapi(&req, auth, cfg)
+                        crate::network::auth::handle_authenticate_gssapi(
+                            &req, auth, cfg, max_reauth,
+                        )
                     }
                 }
             } else {
@@ -131,10 +141,29 @@ async fn handle_sasl_frame(
                 crate::metrics::UNKNOWN_LABEL,
                 krabka_security::SaslMechanism::wire_name,
             );
-            broker
-                .metrics
-                .record_authentication(mech_label, resp.error_code == 0);
-            let close = resp.error_code != 0;
+            let ok = resp.error_code == 0;
+            broker.metrics.record_authentication(mech_label, ok);
+            // One audit row per *completed* exchange, initial or KIP-368
+            // re-auth alike. A multi-round mechanism answers its intermediate
+            // rounds with `error_code == 0` and no principal yet, so a zero
+            // code only completes the exchange once the connection is
+            // authenticated. A non-zero code always ends it.
+            if !ok || auth.is_authenticated() {
+                emit_authentication(
+                    &broker.audit_log,
+                    peer,
+                    mech_label,
+                    auth.principal()
+                        .map_or_else(|| claimed_principal(mech_opt, &req), audit_principal),
+                    if ok {
+                        krabka_audit::AuditOutcome::Success
+                    } else {
+                        krabka_audit::AuditOutcome::Failure
+                    },
+                    resp.error_message.clone(),
+                );
+            }
+            let close = !ok;
             let mut buf = BytesMut::with_capacity(resp.encoded_len(parsed.api_version));
             resp.encode(&mut buf, parsed.api_version)?;
             (buf.freeze(), close)
@@ -153,6 +182,86 @@ async fn handle_sasl_frame(
         response_bytes,
         close_after,
     })
+}
+
+/// Writes one `Authentication` audit row.
+///
+/// Every credential presentation the broker completes goes through here: a
+/// `SaslAuthenticate` exchange that ended, the pre-auth gate that refused a
+/// frame outright, and the mTLS binding a non-SASL listener does at accept
+/// time. `source` is built the same way [`crate::handlers::admin_audit`]
+/// builds it, so an auditor can join an authentication row to the
+/// privileged-action rows the same session went on to write.
+pub(crate) fn emit_authentication(
+    audit_log: &krabka_audit::AuditLog,
+    peer: &SocketAddr,
+    mechanism: &str,
+    principal: krabka_audit::AuditPrincipal,
+    outcome: krabka_audit::AuditOutcome,
+    reason: Option<String>,
+) {
+    audit_log.emit(krabka_audit::AuditEvent::Authentication {
+        outcome,
+        mechanism: mechanism.to_string(),
+        principal,
+        source: krabka_audit::AuditEndpoint {
+            ip: peer.ip().to_string(),
+            port: peer.port(),
+        },
+        reason,
+        time_ms: crate::time_util::now_ms(),
+    });
+}
+
+/// Renders a resolved [`krabka_security::Principal`] as an audit principal.
+///
+/// The name is the `User:<name>` Kafka form, which is what
+/// `break_glass::handlers::principal_name` puts on a `PrivilegedAction` row.
+/// An auditor joins the two by that string, so the two sites have to spell a
+/// principal the same way.
+pub(crate) fn audit_principal(
+    principal: &krabka_security::Principal,
+) -> krabka_audit::AuditPrincipal {
+    krabka_audit::AuditPrincipal {
+        name: principal.to_kafka().to_string(),
+        auth_method: format!("{:?}", principal.auth_method),
+    }
+}
+
+/// Names the identity a *failed* exchange claimed, where the connection state
+/// resolved no principal.
+///
+/// PLAIN is the one mechanism that sends the user in the clear
+/// (`\0<authzid>\0<authcid>\0<password>`), so its failure row can still say
+/// who was refused. Every other mechanism keeps the identity inside its own
+/// challenge/response and its failure row names no user.
+// ponytail: PLAIN only. SCRAM's client-first `n=<user>` would need a GS2
+// header parser here if a failed SCRAM row ever has to name the claimed user.
+fn claimed_principal(
+    mechanism: Option<krabka_security::SaslMechanism>,
+    req: &krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest,
+) -> krabka_audit::AuditPrincipal {
+    let name = match mechanism {
+        Some(krabka_security::SaslMechanism::Plain) => req
+            .auth_bytes
+            .split(|&b| b == 0)
+            .nth(1)
+            .and_then(|user| std::str::from_utf8(user).ok())
+            // The same `User:<name>` form [`audit_principal`] renders, so a
+            // failed row and a successful one name one person identically.
+            .map(|user| format!("User:{user}"))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    krabka_audit::AuditPrincipal {
+        name,
+        auth_method: format!(
+            "{:?}",
+            mechanism.map_or(krabka_security::AuthMethod::Anonymous, |m| {
+                krabka_security::AuthMethod::from_sasl(m)
+            })
+        ),
+    }
 }
 
 fn handle_sasl_handshake(

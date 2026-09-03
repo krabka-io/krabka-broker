@@ -1,16 +1,15 @@
 //! The per-partition copy pass: which sealed segments the remote tier still
 //! lacks, and how one tick's copies thread a write-once archive's chain.
 
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 use krabka_log::SegmentExport;
-use krabka_remote_storage::{
-    RemoteLogMetadataManager, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
-};
+use krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition};
 use tracing::warn;
 
 use super::{
-    archive::{ArchiveMode, ChainPosition},
+    RemoteTier,
+    archive::ChainPosition,
     copy_segment::{CopyOutcome, copy_one},
 };
 
@@ -21,15 +20,13 @@ use super::{
 /// that tests can drive it directly against a real `Log` and a reference
 /// RSM/RLMM.
 pub(crate) async fn copy_eligible(
+    tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
     leader_epoch: krabka_ids::LeaderEpoch,
     exports: Vec<SegmentExport>,
-    archive: ArchiveMode,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
 ) -> usize {
-    let listed = match rlmm.list_remote_log_segments(tp) {
+    let listed = match tier.rlmm.list_remote_log_segments(tp) {
         Ok(list) => list,
         Err(e) => {
             warn!(topic = %tp.topic, partition = tp.partition, error = %e,
@@ -66,7 +63,7 @@ pub(crate) async fn copy_eligible(
         }
     }
 
-    let mut chain = ChainPosition::seed(archive, &listed);
+    let mut chain = ChainPosition::seed(tier.archive, &listed);
     let mut copied = 0;
     for ex in exports {
         if known.contains(&ex.base_offset.0) {
@@ -81,7 +78,7 @@ pub(crate) async fn copy_eligible(
         // Each success hands back the next chain position, so a run of
         // consecutive segments chains inside one tick with no further listing.
         if let CopyOutcome::Copied { next } =
-            copy_one(tp, broker_id, leader_epoch, &ex, chain, rsm, rlmm).await
+            copy_one(tier, tp, broker_id, leader_epoch, &ex, chain).await
         {
             copied += 1;
             chain = next;
@@ -92,19 +89,25 @@ pub(crate) async fn copy_eligible(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use assert2::{assert, check};
     use krabka_ids::LeaderEpoch;
     use krabka_remote_storage::{
         ChainHead, ChainStamp, CustomMetadata, EpochId, IndexType,
         InmemoryRemoteLogMetadataManager, LocalTieredStorage, LogSegmentData, ManifestSeq,
-        RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-        RemoteLogSegmentMetadataUpdate, RemoteStorageError, WormChainRecord,
+        RemoteLogMetadataManager, RemoteLogSegmentDetails, RemoteLogSegmentId,
+        RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate, RemoteStorageError,
+        RemoteStorageManager, WormChainRecord,
     };
     use uuid::Uuid;
 
     use super::*;
-    use crate::remote_log_manager::test_support::{
-        FakeWormArchive, rolled_log, stuck_started_segment, synth_export, tp,
+    use crate::remote_log_manager::{
+        ArchiveMode,
+        test_support::{
+            FakeWormArchive, rolled_log, stuck_started_segment, synth_export, tier, tp,
+        },
     };
 
     /// An RSM whose copy always succeeds, handing back `receipt` verbatim,
@@ -180,13 +183,11 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
 
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(copied == exports.len());
@@ -225,25 +226,21 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
 
         let first = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(first == exports.len());
         // Second pass: everything is already known → nothing re-copied.
         let second = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports.clone(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(second == 0);
@@ -258,13 +255,11 @@ mod tests {
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             Vec::new(),
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
         assert!(copied == 0);
@@ -281,13 +276,11 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
 
         let copied = copy_eligible(
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             vec![synth_export(0, 9, 100, 64)],
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
         )
         .await;
 
@@ -311,13 +304,11 @@ mod tests {
         ];
 
         let copied = copy_eligible(
+            &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             exports,
-            ArchiveMode::WriteOnce,
-            &rsm,
-            &rlmm,
         )
         .await;
 
@@ -375,6 +366,7 @@ mod tests {
         let archive = Arc::new(FakeWormArchive::new());
         let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
         let copied = copy_eligible(
+            &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
@@ -383,9 +375,6 @@ mod tests {
                 synth_export(10, 19, 200, 64),
                 synth_export(20, 29, 300, 64),
             ],
-            ArchiveMode::WriteOnce,
-            &rsm,
-            &rlmm,
         )
         .await;
 
@@ -402,13 +391,11 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         let first_rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
         let copied = copy_eligible(
+            &tier(ArchiveMode::WriteOnce, &first_rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
             vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)],
-            ArchiveMode::WriteOnce,
-            &first_rsm,
-            &rlmm,
         )
         .await;
         check!(copied == 2);
@@ -418,6 +405,7 @@ mod tests {
         // only the metadata manager. The chain continues from the receipts.
         let second_rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
         let copied = copy_eligible(
+            &tier(ArchiveMode::WriteOnce, &second_rsm, &rlmm),
             &tp(),
             1,
             LeaderEpoch(0),
@@ -426,9 +414,6 @@ mod tests {
                 synth_export(10, 19, 200, 64),
                 synth_export(20, 29, 300, 64),
             ],
-            ArchiveMode::WriteOnce,
-            &second_rsm,
-            &rlmm,
         )
         .await;
 
@@ -449,13 +434,11 @@ mod tests {
             let rlmm: Arc<dyn RemoteLogMetadataManager> =
                 Arc::new(InmemoryRemoteLogMetadataManager::new());
             let copied = copy_eligible(
+                &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
                 &tp(),
                 1,
                 LeaderEpoch(0),
                 vec![synth_export(0, 9, 100, 64)],
-                ArchiveMode::WriteOnce,
-                &rsm,
-                &rlmm,
             )
             .await;
             check!(copied == 1);
@@ -491,13 +474,11 @@ mod tests {
             let abandoned = stuck_started_segment(&rlmm, 0x57c, 0);
 
             let copied = copy_eligible(
+                &tier(archive, &rsm, &rlmm),
                 &tp(),
                 1,
                 LeaderEpoch(0),
                 vec![synth_export(0, 9, 100, 64)],
-                archive,
-                &rsm,
-                &rlmm,
             )
             .await;
 

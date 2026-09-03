@@ -37,9 +37,16 @@ pub(super) fn create_topics_response(
     }
 }
 
+/// The topics an audit record may claim were created. A `validate_only`
+/// request commits nothing, so its `NONE` rows are a verdict rather than a
+/// creation and must never reach the audit trail.
 pub(super) fn created_topic_resources(
     results: &[CreatableTopicResult],
+    validate_only: bool,
 ) -> Vec<krabka_audit::AuditResource> {
+    if validate_only {
+        return Vec::new();
+    }
     results
         .iter()
         .filter(|t| t.error_code == codes::NONE)
@@ -74,13 +81,14 @@ pub(super) fn finish_response(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
     results: Vec<CreatableTopicResult>,
+    validate_only: bool,
     delay: Time,
     version: i16,
 ) -> Result<Bytes, BrokerError> {
     audit_created_topics(
         broker.audit_log.as_ref(),
         context,
-        created_topic_resources(&results),
+        created_topic_resources(&results, validate_only),
     );
     // The KIP-599 delay is the only throttle this api applies — the dispatch
     // loop marks it quota-exempt and never charges it the request quota — so
@@ -128,13 +136,24 @@ mod tests {
             },
         ];
 
-        let resources = created_topic_resources(&results);
+        let resources = created_topic_resources(&results, false);
 
         let expected = vec![krabka_audit::AuditResource {
             resource_type: "Topic".into(),
             name: "ok".into(),
         }];
         assert!(resources == expected);
+    }
+
+    #[test]
+    fn created_topic_resources_are_empty_for_a_validate_only_request() {
+        let results = vec![CreatableTopicResult {
+            name: "ok".into(),
+            error_code: codes::NONE,
+            ..Default::default()
+        }];
+
+        assert!(created_topic_resources(&results, true) == Vec::new());
     }
 
     #[test]

@@ -168,7 +168,7 @@ pub struct DirectoryLabel {
 /// `{successful,failed}_authentication_total` counter families.
 /// `mechanism` is the canonical Kafka wire name from
 /// [`krabka_security::SaslMechanism::wire_name`] (`"PLAIN"`,
-/// `"SCRAM-SHA-256"`, `"SCRAM-SHA-512"`, `"OAUTHBEARER"`) when the
+/// `"SCRAM-SHA-256"`, `"SCRAM-SHA-512"`, `"OAUTHBEARER"`, `"GSSAPI"`) when the
 /// `SaslAuthenticate` frame arrived in a valid sequence; the
 /// `"Unknown"` sentinel covers `ILLEGAL_SASL_STATE` rejects where
 /// no prior `SaslHandshake` ran and the mechanism is unset.
@@ -177,6 +177,18 @@ pub struct DirectoryLabel {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct SaslMechanismLabel {
     pub mechanism: String,
+}
+
+/// Authorization-denial fingerprint, paired with the
+/// `authorization_denied_total` counter family. Both values are the `Debug`
+/// spelling of a closed enum -- `krabka_metadata::AclOperation` and
+/// `krabka_metadata::ResourceType` -- so the series count is bounded by the
+/// product of the two variant sets and no principal, host or resource name
+/// reaches this label set.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct AuthorizationDeniedLabel {
+    pub operation: String,
+    pub resource_type: String,
 }
 
 /// KFC-7 rejection fingerprint, paired with the

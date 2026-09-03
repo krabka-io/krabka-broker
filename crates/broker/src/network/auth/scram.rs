@@ -10,11 +10,12 @@ use krabka_protocol::owned::{
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
 use krabka_security::{Principal, SaslMechanism, ScramServerExchange};
+use krabka_units::Time;
 use krabka_verified::delegation_token::{ScramCredentialSource, scram_credential_source};
 
 use super::{
     response::fail_authenticate,
-    state::{ConnectionAuth, SaslExchange},
+    state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 
 /// SCRAM-SHA-512 `SaslAuthenticate` handler. It runs the two RFC 5802 rounds
@@ -36,10 +37,32 @@ use super::{
 ///     (`v=<server-signature>`). On success, `auth` moves to
 ///     `Authenticated { principal }`. On any error, the response carries
 ///     `error_code = 58` and the dispatcher closes the connection.
+///
+/// A SCRAM credential carries no lifetime of its own, so `max_reauth` — the
+/// listener's `connections.max.reauth.ms` — is what bounds a regular SCRAM
+/// session (KIP-368). A delegation-token session is bounded by the earlier of
+/// the token expiry and that cap.
 pub fn handle_authenticate_scram(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     controller: &dyn crate::metadata_source::MetadataSource,
+    max_reauth: Option<Time>,
+) -> SaslAuthenticateResponse {
+    // KIP-368 in-band re-auth runs the same two rounds, so drive the exchange
+    // through the ordinary path and let `finish_reauth` hold it to the
+    // previous session's principal.
+    let Some(previous) = begin_reauth(auth) else {
+        return authenticate_scram(req, auth, controller, max_reauth);
+    };
+    let resp = authenticate_scram(req, auth, controller, max_reauth);
+    finish_reauth(auth, previous, resp)
+}
+
+fn authenticate_scram(
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
+    controller: &dyn crate::metadata_source::MetadataSource,
+    max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
     // Round-1 case: still in `ScramPending` — build the exchange now that
     // we have the client-first bytes (and thus the username).
@@ -178,11 +201,12 @@ pub fn handle_authenticate_scram(
                 {
                     return fail_authenticate("delegation token expired");
                 }
-                let session_lifetime_ms = pending_token_expiry_ms.map_or(0, |e| e - now);
+                let (expires_at_ms, session_lifetime_ms) =
+                    session_expiry(now, pending_token_expiry_ms, max_reauth);
                 *auth = ConnectionAuth::Authenticated {
                     principal,
                     mechanism,
-                    expires_at_ms: pending_token_expiry_ms,
+                    expires_at_ms,
                     authenticated_via_token: pending_token_expiry_ms.is_some(),
                 };
                 SaslAuthenticateResponse {

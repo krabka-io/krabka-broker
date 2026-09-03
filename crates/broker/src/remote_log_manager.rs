@@ -44,6 +44,7 @@ use tracing::debug;
 
 use crate::{
     freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
+    metrics::BrokerMetrics,
     partition::Partition,
     partition_registry::PartitionRegistry,
 };
@@ -57,7 +58,7 @@ mod local_retention;
 mod remote_retention;
 mod rlmm;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use self::{
     archive::ArchiveMode,
@@ -95,8 +96,33 @@ pub(crate) struct RemoteLogManagerContext {
     pub archive: ArchiveMode,
     pub rsm: Arc<dyn RemoteStorageManager>,
     pub rlmm: Arc<dyn RemoteLogMetadataManager>,
+    pub metrics: BrokerMetrics,
     pub node_id: NodeId,
     pub broker_id: i32,
+}
+
+/// The remote tier a sweep writes through, and the counters that watch it.
+///
+/// Bundled because the four travel together down the whole copy path and
+/// nothing below picks one without the others: the archive mode decides
+/// whether a manifest is sealed at all, the two managers do the sealing, and
+/// the metrics are where the outcome is recorded.
+pub(crate) struct RemoteTier<'a> {
+    pub archive: ArchiveMode,
+    pub rsm: &'a Arc<dyn RemoteStorageManager>,
+    pub rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+    pub metrics: &'a BrokerMetrics,
+}
+
+impl RemoteLogManagerContext {
+    fn tier(&self) -> RemoteTier<'_> {
+        RemoteTier {
+            archive: self.archive,
+            rsm: &self.rsm,
+            rlmm: &self.rlmm,
+            metrics: &self.metrics,
+        }
+    }
 }
 
 /// Spawned task entry point. Ticks every `cfg.interval` until `shutdown`.
@@ -118,9 +144,7 @@ pub(crate) async fn run(
         tick_all(
             &context.partitions,
             &*context.controller,
-            context.archive,
-            &context.rsm,
-            &context.rlmm,
+            &context.tier(),
             context.node_id,
             context.broker_id,
         )
@@ -131,9 +155,7 @@ pub(crate) async fn run(
 async fn tick_all(
     partitions: &PartitionRegistry,
     controller: &dyn crate::metadata_source::MetadataSource,
-    archive: ArchiveMode,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    tier: &RemoteTier<'_>,
     node_id: NodeId,
     broker_id: i32,
 ) {
@@ -190,16 +212,7 @@ async fn tick_all(
             // metadata seam.
             let leader_epoch =
                 krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
-            copy_eligible(
-                &tp,
-                broker_id,
-                leader_epoch,
-                exports.clone(),
-                archive,
-                rsm,
-                rlmm,
-            )
-            .await;
+            copy_eligible(tier, &tp, broker_id, leader_epoch, exports.clone()).await;
         }
         // KFC-9: the copy above stays allowed on a frozen topic, and both
         // retention passes below stop. A freeze refuses every operation that
@@ -229,20 +242,20 @@ async fn tick_all(
         // Local retention is deliberately not gated on `archive`: evicting a
         // local segment that the archive already holds is the whole point of
         // tiering, and it deletes nothing from the remote tier.
-        local_retention_pass(&tp, &partition, &exports, &log_config, rlmm, now_ms());
+        local_retention_pass(&tp, &partition, &exports, &log_config, tier.rlmm, now_ms());
         if is_leader {
             let outcome = remote_retention_pass(
                 &tp,
                 broker_id,
                 RemoteRetentionBounds {
                     log_config: &log_config,
-                    archive,
+                    archive: tier.archive,
                     log_start_offset,
                     deleted_below,
                     now_ms: now_ms(),
                 },
-                rsm,
-                rlmm,
+                tier.rsm,
+                tier.rlmm,
             )
             .await;
             // The records the pass deleted are now in no tier at all, so the
@@ -291,7 +304,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        test_support::{fixed_source, rolled_tiered_partition_with_config, tp},
+        test_support::{fixed_source, rolled_tiered_partition_with_config, tier, tp},
         *,
     };
 
@@ -364,6 +377,7 @@ mod tests {
                 archive: ArchiveMode::Mutable,
                 rsm,
                 rlmm: rlmm.clone(),
+                metrics: BrokerMetrics::new(),
                 node_id: NodeId(1),
                 broker_id: 1,
             },
@@ -410,9 +424,7 @@ mod tests {
         tick_all(
             &partitions,
             &controller,
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
         )
@@ -465,9 +477,7 @@ mod tests {
             tick_all(
                 &partitions,
                 &controller,
-                ArchiveMode::Mutable,
-                &rsm,
-                &rlmm,
+                &tier(ArchiveMode::Mutable, &rsm, &rlmm),
                 NodeId(1),
                 1,
             )
@@ -534,13 +544,11 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         if leader_already_copied {
             copy_eligible(
+                &tier(ArchiveMode::Mutable, &rsm, &rlmm),
                 &tp(),
                 2,
                 krabka_ids::LeaderEpoch(0),
                 exports,
-                ArchiveMode::Mutable,
-                &rsm,
-                &rlmm,
             )
             .await;
         }
@@ -548,9 +556,7 @@ mod tests {
         tick_all(
             &partitions,
             &controller,
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
         )
@@ -642,9 +648,7 @@ mod tests {
         tick_all(
             &partitions,
             &controller,
-            ArchiveMode::Mutable,
-            &rsm,
-            &rlmm,
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
         )

@@ -94,9 +94,7 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
     tick_all(
         &partitions,
         &controller,
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         NodeId(1),
         1,
     )

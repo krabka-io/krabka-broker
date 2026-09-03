@@ -97,6 +97,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
                 protocol: ListenerProtocol::SaslPlaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
+                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             }],
             inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
             // PLAIN for the admin/inter-broker channel; SCRAM-SHA-256 so the

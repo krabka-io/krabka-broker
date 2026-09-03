@@ -45,7 +45,7 @@ pub fn handle_handshake(
                     principal,
                     mechanism,
                     expires_at_ms,
-                    authenticated_via_token: _,
+                    authenticated_via_token,
                 } = prev
                 else {
                     unreachable!("matched Authenticated above");
@@ -56,8 +56,12 @@ pub fn handle_handshake(
                         principal,
                         mechanism,
                         expires_at_ms,
+                        authenticated_via_token,
                     },
                     exchange,
+                    // A fresh exchange; a token-SCRAM round 1 populates it
+                    // during re-auth exactly as it does during initial auth.
+                    pending_token_expiry_ms: None,
                 };
                 return SaslHandshakeResponse {
                     error_code: 0,
@@ -186,6 +190,7 @@ mod tests {
                     ..
                 },
                 exchange: SaslExchange::OAuthBearer,
+                ..
             }
         ));
     }

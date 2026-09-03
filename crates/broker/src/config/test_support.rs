@@ -30,6 +30,7 @@ pub fn base() -> BrokerConfig {
                 protocol: ListenerProtocol::Plaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
+                principal_mapper: crate::SslPrincipalMapper::default(),
             },
             ListenerSpec {
                 name: "EXTERNAL".to_string(),
@@ -38,10 +39,16 @@ pub fn base() -> BrokerConfig {
                 protocol: ListenerProtocol::SaslSsl,
                 tls_config: None,
                 sasl_mechanisms: None,
+                principal_mapper: crate::SslPrincipalMapper::default(),
             },
         ],
         inter_broker_listener_name: "INTERNAL".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
+        // PLAIN is enabled above, and `validate` refuses that with an empty
+        // credential table.
+        plain_credentials: [("admin".to_string(), "admin-secret".to_string())]
+            .into_iter()
+            .collect(),
         ..BrokerConfig::default()
     }
 }

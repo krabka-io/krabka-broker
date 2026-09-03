@@ -69,3 +69,5 @@ mod tuning;
 // The head of the chain. It expands one group after another and ends in
 // `define_broker_config`.
 tuning_fields! {}
+
+pub use self::security::PlainCredentials;

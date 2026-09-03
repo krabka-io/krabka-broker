@@ -41,9 +41,13 @@ async fn api_versions_reachable_pre_auth_on_sasl_listener() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    // A listener that offers PLAIN needs a credential table to pass validation.
+    cfg.plain_credentials
+        .insert("alice".to_string(), "alice-secret".to_string());
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -97,9 +101,13 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    // A listener that offers PLAIN needs a credential table to pass validation.
+    cfg.plain_credentials
+        .insert("alice".to_string(), "alice-secret".to_string());
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -157,9 +165,13 @@ async fn unsupported_mechanism_rejected_but_handshake_retryable() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    // A listener that offers PLAIN needs a credential table to pass validation.
+    cfg.plain_credentials
+        .insert("alice".to_string(), "alice-secret".to_string());
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();

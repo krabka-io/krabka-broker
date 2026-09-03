@@ -30,6 +30,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | `break_glass` | table | broker default |  | TOML shape of `[break_glass]`. Maps to [`crate::config::BreakGlassConfig`]. Every field is `Option`, so `approvers = []` and `signed_actions = []` are each a written choice and are distinct from omitting the key. `deny_unknown_fields` so a misspelled key is rejected at parse time. See `[break_glass]` below. |
 | `broker_id` | integer (int32) | broker default |  |  |
 | `connections_max_idle` | string | broker default | duration | How long a connection may go without a complete request frame before the broker closes it (Kafka `connections.max.idle.ms`). Absent leaves the `BrokerConfig` default of ten minutes, which is Kafka's 600000. A `[[listeners]]` entry may carry its own `connections_max_idle`, which wins for that listener. |
+| `connections_max_reauth` | string | broker default | duration | KIP-368 `connections.max.reauth.ms`: how long an authenticated SASL session may live before the client must re-authenticate in band. Absent, or non-positive, disables re-authentication, which is Kafka's default. It applies to every mechanism: PLAIN, SCRAM and GSSAPI sessions are bounded by it alone, while an OAUTHBEARER or delegation-token session expires at the earlier of its credential's expiry and this window. A `[[listeners]]` entry may carry its own `connections_max_reauth`, which wins for that listener. |
 | `controller_election_timeout` | string | broker default | duration | Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`. It is the follower fetch watchdog, and 1.5x of it is the leader's check-quorum window: a leader that has not been fetched from by a majority of the voters within that window resigns its epoch. Absent leaves the `BrokerConfig` default intact. |
 | `controller_heartbeat_interval` | string | broker default | duration | Controller heartbeat interval. Absent leaves the `BrokerConfig` default intact. |
 | `controller_listener_protocol` | string | broker default |  | Controller listener security protocol. When `Some(Ssl)` the controller listener terminates TLS using `tls_config`. |
@@ -48,7 +49,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | `log_dir` | string | broker default |  |  |
 | `max_connections` | integer (uint) | broker default |  | Maximum number of live broker connections across all listeners (Kafka `max.connections`). Connections accepted past this ceiling are closed immediately. Absent leaves the `BrokerConfig` default `usize::MAX` (unlimited), matching Kafka's `Integer.MAX_VALUE`. |
 | `max_connections_per_ip` | integer (uint) | broker default |  | Maximum number of live connections from any single client IP (Kafka `max.connections.per.ip`). Absent leaves the `BrokerConfig` default `usize::MAX` (unlimited). |
-| `oauthbearer` | table | broker default |  | TOML shape of `[oauthbearer]`. Maps to [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri` selects the signed-JWT validator; setting `introspection_endpoint_uri` selects the RFC 7662 introspection validator; the two endpoint URIs are mutually exclusive. With neither set, the unsecured-JWS validator (development only) is used. See `[oauthbearer]` below. |
+| `oauthbearer` | table | broker default |  | TOML shape of `[oauthbearer]`. Maps to [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri` selects the signed-JWT validator; setting `introspection_endpoint_uri` selects the RFC 7662 introspection validator; the two endpoint URIs are mutually exclusive. With neither set, the unsecured-JWS validator (development only) is used, and that fallback is rejected at config-load unless `allow_unsecured = true`. See `[oauthbearer]` below. |
 | `operator_keys` | array of tables | `[]` |  | `[[operator_keys]]` — the shared operator key trust set. Top-level rather than nested under `[break_glass]`, because two subsystems verify against it: a freeze record's detached signature and a break-glass approval's. One provisioning step covers both. Empty is the default and means no operator key is configured. See `[[operator_keys]]` below. |
 | `process` | table | broker default |  | `[process]` TOML section — `KRaft` `process.roles`. See `[process]` below. |
 | `rack` | string | broker default |  | KIP-392: this broker's rack id. Maps to `BrokerConfig::rack`. |
@@ -56,11 +57,13 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | `replica_lag_time_max` | string | broker default | duration | Maximum follower lag before the leader proposes ISR shrink. Absent leaves the `BrokerConfig` default intact. |
 | `replica_selector` | string | broker default |  | KIP-392: replica selector name (`"leader"` \| `"rack-aware"`). Maps to `BrokerConfig::replica_selector`. |
 | `runtime` | table | broker default |  | Validated operational policy loaded from `[runtime]`. See `[runtime]` below. |
+| `sasl_plain` | table | broker default |  | TOML shape of `[sasl_plain]`. Maps to [`crate::BrokerConfig::plain_credentials`]. See `[sasl_plain]` below. |
 | `schema_registry` | table | broker default |  | TOML shape of `[schema_registry]`. Mirrors the constructor arguments of [`crate::schema_validation::SchemaValidator::new`], the one registry client each broker holds. `deny_unknown_fields` so a misspelled key is rejected at parse time. A silently ignored `fail_open` would leave the operator with the opposite of the policy they wrote. See `[schema_registry]` below. |
 | `server_properties` | map of string to string | `{}` |  |  |
 | `stretch` | table | broker default |  | `[stretch]` TOML section — the three-site stretch deployment. The table is all-or-nothing. When it is present, all three fields must be, because a half-built profile would let the broker start with a site layout that no node agrees on. See `[stretch]` below. |
-| `super_users` | array of string | broker default |  | Principals that are unconditionally authorized for all operations, including KIP-48 delegation-token `act-as`. The operator emits `super_users = ["ANONYMOUS"]` when `Kafka.spec.delegationToken` is set so its PLAINTEXT inter-broker reconcile loop can mint per-`KafkaUser` tokens. `None` and `Some(empty)` are equivalent — both leave `BrokerConfig.super_users` empty. |
+| `super_users` | array of string | broker default |  | Principals that are unconditionally authorized for all operations, including KIP-48 delegation-token `act-as`. Super-user status does not substitute for authentication. The delegation-token RPCs (`CreateDelegationToken`, `RenewDelegationToken`, `ExpireDelegationToken`) require a principal that authenticated with SASL or mTLS, and answer `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or one-way-TLS connection whatever this list holds. Listing `"ANONYMOUS"` is therefore rejected by `BrokerConfig::validate`: it cannot enable token issuance, and it would make every unauthenticated client a super-user for all operations. Give the token-minting client a SASL credential or a client certificate and list that principal here. `None` and `Some(empty)` are equivalent — both leave `BrokerConfig.super_users` empty. |
 | `tls_config` | table | broker default |  | TLS material for the controller listener (and any listener whose `protocol` is TLS-bearing). See `[tls_config]` below. |
+| `topic_policy` | table | broker default |  | TOML shape of `[topic_policy]`. Maps to [`crate::topic_policy::TopicPolicy`]. The whole table is the KIP-108 / KIP-133 policy Kafka loads from a Java class named by `create.topic.policy.class.name` and `alter.config.policy.class.name`. krabka cannot load a class, so the rules are declared here instead. Omitting the table declares no rule, which is Kafka's default of no policy class: every `CreateTopics` and every topic `AlterConfigs` that passes ordinary config validation is accepted. A request that breaks a rule is answered with `POLICY_VIOLATION` (44) and an `error_message` naming the rule, which is what a `PolicyViolationException` from a Java policy class produces. The two replica rules apply to `CreateTopics` alone, because an `AlterConfigs` request carries neither number, exactly as `AlterConfigPolicy.RequestMetadata` does not. `deny_unknown_fields` so a misspelled rule name is rejected at parse time rather than leaving the broker enforcing nothing where the operator wrote a rule. See `[topic_policy]` below. |
 
 ### `[audit]`
 
@@ -194,6 +197,7 @@ TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `pr
 | `advertised` | string | required |  |  |
 | `bind_addr` | string | required |  |  |
 | `connections_max_idle` | string | broker default | duration | Per-listener `connections.max.idle.ms`. Absent leaves this listener on the broker-wide `connections_max_idle`. Maps to an entry in [`crate::BrokerConfig::connections_max_idle_overrides`]. |
+| `connections_max_reauth` | string | broker default | duration | Per-listener KIP-368 `connections.max.reauth.ms`. Absent leaves this listener on the broker-wide `connections_max_reauth`. Maps to an entry in [`crate::BrokerConfig::connections_max_reauth_overrides`]. |
 | `name` | string | required |  |  |
 | `protocol` | string | required |  |  |
 | `sasl_config` | table | broker default |  | See `[listeners.sasl_config]` below. |
@@ -213,14 +217,16 @@ TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `pr
 | `client_auth` | one of `Disabled`, `Optional`, `Required` | broker default |  |  |
 | `client_ca_path` | string | broker default |  |  |
 | `key_path` | string | required |  |  |
+| `principal_mapping_rules` | array of string | `["DEFAULT"]` |  | KIP-371 `ssl.principal.mapping.rules`: how the Subject DN of an mTLS peer certificate becomes the principal name ACLs and `super_users` are written against. Each entry is either `DEFAULT`, which uses the DN itself, or `RULE:pattern/replacement/[L\|U]`, where `pattern` has to match the whole DN, `replacement` may reference capture groups as `$1`, and a trailing `L` or `U` lowercases or uppercases the result. The rules are tried in order and the first match wins. Defaults to `["DEFAULT"]`, so a listener that says nothing keeps Kafka's behaviour of using the full DN. A malformed entry is rejected at startup. |
 | `trust_roots_path` | string | broker default |  | PEM file of CA(s) this broker trusts when validating a PEER's server cert as an outbound inter-broker / controller-quorum dialer. The operator renders the cluster CA here so KIP-595 controller peers can mutually authenticate over the controller listener. Maps to [`krabka_security::TlsConfig::trust_roots_path`]. |
 
 ### `[oauthbearer]`
 
-TOML shape of `[oauthbearer]`. Maps to [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri` selects the signed-JWT validator; setting `introspection_endpoint_uri` selects the RFC 7662 introspection validator; the two endpoint URIs are mutually exclusive. With neither set, the unsecured-JWS validator (development only) is used.
+TOML shape of `[oauthbearer]`. Maps to [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri` selects the signed-JWT validator; setting `introspection_endpoint_uri` selects the RFC 7662 introspection validator; the two endpoint URIs are mutually exclusive. With neither set, the unsecured-JWS validator (development only) is used, and that fallback is rejected at config-load unless `allow_unsecured = true`.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `allow_unsecured` | boolean | broker default |  | Opt-in for the unsecured-JWS (`alg:none`) development validator. Default false. With neither `jwks_endpoint_uri` nor `introspection_endpoint_uri` set and a listener enabling `OAUTHBEARER`, the broker refuses to start rather than silently trusting unsigned tokens; set this to true to accept that fallback in development. Never set it in production. |
 | `allowable_clock_skew_ms` | integer (int64) | broker default | milliseconds | Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`. Default 30000. |
 | `custom_claim_check` | string | broker default |  | Optional `JsonPath` expression (RFC 9535, via jsonpath-rust) evaluated against the token claim set. Token is rejected when the expression yields empty/null/false. Compiled once at broker startup; malformed expressions panic with a descriptive error. |
 | `expected_audience` | string | broker default |  | When set, the token `aud` claim must contain this. Signed validator only. |
@@ -238,7 +244,6 @@ TOML shape of `[oauthbearer]`. Maps to [`krabka_security::OAuthBearerValidator`]
 | `jwks_ignore_key_use` | boolean | broker default |  | When true, the JWKS parser keeps keys regardless of `use` field. Default false (filter out `use=enc`). Some identity providers publish signing keys with `use="enc"` by mistake; operators set this to true to accept them. Signed validator only. |
 | `jwks_min_refresh_pause_seconds` | integer (uint32) | broker default | seconds | Minimum pause (seconds) between on-demand JWKS refreshes triggered by validator signals (unknown-kid / bad-signature tokens). Defaults to 1 (Strimzi parity). Signed validator only. |
 | `jwks_refresh_interval_ms` | integer (uint64) | broker default | milliseconds | JWKS re-fetch interval, in milliseconds. Default 300000 (5 minutes). Signed validator only. |
-| `max_session_lifetime_seconds` | integer (uint32) | broker default | seconds | Optional ceiling on OAUTHBEARER session lifetime, in seconds. When set, the broker clamps `session_lifetime_ms` to `min(token_exp_ms - now_ms, cap * 1000)`. When unset, sessions last until the token's natural `exp`. |
 | `principal_claim_name` | string | broker default |  | Claim whose value becomes the principal name. Default `sub`. |
 | `userinfo_endpoint_uri` | string | broker default |  | Optional OIDC userinfo endpoint URL. When set, the introspection validator calls `GET userinfo` after a successful introspection and merges the profile claims over the introspection claims (introspection wins for `active`, `exp`, `iat`, `nbf`, `scope`, `client_id`, `sub`). |
 | `valid_issuer_uri` | string | broker default |  | When set, the token `iss` claim must equal this. Signed validator only. |
@@ -502,6 +507,14 @@ Validated operational policy loaded from `[runtime]`.
 | `unclean_recovery_balanced_deadline` | string | broker default | duration |  |
 | `unclean_recovery_queue_capacity` | integer (uint) | broker default |  |  |
 
+### `[sasl_plain]`
+
+TOML shape of `[sasl_plain]`. Maps to [`crate::BrokerConfig::plain_credentials`].
+
+| Key | Type | Default | Units | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `credentials_path` | string | broker default |  | Filesystem path to the SASL/PLAIN credential file: one `username=password` per line, split at the first `=`, so a password may contain `=`. Line endings are stripped. A line whose trimmed content is empty or starts with `#` is ignored. The username is trimmed of surrounding whitespace, since it is matched against the SASL authcid and padding there is a typo rather than intent; the password is stored exactly as written, including any leading or trailing whitespace, so a secret is never silently rewritten. File-based (not literal) so no password sits in the TOML; the operator mounts a `Secret` and writes the mount path here. |
+
 ### `[schema_registry]`
 
 TOML shape of `[schema_registry]`. Mirrors the constructor arguments of [`crate::schema_validation::SchemaValidator::new`], the one registry client each broker holds. `deny_unknown_fields` so a misspelled key is rejected at parse time. A silently ignored `fail_open` would leave the operator with the opposite of the policy they wrote.
@@ -533,4 +546,17 @@ TLS material for the controller listener (and any listener whose `protocol` is T
 | `client_auth` | one of `Disabled`, `Optional`, `Required` | broker default |  |  |
 | `client_ca_path` | string | broker default |  |  |
 | `key_path` | string | required |  |  |
+| `principal_mapping_rules` | array of string | `["DEFAULT"]` |  | KIP-371 `ssl.principal.mapping.rules`: how the Subject DN of an mTLS peer certificate becomes the principal name ACLs and `super_users` are written against. Each entry is either `DEFAULT`, which uses the DN itself, or `RULE:pattern/replacement/[L\|U]`, where `pattern` has to match the whole DN, `replacement` may reference capture groups as `$1`, and a trailing `L` or `U` lowercases or uppercases the result. The rules are tried in order and the first match wins. Defaults to `["DEFAULT"]`, so a listener that says nothing keeps Kafka's behaviour of using the full DN. A malformed entry is rejected at startup. |
 | `trust_roots_path` | string | broker default |  | PEM file of CA(s) this broker trusts when validating a PEER's server cert as an outbound inter-broker / controller-quorum dialer. The operator renders the cluster CA here so KIP-595 controller peers can mutually authenticate over the controller listener. Maps to [`krabka_security::TlsConfig::trust_roots_path`]. |
+
+### `[topic_policy]`
+
+TOML shape of `[topic_policy]`. Maps to [`crate::topic_policy::TopicPolicy`]. The whole table is the KIP-108 / KIP-133 policy Kafka loads from a Java class named by `create.topic.policy.class.name` and `alter.config.policy.class.name`. krabka cannot load a class, so the rules are declared here instead. Omitting the table declares no rule, which is Kafka's default of no policy class: every `CreateTopics` and every topic `AlterConfigs` that passes ordinary config validation is accepted. A request that breaks a rule is answered with `POLICY_VIOLATION` (44) and an `error_message` naming the rule, which is what a `PolicyViolationException` from a Java policy class produces. The two replica rules apply to `CreateTopics` alone, because an `AlterConfigs` request carries neither number, exactly as `AlterConfigPolicy.RequestMetadata` does not. `deny_unknown_fields` so a misspelled rule name is rejected at parse time rather than leaving the broker enforcing nothing where the operator wrote a rule.
+
+| Key | Type | Default | Units | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `forbidden` | map of string to string | `{}` |  | Config keys the topic must not set to the named value, written as a TOML table: `forbidden = { "unclean.leader.election.enable" = "true" }`. Any other value for that key, and omitting the key, both pass. |
+| `max_partitions` | integer (uint) | broker default |  | Highest partition count `CreateTopics` may be asked for, checked against the effective count. Omitted enforces no ceiling. Must be at least 1. |
+| `min_insync_replicas` | integer (uint) | broker default |  | Lowest `min.insync.replicas` a topic may carry. A topic that does not set the key passes: it runs on the cluster default, which the same operator sets. Omitted enforces no floor. Must be at least 1. |
+| `min_replication_factor` | integer (uint) | broker default |  | Lowest replication factor `CreateTopics` may be asked for. The effective factor is checked, so a request that leaves it `-1` is judged on the factor the placement resolved. Omitted enforces no floor. Must be at least 1. |
+| `required` | map of string to string | `{}` |  | Config keys the topic must set, with the exact value it must set them to, written as a TOML table: `required = { "cleanup.policy" = "delete" }`. A topic that omits the key, or sets it to another value, is refused. |

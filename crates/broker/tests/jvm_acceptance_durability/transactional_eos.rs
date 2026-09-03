@@ -97,6 +97,7 @@ async fn transactional_console_producer_eos() {
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                     tls_config: None,
                     sasl_mechanisms: None,
+                    principal_mapper: krabka_broker::SslPrincipalMapper::default(),
                 },
                 krabka_broker::config::ListenerSpec {
                     name: "INTERNAL".to_string(),
@@ -105,6 +106,7 @@ async fn transactional_console_producer_eos() {
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                     tls_config: None,
                     sasl_mechanisms: None,
+                    principal_mapper: krabka_broker::SslPrincipalMapper::default(),
                 },
             ],
             inter_broker_listener_name: "INTERNAL".to_string(),

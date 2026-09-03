@@ -96,7 +96,7 @@ impl BrokerMetrics {
              Mirrors Kafka's \
              kafka.network:type=Selector,name=successful-authentication-total. \
              Labelled by the canonical SASL mechanism wire name \
-             (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, OAUTHBEARER). \
+             (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, OAUTHBEARER, GSSAPI). \
              Paired with failed_authentication so rate(...) ratios \
              expose per-mechanism credential-failure rates.",
             self.successful_authentication.clone(),
@@ -110,6 +110,19 @@ impl BrokerMetrics {
              rejects (SaslAuthenticate without prior SaslHandshake) \
              land under the `Unknown` mechanism label.",
             self.failed_authentication.clone(),
+        );
+
+        registry.register(
+            "authorization_denied",
+            "Cumulative count of authorization decisions that came back Deny, \
+             labelled by the requested operation and resource type. Kafka has \
+             no equivalent metric: StandardAuthorizer and AclAuthorizer only \
+             write a Denied Operation line to the kafka.authorizer.logger \
+             log4j logger, which operators alert on by log volume. The \
+             counter is bumped whether or not audit is enabled, so it is \
+             the one denial signal a cluster with audit.enabled=false still \
+             has. Both labels come from closed enums, so cardinality is bounded.",
+            self.authorization_denied.clone(),
         );
 
         registry.register(

@@ -210,10 +210,14 @@ async fn kafka_acls_bootstrap_controller_add_list_remove() {
     const TOPIC: &str = "controller-acl-topic";
 
     let (broker, _dir) = start_host_broker_with(|config| {
-        config.super_users = std::iter::once(CONTROLLER_PRINCIPAL.to_owned()).collect();
-        config.authorizer = std::sync::Arc::new(
-            krabka_broker::authorizer::SimpleAclAuthorizer::new(config.super_users.clone()),
-        );
+        // The super-user set goes to the authorizer alone. `ANONYMOUS` in
+        // `BrokerConfig::super_users` is refused by validation, because there
+        // it would make every unauthenticated client on every listener a
+        // super-user; the authorizer's own set is scoped to this one gate.
+        config.authorizer =
+            std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
+                std::iter::once(CONTROLLER_PRINCIPAL.to_owned()).collect(),
+            ));
     })
     .await;
 

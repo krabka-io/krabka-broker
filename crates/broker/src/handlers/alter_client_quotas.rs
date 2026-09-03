@@ -86,12 +86,50 @@ pub(crate) async fn handle(
         apply_submit_error(&mut entry_results, e);
     }
 
+    if !req.validate_only {
+        crate::handlers::audit_admin_success(
+            broker.audit_log.as_ref(),
+            ctx,
+            "AlterClientQuotas",
+            entry_results
+                .iter()
+                .filter(|entry| entry.error_code == crate::codes::NONE)
+                .map(|entry| {
+                    crate::handlers::audit_resource("ClientQuotaEntity", quota_entity_name(entry))
+                })
+                .collect(),
+        );
+    }
+
     let resp = AlterClientQuotasResponse {
         throttle_time_ms: 0,
         entries: entry_results,
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
     encode_response(&resp, api_version)
+}
+
+/// Renders a quota entity as the audit record's resource name.
+///
+/// KIP-546 addresses a quota by a set of `(entity_type, entity_name)` pairs,
+/// and a `None` name is the default entity for that type — what
+/// `kafka-configs --entity-type users --entity-default` sets. `<default>` is
+/// the spelling the JVM tools print for it.
+fn quota_entity_name(
+    entry: &krabka_protocol::owned::alter_client_quotas_response::EntryData,
+) -> String {
+    entry
+        .entity
+        .iter()
+        .map(|e| {
+            format!(
+                "{}={}",
+                e.entity_type,
+                e.entity_name.as_deref().unwrap_or("<default>")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn encode_response<R: Encode>(

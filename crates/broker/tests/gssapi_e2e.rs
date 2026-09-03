@@ -101,6 +101,7 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: Some(vec![SaslMechanism::Gssapi]),
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
         ListenerSpec {
             name: "INTERNAL".to_string(),
@@ -109,6 +110,7 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
             protocol: ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
     ];
     cfg.inter_broker_listener_name = "INTERNAL".to_string();

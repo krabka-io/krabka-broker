@@ -80,3 +80,6 @@ mod lifecycle;
 
 #[path = "delegation_tokens/super_user_bypass.rs"]
 mod super_user_bypass;
+
+#[path = "delegation_tokens/unauthenticated.rs"]
+mod unauthenticated;

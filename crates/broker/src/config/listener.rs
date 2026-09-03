@@ -26,13 +26,18 @@ pub struct ListenerSpec {
     /// SASL mechanisms enabled on this listener. When `Some`, overrides
     /// the top-level `BrokerConfig::enabled_sasl_mechanisms`.
     pub sasl_mechanisms: Option<Vec<SaslMechanism>>,
+    /// KIP-371 `ssl.principal.mapping.rules` for this listener, parsed. It
+    /// rewrites the Subject DN of an mTLS peer certificate into the principal
+    /// name ACLs are written against. The default is an empty rule list, which
+    /// passes the DN through exactly as Kafka's `DEFAULT` rule does.
+    pub principal_mapper: crate::network::auth::SslPrincipalMapper,
 }
 
 /// Credentials the broker uses to connect *to* other brokers.
 ///
 /// There is one variant for each SASL mechanism the inter-broker client
 /// supports.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum InterBrokerCredentials {
     /// SASL/PLAIN: `\0username\0password`.
     Plain { username: String, password: String },
@@ -56,6 +61,46 @@ pub enum InterBrokerCredentials {
     /// SASL/OAUTHBEARER. The token file is read on every new outbound
     /// connection so credential rotation does not require a broker restart.
     OAuthBearer { token_path: PathBuf },
+}
+
+/// Hand-written so the `Plain` and `Scram` passwords render as `<redacted>`;
+/// `BrokerConfig` derives `Debug`, and this enum sits inside it.
+impl std::fmt::Debug for InterBrokerCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain { username, .. } => f
+                .debug_struct("Plain")
+                .field("username", username)
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::Scram {
+                mechanism,
+                username,
+                ..
+            } => f
+                .debug_struct("Scram")
+                .field("mechanism", mechanism)
+                .field("username", username)
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::Gssapi {
+                keytab_path,
+                client_principal,
+                service_name,
+                kdc_url,
+            } => f
+                .debug_struct("Gssapi")
+                .field("keytab_path", keytab_path)
+                .field("client_principal", client_principal)
+                .field("service_name", service_name)
+                .field("kdc_url", kdc_url)
+                .finish(),
+            Self::OAuthBearer { token_path } => f
+                .debug_struct("OAuthBearer")
+                .field("token_path", token_path)
+                .finish(),
+        }
+    }
 }
 
 impl InterBrokerCredentials {
@@ -89,6 +134,7 @@ impl BrokerConfig {
             protocol: ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
         }]
     }
 
@@ -127,6 +173,24 @@ impl BrokerConfig {
                 |(_, value)| *value,
             );
         (configured.millis_i64() > 0).then(|| configured.to_std())
+    }
+
+    /// The KIP-368 re-authentication window a SASL session on `listener_name`
+    /// is held to, or `None` when that listener expires no session.
+    ///
+    /// A per-listener override wins over the broker-wide
+    /// `connections_max_reauth`; names are matched without ASCII case, for the
+    /// same reason [`BrokerConfig::connections_max_idle_for`] does.
+    #[must_use]
+    pub fn connections_max_reauth_for(&self, listener_name: &str) -> Option<krabka_units::Time> {
+        use krabka_units::convert::TimeExt as _;
+
+        self.connections_max_reauth_overrides
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(listener_name))
+            .map(|(_, value)| *value)
+            .or(self.connections_max_reauth)
+            .filter(|value| value.millis_i64() > 0)
     }
 
     pub(super) fn validate_outbound_sasl(
@@ -267,6 +331,7 @@ mod tests {
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: Some(vec![SaslMechanism::OAuthBearer]),
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         let data = BrokerConfig {
             listeners: vec![data_listener],
@@ -295,11 +360,15 @@ mod tests {
                 protocol: ListenerProtocol::SaslPlaintext,
                 tls_config: None,
                 sasl_mechanisms: Some(vec![SaslMechanism::Plain]),
+                principal_mapper: crate::SslPrincipalMapper::default(),
             }],
             inter_broker_listener_name: "INTERNAL".into(),
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),
             }),
+            plain_credentials: [("admin".to_string(), "admin-secret".to_string())]
+                .into_iter()
+                .collect(),
             ..BrokerConfig::default()
         };
         let error = data
@@ -314,6 +383,11 @@ mod tests {
         let controller = BrokerConfig {
             controller_listener_protocol: ListenerProtocol::SaslPlaintext,
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
+            // A controller listener offering PLAIN needs a credential table to
+            // reach the outbound-mismatch error this case is about.
+            plain_credentials: [("admin".to_string(), "admin-secret".to_string())]
+                .into_iter()
+                .collect(),
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),
             }),
@@ -365,6 +439,7 @@ mod tests {
             protocol: ListenerProtocol::SaslSsl,
             tls_config: Some(tls.clone()),
             sasl_mechanisms: Some(vec![SaslMechanism::ScramSha512]),
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         let c = BrokerConfig {
             listeners: vec![listener],

@@ -75,6 +75,7 @@ fn sasl_two_listener_config(
             protocol: ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
         ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
@@ -83,6 +84,7 @@ fn sasl_two_listener_config(
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
     ];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();

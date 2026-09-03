@@ -69,6 +69,7 @@ pub fn start_oauthbearer_broker(
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];
@@ -76,17 +77,17 @@ pub fn start_oauthbearer_broker(
     Box::pin(async move { Broker::start(cfg).await.expect("broker must start") })
 }
 
-/// Same as [`start_oauthbearer_broker`], but with a configurable server-side
-/// ceiling on the OAUTHBEARER session lifetime.
+/// Same as [`start_oauthbearer_broker`], but with the listener's KIP-368
+/// `connections.max.reauth.ms` window set.
 ///
-/// `Some(seconds)` clamps `session_lifetime_ms` to
-/// `min(token_exp - now, seconds * 1000)`. It clamps the dispatch-loop
-/// re-auth deadline to the same value. `None` reproduces the 49e default,
-/// where the session ends at the token exp.
+/// `Some(window)` clamps `session_lifetime_ms` to
+/// `min(token_exp - now, window)`, and clamps the dispatch-loop re-auth
+/// deadline to the same value. `None` leaves the session ending at the
+/// token's own `exp`.
 pub fn start_oauthbearer_broker_with_cap(
     log_dir: &std::path::Path,
     validator: krabka_security::OAuthBearerValidator,
-    max_session_lifetime: Option<krabka_units::Time>,
+    max_reauth: Option<krabka_units::Time>,
 ) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
     let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
     cfg.listeners = vec![ListenerSpec {
@@ -96,11 +97,12 @@ pub fn start_oauthbearer_broker_with_cap(
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];
     cfg.oauthbearer_validator = validator;
-    cfg.oauthbearer_max_session_lifetime = max_session_lifetime;
+    cfg.connections_max_reauth = max_reauth;
     Box::pin(async move { Broker::start(cfg).await.expect("broker must start") })
 }
 

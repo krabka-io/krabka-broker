@@ -14,7 +14,9 @@ use super::{
     oauthbearer_apply::apply_oauthbearer,
     privileged_actions::apply_privileged_action_policy,
     remote_storage::apply_remote_storage,
+    sasl_plain::apply_sasl_plain,
     tail::{FileConfigTail, apply_config_tail},
+    topic_policy::apply_topic_policy,
     validate::positive_time,
 };
 
@@ -141,14 +143,15 @@ impl FileConfig {
                 max_connections: self.max_connections,
                 max_connections_per_ip: self.max_connections_per_ip,
                 connections_max_idle: self.connections_max_idle,
+                connections_max_reauth: self.connections_max_reauth,
                 server_properties: self.server_properties,
                 controller_listener_protocol: self.controller_listener_protocol,
                 tls_config: self.tls_config,
             },
             cfg,
             &defaults,
-        );
-        apply_oauthbearer(self.oauthbearer, cfg);
+        )?;
+        apply_oauthbearer(self.oauthbearer, cfg)?;
 
         if let Some(bindings) = self.inter_broker_principal_node_ids {
             cfg.inter_broker_principal_node_ids = bindings
@@ -158,6 +161,8 @@ impl FileConfig {
         }
 
         apply_delegation_tokens(self.delegation_token.as_ref(), cfg)?;
+
+        apply_sasl_plain(self.sasl_plain.as_ref(), cfg)?;
 
         // Merge the TOML super-user list into the broker's
         // set (initially empty). `extend` over `clone_from` because a
@@ -202,6 +207,9 @@ impl FileConfig {
         // shared by the freeze signature path and the break-glass approval
         // path, plus the two rules that cross those sections.
         apply_privileged_action_policy(&self.operator_keys, self.freeze, self.break_glass, cfg)?;
+
+        // `[topic_policy]`: the KIP-108 / KIP-133 rule set.
+        apply_topic_policy(self.topic_policy, cfg)?;
 
         if has_runtime && validate_runtime {
             cfg.validate()
@@ -270,6 +278,7 @@ protocol = "Plaintext"
             operator_keys: vec![],
             freeze: None,
             break_glass: None,
+            topic_policy: None,
             runtime: None,
             broker_id: Some(0),
             log_dir: Some("/var/lib/krabka/data".to_string()),
@@ -286,6 +295,7 @@ protocol = "Plaintext"
             max_connections: None,
             max_connections_per_ip: None,
             connections_max_idle: None,
+            connections_max_reauth: None,
             controller_quorum_voters: vec![],
             bootstrap_servers: vec![],
             auto_join: None,
@@ -299,6 +309,7 @@ protocol = "Plaintext"
                     tls_config: None,
                     sasl_config: None,
                     connections_max_idle: None,
+                    connections_max_reauth: None,
                 },
                 FileListener {
                     name: "EXTERNAL".to_string(),
@@ -308,6 +319,7 @@ protocol = "Plaintext"
                     tls_config: None,
                     sasl_config: None,
                     connections_max_idle: None,
+                    connections_max_reauth: None,
                 },
             ],
             server_properties: maplit::btreemap! {"log.retention.hours".to_string() => "24".to_string()},
@@ -319,6 +331,7 @@ protocol = "Plaintext"
             remote_storage: None,
             authorization: None,
             process: None,
+            sasl_plain: None,
             gssapi: None,
             inter_broker_credentials: None,
             inter_broker_principal_node_ids: None,

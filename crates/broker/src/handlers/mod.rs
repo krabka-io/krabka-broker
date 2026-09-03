@@ -30,7 +30,7 @@ pub(crate) use self::{
         acl_denied, cluster_action_denied, cluster_alter_denied, cluster_describe_denied,
         group_read_denied,
     },
-    admin_audit::audit_admin,
+    admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
     coordinator_routing::{group_coordinator_error, parse_advertised_host_port},
     private_api_keys::{
         ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,

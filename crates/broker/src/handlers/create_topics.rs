@@ -161,6 +161,9 @@ pub(crate) async fn handle(
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
     let preferred_site = resolve_preferred_leader_site(&image);
+    // KIP-108: a validate-only request runs every check and commits nothing,
+    // so the policy below sees it exactly as it sees a committing one.
+    let validate_only = req.validate_only;
 
     for topic_req in req.topics {
         let name = topic_req.name.clone();
@@ -256,52 +259,90 @@ pub(crate) async fn handle(
             continue;
         }
 
+        // The committing path learns of a name collision from
+        // `submit_change`, which decides it inside the quorum and is the
+        // race-safe answer. A dry run never gets there, so ask the image
+        // directly: Kafka's `validateOnly` reports `TopicExistsException` for
+        // an existing name, and it reports it ahead of the topic policy.
+        if validate_only && image.topic(&name).is_some() {
+            results.push(topic_error_result(name, codes::TOPIC_ALREADY_EXISTS, None));
+            continue;
+        }
+
+        // KIP-108: the operator-declared topic policy, on the effective
+        // partition count and replication factor the placement resolved and
+        // on the topic's own config overrides. Kafka calls
+        // `CreateTopicPolicy.validate` here too: after config validation, and
+        // before the records are generated.
+        if let Err(reason) = crate::topic_policy::check(
+            &broker.config.topic_policy,
+            &name,
+            Some(assignments.len()),
+            assignments.first().map(Vec::len),
+            &config_overrides,
+        ) {
+            results.push(topic_error_result(
+                name,
+                codes::POLICY_VIOLATION,
+                Some(reason),
+            ));
+            continue;
+        }
+
         let topic_id = Uuid::new_v4();
 
-        // Build the batch: one TopicRecord + N PartitionRecords.
-        let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
+        // A validate-only request has now passed every check the committing
+        // path runs, and commits nothing.
+        let error_code = if validate_only {
+            codes::NONE
+        } else {
+            // Build the batch: one TopicRecord + N PartitionRecords.
+            let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
 
-        let result = controller.submit_change(records).await;
-
-        let error_code = match result {
-            Ok(_) => {
-                materialize_topic(
-                    TopicMaterialization {
-                        partitions: &partitions_map,
-                        log_dirs: &log_dirs,
-                        log_config: &log_config,
-                        log_dir_status: &log_dir_status,
-                        producer_state: &producer_state,
-                        producer_id_expiration: broker.config.producer_id_expiration,
-                        max_produce_group: broker.config.max_produce_group,
-                        partition_writer_queue_depth: broker.config.partition_writer_queue_depth,
-                        diskless_wal_local_replica_count: broker
-                            .config
-                            .diskless_wal_local_replica_count,
-                        node_id,
-                        diskless,
-                        topic_id,
-                        hot_tail: &hot_tail,
-                        wal_shards: &wal_shards,
-                        controller: &controller,
-                    },
-                    &name,
-                    &assignments,
-                )
-                .await;
-                codes::NONE
-            }
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
-                codes::TOPIC_ALREADY_EXISTS
-            }
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
-                // E.g., `partitions <= 0` rejected by image::validate.
-                codes::INVALID_PARTITIONS
-            }
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => codes::NOT_CONTROLLER,
-            Err(e) => {
-                tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
-                codes::UNKNOWN_SERVER_ERROR
+            match controller.submit_change(records).await {
+                Ok(_) => {
+                    materialize_topic(
+                        TopicMaterialization {
+                            partitions: &partitions_map,
+                            log_dirs: &log_dirs,
+                            log_config: &log_config,
+                            log_dir_status: &log_dir_status,
+                            producer_state: &producer_state,
+                            producer_id_expiration: broker.config.producer_id_expiration,
+                            max_produce_group: broker.config.max_produce_group,
+                            partition_writer_queue_depth: broker
+                                .config
+                                .partition_writer_queue_depth,
+                            diskless_wal_local_replica_count: broker
+                                .config
+                                .diskless_wal_local_replica_count,
+                            node_id,
+                            diskless,
+                            topic_id,
+                            hot_tail: &hot_tail,
+                            wal_shards: &wal_shards,
+                            controller: &controller,
+                        },
+                        &name,
+                        &assignments,
+                    )
+                    .await;
+                    codes::NONE
+                }
+                Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
+                    codes::TOPIC_ALREADY_EXISTS
+                }
+                Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
+                    // E.g., `partitions <= 0` rejected by image::validate.
+                    codes::INVALID_PARTITIONS
+                }
+                Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
+                    codes::NOT_CONTROLLER
+                }
+                Err(e) => {
+                    tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
+                    codes::UNKNOWN_SERVER_ERROR
+                }
             }
         };
 
@@ -328,5 +369,5 @@ pub(crate) async fn handle(
         results.push(result);
     }
 
-    finish_response(broker, ctx, results, quota.delay(), version)
+    finish_response(broker, ctx, results, validate_only, quota.delay(), version)
 }

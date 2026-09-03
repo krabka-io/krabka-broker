@@ -166,6 +166,7 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
         protocol: ListenerProtocol::Ssl,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SSL".to_string();
     cfg.tls_config = Some(TlsConfig {

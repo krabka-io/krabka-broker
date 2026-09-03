@@ -179,7 +179,7 @@ impl Broker {
         // on `bootstrap_servers` + auto-join instead. Broker-only nodes never
         // run a controller, so the records stay unused (step 2b is gated on
         // having a non-empty set and `Bootstrap` mode).
-        let (controller, controller_admin_router) = start_metadata_phase(
+        let (controller, controller_admin_router, raft_handshake_audit) = start_metadata_phase(
             &mut config,
             controller_listener,
             tls_dynamic.as_ref(),
@@ -261,6 +261,11 @@ impl Broker {
             (&diskless_runtime, metrics),
         )
         .await?;
+
+        // The controller listener is already accepting connections, but the
+        // audit log only exists now. Publish it so controller SASL logins
+        // from here on write their `Authentication` rows.
+        let _ = raft_handshake_audit.set(Arc::clone(&runtime.audit_log));
 
         crate::coordinator::leadership::spawn(
             config.node_id,

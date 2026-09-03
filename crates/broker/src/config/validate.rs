@@ -30,6 +30,7 @@ impl BrokerConfig {
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
     /// - The role set or the [`stretch`][Self::stretch] profile is incoherent.
     /// - `audit_topic` is named outside the internal-topic convention.
+    /// - `super_users` lists `"ANONYMOUS"`.
     pub fn validate(&self) -> Result<(), BrokerError> {
         self.validate_log_io_policy()?;
         crate::internal_topics::validate_audit_topic_name(&self.audit_topic)?;
@@ -37,6 +38,14 @@ impl BrokerConfig {
             return Err(BrokerError::EmptyRoles);
         }
         self.validate_witness_roles()?;
+        // A PLAINTEXT or one-way-TLS connection authenticates as ANONYMOUS,
+        // so listing it here grants every unauthenticated client every
+        // operation — and still does not unlock the delegation-token RPCs,
+        // which Kafka's `KafkaApis.allowTokenRequests` gates on a real SASL
+        // or mTLS identity.
+        if self.super_users.contains("ANONYMOUS") {
+            return Err(BrokerError::SuperUserAnonymous);
+        }
         if !self.is_controller()
             && self
                 .controller_quorum_voters
@@ -83,6 +92,13 @@ impl BrokerConfig {
                         name: l.name.clone(),
                     });
                 }
+                // PLAIN has no dynamic credential path the way SCRAM does, so
+                // an empty table means every PLAIN login fails at runtime.
+                if mechanisms.contains(&SaslMechanism::Plain) && self.plain_credentials.is_empty() {
+                    return Err(BrokerError::PlainListenerNoCredentials {
+                        name: l.name.clone(),
+                    });
+                }
             }
         }
 
@@ -109,10 +125,23 @@ impl BrokerConfig {
                 "controller_listener_protocol requires TLS but tls_config is None".into(),
             ));
         }
-        if cp.requires_sasl() && self.enabled_sasl_mechanisms.is_empty() {
-            return Err(BrokerError::SaslListenerNoMechanisms {
-                name: "controller".into(),
-            });
+        if cp.requires_sasl() {
+            if self.enabled_sasl_mechanisms.is_empty() {
+                return Err(BrokerError::SaslListenerNoMechanisms {
+                    name: "controller".into(),
+                });
+            }
+            // As above, but the controller listener is configured on its own
+            // and is not in `effective_listeners`: an empty table here starts
+            // the node and then rejects every controller peer, so no quorum
+            // ever forms.
+            if self.enabled_sasl_mechanisms.contains(&SaslMechanism::Plain)
+                && self.plain_credentials.is_empty()
+            {
+                return Err(BrokerError::PlainListenerNoCredentials {
+                    name: "controller".into(),
+                });
+            }
         }
         self.validate_outbound_sasl(inter_broker_listener)?;
         self.validate_positive_runtime_scalars()?;
@@ -298,10 +327,81 @@ impl BrokerConfig {
 
 #[cfg(test)]
 mod tests {
+    use assert2::assert;
+    use krabka_security::ListenerProtocol;
     use krabka_units::{Time, bytes, millis};
 
     use super::*;
     use crate::config::test_support::{RuntimeInvalidator, assert_invalid_runtime};
+
+    /// Kafka gates the delegation-token RPCs on a SASL- or mTLS-authenticated
+    /// principal, so `"ANONYMOUS"` as a super-user is never the fix for a
+    /// rejected token request — only a cluster-wide authorization hole.
+    #[test]
+    fn rejects_anonymous_super_user() {
+        let mut config = BrokerConfig::default();
+        config.super_users.insert("ANONYMOUS".to_string());
+        assert!(let Err(BrokerError::SuperUserAnonymous) = config.validate());
+
+        let mut config = BrokerConfig::default();
+        config.super_users.insert("operator".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    /// PLAIN has no dynamic credential path, so an enabled-but-empty table is
+    /// a startup error rather than a run of `SASL_AUTHENTICATION_FAILED`.
+    #[test]
+    fn rejects_plain_listener_without_credentials() {
+        let mut config = crate::config::test_support::base();
+        config.plain_credentials = crate::config::PlainCredentials::default();
+
+        let Err(BrokerError::PlainListenerNoCredentials { name }) = config.validate() else {
+            panic!("expected PlainListenerNoCredentials");
+        };
+        assert!(name == "EXTERNAL");
+
+        // The same config passes once the table is loaded.
+        let config = crate::config::test_support::base();
+        assert!(config.validate().is_ok());
+    }
+
+    /// The controller listener is configured outside `listeners`, so it needs
+    /// the same check: PLAIN with an empty table starts the node and then
+    /// rejects every controller peer, and no quorum ever forms.
+    #[test]
+    fn rejects_plain_controller_listener_without_credentials() {
+        // (controller protocol, credentials loaded, expected to be refused)
+        let cases: &[(ListenerProtocol, bool, bool)] = &[
+            (ListenerProtocol::SaslPlaintext, false, true),
+            (ListenerProtocol::SaslPlaintext, true, false),
+            (ListenerProtocol::Plaintext, false, false),
+        ];
+
+        for &(protocol, credentials, refused) in cases {
+            let config = BrokerConfig {
+                controller_listener_protocol: protocol,
+                enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
+                plain_credentials: if credentials {
+                    [("admin".to_string(), "admin-secret".to_string())]
+                        .into_iter()
+                        .collect()
+                } else {
+                    crate::config::PlainCredentials::default()
+                },
+                ..BrokerConfig::default()
+            };
+
+            let result = config.validate();
+            if refused {
+                let Err(BrokerError::PlainListenerNoCredentials { name }) = result else {
+                    panic!("expected PlainListenerNoCredentials for {protocol:?}");
+                };
+                assert!(name == "controller");
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
 
     #[test]
     fn rejects_invalid_runtime_relations() {

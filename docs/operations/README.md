@@ -15,6 +15,9 @@ fails the build when the series drift.
   how to size disk, network and voters, and how to read the phase families.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
   name it replaces.
+- [Audit](../../crates/audit/README.md#which-rpcs-are-audited): which admin
+  RPCs write an `AdminOperation` record to `__krabka_audit`, what each record
+  names, and what is redacted from it.
 
 ## Monitoring
 
@@ -45,12 +48,15 @@ One per condition the registry tells operators to alert on.
 | `KrabkaFailedProduceRequests` | [failed-produce-requests](runbooks/failed-produce-requests.md) |
 | `KrabkaIdleConnectionCloses` | [idle-connection-closes](runbooks/idle-connection-closes.md) |
 | `KrabkaRlmmBootstrapStuck` | [rlmm-bootstrap-stuck](runbooks/rlmm-bootstrap-stuck.md) |
+| `KrabkaAuthenticationFailures` | [authentication-failures](runbooks/authentication-failures.md) |
+| `KrabkaAuthorizationDenials` | [authorization-denials](runbooks/authorization-denials.md) |
 | `KrabkaAuditWriteFailures`, `KrabkaAuditRecordsDropped` | [audit-write-failures](runbooks/audit-write-failures.md) |
 | `KrabkaBarrierPartialCut` | [barrier-partial-cut](runbooks/barrier-partial-cut.md) |
 | `KrabkaBreakGlassBypassed` | [break-glass-bypassed](runbooks/break-glass-bypassed.md) |
 | `KrabkaDisklessWalQuorumLoss` | [diskless-wal-quorum-loss](runbooks/diskless-wal-quorum-loss.md) |
 | `KrabkaDisklessWalFlushFailures`, `KrabkaDisklessWalColdReadErrors` | [diskless-wal-flush-failures](runbooks/diskless-wal-flush-failures.md) |
 | `KrabkaDisklessWalVoterLag` | [diskless-wal-voter-lag](runbooks/diskless-wal-voter-lag.md) |
+| `KrabkaWormSealFailures` | [worm-seal-failures](runbooks/worm-seal-failures.md) |
 
 ## Keeping the contract
 

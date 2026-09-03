@@ -4,7 +4,7 @@
 
 use std::{io, net::SocketAddr};
 
-use assert2::assert;
+use assert2::{assert, check};
 use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
 use krabka_protocol::{
@@ -19,7 +19,7 @@ use krabka_protocol::{
     },
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
-use tokio::net::TcpStream;
+use tokio::{io::AsyncReadExt, net::TcpStream};
 
 use crate::harness::{alice_password, round_trip, wrong_scram_password};
 
@@ -41,6 +41,7 @@ async fn sasl_scram_sha512_happy_path() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];
@@ -94,6 +95,7 @@ async fn sasl_scram_sha512_wrong_password_closes_connection() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];
@@ -151,6 +153,7 @@ async fn sasl_scram_sha256_happy_path() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha256];
@@ -197,6 +200,7 @@ async fn sasl_scram_sha256_wrong_password_closes_connection() {
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha256];
@@ -360,4 +364,338 @@ pub async fn drive_sasl_scram_session(
     }
 
     Ok(())
+}
+
+/// Runs the two RFC 5802 rounds on `stream` and returns the round-2
+/// response, whose `session_lifetime_ms` is the KIP-368 window.
+async fn scram_authenticate(
+    stream: &mut TcpStream,
+    corr: &mut i32,
+    user: &str,
+    password: &str,
+    mechanism: SaslMechanism,
+) -> Result<SaslAuthenticateResponse, io::Error> {
+    let sh_req = SaslHandshakeRequest {
+        mechanism: mechanism.wire_name().to_string(),
+        ..Default::default()
+    };
+    let mut sh_body = BytesMut::new();
+    sh_req
+        .encode(&mut sh_body, 1)
+        .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
+    *corr += 1;
+    let sh_resp_bytes = round_trip(stream, 17, 1, *corr, false, &sh_body).await?;
+    let mut cur: &[u8] = &sh_resp_bytes;
+    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
+        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
+    if sh_resp.error_code != 0 {
+        return Err(io::Error::other(format!(
+            "SaslHandshake failed: error_code={}",
+            sh_resp.error_code
+        )));
+    }
+
+    let client = krabka_security::ScramClientExchange::new(
+        user.to_string(),
+        password.as_bytes().to_vec(),
+        mechanism,
+    );
+    let (client_first, client) = client
+        .client_first()
+        .map_err(|e| io::Error::other(format!("scram client_first: {e:?}")))?;
+    let mut body = BytesMut::new();
+    SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(client_first),
+        ..Default::default()
+    }
+    .encode(&mut body, 2)
+    .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) encode: {e}")))?;
+    *corr += 1;
+    let first_bytes = round_trip(stream, 36, 2, *corr, true, &body).await?;
+    let mut cur: &[u8] = &first_bytes;
+    let first = SaslAuthenticateResponse::decode(&mut cur, 2)
+        .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) decode: {e}")))?;
+    if first.error_code != 0 {
+        return Ok(first);
+    }
+
+    let (client_final, _client) = client
+        .step(&first.auth_bytes)
+        .map_err(|e| io::Error::other(format!("scram client step: {e:?}")))?;
+    let mut body = BytesMut::new();
+    SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(client_final),
+        ..Default::default()
+    }
+    .encode(&mut body, 2)
+    .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) encode: {e}")))?;
+    *corr += 1;
+    let final_bytes = round_trip(stream, 36, 2, *corr, true, &body).await?;
+    let mut cur: &[u8] = &final_bytes;
+    SaslAuthenticateResponse::decode(&mut cur, 2)
+        .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) decode: {e}")))
+}
+
+/// A `SASL_PLAINTEXT` broker serving SCRAM-SHA-512 for alice and bob, with the
+/// KIP-368 window set to `max_reauth` and the idle window switched off.
+async fn start_scram_reauth_broker(
+    log_dir: &std::path::Path,
+    max_reauth: krabka_units::Time,
+) -> krabka_broker::BrokerHandle {
+    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
+    cfg.connections_max_idle = Some(krabka_units::millis(0));
+    cfg.connections_max_reauth = Some(max_reauth);
+    cfg.listeners = vec![ListenerSpec {
+        name: "SASL_PLAINTEXT".to_string(),
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        advertised: "127.0.0.1:0".to_string(),
+        protocol: ListenerProtocol::SaslPlaintext,
+        tls_config: None,
+        sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+    }];
+    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];
+    let handle = Broker::start(cfg).await.expect("broker must start");
+    for user in ["alice", "bob"] {
+        let cred = krabka_security::hash_scram_password(
+            alice_password().as_bytes(),
+            SaslMechanism::ScramSha512,
+            4096,
+        );
+        handle
+            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
+                krabka_metadata::ScramCredentialRecord {
+                    user: user.into(),
+                    mechanism: SaslMechanism::ScramSha512,
+                    salt: cred.salt,
+                    stored_key: cred.stored_key,
+                    server_key: cred.server_key,
+                    iterations: cred.iterations,
+                },
+            ))
+            .await
+            .expect("submit V1ScramCredential");
+    }
+    handle
+}
+
+/// KIP-368: a SCRAM session under `connections.max.reauth.ms` reports the
+/// window as `session_lifetime_ms`, and a data-plane request that arrives after
+/// it elapses without an in-band re-authentication closes the connection.
+///
+/// The close happens on that request and not on a timer, which is where Kafka
+/// puts it (`Processor.processCompletedReceives`): a connection that has fallen
+/// silent is reclaimed by `connections.max.idle.ms`, not by this window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_session_capped_by_connections_max_reauth_then_closes() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
+    let addr = handle.listen_addr();
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut corr = 0;
+    let resp = scram_authenticate(
+        &mut stream,
+        &mut corr,
+        "alice",
+        &alice_password(),
+        SaslMechanism::ScramSha512,
+    )
+    .await
+    .expect("SCRAM authenticate round-trips");
+    check!(resp.error_code == 0);
+    check!(
+        (200..=300).contains(&resp.session_lifetime_ms),
+        "session_lifetime_ms = {}, expected the 300 ms cap",
+        resp.session_lifetime_ms
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // The request that arrives on the expired session is what ends it.
+    let md_req = MetadataRequest::default();
+    let mut md_body = BytesMut::new();
+    md_req.encode(&mut md_body, 12).unwrap();
+    corr += 1;
+    let _ = round_trip(&mut stream, 3, 12, corr, true, &md_body).await;
+
+    let mut buf = [0_u8; 16];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+        .await
+        .expect("read should not hang")
+        .expect("read should not error");
+    check!(
+        n == 0,
+        "expected EOF after the re-auth window, got {n} bytes"
+    );
+
+    handle.shutdown().await;
+}
+
+/// KIP-368: a SCRAM re-auth for the same principal runs both rounds in the
+/// `Reauthenticating` state and re-arms the window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_in_band_reauth_same_principal_reopens_data_plane() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
+    let addr = handle.listen_addr();
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut corr = 0;
+    scram_authenticate(
+        &mut stream,
+        &mut corr,
+        "alice",
+        &alice_password(),
+        SaslMechanism::ScramSha512,
+    )
+    .await
+    .expect("initial SCRAM authenticate");
+    let reauth = scram_authenticate(
+        &mut stream,
+        &mut corr,
+        "alice",
+        &alice_password(),
+        SaslMechanism::ScramSha512,
+    )
+    .await
+    .expect("in-band SCRAM re-auth round-trips");
+    check!(reauth.error_code == 0, "in-band re-auth must succeed");
+    check!(
+        (29_000..=30_000).contains(&reauth.session_lifetime_ms),
+        "re-auth must re-arm the window, got {}",
+        reauth.session_lifetime_ms
+    );
+
+    let md_req = MetadataRequest::default();
+    let mut md_body = BytesMut::new();
+    md_req.encode(&mut md_body, 12).unwrap();
+    corr += 1;
+    let md_resp_bytes = round_trip(&mut stream, 3, 12, corr, true, &md_body)
+        .await
+        .expect("Metadata RPC after in-band re-auth");
+    let mut cur: &[u8] = &md_resp_bytes;
+    let md_resp = MetadataResponse::decode(&mut cur, 12).unwrap();
+    check!(!md_resp.brokers.is_empty());
+
+    handle.shutdown().await;
+}
+
+/// KIP-368 forbids a principal switch mid-connection: a SCRAM re-auth as a
+/// different user answers `SASL_AUTHENTICATION_FAILED` (58) and closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_in_band_reauth_with_different_principal_closes() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
+    let addr = handle.listen_addr();
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut corr = 0;
+    scram_authenticate(
+        &mut stream,
+        &mut corr,
+        "alice",
+        &alice_password(),
+        SaslMechanism::ScramSha512,
+    )
+    .await
+    .expect("initial SCRAM authenticate");
+    let reauth = scram_authenticate(
+        &mut stream,
+        &mut corr,
+        "bob",
+        &alice_password(),
+        SaslMechanism::ScramSha512,
+    )
+    .await
+    .expect("re-auth round-trips");
+    check!(
+        reauth.error_code == 58,
+        "expected SASL_AUTHENTICATION_FAILED, got {}",
+        reauth.error_code
+    );
+
+    let mut buf = [0_u8; 16];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+        .await
+        .expect("read should not hang")
+        .expect("read should not error");
+    check!(n == 0, "expected EOF after a refused re-auth");
+
+    handle.shutdown().await;
+}
+
+/// KIP-368: a connection re-authenticates round after round for the whole life
+/// of the connection, and it may begin each round *after* its window has
+/// already elapsed.
+///
+/// That lateness is not an edge case. A JVM client picks its re-auth point at
+/// 85–95% of the advertised `session_lifetime_ms`, but acts on it only when it
+/// next has a request to write, so a producer on its own send cadence opens the
+/// exchange past the deadline as a matter of course. Kafka serves it: the
+/// broker runs no timer, and an expired session is closed only by a request
+/// that is not part of a re-authentication.
+///
+/// The window here is short and the test sleeps past it before every round, so
+/// each of the five rounds starts expired. A broker that closed on the deadline
+/// itself fails on the first one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_scram_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
+    let addr = handle.listen_addr();
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut corr = 0;
+    let initial = scram_authenticate(
+        &mut stream,
+        &mut corr,
+        "alice",
+        &alice_password(),
+        SaslMechanism::ScramSha512,
+    )
+    .await
+    .expect("initial SCRAM authenticate");
+    check!(initial.error_code == 0);
+
+    for round in 1..=5 {
+        // Past the deadline the previous round armed, the way a client that
+        // only re-authenticates when it has something to send arrives.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        let reauth = scram_authenticate(
+            &mut stream,
+            &mut corr,
+            "alice",
+            &alice_password(),
+            SaslMechanism::ScramSha512,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("re-auth round {round} must round-trip: {e}"));
+        check!(
+            reauth.error_code == 0,
+            "re-auth round {round} must succeed, got {} {:?}",
+            reauth.error_code,
+            reauth.error_message
+        );
+        check!(
+            (200..=300).contains(&reauth.session_lifetime_ms),
+            "re-auth round {round} must re-arm the window, got {}",
+            reauth.session_lifetime_ms
+        );
+
+        let md_req = MetadataRequest::default();
+        let mut md_body = BytesMut::new();
+        md_req.encode(&mut md_body, 12).unwrap();
+        corr += 1;
+        let md_resp_bytes = round_trip(&mut stream, 3, 12, corr, true, &md_body)
+            .await
+            .unwrap_or_else(|e| panic!("Metadata after re-auth round {round}: {e}"));
+        let mut cur: &[u8] = &md_resp_bytes;
+        let md_resp = MetadataResponse::decode(&mut cur, 12).unwrap();
+        check!(!md_resp.brokers.is_empty(), "round {round}");
+    }
+
+    handle.shutdown().await;
 }
