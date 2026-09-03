@@ -79,6 +79,31 @@ jobs:
             '@@rules_rs++crate+crates__codspeed-5.0.1//:codspeed' \
             2>&1 | tee "${RUNNER_TEMP}/remote.log" || true
 
+      # The command that actually fails. Run 33727160429 executed 1287 actions
+      # genuinely remotely -- `1910 processes: 623 internal, 1287 remote`, every
+      # trailer reading `# Runner: remote` -- and succeeded, with no
+      # `buildbuddy-execroot` anywhere in 172k lines. So `bazel build` on this
+      # target does not reproduce it.
+      #
+      # Every observed failure was in `bazel coverage`, and `build` with
+      # `--config=rbe` passed with 13 remote executions on the same day. The
+      # coverage configuration adds `--collect_code_coverage` and an
+      # instrumentation transition, which rekeys the graph; that is the
+      # difference the reproduction has been missing. `//crates/log` is where
+      # `proptest_log_test` first failed.
+      - name: the command that actually failed, narrowed
+        run: |
+          bazel coverage --config=rbe \
+            --verbose_failures \
+            --noremote_accept_cached \
+            --remote_download_outputs=all \
+            //crates/log:proptest_log_test \
+            2>&1 | tee "${RUNNER_TEMP}/coverage.log" || true
+          echo "::group::did coverage reproduce it"
+          grep -E 'buildbuddy-execroot|ProcessWrapperError|^ERROR|processes:|Build completed|Build did NOT' \
+            "${RUNNER_TEMP}/coverage.log" || echo "(no matching lines)"
+          echo "::endgroup::"
+
       # The same target with no executor -- and, crucially, forced to actually
       # run. Run 33726077901 compared a remote *execution* against a local
       # *cache hit* (`1287 remote cache hit`, codspeed among them) and so
@@ -120,7 +145,11 @@ jobs:
       # absolute path -- which is the remaining live hypothesis. Also Codex's.
       - name: what the env files actually contain
         run: |
-          for f in $(find -L bazel-out/ -name '*codspeed*.env' 2>/dev/null | head -5); do
+          # `-name` matches the basename and the file is `_bs.env`, so the
+          # previous `*codspeed*.env` glob could not match and step 8 printed
+          # nothing at all on run 33727160429. `-path` is what filters on the
+          # codspeed directory.
+          for f in $(find -L bazel-out/ -path '*codspeed*' -name '*.env' 2>/dev/null | head -5); do
             echo "::group::${f}"
             grep -a -E 'OUT_DIR|CARGO_MANIFEST|^PWD|execroot|buildbuddy' "${f}" || echo "(no path-like vars)"
             echo "::endgroup::"
