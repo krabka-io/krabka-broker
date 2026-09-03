@@ -81,6 +81,40 @@ build --java_runtime_version=remotejdk_21
 test --test_tag_filters=-docker
 test:docker --test_tag_filters=docker
 
+# Remote build execution, opt in per invocation with `--config=rbe`.
+#
+#     bazel build --config=rbe //...
+#
+# Off by default and named per step rather than per job, which is what keeps the
+# `timing-sensitive` suites on a real runner: they assert on wall clock and are
+# already `flaky = True`, and `cpu:4` -- the tag that stops Bazel starving them
+# locally -- means nothing to a remote executor, which sizes actions from
+# `exec_properties` instead.
+#
+# The execution platform is the one the `llvm` module already publishes rather
+# than a hand-written copy. That matters for more than tidiness: it carries
+# `@llvm//constraints/libc:gnu.2.28` beside the os and cpu constraints, and
+# without that constraint the C++ toolchain does not resolve on the executor at
+# all. It also pins `docker://ubuntu:22.04`, chosen by the people who build the
+# toolchain to match the glibc it targets. A platform written here would have to
+# track both, and would silently rot when the toolchain moved.
+#
+# `--extra_execution_platforms` rather than `--host_platform`: the host platform
+# keeps resolving as it does for a local build, and only remote actions pick up
+# the container.
+#
+# No credential here. `.github/actions/remote-cache` writes the BuildBuddy
+# endpoint and API key into `user.bazelrc`, which the `try-import` at the bottom
+# of this file reads. On a fork, where the secret is absent, that file is never
+# written and `--remote_executor` fails loudly rather than quietly building
+# somewhere unexpected.
+#
+# `--jobs` goes far past the runner's four cores because the whole point is to
+# have more actions in flight than this machine could run itself.
+build:rbe --remote_executor=grpcs://remote.buildbuddy.io
+build:rbe --extra_execution_platforms=@llvm//:rbe_linux_x86_64
+build:rbe --jobs=100
+
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.
 build --@rules_rs_mutants//mutants:cargo_mutants_binary=@mutants//:cargo-mutants__cargo-mutants
