@@ -16,6 +16,12 @@ description: Write the BuildBuddy configuration into user.bazelrc, when this run
 #
 # Third, a developer's own `user.bazelrc` is untouched off CI.
 #
+# The same file carries the remote *execution* flags, under `--config=rbe`.
+# `.bazelrc` defines that config with one credential-free flag so it always
+# resolves; everything that needs a key is written here, so a fork -- which sees
+# no secret and gets no file -- falls back to a local build rather than to an
+# unauthenticated executor it cannot reach.
+#
 # BuildBuddy accepts either credential, and this takes whichever is present:
 # an API key as a request header, or a client certificate and its key over
 # mTLS. The certificate pair wins when both are set, because it is the more
@@ -81,6 +87,20 @@ runs:
           echo "build --remote_cache=grpcs://remote.buildbuddy.io"
           echo "build --bes_backend=grpcs://remote.buildbuddy.io"
           echo "build --bes_results_url=https://app.buildbuddy.io/invocation/"
+          # The profile BES carries, made legible. Bazel's default `slim_profile`
+          # collapses the many small actions this build is mostly made of into
+          # aggregate rows, and without the target label a row says `Rustc` and
+          # not which crate. That is the difference between "the build spent
+          # eleven minutes compiling" and "these four crates are the critical
+          # path", which is the whole reason to look at a profile. Suggested by
+          # the BuildBuddy team.
+          #
+          # Here rather than in `.bazelrc` because an unslimmed profile only
+          # earns its size when something is uploading it to look at; a local
+          # build would pay for a profile nobody reads.
+          echo "build --noslim_profile"
+          echo "build --experimental_profile_include_target_label"
+          echo "build --experimental_profile_include_primary_output"
           # Ten minutes: the broker's link actions are large, and the default
           # 60s times out on the first cold upload of one.
           echo "build --remote_timeout=600"
@@ -104,6 +124,17 @@ runs:
           # already defaults to 100 bytes on 9.2, which is what keeps zstd off
           # blobs too small to gain from it.
           echo "build --remote_cache_compression"
+          # Remote *execution*, under `--config=rbe` so it applies only to the
+          # steps that ask for it. These live here rather than in `.bazelrc`
+          # for the same reason the API key does: they are useless without one.
+          # A fork's pull request sees no secret, this file is never written,
+          # and `--config=rbe` falls back to the single credential-free flag
+          # `.bazelrc` defines -- a local build, not an unauthenticated one.
+          echo "build:rbe --remote_executor=grpcs://remote.buildbuddy.io"
+          echo "build:rbe --extra_execution_platforms=@llvm//:rbe_linux_x86_64"
+          # Far past the runner's four cores: the point is to have more actions
+          # in flight than this machine could run itself.
+          echo "build:rbe --jobs=100"
         }
 
         # `test` and `coverage` inherit `build`, so one block covers the

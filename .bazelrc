@@ -81,6 +81,65 @@ build --java_runtime_version=remotejdk_21
 test --test_tag_filters=-docker
 test:docker --test_tag_filters=docker
 
+# Remote build execution, opt in per invocation with `--config=rbe`.
+#
+#     bazel build --config=rbe //...
+#
+# `ci` passes it on `lint`, `build` and `docgen`, and the `coverage` job passes
+# it wholesale. Deliberately not `test` or `stateright models` -- see those
+# steps in the workflow for why.
+#
+# Only one flag is here, and it is the one that needs no credential. Everything
+# that does -- the executor, the execution platform, the job count -- is written
+# into `user.bazelrc` by `.github/actions/remote-cache`, beside the API key that
+# makes it usable, and only when there is a key to write.
+#
+# That split is what keeps a fork building. A fork's pull request sees no
+# secrets, so the action writes nothing, so `--config=rbe` expands to this line
+# alone and the build runs locally exactly as it always did. Putting
+# `--remote_executor` here instead would point every credential-less build at an
+# endpoint it cannot authenticate to, which is a failure rather than a fallback
+# -- and CI passes `--config=rbe` unconditionally, so there would be nothing to
+# catch it. `--remote_timeout` governs remote calls only, so on that path it
+# does nothing at all, which is the point: the config has to exist for
+# `--config=rbe` to resolve, and this is the least it can be.
+build:rbe --remote_timeout=600
+
+# `--config=rbe` is on the `lint` step alone, because remote *execution* of
+# rustc codegen is not yet reliable here. Some of it works: on run 33723594983
+# the `build` step executed 13 actions remotely and passed. But a crate whose
+# build script generates something the compile consumes can fail:
+#
+#     compiled Rust output ...libcodspeed-*.rlib embeds the absolute working
+#     directory /buildbuddy-execroot
+#
+# rules_rs scans every rustc codegen output for the action's own working
+# directory (`rust/private/rustc.bzl` passes `--check-output-for-working-dir`;
+# `util/process_wrapper/main.rs` runs the scan). The scan never fires locally,
+# where each sandboxed action has its own
+# `.../sandbox/linux-sandbox/<n>/execroot/_main`; every action on a BuildBuddy
+# executor shares one fixed `/buildbuddy-execroot`. `codspeed` and `ring` have
+# both hit it. Pinning the build scripts to the runner did not prevent it, so
+# where the path enters the rlib is still unestablished.
+#
+# What makes this worse than an occasional failure is *when* it bites. On a
+# warm cache almost nothing executes -- `coverage` on that run logged
+# `2542 remote cache hit ... 2 remote`, and one of those two was the failure --
+# so RBE passes whenever it has least to contribute, and executes, and can
+# fail, exactly on the cold-cache runs it exists for. A gate that behaves that
+# way is worse than no gate speedup at all, which is why `build`, `docgen` and
+# `coverage` stay local until the crash is understood.
+#
+# `lint` is exempt structurally: the clippy aspect emits metadata and no object
+# code, and rustc.bzl skips the scan for those ("RustcMetadata has separate
+# arguments and no object code"). It is also where RBE was measured to help --
+# 10m6s locally against 3m30s with 93 actions executed remotely on a cold
+# cache. (Its 52.5s on a warm cache is the remote *cache*, not execution: that
+# invocation ran 0 actions remotely.)
+#
+# The underlying fix belongs upstream in rules_rs, which should not compare an
+# output against a needle that a fixed remote execroot makes collidable.
+
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.
 build --@rules_rs_mutants//mutants:cargo_mutants_binary=@mutants//:cargo-mutants__cargo-mutants

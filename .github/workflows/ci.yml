@@ -83,10 +83,15 @@ jobs:
       # the same aspect through the `*_clippy` targets, for anyone without the
       # CLI.
       - name: lint
-        run: aspect lint
+        run: aspect lint --bazel-flag=--config=rbe
 
+      # No `--config=rbe`: this compiles, and rustc codegen actions cannot
+      # currently execute on the remote. See the `build:rbe` block in .bazelrc.
       - name: build
-        run: aspect build --bazel-flag=--build_tag_filters=-docker //...
+        run: |
+          aspect build \
+            --bazel-flag=--build_tag_filters=-docker \
+            //...
 
       # The seven suites `coverage` excludes as timing-sensitive, plus
       # `//packaging:image_binaries_test`, which sits outside `//crates` and so
@@ -94,6 +99,12 @@ jobs:
       # just those rather than a full `bazel test //...`, which would rerun the
       # ~140 suites `coverage` already executes and roughly double this job's
       # wall clock for no new signal.
+      # No `--config=rbe`, and this step is why the config is applied per step
+      # rather than per job: `timing-sensitive` is exactly the tag for suites
+      # that assert on wall clock, and `cpu:4` -- which stops Bazel starving
+      # them locally -- means nothing to a remote executor, which sizes actions
+      # from `exec_properties`. //crates/raft records `kraft_engine_sim` failing
+      # 7 of 7 at twelve concurrent runs and passing at six.
       - name: test
         run: |
           bazel test --test_tag_filters=timing-sensitive //crates/...
@@ -112,6 +123,10 @@ jobs:
       # Impact analysis may omit a model when its source did not change. Run
       # every Stateright-bearing target explicitly so the verification catalog
       # remains a merge gate on every pull request.
+      # Local as well. These are model checks rather than wall-clock
+      # assertions, so they could run remotely, but they are the verification
+      # catalog's merge gate and there is no case for making a gate depend on a
+      # second service before the cheaper steps have proved it.
       - name: stateright models
         run: |
           bazel test \
