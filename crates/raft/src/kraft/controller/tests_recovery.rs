@@ -33,13 +33,13 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
         let mut batch =
             typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&committed))])
                 .expect("committed voter batch");
-        log.append(&mut batch)
+        log.append(&mut batch, 0)
             .expect("append committed voter batch");
         log.advance_hwm(log.log_end_offset());
         let mut batch =
             typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&uncommitted))])
                 .expect("uncommitted voter batch");
-        log.append(&mut batch)
+        log.append(&mut batch, 0)
             .expect("append uncommitted voter batch");
     }
 
@@ -66,7 +66,7 @@ fn control_replay_stops_inside_a_partially_committed_batch() {
             ],
         )
         .expect("mixed-commit voter batch");
-        log.append(&mut batch).expect("append voter batch");
+        log.append(&mut batch, 0).expect("append voter batch");
         log.advance_hwm(Offset(1));
     }
 

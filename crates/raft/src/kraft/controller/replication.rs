@@ -14,7 +14,7 @@ use krabka_verified::{
 
 use super::{
     Engine, KraftControlState, Role,
-    checkpoint::{retain_latest_checkpoint, write_checkpoint},
+    checkpoint::{retain_recent_checkpoints, write_checkpoint},
     checkpoint_dir,
     offsets::fetch_offset_has_records,
     records::{decode_batches, encode_batches},
@@ -370,7 +370,7 @@ impl Engine {
             u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
         );
         let _ = self.image_tx.send(Arc::new(self.image.clone()));
-        retain_latest_checkpoint(&checkpoint_dir(&self.data_dir));
+        retain_recent_checkpoints(&checkpoint_dir(&self.data_dir));
         Ok(())
     }
 }

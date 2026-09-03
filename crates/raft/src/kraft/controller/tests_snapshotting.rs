@@ -1,6 +1,7 @@
-//! Tests for KIP-630 snapshotting: the interval-driven checkpoint and prune, the
-//! checkpoint directory's id ordering and single-snapshot retention, and the
-//! fact that an ordinary snapshot never reloads the live image.
+//! Tests for KIP-630 snapshotting: the interval-driven checkpoint and prune,
+//! the checkpoint directory's id ordering and two-snapshot retention, the
+//! header timestamp each checkpoint is stamped with, and the fact that an
+//! ordinary snapshot never reloads the live image.
 
 use assert2::assert;
 
@@ -8,14 +9,29 @@ use super::*;
 use crate::kraft::controller::{
     checkpoint::{
         checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-        load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint, write_checkpoint,
+        load_latest_checkpoint, parse_checkpoint_name, retain_recent_checkpoints, write_checkpoint,
     },
+    records::decode_control_record,
     test_support::{
         await_leader, build_engine_only, build_with_max_bytes_between_snapshots,
-        build_with_snapshot_interval, elect_single_voter_engine, submit_change_with_timeout,
-        topic_record,
+        build_with_snapshot_interval, elect_single_voter_engine, one_offset_batch,
+        submit_change_with_timeout, topic_record,
     },
 };
+
+/// The `last_contained_log_timestamp` a checkpoint's KIP-630
+/// `SnapshotHeaderRecord` is stamped with. The header is the first control
+/// batch of the artifact, so decoding it is how a reader — the JVM
+/// `kafka-dump-log --cluster-metadata-decoder` included — sees the value.
+fn snapshot_header_timestamp(bytes: &[u8]) -> i64 {
+    let mut cursor = bytes;
+    let header = RecordBatch::decode(&mut cursor).expect("decode the header batch");
+    let record = header.records.first().expect("a header record");
+    match decode_control_record(record).expect("decode the header control record") {
+        Some(ControlRecord::SnapshotHeader(header)) => header.last_contained_log_timestamp,
+        other => panic!("expected a snapshot header control record, got {other:?}"),
+    }
+}
 
 #[test]
 fn snapshot_pruning_stays_at_or_below_the_committed_frontier() {
@@ -172,19 +188,19 @@ fn latest_checkpoint_id_picks_highest_offset_then_epoch() {
 }
 
 #[test]
-fn retain_latest_checkpoint_deletes_older_checkpoints_only() {
+fn retain_recent_checkpoints_keeps_the_two_newest_ids_and_deletes_the_rest() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cp_dir = checkpoint_dir(dir.path());
-    write_checkpoint(&cp_dir, 5, 1, b"old").expect("write old");
-    write_checkpoint(&cp_dir, 6, 1, b"new").expect("write new");
+    write_checkpoint(&cp_dir, 5, 1, b"oldest").expect("write oldest");
     write_checkpoint(&cp_dir, 6, 0, b"older-same-offset").expect("write older same offset");
+    write_checkpoint(&cp_dir, 6, 1, b"newest").expect("write newest");
 
-    retain_latest_checkpoint(&cp_dir);
+    retain_recent_checkpoints(&cp_dir);
 
     for (_case, end_offset, epoch, want_present) in [
-        ("matching checkpoint", 6, 1, true),
-        ("wrong end offset", 5, 1, false),
-        ("wrong epoch", 6, 0, false),
+        ("the latest checkpoint", 6, 1, true),
+        ("the one before it", 6, 0, true),
+        ("older than both", 5, 1, false),
     ] {
         assert2::assert!(
             load_checkpoint_by_id(&cp_dir, end_offset, epoch).is_some() == want_present
@@ -194,5 +210,110 @@ fn retain_latest_checkpoint_deletes_older_checkpoints_only() {
         .expect("read checkpoint dir")
         .collect::<Result<Vec<_>, _>>()
         .expect("read entries");
-    assert2::assert!(entries.len() == 1);
+    assert2::assert!(entries.len() == 2);
+}
+
+#[test]
+fn retain_recent_checkpoints_keeps_a_lone_checkpoint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cp_dir = checkpoint_dir(dir.path());
+    write_checkpoint(&cp_dir, 7, 2, b"only").expect("write only");
+
+    retain_recent_checkpoints(&cp_dir);
+
+    assert2::assert!(load_checkpoint_by_id(&cp_dir, 7, 2) == Some(b"only".to_vec()));
+}
+
+/// A snapshot roll leaves the checkpoint it replaces on disk, and only the
+/// roll after that removes it. That one-snapshot grace is what a follower
+/// chunking a `FetchSnapshot` through the previous id needs: Kafka keeps the
+/// previous snapshot servable the same way, through retention rather than by
+/// tracking in-flight readers.
+#[test]
+fn a_snapshot_roll_keeps_the_checkpoint_it_replaces_until_the_next_one() {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let cp_dir = checkpoint_dir(dir.path());
+
+    let mut ids = Vec::new();
+    for name in ["first", "second", "third"] {
+        let (reply, mut rx) = oneshot::channel();
+        engine.on_submit_change(&topic_record(name), reply);
+        assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+        engine
+            .write_snapshot_and_prune()
+            .expect("snapshot and prune");
+        ids.push(latest_checkpoint_id(&cp_dir).expect("a checkpoint exists"));
+
+        // Every roll must land on a genuinely new id, or retention would have
+        // nothing to keep and this test would pass vacuously.
+        assert2::assert!(ids.iter().filter(|id| **id == ids[ids.len() - 1]).count() == 1);
+
+        if ids.len() == 2 {
+            assert2::assert!(load_checkpoint_by_id(&cp_dir, ids[0].0, ids[0].1).is_some());
+        }
+    }
+
+    assert2::assert!(
+        (
+            load_checkpoint_by_id(&cp_dir, ids[0].0, ids[0].1).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[1].0, ids[1].1).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[2].0, ids[2].1).is_some(),
+        ) == (false, true, true)
+    );
+}
+
+/// The KIP-630 header carries the create-time of the last batch the snapshot
+/// contains, the way Kafka's `MetadataLoader` hands `createSnapshot` the
+/// append time of the last batch it folded in. Before this the engine passed a
+/// literal `0` and every checkpoint claimed 1970.
+#[test]
+fn the_checkpoint_header_carries_the_last_contained_batch_create_time() {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+
+    // Append below the engine's own submit path so the create-times are
+    // chosen, not read off the wall clock. The snapshot covers both, so it
+    // must name the newer one.
+    let older = 1_700_000_000_000;
+    let newer = 1_700_000_111_222;
+    for (value, stamp) in [(b"a", older), (b"b", newer)] {
+        let mut batch = one_offset_batch(0, 1, value);
+        engine.log.append(&mut batch, stamp).expect("append");
+    }
+    engine.log.advance_hwm(engine.log.log_end_offset());
+
+    engine
+        .write_snapshot_and_prune()
+        .expect("snapshot and prune");
+
+    let bytes = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+        .expect("scan checkpoints")
+        .expect("a checkpoint exists");
+    assert2::assert!(snapshot_header_timestamp(&bytes) == newer);
+}
+
+/// The same stamp end to end through the engine's own leader append path: a
+/// submitted change is stamped with the wall clock, and the checkpoint written
+/// over it names that instant rather than the epoch.
+#[tokio::test]
+async fn a_submitted_change_stamps_its_checkpoint_with_the_append_wall_clock() {
+    let (ctrl, dir) = build_with_snapshot_interval(NodeId(1), &[NodeId(1)], 3);
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    await_leader(&ctrl, Some(NodeId(1))).await;
+
+    let before = Engine::wall_clock_ms();
+    for name in ["a", "b", "c", "d"] {
+        submit_change_with_timeout(&ctrl, topic_record(name), "snapshot threshold submit")
+            .await
+            .unwrap();
+    }
+    let after = Engine::wall_clock_ms();
+
+    let bytes = load_latest_checkpoint(&checkpoint_dir(dir.path()))
+        .expect("scan checkpoints")
+        .expect("a checkpoint exists");
+    let stamped = snapshot_header_timestamp(&bytes);
+    assert2::assert!(before <= stamped && stamped <= after, "{stamped}");
+    ctrl.shutdown().await;
 }

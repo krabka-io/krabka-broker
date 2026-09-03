@@ -598,7 +598,7 @@ fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     for offset in 0..5 {
         let mut batch = one_offset_batch(offset, 1, b"x");
-        engine.log.append(&mut batch).expect("append");
+        engine.log.append(&mut batch, 0).expect("append");
     }
     engine.log.advance_hwm(Offset(5));
 
