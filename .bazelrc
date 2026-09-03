@@ -91,21 +91,20 @@ test:docker --test_tag_filters=docker
 # `*_docker_test` in //bazel/defs.bzl, because it belongs to the test action
 # rather than to an invocation.
 #
-# EXPERIMENT, not for merge as-is. `--modify_execution_info=^Rustc$=+no-remote-exec`
-# used to be here, pinning Rust code generation to the runner because a rustc
-# action on a BuildBuddy executor can fail rules_rs's working-directory scan
-# (the `build:rbe` block below has the reproduction).
+# What is here is the half that does not: Rust code generation stays on the
+# local machine. A rustc action that runs on a BuildBuddy executor can fail
+# rules_rs's working-directory scan -- the `build:rbe` block below has the
+# reproduction and the cause -- and a compile failure would take the job down
+# before a single container started, which would say nothing about whether the
+# microVMs work. `no-remote-exec` is not `no-remote-cache`: these actions still
+# read the remote cache and only execute locally on a miss.
 #
-# It is lifted to settle a question the evidence never closed. Every observed
-# failure was under `bazel coverage`, which rekeys the graph via
-# `--collect_code_coverage`; `bazel build --config=rbe` has never failed and was
-# once observed executing `1287 remote` and succeeding. Whether a *full* build --
-# one that certainly contains `ring` as an executed action -- survives is
-# untested, and the answer decides whether CI can become one invocation.
-#
-# Restore the line if this run fails on `embeds the absolute working directory`.
+# `^Rustc$` and not `Rustc`: Bazel matches this regex anywhere in the mnemonic,
+# so the unanchored spelling would also catch `RustcMetadata`, which is the one
+# rustc action that is already known to run remotely.
 test:docker-rbe --config=docker
 test:docker-rbe --config=rbe
+test:docker-rbe --modify_execution_info=^Rustc$=+no-remote-exec
 # A failing suite here prints the broker's whole INFO log -- `jvm_acceptance_tiered`
 # managed 8.6 MB -- and Bazel drops anything past this cap, printing
 # "exceeds maximum size ...; skipping" in place of the output. That is the only
@@ -155,13 +154,26 @@ build:rbe --remote_timeout=600
 # `util/process_wrapper/main.rs` runs the scan) and rejects it. On a BuildBuddy
 # executor that directory is `/buildbuddy-execroot`.
 #
-# `bazel coverage` is what surfaces it. `--collect_code_coverage` and
-# `--instrumentation_filter` discard the analysis cache and rekey the graph, so
-# these actions genuinely execute instead of being served from the cache: the
-# reproducing invocation logged `806 remote`, while `bazel build --config=rbe`
-# over the same closure in the same run logged `1287 remote` and passed.
+# What decides it is which actions genuinely execute, not which command runs
+# them, and an earlier version of this comment had that wrong. Two runs on #451
+# settle it. With the pin lifted, `bazel build --config=rbe` executed 83 actions
+# remotely -- every rustc among them, `//crates/broker:broker_test` at 104s --
+# and passed, because `codspeed` and `ring` were not among the 83. Then
+# `bazel coverage --config=rbe --noremote_accept_cached` executed 2413 with no
+# cache hits at all, reached `codspeed`, and failed:
 #
-# That timing is what makes it a bad gate rather than an occasional failure. On
+#     INFO: 4090 processes: 1677 internal, 2413 remote.
+#     Error: ProcessWrapperError("compiled Rust output ...libcodspeed-*.rlib
+#     embeds the absolute working directory /buildbuddy-execroot")
+#
+# `bazel coverage` is the reliable way to reach those crates rather than the
+# cause: `--collect_code_coverage` and `--instrumentation_filter` rekey the
+# graph, so third-party crates execute instead of being served. A `bazel build`
+# that reached them would fail identically. So a green `build` on RBE is luck
+# about which actions the cache happened to cover, which is worth knowing before
+# anyone reads one as evidence that this is fixed.
+#
+# That is also what makes it a bad gate rather than an occasional failure. On
 # a warm cache almost nothing executes, so RBE is green exactly when it
 # contributes nothing, and executes -- and can fail -- on the cold-cache runs
 # it exists for: a `Cargo.lock` bump, a `.bazelrc` change, a broker refactor.

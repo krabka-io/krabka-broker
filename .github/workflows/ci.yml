@@ -87,15 +87,9 @@ jobs:
 
       # No `--config=rbe`: this compiles, and rustc codegen actions cannot
       # currently execute on the remote. See the `build:rbe` block in .bazelrc.
-      # Answered on run 33781077339: `83 remote, 1 processwrapper-sandbox`,
-      # every rustc action on an executor, `//crates/broker:broker_test`
-      # among them at 104s, and no working-directory scan failure anywhere.
-      # `--noremote_accept_cached` has done its job and comes back off --
-      # it defeats the cache this step otherwise benefits from.
       - name: build
         run: |
           aspect build \
-            --bazel-flag=--config=rbe \
             --bazel-flag=--build_tag_filters=-docker \
             //...
 
@@ -219,30 +213,8 @@ jobs:
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
 
-      # EXPERIMENT, not for merge as-is. `build` proved rustc executes remotely,
-      # but it never recompiled `ring` -- the crate that actually failed --
-      # because the local action cache served it, which
-      # `--noremote_accept_cached` does not disable. And every recorded failure
-      # of the rules_rs working-directory scan was under `coverage`, never
-      # `build`: `--collect_code_coverage` and `--instrumentation_filter`
-      # discard the analysis cache and rekey the graph, so third-party crates
-      # genuinely execute. Run 33728109218 failed exactly here, on `ring`.
-      #
-      # So this is the run that matters. `--noremote_accept_cached` on top of
-      # the rekey to leave nothing to a cache.
-      #
-      # `--remote_download_outputs=all` is not part of the question: it is the
-      # documented fix for `--combined_report=lcov` merging remote outputs in a
-      # local action while `user.bazelrc` sets `--remote_download_outputs=toplevel`.
-      # Without it an empty LCOV would fail this job for a reason that has
-      # nothing to do with codegen, and the run would answer nothing.
       - name: coverage
-        run: |
-          bazel coverage \
-            --config=rbe \
-            --noremote_accept_cached \
-            --remote_download_outputs=all \
-            //crates/...
+        run: bazel coverage //crates/...
 
       # `if: always()`, and the three directories by name: when this job does
       # run the disk out, the failure arrives as a linker `Bus error` or a bare
