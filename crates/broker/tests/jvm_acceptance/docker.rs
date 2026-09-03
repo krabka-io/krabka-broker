@@ -250,15 +250,19 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
+import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.kstream.Repartitioned;
 import org.apache.kafka.streams.kstream.TimeWindows;
+import org.apache.kafka.streams.state.Stores;
 
 public final class StreamsApp {
   // A fixed record timestamp for every seeded input record. The window is ten
   // minutes wide and epoch-aligned, so all five records fall in the one window
   // whatever the wall clock says when the suite runs.
   private static final long BASE_TIMESTAMP = 1700000000000L;
+  private static final Duration WINDOW = Duration.ofMinutes(10);
+  private static final Duration RETENTION = Duration.ofMinutes(30);
   private static final List<String> WORDS =
       List.of("alpha", "alpha", "beta", "alpha", "beta");
 
@@ -280,8 +284,18 @@ public final class StreamsApp {
             .withName("shuffle")
             .withNumberOfPartitions(1))
         .groupByKey(Grouped.with(Serdes.String(), Serdes.String()))
-        .windowedBy(TimeWindows.ofSizeWithNoGrace(Duration.ofMinutes(10)))
-        .count()
+        .windowedBy(TimeWindows.ofSizeWithNoGrace(WINDOW))
+        // An in-memory window store, not the default RocksDB one: the Apache
+        // image is JRE-only and carries no `libstdc++`, so `librocksdbjni`
+        // cannot load there and the topology would die on its first commit.
+        // The store choice is a client-side one and changes nothing krabka
+        // sees: a windowed store is still logged, so the changelog topic is
+        // still created with `cleanup.policy=compact,delete`, which is what
+        // this suite reads back.
+        .count(Materialized.<String, Long>as(
+                Stores.inMemoryWindowStore("krabka-counts", RETENTION, WINDOW, false))
+            .withKeySerde(Serdes.String())
+            .withValueSerde(Serdes.Long()))
         .toStream()
         .map((windowedKey, count) ->
             new KeyValue<>(windowedKey.key(), windowedKey.key() + ":" + count))
