@@ -31,6 +31,14 @@ pub(crate) struct BarrierConfig {
     pub(crate) scheduler_tick: Time,
     /// How many cuts a group keeps when the caller names no value.
     pub(crate) default_retained_cuts: i32,
+    /// Maximum number of cuts a barrier group may retain.
+    pub(crate) max_retained_cuts: i32,
+    /// Maximum number of barrier groups the coordinator accepts.
+    pub(crate) max_groups: usize,
+    /// Maximum number of topics in one barrier group.
+    pub(crate) max_topics_per_group: usize,
+    /// Shortest periodic injection interval a barrier group may ask for.
+    pub(crate) min_injection_interval: Time,
 }
 
 impl Default for BarrierConfig {
@@ -44,6 +52,10 @@ impl Default for BarrierConfig {
             retry_backoff_max: secs(5),
             scheduler_tick: secs(1),
             default_retained_cuts: 32,
+            max_retained_cuts: 100,
+            max_groups: 100,
+            max_topics_per_group: 100,
+            min_injection_interval: secs(1),
         }
     }
 }
@@ -66,9 +78,14 @@ mod tests {
             retry_backoff_max: secs(5),
             scheduler_tick: secs(1),
             default_retained_cuts: 32,
+            max_retained_cuts: 100,
+            max_groups: 100,
+            max_topics_per_group: 100,
+            min_injection_interval: secs(1),
         };
         assert!(BarrierConfig::default() == expected);
     }
+
 
     #[test]
     fn the_first_backoff_is_below_the_largest_one() {

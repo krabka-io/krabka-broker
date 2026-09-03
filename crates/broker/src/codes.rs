@@ -560,5 +560,8 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::InvalidLeaderRebalanceThreshold { .. }
         | BrokerError::InvalidRuntimeConfig(_)
         | BrokerError::ShutdownTimeout(_) => UNKNOWN_SERVER_ERROR,
+        BrokerError::Raft(krabka_raft::RaftError::NotLeader { .. }) => NOT_LEADER_OR_FOLLOWER,
+        BrokerError::Raft(krabka_raft::RaftError::Network(_)) => REQUEST_TIMED_OUT,
+        BrokerError::Raft(_) => UNKNOWN_SERVER_ERROR,
     }
 }

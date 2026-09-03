@@ -64,6 +64,10 @@ impl QuorumStateMachine {
             && let Some(progress) = replicas.get_mut(&from)
         {
             progress.fetch_offset = fetch_offset;
+            progress.last_fetch = now;
+            if fetch_offset >= log_end {
+                progress.last_caught_up = now;
+            }
         }
         let new_hwm = self.recompute_high_watermark(log_end);
         if let Role::Leader { high_watermark, .. } = &mut self.role

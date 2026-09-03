@@ -7,22 +7,46 @@ use krabka_units::{Time, convert::TimeExt, secs};
 
 use super::buckets::QuotaBuckets;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ControllerMutationQuotaDecision {
-    Allowed { delay: Time },
-    Rejected { delay: Time },
+    Allowed {
+        delay: Time,
+        user: Option<String>,
+        client_id: Option<String>,
+    },
+    Rejected {
+        delay: Time,
+        user: Option<String>,
+        client_id: Option<String>,
+    },
 }
 
 impl ControllerMutationQuotaDecision {
     #[must_use]
-    pub(crate) fn delay(self) -> Time {
+    pub(crate) fn delay(&self) -> Time {
         match self {
-            Self::Allowed { delay } | Self::Rejected { delay } => delay,
+            Self::Allowed { delay, .. } | Self::Rejected { delay, .. } => *delay,
         }
     }
 
     #[must_use]
-    pub(crate) fn is_rejected(self) -> bool {
+    pub(crate) fn quota_delay(self) -> super::QuotaDelay {
+        match self {
+            Self::Allowed {
+                delay,
+                user,
+                client_id,
+            }
+            | Self::Rejected {
+                delay,
+                user,
+                client_id,
+            } => super::QuotaDelay::new(delay, user, client_id),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn is_rejected(&self) -> bool {
         matches!(self, Self::Rejected { .. })
     }
 }
@@ -40,7 +64,7 @@ pub fn consume_controller_mutation_quota(
     client_id: &str,
     mutations: u64,
     maximum_delay: Time,
-) -> Time {
+) -> super::QuotaDelay {
     apply_controller_mutation_quota_mode(
         image,
         buckets,
@@ -51,7 +75,7 @@ pub fn consume_controller_mutation_quota(
         maximum_delay,
         false,
     )
-    .delay()
+    .quota_delay()
 }
 
 /// Atomically check accumulated controller-mutation debt and record this
@@ -72,6 +96,8 @@ pub(crate) fn apply_controller_mutation_quota_mode(
     if mutations == 0 {
         return ControllerMutationQuotaDecision::Allowed {
             delay: <Time as TimeExt>::ZERO,
+            user: None,
+            client_id: None,
         };
     }
     let Some((entity_key, rate)) = super::lookup::lookup_quota_with_key(
@@ -82,12 +108,25 @@ pub(crate) fn apply_controller_mutation_quota_mode(
     ) else {
         return ControllerMutationQuotaDecision::Allowed {
             delay: <Time as TimeExt>::ZERO,
+            user: None,
+            client_id: None,
         };
     };
+    let user = entity_key
+        .iter()
+        .find(|(k, _)| k == "user")
+        .and_then(|(_, v)| v.clone());
+    let client_id_opt = entity_key
+        .iter()
+        .find(|(k, _)| k == "client-id")
+        .and_then(|(_, v)| v.clone());
+
     let window_secs = window.secs_f64();
     if !rate.is_finite() || rate <= 0.0 || !window_secs.is_finite() || window_secs <= 0.0 {
         return ControllerMutationQuotaDecision::Allowed {
             delay: <Time as TimeExt>::ZERO,
+            user,
+            client_id: client_id_opt,
         };
     }
 
@@ -113,6 +152,8 @@ pub(crate) fn apply_controller_mutation_quota_mode(
     if strict && bucket.tokens < 0.0 {
         return ControllerMutationQuotaDecision::Rejected {
             delay: Time::from_secs_f64((-bucket.tokens / rate).max(0.0)).min(maximum_delay),
+            user,
+            client_id: client_id_opt,
         };
     }
 
@@ -122,7 +163,11 @@ pub(crate) fn apply_controller_mutation_quota_mode(
     } else {
         <Time as TimeExt>::ZERO
     };
-    ControllerMutationQuotaDecision::Allowed { delay }
+    ControllerMutationQuotaDecision::Allowed {
+        delay,
+        user,
+        client_id: client_id_opt,
+    }
 }
 
 #[cfg(test)]

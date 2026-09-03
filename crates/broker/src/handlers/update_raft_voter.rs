@@ -63,6 +63,15 @@ pub(crate) async fn handle(
         return refuse(version, codes::CLUSTER_AUTHORIZATION_FAILED);
     }
 
+    // Broker-only observer forward to the active controller quorum (#392)
+    if let Some(forwarded) = broker
+        .controller
+        .forward_raw(82, version, Bytes::copy_from_slice(req_bytes))
+        .await
+    {
+        return forwarded.map_err(BrokerError::from);
+    }
+
     let cluster_id = image.cluster_id().to_string();
     let quorum = broker.controller.quorum_state();
     if req

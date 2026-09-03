@@ -57,6 +57,15 @@ pub(crate) async fn handle(
         );
     }
 
+    // Broker-only observer forward to the active controller quorum (#392)
+    if let Some(forwarded) = broker
+        .controller
+        .forward_raw(81, version, Bytes::copy_from_slice(req_bytes))
+        .await
+    {
+        return forwarded.map_err(BrokerError::from);
+    }
+
     let cluster_id = image.cluster_id().to_string();
     if req
         .cluster_id

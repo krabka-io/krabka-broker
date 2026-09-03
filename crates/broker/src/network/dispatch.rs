@@ -48,7 +48,7 @@ mod unsupported_version;
 pub use self::accept::serve_connection_on_listener;
 use self::{
     fetch::dispatch_fetch,
-    guards::{ActiveConnectionGuard, InFlightGuard},
+    guards::{ActiveConnectionGuard, InFlightGuard, QueuedRequestGuard},
     registry::{DispatchContext, send_registry_response},
     response::{ResponseShape, apply_request_quota, encode_response},
     sasl::{SaslFrameOutcome, try_handle_sasl_frame},
@@ -285,11 +285,15 @@ async fn serve_connection_stream<S>(
     let mut mute_until: Option<tokio::time::Instant> = None;
 
     loop {
+        let Ok(permit) = broker.queued_requests_sem.clone().acquire_owned().await else {
+            break;
+        };
         let Some(frame) =
             next_connection_frame(&mut framed, &auth, mute_until.take(), &frame_wait).await
         else {
             break;
         };
+        let _queued_guard = QueuedRequestGuard::new(permit, &broker.metrics, frame.len());
         let Some((parsed, req_span)) = parse_connection_request(&broker, &frame, &peer) else {
             // Bytes the broker cannot read as a request are the same reason
             // as bytes the codec refused, one layer further in: the peer sent

@@ -170,6 +170,7 @@ mod tests {
             from: NodeId(2),
             fetch_epoch: 1,
             fetch_offset: 0,
+            replica_directory_id: uuid::Uuid::nil(),
         }
         .encode();
         let fetch_resp = super::dispatch(ApiKey(api_key::FETCH), fetch, &engine)

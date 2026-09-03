@@ -8,15 +8,34 @@ use std::{
 use dashmap::DashMap;
 use krabka_metadata::EntityKey;
 
+use krabka_units::Time;
+
 use crate::throttle::TokenBucket;
 
-#[derive(Debug, Default)]
+/// Stored entry beside each live quota bucket, retaining the client's
+/// principal and client-id for refresh and Prometheus series lifecycle (#396, #418).
+#[derive(Debug)]
+pub struct BucketEntry {
+    pub bucket: Arc<TokenBucket>,
+    pub principal: String,
+    pub client_id: String,
+    pub last_accessed: Mutex<Instant>,
+}
+
+#[derive(Debug)]
 pub struct QuotaBuckets {
     /// Keyed by (`quota_key`, canonical entity key). There is one bucket for
     /// each (`quota_type`, entity) pair, allocated lazily on the first
     /// lookup.
-    buckets: DashMap<(String, EntityKey), Arc<TokenBucket>>,
+    buckets: DashMap<(String, EntityKey), Arc<BucketEntry>>,
     controller_mutations: DashMap<EntityKey, Arc<Mutex<ControllerMutationBucket>>>,
+    quota_window: Time,
+}
+
+impl Default for QuotaBuckets {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug)]
@@ -30,10 +49,21 @@ pub(super) struct ControllerMutationBucket {
 impl QuotaBuckets {
     #[must_use]
     pub fn new() -> Self {
+        Self::with_window(krabka_units::secs(11))
+    }
+
+    #[must_use]
+    pub fn with_window(quota_window: Time) -> Self {
         Self {
             buckets: DashMap::new(),
             controller_mutations: DashMap::new(),
+            quota_window,
         }
+    }
+
+    #[must_use]
+    pub fn quota_window(&self) -> Time {
+        self.quota_window
     }
 
     /// Returns the bucket for `(quota_key, entity_key)`, and creates it
@@ -43,29 +73,66 @@ impl QuotaBuckets {
         &self,
         quota_key: &str,
         entity_key: &EntityKey,
+        principal: &str,
+        client_id: &str,
         initial_rate: u64,
     ) -> Arc<TokenBucket> {
-        if let Some(b) = self
-            .buckets
-            .get(&(quota_key.to_string(), entity_key.clone()))
-        {
-            return b.clone();
+        let key = (quota_key.to_string(), entity_key.clone());
+        if let Some(entry) = self.buckets.get(&key) {
+            *entry.last_accessed.lock().unwrap() = Instant::now();
+            return entry.bucket.clone();
         }
         let b = Arc::new(TokenBucket::new());
-        b.set_byte_rate(super::bucket_rate(initial_rate));
-        let entry = self
-            .buckets
-            .entry((quota_key.to_string(), entity_key.clone()))
-            .or_insert_with(|| b.clone());
-        entry.clone()
+        let new_rate = super::bucket_rate(initial_rate);
+        let burst = (new_rate * self.quota_window).into();
+        b.set_byte_rate_with_burst(new_rate, burst);
+        let entry = self.buckets.entry(key).or_insert_with(|| {
+            Arc::new(BucketEntry {
+                bucket: b.clone(),
+                principal: principal.to_string(),
+                client_id: client_id.to_string(),
+                last_accessed: Mutex::new(Instant::now()),
+            })
+        });
+        *entry.last_accessed.lock().unwrap() = Instant::now();
+        entry.bucket.clone()
     }
 
-    /// Iterates over every (`quota_key`, `entity_key`, bucket) triple. The
-    /// refresh task uses it to push new rates after an image change.
-    pub fn iter(&self) -> impl Iterator<Item = ((String, EntityKey), Arc<TokenBucket>)> + '_ {
+    /// Iterates over every (`quota_key`, `entity_key`, bucket entry) triple.
+    /// The refresh task uses it to push new rates after an image change.
+    pub fn iter(&self) -> impl Iterator<Item = ((String, EntityKey), Arc<BucketEntry>)> + '_ {
         self.buckets
             .iter()
             .map(|r| (r.key().clone(), r.value().clone()))
+    }
+
+    /// Expire buckets unused for more than `max_age` (Kafka uses 1 hour).
+    pub fn expire_inactive(
+        &self,
+        max_age: std::time::Duration,
+    ) -> Vec<(String, Option<String>, Option<String>)> {
+        let now = Instant::now();
+        let mut expired = Vec::new();
+        self.buckets.retain(|(quota_key, _), entry| {
+            let last = *entry.last_accessed.lock().unwrap();
+            if now.duration_since(last) > max_age {
+                let user = if entry.principal.is_empty() {
+                    None
+                } else {
+                    Some(entry.principal.clone())
+                };
+                let client_id = if entry.client_id.is_empty() {
+                    None
+                } else {
+                    Some(entry.client_id.clone())
+                };
+                expired.push((quota_key.clone(), user, client_id));
+                false
+            } else {
+                true
+            }
+        });
+        expired
     }
 
     pub(super) fn controller_mutation_bucket(
@@ -113,7 +180,7 @@ mod tests {
     #[test]
     fn get_or_create_returns_new_bucket_first_time() {
         let buckets = QuotaBuckets::new();
-        let b = buckets.get_or_create("producer_byte_rate", &key("alice"), 1024);
+        let b = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
         assert!(b.byte_rate() == bucket_rate(1024));
         assert!(buckets.len() == 1);
     }
@@ -121,8 +188,8 @@ mod tests {
     #[test]
     fn get_or_create_returns_existing_bucket_second_time() {
         let buckets = QuotaBuckets::new();
-        let b1 = buckets.get_or_create("producer_byte_rate", &key("alice"), 1024);
-        let b2 = buckets.get_or_create("producer_byte_rate", &key("alice"), 4096);
+        let b1 = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
+        let b2 = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 4096);
         // Same Arc — initial_rate on second call is ignored.
         check!(Arc::ptr_eq(&b1, &b2));
         check!(b1.byte_rate() == bucket_rate(1024));
@@ -132,16 +199,16 @@ mod tests {
     #[test]
     fn different_quota_keys_get_different_buckets() {
         let buckets = QuotaBuckets::new();
-        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), 1024);
-        let _ = buckets.get_or_create("consumer_byte_rate", &key("alice"), 2048);
+        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
+        let _ = buckets.get_or_create("consumer_byte_rate", &key("alice"), "alice", "", 2048);
         assert!(buckets.len() == 2);
     }
 
     #[test]
     fn different_entities_get_different_buckets() {
         let buckets = QuotaBuckets::new();
-        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), 1024);
-        let _ = buckets.get_or_create("producer_byte_rate", &key("bob"), 2048);
+        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
+        let _ = buckets.get_or_create("producer_byte_rate", &key("bob"), "bob", "", 2048);
         assert!(buckets.len() == 2);
     }
 }

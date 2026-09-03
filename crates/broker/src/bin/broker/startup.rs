@@ -143,6 +143,7 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         krabka_broker::health::serve(addr, health.clone(), health_shutdown.child_token()).await?;
     }
 
+    let health_for_shutdown = health.clone();
     let handle = Broker::start_with_health(config, health).await?;
     tracing::info!(addr = %handle.listen_addr(), "krabka-broker listening");
 
@@ -162,6 +163,10 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::error!("self-shutdown triggered (all log dirs offline); stopping broker");
         }
     }
+    // Flip /readyz to 503 so load balancers pull the broker out of rotation
+    // before the leadership hand-off starts.
+    health_for_shutdown.mark_shutting_down();
+
     // KIP-500 controlled shutdown: ask the controller to move leadership of
     // every partition this broker leads onto its other in-sync replicas
     // BEFORE we stop. This is the difference between a near-seamless failover

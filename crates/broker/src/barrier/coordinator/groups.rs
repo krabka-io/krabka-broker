@@ -10,7 +10,7 @@ use std::{sync::Arc, time::Instant};
 use krabka_units::{Time, convert::TimeExt as _};
 use tokio::sync::Mutex;
 
-use super::{BarrierCoordinator, validate_spec};
+use super::{BarrierCoordinator, validate_spec_limits};
 use crate::{
     barrier::{
         STATE_TOPIC,
@@ -103,7 +103,12 @@ impl BarrierCoordinator {
         group: &str,
         spec: GroupSpec,
     ) -> Result<GroupValue, BarrierError> {
-        validate_spec(&spec)?;
+        validate_spec_limits(
+            &spec,
+            self.config.max_topics_per_group,
+            self.config.max_retained_cuts,
+            self.config.min_injection_interval,
+        )?;
         // The first group is what brings __barrier_state into being. The topic
         // has to exist before require_coordinator can decide anything, because
         // that decision is the leadership of the partition the group hashes
@@ -116,6 +121,12 @@ impl BarrierCoordinator {
             return Err(BarrierError::GroupExists {
                 group: group.to_owned(),
             });
+        }
+        if self.groups.len() > self.config.max_groups {
+            return Err(BarrierError::InvalidDefinition(format!(
+                "barrier groups limit reached ({})",
+                self.config.max_groups
+            )));
         }
 
         let definition = GroupValue {
@@ -156,7 +167,12 @@ impl BarrierCoordinator {
         group: &str,
         spec: GroupSpec,
     ) -> Result<GroupValue, BarrierError> {
-        validate_spec(&spec)?;
+        validate_spec_limits(
+            &spec,
+            self.config.max_topics_per_group,
+            self.config.max_retained_cuts,
+            self.config.min_injection_interval,
+        )?;
         self.require_coordinator(group).await?;
         let handle = self.live_entry(group)?;
         let mut entry = handle.lock().await;
@@ -173,6 +189,7 @@ impl BarrierCoordinator {
             last_epoch: entry.last_epoch(),
         };
         self.append_records(
+
             group,
             vec![(
                 RecordKey::group(group),
@@ -394,4 +411,22 @@ mod tests {
                 coordinator.trigger_injection(GROUP, None).await
         );
     }
+
+    #[tokio::test]
+    async fn creating_beyond_max_groups_is_refused() {
+        let fixture = Fixture::new();
+        let mut coordinator = fixture.coordinator().await;
+        // Limit max_groups to 1
+        coordinator.config.max_groups = 1;
+        coordinator
+            .create_group("g1", spec(&["orders"], None, 4))
+            .await
+            .expect("first group created");
+        let second = coordinator
+            .create_group("g2", spec(&["orders"], None, 4))
+            .await;
+        assert!(let Err(BarrierError::InvalidDefinition(msg)) = second);
+        assert!(msg.contains("barrier groups limit reached"));
+    }
 }
+

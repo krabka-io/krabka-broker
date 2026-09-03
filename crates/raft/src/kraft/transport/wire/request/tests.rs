@@ -248,6 +248,7 @@ fn fetch_request_round_trips() {
         from: NodeId(2),
         fetch_epoch: 1,
         fetch_offset: 11,
+        replica_directory_id: uuid::Uuid::from_u128(42),
     };
     assert2::assert!(decode_fetch(&req.encode()) == Some(req));
 }
@@ -256,10 +257,12 @@ fn fetch_request_round_trips() {
 fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
     use krabka_protocol::{Decode, owned::fetch_request::FetchRequest};
 
+    let dir_id = uuid::Uuid::from_u128(42);
     let req = PeerRequest::Fetch {
         from: NodeId(2),
         fetch_epoch: 1,
         fetch_offset: 11,
+        replica_directory_id: dir_id,
     };
     let mut cur = &req.encode()[..];
     let raw = FetchRequest::decode(&mut cur, FETCH_VERSION).expect("decode fetch request");
@@ -271,7 +274,8 @@ fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
             partition.current_leader_epoch,
             partition.last_fetched_epoch,
             partition.fetch_offset,
-        ) == (2, -1, 1, 1, 11)
+            partition.replica_directory_id.0,
+        ) == (2, -1, 1, 1, 11, *dir_id.as_bytes())
     );
 }
 

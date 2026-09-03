@@ -46,9 +46,9 @@ pub use self::{
         ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
         BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, ClientSoftwareLabel,
         ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel,
-        FetchDrainPath, FetchDrainPathLabel, PartitionLabel, QuotaType, QuotaTypeLabel,
-        ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
-        WalShardLabel, WalVoterLabel,
+        FetchDrainPath, FetchDrainPathLabel, PartitionLabel, QuotaEntityLabel, QuotaType,
+        QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel,
+        SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
 };
@@ -648,6 +648,46 @@ pub struct BrokerMetrics {
     pub diskless_wal_cold_read_hits_total: Counter,
     pub diskless_wal_cold_read_misses_total: Counter,
     pub diskless_wal_cold_read_errors_total: Counter,
+    // --- Milestone 11 KRaft quorum and cluster state metrics (#390) ---
+    pub raft_current_state: Family<RaftStateLabel, Gauge>,
+    pub raft_current_epoch: Gauge,
+    pub raft_high_watermark: Gauge,
+    pub raft_log_end_offset: Gauge,
+    pub raft_voters: Gauge,
+    pub raft_observers: Gauge,
+    pub metadata_last_applied_offset: Gauge,
+    pub metadata_lag_records: Gauge,
+    pub broker_state: Gauge,
+    pub active_brokers: Gauge,
+    pub fenced_brokers: Gauge,
+    pub global_topics: Gauge,
+    pub global_partitions: Gauge,
+    pub at_min_isr_partition_count: Gauge,
+    pub reassigning_partitions: Gauge,
+    pub preferred_replica_imbalance: Gauge,
+
+    // --- Milestone 11 Tiered Storage and replication throttling metrics (#420) ---
+    pub remote_copy_bytes_total: Family<TopicLabel, Counter>,
+    pub remote_fetch_bytes_total: Family<TopicLabel, Counter>,
+    pub remote_copy_requests_total: Family<TopicLabel, Counter>,
+    pub remote_fetch_requests_total: Family<TopicLabel, Counter>,
+    pub remote_delete_requests_total: Family<TopicLabel, Counter>,
+    pub remote_copy_errors_total: Family<TopicLabel, Counter>,
+    pub remote_fetch_errors_total: Family<TopicLabel, Counter>,
+    pub remote_delete_errors_total: Family<TopicLabel, Counter>,
+    pub remote_copy_lag_bytes: Family<TopicLabel, Gauge>,
+    pub remote_copy_lag_segments: Family<TopicLabel, Gauge>,
+    pub remote_delete_lag_bytes: Family<TopicLabel, Gauge>,
+    pub remote_delete_lag_segments: Family<TopicLabel, Gauge>,
+    pub replication_throttled_bytes_out_total: Counter,
+    pub replication_throttled_bytes_in_total: Counter,
+    pub replication_throttle_sleeps_total: Counter,
+
+    // --- Milestone 11 Quota entity and request queue metrics (#418, #412) ---
+    pub quota_entity_throttle_seconds_total: Family<QuotaEntityLabel, Counter>,
+    pub queued_requests: Gauge,
+    pub queued_request_bytes: Gauge,
+
     /// The label sets [`Self::replica_lag`] and [`Self::consumer_group_lag`]
     /// currently carry, so that a caller holding only part of a lag label set
     /// can still release the series. See [`LagSeriesIndex`].

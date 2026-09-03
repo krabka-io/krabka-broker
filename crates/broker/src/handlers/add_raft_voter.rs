@@ -66,6 +66,15 @@ pub(crate) async fn handle(
         );
     }
 
+    // Broker-only observer forward to the active controller quorum (#392)
+    if let Some(forwarded) = broker
+        .controller
+        .forward_raw(80, version, Bytes::copy_from_slice(req_bytes))
+        .await
+    {
+        return forwarded.map_err(BrokerError::from);
+    }
+
     let cluster_id = image.cluster_id().to_string();
     if req
         .cluster_id
@@ -273,6 +282,13 @@ pub(crate) fn outcome_to_code(
                 None => "not the raft leader; leader currently unknown".into(),
             }),
         ),
+        Err(RaftError::NotLeader { current_leader }) => (
+            codes::NOT_LEADER_OR_FOLLOWER,
+            Some(match current_leader {
+                Some(id) => format!("not the raft leader; current leader is {id}"),
+                None => "not the raft leader; leader currently unknown".into(),
+            }),
+        ),
         Err(RaftError::VoterNotCaughtUp { id, lag }) => (
             codes::INVALID_REQUEST,
             Some(format!("voter {id} not caught up (lag {lag})")),
@@ -359,6 +375,15 @@ mod tests {
         }));
         assert!(code == codes::NOT_LEADER_OR_FOLLOWER);
         assert!(msg.unwrap().contains('3'));
+    }
+
+    #[test]
+    fn raft_error_not_leader_maps_to_not_leader_or_follower() {
+        let (code, msg) = outcome_to_code(Err(RaftError::NotLeader {
+            current_leader: Some(krabka_audit::NodeId(5)),
+        }));
+        assert!(code == codes::NOT_LEADER_OR_FOLLOWER);
+        assert!(msg.unwrap().contains('5'));
     }
 
     #[test]

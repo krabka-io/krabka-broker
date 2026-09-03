@@ -33,6 +33,9 @@ impl MetadataSource for ControllerHandle {
     fn voted_directory_id(&self) -> Option<uuid::Uuid> {
         ControllerHandle::voted_directory_id(self)
     }
+    fn quorum_snapshot(&self) -> Option<krabka_raft::QuorumStateSnapshot> {
+        Some(ControllerHandle::quorum_snapshot(self))
+    }
     async fn submit_change(
         &self,
         records: Vec<MetadataRecord>,

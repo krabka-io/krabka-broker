@@ -33,7 +33,7 @@ pub fn consume_request_quota(
     client_id: &str,
     elapsed_micros: u64,
     maximum_delay: Time,
-) -> Time {
+) -> super::QuotaDelay {
     consume_configured_quota(
         QuotaConsumption {
             image,

@@ -149,6 +149,12 @@ impl BrokerConfig {
                 "delegation_token_default_renew_period",
                 self.delegation_token_default_renew_period,
             ),
+            ("quota_throttle_max", self.quota_throttle_max),
+            ("quota_window", self.quota_window),
+            (
+                "controller_mutation_quota_window",
+                self.controller_mutation_quota_window,
+            ),
         ] {
             require_positive_time(name, value)?;
         }
@@ -285,6 +291,14 @@ impl BrokerConfig {
         }
         self.validate_txn_id_expiry_scalars()?;
         require_positive_size("observer_fetch_max", self.observer_fetch_max)?;
+        if let Some(bytes) = self.queued_max_request_bytes {
+            require_positive_size("queued_max_request_bytes", bytes)?;
+        }
+        if self.queued_max_requests == 0 {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "queued_max_requests must be positive".into(),
+            ));
+        }
         for (name, value) in [
             (
                 "self_registration_max_attempts",

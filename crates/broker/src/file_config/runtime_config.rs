@@ -168,6 +168,9 @@ pub struct RuntimeFileConfig {
     pub quota_throttle_max: Option<Time>,
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub quota_window: Option<Time>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_mutation_quota_window: Option<Time>,
     pub self_registration_max_attempts: Option<u32>,
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
@@ -223,6 +226,10 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub socket_request_max: Option<ByteSize>,
+    pub queued_max_requests: Option<usize>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub queued_max_request_bytes: Option<ByteSize>,
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub sendfile_min: Option<ByteSize>,

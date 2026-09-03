@@ -34,6 +34,7 @@ pub use self::{
     checkpoint::{SnapshotRange, SnapshotSlice},
     startup::{Controller, metadata_log_nonempty},
 };
+pub use crate::kraft::transport::QuorumStateSnapshot;
 use crate::{
     kraft::KraftController,
     network::OutboundDialer,
@@ -61,6 +62,14 @@ pub struct QuorumState {
     /// Per-replica fetch offset (matched index), including observers known to
     /// the leader. Empty on a follower; callers use Kafka's unknown sentinel.
     pub per_voter_matched_index: BTreeMap<NodeId, u64>,
+    /// Per-replica last fetch timestamp in wall-clock milliseconds.
+    pub per_replica_last_fetch_ms: BTreeMap<NodeId, i64>,
+    /// Per-replica last caught-up timestamp in wall-clock milliseconds.
+    pub per_replica_last_caught_up_ms: BTreeMap<NodeId, i64>,
+    /// Discovered directory identities for observer replicas.
+    pub observer_directory_ids: BTreeMap<NodeId, uuid::Uuid>,
+    /// Whether this node currently leads the metadata quorum.
+    pub is_leader: bool,
 }
 
 /// Handle returned by [`Controller::start`]. Owns the live [`KraftController`]
@@ -153,7 +162,17 @@ impl ControllerHandle {
             voters: snap.voters.ids().into_iter().collect(),
             voter_nodes,
             per_voter_matched_index,
+            per_replica_last_fetch_ms: snap.per_replica_last_fetch_ms,
+            per_replica_last_caught_up_ms: snap.per_replica_last_caught_up_ms,
+            observer_directory_ids: snap.observer_directory_ids,
+            is_leader: snap.is_leader,
         }
+    }
+
+    /// Snapshot the full consensus state.
+    #[must_use]
+    pub fn quorum_snapshot(&self) -> QuorumStateSnapshot {
+        self.engine.quorum_snapshot()
     }
 
     /// Highest `__cluster_metadata` offset the quorum has committed, as this

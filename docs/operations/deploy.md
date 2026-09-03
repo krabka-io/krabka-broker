@@ -297,8 +297,8 @@ before you roll it. A build that changes an on-disk format needs a fresh
 The broker serves two HTTP probes on their own listener, port 9405 by
 default. `--health-listen-addr` or `KRABKA_HEALTH_LISTEN_ADDR` moves it, and
 `none` disables both probes. The listener starts before the broker opens the
-log directory. It stays up through the controlled-shutdown drain. An
-orchestrator gets an answer in both windows.
+log directory. It stays up and `/readyz` answers 503 through the
+controlled-shutdown drain. An orchestrator gets an answer in both windows.
 
 `GET /healthz` is the liveness probe. It answers 200 with the body `ok` for
 as long as the process runs its event loop. It looks at no other condition.
@@ -313,6 +313,7 @@ names the first condition that fails, in this order:
 
 | Body starts with | Condition |
 | :--- | :--- |
+| `not ready: shutting_down` | Controlled shutdown is in progress and draining partition leadership to other replicas. |
 | `not ready: log_dir_recovery` | The log directories are not scanned yet, or a recovered partition has no writer yet. |
 | `not ready: listeners_bound` | A data-plane listener is not bound yet, or its accept loop is not running. |
 | `not ready: metadata_quorum_unreached` | The node has not reached the metadata quorum, so it cannot know whether it is caught up. |

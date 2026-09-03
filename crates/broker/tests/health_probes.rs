@@ -152,3 +152,29 @@ async fn readyz_stays_200_while_the_broker_runs() {
 
     handle.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readyz_is_503_when_shutting_down() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
+    let probes = serve_probes(state.clone()).await;
+    let handle = Broker::start_with_health(loopback_config(log_dir.path()), state.clone())
+        .await
+        .unwrap();
+
+    let (status, body) = get(probes, "/readyz").await;
+    check!(status.contains("200 OK"), "{status}");
+    check!(body == "ready\n");
+
+    state.mark_shutting_down();
+
+    let (status, body) = get(probes, "/readyz").await;
+    assert!(status.contains("503 Service Unavailable"));
+    check!(
+        body.starts_with("not ready: shutting_down: "),
+        "{body}"
+    );
+
+    handle.shutdown().await;
+}
+

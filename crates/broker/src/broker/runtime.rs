@@ -199,6 +199,7 @@ pub(super) async fn start_broker_runtime(
     // The two things the runtime needs pre-built: the diskless WAL runtime,
     // and the metric registry the coordinators already report into.
     runtime_deps: (&DisklessRuntime, crate::metrics::BrokerMetrics),
+    health: Option<crate::health::HealthState>,
 ) -> Result<BrokerRuntimeStartup, BrokerError> {
     let (diskless_runtime, metrics) = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();
@@ -257,6 +258,7 @@ pub(super) async fn start_broker_runtime(
         metrics.clone(),
         config,
         supervisor_shutdown.child_token(),
+        health,
     );
     let disk_scanner_handle = spawn_storage_security_maintenance(
         config,

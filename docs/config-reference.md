@@ -439,8 +439,12 @@ Validated operational policy loaded from `[runtime]`.
 | `partition_writer_queue_depth` | integer (uint) | broker default |  |  |
 | `producer_id_expiration` | string | broker default | duration |  |
 | `producer_id_expiration_scan_interval` | string | broker default | duration |  |
+| `queued_max_request_bytes` | string | broker default | byte size | Maximum byte size across all queued requests before accepting additional requests is paused. |
+| `queued_max_requests` | integer (uint) | broker default |  | Maximum number of queued requests allowed in the broker dispatch queue. |
 | `quota_throttle_max` | string | broker default | duration |  |
+| `quota_window` | string | broker default | duration | Time window used for calculating client byte rate and burst quota buckets. |
 | `record_decompression_max_ratio` | string | broker default | ratio |  |
+
 | `record_decompression_output_ceiling` | string | broker default | byte size |  |
 | `record_decompression_output_floor` | string | broker default | byte size |  |
 | `remote_log_manager_interval` | string | broker default | duration |  |

@@ -59,6 +59,10 @@ pub trait MetadataSource: Send + Sync {
     fn voted_directory_id(&self) -> Option<uuid::Uuid> {
         None
     }
+    /// Snapshot the full consensus state if this node runs a controller.
+    fn quorum_snapshot(&self) -> Option<krabka_raft::QuorumStateSnapshot> {
+        None
+    }
     async fn submit_change(
         &self,
         records: Vec<MetadataRecord>,
@@ -93,6 +97,17 @@ pub trait MetadataSource: Send + Sync {
             current_leader: None,
         })
     }
+    /// Forward a raw Kafka protocol request to the active controller if this
+    /// node is a broker-only observer. Controller and combined nodes return
+    /// `None` so the caller handles the request locally.
+    async fn forward_raw(
+        &self,
+        _api_key: i16,
+        _version: i16,
+        _body: bytes::Bytes,
+    ) -> Option<Result<bytes::Bytes, RaftError>> {
+        None
+    }
     async fn cancel(&self);
 }
 
@@ -111,5 +126,16 @@ pub trait MetadataWriter: Send + Sync {
         Err(RaftError::ChangeRejected(
             "metadata writer does not support generation-bound token mutations".to_string(),
         ))
+    }
+    /// Forward a raw request to the controller quorum.
+    async fn forward_raw(
+        &self,
+        _api_key: i16,
+        _version: i16,
+        _body: bytes::Bytes,
+    ) -> Result<bytes::Bytes, RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
     }
 }

@@ -90,7 +90,26 @@ pub fn lookup_quota_with_key(
         UserClientQuotaPrecedence::DefaultClient => 7,
         UserClientQuotaPrecedence::None => return None,
     };
-    matches[index].clone()
+    let (_, rate) = matches[index].clone()?;
+    let bucket_key = match selected {
+        UserClientQuotaPrecedence::ExactPair
+        | UserClientQuotaPrecedence::ExactClientDefaultUser
+        | UserClientQuotaPrecedence::DefaultClientExactUser
+        | UserClientQuotaPrecedence::DefaultPair => vec![
+            ("client-id".into(), Some(client_id.into())),
+            ("user".into(), Some(principal.into())),
+        ],
+        UserClientQuotaPrecedence::ExactUser
+        | UserClientQuotaPrecedence::DefaultUser => vec![
+            ("user".into(), Some(principal.into())),
+        ],
+        UserClientQuotaPrecedence::ExactClient
+        | UserClientQuotaPrecedence::DefaultClient => vec![
+            ("client-id".into(), Some(client_id.into())),
+        ],
+        UserClientQuotaPrecedence::None => return None,
+    };
+    Some((bucket_key, rate))
 }
 
 /// Lookup an `ip`-scoped quota for `peer_ip`. Priority order:
@@ -125,7 +144,10 @@ pub fn lookup_ip_quota_with_key(
     let matches = candidates.map(|key| quota_for_key(image, key, quota_key));
     match ip_quota_precedence(matches[0].is_some(), matches[1].is_some()) {
         IpQuotaPrecedence::Exact => matches[0].clone(),
-        IpQuotaPrecedence::Default => matches[1].clone(),
+        IpQuotaPrecedence::Default => {
+            let (_, rate) = matches[1].clone()?;
+            Some((vec![("ip".into(), Some(peer_ip.to_string()))], rate))
+        }
         IpQuotaPrecedence::None => None,
     }
 }

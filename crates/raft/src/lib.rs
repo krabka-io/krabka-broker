@@ -78,7 +78,8 @@ pub use config::{
     MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftShardRouter, ShardRouteFuture,
 };
 pub use controller::{
-    Controller, ControllerHandle, QuorumState, SnapshotRange, SnapshotSlice, metadata_log_nonempty,
+    Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange, SnapshotSlice,
+    metadata_log_nonempty,
 };
 pub use error::RaftError;
 pub use handshake::{RaftConnection, RaftHandshakeError, RaftListenerHandshake};

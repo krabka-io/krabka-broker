@@ -27,6 +27,10 @@ pub enum BrokerError {
     #[error("protocol: {0}")]
     Protocol(#[from] krabka_protocol::ProtocolError),
 
+    /// Consensus or raft transport error.
+    #[error("raft: {0}")]
+    Raft(#[from] krabka_raft::RaftError),
+
     /// The peer sent an `(api_key, version)` pair that the handler table
     /// cannot serve.
     #[error("unsupported api_key={api_key} version={version}")]

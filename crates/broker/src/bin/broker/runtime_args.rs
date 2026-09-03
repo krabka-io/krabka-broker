@@ -151,6 +151,8 @@ pub struct RuntimeArgs {
     pub operator_recovery_deadline: Option<Time>,
     #[arg(long, env = "KRABKA_QUOTA_THROTTLE_MAX", value_parser = krabka_units::parse::positive_time)]
     pub quota_throttle_max: Option<Time>,
+    #[arg(long, env = "KRABKA_QUOTA_WINDOW", value_parser = krabka_units::parse::positive_time)]
+    pub quota_window: Option<Time>,
     #[arg(long, env = "KRABKA_CONTROLLER_MUTATION_QUOTA_WINDOW", value_parser = krabka_units::parse::positive_time)]
     pub controller_mutation_quota_window: Option<Time>,
     #[arg(long, env = "KRABKA_SELF_REGISTRATION_MAX_ATTEMPTS", value_parser = clap::value_parser!(u32).range(1..))]
@@ -199,6 +201,10 @@ pub struct RuntimeArgs {
     pub message_max_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SOCKET_REQUEST_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_request_max: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_QUEUED_MAX_REQUESTS", value_parser = parse_positive_count)]
+    pub queued_max_requests: Option<usize>,
+    #[arg(long, env = "KRABKA_QUEUED_MAX_REQUEST_BYTES", value_parser = krabka_units::parse::positive_byte_size)]
+    pub queued_max_request_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SENDFILE_MIN", value_parser = krabka_units::parse::positive_byte_size)]
     pub sendfile_min: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SOCKET_SEND_BUFFER", value_parser = krabka_units::parse::positive_byte_size)]

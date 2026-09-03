@@ -34,6 +34,7 @@ pub(crate) trait ControllerLike: Send + Sync {
 #[derive(Debug, Clone)]
 pub(crate) struct AutoRebalanceConfig {
     pub check_interval: Time,
+    #[allow(dead_code)]
     pub imbalance_threshold: Ratio,
 }
 
@@ -64,7 +65,7 @@ pub(crate) async fn run(
 pub(crate) async fn rebalance_tick(
     controller: &dyn ControllerLike,
     liveness: &ControllerLivenessState,
-    cfg: &AutoRebalanceConfig,
+    _cfg: &AutoRebalanceConfig,
 ) {
     let image = controller.current_image();
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
@@ -104,17 +105,15 @@ pub(crate) async fn rebalance_tick(
         }
     }
     let imbalanced = u64::try_from(to_submit.len()).unwrap_or(u64::MAX);
-    let threshold_met = exact_ratio_at_least(imbalanced, total, cfg.imbalance_threshold);
     if !krabka_verified::preferred_rebalance_admission(
         total,
         imbalanced,
         selected_keys.len() == to_submit.len(),
         true,
-        threshold_met,
     ) {
         debug!(
             imbalanced,
-            total, threshold_met, "auto-rebalance: batch admission denied"
+            total, "auto-rebalance: batch admission denied"
         );
         return;
     }
@@ -127,6 +126,7 @@ pub(crate) async fn rebalance_tick(
 /// Compare `selected / total` with the stored ratio's shortest decimal form.
 /// This preserves operator percentage semantics (`10%` is exactly `1/10`)
 /// and avoids both truncated percentages and lossy count conversion.
+#[allow(dead_code)]
 fn exact_ratio_at_least(selected: u64, total: u64, threshold: Ratio) -> bool {
     if selected == 0 || total == 0 || selected > total {
         return false;

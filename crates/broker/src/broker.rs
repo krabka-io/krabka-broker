@@ -146,6 +146,8 @@ pub struct Broker {
     /// handler before each read; sized by
     /// `BrokerConfig::max_incremental_fetch_session_cache_slots`.
     pub fetch_session_cache: Arc<crate::fetch_session::FetchSessionCache>,
+    /// Semaphore limiting queued/in-flight requests per `queued.max.requests` (#412).
+    pub(crate) queued_requests_sem: Arc<tokio::sync::Semaphore>,
     /// Prometheus metrics. Cloned into every subsystem that emits
     /// metrics, such as the produce/fetch handlers and the
     /// isr-maintenance loop. The `BrokerMetrics` struct clones cheaply

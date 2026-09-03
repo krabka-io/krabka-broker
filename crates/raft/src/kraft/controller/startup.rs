@@ -136,6 +136,15 @@ impl KraftController {
                 .map(|key| key.directory_id),
             observers: Vec::new(),
             per_replica_fetch_offset: BTreeMap::new(),
+            per_replica_last_fetch_ms: BTreeMap::new(),
+            per_replica_last_caught_up_ms: BTreeMap::new(),
+            observer_directory_ids: BTreeMap::new(),
+            is_leader: core.role().is_leader(),
+            current_state: if core.role().is_leader() {
+                "leader"
+            } else {
+                "follower"
+            },
         };
         let (quorum_tx, quorum_rx) = watch::channel(initial_snapshot);
         let (cmd_tx, cmd_rx) = mpsc::channel(metadata_raft_command_queue_capacity.get());
@@ -191,6 +200,8 @@ impl KraftController {
             installed_snapshot_epoch: None,
             controls,
             replica_fetch_offsets: BTreeMap::new(),
+            replica_directory_ids: BTreeMap::new(),
+            wall_clock_base: std::time::SystemTime::now(),
             leader_reported_hwm: initial_hwm,
             pending_reconfig: None,
         };

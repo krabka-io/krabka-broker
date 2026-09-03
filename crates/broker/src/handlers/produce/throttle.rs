@@ -6,8 +6,6 @@ use krabka_protocol::{
     Encode,
     owned::produce_response::{ProduceResponse, TopicProduceResponse},
 };
-use krabka_units::{Time, convert::TimeExt};
-
 use super::framing::FramedTopic;
 use crate::{broker::Broker, error::BrokerError};
 
@@ -54,7 +52,9 @@ pub(super) fn finish_produce_response(
                 broker.config.quota_throttle_max,
             )
         })
-        .fold(<Time as TimeExt>::ZERO, Time::max);
+        .fold(crate::quota::QuotaDelay::zero(), |acc, qd| {
+            if qd.delay > acc.delay { qd } else { acc }
+        });
     let elapsed_micros = u64::try_from(
         handler_start
             .elapsed()
@@ -77,8 +77,8 @@ pub(super) fn finish_produce_response(
     let delay = broker.metrics.record_applied_throttle(
         super::PRODUCE_API_KEY,
         &[
-            (crate::metrics::QuotaType::Produce, data_delay),
-            (crate::metrics::QuotaType::Request, request_delay),
+            (crate::metrics::QuotaType::Produce, data_delay).into(),
+            (crate::metrics::QuotaType::Request, request_delay).into(),
         ],
     );
     let response = ProduceResponse {
@@ -143,6 +143,8 @@ mod tests {
     #[test]
     fn consume_producer_quota_tuple_match_overage_throttles() {
         use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+        use krabka_units::{Time, convert::TimeExt};
+
         let mut img = MetadataImage::new(uuid::Uuid::nil());
         img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
             entity: vec![
@@ -170,7 +172,7 @@ mod tests {
             secs(1),
         );
         assert!(
-            delay_match > <Time as TimeExt>::ZERO,
+            delay_match.delay > <Time as TimeExt>::ZERO,
             "tuple quota match should throttle on overage; got {delay_match:?}"
         );
         // No tuple match for client_id="other"; no (user=alice)-only quota exists.
@@ -185,8 +187,9 @@ mod tests {
             secs(1),
         );
         assert!(
-            delay_other == <Time as TimeExt>::ZERO,
+            delay_other.delay == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"
         );
     }
 }
+

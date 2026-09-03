@@ -560,3 +560,51 @@ async fn controller_only_node_never_advertises_itself_as_controller() {
 
     cluster.shutdown().await;
 }
+
+/// A broker-only node forwards `DescribeQuorum` to the active controller
+/// quorum leader (#392). The response reports the controller's real term,
+/// leader, and voter set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn broker_only_node_forwards_describe_quorum_to_controller() {
+    use krabka_protocol::owned::describe_quorum_request::{
+        DescribeQuorumRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
+    };
+
+    support::init_tracing();
+
+    let cluster = start_role_separated(1).await;
+    assert_settled_unfenced(&cluster).await;
+
+    let broker = &cluster.brokers[0];
+    let client = Client::builder()
+        .bootstrap(broker.listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+
+    let req = DescribeQuorumRequest {
+        topics: vec![ReqTopicData {
+            topic_name: "__cluster_metadata".into(),
+            partitions: vec![ReqPartitionData {
+                partition_index: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let resp = client.send(req).await.unwrap();
+    assert!(resp.error_code == 0, "top-level error_code must be NONE");
+    assert!(resp.topics.len() == 1);
+    let topic = &resp.topics[0];
+    assert!(topic.topic_name == "__cluster_metadata");
+    assert!(topic.partitions.len() == 1);
+    let part = &topic.partitions[0];
+    assert!(part.error_code == 0);
+    assert!(part.leader_id == 1, "controller-only node 1 is the leader; got {}", part.leader_id);
+    assert!(part.leader_epoch >= 1, "leader epoch must be >= 1");
+    assert!(part.current_voters.iter().any(|v| v.replica_id == 1), "voters must include node 1");
+
+    cluster.shutdown().await;
+}

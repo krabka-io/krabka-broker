@@ -129,6 +129,19 @@ async fn readyz_is_200_once_every_condition_holds() {
     assert!(body == "ready\n");
 }
 
+#[tokio::test]
+async fn shutting_down_flips_readyz_to_503() {
+    let state = state_at(Phase::QuorumReached(1000, 1000), 100);
+    assert!(state.readiness() == Ok(()));
+
+    state.mark_shutting_down();
+    assert!(state.readiness() == Err(NotReady::ShuttingDown));
+
+    let (status, body) = get(state, "/readyz").await;
+    assert!(status == StatusCode::SERVICE_UNAVAILABLE);
+    assert!(body.starts_with("not ready: shutting_down: "));
+}
+
 #[test]
 fn metadata_progress_is_installed_once() {
     let state = HealthState::new(100);

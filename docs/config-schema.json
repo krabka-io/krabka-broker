@@ -1,4 +1,3 @@
-
 {
   "$defs": {
     "AuthzType": {
@@ -1966,7 +1965,31 @@
             "null"
           ]
         },
+        "queued_max_request_bytes": {
+          "default": null,
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "queued_max_requests": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "quota_throttle_max": {
+          "default": null,
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quota_window": {
           "default": null,
           "format": "duration",
           "type": [

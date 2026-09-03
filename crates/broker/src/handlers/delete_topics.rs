@@ -314,7 +314,7 @@ pub(crate) async fn handle(
     // throttle phase and the quota that caused it exactly once per request.
     let delay = broker.metrics.record_applied_throttle(
         krabka_protocol::api_key::ApiKey::DeleteTopics as i16,
-        &[(crate::metrics::QuotaType::ControllerMutation, quota.delay())],
+        &[(crate::metrics::QuotaType::ControllerMutation, quota.delay()).into()],
     );
     let throttle_time_ms = crate::quota::throttle_time_ms(delay);
     ctx.record_throttle(delay);

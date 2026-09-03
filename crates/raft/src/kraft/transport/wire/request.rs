@@ -64,6 +64,7 @@ pub enum PeerRequest {
         from: NodeId,
         fetch_epoch: Epoch,
         fetch_offset: i64,
+        replica_directory_id: uuid::Uuid,
     },
     FetchSnapshot {
         from: NodeId,
@@ -174,10 +175,15 @@ impl PeerRequest {
                 from,
                 fetch_epoch,
                 fetch_offset,
+                replica_directory_id,
             } => {
                 let req = FetchRequest {
-                    // v17 carries replica_id in replica_state, not the
-                    // top-level field (which is gated to v0..=14).
+                    max_wait_ms: 500,
+                    min_bytes: 1,
+                    max_bytes: 1024 * 1024,
+                    isolation_level: 0,
+                    session_id: 0,
+                    session_epoch: -1,
                     replica_state: fetch_req::ReplicaState {
                         replica_id: node_to_wire(from),
                         replica_epoch: -1,
@@ -191,6 +197,9 @@ impl PeerRequest {
                             current_leader_epoch: epoch_to_wire(fetch_epoch),
                             fetch_offset,
                             last_fetched_epoch: epoch_to_wire(fetch_epoch),
+                            replica_directory_id: krabka_protocol::primitives::uuid::Uuid(
+                                *replica_directory_id.as_bytes(),
+                            ),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -298,10 +307,12 @@ pub fn decode_fetch(buf: &[u8]) -> Option<PeerRequest> {
     let req = FetchRequest::decode(&mut cur, FETCH_VERSION).ok()?;
     let from = node_from_wire(req.replica_state.replica_id);
     let p = req.topics.first()?.partitions.first()?;
+    let replica_directory_id = uuid::Uuid::from_bytes(p.replica_directory_id.0);
     Some(PeerRequest::Fetch {
         from,
         fetch_epoch: epoch_from_wire(p.last_fetched_epoch),
         fetch_offset: p.fetch_offset,
+        replica_directory_id,
     })
 }
 

@@ -64,14 +64,27 @@ pub(super) async fn accept_loop(
                         // connections past either ceiling). The returned guard
                         // is moved into the spawned task so both counters are
                         // released however the connection ends.
-                        let Some(conn_guard) = broker.connections.try_acquire(peer_ip) else {
-                            tracing::debug!(
-                                %peer,
-                                name = %spec.name,
-                                "connection limit reached; closing connection"
-                            );
-                            drop(stream);
-                            continue;
+                        let conn_guard = match broker.connections.try_acquire(peer_ip) {
+                            Ok(guard) => guard,
+                            Err(limit) => {
+                                let reason = match limit {
+                                    crate::broker::connection_limiter::ConnectionLimit::Global => {
+                                        crate::metrics::ConnectionCloseReason::MaxConnections
+                                    }
+                                    crate::broker::connection_limiter::ConnectionLimit::PerIp => {
+                                        crate::metrics::ConnectionCloseReason::MaxConnectionsPerIp
+                                    }
+                                };
+                                broker.metrics.record_connection_close(reason);
+                                tracing::debug!(
+                                    %peer,
+                                    name = %spec.name,
+                                    ?limit,
+                                    "connection limit reached; closing connection"
+                                );
+                                drop(stream);
+                                continue;
+                            }
                         };
 
                         // KIP-612 connection_creation_rate enforcement. Applies
@@ -90,12 +103,18 @@ pub(super) async fn accept_loop(
                             let bucket = broker.quota_buckets.get_or_create(
                                 CONNECTION_CREATION_RATE_QUOTA_KEY,
                                 &entity_key,
+                                "",
+                                "",
                                 initial_rate,
                             );
                             if bucket.try_consume(1) == 0 {
                                 let delay = connection_creation_delay(
                                     rate,
                                     broker.config.connection_creation_throttle_max,
+                                );
+                                broker.metrics.observe_quota_throttle(
+                                    crate::metrics::QuotaType::ConnectionCreation,
+                                    delay.secs_f64(),
                                 );
                                 tokio::time::sleep(delay.to_std()).await;
                             }

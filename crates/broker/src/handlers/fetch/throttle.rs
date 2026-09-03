@@ -77,8 +77,8 @@ pub(super) fn apply_consumer_fetch_quota(
     let delay = broker.metrics.record_applied_throttle(
         super::FETCH_API_KEY,
         &[
-            (crate::metrics::QuotaType::Fetch, data_delay),
-            (crate::metrics::QuotaType::Request, request_delay),
+            (crate::metrics::QuotaType::Fetch, data_delay).into(),
+            (crate::metrics::QuotaType::Request, request_delay).into(),
         ],
     );
     if delay <= <Time as TimeExt>::ZERO {
@@ -142,27 +142,38 @@ fn consume_consumer_quota(
     client_id: &str,
     bytes: u64,
     maximum: Time,
-) -> Time {
+) -> crate::quota::QuotaDelay {
     let Some((entity_key, rate)) =
         crate::quota::lookup_quota_with_key(image, principal, client_id, "consumer_byte_rate")
     else {
-        return <Time as TimeExt>::ZERO;
+        return crate::quota::QuotaDelay::zero();
     };
     if rate <= 0.0 {
-        return <Time as TimeExt>::ZERO;
+        return crate::quota::QuotaDelay::zero();
     }
+    let user = entity_key
+        .iter()
+        .find(|(k, _)| k == "user")
+        .and_then(|(_, v)| v.clone());
+    let client_id_opt = entity_key
+        .iter()
+        .find(|(k, _)| k == "client-id")
+        .and_then(|(_, v)| v.clone());
     let bucket = buckets.get_or_create(
         "consumer_byte_rate",
         &entity_key,
+        principal,
+        client_id,
         rate.to_u64().unwrap_or(u64::MAX),
     );
     let granted = bucket.try_consume(bytes);
     if granted >= bytes {
-        return <Time as TimeExt>::ZERO;
+        return crate::quota::QuotaDelay::zero();
     }
     let overage = bytes - granted;
     let delay_secs = overage.to_f64().unwrap_or(f64::MAX) / rate;
-    Time::from_secs_f64(delay_secs).min(maximum)
+    let delay = Time::from_secs_f64(delay_secs).min(maximum);
+    crate::quota::QuotaDelay::new(delay, user, client_id_opt)
 }
 
 #[cfg(test)]

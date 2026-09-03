@@ -119,14 +119,13 @@ pub fn replica_fetch_mutation(
 }
 
 /// Admit one preferred-leader rebalance batch only when the scan is
-/// nonempty, internally consistent, and at the exact configured threshold.
+/// nonempty, internally consistent, and contains eligible preferred replicas.
 #[ensures(result == (
     total_partitions@ > 0
         && selected_changes@ > 0
         && selected_changes@ <= total_partitions@
         && changes_unique
         && all_preferred_eligible
-        && threshold_met
 ))]
 #[must_use]
 pub fn preferred_rebalance_admission(
@@ -134,14 +133,12 @@ pub fn preferred_rebalance_admission(
     selected_changes: u64,
     changes_unique: bool,
     all_preferred_eligible: bool,
-    threshold_met: bool,
 ) -> bool {
     total_partitions > 0
         && selected_changes > 0
         && selected_changes <= total_partitions
         && changes_unique
         && all_preferred_eligible
-        && threshold_met
 }
 
 /// Compute Kafka's consumer/follower Fetch visibility window.
@@ -688,14 +685,13 @@ mod tests {
 
     #[test]
     fn preferred_rebalance_admission_requires_every_batch_fact() {
-        assert!(preferred_rebalance_admission(10, 1, true, true, true));
+        assert!(preferred_rebalance_admission(10, 1, true, true));
         for denied in [
-            preferred_rebalance_admission(0, 0, true, true, true),
-            preferred_rebalance_admission(10, 0, true, true, true),
-            preferred_rebalance_admission(10, 11, true, true, true),
-            preferred_rebalance_admission(10, 1, false, true, true),
-            preferred_rebalance_admission(10, 1, true, false, true),
-            preferred_rebalance_admission(10, 1, true, true, false),
+            preferred_rebalance_admission(0, 0, true, true),
+            preferred_rebalance_admission(10, 0, true, true),
+            preferred_rebalance_admission(10, 11, true, true),
+            preferred_rebalance_admission(10, 1, false, true),
+            preferred_rebalance_admission(10, 1, true, false),
         ] {
             assert!(!denied);
         }

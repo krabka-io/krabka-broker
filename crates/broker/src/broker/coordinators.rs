@@ -96,6 +96,10 @@ pub(super) async fn start_coordinators(
             recovery_read_max: config.barrier_recovery_read_max,
             injection_timeout: config.barrier_injection_timeout,
             default_retained_cuts: config.barrier_retained_cuts,
+            max_retained_cuts: config.barrier_retained_cuts,
+            max_groups: config.barrier_max_groups,
+            max_topics_per_group: config.barrier_max_topics_per_group,
+            min_injection_interval: config.barrier_min_injection_interval,
             ..crate::barrier::config::BarrierConfig::default()
         },
         Arc::new(crate::barrier::metrics::BrokerBarrierMetrics::new(

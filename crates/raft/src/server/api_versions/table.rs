@@ -310,6 +310,7 @@ mod tests {
                     from: NodeId(2),
                     fetch_epoch: 1,
                     fetch_offset: 5,
+                    replica_directory_id: uuid::Uuid::nil(),
                 },
                 decodes_whole::<FetchRequest>,
             ),

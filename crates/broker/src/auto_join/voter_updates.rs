@@ -22,13 +22,6 @@ use crate::codes;
 /// leader accepts this at both `kraft.version` levels; level zero keeps the
 /// data in memory for upgrade preflight, while level one persists it.
 pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
-    if params.bootstrap_servers.is_empty() {
-        tracing::debug!(
-            node_id = params.node_id.0,
-            "no bootstrap server is available for UpdateVoter"
-        );
-        return;
-    }
     let Ok(voter_id) = i32::try_from(params.node_id.0) else {
         tracing::error!(
             node_id = params.node_id.0,
@@ -44,8 +37,48 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
         let leader = quorum.current_leader;
         let epoch = i32::try_from(quorum.current_term).unwrap_or(i32::MAX);
         if leader.is_some() && last_updated != Some((leader, epoch)) {
-            let target = select_bootstrap_server(&params.bootstrap_servers, next_server);
-            next_server = next_server.wrapping_add(1);
+            // If our advertised listener and directory ID already match the committed
+            // voter record, skip sending an update RPC.
+            if let Some(my_voter) = quorum.voter_nodes.get(&params.node_id) {
+                let matches_dir = my_voter.directory_id == params.directory_id;
+                let matches_listener = my_voter.endpoints.iter().any(|ep| {
+                    ep.host == listener.host && ep.port == listener.port
+                });
+                if matches_dir && matches_listener {
+                    last_updated = Some((leader, epoch));
+                    tokio::time::sleep(params.retry_backoff.to_std()).await;
+                    continue;
+                }
+            }
+
+            // Resolve target controller: try the known leader's endpoint first,
+            // falling back to bootstrap_servers only when unmapped.
+            let target_str = if let Some(leader_id) = leader
+                && let Some(leader_node) = quorum.voter_nodes.get(&leader_id)
+                && let Some(ep) = leader_node
+                    .endpoints
+                    .iter()
+                    .find(|e| e.name.eq_ignore_ascii_case("CONTROLLER"))
+                    .or_else(|| leader_node.endpoints.first())
+            {
+                Some(format!("{}:{}", ep.host, ep.port))
+            } else if !params.bootstrap_servers.is_empty() {
+                let s = select_bootstrap_server(&params.bootstrap_servers, next_server);
+                next_server = next_server.wrapping_add(1);
+                Some(s.to_string())
+            } else {
+                None
+            };
+
+            let Some(target) = target_str else {
+                tracing::warn!(
+                    node_id = params.node_id.0,
+                    ?leader,
+                    "no target controller endpoint or bootstrap server available for UpdateVoter"
+                );
+                tokio::time::sleep(params.retry_backoff.to_std()).await;
+                continue;
+            };
             let request = UpdateRaftVoterRequest {
                 cluster_id: params.cluster_id.map(|id| id.to_string()),
                 current_leader_epoch: epoch,
@@ -70,7 +103,7 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
                 &params.inter_broker_client,
                 params.listener_protocol,
                 &params.inter_broker_server_name,
-                target,
+                &target,
                 &request,
             )
             .await

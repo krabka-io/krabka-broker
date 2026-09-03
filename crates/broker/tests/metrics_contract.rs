@@ -29,8 +29,9 @@ use krabka_broker::metrics::{
     ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
     BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
     ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel,
-    DirectoryLabel, PartitionLabel, QuotaType, QuotaTypeLabel, ReplicaLagLabel, SaslMechanismLabel,
-    SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
+    DirectoryLabel, PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel,
+    ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    WalShardLabel, WalVoterLabel,
 };
 use krabka_metadata::BreakGlassAction as GatedAction;
 
@@ -240,6 +241,40 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         diskless_wal_cold_read_hits_total: _,
         diskless_wal_cold_read_misses_total: _,
         diskless_wal_cold_read_errors_total: _,
+        raft_current_state: _,
+        raft_current_epoch: _,
+        raft_high_watermark: _,
+        raft_log_end_offset: _,
+        raft_voters: _,
+        raft_observers: _,
+        metadata_last_applied_offset: _,
+        metadata_lag_records: _,
+        broker_state: _,
+        active_brokers: _,
+        fenced_brokers: _,
+        global_topics: _,
+        global_partitions: _,
+        at_min_isr_partition_count: _,
+        reassigning_partitions: _,
+        preferred_replica_imbalance: _,
+        remote_copy_bytes_total,
+        remote_fetch_bytes_total,
+        remote_copy_requests_total,
+        remote_fetch_requests_total,
+        remote_delete_requests_total,
+        remote_copy_errors_total,
+        remote_fetch_errors_total,
+        remote_delete_errors_total,
+        remote_copy_lag_bytes,
+        remote_copy_lag_segments,
+        remote_delete_lag_bytes,
+        remote_delete_lag_segments,
+        replication_throttled_bytes_out_total: _,
+        replication_throttled_bytes_in_total: _,
+        replication_throttle_sleeps_total: _,
+        quota_entity_throttle_seconds_total: _,
+        queued_requests: _,
+        queued_request_bytes: _,
         lag_series: _,
     } = metrics;
 
@@ -255,6 +290,22 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         fetch_message_conversions,
         barrier_markers_written_total,
         topic_freeze_rejections,
+        remote_copy_bytes_total,
+        remote_fetch_bytes_total,
+        remote_copy_requests_total,
+        remote_fetch_requests_total,
+        remote_delete_requests_total,
+        remote_copy_errors_total,
+        remote_fetch_errors_total,
+        remote_delete_errors_total,
+    ] {
+        drop(family.get_or_create(&topic));
+    }
+    for family in [
+        remote_copy_lag_bytes,
+        remote_copy_lag_segments,
+        remote_delete_lag_bytes,
+        remote_delete_lag_segments,
     ] {
         drop(family.get_or_create(&topic));
     }
@@ -397,6 +448,18 @@ fn seed_single_families(metrics: &BrokerMetrics) {
                 topic_id: "00000000-0000-0000-0000-000000000001".into(),
                 partition: 0,
                 voter: 1,
+            }),
+    );
+    for state in RaftStateLabel::ALL {
+        drop(metrics.raft_current_state.get_or_create(&state));
+    }
+    drop(
+        metrics
+            .quota_entity_throttle_seconds_total
+            .get_or_create(&QuotaEntityLabel {
+                quota_type: QuotaType::Produce,
+                user: Some("alice".into()),
+                client_id: Some("producer-1".into()),
             }),
     );
 }

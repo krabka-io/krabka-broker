@@ -57,3 +57,37 @@ impl Drop for ActiveConnectionGuard {
         self.metrics.active_connections.dec();
     }
 }
+
+/// RAII guard for one queued request waiting for / holding execution capacity (#412).
+pub(super) struct QueuedRequestGuard {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    metrics: crate::metrics::BrokerMetrics,
+    bytes: usize,
+}
+
+impl QueuedRequestGuard {
+    pub(super) fn new(
+        permit: tokio::sync::OwnedSemaphorePermit,
+        metrics: &crate::metrics::BrokerMetrics,
+        bytes: usize,
+    ) -> Self {
+        metrics.queued_requests.inc();
+        if bytes > 0 {
+            metrics.queued_request_bytes.inc_by(bytes as i64);
+        }
+        Self {
+            _permit: permit,
+            metrics: metrics.clone(),
+            bytes,
+        }
+    }
+}
+
+impl Drop for QueuedRequestGuard {
+    fn drop(&mut self) {
+        self.metrics.queued_requests.dec();
+        if self.bytes > 0 {
+            self.metrics.queued_request_bytes.dec_by(self.bytes as i64);
+        }
+    }
+}

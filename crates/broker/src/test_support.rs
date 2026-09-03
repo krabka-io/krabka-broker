@@ -564,6 +564,10 @@ impl MetadataSource for FakeMetadataSource {
             voters: Vec::new(),
             voter_nodes: std::collections::BTreeMap::new(),
             per_voter_matched_index: std::collections::BTreeMap::new(),
+            per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
+            per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
+            observer_directory_ids: std::collections::BTreeMap::new(),
+            is_leader: false,
         }
     }
 
@@ -821,6 +825,7 @@ mod tests {
             voters,
             voter_nodes,
             per_voter_matched_index,
+            ..
         } = source.quorum_state();
         assert!(current_term == 0);
         assert!(last_applied_index == 0);

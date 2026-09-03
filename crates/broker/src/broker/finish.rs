@@ -68,6 +68,7 @@ pub(super) async fn finish_broker_startup(
     )
     .await?;
     let connections = ConnectionLimiter::new(config.max_connections, config.max_connections_per_ip);
+    let queued_requests_sem = Arc::new(tokio::sync::Semaphore::new(config.queued_max_requests));
     let broker = Arc::new(Broker {
         config,
         controller,
@@ -94,6 +95,7 @@ pub(super) async fn finish_broker_startup(
         quota_buckets: runtime.quota_buckets,
         connections,
         fetch_session_cache: runtime.fetch_session_cache,
+        queued_requests_sem,
         want_shutdown: runtime.want_shutdown,
         should_shutdown: runtime.should_shutdown,
         remote_reader: runtime.remote_reader,

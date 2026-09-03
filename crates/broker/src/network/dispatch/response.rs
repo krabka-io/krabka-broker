@@ -90,7 +90,7 @@ pub(super) fn apply_request_quota(
         // the throttle histogram below, which is what keeps that family's
         // `_count` equal to the number of requests this path accounted for.
         let charged = match auth.principal() {
-            None => <Time as TimeExt>::ZERO,
+            None => crate::quota::QuotaDelay::zero(),
             Some(principal) => {
                 let image = broker.controller.current_image();
                 crate::quota::consume_request_quota(
@@ -108,7 +108,7 @@ pub(super) fn apply_request_quota(
         // for is the window this request is muted for.
         let delay = broker.metrics.record_applied_throttle(
             parsed.api_key,
-            &[(crate::metrics::QuotaType::Request, charged)],
+            &[(crate::metrics::QuotaType::Request, charged).into()],
         );
         if delay > <Time as TimeExt>::ZERO {
             if throttle_is_leading_field(parsed.api_key, shape.version) {

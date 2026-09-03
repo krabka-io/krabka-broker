@@ -15,7 +15,7 @@ pub fn consume_producer_quota(
     qos_tier: &str,
     bytes: u64,
     maximum_delay: Time,
-) -> Time {
+) -> super::QuotaDelay {
     consume_configured_quota(
         QuotaConsumption {
             image,

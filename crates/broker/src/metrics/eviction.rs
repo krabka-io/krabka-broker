@@ -115,6 +115,22 @@ impl BrokerMetrics {
             &self.fetch_message_conversions,
             &self.barrier_markers_written_total,
             &self.topic_freeze_rejections,
+            &self.remote_copy_bytes_total,
+            &self.remote_fetch_bytes_total,
+            &self.remote_copy_requests_total,
+            &self.remote_fetch_requests_total,
+            &self.remote_delete_requests_total,
+            &self.remote_copy_errors_total,
+            &self.remote_fetch_errors_total,
+            &self.remote_delete_errors_total,
+        ] {
+            family.remove(&label);
+        }
+        for family in [
+            &self.remote_copy_lag_bytes,
+            &self.remote_copy_lag_segments,
+            &self.remote_delete_lag_bytes,
+            &self.remote_delete_lag_segments,
         ] {
             family.remove(&label);
         }
