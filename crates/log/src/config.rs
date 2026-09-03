@@ -133,6 +133,35 @@ pub enum ScheduleOrder {
     Monotonic,
 }
 
+/// KIP-950's two tiered-storage disablement controls.
+///
+/// They are separate from [`LogConfig::remote_storage_enable`] because they
+/// describe how the tier is *left*, not whether it is on: `copy_disable`
+/// freezes the remote copy while reads keep being served from it, and
+/// `delete_on_disable` is the operator's standing consent to erase the remote
+/// copies when tiering is turned off. Kafka refuses the
+/// `remote.storage.enable` `true -> false` flip without the second one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RemoteTierFlags {
+    /// `remote.log.copy.disable`: the remote log manager copies nothing new
+    /// for this partition, and retention over what is already there keeps
+    /// running.
+    pub copy_disable: bool,
+    /// `remote.log.delete.on.disable`: turning `remote.storage.enable` off
+    /// erases the partition's remote segments and raises its log start offset
+    /// to the local log start.
+    pub delete_on_disable: bool,
+}
+
+impl RemoteTierFlags {
+    /// Both off, which is Kafka's default: a tiered topic copies, and
+    /// disabling tiering is refused until an operator opts into the delete.
+    pub const DEFAULT: Self = Self {
+        copy_disable: false,
+        delete_on_disable: false,
+    };
+}
+
 /// Tunables for [`Log`](crate::Log) behavior.
 ///
 /// Defaults match Apache Kafka 4.2 for `segment.bytes`, `segment.ms`,
@@ -221,6 +250,10 @@ pub struct LogConfig {
     /// also Kafka's default, because tiered storage is opt-in per topic.
     pub remote_storage_enable: bool,
 
+    /// KIP-950's two disablement controls, `remote.log.copy.disable` and
+    /// `remote.log.delete.on.disable`. See [`RemoteTierFlags`].
+    pub remote_tier: RemoteTierFlags,
+
     /// Local-disk time-retention window for tiered partitions (KIP-405).
     /// `None` inherits [`Self::retention`]. Default `None`.
     pub local_retention: Option<Time>,
@@ -290,6 +323,9 @@ impl Default for LogConfig {
             compression_type: None,
             // Tiered storage is opt-in per topic (Kafka default false).
             remote_storage_enable: false,
+            // Both KIP-950 controls default off, as in Kafka: a tiered topic
+            // copies, and turning tiering off needs the operator's consent.
+            remote_tier: RemoteTierFlags::DEFAULT,
             local_retention: None,
             local_retention_size: None,
             delete_retention: DEFAULT_DELETE_RETENTION,
@@ -333,6 +369,7 @@ mod tests {
                     message_timestamp_type: TimestampType::CreateTime,
                     compression_type: None,
                     remote_storage_enable: false,
+                    remote_tier: RemoteTierFlags::DEFAULT,
                     local_retention: None,
                     local_retention_size: None,
                     delete_retention: secs(24 * 60 * 60),

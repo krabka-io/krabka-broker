@@ -8,9 +8,10 @@ use super::{
         DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES, FLUSH_MS, INDEX_INTERVAL_BYTES,
         LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
         MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE,
-        MIN_COMPACTION_LAG_MS, MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_STORAGE_ENABLE,
-        RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS,
-        SEGMENT_MS, delivery::DELIVERY_MODE_IMMEDIATE,
+        MIN_COMPACTION_LAG_MS, MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE,
+        REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
+        SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
+        delivery::DELIVERY_MODE_IMMEDIATE,
     },
     *,
 };
@@ -495,4 +496,79 @@ fn validate_topic_config_map_checks_pairs_and_then_combinations() {
     CLEANUP_POLICY.to_string() => "compact".to_string(),
     DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
     assert!(validate_topic_config_map(&bad_combination).is_err());
+}
+
+/// KIP-950 `LogConfig.validateRemoteStorageConfigs`: tiered storage cannot be
+/// turned off without saying what happens to the segments already in the
+/// tier.
+#[test]
+fn disabling_tiered_storage_needs_the_delete_flag() {
+    let stored =
+        |enabled: bool| BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_string(), enabled.to_string())]);
+    let cases = [
+        (
+            "the bare flip is refused",
+            Some(stored(true)),
+            vec![(REMOTE_STORAGE_ENABLE, "false")],
+            false,
+        ),
+        (
+            "the flip with delete-on-disable is accepted",
+            Some(stored(true)),
+            vec![
+                (REMOTE_STORAGE_ENABLE, "false"),
+                (REMOTE_LOG_DELETE_ON_DISABLE, "true"),
+            ],
+            true,
+        ),
+        (
+            "the read-only tier keeps the flag on, so nothing is refused",
+            Some(stored(true)),
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (REMOTE_LOG_COPY_DISABLE, "true"),
+            ],
+            true,
+        ),
+        (
+            "a topic that was never tiered is not flipping anything off",
+            Some(stored(false)),
+            vec![(REMOTE_STORAGE_ENABLE, "false")],
+            true,
+        ),
+        (
+            "a topic with no stored config at all",
+            None,
+            vec![(REMOTE_STORAGE_ENABLE, "false")],
+            true,
+        ),
+        (
+            "turning it on is never refused",
+            Some(stored(false)),
+            vec![(REMOTE_STORAGE_ENABLE, "true")],
+            true,
+        ),
+    ];
+    for (case, current, next, want_ok) in cases {
+        let next: BTreeMap<String, String> = next
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        assert!(
+            validate_remote_storage_disable(current.as_ref(), &next).is_ok() == want_ok,
+            "{case}: {next:?}"
+        );
+    }
+}
+
+/// The refusal names both of Kafka's ways out, because an operator reads it
+/// out of `kafka-configs` and has to pick one.
+#[test]
+fn the_disable_refusal_names_both_ways_out() {
+    let current = BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_string(), "true".to_string())]);
+    let next = BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_string(), "false".to_string())]);
+    let message = validate_remote_storage_disable(Some(&current), &next)
+        .expect_err("the bare flip is refused");
+    check!(message.contains("remote.storage.enable=true,remote.log.copy.disable=true"));
+    check!(message.contains("remote.storage.enable=false,remote.log.delete.on.disable=true"));
 }

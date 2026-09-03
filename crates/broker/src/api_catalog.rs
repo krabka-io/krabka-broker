@@ -841,6 +841,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-950",
+        claim: "Tiered storage disablement: remote.log.copy.disable and remote.log.delete.on.disable",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager.rs",
+        tests: &[
+            "crates/broker/src/config_keys/validation/tests.rs",
+            "crates/broker/tests/jvm_acceptance_tiered.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "`remote.storage.enable` going true -> false is refused unless `remote.log.delete.on.disable=true` comes with it, and the flip then erases the partition's remote segments and raises its log start offset to the local log start. `remote.log.copy.disable=true` is the read-only tier: no new copies, reads and remote retention unchanged. Under a WORM archive the cascade clears the partition's remote metadata and removes nothing from the archive, as a `DeleteTopics` cascade does.",
+    },
+    KipAnnotation {
         key: "KIP-951",
         claim: "Leader hints in the Produce and Fetch responses",
         status: KipStatus::Implemented,

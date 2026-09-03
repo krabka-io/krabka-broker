@@ -16,8 +16,8 @@ use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, INDEX_INTERVAL_BYTES,
     LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES,
     MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO,
-    MIN_COMPACTION_LAG_MS, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES,
-    SEGMENT_MS,
+    MIN_COMPACTION_LAG_MS, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
+    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES, SEGMENT_MS,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
     validation::{parse_cleanup_policy, parse_compression_type},
 };
@@ -125,6 +125,12 @@ pub(crate) fn apply_to_log_config(
             }
             REMOTE_STORAGE_ENABLE => {
                 out.remote_storage_enable = v == "true";
+            }
+            REMOTE_LOG_COPY_DISABLE => {
+                out.remote_tier.copy_disable = v == "true";
+            }
+            REMOTE_LOG_DELETE_ON_DISABLE => {
+                out.remote_tier.delete_on_disable = v == "true";
             }
             DELIVERY_MODE => {
                 out.delivery_policy = if v == DELIVERY_MODE_SCHEDULED {

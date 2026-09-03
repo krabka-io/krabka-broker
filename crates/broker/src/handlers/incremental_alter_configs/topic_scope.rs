@@ -72,6 +72,8 @@ pub(super) fn topic_config_record(
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &merged)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_remote_storage_disable(current, &merged)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides: merged,

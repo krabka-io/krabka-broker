@@ -62,6 +62,8 @@ pub(super) fn topic_config_record(
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_remote_storage_disable(current, &overrides)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     // Both validations read the client's map alone, so the carry-over comes
     // after them: a controller-managed key is not the client's to be judged
     // on, and it takes part in no cross-key rule.

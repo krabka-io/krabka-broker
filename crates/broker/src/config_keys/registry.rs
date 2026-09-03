@@ -25,8 +25,9 @@ use super::{
     LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
     MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_CREATE,
     MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
-    MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
-    RETENTION_UNLIMITED, SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
+    MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
+    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
+    SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
     broker_scope::{
         BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
@@ -371,6 +372,28 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Boolean,
             Some("false"),
             "Opt this topic into tiered (remote) storage. Refused on a topic whose cleanup.policy contains `compact`: tiered storage is not supported for compacted topics.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-950"),
+        ..key(
+            REMOTE_LOG_COPY_DISABLE,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Stop copying this topic's sealed segments to the remote tier while remote.storage.enable stays true. Reads are still served from the tier, so the topic becomes read-only there rather than losing its history.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-950"),
+        ..key(
+            REMOTE_LOG_DELETE_ON_DISABLE,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Permit turning remote.storage.enable off. The flip erases this topic's remote segments and raises its log start offset to the local log start, so it is refused while this is false.",
             ValueCheck::Bool,
         )
     },

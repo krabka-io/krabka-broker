@@ -80,6 +80,110 @@ async fn tiered_storage_round_trip_through_minio() {
     // `_minio` is dropped here; the container is removed via `docker rm -f`.
 }
 
+/// KIP-950 through the stock tool: `kafka-configs` refuses the bare
+/// `remote.storage.enable=false`, and accepts the flip that comes with
+/// `remote.log.delete.on.disable=true`. The bucket is empty afterwards and
+/// the partition's log start offset has risen to the local log start, so no
+/// consumer is left pointing at a segment the flip erased.
+///
+/// The refusal is the half a runbook hits first: Kafka answers it with
+/// `InvalidConfigurationException` and names both ways out, and an operator
+/// who reads only "it failed" would otherwise try the same thing again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn tiered_storage_disable_needs_delete_on_disable() {
+    const TOPIC: &str = "krabka-tiered-disable-itest";
+    const RECORDS: usize = 200;
+
+    let minio_port = minio_port();
+    let _minio = MinioContainer::start();
+    minio_make_bucket(MINIO_BUCKET);
+
+    let s3 = krabka_remote_storage::S3Config {
+        bucket: MINIO_BUCKET.to_string(),
+        region: "us-east-1".to_string(),
+        prefix: None,
+        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
+        access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
+        secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
+        allow_http: true,
+        multipart_threshold: 4 * 1024,
+        multipart_chunk_size: 1024,
+        conditional_put: false,
+        checksum_sha256: false,
+    };
+    let (broker, _dir, _cfg) =
+        start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
+    nc_check_connectivity();
+
+    create_tiered_topic(&broker, TOPIC).await;
+    produce_records(TOPIC, RECORDS);
+    wait_for_minio_segments(MINIO_BUCKET, 2).await;
+
+    let bootstrap = broker0_advertised();
+    let alter = |config: &str| -> std::process::Output {
+        docker_run_kafka_tool_allowing_failure(&[
+            "kafka-configs",
+            "--bootstrap-server",
+            bootstrap,
+            "--alter",
+            "--entity-type",
+            "topics",
+            "--entity-name",
+            TOPIC,
+            "--add-config",
+            config,
+        ])
+    };
+
+    let refused = alter("remote.storage.enable=false");
+    assert!(
+        !refused.status.success(),
+        "the bare flip must be refused: {}",
+        tool_output(&refused)
+    );
+    let refusal = tool_output(&refused);
+    check!(
+        refusal.contains("remote.log.delete.on.disable=true"),
+        "the refusal must name the delete-on-disable way out: {refusal}"
+    );
+    check!(
+        refusal.contains("remote.log.copy.disable=true"),
+        "the refusal must name the read-only tier: {refusal}"
+    );
+
+    let accepted = alter("remote.storage.enable=false,remote.log.delete.on.disable=true");
+    assert!(
+        accepted.status.success(),
+        "the flip with delete-on-disable must be accepted: {}",
+        tool_output(&accepted)
+    );
+
+    // The remote-log manager erases the tier on its next sweep, and raises
+    // the log start offset in the same pass.
+    //
+    // intentional poll: the sweep runs on its own 1 s timer, and the bucket
+    // is the only signal that it has run.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut listing = minio_list_objects(MINIO_BUCKET);
+    while listing.contains(TOPIC) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        listing = minio_list_objects(MINIO_BUCKET);
+    }
+    check!(
+        !listing.contains(TOPIC),
+        "the disabled topic's segments must be gone from the bucket: {listing}"
+    );
+    check!(
+        broker
+            .partition_log_start_for_test(TOPIC, 0)
+            .is_some_and(|start| start > 0),
+        "the log start offset must have risen to the local log start"
+    );
+
+    broker.shutdown().await;
+}
+
 // ---------------------------------------------------------------------------
 // Topic-backed RLMM durability test (KIP-405 S3 + durable RLMM restart).
 //

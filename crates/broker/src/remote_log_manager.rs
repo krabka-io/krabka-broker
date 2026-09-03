@@ -40,7 +40,7 @@ use krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageManager, Topi
 use krabka_units::{ByteSize, Time, bytes, convert::TimeExt as _, secs};
 use krabka_verified::FreezeMutationKind;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
@@ -56,6 +56,65 @@ mod leader_epoch;
 mod local_retention;
 mod remote_retention;
 mod rlmm;
+
+/// KIP-950's disable-and-delete: erase what the tier holds for a partition
+/// whose `remote.storage.enable` has gone `true -> false`, then raise its
+/// global log start offset to the local one.
+///
+/// Kafka's `RemoteLogManager.stopPartitions(..., deleteRemoteLog = true)` does
+/// both halves, and the order is what makes a crash between them safe: the
+/// segments go first, so a floor that has not moved yet only means a fetch is
+/// answered from the local log rather than from a segment that is gone.
+///
+/// Under [`ArchiveMode::WriteOnce`] the cascade clears the partition's remote
+/// metadata and removes nothing from the archive, exactly as a `DeleteTopics`
+/// cascade does: turning tiered storage off is a cluster operation, not an
+/// instruction to erase a compliance archive. The floor still moves, because
+/// what the broker will serve is what the metadata says it has.
+async fn disable_and_delete_remote(
+    partition: &Arc<Partition>,
+    image: &krabka_metadata::MetadataImage,
+    broker_id: i32,
+    archive: ArchiveMode,
+    rsm: &Arc<dyn RemoteStorageManager>,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) {
+    let Some(topic_id) = image.topic(&partition.topic).map(|t| t.topic_id) else {
+        return;
+    };
+    let tp = TopicIdPartition::new(topic_id, partition.topic.clone(), partition.index.get());
+    // Nothing to do once the tier is empty, which is every tick after the
+    // first: the sweep runs on a timer, and this must not re-mark a partition
+    // it already erased.
+    match rlmm.list_remote_log_segments(&tp) {
+        Ok(segments) if segments.is_empty() => return,
+        Ok(_) => {}
+        Err(error) => {
+            warn!(topic = %tp.topic, partition = tp.partition, %error,
+                  "remote-log-manager: failed to list segments for a disabled partition");
+            return;
+        }
+    }
+    cascade_remote_partition_delete(
+        tp.clone(),
+        broker_id,
+        archive,
+        Arc::clone(rsm),
+        Arc::clone(rlmm),
+    )
+    .await;
+
+    let local_start = {
+        let log = partition.log.lock().expect("log mutex poisoned");
+        log.local_log_start_offset()
+    };
+    let mut log = partition.log.lock().expect("log mutex poisoned");
+    if let Err(error) = log.set_log_start_offset(local_start) {
+        warn!(topic = %tp.topic, partition = tp.partition, %error,
+              "remote-log-manager: failed to raise the log start offset after disabling tiering");
+    }
+}
+
 #[cfg(test)]
 mod test_support;
 
@@ -154,9 +213,6 @@ async fn tick_all(
         let (log_config, log_start_offset, deleted_below, exports) = {
             let log = partition.log.lock().expect("log mutex poisoned");
             let cfg = log.config_snapshot();
-            if !cfg.remote_storage_enable {
-                continue;
-            }
             (
                 cfg,
                 log.log_start_offset(),
@@ -164,6 +220,16 @@ async fn tick_all(
                 log.tierable_segments(),
             )
         };
+        if !log_config.remote_storage_enable {
+            // KIP-950: the alter paths refuse this flip unless
+            // `remote.log.delete.on.disable` came with it, so a partition that
+            // arrives here with the flag set is one an operator asked to have
+            // erased. Everything else is an ordinary non-tiered partition.
+            if is_leader && log_config.remote_tier.delete_on_disable {
+                disable_and_delete_remote(&partition, &image, broker_id, archive, rsm, rlmm).await;
+            }
+            continue;
+        }
         // A sealed segment that ends below the global floor is deleted data,
         // whatever its file is still doing on disk. Kafka's copy task starts
         // at `max(logStartOffset, lastCopiedOffset)` for the same reason:
@@ -185,7 +251,11 @@ async fn tick_all(
         // log has already been evicted is exactly the one whose remote
         // segments age out, or fall below a `DeleteRecords` floor, with no
         // local segment left to notice it.
-        if is_leader && !exports.is_empty() {
+        // KIP-950 `remote.log.copy.disable`: the read-only tier. Nothing new
+        // is copied, and every pass below still runs — retention over what the
+        // tier already holds keeps working, which is what makes the state a
+        // freeze of the copy rather than an abandonment of the data.
+        if is_leader && !exports.is_empty() && !log_config.remote_tier.copy_disable {
             // Atomic stores the raw epoch; wrap for the remote-storage
             // metadata seam.
             let leader_epoch =
@@ -651,6 +721,113 @@ mod tests {
         .await;
 
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+    }
+
+    /// KIP-950 `remote.log.copy.disable`: the read-only tier copies nothing
+    /// new. The same partition with the flag off copies its sealed segments,
+    /// so the difference is the flag and not the fixture.
+    #[tokio::test]
+    async fn copy_disable_stops_the_copy_and_nothing_else() {
+        for (case, copy_disable, want_segments) in
+            [("copying", false, true), ("copy disabled", true, false)]
+        {
+            let log_dir = tempfile::tempdir().unwrap();
+            let remote_dir = tempfile::tempdir().unwrap();
+            let partitions = PartitionRegistry::new();
+            let partition = rolled_tiered_partition_with_config(
+                log_dir.path(),
+                LogConfig {
+                    segment_size: bytes(256),
+                    remote_storage_enable: true,
+                    remote_tier: krabka_log::RemoteTierFlags {
+                        copy_disable,
+                        delete_on_disable: false,
+                    },
+                    retention: None,
+                    retention_size: None,
+                    ..LogConfig::default()
+                },
+            );
+            partitions.insert("orders".into(), PartitionIndex(0), partition);
+
+            let controller = fixed_source(image_with_orders_topic());
+            let rsm: Arc<dyn RemoteStorageManager> =
+                Arc::new(LocalTieredStorage::new(remote_dir.path()));
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(InmemoryRemoteLogMetadataManager::new());
+
+            tick_all(
+                &partitions,
+                &controller,
+                ArchiveMode::Mutable,
+                &rsm,
+                &rlmm,
+                NodeId(1),
+                1,
+            )
+            .await;
+
+            check!(
+                !rlmm.list_remote_log_segments(&tp()).unwrap().is_empty() == want_segments,
+                "{case}"
+            );
+        }
+    }
+
+    /// KIP-950's disable-and-delete: a partition whose `remote.storage.enable`
+    /// went `true -> false` with `remote.log.delete.on.disable=true` loses its
+    /// remote segments, and its global log start offset rises to the local
+    /// one, so no fetch is left pointing at a segment that is gone.
+    #[tokio::test]
+    async fn disabling_with_delete_on_disable_erases_the_tier() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        let partitions = PartitionRegistry::new();
+        let partition = rolled_tiered_partition(log_dir.path());
+        partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
+
+        let controller = fixed_source(image_with_orders_topic());
+        let rsm: Arc<dyn RemoteStorageManager> =
+            Arc::new(LocalTieredStorage::new(remote_dir.path()));
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+
+        // Copy first: the delete below has to have something to erase.
+        tick_all(
+            &partitions,
+            &controller,
+            ArchiveMode::Mutable,
+            &rsm,
+            &rlmm,
+            NodeId(1),
+            1,
+        )
+        .await;
+        assert!(!rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+
+        // The alter an operator makes, as the partition sees it.
+        {
+            let log = partition.log.lock().unwrap();
+            let mut config = log.config_snapshot();
+            config.remote_storage_enable = false;
+            config.remote_tier.delete_on_disable = true;
+            log.set_config(config);
+        }
+        let local_start = partition.log.lock().unwrap().local_log_start_offset();
+
+        tick_all(
+            &partitions,
+            &controller,
+            ArchiveMode::Mutable,
+            &rsm,
+            &rlmm,
+            NodeId(1),
+            1,
+        )
+        .await;
+
+        check!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+        check!(partition.log.lock().unwrap().log_start_offset() == local_start);
     }
 
     #[test]

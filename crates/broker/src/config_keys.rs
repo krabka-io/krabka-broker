@@ -139,8 +139,8 @@ pub(crate) use self::{
         is_controller_managed_topic_config,
     },
     validation::{
-        is_recognized, parse_compression_type, validate_config_combination, validate_topic_config,
-        validate_topic_config_map,
+        is_recognized, parse_compression_type, validate_config_combination,
+        validate_remote_storage_disable, validate_topic_config, validate_topic_config_map,
     },
 };
 
@@ -196,6 +196,15 @@ pub(crate) const MESSAGE_TIMESTAMP_TYPE_LOG_APPEND: &str = "LogAppendTime";
 
 /// KIP-405: per-topic tiered-storage opt-in.
 pub(crate) const REMOTE_STORAGE_ENABLE: &str = "remote.storage.enable";
+
+/// KIP-950 `remote.log.copy.disable`: stop copying new segments to the remote
+/// tier while still serving reads from it. Kafka's read-only tier.
+pub(crate) const REMOTE_LOG_COPY_DISABLE: &str = "remote.log.copy.disable";
+
+/// KIP-950 `remote.log.delete.on.disable`: the operator's consent to erase the
+/// remote copies when tiered storage is turned off. Kafka refuses the
+/// `remote.storage.enable` `true -> false` flip without it.
+pub(crate) const REMOTE_LOG_DELETE_ON_DISABLE: &str = "remote.log.delete.on.disable";
 /// KIP-405: per-topic local-retention time window for tiered partitions.
 pub(crate) const LOCAL_RETENTION_MS: &str = "local.retention.ms";
 /// KIP-405: per-topic local-retention size budget for tiered partitions.

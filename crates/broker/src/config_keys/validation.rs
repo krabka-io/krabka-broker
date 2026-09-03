@@ -8,7 +8,7 @@ use krabka_log::CleanupPolicy;
 use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, MAX_COMPACTION_LAG_MS, MESSAGE_TIMESTAMP_TYPE,
     MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
-    REMOTE_STORAGE_ENABLE,
+    REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
     diskless::validate_diskless_combination,
     qos::{QOS_TIER, validate_qos_tier},
@@ -192,6 +192,47 @@ fn validate_compaction_lag_order(overrides: &BTreeMap<String, String>) -> Result
         ));
     }
     Ok(())
+}
+
+/// Kafka's KIP-950 `LogConfig.validateRemoteStorageConfigs`: turning tiered
+/// storage off is refused unless the operator has said what should happen to
+/// the segments already in the tier.
+///
+/// `remote.storage.enable` going `true -> false` erases the topic's remote
+/// copies and raises its log start offset to the local log start, so Kafka
+/// makes the operator ask for that explicitly with
+/// `remote.log.delete.on.disable=true`. The alternative it names in the same
+/// message is the read-only tier: keep `remote.storage.enable=true` and set
+/// `remote.log.copy.disable=true`, which stops new copies while the history
+/// stays readable.
+///
+/// `current` is the topic's stored override map and `next` the map the alter
+/// installs, so this is the only rule here that reads both: the others decide
+/// a map on its own.
+///
+/// # Errors
+/// Returns the refusal message when the alter turns tiered storage off
+/// without `remote.log.delete.on.disable=true` in the resulting map.
+pub(crate) fn validate_remote_storage_disable(
+    current: Option<&BTreeMap<String, String>>,
+    next: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let enabled = |map: Option<&BTreeMap<String, String>>| {
+        map.and_then(|map| map.get(REMOTE_STORAGE_ENABLE))
+            .is_some_and(|value| value == "true")
+    };
+    if !enabled(current) || enabled(Some(next)) {
+        return Ok(());
+    }
+    let deleting = next
+        .get(REMOTE_LOG_DELETE_ON_DISABLE)
+        .is_some_and(|value| value == "true");
+    if deleting {
+        return Ok(());
+    }
+    Err(format!(
+        "It is invalid to disable remote storage without deleting remote data. If you want to          keep the remote data, but turn to read only, please set          {REMOTE_STORAGE_ENABLE}=true,{REMOTE_LOG_COPY_DISABLE}=true. If you want to disable          remote storage and delete all remote data, please set          {REMOTE_STORAGE_ENABLE}=false,{REMOTE_LOG_DELETE_ON_DISABLE}=true."
+    ))
 }
 
 /// Parse Kafka's `cleanup.policy` list into the policy a partition runs under.
