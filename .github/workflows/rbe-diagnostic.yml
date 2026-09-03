@@ -72,16 +72,25 @@ jobs:
             '@@rules_rs++crate+crates__codspeed-5.0.1//:codspeed' \
             2>&1 | tee "${RUNNER_TEMP}/remote.log" || true
 
-      # The same target with no executor. If this passes, the difference is
-      # remote execution alone and nothing about the crate or the cache; if it
-      # fails too, everything said about this so far is wrong.
-      - name: compile the same target locally for contrast
+      # The same target with no executor -- and, crucially, forced to actually
+      # run. Run 33726077901 compared a remote *execution* against a local
+      # *cache hit* (`1287 remote cache hit`, codspeed among them) and so
+      # proved nothing about local execution. `--noremote_accept_cached` is
+      # what makes this the comparison it was supposed to be: if the scan
+      # fires here too then it is not remote execution that breaks it and
+      # every explanation offered so far is wrong.
+      - name: compile the same target locally, cache bypassed
         run: |
           bazel build \
             --verbose_failures \
             --subcommands=pretty_print \
+            --noremote_accept_cached \
+            --remote_download_outputs=all \
             '@@rules_rs++crate+crates__codspeed-5.0.1//:codspeed' \
             2>&1 | tee "${RUNNER_TEMP}/local.log" || true
+          echo "::group::did it actually execute, or hit cache again"
+          grep -E 'processes:|Build completed|Build did NOT' "${RUNNER_TEMP}/local.log" || true
+          echo "::endgroup::"
 
       # Whichever rustc invocations the two logs captured, side by side. The
       # remote one is the failing case and the local one is the working case,
@@ -107,7 +116,10 @@ jobs:
       - name: absolute paths inside the locally built rlib
         run: |
           set -euo pipefail
-          rlib="$(find bazel-out -name 'libcodspeed-*.rlib' -print -quit 2>/dev/null || true)"
+          # `-L`: bazel-out is a symlink, and plain `find` will not descend it.
+          # That is why the first run reported no rlib even though Bazel had
+          # just named one.
+          rlib="$(find -L bazel-out/ -name 'libcodspeed-*.rlib' -print -quit 2>/dev/null || true)"
           if [ -z "${rlib}" ]; then
             echo "no rlib was produced; the local build did not get that far"
             exit 0
