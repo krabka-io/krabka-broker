@@ -413,7 +413,7 @@ Validated operational policy loaded from `[runtime]`.
 | `max_incremental_fetch_session_cache_slots` | integer (uint) | broker default |  |  |
 | `max_produce_group` | integer (uint) | broker default |  |  |
 | `message_max_bytes` | string | broker default | byte size | Kafka's broker-wide `message.max.bytes`: the largest record batch a topic that sets no `max.message.bytes` accepts. |
-| `metadata_max_between_snapshots` | string | broker default | byte size |  |
+| `metadata_max_bytes_between_snapshots` | string | broker default | byte size |  |
 | `metadata_max_snapshot_interval` | string | broker default | duration |  |
 | `metadata_raft_command_queue_capacity` | integer (uint) | broker default |  |  |
 | `metadata_raft_fetch_max` | string | broker default | byte size |  |

@@ -29,3 +29,6 @@ crates/gres-conformance/corpus-regress/int4/int4.out       -whitespace
 *.jar      binary
 *.png      binary
 *.ico      binary
+
+*.axl linguist-language=Starlark
+

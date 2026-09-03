@@ -20,6 +20,16 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
+- Follower replicas of a tiered topic now enforce `local.retention.ms` /
+  `local.retention.bytes` on their own disks, as KIP-405 has every replica do.
+  The tiered-storage sweep used to skip a partition outright unless this broker
+  led it, so a follower kept every segment it had ever fetched until it was
+  elected: its disk grew to the topic's full `retention.*` footprint while the
+  leader's held `local.retention.*` worth. The copy pass and remote retention
+  stay leader-only, because one writer per partition owns the remote tier.
+  Local retention now asks the remote-log metadata in offsets rather than in
+  segment boundaries, so a replica whose segments do not line up with the
+  leader's cannot drop a segment the tier holds only part of.
 - A `krabka.diskless=true` topic now expires its object-store tier.
   `retention.ms`, `retention.bytes` and the `DeleteRecords` floor run against
   the committed WAL index on every flush tick, through the new proved

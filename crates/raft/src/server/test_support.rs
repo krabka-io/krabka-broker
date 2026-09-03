@@ -52,6 +52,8 @@ pub(super) fn test_engine_with_voters(
         crate::MetadataRaftFetchMax::default(),
         std::sync::Arc::new(crate::kraft::NullPeerSender),
         0,
+        krabka_units::prelude::bytes(0),
+        millis(0),
         krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::default(),
     )
     .expect("open engine");

@@ -2,12 +2,12 @@
 //! record back from the survivor.
 //!
 //! The suite has exactly one test, and it is long because the scenario is: boot
-//! three brokers, produce until segments tier, wait for the follower's RLMM
-//! consumer to catch up, shut the leader down, wait for the surviving quorum to
-//! elect the follower, then consume from offset 0. The steps that stand on
-//! their own live in the sibling modules; what remains here is the ordering
-//! between them and the discriminating assertion, which must keep requiring
-//! every record back.
+//! three brokers, produce until segments tier, watch the follower evict its own
+//! copy of what the leader tiered, wait for the follower's RLMM consumer to
+//! catch up, shut the leader down, wait for the surviving quorum to elect the
+//! follower, then consume from offset 0. The steps that stand on their own live
+//! in the sibling modules; what remains here is the ordering between them and
+//! the discriminating assertion, which must keep requiring every record back.
 
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,9 @@ use crate::{
     multi_cluster::{
         await_all_brokers_registered, await_all_rlmm_active, start_three_tiered_brokers,
     },
-    multi_workload::{create_tiered_topic, produce_and_await_remote_segments},
+    multi_workload::{
+        await_follower_local_eviction, create_tiered_topic, produce_and_await_remote_segments,
+    },
 };
 
 /// In-process multi-broker tiered metadata-sharing proof.
@@ -29,15 +31,17 @@ use crate::{
 /// Three brokers share a `Local` remote tier and a topic-backed RLMM with rf=3
 /// metadata replication. Broker 1 leads the rf=2 user partition and runs the
 /// RLM copy task. Broker 2 only consumes `__remote_log_metadata` to learn the
-/// segment locations. After broker 1 shuts down, the surviving 2-out-of-3
-/// quorum commits a new partition-leader record, and broker 2 serves all
-/// records from the remote tier. That proves the RLMM metadata-sharing claim.
+/// segment locations, and uses that same metadata to evict its own local copy
+/// of every tiered segment while broker 1 still leads. After broker 1 shuts
+/// down, the surviving 2-out-of-3 quorum commits a new partition-leader
+/// record, and broker 2 serves all records from the remote tier. That proves
+/// the RLMM metadata-sharing claim.
 ///
 /// The test runs under plain `cargo test`, with no Docker, no `MinIO`, and no
 /// host.docker.internal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tiered_storage_metadata_sharing_via_survivor() {
-    let (b1, b2, b3, _dirs, remote_dir) = start_three_tiered_brokers().await;
+    let (b1, b2, b3, log_dirs, remote_dir) = start_three_tiered_brokers().await;
 
     // Wait for all brokers to see each other registered.
     await_all_brokers_registered(&b1, &b2, &b3).await;
@@ -84,6 +88,18 @@ async fn tiered_storage_metadata_sharing_via_survivor() {
     );
 
     produce_and_await_remote_segments(&admin, remote_dir.path()).await;
+
+    // The follower enforces local retention on its own disk, off the shared
+    // RLMM, without ever having run the copy task. Watch it happen while the
+    // leader is still up: after the failover below there is no longer a
+    // follower to observe, and an eviction seen only after the election would
+    // not tell the two behaviors apart.
+    let follower_log_dir = log_dirs[usize::try_from(follower_node_id).unwrap() - 1].path();
+    eprintln!(
+        "ITEST: waiting for follower (broker{follower_node_id}) to evict its sealed segments"
+    );
+    await_follower_local_eviction(follower_log_dir).await;
+    eprintln!("ITEST: follower (broker{follower_node_id}) is down to its active segment");
 
     // Give the RLMM time to propagate CopySegment metadata to the follower via
     // __remote_log_metadata (rf=3).  Interval=1s → 8 ticks plus consume latency.

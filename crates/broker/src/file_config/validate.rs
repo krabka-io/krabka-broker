@@ -409,7 +409,7 @@ mod tests {
             // `message_max_bytes_takes_kafkas_int_at_least_zero` in
             // `runtime_storage` covers its whole domain.
             "future_log_move_read_chunk",
-            "metadata_max_between_snapshots",
+            "metadata_max_bytes_between_snapshots",
             "metadata_snapshot_fetch_max",
         ] {
             let source = format!("[runtime]\n{field} = \"0B\"\n");
@@ -446,7 +446,10 @@ mod tests {
             ("audit_tail_read_max", "1.5B"),
             ("record_decompression_output_floor", "1.5B"),
             ("record_decompression_output_ceiling", "1073741825B"),
-            ("metadata_max_between_snapshots", "18446744073709551616B"),
+            (
+                "metadata_max_bytes_between_snapshots",
+                "18446744073709551616B",
+            ),
             ("metadata_snapshot_fetch_max", "1.5B"),
             ("metadata_snapshot_fetch_max", "1073741825B"),
             ("message_max_bytes", "1.5B"),
@@ -464,6 +467,33 @@ mod tests {
                 field
             };
             assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn metadata_max_snapshot_interval_accepts_zero_and_whole_millis_only() {
+        for (source, expect_ok) in [
+            (
+                "[runtime]\nmetadata_max_snapshot_interval = \"0ms\"\n",
+                true,
+            ),
+            (
+                "[runtime]\nmetadata_max_snapshot_interval = \"1ms\"\n",
+                true,
+            ),
+            ("[runtime]\nmetadata_max_snapshot_interval = \"1h\"\n", true),
+            // A positive sub-millisecond value truncates to 0ms under
+            // `millis_i64()`, which the engine reads as "disabled" — so it
+            // must be rejected here rather than silently doing nothing.
+            (
+                "[runtime]\nmetadata_max_snapshot_interval = \"250us\"\n",
+                false,
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let result = file.apply_to(&mut cfg);
+            assert!(result.is_ok() == expect_ok, "{source}: {result:?}");
         }
     }
 

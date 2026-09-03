@@ -33,13 +33,13 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
         let mut batch =
             typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&committed))])
                 .expect("committed voter batch");
-        log.append(&mut batch)
+        log.append(&mut batch, 0)
             .expect("append committed voter batch");
         log.advance_hwm(log.log_end_offset());
         let mut batch =
             typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&uncommitted))])
                 .expect("uncommitted voter batch");
-        log.append(&mut batch)
+        log.append(&mut batch, 0)
             .expect("append uncommitted voter batch");
     }
 
@@ -66,7 +66,7 @@ fn control_replay_stops_inside_a_partially_committed_batch() {
             ],
         )
         .expect("mixed-commit voter batch");
-        log.append(&mut batch).expect("append voter batch");
+        log.append(&mut batch, 0).expect("append voter batch");
         log.advance_hwm(Offset(1));
     }
 
@@ -118,6 +118,8 @@ async fn snapshot_then_restart_recovers_image() {
                 metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
                 peers: Arc::new(NullPeerSender),
                 snapshot_interval_records: 0,
+                max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
+                max_snapshot_interval: krabka_units::prelude::millis(0),
                 metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             },
             log,
@@ -148,6 +150,8 @@ async fn snapshot_then_restart_recovers_image() {
         MetadataRaftFetchMax::default(),
         Arc::new(NullPeerSender),
         0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
     )
     .expect("reopen");

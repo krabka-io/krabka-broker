@@ -8,6 +8,7 @@ whole set, which is what CI runs.
     aspect axl-tests --suite check-scripts
 """
 
+load("./changed_scope_test.axl", "changed_scope_tests")
 load("./check_crate_changelogs_test.axl", "check_crate_changelogs_tests")
 load("./check_crate_readmes_test.axl", "check_crate_readmes_tests")
 load("./check_creusot_packages_test.axl", "check_creusot_packages_tests")
@@ -25,6 +26,7 @@ load("./rustdoc_site_test.axl", "rustdoc_site_tests")
 load("./testing.axl", "run_suites")
 
 SUITES = [
+    changed_scope_tests,
     check_crate_changelogs_tests,
     check_crate_readmes_tests,
     check_creusot_packages_tests,

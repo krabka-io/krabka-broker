@@ -112,7 +112,7 @@ impl SimNodeLog for KraftBackedLog {
             });
             let value = seq.to_be_bytes();
             let mut batch = make_batch(epoch, &value);
-            self.log.append(&mut batch).expect("append");
+            self.log.append(&mut batch, 0).expect("append");
         }
     }
 

@@ -2,7 +2,9 @@
 //! `MetadataImage` through the KIP-631 translation boundary) is parsed cleanly
 //! by the JVM `kafka-dump-log --cluster-metadata-decoder`, proving the
 //! on-checkpoint bytes are genuine KIP-631 records (`RegisterBroker` / `Topic` /
-//! `Partition` / `Config`), not Krabka-private wincode.
+//! `Partition` / `Config`), not Krabka-private wincode, and that the header
+//! names the create-time of the last batch the snapshot contains rather than
+//! the epoch.
 //!
 //! ```text
 //! cargo test -p krabka-raft --test kraft_checkpoint_jvm -- --ignored --nocapture
@@ -11,12 +13,39 @@
 use std::{io::Write as _, process::Command};
 
 use assert2::check;
+use krabka_ids::Offset;
 use krabka_metadata::{
     BrokerConfigRecord, BrokerRegistrationRecord, LeaderEpoch, MetadataImage, MetadataRecord,
     NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
 };
-use krabka_raft::serialize_metadata_snapshot;
+use krabka_protocol::records::{Record, RecordBatch};
+use krabka_raft::{kraft::KraftLog, serialize_metadata_snapshot};
 use uuid::Uuid;
+
+/// The create-time stamped on the metadata batch the snapshot below contains:
+/// a 2023 instant, so a header that still carried the KIP-630 default would
+/// print 1970 and fail the check on the dump output.
+const APPEND_TIMESTAMP_MS: i64 = 1_700_000_000_123;
+
+/// A metadata log holding one committed batch stamped with
+/// [`APPEND_TIMESTAMP_MS`], and the timestamp the engine reads back out of it
+/// for a snapshot header taken at the high watermark.
+fn committed_log_timestamp(dir: &std::path::Path) -> i64 {
+    let mut log = KraftLog::open(dir).expect("open the metadata log");
+    let mut batch = RecordBatch {
+        partition_leader_epoch: 1,
+        records: vec![Record {
+            value: Some(bytes::Bytes::from_static(b"a committed metadata batch")),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    log.append(&mut batch, APPEND_TIMESTAMP_MS)
+        .expect("append the batch the snapshot contains");
+    log.advance_hwm(Offset(1));
+    log.last_committed_timestamp_ms()
+        .expect("the committed batch has a create-time")
+}
 
 #[test]
 #[ignore = "requires Docker"]
@@ -70,7 +99,14 @@ fn jvm_dump_log_parses_engine_snapshot() {
         overrides: [("retention.ms".to_string(), "604800000".to_string())].into(),
     }));
 
-    let bytes = serialize_metadata_snapshot(&image, 1_700_000_000_000).unwrap();
+    // The header timestamp travels the engine's own route: stamped onto the
+    // batch at append, read back off the last batch the snapshot contains, and
+    // written into `SnapshotHeaderRecord.lastContainedLogTimestamp`.
+    let log_dir = tempfile::tempdir().expect("tempdir");
+    let last_contained_log_timestamp = committed_log_timestamp(log_dir.path());
+    check!(last_contained_log_timestamp == APPEND_TIMESTAMP_MS);
+
+    let bytes = serialize_metadata_snapshot(&image, last_contained_log_timestamp).unwrap();
     let dir = tempfile::tempdir().expect("tempdir");
     // kafka-dump-log infers the snapshot base offset from the file name.
     let path = dir
@@ -113,7 +149,7 @@ fn jvm_dump_log_parses_engine_snapshot() {
     ] {
         assert2::assert!(text.contains(needle));
     }
-    // Three text-shape checks over the dump output:
+    // Four text-shape checks over the dump output:
     // 1. No record may fail the decoder's CRC / schema check.
     // 2. All RegisterBroker records must have a non-nil incarnationId
     //    (kafka-dump-log prints lines like `RegisterBrokerRecord(brokerId=1,
@@ -134,5 +170,14 @@ fn jvm_dump_log_parses_engine_snapshot() {
             .lines()
             .any(|l| l.contains("PartitionRecord") && l.contains("partitionEpoch=-1")),
         "dump-log partitionEpoch check failed: {text}"
+    );
+    // 4. The decoder prints the snapshot header's own
+    //    `lastContainedLogTimestamp`, and it is the create-time of the batch
+    //    appended above — not 0, which every krabka checkpoint carried while
+    //    the engine passed a literal zero to the writer and dump-log printed
+    //    1970 for a log written today.
+    check!(
+        text.contains(&last_contained_log_timestamp.to_string()),
+        "dump-log header timestamp check failed, want {last_contained_log_timestamp}: {text}"
     );
 }
