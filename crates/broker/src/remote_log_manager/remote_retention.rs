@@ -27,18 +27,25 @@ use super::{NO_BYTES, archive::ArchiveMode, delete::delete_one_segment};
 /// contiguous. This matches Kafka.
 ///
 /// A segment is deletable when any of:
-/// - `md.end_offset() < log_start_offset`, the log-start breach, or
+/// - `md.end_offset() < deleted_below`, the log-start breach, or
 /// - `now_ms - md.max_timestamp_ms > retention`, or
 /// - the running sum of sizes from the oldest forward must exceed
 ///   `total - retention_size` (greedy size eviction).
 ///
-/// A `None` setting disables its axis; the log-start breach has no setting to
-/// disable and evicts whatever falls below the floor even when both retention
-/// settings are `None`. That is what makes a `DeleteRecords` on a tiered topic
-/// free the remote bytes it deleted, rather than leaving them listed,
-/// fetchable and billed until time or size retention happens to reach them.
-/// Kafka's `RemoteLogRetentionHandler.deleteLogStartOffsetBreachedSegments`
-/// is the same rule.
+/// A `None` setting disables its axis; the log-start breach has no retention
+/// setting to disable and evicts whatever falls below the floor even when both
+/// retention settings are `None`. That is what makes a `DeleteRecords` on a
+/// tiered topic free the remote bytes it deleted, rather than leaving them
+/// listed, fetchable and billed until time or size retention happens to reach
+/// them. Kafka's
+/// `RemoteLogRetentionHandler.deleteLogStartOffsetBreachedSegments` is the
+/// same rule.
+///
+/// `deleted_below` is the floor **someone deleted up to**, not whatever the
+/// partition's `log_start_offset` currently reads: a floor merely inferred
+/// from the segments left on disk at `Log::open` sits above the whole archive
+/// on a partition whose local segments were evicted, and breaching against it
+/// would delete the archive on every restart. A `None` disables the axis.
 ///
 /// The caller must already have filtered to `CopySegmentFinished` and sorted
 /// by `start_offset`.
@@ -51,7 +58,7 @@ pub(crate) fn remote_retention_eviction_set(
     finished: &[RemoteLogSegmentMetadata],
     retention: Option<Time>,
     retention_size: Option<ByteSize>,
-    log_start_offset: Offset,
+    deleted_below: Option<Offset>,
     now_ms: i64,
 ) -> Vec<RemoteLogSegmentMetadata> {
     let total: ByteSize = finished
@@ -71,7 +78,8 @@ pub(crate) fn remote_retention_eviction_set(
             let age = Time::from_millis(now_ms.saturating_sub(max_timestamp_ms));
             let time_expired =
                 max_timestamp_ms != -1 && matches!(retention, Some(window) if age > window);
-            time_expired || md.end_offset() < log_start_offset.0
+            let below_floor = matches!(deleted_below, Some(floor) if md.end_offset() < floor.0);
+            time_expired || below_floor
         })
         .collect();
     let sizes: Vec<u64> = finished
@@ -97,13 +105,20 @@ fn segment_size(md: &RemoteLogSegmentMetadata) -> ByteSize {
 
 /// The partition facts one [`remote_retention_pass`] measures its segments
 /// against: the topic's total-retention settings, whether the archive accepts
-/// a delete at all, the global log start a `DeleteRecords` may have moved, and
+/// a delete at all, the two readings of the partition's global log start, and
 /// the clock reading segments are aged against.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RemoteRetentionBounds<'a> {
     pub log_config: &'a LogConfig,
     pub archive: ArchiveMode,
+    /// The partition's current `log_start_offset`, whatever established it.
+    /// The pass may only report a floor above this one, and only across
+    /// offsets it removed itself.
     pub log_start_offset: Offset,
+    /// The floor a `DeleteRecords` or an earlier remote deletion moved, if
+    /// any: the log-start breach axis measures against this and nothing else.
+    /// See [`remote_retention_eviction_set`].
+    pub deleted_below: Option<Offset>,
     pub now_ms: i64,
 }
 
@@ -148,6 +163,7 @@ pub(crate) async fn remote_retention_pass(
         log_config,
         archive,
         log_start_offset,
+        deleted_below,
         now_ms,
     } = bounds;
     if archive == ArchiveMode::WriteOnce {
@@ -174,7 +190,7 @@ pub(crate) async fn remote_retention_pass(
         &finished,
         retention,
         retention_size,
-        log_start_offset,
+        deleted_below,
         now_ms,
     );
     let mut outcome = RemoteRetentionOutcome::default();

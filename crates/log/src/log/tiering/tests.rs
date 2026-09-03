@@ -394,3 +394,40 @@ fn delete_local_segments_through_rejects_negative_target() {
     let err = log.delete_local_segments_through(Offset(-1)).unwrap_err();
     assert2::assert!(matches!(err, LogError::InvalidArgument(_)));
 }
+
+/// A reopened tiered log whose local segments were evicted must not report a
+/// floor anything may be refused or deleted against.
+///
+/// Nothing durable carries the global floor across a restart yet, so
+/// [`Log::open`] can only read one off the segments that survived on disk --
+/// and on a tiered partition those start above everything the archive holds.
+/// A remote read measured against that inference would refuse offsets the
+/// tier can still serve, and the log-start breach in remote retention would
+/// delete the archive. [`Log::established_log_start`] answers `None` until
+/// this process moves the floor itself.
+#[test]
+fn a_reopened_log_reports_no_floor_until_something_moves_one() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig::default();
+    let mut log = rolled_log(dir.path(), &config);
+    let exports = log.tierable_segments();
+    let evicted_through = exports[1].last_offset + 1;
+    log.delete_local_segments_through(evicted_through).unwrap();
+    drop(log);
+
+    let mut reopened = Log::open(dir.path(), config).unwrap();
+    check!(
+        reopened.log_start_offset() == evicted_through,
+        "the inference is still the first surviving segment"
+    );
+    check!(
+        reopened.established_log_start() == None,
+        "but nobody deleted up to it, so nothing may be refused against it"
+    );
+
+    reopened.set_log_start_offset(evicted_through + 1).unwrap();
+    check!(
+        reopened.established_log_start() == Some(evicted_through + 1),
+        "a floor this process moved is one a reader may be refused against"
+    );
+}

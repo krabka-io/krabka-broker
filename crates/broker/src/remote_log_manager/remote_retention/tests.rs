@@ -106,7 +106,7 @@ fn remote_retention_eviction_set_returns_empty_when_no_segments() {
         &[],
         Some(millis(1)),
         Some(bytes(1)),
-        NO_FLOOR,
+        None,
         10_000,
     );
     assert!(out.is_empty());
@@ -122,7 +122,7 @@ fn unknown_timestamp_needs_size_pressure_for_remote_eviction() {
             &segments,
             Some(millis(1)),
             None,
-            NO_FLOOR,
+            None,
             10_000,
         )
         .is_empty()
@@ -133,7 +133,7 @@ fn unknown_timestamp_needs_size_pressure_for_remote_eviction() {
             &segments,
             Some(millis(1)),
             Some(bytes(0)),
-            NO_FLOOR,
+            None,
             10_000,
         )
         .len()
@@ -151,7 +151,7 @@ fn maximum_retention_window_keeps_the_host_time_comparison() {
             &segments,
             Some(Time::from_millis(i64::MAX)),
             None,
-            NO_FLOOR,
+            None,
             i64::MAX,
         )
         .is_empty()
@@ -172,7 +172,7 @@ fn remote_retention_eviction_set_time_based_picks_oldest_until_first_in_window()
         &segs,
         Some(millis(500)),
         None,
-        NO_FLOOR,
+        None,
         10_000,
     );
     assert!(out.len() == 2);
@@ -196,14 +196,8 @@ fn remote_retention_eviction_set_size_based_evicts_oldest_first() {
         (Some(bytes(10_000)), 0),
     ];
     for (budget, expected_len) in cases {
-        let out = remote_retention_eviction_set(
-            ArchiveMode::Mutable,
-            &segs,
-            None,
-            budget,
-            NO_FLOOR,
-            1_000,
-        );
+        let out =
+            remote_retention_eviction_set(ArchiveMode::Mutable, &segs, None, budget, None, 1_000);
         assert!(out.len() == expected_len, "budget: {budget:?}");
     }
 }
@@ -216,7 +210,7 @@ fn remote_retention_eviction_set_equal_size_budget_keeps_all_segments() {
         &segs,
         None,
         Some(bytes(100)),
-        NO_FLOOR,
+        None,
         1_000,
     );
     assert!(out.is_empty());
@@ -236,7 +230,7 @@ fn remote_retention_eviction_set_time_and_size_take_union_of_either() {
         &segs,
         Some(millis(500)),
         Some(bytes(10_000)),
-        NO_FLOOR,
+        None,
         1_000,
     );
     assert!(out.len() == 2);
@@ -247,7 +241,7 @@ fn remote_retention_eviction_set_none_settings_disable_axis() {
     let segs = vec![synth_remote_md(10, 0, 9, 100, 100)];
     // No time or size → no eviction.
     assert!(
-        remote_retention_eviction_set(ArchiveMode::Mutable, &segs, None, None, NO_FLOOR, 10_000)
+        remote_retention_eviction_set(ArchiveMode::Mutable, &segs, None, None, None, 10_000)
             .is_empty()
     );
 }
@@ -265,7 +259,7 @@ fn remote_retention_eviction_set_walk_stops_at_first_non_deletable() {
         &segs,
         Some(millis(500)),
         None,
-        NO_FLOOR,
+        None,
         10_000,
     );
     assert!(out.len() == 1);
@@ -306,6 +300,7 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
             log_config: &cfg,
             archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
+            deleted_below: None,
             now_ms: now_ms() + 1_000_000,
         },
         &rsm,
@@ -375,6 +370,7 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
             log_config: &cfg,
             archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
+            deleted_below: None,
             now_ms: 1,
         },
         &rsm,
@@ -407,6 +403,7 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
             log_config: &cfg,
             archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
+            deleted_below: None,
             now_ms: now_ms(),
         },
         &rsm,
@@ -465,7 +462,7 @@ fn remote_retention_eviction_set_is_empty_for_a_write_once_archive() {
                 &segs,
                 retention,
                 retention_size,
-                NO_FLOOR,
+                None,
                 now
             )
             .len()
@@ -478,7 +475,7 @@ fn remote_retention_eviction_set_is_empty_for_a_write_once_archive() {
                 &segs,
                 retention,
                 retention_size,
-                NO_FLOOR,
+                None,
                 now
             )
             .is_empty(),
@@ -506,6 +503,7 @@ async fn remote_retention_pass_never_reaches_the_rsm_for_a_write_once_archive() 
             log_config: &cfg,
             archive: ArchiveMode::WriteOnce,
             log_start_offset: NO_FLOOR,
+            deleted_below: None,
             now_ms: now_ms() + 1_000_000,
         },
         &rsm,
@@ -549,6 +547,7 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
                 log_config: &cfg,
                 archive,
                 log_start_offset: NO_FLOOR,
+                deleted_below: None,
                 now_ms: now_ms() + 1_000_000,
             },
             &rsm,
@@ -588,39 +587,52 @@ fn a_segment_below_the_log_start_is_evicted_whatever_retention_says() {
     // window, so the time axis never fires and a non-empty result is the
     // breach axis alone.
     let cases = [
-        ("no floor, no settings", Offset(0), None, None, 0),
+        ("no floor at all, no settings", None, None, None, 0),
         (
-            "no floor, time window open",
-            Offset(0),
+            "no floor at all, time window open",
+            None,
             Some(millis(500)),
             None,
             0,
         ),
-        ("breach only, no settings at all", Offset(20), None, None, 2),
+        (
+            "a floor at zero breaches nothing",
+            Some(NO_FLOOR),
+            None,
+            None,
+            0,
+        ),
+        (
+            "breach only, no settings at all",
+            Some(Offset(20)),
+            None,
+            None,
+            2,
+        ),
         (
             "breach only, generous settings",
-            Offset(20),
+            Some(Offset(20)),
             Some(millis(500)),
             Some(bytes(10_000)),
             2,
         ),
         (
             "the floor inside a segment keeps it",
-            Offset(15),
+            Some(Offset(15)),
             None,
             None,
             1,
         ),
         (
             "the floor at a segment's end offset keeps it",
-            Offset(9),
+            Some(Offset(9)),
             None,
             None,
             0,
         ),
         (
             "a floor past every segment takes them all",
-            Offset(30),
+            Some(Offset(30)),
             None,
             None,
             3,
@@ -670,7 +682,7 @@ fn the_breach_and_the_time_window_take_the_union_of_either() {
         &segs,
         Some(millis(500)),
         None,
-        Offset(10),
+        Some(Offset(10)),
         10_000,
     );
     assert!(out.len() == 2);
@@ -723,6 +735,7 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
             log_config: &cfg,
             archive: ArchiveMode::Mutable,
             log_start_offset: floor,
+            deleted_below: Some(floor),
             now_ms: 1,
         },
         &rsm,
@@ -786,6 +799,7 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
             log_config: &cfg,
             archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
+            deleted_below: None,
             now_ms: now_ms() + 1_000_000,
         },
         &rsm,
@@ -797,5 +811,66 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
     check!(
         outcome.log_start == Some(exports[0].last_offset + 1),
         "the floor stops below the segment that was never copied"
+    );
+}
+
+/// A partition reopened after its local segments were evicted keeps its
+/// archive.
+///
+/// `Log::open` infers a `log_start_offset` from the segments that survived on
+/// disk, and on a tiered partition that inference sits above the whole
+/// archive. If the breach axis measured against it, the first tick after every
+/// restart would delete every remote segment the partition has. The axis
+/// measures against the floor someone actually deleted up to, which a reopened
+/// log reports as `None`.
+#[tokio::test]
+async fn a_floor_nobody_moved_leaves_the_archive_alone() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let remote_dir = tempfile::tempdir().unwrap();
+    let log = rolled_log(log_dir.path());
+    let exports = log.tierable_segments();
+    assert!(exports.len() >= 2, "the test needs a prefix to evict");
+    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
+    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let copied = copy_eligible(
+        &tp(),
+        1,
+        LeaderEpoch(0),
+        exports.clone(),
+        ArchiveMode::Mutable,
+        &rsm,
+        &rlmm,
+    )
+    .await;
+    assert!(copied == exports.len());
+
+    // What a restart leaves behind: a `log_start_offset` past every copied
+    // segment, and nothing saying anyone deleted up to it.
+    let inferred = exports[exports.len() - 1].last_offset + 1;
+    let cfg = LogConfig {
+        retention: None,
+        retention_size: None,
+        ..LogConfig::default()
+    };
+    let outcome = remote_retention_pass(
+        &tp(),
+        1,
+        RemoteRetentionBounds {
+            log_config: &cfg,
+            archive: ArchiveMode::Mutable,
+            log_start_offset: inferred,
+            deleted_below: None,
+            now_ms: 1,
+        },
+        &rsm,
+        &rlmm,
+    )
+    .await;
+
+    check!(outcome.deleted == 0, "an inferred floor deletes nothing");
+    check!(outcome.log_start == None);
+    check!(
+        rlmm.list_remote_log_segments(&tp()).unwrap().len() == exports.len(),
+        "the archive is intact"
     );
 }

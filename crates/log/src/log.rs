@@ -78,6 +78,21 @@ pub struct Log {
     /// floor.
     start_offset: Offset,
 
+    /// Whether [`Self::start_offset`] is a floor this process moved, rather
+    /// than one inferred from the segments that happened to be on disk at
+    /// [`Log::open`].
+    ///
+    /// Nothing durable carries the global floor across a restart yet, so a
+    /// reopened log can only infer one, and on a tiered partition whose local
+    /// segments were evicted that inference sits *above* everything the
+    /// archive holds. Three callers must not act on such a floor: the remote
+    /// read would refuse offsets the archive can still serve, the log-start
+    /// breach in remote retention would delete the archive, and the
+    /// `ListOffsets(earliest)` clamp would report an offset past every record
+    /// the tier still holds. [`Log::established_log_start`] is what they ask
+    /// instead.
+    start_offset_established: bool,
+
     /// Last-Stable-Offset: the offset before the first record of any
     /// in-flight transaction. Defaults to `log_end_offset()` when no
     /// transactions are in flight.

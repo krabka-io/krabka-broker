@@ -160,6 +160,9 @@ impl Log {
             active: Some(active),
             dir_sync_needed,
             start_offset,
+            // Inferred from the files on disk, not moved by anyone: see
+            // `Log::established_log_start`.
+            start_offset_established: false,
             lso,
             pending: HashMap::new(),
             pending_stamp_ranges: HashMap::new(),

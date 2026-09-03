@@ -132,18 +132,24 @@ async fn tick_all(
         if partition.current_leader.load(Ordering::Relaxed) != node_id {
             continue;
         }
-        // Read config, the global log start and the sealed-segment list under
-        // one hold of the log lock, then drop it. The floor rides along with
-        // the config because remote retention measures a segment against it,
-        // and a value read under a second lock could describe a different
-        // `DeleteRecords` than the segment list does.
-        let (log_config, log_start_offset, exports) = {
+        // Read config, both readings of the global log start and the
+        // sealed-segment list under one hold of the log lock, then drop it.
+        // The floors ride along with the config because remote retention
+        // measures a segment against them, and a value read under a second
+        // lock could describe a different `DeleteRecords` than the segment
+        // list does.
+        let (log_config, log_start_offset, deleted_below, exports) = {
             let log = partition.log.lock().expect("log mutex poisoned");
             let cfg = log.config_snapshot();
             if !cfg.remote_storage_enable {
                 continue;
             }
-            (cfg, log.log_start_offset(), log.tierable_segments())
+            (
+                cfg,
+                log.log_start_offset(),
+                log.established_log_start(),
+                log.tierable_segments(),
+            )
         };
         // A sealed segment that ends below the global floor is deleted data,
         // whatever its file is still doing on disk. Kafka's copy task starts
@@ -217,6 +223,7 @@ async fn tick_all(
                 log_config: &log_config,
                 archive,
                 log_start_offset,
+                deleted_below,
                 now_ms: now_ms(),
             },
             rsm,

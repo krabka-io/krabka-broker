@@ -44,6 +44,21 @@ impl Log {
         self.start_offset
     }
 
+    /// The global floor, when this process is the one that moved it.
+    ///
+    /// `None` on a log whose floor was only inferred from the segments present
+    /// at [`Log::open`]. A caller that would *refuse* or *delete* on the
+    /// strength of the floor must use this rather than
+    /// [`Log::log_start_offset`]: on a tiered partition whose local segments
+    /// were evicted, the inferred floor sits above everything the archive
+    /// holds, so refusing below it hides readable records and deleting below
+    /// it destroys them. Nothing durable carries the floor across a restart
+    /// yet, so a reopened log answers `None` until something moves it again.
+    #[must_use]
+    pub fn established_log_start(&self) -> Option<Offset> {
+        self.start_offset_established.then_some(self.start_offset)
+    }
+
     /// The first offset the segments on disk begin at, before the global
     /// floor is applied.
     pub(super) fn first_local_offset(&self) -> Offset {
@@ -78,6 +93,9 @@ impl Log {
             ));
         }
         self.start_offset = self.start_offset.max(new_start);
+        // Whoever calls this deleted the records below `new_start`, so the
+        // floor now means something a reader may be refused against.
+        self.start_offset_established = true;
         Ok(())
     }
 
@@ -125,9 +143,12 @@ impl Log {
             let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
         }
 
-        // A hard reset re-bases the log, so the global floor follows it down
-        // as well as up: no record below `new_base` exists in any tier.
+        // A hard reset re-bases the local log after a divergence or a
+        // snapshot install. It says nothing about the remote tier, which may
+        // still hold lower offsets, so the floor moves without becoming a
+        // statement anything may be refused or deleted against.
         self.start_offset = new_base;
+        self.start_offset_established = false;
 
         let mut new_active = Segment::create(&self.dir, new_base)?;
         new_active.set_io(self.io.clone());
