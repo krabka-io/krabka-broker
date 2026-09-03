@@ -388,6 +388,110 @@ mod tests {
         );
     }
 
+    /// An RLMM that cannot answer says nothing about what the remote tier
+    /// holds, which is not the same as saying it holds nothing. Deleting on
+    /// that silence would drop local segments with no established remote copy.
+    struct FailingListRlmm;
+    impl RemoteLogMetadataManager for FailingListRlmm {
+        fn add_remote_log_segment_metadata(
+            &self,
+            _m: krabka_remote_storage::RemoteLogSegmentMetadata,
+        ) -> Result<(), krabka_remote_storage::RemoteStorageError> {
+            Ok(())
+        }
+        fn update_remote_log_segment_metadata(
+            &self,
+            _u: krabka_remote_storage::RemoteLogSegmentMetadataUpdate,
+        ) -> Result<(), krabka_remote_storage::RemoteStorageError> {
+            Ok(())
+        }
+        fn remote_log_segment_metadata(
+            &self,
+            _tp: &TopicIdPartition,
+            _epoch: LeaderEpoch,
+            _offset: i64,
+        ) -> Result<
+            Option<krabka_remote_storage::RemoteLogSegmentMetadata>,
+            krabka_remote_storage::RemoteStorageError,
+        > {
+            Ok(None)
+        }
+        fn highest_offset_for_epoch(
+            &self,
+            _tp: &TopicIdPartition,
+            _epoch: LeaderEpoch,
+        ) -> Result<Option<i64>, krabka_remote_storage::RemoteStorageError> {
+            Ok(None)
+        }
+        fn list_remote_log_segments(
+            &self,
+            _tp: &TopicIdPartition,
+        ) -> Result<
+            Vec<krabka_remote_storage::RemoteLogSegmentMetadata>,
+            krabka_remote_storage::RemoteStorageError,
+        > {
+            Err(krabka_remote_storage::RemoteStorageError::NotReady { partition: 0 })
+        }
+        fn list_remote_log_segments_by_epoch(
+            &self,
+            _tp: &TopicIdPartition,
+            _epoch: LeaderEpoch,
+        ) -> Result<
+            Vec<krabka_remote_storage::RemoteLogSegmentMetadata>,
+            krabka_remote_storage::RemoteStorageError,
+        > {
+            Ok(Vec::new())
+        }
+        fn put_remote_partition_delete_metadata(
+            &self,
+            _m: krabka_remote_storage::RemotePartitionDeleteMetadata,
+        ) -> Result<(), krabka_remote_storage::RemoteStorageError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_remote_listing_deletes_nothing() {
+        // Retention pressure is at its maximum -- every sealed segment is
+        // long past `local.retention.ms` -- so the only thing standing
+        // between this pass and the disk is the remote listing, and it
+        // fails. A pass that treated the error as "nothing is copied but
+        // delete anyway", or that let a partial listing through, would take
+        // the segments with it.
+        let log_dir = tempfile::tempdir().unwrap();
+        let partition = rolled_tiered_partition_with_config(
+            log_dir.path(),
+            LogConfig {
+                segment_size: bytes(256),
+                remote_storage_enable: true,
+                local_retention: Some(millis(1)),
+                ..LogConfig::default()
+            },
+        );
+        let (exports, log_config) = {
+            let log = partition.log.lock().unwrap();
+            (log.tierable_segments(), log.config_snapshot())
+        };
+        assert!(
+            exports.len() >= 2,
+            "the fixture needs multiple sealed segments"
+        );
+
+        let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(FailingListRlmm);
+        let removed = local_retention_pass(
+            &tp(),
+            &partition,
+            &exports,
+            &log_config,
+            &rlmm,
+            now_ms() + 60_000,
+        );
+
+        check!(removed == 0);
+        let sealed_after = partition.log.lock().unwrap().tierable_segments().len();
+        check!(sealed_after == exports.len());
+    }
+
     #[test]
     fn local_retention_target_rejects_exhausted_offset() {
         let exports = vec![synth_export(0, i64::MAX, 100, 64)];
