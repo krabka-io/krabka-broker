@@ -30,8 +30,21 @@ fi
 # machine where the name already resolves needs nothing and one where it cannot
 # be written is a failure the test itself will report far more legibly than
 # `set -e` firing here.
+#
+# The leading newline is load-bearing, and its absence was a real bug rather
+# than a hypothetical: the microVM's `/etc/hosts` ends WITHOUT one, so a bare
+# append landed on the end of its last line --
+#
+#     ff02::2	ip6-allrouters127.0.0.1 host.docker.internal
+#
+# -- which makes `host.docker.internal` a second name for `ff02::2`,
+# `ip6-allrouters`. Three suite groups then failed with
+# `connect to [ff02::2]:42241: Address family not supported by protocol`,
+# because every client dialling the advertised name was dialling an IPv6
+# multicast address. A blank line when the file did end in a newline costs
+# nothing.
 if ! getent hosts host.docker.internal >/dev/null 2>&1; then
-    printf '127.0.0.1 host.docker.internal\n' >>/etc/hosts 2>/dev/null || true
+    printf '\n127.0.0.1 host.docker.internal\n' >>/etc/hosts 2>/dev/null || true
 fi
 
 # `$(rootpath)` yields a path relative to the runfiles root, and a test does not
