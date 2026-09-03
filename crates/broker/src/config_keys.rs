@@ -1,11 +1,26 @@
 //! Topic-config whitelist for `AlterConfigs` / `IncrementalAlterConfigs`.
 //!
-//! The broker recognizes twenty-three topic keys. Six propagate live to `Log.config`:
+//! The broker recognizes every key Kafka's `TopicConfig` carries, plus the
+//! krabka-private ones. Six of Kafka's propagate live to `Log.config`:
 //! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`,
 //! `compression.type`, and `delivery.mode`. The tiered-storage local-retention pair
 //! (`local.retention.ms`, `local.retention.bytes`), the KIP-534
 //! delete-horizon grace window (`delete.retention.ms`), and the batch-size cap
-//! (`max.message.bytes`) propagate live too.
+//! (`max.message.bytes`) propagate live too, as do the roll interval
+//! (`segment.ms`), the sparse-index spacing (`index.interval.bytes`), the
+//! cleaner's three selection keys (`min.compaction.lag.ms`,
+//! `max.compaction.lag.ms`, `min.cleanable.dirty.ratio`) and
+//! `message.timestamp.type`.
+//!
+//! `cleanup.policy` is a list, as it is on Kafka: `delete`, `compact`, or
+//! `compact,delete`, which both compacts the log and applies retention to it.
+//! Kafka Streams writes the pair on every windowed-store changelog topic.
+//!
+//! Six keys are accepted and stored with no krabka behaviour behind them:
+//! `segment.index.bytes`, `segment.jitter.ms`, `file.delete.delay.ms`,
+//! `flush.messages`, `flush.ms` and `preallocate`. Kafka accepts them, so a
+//! topic manifest that carries one creates the topic here too, and
+//! `DescribeConfigs` reports back what was set.
 //!
 //! One key bounds a single write: `max.message.bytes`. The produce path reads
 //! it per topic, falls back to the broker's `message.max.bytes` when the topic
@@ -46,11 +61,13 @@
 //! turn the check on for record keys and for record values. The mode selects
 //! how much of each record the check reads.
 //!
-//! Three pairs of keys exclude each other: `cleanup.policy=compact` with
-//! `delivery.mode=scheduled`, and `krabka.diskless=true` with each of
-//! `remote.storage.enable=true` and `delivery.mode=scheduled`.
+//! Four pairs of keys exclude each other: a `cleanup.policy` containing
+//! `compact` with each of `delivery.mode=scheduled` and
+//! `remote.storage.enable=true` (Kafka's
+//! `validateNoRemoteStorageForCompactedTopic`), and `krabka.diskless=true`
+//! with each of `remote.storage.enable=true` and `delivery.mode=scheduled`.
 //! [`validate_topic_config`] sees one pair at a time and cannot see any of
-//! them, so [`validate_config_combination`] checks all three rules over a whole
+//! them, so [`validate_config_combination`] checks all four rules over a whole
 //! override map.
 //!
 //! Two topic keys sit outside the whitelist, because the controller is their
@@ -139,6 +156,46 @@ pub(crate) const MIN_INSYNC_REPLICAS: &str = "min.insync.replicas";
 /// The largest record batch a topic accepts, measured over the batch's whole
 /// wire encoding. An oversized batch earns `MESSAGE_TOO_LARGE` (10).
 pub(crate) const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
+
+/// Kafka's `segment.ms`: the age at which the active segment rolls.
+pub(crate) const SEGMENT_MS: &str = "segment.ms";
+/// Kafka's `segment.index.bytes`: the size cap on a segment's offset index.
+pub(crate) const SEGMENT_INDEX_BYTES: &str = "segment.index.bytes";
+/// Kafka's `segment.jitter.ms`: random subtraction from the roll interval.
+pub(crate) const SEGMENT_JITTER_MS: &str = "segment.jitter.ms";
+/// Kafka's `min.compaction.lag.ms`: how long a record is safe from the
+/// cleaner after it is written.
+pub(crate) const MIN_COMPACTION_LAG_MS: &str = "min.compaction.lag.ms";
+/// Kafka's `max.compaction.lag.ms`: how long a dirty record may go
+/// uncompacted before the cleaner runs regardless of the dirty ratio.
+pub(crate) const MAX_COMPACTION_LAG_MS: &str = "max.compaction.lag.ms";
+/// Kafka's `min.cleanable.dirty.ratio`: the share of the log that must be
+/// uncleaned before a compaction pass is worth running.
+pub(crate) const MIN_CLEANABLE_DIRTY_RATIO: &str = "min.cleanable.dirty.ratio";
+/// Kafka's `file.delete.delay.ms`: the delay before a removed segment file is
+/// unlinked.
+pub(crate) const FILE_DELETE_DELAY_MS: &str = "file.delete.delay.ms";
+/// Kafka's `flush.messages`: records between forced fsyncs.
+pub(crate) const FLUSH_MESSAGES: &str = "flush.messages";
+/// Kafka's `flush.ms`: milliseconds between forced fsyncs.
+pub(crate) const FLUSH_MS: &str = "flush.ms";
+/// Kafka's `index.interval.bytes`: bytes of `.log` between sparse index
+/// entries.
+pub(crate) const INDEX_INTERVAL_BYTES: &str = "index.interval.bytes";
+/// Kafka's `preallocate`: whether a new segment file is preallocated.
+pub(crate) const PREALLOCATE: &str = "preallocate";
+/// Kafka's `message.timestamp.type`: whose clock the stored records carry.
+pub(crate) const MESSAGE_TIMESTAMP_TYPE: &str = "message.timestamp.type";
+/// Kafka's `message.timestamp.after.max.ms`: how far into the future a
+/// producer timestamp may sit.
+pub(crate) const MESSAGE_TIMESTAMP_AFTER_MAX_MS: &str = "message.timestamp.after.max.ms";
+/// Kafka's `message.timestamp.before.max.ms`: how far into the past a
+/// producer timestamp may sit.
+pub(crate) const MESSAGE_TIMESTAMP_BEFORE_MAX_MS: &str = "message.timestamp.before.max.ms";
+/// `message.timestamp.type=CreateTime`: the producer's own timestamps.
+pub(crate) const MESSAGE_TIMESTAMP_TYPE_CREATE: &str = "CreateTime";
+/// `message.timestamp.type=LogAppendTime`: the broker's clock at append time.
+pub(crate) const MESSAGE_TIMESTAMP_TYPE_LOG_APPEND: &str = "LogAppendTime";
 
 /// KIP-405: per-topic tiered-storage opt-in.
 pub(crate) const REMOTE_STORAGE_ENABLE: &str = "remote.storage.enable";

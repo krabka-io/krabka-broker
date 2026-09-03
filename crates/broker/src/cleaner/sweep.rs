@@ -1,8 +1,9 @@
 //! One compaction sweep over the partition registry.
 //!
-//! The sweep tests every partition for local leadership, for the `compact`
-//! cleanup policy, and for a KFC-9 write freeze. It dispatches
-//! [`Partition::compact_log`] for the partitions that pass all three tests,
+//! The sweep tests every partition for local leadership, for a cleanup policy
+//! containing `compact`, for Kafka's cleanable test over the partition's dirty
+//! region, and for a KFC-9 write freeze. It dispatches
+//! [`Partition::compact_log`] for the partitions that pass all four tests,
 //! and it accounts the sweep and each completed compaction in the metrics.
 
 use std::sync::{Arc, atomic::Ordering};
@@ -52,7 +53,7 @@ pub(crate) async fn tick_all(
         if leader != node_id {
             continue;
         }
-        let policy = {
+        let due = {
             // Recover the guard if the mutex was poisoned by a panic
             // elsewhere rather than killing the (discarded-JoinHandle)
             // cleaner task. The config snapshot stays readable.
@@ -60,9 +61,16 @@ pub(crate) async fn tick_all(
                 .log
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            log.config_snapshot().cleanup_policy
+            // A policy list containing `compact` is what makes a partition the
+            // cleaner's work, so `compact,delete` is swept exactly as `compact`
+            // is; the delete half is the retention sweep's, in `Log::tick`.
+            log.config_snapshot().cleanup_policy.contains_compact()
+                // Kafka's `min.cleanable.dirty.ratio`, `min.compaction.lag.ms`
+                // and `max.compaction.lag.ms`, which say whether this
+                // partition has earned a pass yet.
+                && log.compaction_due(std::time::SystemTime::now())
         };
-        if policy != krabka_log::CleanupPolicy::Compact {
+        if !due {
             continue;
         }
         // KFC-9, beside the policy test and skipping in exactly the same way.

@@ -207,6 +207,9 @@ pub(crate) async fn handle(
                     txn_timeout,
                     req.enable2_pc,
                     req.keep_prepared_txn,
+                    // KIP-360: the identity the caller believes it holds. It
+                    // is `(-1, -1)` below v3 and for a first initialisation.
+                    (req.producer_id, req.producer_epoch),
                 )
                 .await?
             } else {

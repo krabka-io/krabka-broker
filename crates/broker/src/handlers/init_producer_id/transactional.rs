@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse;
+use krabka_verified::transaction::InitProducerIdFencingDecision;
 
 use super::identity::{next_init_producer_identity, stage_recovery_identity};
 use crate::{
@@ -24,6 +25,12 @@ use crate::{
 };
 
 /// Transactional sub-path: allocate or bump-epoch for `tid`.
+///
+/// `request_identity` is the `(producer_id, producer_epoch)` the caller
+/// claims, `(-1, -1)` when it claims none. Kafka's
+/// `TransactionCoordinator.handleInitProducerId` fences a stale claim with
+/// `PRODUCER_FENCED` before it matches on the persisted state, so an ongoing
+/// transaction is aborted only for the producer that owns it (KIP-360).
 // cargo-mutants: live transaction-coordinator orchestration; the response
 // identity and error mapping are exercised by broker transaction integration.
 #[cfg_attr(test, mutants::skip)]
@@ -34,6 +41,7 @@ pub(super) async fn handle_transactional(
     txn_timeout: i32,
     enable_2pc: bool,
     keep_prepared_txn: bool,
+    request_identity: (i64, i16),
 ) -> Result<InitProducerIdResponse, BrokerError> {
     let now_ms = now_millis();
 
@@ -52,6 +60,34 @@ pub(super) async fn handle_transactional(
             })
         }
         Some(existing) => {
+            // KIP-360: a caller that names a producer identity must name the
+            // live one, or the epoch this entry held before an epoch fence
+            // whose abort failed. The check runs before every branch below,
+            // so a zombie neither recovers a prepared transaction nor aborts
+            // the ongoing transaction of the producer that fenced it.
+            {
+                let entry = existing.lock().await;
+                let (entry_pid, entry_epoch) =
+                    crate::txn::handlers::end_txn::client_producer_identity(&entry);
+                let decision = krabka_verified::transaction::init_producer_id_fencing_decision(
+                    entry_pid.get(),
+                    entry_epoch,
+                    entry.last_producer_epoch,
+                    entry.has_failed_epoch_fence,
+                    request_identity.0,
+                    request_identity.1,
+                );
+                drop(entry);
+                if decision == InitProducerIdFencingDecision::Fenced {
+                    return Ok(InitProducerIdResponse {
+                        error_code: codes::PRODUCER_FENCED,
+                        producer_id: -1,
+                        producer_epoch: -1,
+                        ..Default::default()
+                    });
+                }
+            }
+
             if keep_prepared_txn {
                 let recovery = {
                     let mut entry = existing.lock().await;
@@ -105,7 +141,8 @@ pub(super) async fn handle_transactional(
                 let mut e = existing.lock().await;
                 if matches!(e.state, TxnState::Ongoing) {
                     // Transition to PrepareAbort; persist; dispatch markers.
-                    let request_pid = crate::txn::handlers::end_txn::client_producer_identity(&e).0;
+                    let (request_pid, fenced_from_epoch) =
+                        crate::txn::handlers::end_txn::client_producer_identity(&e);
                     e.state = TxnState::PrepareAbort;
                     crate::txn::handlers::end_txn::prepare_completion_identities(
                         &mut e,
@@ -117,7 +154,18 @@ pub(super) async fn handle_transactional(
                     let entry_clone = e.clone();
                     drop(e); // release lock while we fan out markers
                     coord.put(entry_clone.clone(), txnv).await?;
-                    dispatch_abort_markers(coord, &entry_clone).await?;
+                    if let Err(error) = dispatch_abort_markers(coord, &entry_clone).await {
+                        // KIP-360: the epoch fence is persisted but the abort
+                        // it was prepared for did not complete. The producer
+                        // that owns the transaction still holds
+                        // `fenced_from_epoch`, so record it and let only that
+                        // producer retry its `InitProducerId`.
+                        let mut fenced = existing.lock().await;
+                        fenced.last_producer_epoch = fenced_from_epoch;
+                        fenced.has_failed_epoch_fence = true;
+                        drop(fenced);
+                        return Err(error);
+                    }
                     // Re-acquire + transition to CompleteAbort.
                     let mut e2 = existing.lock().await;
                     e2.state = TxnState::CompleteAbort;
@@ -394,6 +442,7 @@ mod tests {
                     60_000,
                     false,
                     false,
+                    (-1, -1),
                 )
                 .await
             })

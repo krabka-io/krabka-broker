@@ -10,6 +10,7 @@ use crate::coordinator::unified::{
     GroupCoordinator,
     actor::{
         GroupActorMessage,
+        member_state::build_member,
         test_support::{
             StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic, rpc,
             seed_classic_member, subscription_blob,

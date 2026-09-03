@@ -85,6 +85,10 @@ crate_tests(
         # One image, used twice: as the client that reads krabka's advertised
         # table and as the Kafka broker that table is compared against.
         "api_versions_differential": ["apache_kafka_4_3_1"],
+        # The `fetch.min.bytes` floor, sent as identical bytes to krabka and to
+        # a stock broker of the newest pinned release. The hermetic half of the
+        # same exchange is `fetch_min_bytes`, which needs no image.
+        "fetch_min_bytes_jvm": ["apache_kafka_4_3_1"],
         "jvm_acceptance_cli": [
             "apache_kafka_4_3_1",
             "cp_kafka_6_1_1",

@@ -18,6 +18,70 @@ use krabka_log::LogConfig;
 
 use crate::jvm_acceptance::{KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, docker_run_kafka_tool};
 
+/// A zombie-fencing probe (KIP-360): two JVM producers share one
+/// `transactional.id`, and the first one re-initialises after the second has
+/// taken the id over. The coordinator must answer that stale
+/// `(producer_id, producer_epoch)` with `PRODUCER_FENCED`, which the JVM
+/// client raises as `ProducerFencedException`. Without the fence the first
+/// producer re-initialises cleanly and only learns it is a zombie later, from
+/// an `InvalidProducerEpochException` on its next send or commit.
+///
+/// The probe prints `ZOMBIEPROBE fenced=<exception simple name>`, or
+/// `ZOMBIEPROBE fenced=none` when nothing fenced it at all.
+const ZOMBIE_PRODUCER_JAVA: &str = r#"
+import java.util.Properties;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+
+public final class ZombieProducer {
+  public static void main(String[] args) throws Exception {
+    Properties config = new Properties();
+    config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, args[0]);
+    config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+        "org.apache.kafka.common.serialization.StringSerializer");
+    config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+        "org.apache.kafka.common.serialization.StringSerializer");
+    config.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "zombie-tid");
+
+    KafkaProducer<String, String> first = new KafkaProducer<>(config);
+    first.initTransactions();
+    first.beginTransaction();
+    first.send(new ProducerRecord<>(args[1], "zombie-first")).get();
+    first.commitTransaction();
+
+    // A second instance of the same console producer takes the id over. Its
+    // InitProducerId carries no identity, so it is admitted and bumps the
+    // epoch; the first instance is now a zombie holding the old one.
+    KafkaProducer<String, String> second = new KafkaProducer<>(config);
+    second.initTransactions();
+
+    String fenced = "none";
+    try {
+      first.initTransactions();
+      first.beginTransaction();
+      first.send(new ProducerRecord<>(args[1], "zombie-stale")).get();
+      first.commitTransaction();
+    } catch (Throwable error) {
+      Throwable cause = error;
+      while (cause.getCause() != null) {
+        cause = cause.getCause();
+      }
+      fenced = cause.getClass().getSimpleName();
+    }
+    System.out.println("ZOMBIEPROBE fenced=" + fenced);
+
+    for (KafkaProducer<String, String> producer : java.util.List.of(second, first)) {
+      try {
+        producer.close(java.time.Duration.ofSeconds(5));
+      } catch (Throwable ignored) {
+        // A fenced producer may fail to close; the probe has its answer.
+      }
+    }
+  }
+}
+"#;
+
 // Transactional EOS smoke: stand up a 3-broker Krabka cluster, compile and
 // run a small official JVM KafkaProducer client that commits 6 records and
 // aborts 2, appends a later record, then verifies read_committed and
@@ -33,6 +97,7 @@ use crate::jvm_acceptance::{KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, docker
 #[ignore = "requires Docker"]
 async fn transactional_console_producer_eos() {
     const TOPIC: &str = "krabka-txn-itest";
+    const ZOMBIE_TOPIC: &str = "krabka-txn-zombie";
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -279,6 +344,72 @@ async fn transactional_console_producer_eos() {
                 "after-abort",
             ],
         "read_uncommitted returned the wrong records: {uncommitted_stdout}",
+    );
+
+    // 6. KIP-360: a second producer on one transactional.id fences the first,
+    // and the first learns it from `PRODUCER_FENCED` on its own
+    // re-initialisation rather than from a later epoch error.
+    docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--create",
+        "--if-not-exists",
+        "--topic",
+        ZOMBIE_TOPIC,
+        "--partitions",
+        "1",
+        "--replication-factor",
+        "1",
+        "--bootstrap-server",
+        &bootstrap_1,
+    ]);
+    let mut zombie = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-i",
+            "--add-host=host.docker.internal:host-gateway",
+            "--entrypoint",
+            "bash",
+            KAFKA_IMAGE_TXN,
+            "-c",
+            r#"set -e; cat >/tmp/ZombieProducer.java; \
+               CP=$(ls /usr/share/java/kafka/*.jar | tr '\n' ':')$(ls /usr/share/java/cp-base-new/*.jar | tr '\n' ':'); \
+               javac -cp "$CP" -d /tmp /tmp/ZombieProducer.java; \
+               java -cp "/tmp:$CP" ZombieProducer "$1" "$2""#,
+            "--",
+            &bootstrap_1,
+            ZOMBIE_TOPIC,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn zombie Java producer");
+    zombie
+        .stdin
+        .as_mut()
+        .expect("zombie stdin")
+        .write_all(ZOMBIE_PRODUCER_JAVA.as_bytes())
+        .expect("write Java zombie helper");
+    drop(zombie.stdin.take());
+    let zombie_out = zombie
+        .wait_with_output()
+        .expect("wait Java zombie producer");
+    let zombie_stdout = String::from_utf8_lossy(&zombie_out.stdout);
+    eprintln!(
+        "KRABKA[test] zombie Java producer status={} stdout={zombie_stdout} stderr={}",
+        zombie_out.status,
+        String::from_utf8_lossy(&zombie_out.stderr),
+    );
+    assert!(
+        zombie_out.status.success(),
+        "zombie Java producer failed: stdout={zombie_stdout}, stderr={}",
+        String::from_utf8_lossy(&zombie_out.stderr),
+    );
+    assert!(
+        zombie_stdout.contains("ZOMBIEPROBE fenced=ProducerFencedException"),
+        "the fenced producer must see ProducerFencedException, not a later \
+         epoch error: {zombie_stdout}",
     );
 
     for (h, _) in cluster {

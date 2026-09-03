@@ -12,7 +12,7 @@ use krabka_log::Offset;
 
 use super::{
     acknowledge::apply_one_ack,
-    long_poll::long_poll,
+    long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
     records::{control_batch_ranges, pending_activation_ranges, populate_acquired_response},
 };
@@ -51,9 +51,16 @@ pub(super) async fn acquire_records(
     pending: &mut [PendingPartition],
     max_wait_ms: i32,
 ) -> Result<(), BrokerError> {
+    // Arm the long poll's waiters before the first acquire pass, so a record
+    // produced while that pass runs still wakes the park that follows it.
+    let waits = if max_wait_ms > 0 {
+        arm_waits(context.broker, pending)
+    } else {
+        Vec::new()
+    };
     let acquired = acquire_pass(context, pending, true).await?;
     if acquired == 0 && max_wait_ms > 0 {
-        long_poll(context.broker, pending, max_wait_ms).await;
+        long_poll(waits, max_wait_ms).await;
         acquire_pass(context, pending, false).await?;
     }
     Ok(())

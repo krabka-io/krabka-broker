@@ -170,3 +170,65 @@ async fn kafka_topics_delete_removes_the_topic() {
 
     broker.shutdown().await;
 }
+
+/// `kafka-topics --create --config cleanup.policy=compact,delete`, then
+/// `--describe` and `kafka-configs --describe`.
+///
+/// Kafka types `cleanup.policy` as a LIST, and Kafka Streams' windowed-store
+/// changelogs carry exactly this value, so the broker has to accept the list,
+/// store it as written, and echo it back through both tools.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn kafka_topics_create_accepts_a_compact_and_delete_cleanup_policy() {
+    const TOPIC: &str = "krabka-compact-delete-itest";
+
+    let (broker, _dir) = start_host_broker().await;
+    nc_check_connectivity();
+
+    docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--create",
+        "--topic",
+        TOPIC,
+        "--partitions",
+        "1",
+        "--replication-factor",
+        "1",
+        "--config",
+        "cleanup.policy=compact,delete",
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+
+    let described = docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--describe",
+        "--topic",
+        TOPIC,
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(
+        stdout.contains("cleanup.policy=compact,delete"),
+        "kafka-topics --describe missing the list value: {stdout}"
+    );
+
+    let configs = docker_run_kafka_tool(&[
+        "kafka-configs",
+        "--describe",
+        "--entity-type",
+        "topics",
+        "--entity-name",
+        TOPIC,
+        "--bootstrap-server",
+        broker0_advertised(),
+    ]);
+    let rendered = String::from_utf8_lossy(&configs.stdout);
+    assert!(
+        rendered.contains("cleanup.policy=compact,delete"),
+        "kafka-configs --describe missing the list value: {rendered}"
+    );
+
+    broker.shutdown().await;
+}

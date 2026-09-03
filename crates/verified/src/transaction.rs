@@ -622,6 +622,57 @@ pub fn next_producer_identity(
     }
 }
 
+/// Whether an `InitProducerId` caller's supplied producer identity may
+/// re-initialise the transactional id it names.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum InitProducerIdFencingDecision {
+    NoIdentity,
+    Admit,
+    Fenced,
+}
+
+/// Fence a stale `(producer_id, producer_epoch)` on `InitProducerId`
+/// (KIP-360).
+///
+/// A request producer id of `-1` supplies no identity, which every
+/// `InitProducerId` below v3 and every first initialisation does; such a
+/// caller is neither admitted nor fenced on identity grounds. An identity that
+/// is supplied must name the entry's live producer id, and carry either the
+/// entry's live epoch or, when an epoch fence failed after it was prepared,
+/// the epoch the entry held before that fence.
+#[ensures((result == InitProducerIdFencingDecision::NoIdentity) == (request_pid@ == -1))]
+#[ensures((result == InitProducerIdFencingDecision::Admit)
+    == (request_pid@ != -1
+        && request_pid@ == entry_pid@
+        && (request_epoch@ == entry_epoch@
+            || (has_failed_epoch_fence && request_epoch@ == last_epoch@))))]
+#[ensures((result == InitProducerIdFencingDecision::Fenced)
+    == (request_pid@ != -1
+        && !(request_pid@ == entry_pid@
+            && (request_epoch@ == entry_epoch@
+                || (has_failed_epoch_fence && request_epoch@ == last_epoch@)))))]
+#[must_use]
+pub fn init_producer_id_fencing_decision(
+    entry_pid: i64,
+    entry_epoch: i16,
+    last_epoch: i16,
+    has_failed_epoch_fence: bool,
+    request_pid: i64,
+    request_epoch: i16,
+) -> InitProducerIdFencingDecision {
+    if request_pid == -1 {
+        return InitProducerIdFencingDecision::NoIdentity;
+    }
+    let epoch_valid =
+        request_epoch == entry_epoch || (has_failed_epoch_fence && request_epoch == last_epoch);
+    if request_pid == entry_pid && epoch_valid {
+        InitProducerIdFencingDecision::Admit
+    } else {
+        InitProducerIdFencingDecision::Fenced
+    }
+}
+
 /// Revalidate the transaction entry after the marker fan-out released its lock.
 #[cfg_attr(creusot, requires(prepare_state != complete_state))]
 #[cfg_attr(
@@ -974,6 +1025,41 @@ mod tests {
             assert!(
                 next_producer_identity(verified, recovery, 7, epoch, fresh) == expected,
                 "verified={verified}, recovery={recovery}, epoch={epoch}, fresh={fresh:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_producer_id_fencing_admits_only_the_live_or_failed_fence_identity() {
+        use InitProducerIdFencingDecision::{Admit, Fenced, NoIdentity};
+
+        // (entry pid, entry epoch, last epoch, failed fence, request pid,
+        //  request epoch, expected).
+        let cases = [
+            (7_i64, 4_i16, -1_i16, false, -1_i64, -1_i16, NoIdentity),
+            (7, 4, -1, false, -1, 4, NoIdentity),
+            (7, 4, -1, false, 7, 4, Admit),
+            (7, 4, -1, false, 7, 3, Fenced),
+            (7, 4, -1, false, 7, 5, Fenced),
+            (7, 4, -1, false, 9, 4, Fenced),
+            (7, 5, 4, true, 7, 4, Admit),
+            (7, 5, 4, true, 7, 5, Admit),
+            (7, 5, 4, false, 7, 4, Fenced),
+            (7, 5, 4, true, 7, 3, Fenced),
+            (7, 5, 4, true, 9, 4, Fenced),
+        ];
+        for (entry_pid, entry_epoch, last_epoch, failed_fence, pid, epoch, expected) in cases {
+            assert!(
+                init_producer_id_fencing_decision(
+                    entry_pid,
+                    entry_epoch,
+                    last_epoch,
+                    failed_fence,
+                    pid,
+                    epoch,
+                ) == expected,
+                "entry=({entry_pid}, {entry_epoch}), last={last_epoch}, \
+                 failed_fence={failed_fence}, request=({pid}, {epoch})"
             );
         }
     }

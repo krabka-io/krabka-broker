@@ -1,8 +1,10 @@
 //! Tunables for `Log`. Defaults match Apache Kafka 4.2.
 
 use krabka_compression::CompressionType;
+use krabka_protocol::records::TimestampType;
 use krabka_units::prelude::{
-    ByteSize, Time, bytes, days, gibibytes, hours, kibibytes, mebibytes, millis,
+    ByteSize, Ratio, Time, TimeExt as _, bytes, days, fraction, gibibytes, hours, kibibytes,
+    mebibytes, millis,
 };
 
 /// Kafka's `segment.bytes` default: roll the active segment at 1 GiB.
@@ -40,16 +42,61 @@ pub const DEFAULT_READ_BUFFER_CAP: ByteSize = mebibytes(4);
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
 
+/// Kafka's `min.cleanable.dirty.ratio` default: half the log has to be
+/// uncleaned before a compaction pass is worth its I/O.
+const DEFAULT_MIN_CLEANABLE_DIRTY_RATIO: Ratio = fraction(0.5);
+
 /// Per-topic policy for what to do with old log segments.
 ///
+/// Kafka's `cleanup.policy` is a list, and `LogConfig` derives two independent
+/// booleans from it: `compact` when the list contains `compact` and `delete`
+/// when it contains `delete`. The three sets an operator can write are the
+/// three variants here.
+///
 /// `Delete` is the default. It deletes segments by age or by size in
-/// `crate::retention`. `Compact` does newest-wins dedup by key. `crate::compact`
-/// implements it, and [`crate::Log::compact`] invokes it.
+/// `crate::retention`. `Compact` does newest-wins dedup by key.
+/// `crate::compact` implements it, and [`crate::Log::compact`] invokes it.
+/// `CompactAndDelete` is Kafka's `compact,delete`: the log cleaner runs over
+/// it *and* retention deletes its old segments. Kafka Streams writes exactly
+/// that value on every windowed-store changelog topic, so a broker that
+/// refuses it cannot host a Streams application with a windowed store.
+///
+/// Ask [`Self::contains_compact`] and [`Self::contains_delete`] rather than
+/// comparing variants: `Compact` and `CompactAndDelete` both run the cleaner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CleanupPolicy {
     #[default]
     Delete,
     Compact,
+    CompactAndDelete,
+}
+
+impl CleanupPolicy {
+    /// `true` when the policy list contains `compact`, which is what makes a
+    /// partition the log cleaner's work.
+    #[must_use]
+    pub const fn contains_compact(self) -> bool {
+        matches!(self, Self::Compact | Self::CompactAndDelete)
+    }
+
+    /// `true` when the policy list contains `delete`, which is what makes a
+    /// partition's old segments eligible for time-, size- and
+    /// start-offset-based retention.
+    #[must_use]
+    pub const fn contains_delete(self) -> bool {
+        matches!(self, Self::Delete | Self::CompactAndDelete)
+    }
+
+    /// The `cleanup.policy` value Kafka reports for this policy, which is what
+    /// `DescribeConfigs` echoes back.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Delete => "delete",
+            Self::Compact => "compact",
+            Self::CompactAndDelete => "compact,delete",
+        }
+    }
 }
 
 /// Per-topic policy for when a durable record becomes visible to consumers.
@@ -123,6 +170,27 @@ pub struct LogConfig {
     /// Cleanup policy. Defaults to `Delete`. See [`CleanupPolicy`].
     pub cleanup_policy: CleanupPolicy,
 
+    /// Kafka's `min.compaction.lag.ms`: a record stays uncompacted for at
+    /// least this long after it is written. The broker's cleaner reads it and
+    /// leaves a partition whose newest dirty record is younger than this
+    /// alone. Default 0, which is Kafka's.
+    pub min_compaction_lag: Time,
+
+    /// Kafka's `max.compaction.lag.ms`: however clean a partition looks, once
+    /// its oldest dirty record is older than this the cleaner runs anyway.
+    /// `None` is no bound, which is Kafka's default (`Long.MAX_VALUE`).
+    pub max_compaction_lag: Option<Time>,
+
+    /// Kafka's `min.cleanable.dirty.ratio`: the share of a compacted
+    /// partition's log that must be uncleaned before the cleaner spends a pass
+    /// on it. Default 0.5, which is Kafka's.
+    pub min_cleanable_dirty_ratio: Ratio,
+
+    /// Kafka's `message.timestamp.type`: whose clock the stored records carry.
+    /// `CreateTime` is the producer's own timestamp and is the default;
+    /// `LogAppendTime` is the broker's clock at append time.
+    pub message_timestamp_type: TimestampType,
+
     /// Broker-side recompression target. `None` is Kafka's
     /// `compression.type=producer`, which is pass-through: the broker stores
     /// the batch exactly as the producer sent it. `Some(c)` re-encodes every
@@ -182,6 +250,13 @@ impl Default for LogConfig {
             flush_on_append: false,
             validate_on_open: true,
             cleanup_policy: CleanupPolicy::Delete,
+            // Kafka's cleaner defaults: no minimum lag, no maximum lag, and
+            // half the log dirty before a pass is worth running.
+            min_compaction_lag: Time::ZERO,
+            max_compaction_lag: None,
+            min_cleanable_dirty_ratio: DEFAULT_MIN_CLEANABLE_DIRTY_RATIO,
+            // The producer's own timestamps are what the records carry.
+            message_timestamp_type: TimestampType::CreateTime,
             // Pass-through: producers' compression choice wins. Kafka's
             // default. Operators flip this to a specific codec on
             // topics where they want broker-side enforcement.
@@ -222,6 +297,10 @@ mod tests {
                     flush_on_append: false,
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
+                    min_compaction_lag: Time::ZERO,
+                    max_compaction_lag: None,
+                    min_cleanable_dirty_ratio: fraction(0.5),
+                    message_timestamp_type: TimestampType::CreateTime,
                     compression_type: None,
                     remote_storage_enable: false,
                     local_retention: None,
@@ -251,6 +330,27 @@ mod tests {
     fn default_cleanup_policy_is_delete() {
         let c = LogConfig::default();
         assert2::assert!(c.cleanup_policy == CleanupPolicy::Delete);
+    }
+
+    #[test]
+    fn a_policy_reports_the_halves_of_kafkas_cleanup_policy_list_it_contains() {
+        // `LogConfig` in Kafka derives `compact` and `delete` from the list by
+        // membership, so `compact,delete` is both, and each name alone is one.
+        let cases = [
+            (CleanupPolicy::Delete, false, true, "delete"),
+            (CleanupPolicy::Compact, true, false, "compact"),
+            (
+                CleanupPolicy::CompactAndDelete,
+                true,
+                true,
+                "compact,delete",
+            ),
+        ];
+        for (policy, compact, delete, rendered) in cases {
+            assert2::check!(policy.contains_compact() == compact, "{policy:?}");
+            assert2::check!(policy.contains_delete() == delete, "{policy:?}");
+            assert2::check!(policy.as_str() == rendered, "{policy:?}");
+        }
     }
 
     #[test]

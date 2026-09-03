@@ -245,6 +245,37 @@ async fn handle_success_persists_topic_config_and_success_fields() {
     broker_handle.shutdown().await;
 }
 
+/// Kafka Streams creates every windowed-store changelog topic with
+/// `cleanup.policy=compact,delete`, so a broker that refuses the list value
+/// cannot host a Streams application with a windowed store. The value is
+/// stored as the client sent it, which is what `DescribeConfigs` echoes back.
+#[tokio::test]
+async fn handle_creates_a_topic_whose_cleanup_policy_names_both_halves() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let req = request(vec![topic_with_configs(
+        "windowed-changelog",
+        &[
+            ("cleanup.policy", "compact,delete"),
+            ("min.compaction.lag.ms", "0"),
+            ("message.timestamp.type", "CreateTime"),
+        ],
+    )]);
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    assert!(resp.topics.len() == 1);
+    assert!(resp.topics[0].error_code == codes::NONE);
+    let image = broker_handle.controller_image_for_test();
+    let configs = image
+        .topic_config("windowed-changelog")
+        .expect("topic configs");
+    assert!(configs.get("cleanup.policy").map(String::as_str) == Some("compact,delete"));
+    broker_handle.shutdown().await;
+}
+
 #[tokio::test]
 async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
     /// One rejection case: the row's label, a config map that must never
@@ -257,8 +288,28 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
     let p = principal("admin");
     let peer = peer();
 
-    let cases: [RejectedConfig<'_>; 8] = [
-        ("unknown-key", &[("flush.ms", "1000")], &["flush.ms"]),
+    let cases: [RejectedConfig<'_>; 10] = [
+        (
+            "unknown-key",
+            &[("not.a.topic.config", "1000")],
+            &["not.a.topic.config"],
+        ),
+        (
+            "compacted-and-tiered",
+            &[
+                ("cleanup.policy", "compact"),
+                ("remote.storage.enable", "true"),
+            ],
+            &["Tiered storage is not supported for compacted topics"],
+        ),
+        (
+            "compact-and-delete-and-tiered",
+            &[
+                ("cleanup.policy", "compact,delete"),
+                ("remote.storage.enable", "true"),
+            ],
+            &["Tiered storage is not supported for compacted topics"],
+        ),
         (
             "bad-delivery-mode",
             &[("delivery.mode", "later")],

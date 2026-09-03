@@ -6,6 +6,9 @@
 //! not move.
 
 use krabka_ids::{Offset, ProducerId};
+use krabka_units::prelude::{
+    ByteSize, ByteSizeExt as _, Ratio, RatioExt as _, Time, TimeExt as _, fraction,
+};
 use tracing::instrument;
 
 use super::Log;
@@ -29,7 +32,154 @@ pub struct CompactionContext {
     pub active_producers: std::collections::HashMap<ProducerId, Offset>,
 }
 
+/// What a partition looks like to the broker's cleaner before it decides
+/// whether a compaction pass is worth running.
+///
+/// Kafka's `LogCleanerManager` reads the same three quantities off its cleaner
+/// checkpoint: how many bytes sit below the first dirty offset, how many sit
+/// above it, and how old the dirty region is. krabka keeps no checkpoint file,
+/// because [`Log::compact`] rewrites every sealed segment into one: the first
+/// sealed segment is therefore the previous pass's output and counts as clean,
+/// and everything after it — later sealed segments and the active segment —
+/// arrived since and counts as dirty. A log that has never been compacted
+/// reports its first segment as clean, which is the conservative direction:
+/// the ratio it reports is never larger than the true one.
+///
+/// The active segment counts as dirty even though [`Log::compact`] never
+/// rewrites it. Kafka leaves it out of both halves because its cleaner works
+/// in exact byte ranges; here the question is only whether enough of the
+/// partition is undeduplicated to be worth a pass, and the active segment's
+/// records are undeduplicated data that the next roll hands the cleaner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CompactionCandidacy {
+    /// Bytes the previous compaction pass already deduplicated.
+    clean_bytes: ByteSize,
+    /// Bytes written since, which one pass would deduplicate.
+    dirty_bytes: ByteSize,
+    /// Timestamp of the oldest record in the dirty region, which is what
+    /// `max.compaction.lag.ms` bounds. `None` when nothing is dirty.
+    oldest_dirty_timestamp_ms: Option<i64>,
+    /// Timestamp of the newest record in the dirty region, which is what
+    /// `min.compaction.lag.ms` holds back. `None` when nothing is dirty.
+    newest_dirty_timestamp_ms: Option<i64>,
+}
+
+impl CompactionCandidacy {
+    /// Kafka's dirty ratio: dirty bytes over the whole log. Zero for an empty
+    /// log, which no cleaner should spend a pass on.
+    fn dirty_ratio(self) -> Ratio {
+        let total = self.clean_bytes + self.dirty_bytes;
+        if total.bytes_f64() <= 0.0 {
+            return Ratio::ZERO;
+        }
+        fraction(self.dirty_bytes.bytes_f64() / total.bytes_f64())
+    }
+}
+
+/// The three `LogConfig` values [`compaction_is_due`] reads, so the decision
+/// is a pure function of the log's shape and the topic's configuration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CompactionSchedule {
+    min_lag: Time,
+    max_lag: Option<Time>,
+    min_ratio: Ratio,
+}
+
+/// Kafka's cleanable test, over one partition's [`CompactionCandidacy`].
+///
+/// A partition with nothing dirty is never due. Otherwise the dirty region
+/// forces a pass once it is older than `max.compaction.lag.ms`; short of that
+/// it earns one only when it is both a large enough share of the log and
+/// settled for `min.compaction.lag.ms`.
+fn compaction_is_due(
+    candidacy: CompactionCandidacy,
+    schedule: CompactionSchedule,
+    now_ms: i64,
+) -> bool {
+    if candidacy.dirty_bytes.bytes_f64() <= 0.0 {
+        return false;
+    }
+    let age_ms = |timestamp: Option<i64>| timestamp.map(|stamp| now_ms.saturating_sub(stamp));
+    if let (Some(max_lag), Some(oldest_age)) = (
+        schedule.max_lag,
+        age_ms(candidacy.oldest_dirty_timestamp_ms),
+    ) && oldest_age >= max_lag.millis_i64_trunc()
+    {
+        return true;
+    }
+    if candidacy.dirty_ratio().as_f64() < schedule.min_ratio.as_f64() {
+        return false;
+    }
+    age_ms(candidacy.newest_dirty_timestamp_ms)
+        .is_none_or(|newest_age| newest_age >= schedule.min_lag.millis_i64_trunc())
+}
+
 impl Log {
+    /// Whether a compaction pass over this partition is due, as Kafka's
+    /// `LogCleanerManager` decides it: the dirty region has to be a large
+    /// enough share of the log (`min.cleanable.dirty.ratio`) and old enough
+    /// (`min.compaction.lag.ms`), unless it has been dirty so long that
+    /// `max.compaction.lag.ms` forces a pass regardless.
+    ///
+    /// The cleanup policy itself is not read here. That is the caller's test,
+    /// because a partition the policy excludes is one the broker's cleaner
+    /// skips before it opens the log at all.
+    ///
+    /// # Panics
+    /// Panics if the configuration lock is poisoned.
+    #[must_use]
+    pub fn compaction_due(&self, now: std::time::SystemTime) -> bool {
+        let (min_lag, max_lag, min_ratio) = {
+            let cfg = self.config.read().unwrap();
+            (
+                cfg.min_compaction_lag,
+                cfg.max_compaction_lag,
+                cfg.min_cleanable_dirty_ratio,
+            )
+        };
+        compaction_is_due(
+            self.compaction_candidacy(),
+            CompactionSchedule {
+                min_lag,
+                max_lag,
+                min_ratio,
+            },
+            retention::now_ms(now),
+        )
+    }
+
+    /// The clean/dirty split and dirty-region age [`Self::compaction_due`]
+    /// reads. See [`CompactionCandidacy`] for what counts as clean and why.
+    fn compaction_candidacy(&self) -> CompactionCandidacy {
+        let mut sealed = self.segments.iter();
+        let clean_bytes = sealed.next().map_or(ByteSize::ZERO, Segment::size);
+        let dirty: Vec<&Segment> = sealed.chain(self.active.as_ref()).collect();
+        let dirty_bytes = dirty
+            .iter()
+            .fold(ByteSize::ZERO, |total, segment| total + segment.size());
+        let oldest_dirty_timestamp_ms = dirty
+            .iter()
+            .filter_map(|segment| {
+                segment
+                    .offset_for_timestamp(i64::MIN)
+                    .map(|(_, timestamp)| timestamp)
+            })
+            .min();
+        // `max_timestamp` answers `i64::MIN` for a segment holding no batch,
+        // which is not a timestamp any record carries.
+        let newest_dirty_timestamp_ms = dirty
+            .iter()
+            .map(|segment| segment.max_timestamp())
+            .filter(|timestamp| *timestamp != i64::MIN)
+            .max();
+        CompactionCandidacy {
+            clean_bytes,
+            dirty_bytes,
+            oldest_dirty_timestamp_ms,
+            newest_dirty_timestamp_ms,
+        }
+    }
+
     /// Run one compaction pass over the sealed segment list.
     ///
     /// This method does nothing when fewer than 2 sealed segments exist,
@@ -58,7 +208,7 @@ impl Log {
 
         let (index_interval, delete_retention) = {
             let cfg_guard = self.config.read().unwrap();
-            if cfg_guard.cleanup_policy != crate::CleanupPolicy::Compact {
+            if !cfg_guard.cleanup_policy.contains_compact() {
                 return Ok(());
             }
             (cfg_guard.index_interval, cfg_guard.delete_retention)
@@ -132,6 +282,123 @@ mod tests {
         log::test_support::{compaction_ctx, keyed_batch},
         name,
     };
+
+    /// Kafka's cleanable test, over the shapes a partition can be in. The
+    /// clock is fixed at `10_000` ms so a "dirty since" timestamp reads as an
+    /// age directly.
+    #[test]
+    fn the_cleanable_test_reads_the_ratio_and_the_two_lags() {
+        const NOW_MS: i64 = 10_000;
+        let candidacy = |clean: u32, dirty: u32, oldest: i64, newest: i64| CompactionCandidacy {
+            clean_bytes: bytes(clean),
+            dirty_bytes: bytes(dirty),
+            oldest_dirty_timestamp_ms: Some(oldest),
+            newest_dirty_timestamp_ms: Some(newest),
+        };
+        let schedule = |min_lag_ms: i64, max_lag_ms: Option<i64>, ratio: f64| CompactionSchedule {
+            min_lag: Time::from_millis(min_lag_ms),
+            max_lag: max_lag_ms.map(Time::from_millis),
+            min_ratio: fraction(ratio),
+        };
+        let cases = [
+            (
+                "nothing dirty",
+                candidacy(100, 0, 0, 0),
+                schedule(0, None, 0.5),
+                false,
+            ),
+            (
+                "dirty half the log, no lag configured",
+                candidacy(100, 100, 0, 0),
+                schedule(0, None, 0.5),
+                true,
+            ),
+            (
+                "dirty quarter of the log is below the ratio",
+                candidacy(300, 100, 0, 0),
+                schedule(0, None, 0.5),
+                false,
+            ),
+            (
+                "below the ratio but past the max lag",
+                candidacy(300, 100, 0, 0),
+                schedule(0, Some(5_000), 0.5),
+                true,
+            ),
+            (
+                "below the ratio and inside the max lag",
+                candidacy(300, 100, 9_000, 9_500),
+                schedule(0, Some(5_000), 0.5),
+                false,
+            ),
+            (
+                "above the ratio but the newest dirty record is too young",
+                candidacy(100, 100, 9_000, 9_500),
+                schedule(1_000, None, 0.5),
+                false,
+            ),
+            (
+                "above the ratio and the dirty region has settled",
+                candidacy(100, 100, 1_000, 2_000),
+                schedule(1_000, None, 0.5),
+                true,
+            ),
+        ];
+        for (label, candidacy, schedule, expected) in cases {
+            assert2::check!(
+                compaction_is_due(candidacy, schedule, NOW_MS) == expected,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pass_leaves_a_log_the_cleaner_no_longer_owes_one() {
+        // Twelve distinct keys survive the pass, so the segment it produces is
+        // the bulk of the log and the ratio falls under Kafka's 0.5 default.
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1),
+            ..Default::default()
+        };
+        let mut log = Log::open(dir.path(), cfg).unwrap();
+        for i in 0..12 {
+            let key = format!("k{i}");
+            let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
+            log.append(&mut batch).unwrap();
+        }
+        assert2::check!(log.compaction_due(std::time::SystemTime::now()));
+
+        log.compact(&compaction_ctx()).unwrap();
+        assert2::check!(!log.compaction_due(std::time::SystemTime::now()));
+    }
+
+    #[test]
+    fn a_ratio_of_one_holds_a_partly_dirty_log_back_until_the_max_lag() {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1),
+            min_cleanable_dirty_ratio: fraction(1.0),
+            ..Default::default()
+        };
+        let mut log = Log::open(dir.path(), cfg.clone()).unwrap();
+        for i in 0..3 {
+            let value = format!("v{i}");
+            let mut batch = keyed_batch(i, &[(0, b"key", value.as_bytes())]);
+            log.append(&mut batch).unwrap();
+        }
+        assert2::check!(!log.compaction_due(std::time::SystemTime::now()));
+
+        // The batches carry timestamp 0, so any max lag has long elapsed and
+        // the pass is owed however clean the ratio says the log is.
+        log.set_config(LogConfig {
+            max_compaction_lag: Some(Time::from_millis(1)),
+            ..cfg
+        });
+        assert2::check!(log.compaction_due(std::time::SystemTime::now()));
+    }
 
     fn assert_corrupt_suffix_preserves_originals(suffix: &[u8]) {
         let dir = tempdir().unwrap();

@@ -3,13 +3,23 @@
 
 use std::collections::BTreeMap;
 
+use krabka_log::CleanupPolicy;
+
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE,
+    CLEANUP_POLICY, COMPRESSION_TYPE, MIN_CLEANABLE_DIRTY_RATIO, REMOTE_STORAGE_ENABLE,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
     diskless::validate_diskless_combination,
     qos::{QOS_TIER, validate_qos_tier},
-    registry::{self, BOOLEAN_VALUES, ConfigScope, ValueCheck},
+    registry::{self, BOOLEAN_VALUES, CLEANUP_POLICY_VALUES, ConfigScope, ValueCheck},
 };
+
+/// Kafka's refusal when a topic asks for tiered storage and compaction at
+/// once. `LogConfig.validate` calls `validateNoRemoteStorageForCompactedTopic`
+/// whenever `remote.storage.enable` is true and the cleanup policy contains
+/// `compact`, and every alter path surfaces the `ConfigException` it throws as
+/// `INVALID_CONFIG`.
+pub(crate) const REMOTE_STORAGE_COMPACTED_MESSAGE: &str =
+    "Tiered storage is not supported for compacted topics";
 
 /// Validate a single key/value pair. `Err(reason)` carries an
 /// operator-readable explanation that the handler propagates into the
@@ -30,7 +40,9 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
         ValueCheck::I64AtLeast(min) => parse_i64_at_least(min, value).map(|_| ()),
         ValueCheck::I32AtLeast(min) => parse_i32_at_least(min, value).map(|_| ()),
         ValueCheck::Parsed => match key {
+            CLEANUP_POLICY => parse_cleanup_policy(value).map(|_| ()),
             COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
+            MIN_CLEANABLE_DIRTY_RATIO => parse_dirty_ratio(value).map(|_| ()),
             QOS_TIER => validate_qos_tier(value),
             crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
             | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY => {
@@ -97,15 +109,21 @@ pub(crate) fn validate_topic_config_map(
 /// record would then be deleted without a single delivery, which is the
 /// failure scheduled delivery exists to prevent.
 ///
+/// Kafka states the second: `remote.storage.enable=true` and a cleanup policy
+/// containing `compact` exclude each other. `LogConfig.validate` refuses the
+/// pair in `validateNoRemoteStorageForCompactedTopic`, and because the test is
+/// a membership test over the policy list, `compact,delete` is refused beside
+/// `compact`.
+///
 /// The other two are the data-path rules in [`validate_diskless_combination`]:
 /// `krabka.diskless=true` excludes both `remote.storage.enable=true` and
 /// `delivery.mode=scheduled`.
 pub(crate) fn validate_config_combination(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let compacting = overrides
-        .get(CLEANUP_POLICY)
-        .is_some_and(|policy| policy == "compact");
+    let compacting = overrides.get(CLEANUP_POLICY).is_some_and(|policy| {
+        parse_cleanup_policy(policy).is_ok_and(CleanupPolicy::contains_compact)
+    });
     let scheduled = overrides
         .get(DELIVERY_MODE)
         .is_some_and(|mode| mode == DELIVERY_MODE_SCHEDULED);
@@ -118,7 +136,62 @@ pub(crate) fn validate_config_combination(
              be deleted without a single delivery"
         ));
     }
+    let tiered = overrides
+        .get(REMOTE_STORAGE_ENABLE)
+        .is_some_and(|enabled| enabled == "true");
+    if compacting && tiered {
+        return Err(REMOTE_STORAGE_COMPACTED_MESSAGE.to_owned());
+    }
     validate_diskless_combination(overrides)
+}
+
+/// Parse Kafka's `cleanup.policy` list into the policy a partition runs under.
+///
+/// The value is a comma-separated list, and Kafka derives two independent
+/// booleans from it: `compact` when the list names `compact`, `delete` when it
+/// names `delete`. Either order and either name alone is accepted, and so is
+/// `compact,delete`, which Kafka Streams writes on every windowed-store
+/// changelog topic. An empty list, an empty element and an unknown name are
+/// all refused.
+pub(crate) fn parse_cleanup_policy(value: &str) -> Result<CleanupPolicy, String> {
+    let mut compact = false;
+    let mut delete = false;
+    for name in value.split(',') {
+        match name.trim() {
+            "compact" => compact = true,
+            "delete" => delete = true,
+            other => {
+                return Err(format!(
+                    "{CLEANUP_POLICY}={other} not supported; expected {}, or both separated by a comma",
+                    list_values(CLEANUP_POLICY_VALUES)
+                ));
+            }
+        }
+    }
+    match (compact, delete) {
+        (true, true) => Ok(CleanupPolicy::CompactAndDelete),
+        (true, false) => Ok(CleanupPolicy::Compact),
+        (false, true) => Ok(CleanupPolicy::Delete),
+        // `split` always yields one element, so this is the empty value alone.
+        (false, false) => Err(format!(
+            "{CLEANUP_POLICY}= not supported; expected {}, or both separated by a comma",
+            list_values(CLEANUP_POLICY_VALUES)
+        )),
+    }
+}
+
+/// Parse Kafka's `min.cleanable.dirty.ratio`, a `DOUBLE` between 0 and 1
+/// inclusive. `apache/kafka:4.3.1` refuses anything outside that range with
+/// `Invalid value 2.0 for configuration min.cleanable.dirty.ratio: Value must
+/// be no more than 1`.
+pub(crate) fn parse_dirty_ratio(value: &str) -> Result<krabka_units::Ratio, String> {
+    let parsed: f64 = value
+        .parse()
+        .map_err(|_| format!("expected a number, got `{value}`"))?;
+    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+        return Err(format!("value `{value}` must be between 0 and 1"));
+    }
+    Ok(krabka_units::fraction(parsed))
 }
 
 /// Map the wire-side `compression.type` value to the matching

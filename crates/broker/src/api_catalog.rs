@@ -330,14 +330,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-360",
         claim: "Epoch bump when a transactional producer re-initialises",
-        status: KipStatus::Partial,
-        module: "crates/broker/src/handlers/init_producer_id/identity.rs",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/init_producer_id/transactional.rs",
         tests: &[
-            "crates/broker/tests/transactions/txn_fencing.rs::fenced_producer_cannot_commit",
-            "crates/broker/tests/transaction_version/txnver_full_cycle.rs",
+            "crates/broker/tests/transactions/txn_fencing.rs::init_producer_id_fences_a_stale_producer_identity",
+            "crates/broker/tests/jvm_acceptance_durability/transactional_eos.rs::transactional_console_producer_eos",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "`InitProducerId` reads the request's current `producer_id` and `producer_epoch` only for a KIP-939 recovery (crates/broker/src/handlers/init_producer_id.rs:157), so a re-initialisation that carries a stale epoch is not answered with `PRODUCER_FENCED`.",
+        note: "",
     },
     KipAnnotation {
         key: "KIP-368",
@@ -746,7 +746,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/group_version.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts every pattern RE2J accepts, including its Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match.",
     },
     KipAnnotation {
         key: "KIP-853",

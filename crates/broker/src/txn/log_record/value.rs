@@ -238,6 +238,10 @@ pub(crate) fn decode_value(
         prev_producer_id: ProducerId(prev_producer_id),
         next_producer_id: ProducerId(next_producer_id),
         next_producer_epoch,
+        // KIP-360 fencing state is in-memory only: `TransactionLogValue` has
+        // no field for it, so a replayed entry starts with no failed fence.
+        last_producer_epoch: -1,
+        has_failed_epoch_fence: false,
         last_update_ms,
         start_ms,
     })
@@ -285,6 +289,8 @@ mod tests {
             prev_producer_id: ProducerId(-1),
             next_producer_id: ProducerId(-1),
             next_producer_epoch: -1,
+            last_producer_epoch: -1,
+            has_failed_epoch_fence: false,
             last_update_ms: SAMPLE_TS,
             start_ms: SAMPLE_TS,
         }
@@ -347,6 +353,8 @@ mod tests {
             prev_producer_id: ProducerId(100),
             next_producer_id: ProducerId(200),
             next_producer_epoch: 8,
+            last_producer_epoch: -1,
+            has_failed_epoch_fence: false,
             last_update_ms: 1_234_567,
             start_ms: 1_000_000,
         };
@@ -389,6 +397,8 @@ mod tests {
             prev_producer_id: ProducerId(5),
             next_producer_id: ProducerId(6),
             next_producer_epoch: 3,
+            last_producer_epoch: -1,
+            has_failed_epoch_fence: false,
             last_update_ms: 111,
             start_ms: 222,
         };
@@ -429,6 +439,8 @@ mod tests {
                 prev_producer_id: ProducerId(-1),
                 next_producer_id: ProducerId(-1),
                 next_producer_epoch: -1,
+                last_producer_epoch: -1,
+                has_failed_epoch_fence: false,
                 last_update_ms: 1,
                 start_ms: 1,
             }

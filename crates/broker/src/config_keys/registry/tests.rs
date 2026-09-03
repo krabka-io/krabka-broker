@@ -2,7 +2,7 @@
 //! wire bytes they carry, and the defaults they must agree with.
 
 use assert2::{assert, check};
-use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
+use krabka_units::convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _};
 
 use super::*;
 
@@ -15,6 +15,7 @@ fn config_type_wire_bytes_match_kafka() {
         ConfigType::String,
         ConfigType::Int,
         ConfigType::Long,
+        ConfigType::Double,
         ConfigType::List,
     ]
     .into_iter()
@@ -28,6 +29,7 @@ fn config_type_wire_bytes_match_kafka() {
                 ("string", 2),
                 ("int", 3),
                 ("long", 5),
+                ("double", 6),
                 ("list", 7),
             ]
     );
@@ -58,6 +60,20 @@ fn topic_key_types_match_apache_kafka() {
             crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY,
             ConfigType::List,
         ),
+        (SEGMENT_MS, ConfigType::Long),
+        (SEGMENT_INDEX_BYTES, ConfigType::Int),
+        (SEGMENT_JITTER_MS, ConfigType::Long),
+        (MIN_COMPACTION_LAG_MS, ConfigType::Long),
+        (MAX_COMPACTION_LAG_MS, ConfigType::Long),
+        (MIN_CLEANABLE_DIRTY_RATIO, ConfigType::Double),
+        (FILE_DELETE_DELAY_MS, ConfigType::Long),
+        (FLUSH_MESSAGES, ConfigType::Long),
+        (FLUSH_MS, ConfigType::Long),
+        (INDEX_INTERVAL_BYTES, ConfigType::Int),
+        (PREALLOCATE, ConfigType::Boolean),
+        (MESSAGE_TIMESTAMP_TYPE, ConfigType::String),
+        (MESSAGE_TIMESTAMP_AFTER_MAX_MS, ConfigType::Long),
+        (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, ConfigType::Long),
     ] {
         let row = lookup(ConfigScope::Topic, name).expect(name);
         check!(row.config_type == expected, "{name}");
@@ -113,6 +129,20 @@ fn topic_key_defaults_match_apache_kafka() {
         (DELETE_RETENTION_MS, "86400000"),
         (crate::throttle::LEADER_THROTTLED_REPLICAS_KEY, ""),
         (crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY, ""),
+        (SEGMENT_MS, "604800000"),
+        (SEGMENT_INDEX_BYTES, "10485760"),
+        (SEGMENT_JITTER_MS, "0"),
+        (MIN_COMPACTION_LAG_MS, "0"),
+        (MAX_COMPACTION_LAG_MS, "9223372036854775807"),
+        (MIN_CLEANABLE_DIRTY_RATIO, "0.5"),
+        (FILE_DELETE_DELAY_MS, "60000"),
+        (FLUSH_MESSAGES, "9223372036854775807"),
+        (FLUSH_MS, "9223372036854775807"),
+        (INDEX_INTERVAL_BYTES, "4096"),
+        (PREALLOCATE, "false"),
+        (MESSAGE_TIMESTAMP_TYPE, "CreateTime"),
+        (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "9223372036854775807"),
+        (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "9223372036854775807"),
     ] {
         let row = lookup(ConfigScope::Topic, name).expect(name);
         check!(row.default == Some(expected), "{name}");
@@ -140,12 +170,31 @@ fn topic_defaults_agree_with_the_log_config_a_partition_runs_on() {
         default_of(DELETE_RETENTION_MS)
             == Some(log.delete_retention.millis_i64().to_string().as_str())
     );
+    check!(default_of(CLEANUP_POLICY) == Some(log.cleanup_policy.as_str()));
     check!(
-        default_of(CLEANUP_POLICY)
-            == Some(match log.cleanup_policy {
-                krabka_log::CleanupPolicy::Delete => "delete",
-                krabka_log::CleanupPolicy::Compact => "compact",
-            })
+        default_of(SEGMENT_MS) == Some(log.segment_roll_interval.millis_i64().to_string().as_str())
+    );
+    check!(
+        default_of(INDEX_INTERVAL_BYTES)
+            == Some(log.index_interval.bytes_u64().to_string().as_str())
+    );
+    check!(
+        default_of(MIN_COMPACTION_LAG_MS)
+            == Some(log.min_compaction_lag.millis_i64().to_string().as_str())
+    );
+    // Kafka spells "no bound" as `Long.MAX_VALUE`; the log carries it as
+    // `None`, and the registry has to report the number an operator reads.
+    check!(
+        log.max_compaction_lag == None
+            && default_of(MAX_COMPACTION_LAG_MS) == Some("9223372036854775807")
+    );
+    check!(
+        default_of(MIN_CLEANABLE_DIRTY_RATIO)
+            == Some(log.min_cleanable_dirty_ratio.as_f64().to_string().as_str())
+    );
+    check!(
+        log.message_timestamp_type == krabka_protocol::records::TimestampType::CreateTime
+            && default_of(MESSAGE_TIMESTAMP_TYPE) == Some("CreateTime")
     );
     check!(log.compression_type.is_none() && default_of(COMPRESSION_TYPE) == Some("producer"));
     check!(

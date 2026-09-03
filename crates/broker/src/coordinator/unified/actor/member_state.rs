@@ -37,8 +37,47 @@ pub(super) fn reported_owned(req: &ConsumerGroupHeartbeatRequest) -> HashMap<Uui
         .unwrap_or_default()
 }
 
+/// Rejects a heartbeat whose `SubscribedTopicRegex` does not compile, with the
+/// message Kafka builds in
+/// `GroupMetadataManager.throwIfRegularExpressionIsInvalid`.
+///
+/// Kafka compiles the pattern with `com.google.re2j.Pattern.compile` and
+/// raises `InvalidRegularExpressionException` (`INVALID_REGULAR_EXPRESSION`,
+/// 128) before it writes any member record, so the heartbeat that carries the
+/// bad pattern fails and the member is not admitted.
+///
+/// We compile with `regex::Regex::new`, that is with Unicode mode ON, rather
+/// than `RegexBuilder::unicode(false)`, even though RE2J's `\d`, `\w`, `\s`,
+/// and `\b` are ASCII-only:
+///
+/// - This function decides *acceptance*, and Unicode mode accepts a strict
+///   superset of what `unicode(false)` accepts. RE2J supports the Unicode
+///   classes `\pN` and `\p{Greek}`; Rust's `regex` rejects those outright when
+///   Unicode is off, so `unicode(false)` would answer 128 to patterns real
+///   Kafka compiles happily. Being stricter than Kafka is the worse failure.
+/// - The ASCII/Unicode split cannot change a *match* result here: the pattern
+///   is only ever matched against Kafka topic names, whose legal alphabet is
+///   `[a-zA-Z0-9._-]`. On ASCII-only inputs `\d`, `\w`, `\s` and `\b` mean the
+///   same thing in both engines.
+fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
+    regex::Regex::new(pattern).map(|_| ()).map_err(|error| {
+        // `regex`'s Display is a multi-line diagram; flatten it so the
+        // response's `error_message` stays one line.
+        let detail = error
+            .to_string()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("SubscribedTopicRegex `{pattern}` is not a valid regular expression: {detail}.")
+    })
+}
+
 /// Applies steady-state member updates and runs reconciliation. It returns
-/// `true` when a change happened that needs a log write.
+/// `true` when a change happened that needs a log write, and the
+/// `INVALID_REGULAR_EXPRESSION` message when the heartbeat carries a
+/// `SubscribedTopicRegex` that does not compile.
 pub(super) fn update_member_state(
     state: &mut GroupState,
     config: &NextGenConfig,
@@ -47,7 +86,19 @@ pub(super) fn update_member_state(
     client: ClientIdentity<'_>,
     now: Instant,
     cur_epoch: i32,
-) -> bool {
+) -> Result<bool, String> {
+    // Kafka validates the pattern before it touches member state, and only
+    // when the heartbeat carries one that differs from the member's stored
+    // pattern. Do the same, so a rejected heartbeat leaves the group exactly
+    // as it found it.
+    if let Some(pattern) = req.subscribed_topic_regex.as_deref()
+        && state
+            .members
+            .get(&req.member_id)
+            .is_none_or(|m| m.subscribed_topic_regex.as_deref() != Some(pattern))
+    {
+        check_subscribed_topic_regex(pattern)?;
+    }
     let mut member_metadata_changed = false;
     let mut became_dirty = false;
     if let Some(m) = state.members.get_mut(&req.member_id) {
@@ -104,7 +155,7 @@ pub(super) fn update_member_state(
             .unwrap_or_default()
     };
     let assignment_changed = state.reconcile_member(&req.member_id, &owned);
-    member_metadata_changed || was_dirty || epoch_advanced || assignment_changed
+    Ok(member_metadata_changed || was_dirty || epoch_advanced || assignment_changed)
 }
 
 pub(super) fn run_reconcile(
@@ -140,6 +191,24 @@ fn pick_assignor(state: &GroupState, config: &NextGenConfig) -> Arc<dyn Assignor
         .expect("NextGenConfig must have at least one registered assignor")
 }
 
+/// Builds a first-join member, rejecting a heartbeat whose
+/// `SubscribedTopicRegex` does not compile.
+///
+/// Kafka runs the same check on the join path, before any member record is
+/// written, so a first heartbeat with a bad pattern fails instead of admitting
+/// a member that would then never receive partitions.
+pub(super) fn try_build_member(
+    member_id: &str,
+    req: &ConsumerGroupHeartbeatRequest,
+    client: ClientIdentity<'_>,
+    now: Instant,
+) -> Result<MemberState, String> {
+    if let Some(pattern) = req.subscribed_topic_regex.as_deref() {
+        check_subscribed_topic_regex(pattern)?;
+    }
+    Ok(build_member(member_id, req, client, now))
+}
+
 pub(super) fn build_member(
     member_id: &str,
     req: &ConsumerGroupHeartbeatRequest,
@@ -152,7 +221,7 @@ pub(super) fn build_member(
         .unwrap_or_default()
         .into_iter()
         .collect();
-    MemberState {
+    let mut member = MemberState {
         member_id: member_id.into(),
         instance_id: req.instance_id.clone(),
         rack_id: req.rack_id.clone(),
@@ -172,7 +241,13 @@ pub(super) fn build_member(
         partitions_pending_revocation: HashMap::new(),
         last_seen: now,
         classic: None,
-    }
+    };
+    // The struct literal above sets the pattern string directly, so fill the
+    // compiled cache from it. Without this a member that joins with a regex
+    // never compiles one: the steady-state path recompiles only when the
+    // pattern *changes*, and the client re-sends the same pattern forever.
+    member.sync_regex_cache();
+    member
 }
 
 #[cfg(test)]
@@ -268,6 +343,213 @@ mod tests {
         check!(step.pending.target_metadata.is_some());
         check!(target_ids == vec!["m1", "m2"]);
         assert!(current_ids == vec!["m1", "m2"]);
+    }
+
+    /// A group holding one member subscribed by regex, already reconciled and
+    /// at a stable epoch.
+    fn group_with_regex_member(metadata: &StaticMetadata, pattern: &str) -> GroupState {
+        let config = NextGenConfig::default();
+        let mut state = GroupState::new("g");
+        state.add_or_update_member(build_member(
+            "m1",
+            &ConsumerGroupHeartbeatRequest {
+                subscribed_topic_regex: Some(pattern.into()),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+            ClientIdentity {
+                id: "client",
+                host: "host",
+            },
+            Instant::now(),
+        ));
+        run_reconcile(&mut state, &config, metadata);
+        state.advance_member_epoch("m1");
+        state
+    }
+
+    fn orders_metadata() -> StaticMetadata {
+        let orders = Uuid([12; 16]);
+        StaticMetadata {
+            input: ReconcileInput {
+                topic_id_by_name: [("orders-eu".into(), orders)].into(),
+                partitions_per_topic: [(orders, 2)].into(),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Kafka's `throwIfRegularExpressionIsInvalid` fails the heartbeat that
+    /// carries a bad pattern, before any member record is written, so the
+    /// joining member is never admitted.
+    #[test]
+    fn invalid_regex_on_join_rejects_the_heartbeat() {
+        let config = NextGenConfig::default();
+        let metadata = orders_metadata();
+        for pattern in ["(", "[a-", "a{2,1}"] {
+            let mut state = GroupState::new("g");
+            let step = step_heartbeat(
+                &mut state,
+                &config,
+                &metadata,
+                &ConsumerGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m1".into(),
+                    member_epoch: 0,
+                    subscribed_topic_regex: Some(pattern.into()),
+                    rebalance_timeout_ms: 60_000,
+                    ..Default::default()
+                },
+                ClientIdentity {
+                    id: "client",
+                    host: "host",
+                },
+                Instant::now(),
+            );
+
+            check!(
+                step.response.error_code == crate::codes::INVALID_REGULAR_EXPRESSION,
+                "{pattern}"
+            );
+            check!(
+                step.response
+                    .error_message
+                    .as_deref()
+                    .is_some_and(|m| m.starts_with(&format!(
+                        "SubscribedTopicRegex `{pattern}` is not a valid regular expression: "
+                    ))),
+                "{pattern}: {:?}",
+                step.response.error_message,
+            );
+            check!(step.pending.is_empty(), "{pattern}");
+            assert!(state.members.is_empty(), "{pattern}");
+        }
+    }
+
+    /// A pattern change to something that does not compile leaves the existing
+    /// member exactly as it was: same pattern, same epoch, group not dirty.
+    #[test]
+    fn invalid_regex_on_pattern_change_leaves_member_untouched() {
+        let config = NextGenConfig::default();
+        let metadata = orders_metadata();
+        for pattern in ["(", "[a-", "a{2,1}"] {
+            let mut state = group_with_regex_member(&metadata, "^orders-.*");
+            let member_epoch = state.members["m1"].member_epoch;
+            let group_epoch = state.group_epoch;
+
+            let result = update_member_state(
+                &mut state,
+                &config,
+                &metadata,
+                &ConsumerGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m1".into(),
+                    member_epoch,
+                    subscribed_topic_regex: Some(pattern.into()),
+                    rebalance_timeout_ms: 60_000,
+                    ..Default::default()
+                },
+                ClientIdentity {
+                    id: "other-client",
+                    host: "other-host",
+                },
+                Instant::now(),
+                member_epoch,
+            );
+
+            check!(result.is_err(), "{pattern}");
+            let member = &state.members["m1"];
+            check!(
+                member.subscribed_topic_regex.as_deref() == Some("^orders-.*"),
+                "{pattern}"
+            );
+            check!(member.client_id == "client", "{pattern}");
+            check!(member.member_epoch == member_epoch, "{pattern}");
+            check!(!state.dirty, "{pattern}");
+            assert!(state.group_epoch == group_epoch, "{pattern}");
+        }
+    }
+
+    /// The rejection is specific to the bad pattern: a valid one still admits
+    /// the member and reconciles the topics it matches.
+    #[test]
+    fn valid_regex_still_reconciles() {
+        let config = NextGenConfig::default();
+        let metadata = orders_metadata();
+        let mut state = GroupState::new("g");
+
+        let step = step_heartbeat(
+            &mut state,
+            &config,
+            &metadata,
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                subscribed_topic_regex: Some("^orders-.*".into()),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+            ClientIdentity {
+                id: "client",
+                host: "host",
+            },
+            Instant::now(),
+        );
+
+        check!(step.response.error_code == 0);
+        check!(step.response.error_message.is_none());
+        let assigned: Vec<i32> = state.members["m1"]
+            .assigned_partitions
+            .values()
+            .flatten()
+            .copied()
+            .collect();
+        assert!(assigned.len() == 2, "{:?}", state.members["m1"]);
+    }
+
+    /// Acceptance parity with RE2J, the engine Kafka validates with. Rust's
+    /// `regex` runs in Unicode mode here on purpose: it accepts everything
+    /// RE2J does in these cases, where `RegexBuilder::unicode(false)` would
+    /// reject the Unicode classes RE2J supports.
+    #[test]
+    fn regex_acceptance_matches_re2j() {
+        for (pattern, accepted) in [
+            // ASCII in RE2J, Unicode-aware in Rust — both compile.
+            (r"\d+", true),
+            (r"\w+", true),
+            (r"x", true),
+            // Unicode classes: RE2J supports them, and `unicode(false)` would
+            // not.
+            (r"\pN", true),
+            (r"\p{Greek}", true),
+            // Named groups: RE2's `(?P<name>)` spelling and the modern
+            // `(?<name>)` spelling.
+            (r"(?P<name>a)", true),
+            (r"(?<name>a)", true),
+            // Rejected by both engines.
+            ("(", false),
+            ("[a-", false),
+        ] {
+            check!(
+                check_subscribed_topic_regex(pattern).is_ok() == accepted,
+                "{pattern}: {:?}",
+                check_subscribed_topic_regex(pattern),
+            );
+        }
+    }
+
+    /// The one behavioral difference the Unicode choice leaves — `\d` matching
+    /// a non-ASCII digit — cannot be observed through a subscription, because
+    /// Kafka topic names are drawn from `[a-zA-Z0-9._-]`.
+    #[test]
+    fn unicode_digit_class_cannot_change_a_topic_name_match() {
+        let re = regex::Regex::new(r"^t\d+$").expect("compiles");
+        check!(re.is_match("t42"));
+        check!(!re.is_match("t-42"));
+        // Unicode-aware in Rust, ASCII-only in RE2J; no legal topic name can
+        // contain this character, so the divergence is unreachable.
+        assert!(re.is_match("t\u{0663}"));
     }
 
     #[derive(Debug)]

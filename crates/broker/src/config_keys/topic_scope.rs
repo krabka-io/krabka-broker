@@ -93,7 +93,7 @@ mod tests {
                 BROKER_WITNESS,
                 false,
             ),
-            ("an unknown key", "flush.ms", false),
+            ("an unknown key", "not.a.topic.config", false),
             ("an empty key", "", false),
         ] {
             check!(

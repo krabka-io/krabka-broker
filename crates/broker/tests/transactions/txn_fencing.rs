@@ -55,6 +55,91 @@ async fn fenced_producer_cannot_commit() {
     broker.shutdown().await;
 }
 
+/// One `InitProducerId` of the KIP-360 table below, named by the identity it
+/// supplies.
+struct Case {
+    name: &'static str,
+    /// The request identity, as an offset from the live one the coordinator
+    /// just handed out; `None` supplies no identity at all.
+    offset: Option<(i64, i16)>,
+    expected_error_code: i16,
+}
+
+/// KIP-360: `InitProducerId` answers a caller that names a producer identity
+/// the coordinator does not hold with `PRODUCER_FENCED` (90), before it
+/// re-initialises anything. A caller that names no identity at all — every
+/// request below v3, and every first initialisation — is admitted, which is
+/// what lets a replacement producer take a transactional id over.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_producer_id_fences_a_stale_producer_identity() {
+    use krabka_protocol::owned::init_producer_id_request::InitProducerIdRequest;
+
+    let (broker, bootstrap, _dir) = boot_single().await;
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(bootstrap.clone())
+        .build()
+        .await
+        .unwrap();
+
+    let case = |name, offset, expected_error_code| Case {
+        name,
+        offset,
+        expected_error_code,
+    };
+
+    let cases = [
+        case("no identity supplied", None, 0),
+        case("the live identity", Some((0, 0)), 0),
+        case("a stale epoch", Some((0, -1)), 90),
+        case("an unreached epoch", Some((0, 1)), 90),
+        case("another producer id", Some((1, 0)), 90),
+        case("another producer id at a stale epoch", Some((1, -1)), 90),
+    ];
+
+    for (index, case) in cases.into_iter().enumerate() {
+        let Case {
+            name,
+            offset,
+            expected_error_code: expected,
+        } = case;
+        // One transactional id per case: an admitted request bumps the epoch,
+        // which would move the identity the next case starts from.
+        let tid = format!("kip360-tid-{index}");
+        let (producer_id, producer_epoch) = init_transaction(&client, &tid).await;
+        let (request_id, request_epoch) = match offset {
+            None => (-1, -1),
+            Some((id_offset, epoch_offset)) => {
+                (producer_id + id_offset, producer_epoch + epoch_offset)
+            }
+        };
+
+        let response = client
+            .send(InitProducerIdRequest {
+                transactional_id: Some(tid.clone()),
+                transaction_timeout_ms: 60_000,
+                producer_id: request_id,
+                producer_epoch: request_epoch,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            response.error_code == expected,
+            "InitProducerId with {name} ({request_id}, {request_epoch}) against \
+             ({producer_id}, {producer_epoch}): {response:?}"
+        );
+        if expected != 0 {
+            assert!(
+                (response.producer_id, response.producer_epoch) == (-1, -1),
+                "a fenced InitProducerId returns no identity: {response:?}"
+            );
+        }
+    }
+
+    broker.shutdown().await;
+}
+
 /// The broker fences a classic-group `TxnOffsetCommit` when it carries a stale
 /// generation (`ILLEGAL_GENERATION`) or an unknown member
 /// (`UNKNOWN_MEMBER_ID`), and accepts it when the metadata matches the live

@@ -20,9 +20,13 @@
 //! cluster-default broker config, and the two rows differ.
 
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, MIN_INSYNC_REPLICAS,
-    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
+    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES,
+    FLUSH_MS, INDEX_INTERVAL_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_INHERIT,
+    LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
+    MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_CREATE,
+    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
+    MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
+    RETENTION_UNLIMITED, SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
     broker_scope::{
         BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
@@ -67,6 +71,7 @@ pub(crate) enum ConfigType {
     String,
     Int,
     Long,
+    Double,
     List,
 }
 
@@ -78,6 +83,7 @@ impl ConfigType {
             Self::String => 2,
             Self::Int => 3,
             Self::Long => 5,
+            Self::Double => 6,
             Self::List => 7,
         }
     }
@@ -89,6 +95,7 @@ impl ConfigType {
             Self::String => "string",
             Self::Int => "int",
             Self::Long => "long",
+            Self::Double => "double",
             Self::List => "list",
         }
     }
@@ -244,7 +251,15 @@ const fn key(
 /// The two values every boolean key accepts, in the order a refusal names
 /// them.
 pub(super) const BOOLEAN_VALUES: &[&str] = &["true", "false"];
-const CLEANUP_POLICY_VALUES: &[&str] = &["delete", "compact"];
+/// The values `cleanup.policy` accepts, in any order and in any non-empty
+/// combination: Kafka types the key as a LIST and `LogConfig` derives its
+/// `compact` and `delete` booleans by membership, so `compact,delete` is as
+/// valid as either name alone.
+pub(super) const CLEANUP_POLICY_VALUES: &[&str] = &["delete", "compact"];
+const MESSAGE_TIMESTAMP_TYPE_VALUES: &[&str] = &[
+    MESSAGE_TIMESTAMP_TYPE_CREATE,
+    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
+];
 const RECOVERY_STRATEGY_VALUES: &[&str] = &["None", "Balanced", "Aggressive"];
 const DELIVERY_MODE_VALUES: &[&str] = &[DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED];
 const SCHEMA_VALIDATION_MODE_VALUES: &[&str] =
@@ -291,8 +306,8 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         ConfigScope::Topic,
         ConfigType::List,
         Some("delete"),
-        "`delete` or `compact`.",
-        ValueCheck::OneOf(CLEANUP_POLICY_VALUES),
+        "Any non-empty combination of `delete` and `compact`, comma-separated: `delete`, `compact`, or `compact,delete`, which both compacts the log and applies retention to it. A policy containing `compact` cannot be combined with remote.storage.enable=true or with delivery.mode=scheduled.",
+        ValueCheck::Parsed,
     ),
     key(
         COMPRESSION_TYPE,
@@ -355,7 +370,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Boolean,
             Some("false"),
-            "Opt this topic into tiered (remote) storage.",
+            "Opt this topic into tiered (remote) storage. Refused on a topic whose cleanup.policy contains `compact`: tiered storage is not supported for compacted topics.",
             ValueCheck::Bool,
         )
     },
@@ -479,6 +494,154 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             Some(SCHEMA_VALIDATION_MODE_ID),
             "`id` checks the Confluent header alone; `full` also decodes the record body against the schema the header names.",
             ValueCheck::OneOf(SCHEMA_VALIDATION_MODE_VALUES),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            SEGMENT_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("604800000"),
+            "Roll the active segment once its first record is older than this, even when it has not reached segment.bytes.",
+            ValueCheck::I64AtLeast(1),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes"),
+        ..key(
+            SEGMENT_INDEX_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("10485760"),
+            "Size cap on a segment's offset index. krabka sizes its sparse indexes from index.interval.bytes, so this value is stored and reported only.",
+            ValueCheck::I32AtLeast(4),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            SEGMENT_JITTER_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("0"),
+            "Random subtraction from segment.ms, which staggers the roll of many partitions. Stored and reported only: krabka rolls on the interval itself.",
+            ValueCheck::I64AtLeast(0),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            MIN_COMPACTION_LAG_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("0"),
+            "How long a record is safe from the log cleaner after it is written. The cleaner leaves a partition whose newest uncompacted record is younger than this.",
+            ValueCheck::I64AtLeast(0),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            MAX_COMPACTION_LAG_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("9223372036854775807"),
+            "How long a record may stay uncompacted before the cleaner runs whatever the dirty ratio says.",
+            ValueCheck::I64AtLeast(1),
+        )
+    },
+    ConfigKey {
+        type_note: Some("0..1"),
+        ..key(
+            MIN_CLEANABLE_DIRTY_RATIO,
+            ConfigScope::Topic,
+            ConfigType::Double,
+            Some("0.5"),
+            "The share of a compacted partition's log that must be uncleaned before the cleaner spends a pass on it.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            FILE_DELETE_DELAY_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("60000"),
+            "Delay before a segment file removed by retention is unlinked. Stored and reported only: krabka unlinks a segment as it evicts it.",
+            ValueCheck::I64AtLeast(0),
+        )
+    },
+    ConfigKey {
+        type_note: Some("records"),
+        ..key(
+            FLUSH_MESSAGES,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("9223372036854775807"),
+            "Records between forced fsyncs. Stored and reported only: krabka manages fsync from its own durability settings.",
+            ValueCheck::I64AtLeast(0),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            FLUSH_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("9223372036854775807"),
+            "Milliseconds between forced fsyncs. Stored and reported only: krabka manages fsync from its own durability settings.",
+            ValueCheck::I64AtLeast(0),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes"),
+        ..key(
+            INDEX_INTERVAL_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("4096"),
+            "Bytes of .log between entries in the sparse offset and timestamp indexes.",
+            ValueCheck::I32AtLeast(0),
+        )
+    },
+    key(
+        PREALLOCATE,
+        ConfigScope::Topic,
+        ConfigType::Boolean,
+        Some("false"),
+        "Preallocate a new segment file to segment.bytes. Stored and reported only: krabka grows a segment as it writes it.",
+        ValueCheck::Bool,
+    ),
+    key(
+        MESSAGE_TIMESTAMP_TYPE,
+        ConfigScope::Topic,
+        ConfigType::String,
+        Some(MESSAGE_TIMESTAMP_TYPE_CREATE),
+        "`CreateTime` stores the producer's own timestamps; `LogAppendTime` stores the broker's clock at append time. The value reaches the partition's log configuration; the append-path stamping it selects is not implemented yet.",
+        ValueCheck::OneOf(MESSAGE_TIMESTAMP_TYPE_VALUES),
+    ),
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            MESSAGE_TIMESTAMP_AFTER_MAX_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("9223372036854775807"),
+            "How far ahead of the broker's clock a producer timestamp may sit. Stored and reported only: krabka's produce path does not yet refuse a batch outside the window.",
+            ValueCheck::I64AtLeast(0),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            MESSAGE_TIMESTAMP_BEFORE_MAX_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("9223372036854775807"),
+            "How far behind the broker's clock a producer timestamp may sit. Stored and reported only: krabka's produce path does not yet refuse a batch outside the window.",
+            ValueCheck::I64AtLeast(0),
         )
     },
     ConfigKey {

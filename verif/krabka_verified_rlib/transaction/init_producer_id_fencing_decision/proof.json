@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_init_producer_id_fencing_decision": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      }
+    }
+  }
+}
