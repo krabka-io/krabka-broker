@@ -1,0 +1,79 @@
+name: benchmarks
+
+on:
+  pull_request:
+    paths:
+      - "crates/log/**"
+      - "crates/verified/**"
+      - "crates/parse-benches/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/benchmarks.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/log/**"
+      - "crates/verified/**"
+      - "crates/parse-benches/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/benchmarks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded PR runs; let pushes to main run to completion.
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # Automated storage microbenchmarks for krabka-log.
+  # Bazel's defs.bzl does not currently provide a crate_bench rule, so this
+  # workflow runs cargo bench directly using the repository's pinned toolchain.
+  micro-benchmarks:
+    name: broker · storage microbenchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.1.0
+
+      # Omitting an explicit rust-toolchain action relies on ubuntu-latest's pre-installed
+      # rustup, which automatically reads rust-toolchain.toml (channel = "1.98.0") as the
+      # single source of truth and eliminates an unpinned third-party action step.
+      # Note: ubuntu-latest's pre-installed stable toolchain still appears in the
+      # rust-cache environment inventory alongside the pinned 1.98.0 toolchain.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.7.7
+        with:
+          key: bench-broker
+
+      # `shell: bash` enforces pipefail so any cargo bench or compilation
+      # failure exits non-zero instead of being masked by `tee`.
+      # Pipe stdout to tee so the benchmark log receives clean output, leaving
+      # stderr diagnostic messages in the console.
+      # `rm -rf target/criterion` clears stale baseline samples from warm cache runs.
+      # `--noplot` prevents Criterion from rendering uncollected gnuplot charts.
+      - name: Run Log Engine Benches
+        shell: bash
+        run: |
+          mkdir -p bench-results
+          rm -rf target/criterion
+          cargo bench -p krabka-log --bench log -- --output-format bencher --noplot | tee bench-results/log-engine.txt
+
+      # Parses Criterion bencher output into a structured JSON summary artifact.
+      # This utility lives in crates/parse-benches and can be migrated to a shared
+      # krabka-tools repository if cross-repo tooling is extracted in the future.
+      - name: Generate Summary JSON
+        run: cargo run -p krabka-parse-benches -- --results-dir bench-results --suite krabka-broker
+
+      # Benchmark summary JSON and raw logs are archived as build artifacts for
+      # historical trend tracking and comparative regression analysis across PRs.
+      # Note: Automated regression threshold gating is deferred to a future CodSpeed
+      # integration because standard shared runner wall-clock times vary by up to ±24%.
+      - name: Upload Benchmark Results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.1
+        with:
+          name: broker-benchmark-results
+          path: bench-results/
+          retention-days: 30
