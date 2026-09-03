@@ -20,7 +20,10 @@ use crate::{
     cluster::start_diskless_cluster,
     support,
     topic::{await_wal_quorum, create_diskless_topic},
-    wire::{assert_matches_produced, fetch_log, produce_all, value_at},
+    wire::{
+        OFFSET_OUT_OF_RANGE, assert_matches_produced, delete_records_below, earliest_offset,
+        fetch_error_code, fetch_log, produce_all, value_at,
+    },
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -115,4 +118,78 @@ async fn await_trimmed_flush(
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// `DeleteRecords` on a diskless topic has to reach the object tier, not just
+/// the local WAL.
+///
+/// The trim frontier is no help here. By the time this runs the flusher has
+/// already trimmed the local log past every offset the case deletes, so a
+/// broker that measured the delete against `log_start_offset` would call the
+/// request a no-op and go on serving the deleted records out of the bucket for
+/// as long as the topic lived. The two assertions below are what an operator
+/// checks after running `kafka-delete-records`: the deleted offsets are gone,
+/// and the ones above the floor are not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleted_diskless_records_leave_the_object_store_unreadable() {
+    let cluster = start_diskless_cluster(|config| {
+        config.diskless_wal_flush_interval = krabka_units::millis(100);
+        config.diskless_wal_trim_safety_lag = 0;
+    })
+    .await;
+    cluster.await_ready().await;
+
+    let admin = support::sasl_client(
+        &cluster.bootstrap_for_node(cluster.node_ids()[0]),
+        CLIENT_PRINCIPAL,
+        PASSWORD,
+    )
+    .await;
+    let topic_id = create_diskless_topic(&admin).await;
+    let leader = await_wal_quorum(&cluster).await;
+    let bootstrap = cluster.bootstrap_for_node(leader);
+
+    let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
+    let producer = support::sasl_client(&bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
+    produce_all(&producer, topic_id, &values).await;
+
+    let leader_broker = cluster
+        .handle_for_node(leader)
+        .expect("the diskless leader is up");
+    let committed = i64::try_from(RECORDS).expect("small count");
+    let (log_start, _, _) = await_trimmed_flush(leader_broker, committed).await;
+    // Everything the case deletes is already below the local log start, so the
+    // delete can only be answered by the index.
+    let floor = 4;
+    assert!(
+        log_start > floor,
+        "the flusher has to have trimmed past the delete point for this case to \
+         mean anything; log start was {log_start}"
+    );
+    // The whole range still reads back from the object store first, so a later
+    // OFFSET_OUT_OF_RANGE cannot be a cold read that never worked.
+    let before = fetch_log(&bootstrap, topic_id, 0, RECORDS, Duration::from_secs(90)).await;
+    assert_matches_produced(&before, 0, RECORDS);
+    assert!(earliest_offset(&bootstrap).await == 0);
+
+    let low_watermark = delete_records_below(&bootstrap, floor).await;
+
+    assert!(low_watermark == floor);
+    assert!(earliest_offset(&bootstrap).await == floor);
+    assert!(fetch_error_code(&bootstrap, topic_id, 0).await == OFFSET_OUT_OF_RANGE);
+    assert!(fetch_error_code(&bootstrap, topic_id, floor - 1).await == OFFSET_OUT_OF_RANGE);
+    // Above the floor the object store still answers.
+    let kept = fetch_log(
+        &bootstrap,
+        topic_id,
+        floor,
+        RECORDS - usize::try_from(floor).expect("small floor"),
+        Duration::from_secs(90),
+    )
+    .await;
+    assert!(kept.records[0].0 == floor);
+
+    drop(producer);
+    drop(admin);
+    cluster.shutdown().await;
 }

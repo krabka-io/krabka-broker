@@ -17,12 +17,38 @@ use crate::{broker::Broker, codes, handlers::fetch::PendingRead, partition::Part
 pub(crate) struct DisklessReadHandle {
     pub(crate) index: Arc<AsyncMutex<WalIndexCache>>,
     store: Arc<dyn ObjectStore>,
+    /// The index log the flusher currently owns, or `None` while the
+    /// bootstrap is between incarnations of it.
+    ///
+    /// A handler that has to *write* to the index topic -- `DeleteRecords`
+    /// recording its floor is the only one -- publishes through here rather
+    /// than holding its own clone, because a stalled replay makes the
+    /// bootstrap rebuild the log and a captured clone would go stale.
+    index_log: Arc<arc_swap::ArcSwapOption<super::index_log::DisklessIndexLog>>,
 }
 
 impl DisklessReadHandle {
     #[must_use]
     pub(crate) fn new(index: Arc<AsyncMutex<WalIndexCache>>, store: Arc<dyn ObjectStore>) -> Self {
-        Self { index, store }
+        Self {
+            index,
+            store,
+            index_log: Arc::new(arc_swap::ArcSwapOption::empty()),
+        }
+    }
+
+    /// The slot the diskless bootstrap publishes each new index log into.
+    #[must_use]
+    pub(crate) fn index_log_slot(
+        &self,
+    ) -> Arc<arc_swap::ArcSwapOption<super::index_log::DisklessIndexLog>> {
+        Arc::clone(&self.index_log)
+    }
+
+    /// The index log currently serving the projection, if one is running.
+    #[must_use]
+    pub(crate) fn index_log(&self) -> Option<Arc<super::index_log::DisklessIndexLog>> {
+        self.index_log.load_full()
     }
 
     /// Clone the raw object-store handle for the background WAL flusher.
@@ -398,6 +424,7 @@ mod tests {
                 last_offset: 1,
                 byte_start,
                 byte_len: u32::try_from(second.len()).unwrap(),
+                max_timestamp_ms: 0,
             }],
         });
         let handle = DisklessReadHandle::new(Arc::new(AsyncMutex::new(cache)), store);
@@ -454,6 +481,7 @@ mod tests {
                         last_offset: 0,
                         byte_start: 0,
                         byte_len: u32::try_from(first.len()).unwrap(),
+                        max_timestamp_ms: 0,
                     },
                     super::super::wal_index::WalIndexEntry {
                         topic_id,
@@ -462,6 +490,7 @@ mod tests {
                         last_offset: 1,
                         byte_start: u64::try_from(first.len()).unwrap(),
                         byte_len: u32::try_from(second.len()).unwrap(),
+                        max_timestamp_ms: 0,
                     },
                 ],
             });
@@ -533,6 +562,7 @@ mod tests {
                     last_offset: 0,
                     byte_start: 0,
                     byte_len: 1,
+                    max_timestamp_ms: 0,
                 }],
             });
         pending.out = PartitionData {

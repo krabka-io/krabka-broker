@@ -299,6 +299,7 @@ mod tests {
                     last_offset: 0,
                     byte_start: 0,
                     byte_len: u32::try_from(flushed.len()).expect("small run"),
+                    max_timestamp_ms: 0,
                 }],
             });
 

@@ -64,6 +64,7 @@ use krabka_protocol::{
         delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     },
 };
+use krabka_units::convert::TimeExt as _;
 use krabka_verified::{DeleteRecordsTrimDecision, FreezeMutationKind};
 use uuid::Uuid;
 
@@ -167,6 +168,92 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
+/// Record the trim as the partition's diskless `DeleteRecords` floor, durably.
+///
+/// A diskless partition's local log start is the flusher's trim frontier, not
+/// a delete point, so the object tier cannot read the floor off the log. The
+/// index topic carries it instead, as a keyed record the projection replays
+/// like any other: a cold read below the floor misses from here on,
+/// `ListOffsets(EARLIEST)` answers the floor, and the flusher's next tick
+/// tombstones every index range that ends below it.
+///
+/// The range tombstones could not stand in for the record. A range that
+/// straddles the floor keeps live records, so retention must not expire it,
+/// and neither may the newest range; both would come back out of a replay
+/// still covering the offsets below the floor. So this runs *before* the trim
+/// is acknowledged, and a failure fails the row: a client told its records are
+/// gone must not see them again after a restart or a leadership move.
+///
+/// A partition with no object tier behind it has nothing to record.
+///
+/// # Errors
+///
+/// Returns an error when the floor cannot be published or does not reach the
+/// committed projection in time.
+async fn publish_diskless_delete_floor(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    part: &crate::partition::Partition,
+    floor: Offset,
+) -> Result<(), crate::error::BrokerError> {
+    let Some((handle, topic_id)) = diskless_index(env, topic, part) else {
+        return Ok(());
+    };
+    // A rebuilding projection is the one case that must not be mistaken for
+    // "nothing to record": there is a floor to persist and nowhere to put it.
+    let Some(index_log) = handle.index_log() else {
+        return Err(crate::error::BrokerError::Txn(
+            "diskless WAL index log is rebuilding; the delete floor cannot be recorded".into(),
+        ));
+    };
+    index_log
+        .publish_delete_floor(
+            topic_id,
+            part.index.get(),
+            floor.0,
+            env.broker
+                .config
+                .diskless_wal_index_projection_timeout
+                .to_std(),
+        )
+        .await
+}
+
+/// The offset a diskless partition actually starts at: the lower of the local
+/// log start and the first offset the object tier still answers for, which is
+/// what [`crate::handlers::list_offsets`] reports for `EARLIEST`.
+///
+/// `None` for a partition with no object tier behind it, which trims against
+/// its local log start like any other.
+async fn diskless_logical_start(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    part: &crate::partition::Partition,
+) -> Option<i64> {
+    let (handle, topic_id) = diskless_index(env, topic, part)?;
+    let covered = handle
+        .index
+        .lock()
+        .await
+        .earliest_covered(topic_id, part.index.get())?;
+    Some(covered.min(part.log_start_offset().0))
+}
+
+/// The diskless read handle and topic id behind a diskless partition.
+fn diskless_index<'a>(
+    env: &'a TrimEnv<'_>,
+    topic: &str,
+    part: &crate::partition::Partition,
+) -> Option<(&'a crate::diskless::read::DisklessReadHandle, Uuid)> {
+    if !part.diskless {
+        return None;
+    }
+    env.broker
+        .diskless_read
+        .as_deref()
+        .zip(env.image.topic(topic).map(|topic| topic.topic_id))
+}
+
 /// Everything one partition's trim reads, and nothing it writes.
 pub(super) struct TrimEnv<'a> {
     pub(super) broker: &'a Broker,
@@ -249,13 +336,15 @@ async fn trim_one(
         .delivery
         .publish_now(&part.log)
         .map(|delivery| delivery.watermark);
-    let target = match trim_decision(
-        fp.offset,
-        hw,
-        leo,
-        part.log_start_offset(),
-        delivery_watermark,
-    ) {
+    // A diskless partition's local log start is the flusher's trim frontier:
+    // the records below it are in the object store, not gone. The trim has to
+    // measure against the offset the partition actually starts at, which is
+    // the same one `ListOffsets(EARLIEST)` answers, or every request below the
+    // trim frontier would be a no-op that deletes nothing.
+    let current_start = diskless_logical_start(env, topic, &part)
+        .await
+        .map_or_else(|| part.log_start_offset(), Offset);
+    let target = match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
         DeleteRecordsTrimDecision::Noop { frontier }
         | DeleteRecordsTrimDecision::Apply { frontier } => Offset(frontier),
         DeleteRecordsTrimDecision::RejectMalformed
@@ -295,8 +384,23 @@ async fn trim_one(
         }
     };
 
+    // Ahead of the trim, so the acknowledgement below can never outrun the
+    // durable record of what was deleted.
+    if let Err(error) = publish_diskless_delete_floor(env, topic, &part, target).await {
+        tracing::warn!(
+            %topic, partition = index, %error,
+            "DeleteRecords could not record the diskless delete floor"
+        );
+        return error_partition_result(index, codes::UNKNOWN_SERVER_ERROR);
+    }
+
     match part.trim_to_offset(target).await {
         Ok(new_start) => {
+            // On a diskless partition the local trim frontier is already past
+            // `target` in the steady state, so `new_start` says nothing about
+            // what a client can still read. The floor does, and it is also the
+            // low watermark the response carries.
+            let low_watermark = if part.diskless { target.0 } else { new_start.0 };
             audit_transition(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
@@ -309,8 +413,7 @@ async fn trim_one(
                     reason: "records deleted below the trim point",
                 },
             );
-            // Unwrap the `Offset` into the wire `i64` `low_watermark`.
-            partition_result(index, new_start.0, codes::NONE)
+            partition_result(index, low_watermark, codes::NONE)
         }
         Err(e) => {
             tracing::warn!(

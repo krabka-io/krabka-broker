@@ -88,6 +88,13 @@ record, and trims the local WAL behind the committed index.
 - A consumer that reads below `krabka_broker_diskless_wal_trim_frontier` costs
   an object-store read. `krabka_broker_diskless_wal_cold_read_hits_total`
   counts them. A fleet whose consumers keep up sees almost none.
+- Bucket size per diskless topic is ingest times `retention.ms`, or
+  `retention.bytes` where that is lower, plus a lag. Retention expires index
+  ranges, and an object is deleted only once every partition sharing it has
+  expired its own ranges, so size the bucket with headroom for one flush
+  object's worth of co-tenancy and the five-minute reclaim grace on top of the
+  retention itself. `krabka_broker_diskless_wal_expired_ranges_total` stuck at
+  zero on a topic with a finite retention means nothing is being reclaimed.
 
 ## Tiered storage
 

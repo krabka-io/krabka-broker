@@ -13,14 +13,19 @@ use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
 use crate::partition::Partition;
 
+/// A batch of `count` records, stamped with the wall clock the way a real
+/// producer stamps one. The timestamp matters: `retention.ms` reads the
+/// batch's `max_timestamp` off the index the flusher builds from this, and a
+/// batch left at the epoch would be older than any retention window.
 fn batch(count: i32) -> RecordBatch {
+    let now_ms = crate::time_util::now_ms();
     RecordBatch {
         base_offset: 0,
         partition_leader_epoch: 0,
         attributes: Attributes::default(),
         last_offset_delta: count - 1,
-        base_timestamp: 0,
-        max_timestamp: 0,
+        base_timestamp: now_ms,
+        max_timestamp: now_ms,
         producer_id: -1,
         producer_epoch: -1,
         base_sequence: -1,

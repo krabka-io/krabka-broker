@@ -233,6 +233,7 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         diskless_wal_flush_failures_total: _,
         diskless_wal_index_projection_lag,
         diskless_wal_trim_frontier,
+        diskless_wal_expired_ranges_total: _,
         diskless_wal_cold_read_hits_total: _,
         diskless_wal_cold_read_misses_total: _,
         diskless_wal_cold_read_errors_total: _,

@@ -105,6 +105,98 @@ pub const fn diskless_wal_replay_decision(
     }
 }
 
+/// Select the oldest contiguous prefix of one diskless partition's committed
+/// WAL index ranges that retention allows to expire.
+///
+/// The three predicates are Kafka's, from `UnifiedLog.deleteOldSegments`: a
+/// range whose newest record is older than `retention.ms`, an oldest range the
+/// `retention.bytes` budget cannot keep, and a range that ends below the
+/// `DeleteRecords` floor. Kafka walks oldest first and stops at the first
+/// segment it must keep, so this returns a prefix length rather than a set.
+///
+/// The ranges arrive oldest first, one entry per index range, and the three
+/// slices are parallel. `retention_ms` and `retention_bytes` are `None` for
+/// Kafka's unlimited sentinel, and a `now_ms - retention_ms` that cannot be
+/// represented expires nothing by time.
+///
+/// The newest range never expires. Kafka keeps the active segment for the same
+/// reason, and here it is also what keeps the flusher's `flushed_frontier`
+/// pointing past the last flushed offset: an empty index would send the next
+/// tick back to the local log start and re-upload a prefix the bucket holds.
+#[requires(max_timestamps@.len() == byte_lens@.len())]
+#[requires(max_timestamps@.len() == last_offsets@.len())]
+#[ensures(result@ <= max_timestamps@.len())]
+#[ensures(max_timestamps@.len() > 0 ==> result@ < max_timestamps@.len())]
+#[ensures(forall<i: Int> 0 <= i && i < result@ ==>
+    last_offsets@[i]@ < log_start_offset@
+    || retention_bytes != None
+    || match retention_ms {
+        Some(retention) => now_ms@ - retention@ >= i64::MIN@
+            && max_timestamps@[i]@ < now_ms@ - retention@,
+        None => false,
+    })]
+#[must_use]
+pub fn diskless_retention_prefix(
+    max_timestamps: &[i64],
+    byte_lens: &[u64],
+    last_offsets: &[i64],
+    retention_ms: Option<i64>,
+    retention_bytes: Option<u64>,
+    log_start_offset: i64,
+    now_ms: i64,
+) -> usize {
+    if matches!(max_timestamps.len(), 0) {
+        return 0;
+    }
+    let max_expire = max_timestamps.len() - 1;
+    let horizon = match retention_ms {
+        Some(retention) => now_ms.checked_sub(retention),
+        None => None,
+    };
+    let mut indexed_bytes = 0u64;
+    let mut scanned = 0usize;
+    #[invariant(scanned@ <= byte_lens@.len())]
+    #[variant(byte_lens@.len() - scanned@)]
+    while scanned < byte_lens.len() {
+        indexed_bytes = indexed_bytes.saturating_add(byte_lens[scanned]);
+        scanned += 1;
+    }
+    let mut size_debt = match retention_bytes {
+        Some(budget) => indexed_bytes.saturating_sub(budget),
+        None => 0,
+    };
+
+    let mut len = 0usize;
+    #[invariant(len@ <= max_expire@)]
+    #[invariant(size_debt@ > 0 ==> retention_bytes != None)]
+    #[invariant(forall<i: Int> 0 <= i && i < len@ ==>
+        last_offsets@[i]@ < log_start_offset@
+        || retention_bytes != None
+        || match retention_ms {
+            Some(retention) => now_ms@ - retention@ >= i64::MIN@
+                && max_timestamps@[i]@ < now_ms@ - retention@,
+            None => false,
+        })]
+    #[variant(max_expire@ - len@)]
+    while len < max_expire {
+        let below_floor = last_offsets[len] < log_start_offset;
+        let aged_out = match horizon {
+            Some(horizon) => max_timestamps[len] < horizon,
+            None => false,
+        };
+        // Kafka subtracts the segment size only while the remainder stays
+        // non-negative, so `retention.bytes` never deletes past its own
+        // budget.
+        let over_budget = size_debt > 0 && size_debt >= byte_lens[len];
+        if !below_floor && !aged_out && !over_budget {
+            break;
+        }
+        size_debt = size_debt.saturating_sub(byte_lens[len]);
+        len += 1;
+    }
+    len
+}
+
 /// Permit object deletion only after the grace period and with no index
 /// reference in the projection protected by the caller's cache lock.
 #[ensures(result == (!referenced && grace_elapsed))]
@@ -376,6 +468,121 @@ mod tests {
                 check!(decision.target <= high_watermark - lag.max(0));
             }
         }
+    }
+
+    /// Every case runs over the same three ranges: 100 bytes each, covering
+    /// offsets 0-4, 5-9 and 10-14, read at `now_ms = 1_000`. Only the batch
+    /// timestamps and the topic's retention change, which is what each Kafka
+    /// predicate keys on.
+    #[test]
+    fn retention_prefix_applies_each_kafka_predicate_and_keeps_the_newest_range() {
+        const BYTE_LENS: [u64; 3] = [100, 100, 100];
+        const LAST_OFFSETS: [i64; 3] = [4, 9, 14];
+        const NOW_MS: i64 = 1_000;
+
+        // `(what, batch max timestamps, retention.ms, retention.bytes,
+        // DeleteRecords floor, expired prefix)`.
+        for (what, max_timestamps, retention_ms, retention_bytes, floor, expired) in [
+            (
+                "nothing configured expires nothing",
+                [10, 20, 30],
+                None,
+                None,
+                0,
+                0,
+            ),
+            (
+                "time leaves what is newer than now - 500",
+                [100, 200, 900],
+                Some(500),
+                None,
+                0,
+                2,
+            ),
+            (
+                "time past every range still keeps the newest",
+                [100, 200, 300],
+                Some(500),
+                None,
+                0,
+                2,
+            ),
+            // The 150-byte debt over a 150-byte budget is paid down to 50 by
+            // the first range, which the second cannot cover.
+            (
+                "bytes expires the oldest range only",
+                [10, 20, 30],
+                None,
+                Some(150),
+                0,
+                1,
+            ),
+            (
+                "a budget the index already fits expires nothing",
+                [10, 20, 30],
+                None,
+                Some(300),
+                0,
+                0,
+            ),
+            (
+                "the floor expires every range that ends below it",
+                [10, 20, 30],
+                None,
+                None,
+                5,
+                1,
+            ),
+            (
+                "a floor past every range still keeps the newest",
+                [10, 20, 30],
+                None,
+                None,
+                99,
+                2,
+            ),
+            // The floor clears the first range, time the second, and neither
+            // reaches the third.
+            (
+                "the predicates union",
+                [100, 100, 900],
+                Some(500),
+                None,
+                5,
+                2,
+            ),
+        ] {
+            let prefix = diskless_retention_prefix(
+                &max_timestamps,
+                &BYTE_LENS,
+                &LAST_OFFSETS,
+                retention_ms,
+                retention_bytes,
+                floor,
+                NOW_MS,
+            );
+            check!(prefix == expired, "{what}");
+            check!(prefix < max_timestamps.len(), "{what}");
+        }
+    }
+
+    #[test]
+    fn retention_prefix_is_total_on_short_inputs_and_unrepresentable_windows() {
+        // A window `now_ms - retention_ms` cannot represent expires nothing.
+        check!(
+            diskless_retention_prefix(
+                &[10, 20, 30],
+                &[100, 100, 100],
+                &[4, 9, 14],
+                Some(-1),
+                None,
+                0,
+                i64::MIN,
+            ) == 0
+        );
+        // One range is the newest range, whatever retention says.
+        check!(diskless_retention_prefix(&[10], &[100], &[4], Some(1), Some(0), 99, 1_000) == 0);
+        check!(diskless_retention_prefix(&[], &[], &[], Some(1), Some(0), 99, 1_000) == 0);
     }
 
     #[test]

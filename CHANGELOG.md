@@ -41,6 +41,30 @@ the `krabka-*` names to crates.io.
   Local retention now asks the remote-log metadata in offsets rather than in
   segment boundaries, so a replica whose segments do not line up with the
   leader's cannot drop a segment the tier holds only part of.
+- A `krabka.diskless=true` topic now expires its object-store tier.
+  `retention.ms`, `retention.bytes` and the `DeleteRecords` floor run against
+  the committed WAL index on every flush tick, through the new proved
+  `diskless_retention_prefix` kernel, and each expired range gets a keyed
+  tombstone on `__diskless_wal_index`. The reclaimer then frees an object once
+  no range in it is referenced. Before this the bucket and the index topic grew
+  at the ingest rate for the life of the topic.
+  `krabka_broker_diskless_wal_expired_ranges_total` counts the tombstones.
+  `WalIndexEntry` gains the `max_timestamp_ms` field `retention.ms` reads, so
+  the `__diskless_wal_index` record format changed: delete the topic and the
+  local data directories rather than replaying an older one.
+- `DeleteRecords` on a diskless partition now deletes. It measures against the
+  offset the partition actually starts at rather than the flusher's local trim
+  frontier, so a request below that frontier is no longer a silent no-op, and
+  the object tier stops answering for the deleted offsets immediately: a fetch
+  below the floor is `OFFSET_OUT_OF_RANGE` and `ListOffsets(EARLIEST)` reports
+  the floor. The floor is a keyed record on `__diskless_wal_index`, published
+  and projected before the trim is acknowledged, so it survives a restart and a
+  leadership move on every broker. The range tombstones could not stand in for
+  it: a range that straddles the floor still holds live records, and neither it
+  nor the newest range may be expired.
+- A KFC-9 write freeze now holds the diskless retention pass, as it already
+  held the cleaner and the remote-log-manager's two retention passes. A frozen
+  topic's prefix stays byte-identical in the object tier too.
 
 - A broker-only node no longer stalls forever after a restart once the
   controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
