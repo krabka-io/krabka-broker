@@ -81,6 +81,38 @@ build --java_runtime_version=remotejdk_21
 test --test_tag_filters=-docker
 test:docker --test_tag_filters=docker
 
+# The same suites, with the daemon supplied by a BuildBuddy Firecracker microVM
+# instead of the runner.
+#
+#     bazel test --config=docker-rbe //...
+#
+# `ci` passes this on the container matrix. The per-target half of it -- the
+# microVM, its dockerd, the image the VM boots -- is `exec_properties` on each
+# `*_docker_test` in //bazel/defs.bzl, because it belongs to the test action
+# rather than to an invocation.
+#
+# What is here is the half that does not: Rust code generation stays on the
+# local machine. A rustc action that runs on a BuildBuddy executor can fail
+# rules_rs's working-directory scan -- the `build:rbe` block below has the
+# reproduction and the cause -- and a compile failure would take the job down
+# before a single container started, which would say nothing about whether the
+# microVMs work. `no-remote-exec` is not `no-remote-cache`: these actions still
+# read the remote cache and only execute locally on a miss.
+#
+# `^Rustc$` and not `Rustc`: Bazel matches this regex anywhere in the mnemonic,
+# so the unanchored spelling would also catch `RustcMetadata`, which is the one
+# rustc action that is already known to run remotely.
+test:docker-rbe --config=docker
+test:docker-rbe --config=rbe
+test:docker-rbe --modify_execution_info=^Rustc$=+no-remote-exec
+# A failing suite here prints the broker's whole INFO log -- `jvm_acceptance_tiered`
+# managed 8.6 MB -- and Bazel drops anything past this cap, printing
+# "exceeds maximum size ...; skipping" in place of the output. That is the only
+# copy CI keeps, so three suites failed in a run with no recoverable reason for
+# any of them. The cap is per test and only spent when a test fails, so the
+# ceiling costs nothing on a green run.
+test:docker-rbe --experimental_ui_max_stdouterr_bytes=20000000
+
 # Remote build execution, opt in per invocation with `--config=rbe`.
 #
 #     bazel build --config=rbe //...
@@ -105,30 +137,34 @@ test:docker --test_tag_filters=docker
 # `--config=rbe` to resolve, and this is the least it can be.
 build:rbe --remote_timeout=600
 
-# `--config=rbe` is on the `lint` step alone, because remote *execution* of
-# rustc codegen is not yet reliable here. Some of it works: on run 33723594983
-# the `build` step executed 13 actions remotely and passed. But a crate whose
-# build script generates something the compile consumes can fail:
+# `--config=rbe` is on the `lint` step alone, and the reason is now known
+# rather than guessed. Reproduced by run 33728109218:
 #
-#     compiled Rust output ...libcodspeed-*.rlib embeds the absolute working
-#     directory /buildbuddy-execroot
+#     Compiling Rust rlib @@rules_rs++crate+crates__ring-0.17.14//:ring failed
+#         CARGO_MANIFEST_DIR='${pwd}/external/rules_rs++crate+crates__ring-0.17.14'
+#     Error: ProcessWrapperError("compiled Rust output ...libring-*.rlib embeds
+#     the absolute working directory /buildbuddy-execroot")
 #
-# rules_rs scans every rustc codegen output for the action's own working
+# rules_rs sets `CARGO_MANIFEST_DIR` to `${pwd}/external/...`, and its process
+# wrapper expands `${pwd}` to the working directory of the action that is
+# running. rustc applies `--remap-path-prefix` to source paths, not to `env!()`
+# values, so a crate that retains `CARGO_MANIFEST_DIR` in its output keeps that
+# directory verbatim -- and rules_rs then scans the same output for the same
 # directory (`rust/private/rustc.bzl` passes `--check-output-for-working-dir`;
-# `util/process_wrapper/main.rs` runs the scan). The scan never fires locally,
-# where each sandboxed action has its own
-# `.../sandbox/linux-sandbox/<n>/execroot/_main`; every action on a BuildBuddy
-# executor shares one fixed `/buildbuddy-execroot`. `codspeed` and `ring` have
-# both hit it. Pinning the build scripts to the runner did not prevent it, so
-# where the path enters the rlib is still unestablished.
+# `util/process_wrapper/main.rs` runs the scan) and rejects it. On a BuildBuddy
+# executor that directory is `/buildbuddy-execroot`.
 #
-# What makes this worse than an occasional failure is *when* it bites. On a
-# warm cache almost nothing executes -- `coverage` on that run logged
-# `2542 remote cache hit ... 2 remote`, and one of those two was the failure --
-# so RBE passes whenever it has least to contribute, and executes, and can
-# fail, exactly on the cold-cache runs it exists for. A gate that behaves that
-# way is worse than no gate speedup at all, which is why `build`, `docgen` and
-# `coverage` stay local until the crash is understood.
+# `bazel coverage` is what surfaces it. `--collect_code_coverage` and
+# `--instrumentation_filter` discard the analysis cache and rekey the graph, so
+# these actions genuinely execute instead of being served from the cache: the
+# reproducing invocation logged `806 remote`, while `bazel build --config=rbe`
+# over the same closure in the same run logged `1287 remote` and passed.
+#
+# That timing is what makes it a bad gate rather than an occasional failure. On
+# a warm cache almost nothing executes, so RBE is green exactly when it
+# contributes nothing, and executes -- and can fail -- on the cold-cache runs
+# it exists for: a `Cargo.lock` bump, a `.bazelrc` change, a broker refactor.
+# So `build`, `docgen` and `coverage` stay local.
 #
 # `lint` is exempt structurally: the clippy aspect emits metadata and no object
 # code, and rustc.bzl skips the scan for those ("RustcMetadata has separate
@@ -137,8 +173,9 @@ build:rbe --remote_timeout=600
 # cache. (Its 52.5s on a warm cache is the remote *cache*, not execution: that
 # invocation ran 0 actions remotely.)
 #
-# The underlying fix belongs upstream in rules_rs, which should not compare an
-# output against a needle that a fixed remote execroot makes collidable.
+# The fix belongs upstream. rules_rs should either not put an absolute `${pwd}`
+# in `CARGO_MANIFEST_DIR`, or not reject an output for containing a directory
+# it chose to put there. Until then this stays where it is.
 
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.

@@ -645,11 +645,15 @@ jobs:
             printf 'No labels resolved for group targets: %s\n' "${TARGETS}" >&2
             exit 1
           fi
-          # `--config=docker` is defined for `test` only (it swaps the
+          # `--config=docker-rbe` is defined for `test` only (it swaps the
           # `--test_tag_filters` set), so passing it to `build` fails with
-          # "Config value 'docker' is not defined in any .rc file".
+          # "Config value 'docker-rbe' is not defined in any .rc file".
+          #
+          # It runs the suites on BuildBuddy Firecracker microVMs, each with its
+          # own dockerd, rather than on this runner's daemon. The compile stays
+          # here -- see the `docker-rbe` block in `.bazelrc`.
           if [ -n "${tests}" ]; then
-            bazel test --config=docker ${tests}
+            bazel test --config=docker-rbe ${tests}
           fi
           if [ -n "${builds}" ]; then
             bazel build ${builds}
