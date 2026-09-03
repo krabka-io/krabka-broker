@@ -20,6 +20,24 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
+- A `krabka.diskless=true` topic now expires its object-store tier.
+  `retention.ms`, `retention.bytes` and the `DeleteRecords` floor run against
+  the committed WAL index on every flush tick, through the new proved
+  `diskless_retention_prefix` kernel, and each expired range gets a keyed
+  tombstone on `__diskless_wal_index`. The reclaimer then frees an object once
+  no range in it is referenced. Before this the bucket and the index topic grew
+  at the ingest rate for the life of the topic.
+  `krabka_broker_diskless_wal_expired_ranges_total` counts the tombstones.
+  `WalIndexEntry` gains the `max_timestamp_ms` field `retention.ms` reads, so
+  the `__diskless_wal_index` record format changed: delete the topic and the
+  local data directories rather than replaying an older one.
+- `DeleteRecords` on a diskless partition now deletes. It measures against the
+  offset the partition actually starts at rather than the flusher's local trim
+  frontier, so a request below that frontier is no longer a silent no-op, and
+  the object tier stops answering for the deleted offsets immediately: a fetch
+  below the floor is `OFFSET_OUT_OF_RANGE` and `ListOffsets(EARLIEST)` reports
+  the floor.
+
 - A broker-only node no longer stalls forever after a restart once the
   controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
   observer metadata fetch now answers a pruned fetch offset with the KIP-630

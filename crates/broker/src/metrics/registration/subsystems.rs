@@ -296,6 +296,11 @@ impl BrokerMetrics {
             self.diskless_wal_flush_failures_total.clone(),
         );
         registry.register(
+            "diskless_wal_expired_ranges",
+            "Committed diskless WAL index ranges tombstoned by retention or DeleteRecords.",
+            self.diskless_wal_expired_ranges_total.clone(),
+        );
+        registry.register(
             "diskless_wal_cold_read_hits",
             "Diskless WAL cold reads served from object storage.",
             self.diskless_wal_cold_read_hits_total.clone(),

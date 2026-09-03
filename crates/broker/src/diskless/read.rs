@@ -398,6 +398,7 @@ mod tests {
                 last_offset: 1,
                 byte_start,
                 byte_len: u32::try_from(second.len()).unwrap(),
+                max_timestamp_ms: 0,
             }],
         });
         let handle = DisklessReadHandle::new(Arc::new(AsyncMutex::new(cache)), store);
@@ -454,6 +455,7 @@ mod tests {
                         last_offset: 0,
                         byte_start: 0,
                         byte_len: u32::try_from(first.len()).unwrap(),
+                        max_timestamp_ms: 0,
                     },
                     super::super::wal_index::WalIndexEntry {
                         topic_id,
@@ -462,6 +464,7 @@ mod tests {
                         last_offset: 1,
                         byte_start: u64::try_from(first.len()).unwrap(),
                         byte_len: u32::try_from(second.len()).unwrap(),
+                        max_timestamp_ms: 0,
                     },
                 ],
             });
@@ -533,6 +536,7 @@ mod tests {
                     last_offset: 0,
                     byte_start: 0,
                     byte_len: 1,
+                    max_timestamp_ms: 0,
                 }],
             });
         pending.out = PartitionData {

@@ -251,6 +251,7 @@ mod tests {
                 last_offset: 2,
                 byte_start: 0,
                 byte_len: 10,
+                max_timestamp_ms: 0,
             }],
         })
         .await

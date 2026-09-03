@@ -167,6 +167,7 @@ impl BrokerMetrics {
             diskless_wal_flush_failures_total: Counter::default(),
             diskless_wal_index_projection_lag: Family::default(),
             diskless_wal_trim_frontier: Family::default(),
+            diskless_wal_expired_ranges_total: Counter::default(),
             diskless_wal_cold_read_hits_total: Counter::default(),
             diskless_wal_cold_read_misses_total: Counter::default(),
             diskless_wal_cold_read_errors_total: Counter::default(),

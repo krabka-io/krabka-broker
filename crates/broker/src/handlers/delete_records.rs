@@ -155,6 +155,64 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
+/// Record a completed trim as the partition's diskless `DeleteRecords` floor.
+///
+/// A diskless partition's local log start is the flusher's trim frontier, not
+/// a delete point, so the object tier cannot read the floor off the log. The
+/// projection carries it instead: a cold read below the floor misses from here
+/// on, `ListOffsets(EARLIEST)` answers the floor, and the flusher's next tick
+/// tombstones every index range that ends below it.
+async fn raise_diskless_delete_floor(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    part: &crate::partition::Partition,
+    floor: Offset,
+) {
+    let Some((handle, topic_id)) = diskless_index(env, topic, part) else {
+        return;
+    };
+    handle
+        .index
+        .lock()
+        .await
+        .raise_delete_floor(topic_id, part.index.get(), floor.0);
+}
+
+/// The offset a diskless partition actually starts at: the lower of the local
+/// log start and the first offset the object tier still answers for, which is
+/// what [`crate::handlers::list_offsets`] reports for `EARLIEST`.
+///
+/// `None` for a partition with no object tier behind it, which trims against
+/// its local log start like any other.
+async fn diskless_logical_start(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    part: &crate::partition::Partition,
+) -> Option<i64> {
+    let (handle, topic_id) = diskless_index(env, topic, part)?;
+    let covered = handle
+        .index
+        .lock()
+        .await
+        .earliest_covered(topic_id, part.index.get())?;
+    Some(covered.min(part.log_start_offset().0))
+}
+
+/// The diskless read handle and topic id behind a diskless partition.
+fn diskless_index<'a>(
+    env: &'a TrimEnv<'_>,
+    topic: &str,
+    part: &crate::partition::Partition,
+) -> Option<(&'a crate::diskless::read::DisklessReadHandle, Uuid)> {
+    if !part.diskless {
+        return None;
+    }
+    env.broker
+        .diskless_read
+        .as_deref()
+        .zip(env.image.topic(topic).map(|topic| topic.topic_id))
+}
+
 /// Everything one partition's trim reads, and nothing it writes.
 pub(super) struct TrimEnv<'a> {
     pub(super) broker: &'a Broker,
@@ -237,13 +295,15 @@ async fn trim_one(
         .delivery
         .publish_now(&part.log)
         .map(|delivery| delivery.watermark);
-    let target = match trim_decision(
-        fp.offset,
-        hw,
-        leo,
-        part.log_start_offset(),
-        delivery_watermark,
-    ) {
+    // A diskless partition's local log start is the flusher's trim frontier:
+    // the records below it are in the object store, not gone. The trim has to
+    // measure against the offset the partition actually starts at, which is
+    // the same one `ListOffsets(EARLIEST)` answers, or every request below the
+    // trim frontier would be a no-op that deletes nothing.
+    let current_start = diskless_logical_start(env, topic, &part)
+        .await
+        .map_or_else(|| part.log_start_offset(), Offset);
+    let target = match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
         DeleteRecordsTrimDecision::Noop { frontier }
         | DeleteRecordsTrimDecision::Apply { frontier } => Offset(frontier),
         DeleteRecordsTrimDecision::RejectMalformed
@@ -285,6 +345,16 @@ async fn trim_one(
 
     match part.trim_to_offset(target).await {
         Ok(new_start) => {
+            // On a diskless partition the local trim frontier is already past
+            // `target` in the steady state, so `new_start` says nothing about
+            // what a client can still read. The floor does, and it is also the
+            // low watermark the response carries.
+            let low_watermark = if part.diskless {
+                raise_diskless_delete_floor(env, topic, &part, target).await;
+                target.0
+            } else {
+                new_start.0
+            };
             audit_transition(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
@@ -297,8 +367,7 @@ async fn trim_one(
                     reason: "records deleted below the trim point",
                 },
             );
-            // Unwrap the `Offset` into the wire `i64` `low_watermark`.
-            partition_result(index, new_start.0, codes::NONE)
+            partition_result(index, low_watermark, codes::NONE)
         }
         Err(e) => {
             tracing::warn!(

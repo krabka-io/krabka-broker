@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytes::Bytes;
 use krabka_verified::{
-    DisklessWalReplayAction, diskless_logical_range, diskless_span_extension,
-    diskless_wal_replay_decision,
+    DisklessWalReplayAction, diskless_logical_range, diskless_retention_prefix,
+    diskless_span_extension, diskless_wal_replay_decision,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,6 +19,9 @@ pub struct WalIndexEntry {
     pub last_offset: i64,
     pub byte_start: u64,
     pub byte_len: u32,
+    /// Newest record timestamp in the range, taken from the batch header at
+    /// flush time. `retention.ms` reads this and nothing else.
+    pub max_timestamp_ms: i64,
 }
 
 /// Stable Kafka compaction key for one logical WAL range.
@@ -100,6 +103,15 @@ pub struct WalIndexCache {
     keyed_ranges: HashSet<WalIndexKey>,
     replay_tombstones: HashSet<WalIndexKey>,
     legacy_replay_finished: bool,
+    /// `DeleteRecords` floors, by partition. Records below one of these are
+    /// deleted as far as every client is concerned, so the object tier stops
+    /// answering for them the moment the trim lands rather than one flush tick
+    /// later, when the flusher has tombstoned the ranges that hold them.
+    ///
+    /// The tombstones are the durable half. This map is not: a broker that
+    /// restarts inside that tick comes back with an empty one and serves the
+    /// deleted offsets again until its first flush tick expires the ranges.
+    delete_floors: HashMap<(Uuid, i32), i64>,
 }
 
 impl WalIndexCache {
@@ -217,6 +229,72 @@ impl WalIndexCache {
             .collect()
     }
 
+    /// Raise one partition's `DeleteRecords` floor. The floor only moves
+    /// forward, so a stale retry cannot expose records an earlier trim removed.
+    pub(crate) fn raise_delete_floor(&mut self, topic_id: Uuid, partition: i32, floor: i64) {
+        let entry = self.delete_floors.entry((topic_id, partition)).or_insert(0);
+        *entry = (*entry).max(floor);
+    }
+
+    /// The partition's `DeleteRecords` floor, or zero when none was set.
+    #[must_use]
+    pub(crate) fn delete_floor(&self, topic_id: Uuid, partition: i32) -> i64 {
+        self.delete_floors
+            .get(&(topic_id, partition))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Drop the floors a deleted topic left behind, so the map does not grow
+    /// with every topic the cluster has ever trimmed.
+    pub(crate) fn forget_topic(&mut self, topic_id: Uuid) {
+        self.delete_floors.retain(|(id, _), _| *id != topic_id);
+    }
+
+    /// Keys of the oldest ranges this partition's retention allows to expire,
+    /// oldest first.
+    ///
+    /// `retention_ms` and `retention_bytes` are `None` for Kafka's unlimited
+    /// sentinel; `log_start_offset` is the `DeleteRecords` floor. The newest
+    /// range is never returned, so the partition keeps a `flushed_frontier`.
+    #[must_use]
+    pub(crate) fn retention_expired_keys(
+        &self,
+        topic_id: Uuid,
+        partition: i32,
+        retention_ms: Option<i64>,
+        retention_bytes: Option<u64>,
+        log_start_offset: i64,
+        now_ms: i64,
+    ) -> Vec<WalIndexKey> {
+        let Some(entries) = self.by_topic_partition.get(&(topic_id, partition)) else {
+            return Vec::new();
+        };
+        // `BTreeMap` iterates by `first_offset`, which is the oldest-first
+        // order the kernel's prefix walk expects.
+        let ranges: Vec<&WalIndexEntry> = entries.values().map(|(_, entry)| entry).collect();
+        let max_timestamps: Vec<i64> = ranges.iter().map(|entry| entry.max_timestamp_ms).collect();
+        let byte_lens: Vec<u64> = ranges
+            .iter()
+            .map(|entry| u64::from(entry.byte_len))
+            .collect();
+        let last_offsets: Vec<i64> = ranges.iter().map(|entry| entry.last_offset).collect();
+        let expired = diskless_retention_prefix(
+            &max_timestamps,
+            &byte_lens,
+            &last_offsets,
+            retention_ms,
+            retention_bytes,
+            log_start_offset,
+            now_ms,
+        );
+        ranges
+            .into_iter()
+            .take(expired)
+            .map(WalIndexKey::from)
+            .collect()
+    }
+
     /// Topic ids represented in the projection.
     #[must_use]
     pub(crate) fn topic_ids(&self) -> HashSet<Uuid> {
@@ -282,6 +360,9 @@ impl WalIndexCache {
         offset: i64,
         max_bytes: usize,
     ) -> Option<(String, u64, u64)> {
+        if offset < self.delete_floor(topic_id, partition) {
+            return None;
+        }
         let entries = self.by_topic_partition.get(&(topic_id, partition))?;
         let indexed: Vec<_> = entries.values().collect();
         let logical: Vec<_> = indexed
@@ -326,14 +407,16 @@ impl WalIndexCache {
             .and_then(|(_, entry)| entry.last_offset.checked_add(1))
     }
 
-    /// Return the smallest first offset covered by object storage for the partition.
+    /// Return the smallest offset object storage still answers for, which is
+    /// the smallest indexed first offset raised to the `DeleteRecords` floor.
     #[must_use]
     pub fn earliest_covered(&self, topic_id: Uuid, partition: i32) -> Option<i64> {
+        let floor = self.delete_floor(topic_id, partition);
         self.by_topic_partition
             .get(&(topic_id, partition))?
             .values()
             .next()
-            .map(|(_, entry)| entry.first_offset)
+            .map(|(_, entry)| entry.first_offset.max(floor))
     }
 }
 
@@ -352,6 +435,7 @@ mod tests {
             last_offset: l,
             byte_start: 0,
             byte_len: 1,
+            max_timestamp_ms: 0,
         }
     }
 
@@ -529,6 +613,83 @@ mod tests {
 
         assert!(c.earliest_covered(Uuid::from_u128(1), 0) == Some(0));
         assert!(c.earliest_covered(Uuid::from_u128(1), 1).is_none());
+    }
+
+    /// Three ranges, one batch each, with ascending timestamps and offsets.
+    fn retention_cache() -> WalIndexCache {
+        let mut cache = WalIndexCache::default();
+        for (index, (first, last, timestamp)) in [(0i64, 4i64, 100i64), (5, 9, 200), (10, 14, 900)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut entry = entry(0, first, last);
+            entry.byte_len = 100;
+            entry.max_timestamp_ms = timestamp;
+            cache.apply(&WalFlushRecord {
+                object_key: format!("o{index}"),
+                format_version: 1,
+                entries: vec![entry],
+            });
+        }
+        cache
+    }
+
+    fn first_offsets(keys: &[WalIndexKey]) -> Vec<i64> {
+        keys.iter().map(|key| key.first_offset).collect()
+    }
+
+    #[test]
+    fn retention_expires_the_oldest_ranges_and_keeps_the_newest() {
+        let cache = retention_cache();
+        let topic = Uuid::from_u128(1);
+
+        // Nothing configured expires nothing.
+        assert!(
+            cache
+                .retention_expired_keys(topic, 0, None, None, 0, 1_000)
+                .is_empty()
+        );
+        // `retention.ms` leaves everything newer than now - 500.
+        assert!(
+            first_offsets(&cache.retention_expired_keys(topic, 0, Some(500), None, 0, 1_000))
+                == [0, 5]
+        );
+        // `retention.bytes` pays a 150-byte debt down with the oldest range.
+        assert!(
+            first_offsets(&cache.retention_expired_keys(topic, 0, None, Some(150), 0, 1_000))
+                == [0]
+        );
+        // The `DeleteRecords` floor clears every range that ends below it.
+        assert!(
+            first_offsets(&cache.retention_expired_keys(topic, 0, None, None, 10, 1_000)) == [0, 5]
+        );
+        // A partition the projection has never seen has nothing to expire.
+        assert!(
+            cache
+                .retention_expired_keys(topic, 1, Some(1), Some(0), 99, 1_000)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_delete_floor_hides_the_offsets_below_it_from_the_object_tier() {
+        let mut cache = retention_cache();
+        let topic = Uuid::from_u128(1);
+        assert!(cache.earliest_covered(topic, 0) == Some(0));
+        assert!(cache.lookup_fetch_range(topic, 0, 0, 100).is_some());
+
+        cache.raise_delete_floor(topic, 0, 5);
+
+        assert!(cache.earliest_covered(topic, 0) == Some(5));
+        assert!(cache.lookup_fetch_range(topic, 0, 4, 100).is_none());
+        assert!(cache.lookup_fetch_range(topic, 0, 5, 100).is_some());
+        // The floor never moves back, so a stale retry cannot expose records
+        // an earlier trim removed.
+        cache.raise_delete_floor(topic, 0, 1);
+        assert!(cache.delete_floor(topic, 0) == 5);
+        // And it leaves with its topic.
+        cache.forget_topic(topic);
+        assert!(cache.delete_floor(topic, 0) == 0);
     }
 
     #[test]

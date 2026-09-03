@@ -116,7 +116,8 @@ pub use directory::{
 pub use diskless::{
     DisklessBatchStep, DisklessTrimDecision, DisklessWalReplayAction, DisklessWalReplayDecision,
     diskless_batch_step, diskless_logical_range, diskless_object_reclaimable,
-    diskless_span_extension, diskless_trim_decision, diskless_wal_replay_decision,
+    diskless_retention_prefix, diskless_span_extension, diskless_trim_decision,
+    diskless_wal_replay_decision,
 };
 pub use epoch::exact_epoch_successor;
 pub use features::{FeatureUpdateDecision, feature_update_decision};

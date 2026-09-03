@@ -12,6 +12,7 @@ use std::{
 use futures_util::TryStreamExt as _;
 use krabka_log::Offset;
 use krabka_metadata::{MetadataImage, NodeId};
+use krabka_units::convert::{ByteSizeExt, TimeExt};
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -129,6 +130,7 @@ async fn flush_tick(
     let image = context.image_rx.borrow().clone();
     tombstone_deleted_topics(context, &image).await?;
     let mut partitions = flushable_partitions(&context.partitions, &image, context.node_id).await;
+    expire_retention_breached_ranges(context, &partitions, crate::time_util::now_ms()).await?;
     if !partitions.is_empty() {
         let start = rotation % partitions.len();
         partitions.rotate_left(start);
@@ -154,7 +156,68 @@ async fn tombstone_deleted_topics(
     for topic_id in topic_ids {
         if image.topic_by_id(&topic_id).is_none() {
             context.index_log.tombstone_topic(topic_id).await?;
+            context
+                .index_log
+                .cache()
+                .lock()
+                .await
+                .forget_topic(topic_id);
         }
+    }
+    Ok(())
+}
+
+/// Tombstone the index ranges each led partition's retention has expired.
+///
+/// Kafka runs the same three predicates on every `LogManager` cleanup tick,
+/// against both the local segments and, on a tiered topic, the remote ones.
+/// On a diskless topic the object tier is the only tier that holds the
+/// records, so the tombstone is what makes retention mean anything at all.
+///
+/// The object itself is freed by [`Reclaimer`] on a later sweep, and only once
+/// no range in it is referenced. One object holds runs from several
+/// partitions, so a partition whose ranges all expire can still leave the
+/// object in the bucket until its co-tenants expire too.
+async fn expire_retention_breached_ranges(
+    context: &FlusherContext,
+    partitions: &[FlushPartition],
+    now_ms: i64,
+) -> Result<(), crate::error::BrokerError> {
+    for partition in partitions {
+        let config = partition
+            .handle
+            .log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .config_snapshot();
+        let retention_ms = config.retention.map(TimeExt::millis_i64_trunc);
+        let retention_bytes = config.retention_size.map(ByteSizeExt::bytes_u64);
+        let index = partition.handle.index.get();
+        let keys = {
+            let cache = context.index_log.cache();
+            let cache = cache.lock().await;
+            // The `DeleteRecords` floor, not the local log start: the flusher
+            // trims the local log behind the committed index on every tick, so
+            // the log start says only how much of the WAL has reached the
+            // bucket, never what an operator asked to delete.
+            let log_start_offset = cache.delete_floor(partition.topic_id, index);
+            cache.retention_expired_keys(
+                partition.topic_id,
+                index,
+                retention_ms,
+                retention_bytes,
+                log_start_offset,
+                now_ms,
+            )
+        };
+        if keys.is_empty() {
+            continue;
+        }
+        context.index_log.tombstone_ranges(&keys).await?;
+        context
+            .metrics
+            .diskless_wal_expired_ranges_total
+            .inc_by(u64::try_from(keys.len()).unwrap_or(u64::MAX));
     }
     Ok(())
 }
@@ -263,7 +326,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, TopicRecord};
-    use krabka_units::{ByteSize, convert::ByteSizeExt as _};
+    use krabka_units::ByteSize;
     use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
     use tempfile::tempdir;
 
@@ -449,6 +512,7 @@ mod tests {
                         last_offset: 2,
                         byte_start: 0,
                         byte_len: 6,
+                        max_timestamp_ms: 0,
                     }],
                 })
                 .await
@@ -521,6 +585,7 @@ mod tests {
                     last_offset: 2,
                     byte_start: 0,
                     byte_len: 6,
+                    max_timestamp_ms: 0,
                 }],
             })
             .await
@@ -544,6 +609,222 @@ mod tests {
 
         assert!(cache.lock().await.lookup(topic_id, 0, 0).is_none());
         assert!(store.head(&Path::from(object_key)).await.is_err());
+    }
+
+    /// A flusher over one led diskless partition whose projection already
+    /// holds `ranges` -- `(object key, first offset, last offset, batch max
+    /// timestamp)`, one keyed record each -- with each object in the store.
+    ///
+    /// The partition itself is only here for its log configuration and its
+    /// index, which is what the retention pass reads.
+    async fn seeded_retention_flusher(
+        dir: &std::path::Path,
+        topic_id: Uuid,
+        ranges: &[(&str, i64, i64, i64)],
+    ) -> (FlusherContext, Arc<dyn ObjectStore>, Arc<Partition>) {
+        let handle = test_partition(dir, "orders", 0, true, NodeId(1));
+        let partitions = Arc::new(PartitionRegistry::new());
+        partitions.insert(
+            "orders".into(),
+            krabka_ids::PartitionIndex(0),
+            Arc::clone(&handle),
+        );
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let index = DisklessIndexLog::start(
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+        )
+        .await
+        .unwrap();
+        for (object_key, first_offset, last_offset, max_timestamp_ms) in ranges.iter().copied() {
+            store
+                .put(&Path::from(object_key), PutPayload::from_static(b"object"))
+                .await
+                .unwrap();
+            let record = WalFlushRecord {
+                object_key: object_key.into(),
+                format_version: 1,
+                entries: vec![crate::diskless::wal_index::WalIndexEntry {
+                    topic_id,
+                    partition: 0,
+                    first_offset,
+                    last_offset,
+                    byte_start: 0,
+                    byte_len: 6,
+                    max_timestamp_ms,
+                }],
+            };
+            index.publish_flush(&record).await.unwrap();
+            assert!(
+                index
+                    .wait_until_applied(&record, Duration::from_secs(1))
+                    .await
+            );
+        }
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "orders".into(),
+            topic_id,
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
+        (
+            FlusherContext {
+                partitions,
+                image_rx,
+                object_store: Arc::clone(&store),
+                index_log: index,
+                node_id: NodeId(1),
+                broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
+                ready: Arc::new(AtomicBool::new(false)),
+            },
+            store,
+            handle,
+        )
+    }
+
+    fn flush_partition(topic_id: Uuid, handle: &Arc<Partition>) -> FlushPartition {
+        FlushPartition {
+            topic_id,
+            handle: Arc::clone(handle),
+            high_watermark: Offset(3),
+        }
+    }
+
+    #[tokio::test]
+    async fn retention_ms_expires_an_aged_range_and_frees_its_object() {
+        let dir = tempdir().unwrap();
+        let topic_id = Uuid::from_u128(11);
+        let (context, store, handle) = seeded_retention_flusher(
+            dir.path(),
+            topic_id,
+            &[
+                ("diskless-wal/7/aged.ckwl", 0, 2, 1_000),
+                ("diskless-wal/7/fresh.ckwl", 3, 5, 5_000),
+            ],
+        )
+        .await;
+        let mut config = handle.log.lock().unwrap().config_snapshot();
+        config.retention = Some(krabka_units::millis(1));
+        handle.log.lock().unwrap().set_config(config);
+        let partitions = [flush_partition(topic_id, &handle)];
+
+        // Far enough past both batches that only the "keep the newest range"
+        // rule stands between retention and an empty index.
+        expire_retention_breached_ranges(&context, &partitions, 10_000)
+            .await
+            .unwrap();
+        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+
+        let cache = context.index_log.cache();
+        let cache = cache.lock().await;
+        assert!(cache.lookup(topic_id, 0, 0).is_none());
+        assert!(cache.lookup(topic_id, 0, 3).is_some());
+        drop(cache);
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/7/aged.ckwl"))
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/7/fresh.ckwl"))
+                .await
+                .is_ok()
+        );
+
+        let mut body = String::new();
+        let registry = context.metrics.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        assert!(body.contains("krabka_broker_diskless_wal_expired_ranges_total 1"));
+    }
+
+    #[tokio::test]
+    async fn an_unlimited_retention_expires_nothing() {
+        let dir = tempdir().unwrap();
+        let topic_id = Uuid::from_u128(11);
+        let (context, store, handle) = seeded_retention_flusher(
+            dir.path(),
+            topic_id,
+            &[
+                ("diskless-wal/7/first.ckwl", 0, 2, 1_000),
+                ("diskless-wal/7/second.ckwl", 3, 5, 5_000),
+            ],
+        )
+        .await;
+        // Kafka's unlimited sentinel for both windows, which is what a topic
+        // with `retention.ms=-1` and `retention.bytes=-1` reaches the flusher
+        // as. The clock is then irrelevant, so this uses the largest one.
+        let mut config = handle.log.lock().unwrap().config_snapshot();
+        config.retention = None;
+        config.retention_size = None;
+        handle.log.lock().unwrap().set_config(config);
+        let partitions = [flush_partition(topic_id, &handle)];
+
+        expire_retention_breached_ranges(&context, &partitions, i64::MAX)
+            .await
+            .unwrap();
+        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+
+        assert!(
+            context
+                .index_log
+                .cache()
+                .lock()
+                .await
+                .lookup(topic_id, 0, 0)
+                .is_some()
+        );
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/7/first.ckwl"))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delete_records_floor_expires_the_ranges_below_it() {
+        let dir = tempdir().unwrap();
+        let topic_id = Uuid::from_u128(11);
+        let (context, store, handle) = seeded_retention_flusher(
+            dir.path(),
+            topic_id,
+            &[
+                ("diskless-wal/7/deleted.ckwl", 0, 2, 1_000),
+                ("diskless-wal/7/kept.ckwl", 3, 5, 1_000),
+            ],
+        )
+        .await;
+        // The local log start is the flusher's trim frontier and says nothing
+        // about a delete, so the floor the handler recorded is what the
+        // retention pass reads.
+        context
+            .index_log
+            .cache()
+            .lock()
+            .await
+            .raise_delete_floor(topic_id, 0, 3);
+        let partitions = [flush_partition(topic_id, &handle)];
+
+        expire_retention_breached_ranges(&context, &partitions, 1_000)
+            .await
+            .unwrap();
+        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+
+        let cache = context.index_log.cache();
+        let cache = cache.lock().await;
+        assert!(cache.lookup(topic_id, 0, 0).is_none());
+        assert!(cache.earliest_covered(topic_id, 0) == Some(3));
+        drop(cache);
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/7/deleted.ckwl"))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -696,6 +977,7 @@ mod tests {
                 last_offset: 2,
                 byte_start: 0,
                 byte_len: 10,
+                max_timestamp_ms: 0,
             }],
         })
         .await

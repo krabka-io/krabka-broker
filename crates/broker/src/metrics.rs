@@ -616,6 +616,9 @@ pub struct BrokerMetrics {
     pub diskless_wal_index_projection_lag: Family<WalShardLabel, Gauge>,
     /// Local WAL log-start offset after trimming.
     pub diskless_wal_trim_frontier: Family<WalShardLabel, Gauge>,
+    /// Committed WAL index ranges tombstoned because `retention.ms`,
+    /// `retention.bytes`, or a `DeleteRecords` floor expired them.
+    pub diskless_wal_expired_ranges_total: Counter,
     pub diskless_wal_cold_read_hits_total: Counter,
     pub diskless_wal_cold_read_misses_total: Counter,
     pub diskless_wal_cold_read_errors_total: Counter,

@@ -14,7 +14,11 @@ use bytes::{Bytes, BytesMut};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
+        delete_records_request::{
+            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+        },
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     primitives::uuid::Uuid as WireUuid,
@@ -29,7 +33,9 @@ const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 /// Kafka `UNKNOWN_TOPIC_OR_PARTITION`. Also pre-append.
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 /// Kafka `OFFSET_OUT_OF_RANGE`.
-const OFFSET_OUT_OF_RANGE: i16 = 1;
+pub(crate) const OFFSET_OUT_OF_RANGE: i16 = 1;
+/// The `ListOffsets` sentinel for the earliest available offset (KIP-79).
+const EARLIEST_TIMESTAMP: i64 = -2;
 
 /// A log read back over the wire.
 pub(crate) struct FetchedLog {
@@ -40,6 +46,32 @@ pub(crate) struct FetchedLog {
     /// serving them holds the identical batches, which is the byte-exactness
     /// the failover case asserts.
     pub(crate) bytes: Bytes,
+}
+
+/// One record carrying `value`, stamped with the wall clock the way a real
+/// producer stamps a batch.
+///
+/// The timestamp is not incidental. `retention.ms` on a diskless topic reads a
+/// batch's `max_timestamp` off the WAL index, and this suite's topic runs the
+/// default seven-day window, so a batch left at the epoch would be expired out
+/// of the object store before any case could read it back.
+fn stamped_batch(value: Bytes) -> RecordBatch {
+    let now_ms = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the test clock is after the epoch")
+            .as_millis(),
+    )
+    .expect("the test clock fits an i64 of milliseconds");
+    RecordBatch {
+        base_timestamp: now_ms,
+        max_timestamp: now_ms,
+        records: vec![Record {
+            value: Some(value),
+            ..Record::default()
+        }],
+        ..RecordBatch::default()
+    }
 }
 
 /// The value this suite produces at `index`.
@@ -66,13 +98,7 @@ pub(crate) async fn produce_all(client: &Client, topic_id: WireUuid, values: &[B
 async fn produce_one(client: &Client, topic_id: WireUuid, value: Bytes, index: usize) {
     let deadline = Instant::now() + Duration::from_mins(1);
     loop {
-        let batch = RecordBatch {
-            records: vec![Record {
-                value: Some(value.clone()),
-                ..Record::default()
-            }],
-            ..RecordBatch::default()
-        };
+        let batch = stamped_batch(value.clone());
         let response = client
             .send(ProduceRequest {
                 acks: -1,
@@ -225,13 +251,7 @@ pub(crate) async fn produce_until_stopped(
 ) {
     let mut index = 0usize;
     while !stop.is_cancelled() {
-        let batch = RecordBatch {
-            records: vec![Record {
-                value: Some(Bytes::from(format!("diskless-e2e-churn-{index:04}"))),
-                ..Record::default()
-            }],
-            ..RecordBatch::default()
-        };
+        let batch = stamped_batch(Bytes::from(format!("diskless-e2e-churn-{index:04}")));
         let _ = client
             .send(ProduceRequest {
                 acks: -1,
@@ -266,4 +286,95 @@ pub(crate) fn assert_matches_produced(log: &FetchedLog, start_offset: i64, expec
         })
         .collect();
     assert!(log.records == want);
+}
+
+/// Delete every record below `offset`, and return the low watermark the broker
+/// answers with.
+///
+/// The request goes to `bootstrap` directly rather than through a leader
+/// lookup: only the leader trims, so a case that means to delete records sends
+/// this to the broker it already resolved as the leader. `DeleteRecords`
+/// carries no topic id at any version, so this names the topic and there is
+/// nothing to pass.
+pub(crate) async fn delete_records_below(bootstrap: &str, offset: i64) -> i64 {
+    let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
+    let response = client
+        .send(DeleteRecordsRequest {
+            topics: vec![DeleteRecordsTopic {
+                name: TOPIC.into(),
+                partitions: vec![DeleteRecordsPartition {
+                    partition_index: 0,
+                    offset,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            timeout_ms: 10_000,
+            ..Default::default()
+        })
+        .await
+        .expect("DeleteRecords");
+    let partition = &response.topics[0].partitions[0];
+    assert!(
+        partition.error_code == 0,
+        "DeleteRecords below offset {offset} failed: {response:?}"
+    );
+    partition.low_watermark
+}
+
+/// The offset `ListOffsets(EARLIEST)` answers for the suite's partition.
+pub(crate) async fn earliest_offset(bootstrap: &str) -> i64 {
+    let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
+    let response = client
+        .send(ListOffsetsRequest {
+            replica_id: -1,
+            topics: vec![ListOffsetsTopic {
+                name: TOPIC.into(),
+                partitions: vec![ListOffsetsPartition {
+                    partition_index: 0,
+                    timestamp: EARLIEST_TIMESTAMP,
+                    current_leader_epoch: -1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("ListOffsets");
+    let partition = &response.topics[0].partitions[0];
+    assert!(
+        partition.error_code == 0,
+        "ListOffsets(EARLIEST) failed: {response:?}"
+    );
+    partition.offset
+}
+
+/// The error code one `Fetch` of `offset` answers with, without retrying.
+///
+/// [`fetch_log`] refuses `OFFSET_OUT_OF_RANGE`, which is exactly the answer a
+/// case about a deleted offset is asserting, so that case reads the raw code
+/// through here instead.
+pub(crate) async fn fetch_error_code(bootstrap: &str, topic_id: WireUuid, offset: i64) -> i16 {
+    let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
+    let response = client
+        .send(FetchRequest {
+            max_wait_ms: 500,
+            min_bytes: 1,
+            topics: vec![FetchTopic {
+                topic: TOPIC.into(),
+                topic_id,
+                partitions: vec![FetchPartition {
+                    partition: 0,
+                    fetch_offset: offset,
+                    partition_max_bytes: 4 * 1024 * 1024,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("Fetch");
+    response.responses[0].partitions[0].error_code
 }

@@ -238,6 +238,20 @@ impl DisklessIndexLog {
         topic_id: uuid::Uuid,
     ) -> Result<(), crate::error::BrokerError> {
         let keys = self.cache.lock().await.keys_for_topic(topic_id);
+        self.tombstone_ranges(&keys).await
+    }
+
+    /// Tombstone named logical ranges, one keyed record each, and drop them
+    /// from the projection.
+    ///
+    /// A partial failure leaves the ranges it already published tombstoned and
+    /// the rest untouched. That is safe to retry: a tombstone for a range the
+    /// projection no longer holds is a no-op, and the caller recomputes the
+    /// remaining set on its next pass.
+    pub(crate) async fn tombstone_ranges(
+        &self,
+        keys: &[WalIndexKey],
+    ) -> Result<(), crate::error::BrokerError> {
         for key in keys {
             let bytes = key.to_bytes();
             self.log
@@ -250,7 +264,7 @@ impl DisklessIndexLog {
                 .map_err(|error| {
                     crate::error::BrokerError::Txn(format!("diskless index tombstone: {error}"))
                 })?;
-            self.cache.lock().await.remove(key);
+            self.cache.lock().await.remove(*key);
         }
         Ok(())
     }
@@ -347,6 +361,7 @@ mod tests {
                 last_offset: last,
                 byte_start: 0,
                 byte_len: 10,
+                max_timestamp_ms: 0,
             }],
         }
     }
@@ -471,6 +486,7 @@ mod tests {
                 last_offset: 3,
                 byte_start: 6,
                 byte_len: 10,
+                max_timestamp_ms: 0,
             }],
         };
 
