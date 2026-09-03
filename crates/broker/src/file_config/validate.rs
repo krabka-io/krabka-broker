@@ -409,7 +409,7 @@ mod tests {
             // `message_max_bytes_takes_kafkas_int_at_least_zero` in
             // `runtime_storage` covers its whole domain.
             "future_log_move_read_chunk",
-            "metadata_max_between_snapshots",
+            "metadata_max_bytes_between_snapshots",
             "metadata_snapshot_fetch_max",
         ] {
             let source = format!("[runtime]\n{field} = \"0B\"\n");
@@ -446,7 +446,10 @@ mod tests {
             ("audit_tail_read_max", "1.5B"),
             ("record_decompression_output_floor", "1.5B"),
             ("record_decompression_output_ceiling", "1073741825B"),
-            ("metadata_max_between_snapshots", "18446744073709551616B"),
+            (
+                "metadata_max_bytes_between_snapshots",
+                "18446744073709551616B",
+            ),
             ("metadata_snapshot_fetch_max", "1.5B"),
             ("metadata_snapshot_fetch_max", "1073741825B"),
             ("message_max_bytes", "1.5B"),

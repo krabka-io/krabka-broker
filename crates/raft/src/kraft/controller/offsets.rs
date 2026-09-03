@@ -50,10 +50,23 @@ pub fn committed_records_since_snapshot(hwm: Offset, last_snapshot_end_offset: O
 }
 
 pub fn snapshot_interval_reached(advanced: u64, snapshot_interval_records: u64) -> bool {
-    matches!(
-        advanced.cmp(&snapshot_interval_records),
-        std::cmp::Ordering::Equal | std::cmp::Ordering::Greater
-    )
+    snapshot_interval_records != 0
+        && matches!(
+            advanced.cmp(&snapshot_interval_records),
+            std::cmp::Ordering::Equal | std::cmp::Ordering::Greater
+        )
+}
+
+/// (KIP-630) whether the bytes committed since the last snapshot have reached
+/// `max_bytes_between_snapshots`. `0` disables the byte-size cap.
+pub fn snapshot_bytes_reached(bytes_since_snapshot: u64, max_bytes_between_snapshots: u64) -> bool {
+    max_bytes_between_snapshots != 0 && bytes_since_snapshot >= max_bytes_between_snapshots
+}
+
+/// (KIP-630) whether the wall-clock time since the last snapshot has reached
+/// `max_snapshot_interval_ms`. `0` disables the time-based cap.
+pub fn snapshot_time_reached(elapsed_ms: u64, max_snapshot_interval_ms: u64) -> bool {
+    max_snapshot_interval_ms != 0 && elapsed_ms >= max_snapshot_interval_ms
 }
 
 pub fn expected_hwm_after_advance(prev_hwm: Offset, new_hwm: Offset, log_end: Offset) -> Offset {

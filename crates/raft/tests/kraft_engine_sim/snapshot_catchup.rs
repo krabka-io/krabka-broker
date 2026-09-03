@@ -4,7 +4,11 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use krabka_raft::kraft::NodeId;
+use krabka_raft::kraft::{
+    NodeId, PeerSender, checkpoint_dir,
+    controller::checkpoint::{latest_checkpoint_id, load_checkpoint_by_id},
+    transport::{api_key, wire},
+};
 
 use crate::{
     harness::{
@@ -121,6 +125,134 @@ async fn lagging_follower_catches_up_via_snapshot() {
     assert2::assert!(lag_snap.log_start_offset > 0);
 
     for &id in &ids {
+        if let Some(c) = net.get(id) {
+            c.shutdown().await;
+        }
+    }
+}
+
+/// Every voter snapshots and prunes on its own (#364): a follower that never
+/// held leadership still checkpoints once the committed offset advances past
+/// `snapshot_interval_records`, and the resulting on-disk checkpoint is
+/// enough for it to serve a lagging peer's `Fetch`/`FetchSnapshot` directly —
+/// the leader stays up and reachable throughout, so this isolates the
+/// follower's own serve path from election/discovery timing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
+    let net = SimNet::new();
+    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let cid = uuid::Uuid::from_u128(501);
+    let interval = 5u64;
+
+    let mut dirs: HashMap<NodeId, tempfile::TempDir> = HashMap::new();
+    for &id in &[NodeId(1), NodeId(2)] {
+        let idx = usize::try_from(id.0 - 1).unwrap();
+        let (ctrl, dir) = build_engine_with_snapshot_interval(
+            id,
+            &ids,
+            cid,
+            STAGGERED_TIMEOUTS[idx],
+            &net,
+            interval,
+        );
+        net.register(id, ctrl);
+        dirs.insert(id, dir);
+    }
+
+    let live = [NodeId(1), NodeId(2)];
+    let (leader, _epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
+    assert2::assert!(leader == NodeId(1));
+    let follower = NodeId(2);
+
+    let burst = usize::try_from(interval).unwrap() * 3;
+    for i in 0..burst {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            net.get(leader)
+                .unwrap()
+                .submit_change(vec![topic_record(&format!("f{i}"), 2000 + i as u128)]),
+        )
+        .await
+        .expect("burst submit did not hang")
+        .expect("burst submit ok");
+    }
+
+    // The follower must have pruned on its own — the direct fix for #364:
+    // `maybe_snapshot_and_prune` no longer gates on `is_leader()`, so a
+    // follower's HWM advance on its applied Fetch response checkpoints and
+    // prunes exactly as the leader's does, with the leader never touched.
+    let follower_ctrl = net.get(follower).unwrap();
+    await_until(Duration::from_secs(10), || {
+        (follower_ctrl.quorum_snapshot().log_start_offset > 0).then_some(())
+    })
+    .await;
+    let follower_dir = dirs[&follower].path().to_path_buf();
+    let (end_offset, epoch) = latest_checkpoint_id(&checkpoint_dir(&follower_dir))
+        .expect("the follower's independent prune left a checkpoint on disk");
+    let want_bytes = load_checkpoint_by_id(&checkpoint_dir(&follower_dir), end_offset, epoch)
+        .expect("the follower's own checkpoint is readable");
+
+    // A lagging peer (node 3, never registered — this exercises the wire
+    // protocol directly rather than through election/discovery) asks the
+    // FOLLOWER, not the leader, for records from offset 0. Below the
+    // follower's own pruned log_start, so it must point back at its own
+    // checkpoint rather than serve records (only a leader serves records).
+    let fetch_req = wire::PeerRequest::Fetch {
+        from: NodeId(3),
+        fetch_epoch: 0,
+        fetch_offset: 0,
+    }
+    .encode();
+    let fetch_resp_body = net
+        .send(follower, api_key::FETCH, fetch_req)
+        .await
+        .expect("fetch to the follower succeeds");
+    let Some(wire::PeerResponse::Fetch {
+        snapshot_id,
+        records,
+        ..
+    }) = wire::PeerResponse::decode_fetch(&fetch_resp_body)
+    else {
+        panic!("follower did not return a decodable Fetch response");
+    };
+    assert2::assert!(snapshot_id == Some((end_offset, epoch)));
+    assert2::assert!(records.is_empty());
+
+    // Fetch the whole snapshot from the follower directly, exactly as a
+    // lagging peer's `FetchSnapshot` loop would, and confirm it reassembles
+    // to the follower's own on-disk checkpoint byte-for-byte.
+    let mut got_bytes = Vec::new();
+    loop {
+        let position = i64::try_from(got_bytes.len()).unwrap();
+        let req = wire::PeerRequest::FetchSnapshot {
+            from: NodeId(3),
+            snapshot_id: (end_offset, epoch),
+            position,
+            max_bytes: i32::MAX,
+        }
+        .encode();
+        let resp_body = net
+            .send(follower, api_key::FETCH_SNAPSHOT, req)
+            .await
+            .expect("fetch snapshot chunk from the follower succeeds");
+        let Some(wire::PeerResponse::FetchSnapshot {
+            size,
+            bytes,
+            error_code,
+            ..
+        }) = wire::PeerResponse::decode_fetch_snapshot(&resp_body)
+        else {
+            panic!("follower did not return a decodable FetchSnapshot response");
+        };
+        assert2::assert!(error_code == 0);
+        got_bytes.extend_from_slice(&bytes);
+        if i64::try_from(got_bytes.len()).unwrap() >= size {
+            break;
+        }
+    }
+    assert2::assert!(got_bytes == want_bytes);
+
+    for &id in &live {
         if let Some(c) = net.get(id) {
             c.shutdown().await;
         }

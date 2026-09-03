@@ -61,7 +61,7 @@ impl RuntimeFileConfig {
         }
         set_runtime_size_bytes!(
             runtime,
-            metadata_max_between_snapshots,
+            metadata_max_bytes_between_snapshots,
             cfg.metadata_max_bytes_between_snapshots,
             whole_bytes_u64
         );

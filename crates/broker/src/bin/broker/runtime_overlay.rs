@@ -235,7 +235,7 @@ impl Args {
             runtime,
             partition_disk_scan_interval,
             observer_lag_bound,
-            metadata_max_between_snapshots,
+            metadata_max_bytes_between_snapshots,
             metadata_max_snapshot_interval,
             metadata_snapshot_interval_records,
             metadata_snapshot_fetch_max,

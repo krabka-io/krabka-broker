@@ -333,7 +333,7 @@ pub struct RuntimeFileConfig {
     pub controlled_shutdown_drain_timeout: Option<Time>,
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub metadata_max_between_snapshots: Option<ByteSize>,
+    pub metadata_max_bytes_between_snapshots: Option<ByteSize>,
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub metadata_max_snapshot_interval: Option<Time>,

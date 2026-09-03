@@ -137,6 +137,8 @@ async fn repeated_leader_restart_reelects() {
             MetadataRaftFetchMax::default(),
             Arc::new(net.as_peer(leader)),
             0,
+            krabka_units::prelude::bytes(0),
+            krabka_units::prelude::millis(0),
             MetadataSnapshotFetchMax::default(),
         )
         .expect("reopen leader");

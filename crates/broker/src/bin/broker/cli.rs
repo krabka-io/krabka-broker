@@ -218,10 +218,10 @@ pub struct Args {
     /// Maximum bytes between metadata-log snapshots.
     #[arg(
         long,
-        env = "KRABKA_METADATA_MAX_BETWEEN_SNAPSHOTS",
+        env = "KRABKA_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS",
         value_parser = krabka_units::parse::positive_byte_size
     )]
-    pub metadata_max_between_snapshots: Option<ByteSize>,
+    pub metadata_max_bytes_between_snapshots: Option<ByteSize>,
 
     /// Maximum time between metadata-log snapshots. `0s` disables the interval cap.
     #[arg(long, env = "KRABKA_METADATA_MAX_SNAPSHOT_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]

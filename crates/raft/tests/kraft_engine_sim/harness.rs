@@ -80,6 +80,8 @@ pub(crate) fn build_engine_with_snapshot_interval(
             metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
             peers: Arc::new(net.as_peer(me)),
             snapshot_interval_records,
+            max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
+            max_snapshot_interval: millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         },
         log,

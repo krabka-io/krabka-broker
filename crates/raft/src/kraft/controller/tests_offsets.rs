@@ -9,8 +9,9 @@ use crate::kraft::controller::offsets::{
     append_result_is_consistent, assigned_record_offset, batch_base_in_apply_window,
     committed_records_since_snapshot, expected_hwm_after_advance, fetch_batch_committed_before_hwm,
     fetch_offset_has_records, hwm_advanced_as_expected, hwm_reaches_waiter,
-    is_single_voter_majority, metadata_fetch_offset_in_committed_window, snapshot_interval_reached,
-    submit_waiter_need_offset, validate_append_result,
+    is_single_voter_majority, metadata_fetch_offset_in_committed_window, snapshot_bytes_reached,
+    snapshot_interval_reached, snapshot_time_reached, submit_waiter_need_offset,
+    validate_append_result,
 };
 
 #[test]
@@ -85,8 +86,31 @@ fn snapshot_threshold_uses_positive_hwm_delta_from_last_snapshot() {
         ("exact threshold", 3, 3, true),
         ("above threshold", 4, 3, true),
         ("below threshold", 2, 3, false),
+        ("disabled cap never reached", 5, 0, false),
     ] {
         assert2::assert!(snapshot_interval_reached(advanced, interval) == want);
+    }
+}
+
+#[test]
+fn snapshot_bytes_and_time_caps_disable_at_zero_and_trigger_at_or_past_threshold() {
+    for (_case, bytes_since_snapshot, max_bytes_between_snapshots, want) in [
+        ("exact threshold", 20, 20, true),
+        ("above threshold", 21, 20, true),
+        ("below threshold", 19, 20, false),
+        ("disabled cap never reached", u64::MAX, 0, false),
+    ] {
+        assert2::assert!(
+            snapshot_bytes_reached(bytes_since_snapshot, max_bytes_between_snapshots) == want
+        );
+    }
+    for (_case, elapsed_ms, max_snapshot_interval_ms, want) in [
+        ("exact threshold", 3_600_000, 3_600_000, true),
+        ("above threshold", 3_600_001, 3_600_000, true),
+        ("below threshold", 3_599_999, 3_600_000, false),
+        ("disabled cap never reached", u64::MAX, 0, false),
+    ] {
+        assert2::assert!(snapshot_time_reached(elapsed_ms, max_snapshot_interval_ms) == want);
     }
 }
 
