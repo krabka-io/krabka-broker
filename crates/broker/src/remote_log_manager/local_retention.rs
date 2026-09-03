@@ -2,19 +2,23 @@
 //! from its own disk once the remote tier holds them.
 //!
 //! Leader and follower alike run this pass. What makes a sealed segment
-//! droppable is the RLMM saying the leader finished copying it, and the RLMM
-//! is shared, so a follower reaches the same answer over its own disk that the
-//! leader reaches over the leader's.
+//! droppable is the RLMM saying the leader finished copying the offsets it
+//! holds, and the RLMM is shared, so a follower reaches the same answer over
+//! its own disk that the leader reaches over the leader's.
+//!
+//! The question is asked in offsets, never in segment boundaries. A replica
+//! rolls its own segments, so a follower's segment need not line up with the
+//! leader's; [`remote_covered_through`] turns the RLMM listing into the one
+//! offset the tier holds an unbroken copy through, and nothing past it is
+//! droppable on any replica.
 //!
 //! The pure walk that picks the deletion target sits beside the pass that
 //! applies it, because the two share one contiguous-prefix rule.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use krabka_log::{LogConfig, Offset, SegmentExport};
-use krabka_remote_storage::{
-    RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
-};
+use krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentState, TopicIdPartition};
 use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},
@@ -24,24 +28,64 @@ use tracing::{debug, warn};
 use super::NO_BYTES;
 use crate::partition::Partition;
 
+/// The offset through which the remote tier holds an unbroken copy of this
+/// partition, given the `(start, end)` range of every `CopySegmentFinished`
+/// segment and the base offset of the replica's oldest local segment.
+/// Returns `None` when the remote tier does not reach `local_start` at all.
+///
+/// This is Kafka's `UnifiedLog.highestOffsetInRemoteStorage()`, the bound
+/// `RLMFollowerTask` keeps current on a follower by reading the RLMM. Local
+/// retention needs it because **a replica's segment boundaries are its own**:
+/// a follower rolls on its own `segment.bytes` as it appends what it fetched,
+/// so a leader segment copied as 0..=99 says nothing about a follower segment
+/// spanning 0..=199. Matching a local segment's base offset against a remote
+/// start offset would call that follower segment copied and delete 100..=199
+/// with no remote copy anywhere; a failover in that window would lose
+/// acknowledged records. An offset-range bound holds whatever the boundaries.
+///
+/// The walk stops at the first gap rather than taking the maximum end, because
+/// a copy that failed between two that succeeded leaves a hole, and the
+/// segments past it cover none of it.
+pub(crate) fn remote_covered_through(finished: &[(i64, i64)], local_start: i64) -> Option<i64> {
+    let mut ranges: Vec<(i64, i64)> = finished.to_vec();
+    ranges.sort_unstable();
+    let mut covered: Option<i64> = None;
+    for (start, end) in ranges {
+        match covered {
+            // The remote tier must reach back to the oldest local segment,
+            // or the prefix this pass would delete is not covered at all.
+            None if start <= local_start => covered = Some(end),
+            None => {}
+            // Sorted by start, so the first segment that does not abut what is
+            // already covered is a gap, and every later one starts past it.
+            Some(through) if start <= through.saturating_add(1) => {
+                covered = Some(through.max(end));
+            }
+            Some(_) => break,
+        }
+    }
+    covered
+}
+
 /// Compute the highest `target` to pass to
 /// [`krabka_log::Log::delete_local_segments_through`] given the
 /// partition's local sealed-segment exports and the per-topic
 /// local-retention settings. Returns `None` when nothing is deletable.
 ///
-/// A segment is eligible if and only if its `base_offset` is in
-/// `finished_bases`, that is, `CopySegmentFinished` in the RLMM, AND it meets
-/// either time-based eviction (`now_ms - seg.max_timestamp > effective_local`)
-/// or size-based eviction (oldest-first until the sealed total fits
-/// `effective_local_size`). The walk stops at the first non-finished
-/// segment, so the local prefix stays contiguous. This matches Kafka.
+/// A segment is eligible if and only if the remote tier covers it whole, that
+/// is, its `last_offset` is at or below `covered_through` (see
+/// [`remote_covered_through`]), AND it meets either time-based eviction
+/// (`now_ms - seg.max_timestamp > effective_local`) or size-based eviction
+/// (oldest-first until the sealed total fits `effective_local_size`). The walk
+/// stops at the first segment the remote tier does not cover, so the local
+/// prefix stays contiguous. This matches Kafka.
 ///
 /// Size-based eviction ignores the active segment. Operators set
 /// local.retention.bytes in MB or GB ranges, where the active segment,
 /// bounded by `segment.bytes`, is negligible.
 pub(crate) fn local_retention_target(
     exports: &[SegmentExport],
-    finished_bases: &HashSet<i64>,
+    covered_through: Option<i64>,
     effective_local: Option<Time>,
     effective_local_size: Option<ByteSize>,
     now_ms: i64,
@@ -54,7 +98,7 @@ pub(crate) fn local_retention_target(
         effective_local_size.map_or(NO_BYTES, |budget| (sealed_total - budget).max(NO_BYTES));
     let finished: Vec<bool> = exports
         .iter()
-        .map(|ex| finished_bases.contains(&ex.base_offset.0))
+        .map(|ex| matches!(covered_through, Some(through) if ex.last_offset.0 <= through))
         .collect();
     let time_expired: Vec<bool> = exports
         .iter()
@@ -86,6 +130,8 @@ pub(crate) fn local_retention_target(
 /// This runs on every replica of a tiered partition. On a follower the copy
 /// pass belongs to another broker, so `rlmm` is the only thing that says a
 /// segment is safe to drop -- which is exactly what it says on the leader too.
+/// It says it in offsets: see [`remote_covered_through`] for why a follower
+/// cannot read a remote segment's boundaries as its own.
 pub(crate) fn local_retention_pass(
     tp: &TopicIdPartition,
     partition: &Partition,
@@ -99,11 +145,14 @@ pub(crate) fn local_retention_pass(
         .local_retention_size
         .or(log_config.retention_size);
 
-    let finished_bases: HashSet<i64> = match rlmm.list_remote_log_segments(tp) {
+    let Some(local_start) = exports.first().map(|ex| ex.base_offset.0) else {
+        return 0;
+    };
+    let finished: Vec<(i64, i64)> = match rlmm.list_remote_log_segments(tp) {
         Ok(list) => list
             .iter()
             .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .map(RemoteLogSegmentMetadata::start_offset)
+            .map(|md| (md.start_offset(), md.end_offset()))
             .collect(),
         Err(e) => {
             warn!(topic = %tp.topic, partition = tp.partition, error = %e,
@@ -111,10 +160,11 @@ pub(crate) fn local_retention_pass(
             return 0;
         }
     };
+    let covered_through = remote_covered_through(&finished, local_start);
 
     let Some(target) = local_retention_target(
         exports,
-        &finished_bases,
+        covered_through,
         effective_local,
         effective_local_size,
         now_ms,
@@ -161,19 +211,18 @@ mod tests {
     #[test]
     fn local_retention_target_returns_none_when_no_finished_segments() {
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
-        let finished: HashSet<i64> = HashSet::new();
-        // Big enough time-pressure to delete everything, but nothing is finished.
-        assert!(local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000) == None);
+        // Big enough time-pressure to delete everything, but the remote tier
+        // covers nothing.
+        assert!(local_retention_target(&exports, None, Some(millis(1)), None, 10_000) == None);
     }
 
     #[test]
     fn unknown_timestamp_needs_size_pressure_for_local_eviction() {
         let exports = vec![synth_export(0, 9, -1, 100)];
-        let finished = maplit::hashset! {0};
 
-        check!(local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000) == None);
+        check!(local_retention_target(&exports, Some(9), Some(millis(1)), None, 10_000) == None);
         check!(
-            local_retention_target(&exports, &finished, Some(millis(1)), Some(bytes(0)), 10_000,)
+            local_retention_target(&exports, Some(9), Some(millis(1)), Some(bytes(0)), 10_000,)
                 == Some(10)
         );
     }
@@ -181,12 +230,11 @@ mod tests {
     #[test]
     fn maximum_retention_window_keeps_the_host_time_comparison() {
         let exports = vec![synth_export(0, 9, 0, 100)];
-        let finished = maplit::hashset! {0};
 
         check!(
             local_retention_target(
                 &exports,
-                &finished,
+                Some(9),
                 Some(Time::from_millis(i64::MAX)),
                 None,
                 i64::MAX,
@@ -201,10 +249,9 @@ mod tests {
             synth_export(10, 19, 200, 64),
             synth_export(20, 29, 5_000, 64),
         ];
-        let finished: HashSet<i64> = maplit::hashset! {0, 10, 20};
         // now=1000, retention=500ms → segs with max_ts<500 are deletable.
         // Only seg0 (max_ts=100) and seg1 (max_ts=200) qualify; seg2 stops it.
-        let target = local_retention_target(&exports, &finished, Some(millis(500)), None, 1_000);
+        let target = local_retention_target(&exports, Some(29), Some(millis(500)), None, 1_000);
         assert!(target == Some(20));
     }
 
@@ -215,7 +262,6 @@ mod tests {
             synth_export(10, 19, 200, 100),
             synth_export(20, 29, 300, 100),
         ];
-        let finished: HashSet<i64> = maplit::hashset! {0, 10, 20};
         let cases = [
             // Total = 300; budget = 150 → must evict 150 bytes → oldest two go.
             (Some(bytes(150)), Some(20)),
@@ -230,7 +276,7 @@ mod tests {
             (Some(bytes(10_000)), None),
         ];
         for (budget, expected) in cases {
-            let target = local_retention_target(&exports, &finished, None, budget, 1_000);
+            let target = local_retention_target(&exports, Some(29), None, budget, 1_000);
             assert!(target == expected, "budget: {budget:?}");
         }
     }
@@ -238,8 +284,7 @@ mod tests {
     #[test]
     fn local_retention_target_equal_size_budget_keeps_all_segments() {
         let exports = vec![synth_export(0, 9, 100, 100), synth_export(10, 19, 200, 100)];
-        let finished: HashSet<i64> = maplit::hashset! {0, 10};
-        let target = local_retention_target(&exports, &finished, None, Some(bytes(200)), 1_000);
+        let target = local_retention_target(&exports, Some(19), None, Some(bytes(200)), 1_000);
         assert!(target == None);
     }
 
@@ -250,21 +295,106 @@ mod tests {
             synth_export(10, 19, 200, 64),
             synth_export(20, 29, 300, 64),
         ];
-        // Segment at base=10 has NOT been copy-finished. Walk stops there.
-        let finished: HashSet<i64> = maplit::hashset! {0, 20};
-        let target = local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000);
+        // The tier holds 0..=9 and 20..=29 but not 10..=19, so its unbroken
+        // cover ends at 9 and the walk stops at seg1.
+        let covered = remote_covered_through(&[(0, 9), (20, 29)], 0);
+        assert!(covered == Some(9));
+        let target = local_retention_target(&exports, covered, Some(millis(1)), None, 10_000);
         assert!(
             target == Some(10),
             "only seg0 deletable; walk stops at seg1"
         );
     }
 
+    /// One [`remote_covered_through`] case: an RLMM listing, the base offset
+    /// of the replica's oldest local segment, and the bound they imply.
+    struct CoverCase {
+        label: &'static str,
+        finished: &'static [(i64, i64)],
+        local_start: i64,
+        expected: Option<i64>,
+    }
+
+    #[test]
+    fn remote_covered_through_walks_an_unbroken_prefix() {
+        let cases = [
+            CoverCase {
+                label: "nothing copied",
+                finished: &[],
+                local_start: 0,
+                expected: None,
+            },
+            CoverCase {
+                label: "one segment from the local start",
+                finished: &[(0, 9)],
+                local_start: 0,
+                expected: Some(9),
+            },
+            CoverCase {
+                label: "abutting segments join, in any listed order",
+                finished: &[(20, 29), (0, 9), (10, 19)],
+                local_start: 0,
+                expected: Some(29),
+            },
+            CoverCase {
+                label: "a gap stops the walk, and a later segment cannot bridge it",
+                finished: &[(0, 9), (20, 29)],
+                local_start: 0,
+                expected: Some(9),
+            },
+            CoverCase {
+                label: "the tier starts past the oldest local segment",
+                finished: &[(10, 19)],
+                local_start: 0,
+                expected: None,
+            },
+            CoverCase {
+                label: "remote retention dropped the head, but the local log moved too",
+                finished: &[(10, 19), (20, 29)],
+                local_start: 10,
+                expected: Some(29),
+            },
+        ];
+        for case in cases {
+            check!(
+                remote_covered_through(case.finished, case.local_start) == case.expected,
+                "{}",
+                case.label
+            );
+        }
+    }
+
+    #[test]
+    fn a_local_segment_the_tier_covers_only_in_part_is_not_droppable() {
+        // The follower rolled one 0..=199 segment where the leader rolled two,
+        // and the leader has copied only the first of them. Reading the remote
+        // start offset 0 as "this local segment is copied" would delete
+        // 100..=199, which no remote segment holds; a failover in that window
+        // would lose acknowledged records.
+        let exports = vec![
+            synth_export(0, 199, 100, 64),
+            synth_export(200, 399, 200, 64),
+        ];
+        let covered = remote_covered_through(&[(0, 99)], 0);
+        check!(covered == Some(99));
+        check!(local_retention_target(&exports, covered, Some(millis(1)), None, 10_000) == None);
+
+        // Once the leader copies 100..=199 too, the follower's first segment is
+        // covered whole and goes.
+        let covered = remote_covered_through(&[(0, 99), (100, 199)], 0);
+        check!(covered == Some(199));
+        check!(
+            local_retention_target(&exports, covered, Some(millis(1)), None, 10_000) == Some(200)
+        );
+    }
+
     #[test]
     fn local_retention_target_rejects_exhausted_offset() {
         let exports = vec![synth_export(0, i64::MAX, 100, 64)];
-        let finished = maplit::hashset! {0};
 
-        assert!(local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000) == None);
+        assert!(
+            local_retention_target(&exports, Some(i64::MAX), Some(millis(1)), None, 10_000) == None
+        );
     }
 
     #[test]
@@ -274,9 +404,8 @@ mod tests {
         // the topic's `retention` (the fallback), the helper deletes the
         // same set as if `local_retention` had been set directly.
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
-        let finished: HashSet<i64> = maplit::hashset! {0, 10};
         // Caller resolved effective_local = retention = 250ms; now=1000.
-        let target = local_retention_target(&exports, &finished, Some(millis(250)), None, 1_000);
+        let target = local_retention_target(&exports, Some(19), Some(millis(250)), None, 1_000);
         assert!(target == Some(20));
     }
 
@@ -285,7 +414,7 @@ mod tests {
     /// integration against a real `Log` and no broker fixtures.
     fn local_retention_drive(
         log: &mut Log,
-        finished_bases: &HashSet<i64>,
+        finished: &[(i64, i64)],
         log_config: &LogConfig,
         now_ms: i64,
     ) -> usize {
@@ -294,9 +423,12 @@ mod tests {
             .local_retention_size
             .or(log_config.retention_size);
         let exports = log.tierable_segments();
+        let Some(local_start) = exports.first().map(|ex| ex.base_offset.0) else {
+            return 0;
+        };
         let Some(target) = local_retention_target(
             &exports,
-            finished_bases,
+            remote_covered_through(finished, local_start),
             effective_local,
             effective_local_size,
             now_ms,
@@ -344,20 +476,20 @@ mod tests {
         .await;
         assert!(copied == exports.len());
 
-        // Gather finished bases the same way `local_retention_pass` would.
-        let finished_bases: HashSet<i64> = rlmm
+        // Gather finished ranges the same way `local_retention_pass` would.
+        let finished: Vec<(i64, i64)> = rlmm
             .list_remote_log_segments(&tp())
             .unwrap()
             .iter()
             .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .map(RemoteLogSegmentMetadata::start_offset)
+            .map(|md| (md.start_offset(), md.end_offset()))
             .collect();
-        assert!(finished_bases.len() == exports.len());
+        assert!(finished.len() == exports.len());
 
         // Drive retention with `now_ms` far in the future so every sealed
         // segment satisfies the 1ms time-based eviction.
         let future = now_ms() + 1_000_000;
-        let removed = local_retention_drive(&mut log, &finished_bases, &log_config, future);
+        let removed = local_retention_drive(&mut log, &finished, &log_config, future);
         assert!(removed == exports.len());
 
         // local_log_start_offset advanced; sealed log files are gone.
@@ -371,7 +503,7 @@ mod tests {
             );
         }
         // Re-running is a no-op.
-        let removed_again = local_retention_drive(&mut log, &finished_bases, &log_config, future);
+        let removed_again = local_retention_drive(&mut log, &finished, &log_config, future);
         assert!(removed_again == 0);
     }
 
