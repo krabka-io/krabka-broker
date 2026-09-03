@@ -539,22 +539,39 @@ async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
     broker.shutdown().await;
 }
 
-/// Fail unless the cluster finalized `transaction.version` at level 2.
+/// Wait until the cluster finalizes `transaction.version` at level 2, and fail
+/// if it never does.
+///
+/// The bootstrap `FeatureLevelRecord`s are committed by the controller and
+/// reach the broker through the metadata image, so a client that connects in
+/// the same millisecond as `Broker::start` returns can be answered an
+/// `ApiVersions` whose `finalized_features` is still empty. That is a race
+/// against the bootstrap batch, not a statement about the cluster's level, so
+/// the precondition polls the surface the JVM client reads rather than
+/// sampling it once. A cluster that really is below `TV_2` still fails here,
+/// with the level it stopped at.
 async fn assert_transaction_version_2(admin: &Client) {
-    let features = admin
-        .send(ApiVersionsRequest::default())
-        .await
-        .expect("ApiVersions")
-        .finalized_features;
-    let level = features
-        .iter()
-        .find(|feature| feature.name == "transaction.version")
-        .map(|feature| feature.max_version_level);
-    assert!(
-        level == Some(2),
-        "this case is only meaningful at transaction.version=2, and the \
-         cluster finalized {level:?}: {features:?}",
-    );
+    let deadline = Instant::now() + SETTLE_DEADLINE;
+    loop {
+        let features = admin
+            .send(ApiVersionsRequest::default())
+            .await
+            .expect("ApiVersions")
+            .finalized_features;
+        let level = features
+            .iter()
+            .find(|feature| feature.name == "transaction.version")
+            .map(|feature| feature.max_version_level);
+        if level == Some(2) {
+            return;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "this case is only meaningful at transaction.version=2, and the \
+             cluster finalized {level:?}: {features:?}",
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Compile [`TRANSACTIONAL_PRODUCER_JAVA`] against the Kafka client jars in
