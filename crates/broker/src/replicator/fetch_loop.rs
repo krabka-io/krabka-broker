@@ -12,6 +12,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+
 use krabka_client_core::{ClientError, Connection};
 use krabka_protocol::owned::{
     fetch_request::{FetchPartition, FetchRequest, ReplicaState},
@@ -33,6 +34,18 @@ use super::{
     session::{FollowerFetchSession, SessionKey, SessionOutcome, WantedRows},
 };
 
+/// When each partition may next be asked about.
+///
+/// A leader that answers `NOT_LEADER_OR_FOLLOWER`, or a response fenced
+/// against a target this follower no longer has, means the fetcher and the
+/// metadata image disagree about who leads the partition. Removing it from the
+/// fetcher would not settle that: the supervisor owns the membership and puts
+/// the partition straight back on the next reconcile, so the pair would churn
+/// -- rebuilding the partition's configuration and re-asking the leader -- for
+/// as long as the disagreement lasts. Holding it back instead leaves the
+/// membership where it belongs and stops the churn.
+type DelayedUntil = std::collections::HashMap<FollowedKey, tokio::time::Instant>;
+
 /// One round's plan: what goes on the wire, and which partition each row
 /// belongs to once the answer comes back.
 struct Round<'round> {
@@ -46,14 +59,21 @@ struct Round<'round> {
 }
 
 pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), String> {
-    let mut client = connect_with_backoff(fetcher).await?;
     let mut session = FollowerFetchSession::default();
     // The partitions whose on-disk log this fetcher has already opened. A
     // reconcile adds a partition to a running fetcher, and the first round
-    // that sees it is what materializes it; re-checking every partition every
-    // round would put the registry lookup back on the per-partition path this
+    // that sees it is what opens it; re-checking every partition every round
+    // would put the registry lookup back on the per-partition path this
     // batching exists to leave.
     let mut materialized: std::collections::HashSet<FollowedKey> = std::collections::HashSet::new();
+    let mut delayed: DelayedUntil = DelayedUntil::new();
+    // The leader connection, dialled lazily. Opening the local logs must not
+    // wait behind the dial: a follower whose leader is not accepting yet still
+    // has to have its replicas on disk, because the ISR report, a later
+    // election and a consumer's metadata are all keyed off the partition
+    // existing. One task per partition used to guarantee that by construction,
+    // since each dialled only after opening its own log.
+    let mut client: Option<Connection> = None;
 
     loop {
         if fetcher.shutdown.is_cancelled() {
@@ -75,7 +95,10 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             materialized.insert(key.clone());
         }
 
-        let round = plan_round(&followed);
+        delayed.retain(|key, until| {
+            followed.contains_key(key) && *until > tokio::time::Instant::now()
+        });
+        let round = plan_round(&followed, &delayed);
         if round.entries.is_empty() {
             // Nothing to ask for: either this fetcher follows nothing yet, or
             // every partition it follows is out of throttle budget. Wait, and
@@ -91,10 +114,14 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             continue;
         }
 
+        let connection = match client {
+            Some(ref mut connection) => connection,
+            None => client.insert(connect_with_backoff(fetcher).await?),
+        };
         let request = build_fetch_request(fetcher, &mut session, round.wanted);
         let send = tokio::select! {
             () = fetcher.shutdown.cancelled() => return Ok(()),
-            r = client.send(request) => r,
+            r = connection.send(request) => r,
         };
 
         let mut resp: FetchResponse = match send {
@@ -103,18 +130,18 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             // the request, so what it holds for this session is unknowable.
             // Drop the session with the connection; the next round is full.
             Err(ClientError::Disconnected | ClientError::Io(_)) => {
+                client = None;
                 session.reset();
-                client = reconnect(fetcher, &mut session).await?;
                 continue;
             }
             Err(e) => {
                 warn!(error = %e,
                     "replicator: client.send unexpected error; retrying after backoff");
+                client = None;
                 session.reset();
                 if !sleep_or_stop(fetcher, fetcher.replication.send_error_backoff).await {
                     return Ok(());
                 }
-                client = reconnect(fetcher, &mut session).await?;
                 continue;
             }
         };
@@ -135,8 +162,13 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                 RowAction::Continue => {}
                 RowAction::Drop => {
                     info!(topic = %key.0, partition = key.1.get(),
-                        "replicator.not_leader; supervisor will re-evaluate");
-                    drop_partition(fetcher, key);
+                        "replicator.not_leader; holding the partition back until \
+                         the metadata image settles");
+                    delayed.insert(
+                        key.clone(),
+                        tokio::time::Instant::now()
+                            + fetcher.replication.epoch_fence_backoff.to_std(),
+                    );
                     // The leader's cached set still holds it; the next round
                     // forgets it, which is what the session handler does with
                     // a key that left the wanted set.
@@ -184,24 +216,18 @@ async fn sleep_or_stop(fetcher: &FetcherConfig, delay: Time) -> bool {
     }
 }
 
-/// Redials the leader and forgets the session, which the new connection could
-/// not continue in any case.
-async fn reconnect(
-    fetcher: &FetcherConfig,
-    session: &mut FollowerFetchSession,
-) -> Result<Connection, String> {
-    session.reset();
-    connect_with_backoff(fetcher).await
-}
-
 /// Decides what this round asks for, partition by partition.
 ///
 /// A partition whose replication target has moved is skipped rather than
 /// dropped: the supervisor owns that decision, and the next reconcile makes
 /// it. A partition with no throttle budget left is skipped for this round
 /// only, which is how Kafka's follower quota holds one partition back without
-/// holding back the ones sharing its fetcher.
-fn plan_round(followed: &BTreeMap<FollowedKey, Arc<Config>>) -> Round<'_> {
+/// holding back the ones sharing its fetcher. A partition the leader disowned
+/// is held back by `delayed` for the same reason.
+fn plan_round<'round>(
+    followed: &'round BTreeMap<FollowedKey, Arc<Config>>,
+    delayed: &DelayedUntil,
+) -> Round<'round> {
     let mut round = Round {
         wanted: WantedRows::new(),
         entries: Vec::new(),
@@ -211,7 +237,7 @@ fn plan_round(followed: &BTreeMap<FollowedKey, Arc<Config>>) -> Round<'_> {
     let mut wanted_a_fetch = 0_usize;
     let mut throttled_out = 0_usize;
     for (key, cfg) in followed {
-        if replication_target_changed(cfg) {
+        if delayed.contains_key(key) || replication_target_changed(cfg) {
             continue;
         }
         wanted_a_fetch += 1;
@@ -485,7 +511,7 @@ mod tests {
             Arc::new(cfg),
         );
 
-        let round = plan_round(&followed);
+        let round = plan_round(&followed, &DelayedUntil::new());
 
         check!(round.entries.is_empty());
         check!(round.wanted.is_empty());
@@ -500,20 +526,66 @@ mod tests {
         let mut followed = BTreeMap::new();
         followed.insert((Arc::clone(&cfg.topic), cfg.partition), Arc::new(cfg));
 
-        let round = plan_round(&followed);
+        let round = plan_round(&followed, &DelayedUntil::new());
 
         check!(round.entries.is_empty());
     }
 
     #[tokio::test]
-    async fn a_fetcher_reports_cancelled_before_its_first_connection() {
+    async fn a_cancelled_fetcher_stops_without_dialling() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
         fetcher.shutdown.cancel();
 
-        let err = run_fetcher_loop(&fetcher).await.unwrap_err();
+        // The fixture's leader endpoint is `127.0.0.1:9`, the discard port,
+        // so a loop that dialled would hang here rather than return.
+        run_fetcher_loop(&fetcher)
+            .await
+            .expect("a cancelled fetcher stops cleanly");
+    }
 
-        assert!(err == "cancelled");
+    /// Opening a follower's local log must not wait behind the dial. Every
+    /// other broker-side fact about a follower replica -- the ISR report, a
+    /// later election, what a consumer's metadata says -- is keyed off the
+    /// partition existing, and a leader that is not accepting connections yet
+    /// is the normal state during a rolling restart.
+    #[tokio::test]
+    async fn a_fetcher_opens_its_partitions_before_it_reaches_the_leader() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let partitions = cfg.partitions.clone();
+        let topic = Arc::clone(&cfg.topic);
+        let partition = cfg.partition;
+        let followed: FollowedPartitions = Arc::new(std::sync::Mutex::new(
+            [((Arc::clone(&topic), partition), Arc::new(cfg))]
+                .into_iter()
+                .collect(),
+        ));
+        // `test_config` points the fetcher at port 9, the discard port, so the
+        // dial never completes and the loop cannot get past it.
+        let fetcher = test_fetcher(
+            &followed
+                .lock()
+                .expect("followed")
+                .values()
+                .next()
+                .expect("one partition")
+                .clone(),
+            Arc::clone(&followed),
+        );
+        let shutdown = fetcher.shutdown.clone();
+
+        let task = tokio::spawn(async move { run_fetcher_loop(&fetcher).await });
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while partitions.get(TOPIC, partition).is_none() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the fetcher never opened its partition's log"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        shutdown.cancel();
+        let _ = task.await;
     }
 
     /// `WireUuid` is only here to keep the import used when the assertions

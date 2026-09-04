@@ -128,18 +128,60 @@ impl ReplicatorSupervisor {
                 leader,
                 replicator::fetcher_id_for(&key.0, key.1, self.replication.fetchers),
             );
+            let followed_key = (
+                self.partitions.shared_topic_name(&key.0),
+                PartitionIndex(key.1),
+            );
+            // Reuse the configuration the fetcher already holds when nothing
+            // about the partition's target moved. A reconcile runs on every
+            // metadata image change, and building a `Config` clones the log
+            // directory list, the log settings and four strings; doing that
+            // for every followed partition on every image made an ordinary
+            // ISR update cost more than the replication it was reporting on.
+            let config = self
+                .followed_config(fetcher_key, &followed_key, topic, partition, &endpoint)
+                .unwrap_or_else(|| {
+                    Arc::new(self.replicator_config(&key, topic, partition, endpoint.clone()))
+                });
             let entry = desired
                 .entry(fetcher_key)
                 .or_insert_with(|| DesiredFetcher {
-                    endpoint: endpoint.clone(),
+                    endpoint,
                     partitions: BTreeMap::new(),
                 });
-            let config = Arc::new(self.replicator_config(&key, topic, partition, endpoint));
-            entry
-                .partitions
-                .insert((Arc::clone(&config.topic), config.partition), config);
+            entry.partitions.insert(followed_key, config);
         }
         desired
+    }
+
+    /// The configuration a running fetcher already holds for `key`, when it
+    /// still describes the partition the image names.
+    ///
+    /// Everything a `Config` carries is either fixed for the broker's life or
+    /// part of the target the three compared fields name, so a match means the
+    /// held configuration and a freshly built one would be equal.
+    fn followed_config(
+        &self,
+        fetcher_key: FetcherKey,
+        followed_key: &FollowedKey,
+        topic: &krabka_metadata::TopicRecord,
+        partition: &krabka_metadata::PartitionRecord,
+        endpoint: &(String, u16),
+    ) -> Option<Arc<replicator::Config>> {
+        let task = self.tasks.get(&fetcher_key)?;
+        if task.endpoint != *endpoint {
+            return None;
+        }
+        let held = task
+            .followed
+            .lock()
+            .expect("followed-partitions mutex poisoned")
+            .get(followed_key)
+            .cloned()?;
+        (held.topic_id.0 == topic.topic_id.into_bytes()
+            && held.leader_node_id == partition.leader
+            && held.leader_epoch == partition.leader_epoch)
+            .then_some(held)
     }
 
     /// The per-partition configuration a fetcher applies one response row

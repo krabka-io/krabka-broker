@@ -325,8 +325,105 @@ async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {
     }
 }
 
+/// The batching's other half: a caught-up follower's request *rate* is bounded
+/// by how many fetchers it runs, not by how many partitions it follows.
+///
+/// One task per partition meant at least `2P` Fetch requests per second per
+/// follower on an idle cluster, each parked in the leader's purgatory and
+/// decoded on its own. With one fetcher per leader it is a couple per second
+/// however many partitions there are. A regression that makes the fetcher spin
+/// -- a round that returns immediately and is re-sent at once -- shows up here
+/// as a rate in the thousands, and nowhere else until a profiler is pointed at
+/// it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows() {
+    let _g = cluster_lock().lock().await;
+    let cluster = support::start_n_node_with(3, |_, config| {
+        config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    })
+    .await
+    .expect("3-broker cluster");
+    for (h, _, _) in &cluster {
+        h.wait_until_brokers_registered(3).await;
+    }
+
+    let leader_addr = cluster[0].1.listen_addr.to_string();
+    let admin = Client::builder()
+        .bootstrap(leader_addr)
+        .build()
+        .await
+        .unwrap();
+    let resp = admin
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "idle-rate".into(),
+                num_partitions: 12,
+                replication_factor: 3,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(resp.topics[0].error_code == 0);
+    for (h, _, _) in &cluster {
+        for partition in 0..12 {
+            h.wait_until_partition_present("idle-rate", partition).await;
+        }
+    }
+
+    let metrics_addr = cluster[0]
+        .0
+        .metrics_addr()
+        .expect("metrics server should be bound");
+    // Let the followers settle into their steady state before sampling.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let before = scrape_counter(metrics_addr, "krabka_broker_api_requests_total", "Fetch").await;
+    let window = std::time::Duration::from_secs(3);
+    tokio::time::sleep(window).await;
+    let after = scrape_counter(metrics_addr, "krabka_broker_api_requests_total", "Fetch").await;
+
+    // The counter is a request count over three seconds; it does not reach
+    // the range where an `i64` stops fitting an `f64` exactly, and the
+    // conversion says so rather than truncating silently.
+    let observed = i32::try_from(after - before).expect("Fetch count over three seconds fits i32");
+    let per_second = f64::from(observed) / window.as_secs_f64();
+    // Two followers, each long-polling for `fetch_max_wait`, plus whatever
+    // internal topics the cluster keeps warm. Generous by two orders of
+    // magnitude against a spin, and far below the ~50/s the per-partition
+    // shape produced for this topic alone.
+    assert!(
+        per_second < 40.0,
+        "a caught-up follower must not busy-fetch; leader saw {per_second:.1} Fetch/s"
+    );
+
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+}
+
+/// Reads one labelled counter out of a broker's `/metrics` body, summed over
+/// every series whose label set contains `label_value`.
+async fn scrape_counter(addr: std::net::SocketAddr, name: &str, label_value: &str) -> i64 {
+    let body = scrape(addr).await;
+    body.lines()
+        .filter(|line| line.starts_with(name) && line.contains(label_value))
+        .filter_map(|line| line.rsplit(' ').next()?.parse::<i64>().ok())
+        .sum()
+}
+
 /// Reads one label-free gauge out of a broker's `/metrics` body.
 async fn scrape_gauge(addr: std::net::SocketAddr, name: &str) -> i64 {
+    scrape(addr)
+        .await
+        .lines()
+        .find_map(|line| line.strip_prefix(name)?.trim().parse::<i64>().ok())
+        .unwrap_or(-1)
+}
+
+/// The `OpenMetrics` body a broker serves on `/metrics`.
+async fn scrape(addr: std::net::SocketAddr) -> String {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -337,7 +434,6 @@ async fn scrape_gauge(addr: std::net::SocketAddr, name: &str) -> i64 {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await.unwrap();
     let body = String::from_utf8(buf).unwrap();
-    body.lines()
-        .find_map(|line| line.strip_prefix(name)?.trim().parse::<i64>().ok())
-        .unwrap_or(-1)
+    let start = body.find("\r\n\r\n").map_or(0, |at| at + 4);
+    body[start..].to_string()
 }
