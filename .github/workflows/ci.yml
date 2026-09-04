@@ -417,6 +417,9 @@ jobs:
       # //bazel/images' IMAGES restates every //MODULE.bazel image pin as the tag the image is loaded under. A digest bump that moves the tag on one side only leaves a suite testing bytes its `const KAFKA_IMAGE` no longer describes.
       - name: pinned images
         run: aspect check-images
+      # The workspace version is written by hand in `[workspace.package]`, in every first-party `path` dependency's version requirement, in `module()`, in `WORKSPACE_VERSION` and in each `html_root_url`. `bazel/defs.bzl` stamps `WORKSPACE_VERSION` into every crate's purl, so one left behind by a bump attests an SBOM naming the previous release; the release workflow runs this same check against the tag.
+      - name: version pins
+        run: aspect check-version-pins
       - name: markdown links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
