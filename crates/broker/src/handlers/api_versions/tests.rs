@@ -268,3 +268,61 @@ async fn handle_applies_kip1242_routing_checks() {
 
     broker_handle.shutdown().await;
 }
+
+/// KIP-219 on `ApiVersions`: the handler charges the KIP-124 request quota
+/// itself, because the dispatch loop's leading-int32 patch cannot reach a
+/// `ThrottleTimeMs` that sits behind the `ApiKeys` array.
+///
+/// `request_percentage = 0.0001` leaves the bucket a budget of about one
+/// microsecond of handler time per second, so a handshake overruns it at once.
+/// The delay has to appear in two places: on the response the client decodes,
+/// and on the context, which is where the connection loop reads the window it
+/// mutes for.
+#[tokio::test]
+async fn handle_reports_and_records_a_request_quota_throttle() {
+    use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity};
+
+    let (broker_handle, _dir) = start_broker().await;
+    let broker = broker_handle.broker_arc_for_test();
+    let principal = anonymous_principal();
+    let peer = crate::test_support::peer();
+    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
+    wait_for_leader(&broker).await;
+
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1ClientQuota(ClientQuotaRecord {
+            entity: vec![QuotaEntity {
+                entity_type: "user".into(),
+                entity_name: Some(principal.name.clone()),
+            }],
+            config_key: "request_percentage".into(),
+            config_value: Some(0.0001),
+        })])
+        .await
+        .expect("seed the request quota");
+    broker_handle
+        .wait_for_image(|image| {
+            let key: EntityKey = vec![("user".into(), Some("ANONYMOUS".into()))];
+            image
+                .client_quotas()
+                .get(&key)
+                .and_then(|configs| configs.get("request_percentage"))
+                == Some(&0.0001)
+        })
+        .await;
+
+    let req = request("krabka-test", "1.0.0");
+    let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
+        .await
+        .expect("ApiVersions handler");
+    let resp = decode_response(API_VERSIONS_V3, &bytes);
+
+    check!(resp.error_code == codes::NONE, "{resp:?}");
+    check!(resp.throttle_time_ms > 0, "{resp:?}");
+    check!(
+        context.take_throttle() > <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO
+    );
+
+    broker_handle.shutdown().await;
+}

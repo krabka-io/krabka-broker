@@ -803,13 +803,7 @@ jobs:
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: >-
-            --no-progress
-            --root-dir "${{ github.workspace }}"
-            --max-retries 3
-            --exclude '^http://schema-registry:8081'
-            --exclude '^http://opa:8181'
-            './**/*.md'
+          args: --no-progress --root-dir "${{ github.workspace }}" --max-retries 3 --exclude '^http://schema-registry:8081' --exclude '^http://opa:8181' './**/*.md'
 
   # Push the broker image.
   #
@@ -1003,7 +997,7 @@ jobs:
           # so the issue says where the two answers live.
           hint=''
           if [ "$(jq -r '.links.result' <<<"${NEEDS}")" = failure ]; then
-            hint="$(printf '\n%s\n' 'A broken link is either wrong -- fix the markdown -- or correct but permanently unreachable to a checker, Confluence answering 403 to bots being the usual case, and that one goes in `.lycheeignore` with a line saying why.')"
+            hint=$'\nA broken link is either wrong -- fix the markdown -- or correct but permanently unreachable to a checker, Confluence answering 403 to bots being the usual case, and that one goes in `.lycheeignore` with a line saying why.\n'
           fi
           body="$(printf '%s\n\nFailed jobs:\n\n%s\n%s\nRun: %s\n' \
             "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${hint}" "${RUN_URL}")"
