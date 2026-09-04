@@ -135,8 +135,8 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
 /// Test #2: a request that arrives past the token's `exp` closes the TCP
 /// stream, and the client observes EOF on the next read.
 ///
-/// The token is given a one-second life and the test waits it out, rather than
-/// jumping a paused tokio clock: the deadline is a wall-clock instant the
+/// The token is given a few seconds of life and the test waits it out, rather
+/// than jumping a paused tokio clock: the deadline is a wall-clock instant the
 /// dispatch loop compares each arriving request against, not a timer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_expires_closes_connection() {
@@ -144,14 +144,26 @@ async fn oauthbearer_session_expires_closes_connection() {
     let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
     let addr = handle.listen_addr();
 
-    let exp_secs = now_unix_secs() + 1;
+    // `now_unix_secs` truncates to whole seconds, so `now + 1` left the
+    // handshake anywhere between zero and one second before the token expired,
+    // and under load it expired mid-handshake and the broker rejected it. The
+    // headroom below is for the open; the expiry this test is about is the one
+    // the wait below crosses.
+    let exp_secs = now_unix_secs() + 4;
     let token = unsecured_jws("alice", exp_secs);
 
     let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token)
         .await
         .expect("OAUTHBEARER session must succeed");
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // Wait out whatever is left of the token, measured after the handshake
+    // rather than assumed before it, plus a margin to land past `exp`.
+    let remaining = u64::try_from(exp_secs.saturating_sub(now_unix_secs()).max(0))
+        .expect("a non-negative second count fits in u64");
+    tokio::time::sleep(
+        std::time::Duration::from_secs(remaining) + std::time::Duration::from_millis(500),
+    )
+    .await;
     send_metadata_on_expired_session(&mut stream).await;
 
     // Broker must have closed the connection. Read should EOF.
@@ -178,14 +190,22 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
     let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
     let addr = handle.listen_addr();
 
-    // Token A expires in a second. Token B expires in 600s.
-    let token_a = unsecured_jws("alice", now_unix_secs() + 1);
+    // Token A gets a few seconds so the handshake cannot outlive it -- see the
+    // note in `oauthbearer_session_expires_closes_connection`. Token B lasts
+    // 600s. What this test needs is to re-auth *past* A's `exp`, which the
+    // computed wait below guarantees.
+    let exp_a = now_unix_secs() + 4;
+    let token_a = unsecured_jws("alice", exp_a);
     let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token_a)
         .await
         .expect("initial OAUTHBEARER must succeed");
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
+    let remaining = u64::try_from(exp_a.saturating_sub(now_unix_secs()).max(0))
+        .expect("a non-negative second count fits in u64");
+    tokio::time::sleep(
+        std::time::Duration::from_secs(remaining) + std::time::Duration::from_millis(500),
+    )
+    .await;
     let token_b = unsecured_jws("alice", now_unix_secs() + 600);
     drive_inband_reauth(&mut stream, &token_b)
         .await

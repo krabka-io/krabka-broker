@@ -58,20 +58,25 @@ crate_tests(
     # from one that waited out its 20s `max.wait.ms`. That wake is timer-driven,
     # so instrumentation does not move it.
     #
-    # `auth_handlers` and `compaction` join the list for the same reason, on the
-    # same evidence: on the commit that added them here, both passed the
-    # uninstrumented `test` step and repeated local runs, and both failed the
-    # `coverage` run of that commit. `auth_handlers` says outright in
-    # `oauthbearer_sessions.rs` that its expiry cases wait out a real one-second
-    # token rather than jumping a paused clock, "the deadline is a wall-clock
-    # instant the dispatch loop compares each arriving request against"; the
-    # margin between that deadline and the 1.5s the test waits is what
-    # instrumentation eats. `compaction` waits on the cleaner through
-    # `wait_for_metrics`, whose `TEST_AWAITER_TIMEOUT` does not stretch when the
-    # background loop it is waiting for is slowed by the profiler -- the same
-    # shape as `durability`, one bounded wait on a loop instrumentation delays.
+    # `compaction` joins the list on the same evidence recorded above for
+    # `stretch_cluster`: it passed the uninstrumented `test` step and repeated
+    # local runs of the commit whose `coverage` run failed it. It waits on the
+    # cleaner through `wait_for_metrics`, and that 30-second
+    # `TEST_AWAITER_TIMEOUT` does not stretch when the background loop it is
+    # waiting for is slowed by the profiler -- one bounded wait on a delayed
+    # loop, the same shape as `durability`. Its per-test log was not captured
+    # before the tag went on, so that mechanism is read off the code rather
+    # than off a failure message; if it fails again, read the log first.
+    #
+    # `auth_handlers` was briefly on this list and was removed: its failure was
+    # not an instrumentation artifact at all. `oauthbearer_sessions.rs` minted
+    # tokens with `now_unix_secs() + 1`, and since that helper truncates to
+    # whole seconds the handshake had between zero and one second to finish
+    # before the token it was presenting expired. Under load it lost that race
+    # and the broker rejected the token, which is a racy test rather than a
+    # slow one. The tokens now carry enough life for the open and the tests
+    # wait out whatever remains, so the suite belongs in the ordinary set.
     cpu_heavy = [
-        "auth_handlers",
         "compaction",
         "diskless_e2e",
         "durability",
