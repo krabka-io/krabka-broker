@@ -4,7 +4,13 @@ Leader election, leases, and fencing epochs as a first-class krabka API, with th
 
 ## Status
 
-**Under discussion.** No implementation exists. This document is the specification for one, and it merged through pull request [#14](https://github.com/krabka-io/krabka-broker/pull/14).
+**Deferred.** No implementation exists, and none is scheduled. This document stays in the tree as the design record, and it merged through pull request [#14](https://github.com/krabka-io/krabka-broker/pull/14).
+
+Three facts decided the deferral. Nothing in the tree implements any part of the design, and nothing has been built in the time since the document was written. The work is large and it reaches everywhere: four `MetadataRecord` variants in `krabka-metadata`, which is a `krabka-protocol` revision and a `[patch.crates-io]` bump, a `crates/verified/src/coordination.rs` with Creusot contracts, a stateright model, a `krabka coordination` crate, the `__coordination_state` topic, and the same primitive in three client languages. And Kafka has no equivalent API, so none of that is Kafka-parity work: it does not sit on the compatibility path that the rest of the tree is judged against, and no shipped behaviour waits on it.
+
+The reservations that the design held are released with this decision. `crates/broker/src/codes.rs` no longer keeps error codes 1001 to 1005 free, and the guard test that enforced the gap is gone, so a later feature takes those numbers on a first-come basis. The api keys at 1020 to 1022 were never registered. [KFC-8](KFC-8-clock-confidence-signal.md) no longer names `coordination.clock.uncertainty.ms` as a consumer of its clock bound. A revival re-picks every number in [Public Interfaces](#public-interfaces) against the tree it finds.
+
+What would restart the work is a use that the recipes in the [Motivation](#motivation) cannot serve, on a cluster that krabka already runs. Until then, an operator who needs this primitive today runs one of the external services that [Rejected Alternatives](#an-external-coordination-service) names.
 
 No KIP defines a coordination API. Kafka gives a client three mechanisms that come close to one, and none of them is one. The [Motivation](#motivation) states what each of them misses. The [Compatibility](#compatibility-deprecation-and-migration-plan) section states the one Kafka surface this design reuses, which is transactional-id fencing.
 

@@ -373,18 +373,25 @@ impl Model for ConsensusModel {
                 }
                 true
             }),
-            // Safety (Raft leader completeness, Figure 8): every entry that has
-            // committed is present, with the epoch it committed under, in the
-            // log of every node that believes it leads. A vote granted to a
-            // candidate whose log is behind the granting majority is exactly
-            // what breaks this: the winner would lead an epoch missing an
-            // already-acknowledged entry, and the next replication round would
-            // overwrite it.
+            // Safety (Raft leader completeness, Figure 8): a leader of epoch `e`
+            // holds every entry committed in an epoch at or below `e`, stamped
+            // with the epoch it committed under. Entries of a LATER epoch are
+            // excluded: a leader that has been superseded and not yet heard so
+            // legitimately lags behind its successor's commits, and holding it
+            // to them would flag ordinary staleness rather than a safety
+            // failure.
+            //
+            // A vote granted to a candidate whose log is behind the granting
+            // majority is exactly what breaks this: the winner would open a new
+            // epoch missing an already-acknowledged entry, and its replication
+            // would then overwrite it everywhere.
             Property::always("leader_completeness", |_, s: &ModelState| {
                 s.nodes.values().filter(|n| is_leader(n)).all(|n| {
+                    let leader_epoch = n.machine.quorum_state().leader_epoch;
                     s.committed_epochs
                         .iter()
                         .enumerate()
+                        .filter(|(_, &epoch)| epoch <= leader_epoch)
                         .all(|(offset, &epoch)| {
                             i64::try_from(offset)
                                 .is_ok_and(|offset| n.log.epoch_at(offset) == Some(epoch))

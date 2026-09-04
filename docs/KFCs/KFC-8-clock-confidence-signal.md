@@ -6,7 +6,7 @@ A measured, queryable signal for how wrong each node's clock can be, and a recor
 
 **Adopted.** The implementation is the clock block kind and the `/api/v1/clocks` ingest path in the metrics distributor. It also carries the shipped recording and alerting rule bundle, and the `krabka.hlc` record header in the client libraries. It merged to `main` through pull request [#15](https://github.com/krabka-io/krabka-broker/pull/15) and ships in release `v0.5.0` and every later release.
 
-No KIP defines clock telemetry, and no KIP bounds clock skew. [KFC-1](KFC-1-deliver-at-time-visibility.md) and [KFC-6](KFC-6-coordination-primitives-api.md) each declare a clock bound as a config value, and neither of them measures it. This document is the specification for the measurement. The Prometheus remote-write specification defines the envelope that the [ingest endpoint](#the-ingest-endpoint) reuses, and it says nothing about a clock reading.
+No KIP defines clock telemetry, and no KIP bounds clock skew. [KFC-1](KFC-1-deliver-at-time-visibility.md) declares a clock bound as a config value and does not measure it. This document is the specification for the measurement. The Prometheus remote-write specification defines the envelope that the [ingest endpoint](#the-ingest-endpoint) reuses, and it says nothing about a clock reading.
 
 ## Motivation
 
@@ -20,11 +20,11 @@ KFC-1 builds its whole safety argument on that number. Call the broker's clock r
 
 KFC-1's [ListOffsets](KFC-1-deliver-at-time-visibility.md#listoffsets) section states the cost of the same assumption on the other side. The watermark can move backwards by up to `2e` across a leader change. The old leader and the new leader can read clocks that differ by `2e` and both stay inside their declared bounds. KFC-1 accepts that cost and tells the operator to lower `delivery_clock_uncertainty` for a smaller one. An operator who lowers a bound that nobody measures moves the risk and does not remove it.
 
-KFC-6 rests on the same number under a second name. It defines `coordination.clock.uncertainty.ms` with a default of `250`, and it says the config "carries the same meaning and the same default as `delivery_clock_uncertainty` in KFC-1". A client marks its leadership handle revoked at the lease deadline minus that bound, on its own clock, with no server round trip.
+A cluster carries one such bound per broker, and safety rests on all of them at once. Two brokers that each stay inside their own declared bound can still read clocks that differ by twice it, so the number an operator has to know is the widest difference the fleet admits, and no broker can compute that number alone.
 
 Nothing else in krabka bounds a clock. [KFC-4](KFC-4-cross-topic-snapshots.md) rejects timestamp-based cuts for exactly this reason: a snapshot built from record timestamps "is correct up to the skew, and nothing in Kafka bounds the skew". The declared bound is the only bound the project has, and it is a literal in a config file.
 
-A clock breaks in ways that the declaration cannot see. A PTP grandmaster drops into holdover and its slaves drift apart at their oscillators' rates. An NTP daemon steps the clock and moves every future timestamp with it. Both faults break KFC-1 and KFC-6 at the same moment, and both are silent.
+A clock breaks in ways that the declaration cannot see. A PTP grandmaster drops into holdover and its slaves drift apart at their oscillators' rates. An NTP daemon steps the clock and moves every future timestamp with it. Both faults break KFC-1's argument at the moment they happen, and both are silent.
 
 The only symptom today is the one KFC-1's [Metrics](KFC-1-deliver-at-time-visibility.md#metrics) section names. That section calls the activation lateness histogram "the one an operator watches". It says a rising tail "points at clock skew, or at a scheduler that does not get enough CPU". Both readings are guesses and the operator cannot separate them. The tail also appears only after the broker already delivered records under a bound that no longer held.
 
@@ -103,7 +103,7 @@ The sync state rides as `krabka_clock_sync_state{state="holdover"} == 1`, which 
 
 The projection is deliberately lossy. `gmClockAccuracy` and the reference identity stay in the block and get no series, because they are categorical values that would fork a series on every grandmaster failover.
 
-`krabka_clock_uncertainty_seconds` is the one an operator watches, because it is the measured version of the number that KFC-1 and KFC-6 declare. `krabka_clock_sync_state` is the second, because a clock that left `synchronized` invalidates the first one.
+`krabka_clock_uncertainty_seconds` is the one an operator watches, because it is the measured version of the number that KFC-1 declares. `krabka_clock_sync_state` is the second, because a clock that left `synchronized` invalidates the first one.
 
 There is deliberately no series that carries the age of a reading. An age computed when the reading arrives is zero at that moment and never grows, so the series would go stale instead of reporting staleness. Age is a question about the present, and a query answers it against the moment it runs. `time() - timestamp(krabka_clock_uncertainty_seconds)` gives the age of a clock that still reports. The staleness alert below uses a range selector instead, because a clock that stopped reporting leaves the instant vector altogether.
 
@@ -140,7 +140,7 @@ groups:
         expr: count(krabka_clock_sync_state{state!="synchronized"} == 1) or vector(0)
 ```
 
-`krabka_clock:fleet_skew_bound_seconds` is the number the whole signal exists to produce. Each clock claims an interval from its offset minus its uncertainty to its offset plus its uncertainty. The largest upper end minus the smallest lower end is the largest difference between any two clocks in the cluster that the fleet's own uncertainty admits. That is the number an operator compares `delivery_clock_uncertainty` and `coordination.clock.uncertainty.ms` against. Two clocks each inside a bound `e` differ by at most `2e`, so a fleet bound above twice the declared bound says the declaration is false.
+`krabka_clock:fleet_skew_bound_seconds` is the number the whole signal exists to produce. Each clock claims an interval from its offset minus its uncertainty to its offset plus its uncertainty. The largest upper end minus the smallest lower end is the largest difference between any two clocks in the cluster that the fleet's own uncertainty admits. That is the number an operator compares `delivery_clock_uncertainty` against, and it is the only place a cluster-wide answer to "how far apart can two of these clocks be" exists. Two clocks each inside a bound `e` differ by at most `2e`, so a fleet bound above twice the declared bound says the declaration is false.
 
 `krabka_clock:declared_bound_seconds` reads `krabka_broker_delivery_clock_uncertainty_seconds`, the gauge this KFC adds to the broker. The bound is a constant of a running broker and no topic config overrides it, so the broker publishes it once at startup. The rule takes the maximum across brokers, because a rolling config change leaves the cluster with two values for a short time and the larger one is the weaker promise. An operator who retunes `delivery_clock_uncertainty` changes nothing in the rule file, and the alert follows the broker.
 
@@ -185,7 +185,7 @@ A bundle that does not install stops the start. An unreadable file, YAML that is
 | Bytes 8 to 11 | Logical counter, big-endian unsigned |
 | Bytes 12 to 15 | Node id of the writer, big-endian signed |
 
-The layout uses fixed-width big-endian integers and no varint framing. The reason is the one KFC-6 gives for the `__coordination_state` value layout. The Java and Go clients decode it by hand. A hand-written decoder for three fixed offsets is a decoder that stays correct.
+The layout uses fixed-width big-endian integers and no varint framing, because the Java and Go clients decode it by hand. A hand-written decoder for three fixed offsets is a decoder that stays correct.
 
 ## Proposed Changes
 
@@ -231,7 +231,7 @@ The record header is the cost that does grow with traffic, and it falls on the c
 
 Ingest also writes ordinary float samples for each reading. Those samples are the series in [The Projected Metric Series](#the-projected-metric-series), and they are a derived view of the block.
 
-KFC-6 makes the same split for `__coordination_state`, and it says so in one line: the topic "is a projection and not the source of truth". The lag is safe here for the same shape of reason. A reader that needs the exact reading reads the block, where the interval and the state are still atomic. A reader that needs to alert reads the projection, and an alert that fires one evaluation interval later is still the same alert.
+The block is the source of truth and the series are allowed to lag it. The lag is safe because of the split. A reader that needs the exact reading reads the block, where the interval and the state are still atomic. A reader that needs to alert reads the projection, and an alert that fires one evaluation interval later is still the same alert.
 
 The gain is the entire query path with no change to it. PromQL, the ruler, `/api/v1/rules`, `/api/v1/alerts`, and Grafana all work on the projected series, because the projected series are ordinary float series. An operator writes a clock query with the language they already write every other query in.
 
@@ -287,9 +287,9 @@ Three limits belong here plainly, because a reader can otherwise take this featu
 
 **It does not make any clock correct.** It reports what the clock daemons already know, and it makes that report queryable and alertable. A node with a broken clock still has a broken clock after this change.
 
-**It changes no KFC-1 and no KFC-6 behaviour.** The delivery watermark, the activation rule, the lease arithmetic, and the fence-before-grant order are all exactly what those documents specify. `delivery_clock_uncertainty` and `coordination.clock.uncertainty.ms` keep their meanings and their defaults.
+**It changes no KFC-1 behaviour.** The delivery watermark and the activation rule are exactly what that document specifies, and `delivery_clock_uncertainty` keeps its meaning and its default.
 
-**It does not let the broker refuse work when the bound is violated.** A broker whose measured uncertainty reaches a full second keeps activating batches at 250 ms. It keeps granting leases as well. The signal fires an alert, and an operator acts on it. [Making the Broker Refuse Work When the Bound Is Violated](#making-the-broker-refuse-work-when-the-bound-is-violated) states why that change belongs in its own KFC.
+**It does not let the broker refuse work when the bound is violated.** A broker whose measured uncertainty reaches a full second keeps activating batches at 250 ms. The signal fires an alert, and an operator acts on it. [Making the Broker Refuse Work When the Bound Is Violated](#making-the-broker-refuse-work-when-the-bound-is-violated) states why that change belongs in its own KFC.
 
 The feature reports. It does not decide.
 
@@ -385,9 +385,9 @@ The ceiling gives up a small amount of causality tracking for a bounded fault. A
 
 ### Making the Broker Refuse Work When the Bound Is Violated
 
-The strongest version of this feature would have the broker read its own measured uncertainty and stop acting when the measurement exceeds the declared bound. A broker would refuse to activate a scheduled batch, and a controller would refuse to grant a lease.
+The strongest version of this feature would have the broker read its own measured uncertainty and stop acting when the measurement exceeds the declared bound. A broker would refuse to activate a scheduled batch.
 
-That is a much larger change than a signal, and it changes the contracts of two adopted documents. KFC-1 promises that a scheduled record is delivered once it is durable, and a refusal turns a clock fault into an unbounded delivery stall. KFC-6 prefers a vacant role over two writers. It reaches that state through a fence and a lease expiry, and not through a clock reading that arrives from outside the metadata quorum.
+That is a much larger change than a signal, and it changes the contract of an adopted document. KFC-1 promises that a scheduled record is delivered once it is durable, and a refusal turns a clock fault into an unbounded delivery stall.
 
 It also needs answers that this document does not have. What does the broker do with a reading that is itself stale? How does a measurement reach the broker without a new dependency from the data plane onto the metrics store? What does an operator do with a cluster that refuses every produce?
 

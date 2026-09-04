@@ -8,7 +8,7 @@ use stateright::semantics::ConsistencyTester;
 
 use super::{
     spec::LogRet,
-    state::{CommitPoint, ModelState, node_high_watermark},
+    state::{CommitPoint, ModelState, live_authority, node_high_watermark},
 };
 
 pub(super) fn wal_quorum_frontier(state: &ModelState) -> i64 {
@@ -21,12 +21,18 @@ pub(super) fn wal_quorum_frontier(state: &ModelState) -> i64 {
 /// Extends [`ModelState::committed_epochs`] over every raft offset the cluster
 /// has newly committed, stamping each with the epoch it was written in.
 ///
-/// The offsets are read off the node holding the highest high watermark,
-/// because that node is by construction one that both holds the entries and has
-/// seen them commit. The record is append-only: once an offset is committed its
-/// epoch is fixed forever, which is exactly what a later leader must reproduce.
+/// The offsets are read off the current authority's log, under that leader's
+/// own high watermark. Only a leader advances the high watermark, and it does so
+/// only over entries a majority has taken from its own log, so its prefix is the
+/// one that is genuinely committed. A follower is not a safe source: the model
+/// propagates the leader's watermark to peers clamped by their log length, so a
+/// peer still holding a divergent entry of the same length would report an epoch
+/// that never committed.
+///
+/// The record is append-only: once an offset is committed its epoch is fixed
+/// forever, which is exactly what a later leader must reproduce.
 fn record_committed_epochs(state: &mut ModelState) {
-    let Some(node) = state.nodes.values().max_by_key(|n| node_high_watermark(n)) else {
+    let Some(node) = live_authority(state).and_then(|id| state.nodes.get(&id)) else {
         return;
     };
     let high_watermark = node_high_watermark(node);

@@ -57,6 +57,13 @@ aspect mutants-shard --target //crates/raft:raft_mutants
 Changes to a Creusot kernel or contract also need the commands in the
 [verification ledger](docs/verification.md).
 
+The container matrix and the `gssapi` lane run at full width only on the
+nightly schedule, where they gate no merge, so `ci.yml` reports them instead: a
+scheduled run in which either lane fails opens an issue labelled `nightly-red`
+-- naming the failed jobs and linking the run -- or comments on the open one if
+there already is one, and the next green scheduled run closes it. A skipped
+lane is not a failure, and a cancelled run reports nothing either way.
+
 ## Submit a Change
 
 Before you open a pull request:

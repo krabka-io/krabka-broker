@@ -882,3 +882,102 @@ jobs:
             exit 1
           fi
           echo 'Gate passed: every job that gates a merge succeeded.'
+
+  # The scheduled lanes' only reader.
+  #
+  # `docker` (the full JVM/librdkafka container matrix) and `gssapi` (both
+  # Kerberos acceptance cases) run at their full width exactly once a day, on
+  # the 05:00 UTC schedule, and `gate` deliberately excludes scheduled runs --
+  # they gate no merge. Nothing else consumed their result, so a red nightly
+  # was visible only to whoever opened the Actions tab. This job is what turns
+  # it into an issue.
+  #
+  # `select` is on `needs` alongside the two lanes it feeds. A `select` failure
+  # leaves `docker` *skipped* rather than failed, and a skip is not a failure
+  # here (see below) -- so without this dependency a nightly whose suite query
+  # died would close the issue and report itself green.
+  #
+  # `gh` rather than `actions/github-script`: every other piece of logic in this
+  # workflow is an inline `run:` script, secrets already reach steps as `env`
+  # (see `delivery`'s registry login), and `gh` is preinstalled on the runner,
+  # so this adds no fourth pinned action for three API calls.
+  #
+  # The label name and the body-building live in one place each so that #403 can
+  # point `mutants.yml`'s schedule at the same mechanism.
+  nightly-report:
+    name: nightly report
+    needs: [select, docker, gssapi]
+    # `always()`: the whole point is to run when a dependency failed, and a
+    # plain `needs` would skip this job exactly then.
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The workflow-level block is `contents: read` + `id-token: write`. This is
+    # the only job that writes issues, so the grant stays here rather than
+    # widening every job's token.
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # `gh` resolves the repository from a git remote, and this job has no
+      # checkout -- it needs none. `GH_REPO` is what stands in for one.
+      GH_REPO: ${{ github.repository }}
+      LABEL: nightly-red
+      NEEDS: ${{ toJSON(needs) }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # `gh issue create --label` fails outright when the label does not exist,
+      # which would turn "the nightly is red" into "the reporting job is red"
+      # with nothing filed. Creating it here keeps the workflow self-sufficient:
+      # nobody has to have run a one-off `gh label create` against the
+      # repository first. `--force` makes it idempotent.
+      - name: ensure the label exists
+        run: |
+          set -euo pipefail
+          gh label create "${LABEL}" \
+            --color b60205 \
+            --description 'A scheduled lane failed; a green scheduled run closes this' \
+            --force
+
+      # `contains(needs.*.result, 'failure')` and nothing else. `needs.*.result`
+      # also yields `skipped` and `cancelled`, and neither is a red lane:
+      # `gssapi` is skipped on any event that is not a schedule or a dispatch,
+      # `docker` is skipped when the suite selection is empty, and a cancelled
+      # run means a human or the concurrency group stopped it.
+      - name: report the failure
+        if: contains(needs.*.result, 'failure')
+        run: |
+          set -euo pipefail
+          failed="$(jq -r '
+            to_entries[] | select(.value.result == "failure") | "- `\(.key)`"
+          ' <<<"${NEEDS}")"
+          body="$(printf '%s\n\nFailed jobs:\n\n%s\n\nRun: %s\n' \
+            "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${RUN_URL}")"
+          number="$(gh issue list \
+            --label "${LABEL}" --state open --limit 1 \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create \
+              --label "${LABEL}" \
+              --title "Nightly ${GITHUB_WORKFLOW} is red" \
+              --body "${body}"
+          fi
+
+      # The complement, minus cancellations: a run somebody stopped part-way
+      # proves nothing green, so it neither files nor closes anything. Every
+      # open issue rather than the first, so a label applied by hand to a second
+      # one does not leave it open forever.
+      - name: close the issue on a green run
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        run: |
+          set -euo pipefail
+          for number in $(gh issue list \
+            --label "${LABEL}" --state open --limit 100 \
+            --json number --jq '.[].number'); do
+            gh issue close "${number}" \
+              --reason completed \
+              --comment "The scheduled \`${GITHUB_WORKFLOW}\` run is green again: ${RUN_URL}"
+          done
