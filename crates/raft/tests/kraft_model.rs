@@ -6,12 +6,21 @@
 //! on top of the model's tight `within_boundary`, so a runaway space cannot
 //! exhaust the host RAM.
 //!
-//! There are two configs, because the linearizability tester keeps its history
-//! in the fingerprinted state and so blows the space up by about 30x:
+//! The configs differ in their bounds because the linearizability tester keeps
+//! its history in the fingerprinted state and so blows the space up by about
+//! 30x wherever client appends are enabled:
 //! - `three_voters_election_safety`: 3 voters and NO client appends. This covers
 //!   election and log-matching safety over the small, fast space.
 //! - `two_voters_linearizable`: 2 voters with client appends. This covers
 //!   committed-log linearizability over a tightly-bounded space.
+//! - `three_voters_faults`: 3 voters, no appends, message loss and duplication,
+//!   and one crash at a time.
+//! - `three_voters_append`: 3 voters WITH client appends and one crash at a
+//!   time, which is the only config in which a committed entry can rest on a
+//!   bare majority while the third voter falls behind. That is what makes the
+//!   KIP-595 log-recency test in `handle_vote_request` observable: without it a
+//!   stale voter wins an election and `leader_completeness` fails.
+//! - `two_voters_append_via_linearizable`: 2 voters and stateless appenders.
 mod model;
 
 use krabka_ids::NodeId;
@@ -74,6 +83,19 @@ fn three_voters_faults() {
     run(
         ConsensusModel::faults(&[NodeId(1), NodeId(2), NodeId(3)]),
         "three_voters_faults",
+    );
+}
+
+#[test]
+fn three_voters_append() {
+    // Leader completeness under a stale majority: three voters, client appends,
+    // and one crash at a time, so a committed prefix can live on a bare
+    // majority while the crashed voter misses it. The `leader_completeness`
+    // property then holds every elected leader to that prefix, and the
+    // `stale_candidate_refused` witness proves the refusal is actually reached.
+    run(
+        ConsensusModel::three_voters_append(&[NodeId(1), NodeId(2), NodeId(3)], 1),
+        "three_voters_append",
     );
 }
 

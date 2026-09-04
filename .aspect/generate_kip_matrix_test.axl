@@ -8,6 +8,7 @@ load(
     "citations",
     "const_str_value",
     "declares_fn",
+    "decision_row_problem",
     "defines_fn",
     "digest_for",
     "docker_map",
@@ -409,6 +410,48 @@ def _test_link_citations(_ctx):
     )
     check_eq("a note with nothing to link", link_citations("plain note", {}), "plain note")
 
+def _decision_row(key, status, note):
+    """A KIP_ANNOTATIONS row with only the fields the decision check reads."""
+    return struct(key = key, status = status, note = note)
+
+_CITATION = "crates/raft/src/lib.rs:52"
+
+def _test_decision_row_problem(_ctx):
+    cited = "out of scope: %s." % _CITATION
+    check_eq(
+        "a row the decision does not touch",
+        decision_row_problem(_decision_row("KIP-500", "Partial", ""), "mixed-quorum", "KIP-590", _CITATION),
+        "",
+    )
+    check_eq(
+        "the mixed-quorum row citing the decision",
+        decision_row_problem(_decision_row("mixed-quorum", "OutOfScope", cited), "mixed-quorum", "KIP-590", _CITATION),
+        "",
+    )
+    check_eq(
+        "the served-only forwarding row",
+        decision_row_problem(_decision_row("KIP-590", "Implemented", cited), "mixed-quorum", "KIP-590", _CITATION),
+        "",
+    )
+
+def _test_decision_row_problem_rejects(_ctx):
+    cited = "out of scope: %s." % _CITATION
+    check_eq(
+        "the mixed-quorum row dropping the citation",
+        decision_row_problem(_decision_row("mixed-quorum", "OutOfScope", "no citation"), "mixed-quorum", "KIP-590", _CITATION),
+        "mixed-quorum does not cite %s" % _CITATION,
+    )
+    check_eq(
+        "the forwarding row dropping the citation",
+        decision_row_problem(_decision_row("KIP-590", "Implemented", "no citation"), "mixed-quorum", "KIP-590", _CITATION),
+        "KIP-590 does not cite %s" % _CITATION,
+    )
+    check_eq(
+        "the forwarding row back to Partial",
+        decision_row_problem(_decision_row("KIP-590", "Partial", cited), "mixed-quorum", "KIP-590", _CITATION),
+        "KIP-590 serves Envelope and needs no broker half; it is Partial, not Implemented",
+    )
+
 def _test_librdkafka_clients(_ctx):
     suite = "\n".join([
         "const CLIENTS: [ClientCase; 2] = [",
@@ -573,6 +616,8 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_citations,
     _test_citations_needs_a_whole_reference,
     _test_link_citations,
+    _test_decision_row_problem,
+    _test_decision_row_problem_rejects,
     _test_librdkafka_clients,
     _test_log_contract_rows,
     _test_api_versions_rows,

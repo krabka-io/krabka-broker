@@ -83,7 +83,7 @@ pub(crate) use self::{
         start_three_broker_sasl_plaintext_jvm_cluster,
         start_three_broker_sasl_plaintext_jvm_cluster_with_users,
     },
-    tiered::{start_host_broker_with_minio_tier, start_two_brokers_with_minio_tier},
+    tiered::start_host_broker_with_minio_tier,
     tiered_workload::{
         consume_record_values, consume_records, create_tiered_topic, produce_records,
         wait_for_minio_segments, wait_for_settled_minio_segments,

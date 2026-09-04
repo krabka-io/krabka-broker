@@ -1109,6 +1109,28 @@ def _note_line_counts(fs, root, note, counts):
             counts[citation.path] = len(_read(fs, root, citation.path).splitlines())
     return counts
 
+def decision_row_problem(row, mixed_quorum, forwarding, citation):
+    """The complaint about a row that rests on the mixed-quorum decision, or "".
+
+    Two rows rest on it: the mixed-quorum row itself, which is out of scope,
+    and the KIP-590 row, which is served-only -- the controller listener
+    answers `Envelope`, and no broker builds one because a Krabka broker
+    reaches its controller over the krabka-private `SubmitChange` RPC. Both
+    have to cite the line the decision is written on, and the KIP-590 row has
+    to keep the status that decision leaves it with: a `Partial` there would
+    be a claim that a forwarding path is half built.
+    """
+    if row.key != mixed_quorum and row.key != forwarding:
+        return ""
+    if row.note.find(citation) < 0:
+        return "%s does not cite %s" % (row.key, citation)
+    if row.key == forwarding and row.status != "Implemented":
+        return "%s serves Envelope and needs no broker half; it is %s, not Implemented" % (
+            row.key,
+            row.status,
+        )
+    return ""
+
 def _kip_rows(fs, root, pins, broker_build):
     """The per-KIP rows, and the image legend they refer to."""
     catalog = _read(fs, root, _API_CATALOG)
@@ -1122,6 +1144,11 @@ def _kip_rows(fs, root, pins, broker_build):
         const_str_value(catalog, 'pub const MIXED_QUORUM_KEY: &str = "'),
         _API_CATALOG,
         'pub const MIXED_QUORUM_KEY: &str = "..."',
+    )
+    forwarding = _evidence(
+        const_str_value(catalog, 'pub const FORWARDING_KEY: &str = "'),
+        _API_CATALOG,
+        'pub const FORWARDING_KEY: &str = "..."',
     )
 
     cited_path, _, cited_line = citation.rpartition(":")
@@ -1144,6 +1171,8 @@ def _kip_rows(fs, root, pins, broker_build):
         )
     if mixed_quorum not in annotated:
         fail("KIP_ANNOTATIONS has no %s row" % mixed_quorum)
+    if forwarding not in annotated:
+        fail("KIP_ANNOTATIONS has no %s row" % forwarding)
     ordered = [row.key for row in rows]
     if ordered != kip_order(ordered):
         fail("KIP_ANNOTATIONS is not in KIP order")
@@ -1161,8 +1190,9 @@ def _kip_rows(fs, root, pins, broker_build):
                 fail("%s is out of scope; it needs a note and no tests" % row.key)
         elif not row.tests:
             fail("%s is %s without a test" % (row.key, row.status))
-        if row.key in (mixed_quorum, "KIP-590") and row.note.find(citation) < 0:
-            fail("%s does not cite %s" % (row.key, citation))
+        problem = decision_row_problem(row, mixed_quorum, forwarding, citation)
+        if problem:
+            fail(problem)
         if row.clients == "Kcat" and kcat_test not in row.tests:
             fail("%s claims kcat evidence without listing %s" % (row.key, _LIBRDKAFKA_TEST))
 

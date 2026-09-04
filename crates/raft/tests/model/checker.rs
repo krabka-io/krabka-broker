@@ -58,6 +58,7 @@ impl Model for ConsensusModel {
             wal_frontiers: self.voter_ids.iter().map(|&id| (id, 0)).collect(),
             appenders_seen: BTreeSet::new(),
             committed: Vec::new(),
+            committed_epochs: Vec::new(),
             appends_issued: 0,
             crashed: BTreeSet::new(),
             check_quorum_violation: false,
@@ -372,6 +373,49 @@ impl Model for ConsensusModel {
                 }
                 true
             }),
+            // Safety (Raft leader completeness, Figure 8): every entry that has
+            // committed is present, with the epoch it committed under, in the
+            // log of every node that believes it leads. A vote granted to a
+            // candidate whose log is behind the granting majority is exactly
+            // what breaks this: the winner would lead an epoch missing an
+            // already-acknowledged entry, and the next replication round would
+            // overwrite it.
+            Property::always("leader_completeness", |_, s: &ModelState| {
+                s.nodes.values().filter(|n| is_leader(n)).all(|n| {
+                    s.committed_epochs
+                        .iter()
+                        .enumerate()
+                        .all(|(offset, &epoch)| {
+                            i64::try_from(offset)
+                                .is_ok_and(|offset| n.log.epoch_at(offset) == Some(epoch))
+                        })
+                })
+            }),
+            // Anti-vacuity witness for the property above: a voter actually
+            // refuses a candidate whose log is behind its own, which is the
+            // only reason `leader_completeness` can hold under a majority that
+            // has fallen behind. A state count would not say this; the refusal
+            // envelope does.
+            Property::sometimes(
+                "stale_candidate_refused",
+                |m: &ConsensusModel, s: &ModelState| {
+                    // Only reachable where a majority can fall behind a
+                    // committed prefix: three voters that take client appends.
+                    if m.voter_ids.len() < 3 || m.max_appends == 0 {
+                        return true;
+                    }
+                    s.network.iter().any(|env| {
+                        matches!(
+                            env.event,
+                            Event::ReceiveVoteResponse {
+                                vote_granted: false,
+                                ..
+                            }
+                        ) && s.nodes.get(&env.dst).map(|n| n.log.end_offset())
+                            < s.nodes.get(&env.src).map(|n| n.log.end_offset())
+                    })
+                },
+            ),
             // Safety: no node's committed high-watermark exceeds its own log end
             // (a node cannot have committed past what it physically holds).
             Property::always("hwm_within_log", |_, s: &ModelState| {

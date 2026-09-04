@@ -6,7 +6,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use krabka_raft::kraft::{
-    QuorumStateMachine, action::TimerKind, event::Event, role::Role, types::NodeId,
+    QuorumStateMachine,
+    action::TimerKind,
+    event::Event,
+    role::Role,
+    types::{Epoch, NodeId},
 };
 use stateright::semantics::LinearizabilityTester;
 
@@ -64,6 +68,16 @@ pub struct ModelState {
     /// appends commit, and the linearizability return values are checked
     /// against it.
     pub committed: Vec<u64>,
+    /// The leader epoch stamped on every committed raft offset, indexed by that
+    /// offset: `committed_epochs[o]` is the epoch of offset `o`, recorded at the
+    /// moment the high watermark first passed it.
+    ///
+    /// It covers every committed offset, control records included, where
+    /// [`ModelState::committed`] holds only client values. It is append-only,
+    /// so it is the model's memory of what the cluster has irrevocably
+    /// promised, which is what `leader_completeness` holds a newly elected
+    /// leader to.
+    pub committed_epochs: Vec<Epoch>,
     /// Total client appends issued so far. `ConsensusModel::max_appends`
     /// bounds it.
     pub appends_issued: u32,

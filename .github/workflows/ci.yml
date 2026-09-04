@@ -247,6 +247,71 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
+  # The Cargo-side gate. `CONTRIBUTING.md`, `CLAUDE.md` and the pull request
+  # template all ask for `cargo clippy --workspace --all-targets` and
+  # `cargo nextest run --workspace` before a push; this is what makes those two
+  # commands a merge gate rather than an honour system.
+  #
+  # It is not a duplicate of the Bazel Clippy aspect. Three bodies of code are
+  # outside what that aspect can see:
+  #
+  #   * the benches -- `crates/broker/benches/*.rs` and `crates/log/benches/`
+  #     have no Bazel target at all, so nothing else in CI compiles them;
+  #   * the test and binary targets a change did not touch, which `aspect lint`
+  #     narrows away on a pull request and `--all-targets` does not;
+  #   * `krabka-protocol`'s build script, which `MODULE.bazel` pins with
+  #     `gen_build_script = "off"` and which therefore only ever runs under
+  #     Cargo.
+  #
+  # `cargo deny` is a sibling job rather than a step here for the same reason
+  # it always was: it needs neither a toolchain nor a build directory.
+  cargo:
+    name: cargo clippy · nextest
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/reclaim-disk
+
+      # `rust-toolchain.toml` is the single pin, so read the channel out of it
+      # rather than restating it here: a bump there must not leave this job
+      # installing the previous compiler and downloading the new one anyway on
+      # the first `cargo` invocation.
+      - id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -ne 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          test -n "${channel}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # The tarball rather than a fourth pinned action: `get.nexte.st` is the
+      # install path the nextest book documents for CI, and it lands one
+      # prebuilt binary next to `cargo` with no compilation.
+      - name: install cargo-nextest
+        run: |
+          set -euo pipefail
+          curl -LsSf --retry 5 https://get.nexte.st/latest/linux \
+            | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # `--profile ci` is what excludes the two suites `//crates/broker`'s
+      # `manual` list excludes for the same reasons -- see the `default-filter`
+      # in `.config/nextest.toml`. The container-backed cases are `#[ignore]`d
+      # and nextest does not run those unless asked.
+      - name: nextest
+        run: cargo nextest run --workspace --profile ci
+
   # The repository's cheap checks, in one job.
   #
   # These were four jobs -- `axl tasks`, `changelogs`, `creusot mutants::skip`

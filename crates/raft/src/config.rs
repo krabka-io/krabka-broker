@@ -46,38 +46,41 @@ pub const DEFAULT_METADATA_RAFT_FETCH_MAX: ByteSize = mebibytes(8);
 
 /// Bootstrap orchestration for a freshly-formatted controller node.
 ///
-/// Openraft 0.9 lacks pre-vote (KIP-595's equivalent), so simultaneous
-/// `raft.initialize(full_voter_set)` on multiple brokers can split-vote
-/// indefinitely on cold boot. This enum lets the operator (or test harness)
-/// pick a deterministic boot order:
+/// The engine runs KIP-996 pre-vote, so cold-booting voters that race each
+/// other do not disrupt an established epoch. This enum decides something the
+/// election rules cannot: where a freshly-formatted node gets its first voter
+/// set from. `Controller::start` validates the mode against the on-disk
+/// metadata log and rejects a mismatch.
 ///
-/// 1. One broker boots with `Bootstrap` — it initializes as the sole voter
-///    in a singleton cluster and self-elects on the first election timeout.
-/// 2. Remaining brokers boot with `Join` — they don't initialize, so they
-///    don't race to elect. The bootstrap broker brings them in via
-///    [`crate::ControllerHandle::add_learner`] +
-///    [`crate::ControllerHandle::change_membership`].
+/// 1. One broker boots with `Bootstrap` — its configured
+///    [`ControllerConfig::initial_voters`] seed the quorum.
+/// 2. Remaining brokers boot with `Join` — they start empty, discover the
+///    leader through [`ControllerConfig::bootstrap_servers`], and add
+///    themselves once caught up.
 /// 3. After the initial format, restarted brokers use `Rejoin` — their
-///    on-disk raft log already carries the membership and the engine replays
-///    it during `Raft::new`.
+///    on-disk metadata log, checkpoint, and quorum-state file already carry
+///    the membership.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapMode {
-    /// Cold-boot the first voter of a fresh cluster. This node holds the
-    /// initial `VotersRecord`; `Controller::start` calls `raft.initialize`
-    /// with [`ControllerConfig::initial_voters`], producing the seed
-    /// membership that elects this broker as leader on its first timeout.
+    /// Cold-boot the first voter of a fresh cluster. `Controller::start`
+    /// requires an empty metadata log and a non-empty
+    /// [`ControllerConfig::initial_voters`], which becomes the seed voter set
+    /// that elects this broker on its first election timeout. A node that
+    /// configures no initial voters and sets [`ControllerConfig::auto_join`]
+    /// is started as `Join` instead.
     Bootstrap,
 
     /// Cold-boot a subsequent voter with an empty start. `Controller::start`
-    /// skips `initialize`; the engine sits in Learner state and discovers
-    /// the leader via [`ControllerConfig::bootstrap_servers`], then
-    /// auto-joins (issuing `AddVoter` for itself once caught up) when
-    /// [`ControllerConfig::auto_join`] is set.
+    /// requires an empty metadata log. The node runs as an observer, fetches
+    /// from a peer in [`ControllerConfig::bootstrap_servers`] to find the
+    /// leader, then auto-joins (issuing `AddVoter` for itself once caught up)
+    /// when [`ControllerConfig::auto_join`] is set.
     Join,
 
-    /// Restart a previously-formatted broker. The on-disk raft log encodes
-    /// the cluster's current membership; `Controller::start` skips
-    /// recovers existing state from the on-disk log + checkpoint at startup.
+    /// Restart a previously-formatted broker. `Controller::start` requires a
+    /// non-empty metadata log and recovers the voter set, the epoch, and the
+    /// committed metadata from that log, the latest checkpoint, and the
+    /// quorum-state file.
     Rejoin,
 }
 

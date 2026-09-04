@@ -63,6 +63,12 @@ pub struct KipAnnotation {
 /// `crates/`.
 pub const MIXED_QUORUM_KEY: &str = "mixed-quorum";
 
+/// The key of the KIP whose forwarding half the same decision rules out. The
+/// controller listener serves `Envelope`; nothing in the tree builds one,
+/// because a Krabka broker reaches its controller over the krabka-private
+/// `SubmitChange` RPC, and a JVM controller is not a peer krabka speaks to.
+pub const FORWARDING_KEY: &str = "KIP-590";
+
 /// Where the out-of-scope decision for mixed quorums and JVM-side forwarding
 /// is written down. The generator checks that this line still says so.
 pub const OUT_OF_SCOPE_CITATION: &str = "crates/raft/src/lib.rs:52";
@@ -630,15 +636,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-590",
-        claim: "Envelope: a broker forwards admin writes to the active controller",
-        status: KipStatus::Partial,
+        claim: "Envelope: the controller listener serves a forwarded admin write",
+        status: KipStatus::Implemented,
         module: "crates/broker/src/envelope.rs",
         tests: &[
             "crates/broker/tests/kip590_envelope.rs",
             "crates/broker/tests/jvm_role_separated_admin.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "The controller listener serves `Envelope`, and a Krabka broker-only node forwards through it. Forwarding into or out of a JVM controller is out of scope: crates/raft/src/lib.rs:52.",
+        note: "The broker side of KIP-590 is not needed: a Krabka broker reaches its controller over the krabka-private `SubmitChange` RPC (`crates/broker/src/metadata_source/observer_source.rs`), and a JVM controller is outside the compatibility target (crates/raft/src/lib.rs:52).",
     },
     KipAnnotation {
         key: "KIP-595",
@@ -1376,9 +1382,14 @@ mod tests {
         }
     }
 
+    /// Both rows that rest on the mixed-quorum decision cite it, and each
+    /// carries the status that decision leaves it with: the mixed-quorum row
+    /// is out of scope, and KIP-590 is served-only -- the controller listener
+    /// answers `Envelope`, and a broker-only node needs no forwarding path of
+    /// its own because it writes over the krabka-private `SubmitChange` RPC.
     #[test]
     fn mixed_quorum_and_forwarding_rows_cite_the_raft_decision() {
-        for key in ["KIP-590", MIXED_QUORUM_KEY] {
+        for key in [FORWARDING_KEY, MIXED_QUORUM_KEY] {
             let row = KIP_ANNOTATIONS
                 .iter()
                 .find(|row| row.key == key)
@@ -1393,6 +1404,12 @@ mod tests {
             .find(|row| row.key == MIXED_QUORUM_KEY)
             .expect("mixed-quorum row");
         assert!(mixed.status == KipStatus::OutOfScope);
+
+        let forwarding = KIP_ANNOTATIONS
+            .iter()
+            .find(|row| row.key == FORWARDING_KEY)
+            .expect("KIP-590 row");
+        assert!(forwarding.status == KipStatus::Implemented);
     }
 
     /// Every module and test path an annotation names is a file in the tree.
