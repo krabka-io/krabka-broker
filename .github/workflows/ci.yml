@@ -302,6 +302,13 @@ jobs:
           curl -LsSf --retry 5 https://get.nexte.st/latest/linux \
             | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
 
+      # `--all-targets` is also what keeps the criterion benches compiling.
+      # It includes `--benches`, so every `[[bench]]` target in
+      # `crates/broker` and `crates/log` is type-checked on every pull request
+      # and a bench that stops building fails here. The `bench` job below runs
+      # them, and only on a schedule -- so this is the whole of the
+      # pull-request-time guarantee, and a `cargo bench --no-run` step beside
+      # it would buy nothing.
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -1116,10 +1123,10 @@ jobs:
       # also yields `skipped` and `cancelled`, and neither is a red lane:
       # `gssapi` is skipped on any event that is not a schedule or a dispatch,
       # `docker` is skipped when the suite selection is empty, and a cancelled
-      # run means a human or the concurrency group stopped it. (`links` is the
-      # one dependency that cannot be skipped here: its `if:` is the same
-      # `schedule` this job's is, so on a scheduled run it always has a
-      # `success`, `failure` or `cancelled` of its own.)
+      # run means a human or the concurrency group stopped it. (`links` and
+      # `bench` are the two dependencies that cannot be skipped here: both
+      # `if:`s admit the same `schedule` this job's does, so on a scheduled run
+      # each always has a `success`, `failure` or `cancelled` of its own.)
       - name: report the failure
         if: contains(needs.*.result, 'failure')
         run: |
