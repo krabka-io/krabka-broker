@@ -772,6 +772,45 @@ jobs:
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
+  # The external half of the link check.
+  #
+  # `checks` runs lychee with `--offline`, which resolves file-relative links
+  # and nothing else. That is deliberate on a pull request: the merge gate does
+  # not go red because Confluence was slow. It also means the ~180 http links
+  # across `**/*.md` -- KIP pages on cwiki, `kafka.apache.org/<version>/` paths,
+  # docs.rs items -- were checked by nobody, so a renamed Confluence page or a
+  # moved documentation path 404s silently and leaves a citation no reader can
+  # follow. This lane fetches them once a day, where a flake costs a re-run
+  # rather than a merge.
+  #
+  # `token:` is what keeps the ~78 github.com links from spending the
+  # unauthenticated 60-requests-an-hour budget in the first minute.
+  #
+  # The two `--exclude` patterns are compose-internal hostnames written as
+  # example configuration values (`docs/config-reference.md` and
+  # `docs/KFCs/KFC-7-broker-side-schema-validation.md`): they resolve inside a
+  # deployment and nowhere else, and no run of this check can ever reach them.
+  # They live here rather than in `.lycheeignore` so that file stays a record of
+  # links this lane has actually proven unreachable.
+  links:
+    name: external links
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: markdown links (external)
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: >-
+            --no-progress
+            --root-dir "${{ github.workspace }}"
+            --max-retries 3
+            --exclude '^http://schema-registry:8081'
+            --exclude '^http://opa:8181'
+            './**/*.md'
+
   # Push the broker image.
   #
   # Not `aspect delivery`: its "only what changed" tracking needs
@@ -888,12 +927,14 @@ jobs:
 
   # The scheduled lanes' only reader.
   #
-  # `docker` (the full JVM/librdkafka container matrix) and `gssapi` (both
-  # Kerberos acceptance cases) run at their full width exactly once a day, on
-  # the 05:00 UTC schedule, and `gate` deliberately excludes scheduled runs --
-  # they gate no merge. Nothing else consumed their result, so a red nightly
-  # was visible only to whoever opened the Actions tab. This job is what turns
-  # it into an issue.
+  # `docker` (the full JVM/librdkafka container matrix), `gssapi` (both
+  # Kerberos acceptance cases) and `links` (every external URL in the markdown
+  # the pull-request lychee run skips under `--offline`) run once a day, on the
+  # 05:00 UTC schedule, and `gate` deliberately excludes scheduled runs -- they
+  # gate no merge. Nothing else consumed their result, so a red nightly was
+  # visible only to whoever opened the Actions tab. This job is what turns it
+  # into an issue, and it is the only reporting path the scheduled lanes have:
+  # a new lane extends `needs` here rather than filing on its own.
   #
   # `select` is on `needs` alongside the two lanes it feeds. A `select` failure
   # leaves `docker` *skipped* rather than failed, and a skip is not a failure
@@ -909,7 +950,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi]
+    needs: [select, docker, gssapi, links]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
@@ -955,8 +996,16 @@ jobs:
           failed="$(jq -r '
             to_entries[] | select(.value.result == "failure") | "- `\(.key)`"
           ' <<<"${NEEDS}")"
-          body="$(printf '%s\n\nFailed jobs:\n\n%s\n\nRun: %s\n' \
-            "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${RUN_URL}")"
+          # A red `links` lane is the one failure whose fix is not in the code,
+          # so the issue says where the two answers live.
+          hint=''
+          if [ "$(jq -r '.links.result' <<<"${NEEDS}")" = failure ]; then
+            hint='
+A broken link is either wrong (fix the markdown) or correct but permanently unreachable to a checker -- Confluence answers 403 to bots, for one -- in which case it goes in `.lycheeignore` with a line saying why.
+'
+          fi
+          body="$(printf '%s\n\nFailed jobs:\n\n%s\n%s\nRun: %s\n' \
+            "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${hint}" "${RUN_URL}")"
           number="$(gh issue list \
             --label "${LABEL}" --state open --limit 1 \
             --json number --jq '.[0].number // empty')"
