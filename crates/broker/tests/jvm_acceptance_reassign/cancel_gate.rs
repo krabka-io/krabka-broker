@@ -81,13 +81,18 @@ const TOPIC: &str = "krabka-cancel-gate-itest";
 /// nothing.
 const WIRE_CANCEL_REASSIGNMENT: i8 = 5;
 
-/// The JVM exception `Errors.forCode` builds for `POLICY_VIOLATION` (44).
+/// The refusal `kafka-reassign-partitions --cancel` prints for a gated cancel.
 ///
-/// The fully-qualified name is the assertion and not the bare class: a bare
-/// name would also match a sentence that merely mentioned it, and the point is
-/// that Kafka's own client constructed this class out of the number krabka
-/// sent.
-const POLICY_VIOLATION_EXCEPTION: &str = "org.apache.kafka.common.errors.PolicyViolationException";
+/// Unlike `kafka-topics` and `kafka-leader-election`, which print a
+/// `Throwable.toString()` and so name
+/// `org.apache.kafka.common.errors.PolicyViolationException`,
+/// `ReassignPartitionsCommand` prints `<topic-partition>: <getMessage()>` for
+/// each partition it could not cancel. There is no class name in its output to
+/// assert on, so what proves the round trip here is the broker's own refusal
+/// text arriving intact. That the code behind it is `POLICY_VIOLATION` (44) is
+/// pinned in process, by `alter_partition_reassignments::cancel_approval` and
+/// `::plan`.
+const CANCEL_REFUSAL: &str = "break-glass refused cancel_reassignment";
 
 /// Where the tool's files are placed inside its container.
 const PLAN_JSON: &str = "/tmp/krabka-cancel-plan.json";
@@ -321,6 +326,20 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
         // three actions this suite has no key material to sign for.
         config.break_glass.approvers = approvers.clone();
         config.break_glass.signed_actions = Vec::new();
+        // The cluster runs a `SimpleAclAuthorizer` whose only super user is
+        // the admin the tools authenticate as, and the break-glass RPCs are
+        // cluster operations. Without this the operators are refused at the
+        // authorizer with `CLUSTER_AUTHORIZATION_FAILED` and never reach the
+        // two-person rule, which is the thing under test.
+        for (user, _) in [PROPOSER, APPROVER_ONE, APPROVER_TWO] {
+            config.super_users.insert(user.to_owned());
+        }
+        // The authorizer is built from the super-user set, so it has to be
+        // rebuilt after widening it; the one the cluster helper constructed
+        // captured the old set.
+        config.authorizer = std::sync::Arc::new(
+            krabka_broker::authorizer::SimpleAclAuthorizer::new(config.super_users.clone()),
+        );
         config
     });
     for handle in [h1, h2, h3] {
@@ -338,8 +357,8 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
         refused.text(),
     );
     check!(
-        refused.text().contains(POLICY_VIOLATION_EXCEPTION),
-        "the refusal must reach the tool as Kafka's policy violation:\n{}",
+        refused.text().contains(CANCEL_REFUSAL) && refused.text().contains(&format!("{TOPIC}-0")),
+        "the refusal must reach the tool naming the gate and the partition:\n{}",
         refused.text(),
     );
     check!(
