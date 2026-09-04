@@ -753,32 +753,38 @@ def _span(versions):
 # What the intent column says for a row that has nothing to explain.
 NO_INTENT = "--"
 
-def intent_cell(row):
-    """The intent column of one advertised-version row.
+def intent_problem(row):
+    """The complaint about one row's recorded divergence intent, or "".
 
     A `range_differs` row carries the sentence the differential suite recorded
-    for it; every other verdict carries none. Both halves are enforced rather
+    for it; every other verdict carries none. Both halves are checked rather
     than tolerated: `DivergenceReport::build` panics on a range divergence with
     no intent, and a fixture that reached here without one -- a hand edit, or a
     regeneration against an older suite -- would render a blank cell that reads
-    as "no reason needed" instead of failing.
+    as "no reason needed".
     """
     intent = row.get("intent")
     if row["verdict"] == "range_differs":
         if not intent:
-            fail(
-                "api key %d advertises a different range from the oracle and " % row["api_key"] +
-                "records no intent; regenerate divergence.json from a suite " +
-                "that fills `RANGE_DIVERGENCE_INTENTS`",
-            )
-        return intent
+            return "api key %d differs in range and records no intent" % row["api_key"]
+        return ""
     if intent:
-        fail(
-            "api key %d records a divergence intent but its verdict is %r" % (
-                row["api_key"],
-                row["verdict"],
-            ),
+        return "api key %d records an intent but its verdict is %s" % (
+            row["api_key"],
+            row["verdict"],
         )
+    return ""
+
+def intent_cell(row):
+    """The intent column of one advertised-version row."""
+    problem = intent_problem(row)
+    if problem:
+        fail(
+            "%s; regenerate divergence.json from a suite that fills " % problem +
+            "`RANGE_DIVERGENCE_INTENTS`",
+        )
+    if row["verdict"] == "range_differs":
+        return row["intent"]
     return NO_INTENT
 
 def api_versions_rows(report):

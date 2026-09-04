@@ -15,6 +15,7 @@ load(
     "image_for",
     "image_legend",
     "intent_cell",
+    "intent_problem",
     "is_word_char",
     "kafka_image_keys",
     "kcat_evidence",
@@ -540,17 +541,34 @@ def _test_intent_cell(_ctx):
             "--",
         )
 
-def _test_intent_cell_rejects(_ctx):
-    for name, row in [
-        ("a range divergence with no intent", {"api_key": 1, "verdict": "range_differs", "intent": None}),
-        ("a range divergence with an empty intent", {"api_key": 1, "verdict": "range_differs", "intent": ""}),
-        ("an intent on a matching range", {"api_key": 3, "verdict": "same", "intent": "why?"}),
-    ]:
-        check_eq(
-            name + " is rejected",
-            check_fails(lambda row = row: intent_cell(row)),
-            True,
-        )
+def _test_intent_problem(_ctx):
+    check_eq(
+        "a range divergence carrying its sentence",
+        intent_problem({"api_key": 18, "verdict": "range_differs", "intent": "Intended."}),
+        "",
+    )
+    check_eq(
+        "a matching range with nothing recorded",
+        intent_problem({"api_key": 3, "verdict": "same", "intent": None}),
+        "",
+    )
+
+def _test_intent_problem_rejects(_ctx):
+    check_eq(
+        "a range divergence with no intent",
+        intent_problem({"api_key": 1, "verdict": "range_differs", "intent": None}),
+        "api key 1 differs in range and records no intent",
+    )
+    check_eq(
+        "a range divergence whose intent is empty",
+        intent_problem({"api_key": 1, "verdict": "range_differs", "intent": ""}),
+        "api key 1 differs in range and records no intent",
+    )
+    check_eq(
+        "an intent recorded on a matching range",
+        intent_problem({"api_key": 3, "verdict": "same", "intent": "why?"}),
+        "api key 3 records an intent but its verdict is same",
+    )
 
 def _test_kcat_evidence(_ctx):
     check_eq(
@@ -660,7 +678,8 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_log_contract_rows,
     _test_api_versions_rows,
     _test_intent_cell,
-    _test_intent_cell_rejects,
+    _test_intent_problem,
+    _test_intent_problem_rejects,
     _test_kcat_evidence,
     _test_kip_row,
     _test_kip_row_without_evidence,
