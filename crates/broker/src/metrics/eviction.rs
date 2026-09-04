@@ -91,7 +91,6 @@ impl BrokerMetrics {
             });
     }
 
-
     /// Drop every series that any per-partition family carries for `label`.
     ///
     /// This is the one entry point for partition-series eviction: a caller

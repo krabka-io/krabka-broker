@@ -115,9 +115,7 @@ impl Engine {
             .collect();
         let observer_directory_ids: std::collections::BTreeMap<NodeId, uuid::Uuid> = observers
             .iter()
-            .filter_map(|id| {
-                self.replica_directory_ids.get(id).map(|dir| (*id, *dir))
-            })
+            .filter_map(|id| self.replica_directory_ids.get(id).map(|dir| (*id, *dir)))
             .collect();
         QuorumStateSnapshot {
             leader_id: qs.leader_id,

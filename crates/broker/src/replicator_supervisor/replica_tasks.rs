@@ -253,10 +253,7 @@ mod tests {
 
     /// A fetcher whose task parks until its token is cancelled, so a test can
     /// observe whether reconcile retired it.
-    fn running_fetcher(
-        shutdown: CancellationToken,
-        endpoint: (String, u16),
-    ) -> FetcherTask {
+    fn running_fetcher(shutdown: CancellationToken, endpoint: (String, u16)) -> FetcherTask {
         let child_shutdown = shutdown.clone();
         FetcherTask {
             shutdown,
@@ -315,7 +312,11 @@ mod tests {
         check!(supervisor.tasks.len() == 1);
         check!(
             followed_keys(&supervisor, (NodeId(1), 0))
-                == vec![("t".to_string(), 0), ("t".to_string(), 1), ("t".to_string(), 2)]
+                == vec![
+                    ("t".to_string(), 0),
+                    ("t".to_string(), 1),
+                    ("t".to_string(), 2)
+                ]
         );
         for task in &supervisor.tasks {
             task.shutdown.cancel();
@@ -370,7 +371,10 @@ mod tests {
 
         supervisor.reconcile(&img).await;
 
-        check!(supervisor.tasks.len() > 1, "four fetchers must not collapse to one");
+        check!(
+            supervisor.tasks.len() > 1,
+            "four fetchers must not collapse to one"
+        );
         let mut followed: Vec<i32> = (&supervisor.tasks)
             .into_iter()
             .flat_map(|task| {
@@ -535,7 +539,10 @@ mod tests {
             .lock()
             .expect("followed-partitions mutex poisoned");
         let config = followed
-            .get(&(supervisor.partitions.shared_topic_name("t"), PartitionIndex(0)))
+            .get(&(
+                supervisor.partitions.shared_topic_name("t"),
+                PartitionIndex(0),
+            ))
             .expect("the recreated partition");
         check!(config.topic_id.0 == recreated_id.into_bytes());
         check!(config.leader_epoch == krabka_metadata::LeaderEpoch(9));

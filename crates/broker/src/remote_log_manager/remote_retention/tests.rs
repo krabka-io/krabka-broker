@@ -6,8 +6,8 @@ use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
     CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
-    LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId,
-    RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
+    LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate,
+    RemoteStorageError, RemoteStorageManager,
 };
 use krabka_units::{bytes, hours, millis};
 use uuid::Uuid;
@@ -894,9 +894,27 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
         topic: Arc::from(tp().topic.as_str()),
     };
     // The lag is what the pass decided to remove, recorded before it tried.
-    check!(metrics.remote_delete_lag_segments.get_or_create(&topic).get() == 3);
+    check!(
+        metrics
+            .remote_delete_lag_segments
+            .get_or_create(&topic)
+            .get()
+            == 3
+    );
     // The pass stops at the first failure to keep the contiguous-prefix
     // invariant, so exactly one attempt and one error are recorded.
-    check!(metrics.remote_delete_requests_total.get_or_create(&topic).get() == 1);
-    check!(metrics.remote_delete_errors_total.get_or_create(&topic).get() == 1);
+    check!(
+        metrics
+            .remote_delete_requests_total
+            .get_or_create(&topic)
+            .get()
+            == 1
+    );
+    check!(
+        metrics
+            .remote_delete_errors_total
+            .get_or_create(&topic)
+            .get()
+            == 1
+    );
 }

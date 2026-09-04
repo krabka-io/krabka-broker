@@ -250,7 +250,7 @@ mod tests {
             rlmm.clone(),
             disabled_index_cache(),
         )
-            .await;
+        .await;
 
         // All segments are gone from the cache.
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
@@ -318,7 +318,7 @@ mod tests {
             rlmm.clone(),
             disabled_index_cache(),
         )
-            .await;
+        .await;
 
         check!(
             rlmm.list_remote_log_segments(&tp()).unwrap().is_empty(),

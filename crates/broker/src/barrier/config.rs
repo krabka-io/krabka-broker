@@ -86,7 +86,6 @@ mod tests {
         assert!(BarrierConfig::default() == expected);
     }
 
-
     #[test]
     fn the_first_backoff_is_below_the_largest_one() {
         let config = BarrierConfig::default();

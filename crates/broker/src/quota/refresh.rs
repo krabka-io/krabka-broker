@@ -113,4 +113,3 @@ mod tests {
         assert!(b.byte_rate() == bucket_rate(2048));
     }
 }
-

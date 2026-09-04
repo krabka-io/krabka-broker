@@ -252,12 +252,6 @@ mod tests {
                 )
             })
             .collect();
-        assert!(
-            shape
-                == vec![
-                    ("orders".to_owned(), vec![2, 0]),
-                    (String::new(), vec![0]),
-                ]
-        );
+        assert!(shape == vec![("orders".to_owned(), vec![2, 0]), (String::new(), vec![0]),]);
     }
 }

@@ -6,9 +6,7 @@ use krabka_ids::PartitionIndex;
 use krabka_metadata::MetadataImage;
 use tracing::warn;
 
-use super::{
-    ReplicatorSupervisor, desired_local_set, desired_wal_placements, push_topic_configs,
-};
+use super::{ReplicatorSupervisor, desired_local_set, desired_wal_placements, push_topic_configs};
 
 impl ReplicatorSupervisor {
     pub(crate) async fn reconcile(&self, image: &MetadataImage) {

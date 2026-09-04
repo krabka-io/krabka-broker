@@ -6,7 +6,7 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
 use krabka_ids::PartitionIndex;
-use krabka_units::convert::TimeExt as _;
+use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -69,6 +69,9 @@ pub(super) async fn finish_broker_startup(
     .await?;
     let connections = ConnectionLimiter::new(config.max_connections, config.max_connections_per_ip);
     let queued_requests_sem = Arc::new(tokio::sync::Semaphore::new(config.queued_max_requests));
+    let queued_request_bytes = config
+        .queued_max_request_bytes
+        .map(|budget| crate::network::dispatch::RequestByteBudget::of(budget.bytes_usize()));
     let broker = Arc::new(Broker {
         config,
         controller,
@@ -96,6 +99,7 @@ pub(super) async fn finish_broker_startup(
         connections,
         fetch_session_cache: runtime.fetch_session_cache,
         queued_requests_sem,
+        queued_request_bytes,
         want_shutdown: runtime.want_shutdown,
         should_shutdown: runtime.should_shutdown,
         remote_reader: runtime.remote_reader,

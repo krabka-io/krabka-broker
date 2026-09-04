@@ -155,7 +155,13 @@ mod tests {
         let topic = crate::metrics::TopicLabel {
             topic: std::sync::Arc::from(tp().topic.as_str()),
         };
-        check!(metrics.remote_copy_requests_total.get_or_create(&topic).get() == 2);
+        check!(
+            metrics
+                .remote_copy_requests_total
+                .get_or_create(&topic)
+                .get()
+                == 2
+        );
         check!(metrics.remote_copy_errors_total.get_or_create(&topic).get() == 0);
         check!(metrics.remote_copy_bytes_total.get_or_create(&topic).get() == 128);
         // The lag is what the round found waiting, recorded before it ran.
@@ -193,7 +199,13 @@ mod tests {
         let topic = crate::metrics::TopicLabel {
             topic: std::sync::Arc::from(tp().topic.as_str()),
         };
-        check!(metrics.remote_copy_requests_total.get_or_create(&topic).get() == 1);
+        check!(
+            metrics
+                .remote_copy_requests_total
+                .get_or_create(&topic)
+                .get()
+                == 1
+        );
         check!(metrics.remote_copy_errors_total.get_or_create(&topic).get() == 1);
         check!(metrics.remote_copy_bytes_total.get_or_create(&topic).get() == 0);
     }

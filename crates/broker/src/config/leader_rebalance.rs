@@ -52,5 +52,4 @@ mod tests {
             Err(BrokerError::InvalidLeaderRebalanceInterval { value: 0 })
         ));
     }
-
 }

@@ -5,9 +5,7 @@
 //! A write-once archive evicts nothing, so the pass ends before it lists.
 
 use krabka_log::{LogConfig, Offset};
-use krabka_remote_storage::{
-    RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
-};
+use krabka_remote_storage::{RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition};
 use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},

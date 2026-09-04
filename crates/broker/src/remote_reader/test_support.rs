@@ -110,7 +110,9 @@ pub struct CountingRsm {
 }
 
 impl CountingRsm {
-    pub fn new(inner: Arc<dyn RemoteStorageManager>) -> (Arc<Self>, Arc<std::sync::atomic::AtomicUsize>) {
+    pub fn new(
+        inner: Arc<dyn RemoteStorageManager>,
+    ) -> (Arc<Self>, Arc<std::sync::atomic::AtomicUsize>) {
         let index_fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         (
             Arc::new(Self {
@@ -168,8 +170,11 @@ pub struct ReaderDirs {
 
 /// The `sparse_remote_segment_reader` fixture, with the production index cache
 /// turned on and a counting RSM underneath.
-pub fn caching_sparse_remote_segment_reader()
--> (RemoteReader, ReaderDirs, Arc<std::sync::atomic::AtomicUsize>) {
+pub fn caching_sparse_remote_segment_reader() -> (
+    RemoteReader,
+    ReaderDirs,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     let (reader, remote_dir) = sparse_remote_segment_reader();
     let (counting, index_fetches) = CountingRsm::new(Arc::clone(&reader.rsm));
     let log_dir = tempfile::tempdir().unwrap();

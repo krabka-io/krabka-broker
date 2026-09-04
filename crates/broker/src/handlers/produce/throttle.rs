@@ -6,6 +6,7 @@ use krabka_protocol::{
     Encode,
     owned::produce_response::{ProduceResponse, TopicProduceResponse},
 };
+
 use super::framing::FramedTopic;
 use crate::{broker::Broker, error::BrokerError};
 
@@ -194,4 +195,3 @@ mod tests {
         );
     }
 }
-

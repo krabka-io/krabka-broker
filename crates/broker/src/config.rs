@@ -4,9 +4,7 @@
 //! binary entry point is `bin/broker.rs`.
 
 pub use krabka_raft::BootstrapMode;
-use krabka_units::{
-    ByteSize, Time, days, gibibytes, hours, mebibytes, millis, minutes, secs,
-};
+use krabka_units::{ByteSize, Time, days, gibibytes, hours, mebibytes, millis, minutes, secs};
 
 mod break_glass;
 mod broker_config;

@@ -189,7 +189,10 @@ pub(crate) async fn run_fetcher(fetcher: FetcherConfig) {
             "replicator fetcher stopped on unrecoverable error");
     }
 
-    info!(leader_node_id = fetcher.leader_node_id.0, "replicator.fetcher.stopped");
+    info!(
+        leader_node_id = fetcher.leader_node_id.0,
+        "replicator.fetcher.stopped"
+    );
 }
 
 /// Builds or recovers the on-disk `Partition` for this follower.

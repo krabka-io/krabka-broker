@@ -107,7 +107,8 @@ impl Engine {
                 {
                     self.replica_fetch_offsets.insert(from, fetch_offset);
                     if replica_directory_id != uuid::Uuid::nil() {
-                        self.replica_directory_ids.insert(from, replica_directory_id);
+                        self.replica_directory_ids
+                            .insert(from, replica_directory_id);
                     }
                     let now = self.now();
                     let prev_role = self.core.role().name();

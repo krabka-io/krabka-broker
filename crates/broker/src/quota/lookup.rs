@@ -99,14 +99,12 @@ pub fn lookup_quota_with_key(
             ("client-id".into(), Some(client_id.into())),
             ("user".into(), Some(principal.into())),
         ],
-        UserClientQuotaPrecedence::ExactUser
-        | UserClientQuotaPrecedence::DefaultUser => vec![
-            ("user".into(), Some(principal.into())),
-        ],
-        UserClientQuotaPrecedence::ExactClient
-        | UserClientQuotaPrecedence::DefaultClient => vec![
-            ("client-id".into(), Some(client_id.into())),
-        ],
+        UserClientQuotaPrecedence::ExactUser | UserClientQuotaPrecedence::DefaultUser => {
+            vec![("user".into(), Some(principal.into()))]
+        }
+        UserClientQuotaPrecedence::ExactClient | UserClientQuotaPrecedence::DefaultClient => {
+            vec![("client-id".into(), Some(client_id.into()))]
+        }
         UserClientQuotaPrecedence::None => return None,
     };
     Some((bucket_key, rate))

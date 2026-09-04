@@ -170,10 +170,7 @@ async fn readyz_is_503_when_shutting_down() {
 
     let (status, body) = get(probes, "/readyz").await;
     assert!(status.contains("503 Service Unavailable"));
-    check!(
-        body.starts_with("not ready: shutting_down: "),
-        "{body}"
-    );
+    check!(body.starts_with("not ready: shutting_down: "), "{body}");
 
     handle.shutdown().await;
 }
@@ -201,4 +198,3 @@ async fn shutting_down_outranks_every_other_not_ready_condition() {
     check!(status.contains("503 Service Unavailable"), "{status}");
     check!(body.starts_with("not ready: shutting_down: "), "{body}");
 }
-

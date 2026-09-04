@@ -41,9 +41,10 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
             // voter record, skip sending an update RPC.
             if let Some(my_voter) = quorum.voter_nodes.get(&params.node_id) {
                 let matches_dir = my_voter.directory_id == params.directory_id;
-                let matches_listener = my_voter.endpoints.iter().any(|ep| {
-                    ep.host == listener.host && ep.port == listener.port
-                });
+                let matches_listener = my_voter
+                    .endpoints
+                    .iter()
+                    .any(|ep| ep.host == listener.host && ep.port == listener.port);
                 if matches_dir && matches_listener {
                     last_updated = Some((leader, epoch));
                     tokio::time::sleep(params.retry_backoff.to_std()).await;

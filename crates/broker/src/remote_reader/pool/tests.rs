@@ -82,6 +82,9 @@ async fn idle_percent_reports_the_share_of_free_slots() {
 #[tokio::test]
 async fn a_zero_thread_pool_still_serves_one_read_at_a_time() {
     let pool = ReaderPool::new(0, 100);
-    let permit = pool.acquire().await.expect("a pool must never refuse everything");
+    let permit = pool
+        .acquire()
+        .await
+        .expect("a pool must never refuse everything");
     drop(permit);
 }

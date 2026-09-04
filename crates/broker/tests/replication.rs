@@ -427,8 +427,9 @@ async fn scrape(addr: std::net::SocketAddr) -> String {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let request =
-        format!("GET /metrics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
+    let request = format!(
+        "GET /metrics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n"
+    );
     stream.write_all(request.as_bytes()).await.unwrap();
     stream.flush().await.unwrap();
     let mut buf = Vec::new();

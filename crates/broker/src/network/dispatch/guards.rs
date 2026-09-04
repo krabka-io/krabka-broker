@@ -61,6 +61,9 @@ impl Drop for ActiveConnectionGuard {
 /// RAII guard for one queued request waiting for / holding execution capacity (#412).
 pub(super) struct QueuedRequestGuard {
     _permit: tokio::sync::OwnedSemaphorePermit,
+    /// The `queued.max.request.bytes` budget this request spent, given back
+    /// when the guard drops. Absent when the knob is off.
+    _bytes: Option<tokio::sync::OwnedSemaphorePermit>,
     metrics: crate::metrics::BrokerMetrics,
     /// The value this guard added to `queued_request_bytes`, kept as the
     /// gauge's own type so the decrement on drop is exactly the increment
@@ -71,6 +74,7 @@ pub(super) struct QueuedRequestGuard {
 impl QueuedRequestGuard {
     pub(super) fn new(
         permit: tokio::sync::OwnedSemaphorePermit,
+        bytes_permit: Option<tokio::sync::OwnedSemaphorePermit>,
         metrics: &crate::metrics::BrokerMetrics,
         bytes: usize,
     ) -> Self {
@@ -81,6 +85,7 @@ impl QueuedRequestGuard {
         }
         Self {
             _permit: permit,
+            _bytes: bytes_permit,
             metrics: metrics.clone(),
             bytes,
         }

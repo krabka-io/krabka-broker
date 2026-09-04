@@ -136,8 +136,14 @@ pub(super) fn spawn_broker_gauge_updater(
 
             // Cluster state metrics published by the active controller (#390)
             if is_controller {
-                let active = image.brokers().filter(|b| alive.contains(&b.node_id.0)).count();
-                let fenced = image.brokers().filter(|b| !alive.contains(&b.node_id.0)).count();
+                let active = image
+                    .brokers()
+                    .filter(|b| alive.contains(&b.node_id.0))
+                    .count();
+                let fenced = image
+                    .brokers()
+                    .filter(|b| !alive.contains(&b.node_id.0))
+                    .count();
                 metrics
                     .active_brokers
                     .set(i64::try_from(active).unwrap_or(i64::MAX));
@@ -207,8 +213,12 @@ pub(super) fn spawn_broker_gauge_updater(
                 metrics.raft_current_epoch.set(i64::from(snap.leader_epoch));
                 metrics.raft_high_watermark.set(snap.high_watermark);
                 metrics.raft_log_end_offset.set(snap.log_end_offset);
-                metrics.raft_voters.set(i64::try_from(snap.voters.len()).unwrap_or(i64::MAX));
-                metrics.raft_observers.set(i64::try_from(snap.observers.len()).unwrap_or(i64::MAX));
+                metrics
+                    .raft_voters
+                    .set(i64::try_from(snap.voters.len()).unwrap_or(i64::MAX));
+                metrics
+                    .raft_observers
+                    .set(i64::try_from(snap.observers.len()).unwrap_or(i64::MAX));
             }
 
             // Metadata applied offset and lag (#390)

@@ -12,7 +12,6 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-
 use krabka_client_core::{ClientError, Connection};
 use krabka_protocol::owned::{
     fetch_request::{FetchPartition, FetchRequest, ReplicaState},
@@ -146,7 +145,8 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             }
         };
 
-        if session.handle_response(resp.error_code, resp.session_id) == SessionOutcome::SessionLost {
+        if session.handle_response(resp.error_code, resp.session_id) == SessionOutcome::SessionLost
+        {
             info!(
                 leader_node_id = fetcher.leader_node_id.0,
                 error_code = resp.error_code,
@@ -336,14 +336,8 @@ fn build_fetch_request(
     // Truncate rather than round: `max_wait_ms` is a wire field, and a
     // fractional millisecond rounded up would ask the leader to hold the Fetch
     // open past the configured budget. A negative budget means "do not wait".
-    let max_wait_ms = i32::try_from(
-        fetcher
-            .replication
-            .fetch_max_wait
-            .millis_i64_trunc()
-            .max(0),
-    )
-    .unwrap_or(i32::MAX);
+    let max_wait_ms = i32::try_from(fetcher.replication.fetch_max_wait.millis_i64_trunc().max(0))
+        .unwrap_or(i32::MAX);
     FetchRequest {
         replica_id: rid,
         replica_state: ReplicaState {
@@ -396,7 +390,11 @@ mod tests {
 
     /// One `wanted` row per partition, at `fetch_offset`, as `plan_round`
     /// would have produced it.
-    fn wanted_row(partition: i32, fetch_offset: i64, max_bytes: i32) -> (SessionKey, FetchPartition) {
+    fn wanted_row(
+        partition: i32,
+        fetch_offset: i64,
+        max_bytes: i32,
+    ) -> (SessionKey, FetchPartition) {
         (
             SessionKey {
                 topic: TOPIC.to_string(),
@@ -422,9 +420,12 @@ mod tests {
         cfg.replication.fetch_min = bytes(17);
         let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
         let mut session = FollowerFetchSession::default();
-        let wanted: WantedRows = [wanted_row(PARTITION, 123, 456), wanted_row(PARTITION + 1, 7, 456)]
-            .into_iter()
-            .collect();
+        let wanted: WantedRows = [
+            wanted_row(PARTITION, 123, 456),
+            wanted_row(PARTITION + 1, 7, 456),
+        ]
+        .into_iter()
+        .collect();
 
         let req = build_fetch_request(&fetcher, &mut session, wanted);
 
@@ -458,15 +459,21 @@ mod tests {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
         let mut session = FollowerFetchSession::default();
-        let first: WantedRows = [wanted_row(PARTITION, 0, 99), wanted_row(PARTITION + 1, 0, 99)]
-            .into_iter()
-            .collect();
+        let first: WantedRows = [
+            wanted_row(PARTITION, 0, 99),
+            wanted_row(PARTITION + 1, 0, 99),
+        ]
+        .into_iter()
+        .collect();
         build_fetch_request(&fetcher, &mut session, first);
         session.handle_response(crate::codes::NONE, 77);
 
-        let second: WantedRows = [wanted_row(PARTITION, 5, 99), wanted_row(PARTITION + 1, 0, 99)]
-            .into_iter()
-            .collect();
+        let second: WantedRows = [
+            wanted_row(PARTITION, 5, 99),
+            wanted_row(PARTITION + 1, 0, 99),
+        ]
+        .into_iter()
+        .collect();
         let req = build_fetch_request(&fetcher, &mut session, second);
 
         check!(req.session_id == 77);
@@ -506,10 +513,7 @@ mod tests {
     fn a_partition_whose_target_moved_is_skipped_for_the_round() {
         let (cfg, _log_dir) = test_config(image_with_leader(NODE_ID));
         let mut followed = BTreeMap::new();
-        followed.insert(
-            (Arc::clone(&cfg.topic), cfg.partition),
-            Arc::new(cfg),
-        );
+        followed.insert((Arc::clone(&cfg.topic), cfg.partition), Arc::new(cfg));
 
         let round = plan_round(&followed, &DelayedUntil::new());
 

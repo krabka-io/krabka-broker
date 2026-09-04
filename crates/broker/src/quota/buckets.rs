@@ -7,7 +7,6 @@ use std::{
 
 use dashmap::DashMap;
 use krabka_metadata::EntityKey;
-
 use krabka_units::Time;
 
 use crate::throttle::TokenBucket;
@@ -213,7 +212,10 @@ mod tests {
                 buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", rate);
 
             check!(bucket.try_consume(spend_without_throttle) == spend_without_throttle);
-            check!(bucket.try_consume(1) == 0, "{window:?} burst was not exhausted");
+            check!(
+                bucket.try_consume(1) == 0,
+                "{window:?} burst was not exhausted"
+            );
         }
     }
 

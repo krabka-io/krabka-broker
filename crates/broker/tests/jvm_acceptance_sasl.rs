@@ -21,10 +21,10 @@
 mod acl_authorized;
 #[path = "jvm_acceptance_sasl/acl_cli.rs"]
 mod acl_cli;
-#[path = "jvm_acceptance_sasl/acl_output.rs"]
-mod acl_output;
 #[path = "jvm_acceptance_sasl/acl_denied.rs"]
 mod acl_denied;
+#[path = "jvm_acceptance_sasl/acl_output.rs"]
+mod acl_output;
 #[path = "jvm_acceptance_sasl/acl_prefixed.rs"]
 mod acl_prefixed;
 mod jvm_acceptance;

@@ -112,8 +112,8 @@ impl ReaderPool {
     /// whatever window the query asks for and a second moving average inside
     /// the broker would only blur it.
     pub(crate) fn idle_percent(&self) -> f64 {
-        let available = u32::try_from(self.permits.available_permits().min(self.threads))
-            .unwrap_or(u32::MAX);
+        let available =
+            u32::try_from(self.permits.available_permits().min(self.threads)).unwrap_or(u32::MAX);
         // `new` raised `threads` to at least one, so this cannot divide by zero.
         let threads = u32::try_from(self.threads).unwrap_or(u32::MAX);
         f64::from(available) / f64::from(threads) * 100.0

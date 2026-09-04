@@ -125,10 +125,7 @@ pub(crate) async fn rebalance_tick(
         selected_keys.len() == to_submit.len(),
         true,
     ) {
-        debug!(
-            imbalanced,
-            total, "auto-rebalance: batch admission denied"
-        );
+        debug!(imbalanced, total, "auto-rebalance: batch admission denied");
         return;
     }
     info!(count = imbalanced, "auto-rebalance: submitting elections");
@@ -267,7 +264,6 @@ mod tests {
         }
         l
     }
-
 
     #[tokio::test]
     async fn offline_or_out_of_isr_preferred_replica_is_not_submitted() {

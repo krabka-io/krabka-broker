@@ -457,9 +457,8 @@ index_cache_size = "256MiB"
             ("reader_max_pending_tasks", "0"),
             ("index_cache_size", "\"0B\""),
         ] {
-            let source = format!(
-                "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n{field} = {value}\n"
-            );
+            let source =
+                format!("[remote_storage]\nstorage_dir = \"/tmp/tier\"\n{field} = {value}\n");
             let file: FileConfig = toml::from_str(&source).expect("parse syntax");
             let mut config = crate::config::BrokerConfig::default();
             let error = file

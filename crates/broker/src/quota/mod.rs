@@ -16,16 +16,16 @@ mod request;
 mod throttle_slot;
 
 pub use buckets::QuotaBuckets;
-pub use controller_mutation::consume_controller_mutation_quota;
 pub(crate) use controller_mutation::apply_controller_mutation_quota_mode;
+pub use controller_mutation::consume_controller_mutation_quota;
 pub use lookup::{lookup_ip_quota, lookup_ip_quota_with_key, lookup_quota, lookup_quota_with_key};
 pub use producer::consume_producer_quota;
 pub use request::consume_request_quota;
 pub(crate) use throttle_slot::ThrottleSlot;
 
 mod refresh;
-pub use refresh::run;
 pub(crate) use expiry::run as run_expiry;
+pub use refresh::run;
 
 /// Result of consuming a client quota, carrying the delay and the resolved
 /// entity identity (`user` and `client_id`) that the match was charged to (#418).

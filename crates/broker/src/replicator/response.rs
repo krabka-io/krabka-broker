@@ -318,8 +318,9 @@ pub(super) async fn apply_response(
             actions.push(RowAction::Continue);
             continue;
         };
-        actions
-            .push(handle_partition_response(part_resp, entry.cfg, entry.request_leader_epoch).await);
+        actions.push(
+            handle_partition_response(part_resp, entry.cfg, entry.request_leader_epoch).await,
+        );
     }
     actions
 }
@@ -571,9 +572,7 @@ mod tests {
                 },
             );
 
-            assert!(
-                handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Drop
-            );
+            assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Drop);
         }
     }
 
@@ -600,9 +599,7 @@ mod tests {
             },
         );
 
-        assert!(
-            handle_response(resp, &cfg, cfg.leader_epoch.0 - 1).await == RowAction::Drop
-        );
+        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0 - 1).await == RowAction::Drop);
         assert!(part.log_end_offset() == Offset(1));
     }
 

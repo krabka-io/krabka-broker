@@ -137,7 +137,6 @@ pub(crate) fn validate_spec_limits(
     Ok(())
 }
 
-
 /// Per-broker barrier coordinator.
 ///
 /// `Broker::start` builds it and shares it with the barrier wire handlers and
@@ -393,17 +392,35 @@ mod tests {
 
         // Too many topics
         let too_many_topics = spec(&["t1", "t2", "t3", "t4"], Some(krabka_units::secs(2)), 5);
-        assert!(validate_spec_limits(&too_many_topics, max_topics, max_retained_cuts, min_interval).is_err());
+        assert!(
+            validate_spec_limits(
+                &too_many_topics,
+                max_topics,
+                max_retained_cuts,
+                min_interval
+            )
+            .is_err()
+        );
 
         // Too many cuts
         let too_many_cuts = spec(&["t1"], Some(krabka_units::secs(2)), 15);
-        assert!(validate_spec_limits(&too_many_cuts, max_topics, max_retained_cuts, min_interval).is_err());
+        assert!(
+            validate_spec_limits(&too_many_cuts, max_topics, max_retained_cuts, min_interval)
+                .is_err()
+        );
 
         // Interval below minimum
         let interval_too_short = spec(&["t1"], Some(krabka_units::millis(500)), 5);
-        assert!(validate_spec_limits(&interval_too_short, max_topics, max_retained_cuts, min_interval).is_err());
+        assert!(
+            validate_spec_limits(
+                &interval_too_short,
+                max_topics,
+                max_retained_cuts,
+                min_interval
+            )
+            .is_err()
+        );
     }
-
 
     #[tokio::test]
     async fn the_state_partition_of_a_group_carries_every_record_of_that_group() {

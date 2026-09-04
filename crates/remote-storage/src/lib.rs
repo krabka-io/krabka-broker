@@ -153,8 +153,8 @@ pub use index::{
     position_for_relative_offset, relative_offset_floor_for_timestamp, txn_overlaps,
 };
 pub use index_cache::{
-    DEFAULT_INDEX_CACHE_TOTAL_SIZE_BYTES, IndexCacheOutcome, IndexCacheStats, REMOTE_INDEX_CACHE_DIR,
-    RemoteIndexCache,
+    DEFAULT_INDEX_CACHE_TOTAL_SIZE_BYTES, IndexCacheOutcome, IndexCacheStats,
+    REMOTE_INDEX_CACHE_DIR, RemoteIndexCache,
 };
 pub use inmemory::InmemoryRemoteLogMetadataManager;
 pub use krabka_object_store::{

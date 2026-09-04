@@ -483,7 +483,12 @@ impl RaftStateLabel {
     pub const FOLLOWER: Self = Self { state: "follower" };
     pub const CANDIDATE: Self = Self { state: "candidate" };
     pub const OBSERVER: Self = Self { state: "observer" };
-    pub const ALL: [Self; 4] = [Self::LEADER, Self::FOLLOWER, Self::CANDIDATE, Self::OBSERVER];
+    pub const ALL: [Self; 4] = [
+        Self::LEADER,
+        Self::FOLLOWER,
+        Self::CANDIDATE,
+        Self::OBSERVER,
+    ];
 }
 
 /// Per-entity client quota label set, paired with

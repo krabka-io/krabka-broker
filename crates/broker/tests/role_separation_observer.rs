@@ -602,9 +602,16 @@ async fn broker_only_node_forwards_describe_quorum_to_controller() {
     assert!(topic.partitions.len() == 1);
     let part = &topic.partitions[0];
     assert!(part.error_code == 0);
-    assert!(part.leader_id == 1, "controller-only node 1 is the leader; got {}", part.leader_id);
+    assert!(
+        part.leader_id == 1,
+        "controller-only node 1 is the leader; got {}",
+        part.leader_id
+    );
     assert!(part.leader_epoch >= 1, "leader epoch must be >= 1");
-    assert!(part.current_voters.iter().any(|v| v.replica_id == 1), "voters must include node 1");
+    assert!(
+        part.current_voters.iter().any(|v| v.replica_id == 1),
+        "voters must include node 1"
+    );
 
     cluster.shutdown().await;
 }

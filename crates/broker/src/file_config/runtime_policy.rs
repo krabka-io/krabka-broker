@@ -9,8 +9,7 @@ use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
         disableable_millis_i32_time, metadata_snapshot_fetch_max, nonnegative_time, positive_time,
-        positive_u64, whole_bytes_u64, whole_millis_i32_time,
-        whole_millis_i64_time,
+        positive_u64, whole_bytes_u64, whole_millis_i32_time, whole_millis_i64_time,
     },
 };
 

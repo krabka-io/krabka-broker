@@ -189,7 +189,6 @@ impl BarrierCoordinator {
             last_epoch: entry.last_epoch(),
         };
         self.append_records(
-
             group,
             vec![(
                 RecordKey::group(group),
@@ -429,4 +428,3 @@ mod tests {
         assert!(msg.contains("barrier groups limit reached"));
     }
 }
-

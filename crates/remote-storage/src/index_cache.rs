@@ -355,8 +355,10 @@ impl RemoteIndexCache {
                 remove_quietly(&entry_path(root, *victim));
             }
         }
-        self.evictions
-            .fetch_add(u64::try_from(evicted.len()).unwrap_or(u64::MAX), Ordering::Relaxed);
+        self.evictions.fetch_add(
+            u64::try_from(evicted.len()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
     }
 }
 
