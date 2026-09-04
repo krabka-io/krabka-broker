@@ -17,6 +17,15 @@
 //! This file holds the wire entry point. The KIP-511 name check lives in
 //! `client_info`, and the KIP-584 feature rows the response carries live in
 //! `feature_keys`.
+//!
+//! KIP-219: `ApiVersionsResponse` puts `ThrottleTimeMs` behind the `ApiKeys`
+//! array, so the dispatch loop -- which reports a request-quota delay by
+//! patching the leading int32 of an already-encoded body -- cannot reach the
+//! field. The handler therefore charges the KIP-124 request quota itself and
+//! fills the field in before encoding, which is what Kafka's
+//! `KafkaApis.handleApiVersionsRequest` does by answering through
+//! `requestHelper.sendResponseMaybeThrottle`. Its dispatch entry is
+//! `RequestQuotaPolicy::SelfAccounted` for that reason.
 
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;

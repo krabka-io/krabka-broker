@@ -407,6 +407,9 @@ jobs:
       # Every crate has a README and the root README crate table names it.
       - name: crate READMEs
         run: aspect check-crate-readmes
+      # //bazel/images' IMAGES restates every //MODULE.bazel image pin as the tag the image is loaded under. A digest bump that moves the tag on one side only leaves a suite testing bytes its `const KAFKA_IMAGE` no longer describes.
+      - name: pinned images
+        run: aspect check-images
       - name: markdown links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
