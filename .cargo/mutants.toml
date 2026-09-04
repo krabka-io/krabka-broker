@@ -46,6 +46,14 @@ exclude_re = [
     # waiting forever. The drain test detects that, but cargo-mutants can only
     # classify the deliberately stuck process as a timeout.
     "broker/src/client_metrics/mod\\.rs.*replace ClientMetrics::shutdown with \\(\\)",
+    # `InitProducerId`'s non-transactional arm sets `error_code: codes::NONE`,
+    # and `codes::NONE` is 0, which is the field's derived `Default`. Deleting
+    # the field encodes the same bytes, so the mutant is a true equivalent of
+    # one expression. It lives here rather than on a `#[cfg_attr(test,
+    # mutants::skip)]` because the rest of `handle` -- the two ACL arms, the
+    # KIP-939 2PC gates, the coordinator routing -- is wire-visible and is
+    # asserted by `handlers::init_producer_id::tests`.
+    "init_producer_id\\.rs.*delete .*error_code.*in handle",
     # ---- crates/log ----------------------------------------------------
     #
     # The epoch guard in each append path is `epoch.is_known() && latest is none

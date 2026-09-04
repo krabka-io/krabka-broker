@@ -117,8 +117,6 @@ impl TxnCoordinator {
     /// A tid whose `__transaction_state` partition moved away is skipped: the
     /// broker that leads it now owns the decision. An append failure restores
     /// the state it found and leaves the entry in place for the next tick.
-    // cargo-mutants: I/O orchestration over live DashMap / partition state
-    #[cfg_attr(test, mutants::skip)]
     #[tracing::instrument(
         name = "txn_coordinator_expire_transactional_ids",
         level = "debug",

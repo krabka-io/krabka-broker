@@ -9,9 +9,6 @@
 
 use crate::{error::BrokerError, txn::state::TxnEntry};
 
-// cargo-mutants: identity allocation can cross the metadata controller;
-// transaction integration exercises both epoch-bump and rollover paths.
-#[cfg_attr(test, mutants::skip)]
 pub(super) async fn next_init_producer_identity(
     entry: &TxnEntry,
     txnv: crate::txn::version::TxnVersion,
