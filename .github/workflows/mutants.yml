@@ -331,7 +331,9 @@ jobs:
           {
             echo '## Last green sweep'
             echo
-            sed -n '/^| Crate |/,/^$/p' "${DOC}"
+            # Every table line, header and separator included: the last-green
+            # table is the only table in the file.
+            sed -n '/^| /p' "${DOC}"
           } >>"${GITHUB_STEP_SUMMARY}"
 
           if git diff --quiet -- "${DOC}"; then

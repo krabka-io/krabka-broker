@@ -328,9 +328,9 @@ mod tests {
             error_message: Some("broker listener requires endpoint_type=BROKERS".into()),
             endpoint_type: 2,
             cluster_id: String::new(),
-            controller_id: 0,
+            controller_id: -1,
             brokers: vec![],
-            cluster_authorized_operations: 0,
+            cluster_authorized_operations: i32::MIN,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(decode_response(&bytes) == expected);
