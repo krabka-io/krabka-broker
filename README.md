@@ -363,9 +363,11 @@ Mutation sweeps run through
 bazel test //crates/raft:raft_mutants
 ```
 
-They are tagged `manual`, so `bazel test //...` skips them. The on-demand,
-sharded `mutants` workflow runs a requested crate's full sweep. A non-excluded
-survivor fails its shard. Two things to know about the results:
+They are tagged `manual`, so `bazel test //...` skips them. The sharded
+`mutants` workflow runs the sweeps: weekly on a schedule over every swept
+crate, and on demand for a single crate. A non-excluded survivor fails its
+shard, and [`docs/mutants-baseline.md`](docs/mutants-baseline.md) records when
+each crate last swept green. Two things to know about the results:
 
 * The target runs unit tests and ordinary `tests/*.rs` integration tests. It
   excludes manual and Docker-backed suites because the sweep reruns the tests
