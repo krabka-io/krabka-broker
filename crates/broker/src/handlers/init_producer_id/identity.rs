@@ -60,8 +60,8 @@ mod tests {
     use super::*;
     use crate::txn::state::TxnState;
 
-    /// The `transaction.version` split. Below TV_2 the coordinator bumps the
-    /// entry's own epoch and keeps the producer id; from TV_2 it goes through
+    /// The `transaction.version` split. Below `TV_2` the coordinator bumps the
+    /// entry's own epoch and keeps the producer id; from `TV_2` it goes through
     /// `next_producer_identity`, which rotates to a fresh producer id at the
     /// `i16::MAX - 1` boundary rather than bumping into `i16::MAX`.
     #[tokio::test]
@@ -75,7 +75,9 @@ mod tests {
             crate::txn::version::TxnVersion::Flexible,
         ] {
             assert!(
-                next_init_producer_identity(&entry, txnv, &ids).await.unwrap()
+                next_init_producer_identity(&entry, txnv, &ids)
+                    .await
+                    .unwrap()
                     == (ProducerId(11), 4)
             );
         }
@@ -94,7 +96,8 @@ mod tests {
     #[tokio::test]
     async fn the_epoch_ceiling_rotates_to_a_fresh_producer_id_on_both_sides() {
         let ids = crate::producer_id_manager::ProducerIdManager::new();
-        let mut entry = TxnEntry::new_empty("tid-max".into(), ProducerId(11), i16::MAX, i32::MAX, 0);
+        let mut entry =
+            TxnEntry::new_empty("tid-max".into(), ProducerId(11), i16::MAX, i32::MAX, 0);
         entry.state = TxnState::CompleteCommit;
 
         let (classic_pid, classic_epoch) =

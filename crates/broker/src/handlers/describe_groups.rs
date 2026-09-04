@@ -356,7 +356,12 @@ mod tests {
                 GroupState::Stable,
             ]
             .map(state_to_str)
-                == ["Empty", "PreparingRebalance", "CompletingRebalance", "Stable"]
+                == [
+                    "Empty",
+                    "PreparingRebalance",
+                    "CompletingRebalance",
+                    "Stable"
+                ]
         );
     }
 }
