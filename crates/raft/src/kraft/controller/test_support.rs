@@ -177,6 +177,15 @@ pub fn build_engine_only_with_policy(
             .map(|key| key.directory_id),
         observers: Vec::new(),
         per_replica_fetch_offset: std::collections::BTreeMap::new(),
+        per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
+        per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
+        observer_directory_ids: std::collections::BTreeMap::new(),
+        is_leader: core.role().is_leader(),
+        current_state: if core.role().is_leader() {
+            "leader"
+        } else {
+            "follower"
+        },
     };
     let (quorum_tx, _quorum_rx) = watch::channel(initial_snapshot);
     let (cmd_tx, _cmd_rx) = mpsc::channel(1);
@@ -222,6 +231,8 @@ pub fn build_engine_only_with_policy(
             installed_snapshot_epoch: None,
             controls,
             replica_fetch_offsets: BTreeMap::new(),
+            replica_directory_ids: BTreeMap::new(),
+            wall_clock_base: std::time::SystemTime::now(),
             leader_reported_hwm: log_hwm_at_open,
             pending_reconfig: None,
         },

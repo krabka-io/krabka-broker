@@ -133,7 +133,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/broker/src/throttle/mod.rs",
         tests: &["crates/broker/tests/throttle.rs"],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "The measured throttled-replication rate is published as `krabka_broker_replication_throttled_bytes_out` and `krabka_broker_replication_throttled_bytes_in`, which stand for Kafka's `kafka.server:type=LeaderReplication,name=byte-rate` and its `FollowerReplication` twin, with `krabka_broker_replication_throttle_sleeps` for the rounds the throttle held back entirely. Kafka delays a throttled fetch; krabka drops the partition from the round and the follower re-asks, so there is no `throttle_time_ms` to attribute and the byte-rate is what says whether the throttle is biting.",
     },
     KipAnnotation {
         key: "KIP-98",
@@ -422,7 +422,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/restore/tests/roundtrip/consume.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "The tier's traffic and lag are published per topic under the `krabka_broker_remote_*` names, which stand for Kafka's `BrokerTopicMetrics` `RemoteCopyBytesPerSec`, `RemoteFetchBytesPerSec`, the three `Remote*RequestsPerSec` and `Remote*ErrorsPerSec` meters, and the four `Remote*Lag*` gauges. The bounded reader pool and the on-disk index cache report `krabka_broker_remote_log_reader_task_queue_size`, `_avg_idle_percent` and `_fetch_duration_seconds` for Kafka's `RemoteLogManager` gauges, plus rejection and cache hit / miss counters Kafka has no counterpart for.",
     },
     KipAnnotation {
         key: "KIP-412",
@@ -477,6 +477,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/partition_reassignment.rs",
             "crates/broker/tests/jvm_acceptance_reassign.rs",
+            "crates/broker/tests/jvm_acceptance_reassign/cancel_gate.rs",
         ],
         clients: ClientEvidence::NotCovered,
         note: "",
@@ -787,6 +788,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/consumer_group_next_gen.rs",
             "crates/broker/tests/jvm_consumer_group_next_gen.rs",
             "crates/broker/tests/group_version.rs",
+            "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
         ],
         clients: ClientEvidence::NotCovered,
         note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker.",

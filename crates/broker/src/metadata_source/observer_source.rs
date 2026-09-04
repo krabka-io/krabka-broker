@@ -48,9 +48,8 @@ impl MetadataSource for ObserverSource {
     }
     fn quorum_state(&self) -> QuorumState {
         // A broker-only node is not a voter and has no openraft state of its
-        // own, so only `current_leader` is meaningful here. `current_term` /
-        // `last_applied_index` / per-voter progress are unknown — DescribeQuorum
-        // on a broker-only node forwards to a controller in a later component.
+        // own, so only `current_leader` is meaningful here. DescribeQuorum
+        // and KIP-853 voter admin RPCs are forwarded to the controller.
         QuorumState {
             current_term: 0,
             last_applied_index: 0,
@@ -58,6 +57,10 @@ impl MetadataSource for ObserverSource {
             voters: Vec::new(),
             voter_nodes: std::collections::BTreeMap::new(),
             per_voter_matched_index: std::collections::BTreeMap::new(),
+            per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
+            per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
+            observer_directory_ids: std::collections::BTreeMap::new(),
+            is_leader: false,
         }
     }
     fn current_controller_epoch(&self) -> Option<u64> {
@@ -105,19 +108,24 @@ impl MetadataSource for ObserverSource {
         })
     }
     async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-        Err(RaftError::NotLeader {
-            current_leader: None,
-        })
+        let current_leader = *self.observer.watch_leader().borrow();
+        Err(RaftError::NotLeader { current_leader })
     }
     async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-        Err(RaftError::NotLeader {
-            current_leader: None,
-        })
+        let current_leader = *self.observer.watch_leader().borrow();
+        Err(RaftError::NotLeader { current_leader })
     }
     async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-        Err(RaftError::NotLeader {
-            current_leader: None,
-        })
+        let current_leader = *self.observer.watch_leader().borrow();
+        Err(RaftError::NotLeader { current_leader })
+    }
+    async fn forward_raw(
+        &self,
+        api_key: i16,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Option<Result<bytes::Bytes, RaftError>> {
+        Some(self.writer.forward_raw(api_key, version, body).await)
     }
     async fn cancel(&self) {
         self.observer.cancel().await;

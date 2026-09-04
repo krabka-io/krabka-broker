@@ -146,6 +146,22 @@ pub struct Broker {
     /// handler before each read; sized by
     /// `BrokerConfig::max_incremental_fetch_session_cache_slots`.
     pub fetch_session_cache: Arc<crate::fetch_session::FetchSessionCache>,
+    /// Semaphore limiting queued/in-flight requests per `queued.max.requests` (#412).
+    pub(crate) queued_requests_sem: Arc<tokio::sync::Semaphore>,
+    /// Byte budget across every connection's in-flight requests, per
+    /// `queued.max.request.bytes` (#412). `None` when the knob is off, which
+    /// is Kafka's default.
+    ///
+    /// A permit is one byte, taken for the frame's whole length once it has
+    /// been decoded and given back when its response is written. It bounds
+    /// what the broker holds while it is *handling* requests: the decoded
+    /// request, whatever the handler builds from it, and the response. What it
+    /// does not bound is the one frame per connection that the codec has
+    /// already read, which is Kafka's `SimpleMemoryPool` sitting on the read
+    /// side instead; `socket.request.max.bytes` and `max.connections` bound
+    /// that. A frame larger than the whole budget is refused rather than
+    /// waited on, because no response can ever free enough room for it.
+    pub(crate) queued_request_bytes: Option<crate::network::dispatch::RequestByteBudget>,
     /// Prometheus metrics. Cloned into every subsystem that emits
     /// metrics, such as the produce/fetch handlers and the
     /// isr-maintenance loop. The `BrokerMetrics` struct clones cheaply

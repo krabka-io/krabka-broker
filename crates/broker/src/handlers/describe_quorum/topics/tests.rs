@@ -58,6 +58,10 @@ fn quorum_state(
             .iter()
             .map(|&(v, m)| (krabka_raft::NodeId(v), m))
             .collect::<BTreeMap<_, _>>(),
+        per_replica_last_fetch_ms: BTreeMap::new(),
+        per_replica_last_caught_up_ms: BTreeMap::new(),
+        observer_directory_ids: BTreeMap::new(),
+        is_leader: true,
     }
 }
 
@@ -272,6 +276,10 @@ fn v2_replica_directory_id_and_nodes_come_from_voter_nodes() {
         voters: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
         voter_nodes,
         per_voter_matched_index: BTreeMap::new(),
+        per_replica_last_fetch_ms: BTreeMap::new(),
+        per_replica_last_caught_up_ms: BTreeMap::new(),
+        observer_directory_ids: BTreeMap::new(),
+        is_leader: true,
     };
 
     // Per-voter replica_directory_id is sourced from voter_nodes.
@@ -351,4 +359,33 @@ fn current_term_above_i32_max_saturates() {
     let q = quorum_state(Some(1), u64::MAX, 0, &[1], &[]);
     let out = build_topic_responses(&req, &q);
     assert!(out[0].partitions[0].leader_epoch == i32::MAX);
+}
+
+#[test]
+fn voter_and_observer_timestamps_and_directory_ids_surfaced() {
+    let req = req_for(CLUSTER_METADATA_TOPIC, 0);
+    let mut q = quorum_state(Some(1), 1, 10, &[1], &[(1, 10), (2, 9)]);
+    let obs_uuid = uuid::Uuid::new_v4();
+    q.per_replica_last_fetch_ms
+        .insert(krabka_raft::NodeId(1), 1_700_000_001_000);
+    q.per_replica_last_caught_up_ms
+        .insert(krabka_raft::NodeId(1), 1_700_000_001_000);
+    q.per_replica_last_fetch_ms
+        .insert(krabka_raft::NodeId(2), 1_700_000_002_000);
+    q.per_replica_last_caught_up_ms
+        .insert(krabka_raft::NodeId(2), 1_700_000_001_500);
+    q.observer_directory_ids
+        .insert(krabka_raft::NodeId(2), obs_uuid);
+
+    let out = build_topic_responses(&req, &q);
+    let partition = &out[0].partitions[0];
+    assert!(partition.current_voters.len() == 1);
+    assert!(partition.current_voters[0].last_fetch_timestamp == 1_700_000_001_000);
+    assert!(partition.current_voters[0].last_caught_up_timestamp == 1_700_000_001_000);
+
+    assert!(partition.observers.len() == 1);
+    assert!(partition.observers[0].replica_id == 2);
+    assert!(partition.observers[0].last_fetch_timestamp == 1_700_000_002_000);
+    assert!(partition.observers[0].last_caught_up_timestamp == 1_700_000_001_500);
+    assert!(partition.observers[0].replica_directory_id == Uuid(*obs_uuid.as_bytes()));
 }

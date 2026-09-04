@@ -16,6 +16,8 @@ mod support;
 mod cluster;
 #[path = "jvm_acceptance_cli/compaction.rs"]
 mod compaction;
+#[path = "jvm_acceptance_cli/config_output.rs"]
+mod config_output;
 #[path = "jvm_acceptance_cli/configs.rs"]
 mod configs;
 #[path = "jvm_acceptance_cli/console.rs"]
@@ -28,5 +30,12 @@ mod consumer_groups;
 mod delete_records;
 #[path = "jvm_acceptance_cli/elr_columns.rs"]
 mod elr_columns;
+#[path = "jvm_acceptance_cli/group_output.rs"]
+mod group_output;
+// The oracle harness these suites compare against. It lives beside this
+// binary's parts and is re-based into `jvm_acceptance_sasl` and
+// `jvm_acceptance_reassign` with `#[path]`, so the three share one copy.
+#[path = "jvm_acceptance_cli/oracle.rs"]
+mod oracle;
 #[path = "jvm_acceptance_cli/topics.rs"]
 mod topics;

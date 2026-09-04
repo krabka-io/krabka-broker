@@ -9,8 +9,7 @@ use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
         disableable_millis_i32_time, metadata_snapshot_fetch_max, nonnegative_time, positive_time,
-        positive_u64, unit_interval_ratio, whole_bytes_u64, whole_millis_i32_time,
-        whole_millis_i64_time,
+        positive_u64, whole_bytes_u64, whole_millis_i32_time, whole_millis_i64_time,
     },
 };
 
@@ -112,10 +111,6 @@ impl RuntimeFileConfig {
             leader_imbalance_check_interval,
             cfg.leader_imbalance_check_interval
         );
-        if let Some(value) = runtime.leader_imbalance_per_broker {
-            cfg.leader_imbalance_per_broker =
-                unit_interval_ratio("leader_imbalance_per_broker", value)?;
-        }
         // Zero disables the periodic TLS watcher, so it bypasses the
         // positive-only macro.
         if let Some(value) = runtime.tls_reload_interval {
@@ -152,32 +147,5 @@ impl RuntimeFileConfig {
             cfg.remote_log_manager_interval
         );
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use assert2::assert;
-    use krabka_units::convert::RatioExt as _;
-
-    use crate::file_config::FileConfig;
-
-    /// Kafka's `leader.imbalance.per.broker.percentage` lands as a [`Ratio`].
-    #[test]
-    fn leader_imbalance_percentage_lands_as_a_ratio() {
-        for (raw, want) in [("0%", 0.0), ("10%", 0.10), ("55%", 0.55), ("100%", 1.0)] {
-            let file: FileConfig = toml::from_str(&format!(
-                "[runtime]\nleader_imbalance_per_broker = \"{raw}\"\n"
-            ))
-            .expect("parse runtime config");
-            let mut cfg = crate::config::BrokerConfig::default();
-
-            file.apply_to(&mut cfg).expect("apply runtime config");
-
-            assert!(
-                (cfg.leader_imbalance_per_broker.as_f64() - want).abs() < 1e-12,
-                "{raw} should be {want}"
-            );
-        }
     }
 }

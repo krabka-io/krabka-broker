@@ -59,7 +59,7 @@ macro_rules! tuning_fields {
             pub rlmm_bootstrap_backoff_initial: Time,
             /// Maximum remote-log metadata bootstrap retry delay.
             pub rlmm_bootstrap_backoff_max: Time,
-            /// Maximum connection-creation quota delay.
+            /// Maximum connection-creation quota delay. Governed by KIP-612 connection quota enforcement.
             pub connection_creation_throttle_max: Time,
             /// OPA authorization request timeout.
             pub opa_http_timeout: Time,
@@ -87,8 +87,10 @@ macro_rules! tuning_fields {
             pub unclean_recovery_balanced_deadline: Time,
             /// Operator-triggered recovery deadline.
             pub operator_recovery_deadline: Time,
-            /// Maximum quota throttle delay.
+            /// Maximum client quota throttle delay (default 10 s), bounding per-response client muting. Equivalent to Kafka's `quotaWindowSizeSeconds * (numQuotaSamples - 1)` under `quota.window.num` and `quota.window.size.seconds`.
             pub quota_throttle_max: Time,
+            /// Time window sizing the byte-rate quota token bucket burst capacity (default 11 s). Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`.
+            pub quota_window: Time,
             /// Window whose throughput defines the controller-mutation burst capacity.
             pub controller_mutation_quota_window: Time,
             /// Maximum self-registration attempts before startup fails.
@@ -101,13 +103,13 @@ macro_rules! tuning_fields {
             pub audit_tail_window_offsets: i64,
             /// Maximum bytes read by an audit tail request.
             pub audit_tail_read_max: ByteSize,
-            /// Maximum wait for offsets-topic metadata.
+            /// Maximum wait for offset topic metadata before failing requests.
             pub offsets_topic_metadata_wait_timeout: Time,
-            /// Push intervals after which client metrics become stale.
+            /// Number of stale push intervals before client metrics expire.
             pub client_metrics_stale_push_intervals: u32,
-            /// Capacity of each coordinator actor mailbox.
+            /// Mailbox capacity for coordinator actors.
             pub coordinator_actor_mailbox_capacity: usize,
-            /// Number of broker voters in each diskless WAL quorum.
+            /// Local replica count for diskless WAL mode.
             pub diskless_wal_local_replica_count: usize,
             /// Cadence of diskless WAL object-store flushes.
             pub diskless_wal_flush_interval: Time,
@@ -125,8 +127,12 @@ macro_rules! tuning_fields {
             pub share_recovery_read_max: ByteSize,
             /// Share-session cache ceiling when group count is unlimited.
             pub share_session_cache_max_when_unlimited: usize,
-            /// Maximum encoded request size accepted from a socket.
+            /// Maximum encoded request size accepted from a socket (matches Kafka socket.request.max.bytes).
             pub socket_request_max: ByteSize,
+            /// Maximum number of resident queued requests across all connections (matches Kafka queued.max.requests).
+            pub queued_max_requests: usize,
+            /// Maximum resident request bytes across all connections (matches Kafka queued.max.request.bytes).
+            pub queued_max_request_bytes: Option<ByteSize>,
             /// Minimum response size eligible for `sendfile`.
             ///
             /// The default is 4 KiB, the floor of the sweep in

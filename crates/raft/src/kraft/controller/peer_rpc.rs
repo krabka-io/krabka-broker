@@ -110,10 +110,17 @@ impl Engine {
             self.log.log_end_offset(),
             self.log.last_epoch(),
         );
+        let replica_directory_id = self
+            .core
+            .quorum_state()
+            .voters
+            .get(self.me)
+            .map_or(uuid::Uuid::nil(), |v| v.directory_id);
         let body = wire::PeerRequest::Fetch {
             from: self.me,
             fetch_epoch,
             fetch_offset,
+            replica_directory_id,
         }
         .encode();
         self.spawn_send(leader_id, api_key::FETCH, body);

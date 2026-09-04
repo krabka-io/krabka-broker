@@ -107,7 +107,40 @@ impl BrokerMetrics {
             .get_or_create(&QuotaTypeLabel { quota_type })
             .observe(seconds);
     }
+}
 
+/// A single quota charge evaluated by [`BrokerMetrics::record_applied_throttle`].
+#[derive(Debug, Clone)]
+pub(crate) struct QuotaCharge {
+    pub quota_type: QuotaType,
+    pub delay: Time,
+    pub user: Option<String>,
+    pub client_id: Option<String>,
+}
+
+impl From<(QuotaType, Time)> for QuotaCharge {
+    fn from((quota_type, delay): (QuotaType, Time)) -> Self {
+        Self {
+            quota_type,
+            delay,
+            user: None,
+            client_id: None,
+        }
+    }
+}
+
+impl From<(QuotaType, crate::quota::QuotaDelay)> for QuotaCharge {
+    fn from((quota_type, qd): (QuotaType, crate::quota::QuotaDelay)) -> Self {
+        Self {
+            quota_type,
+            delay: qd.delay,
+            user: qd.user,
+            client_id: qd.client_id,
+        }
+    }
+}
+
+impl BrokerMetrics {
     /// Resolve and record the throttle one request applies, and return the
     /// delay the caller must sleep for.
     ///
@@ -128,18 +161,33 @@ impl BrokerMetrics {
     pub(crate) fn record_applied_throttle(
         &self,
         api_key: ApiKeyCode,
-        charged: &[(QuotaType, Time)],
+        charged: &[QuotaCharge],
     ) -> Time {
-        let mut applied: Option<(QuotaType, Time)> = None;
-        for &(quota_type, delay) in charged {
-            if applied.is_none_or(|(_, largest)| delay > largest) {
-                applied = Some((quota_type, delay));
+        let mut applied: Option<&QuotaCharge> = None;
+        for c in charged {
+            if applied.is_none_or(|largest| c.delay > largest.delay) {
+                applied = Some(c);
             }
         }
-        let (quota_type, delay) = applied.unwrap_or((QuotaType::Request, <Time as TimeExt>::ZERO));
+        let fallback = QuotaCharge {
+            quota_type: QuotaType::Request,
+            delay: <Time as TimeExt>::ZERO,
+            user: None,
+            client_id: None,
+        };
+        let winning = applied.unwrap_or(&fallback);
+        let delay = winning.delay;
         self.observe_request_throttle_duration(api_key, delay.secs_f64());
         if delay > <Time as TimeExt>::ZERO {
-            self.observe_quota_throttle(quota_type, delay.secs_f64());
+            self.observe_quota_throttle(winning.quota_type, delay.secs_f64());
+            let entity_label = super::labels::QuotaEntityLabel {
+                quota_type: winning.quota_type,
+                user: winning.user.clone(),
+                client_id: winning.client_id.clone(),
+            };
+            self.quota_entity_throttle_seconds_total
+                .get_or_create(&entity_label)
+                .inc_by(delay.secs_f64());
         }
         delay
     }
@@ -247,7 +295,8 @@ mod tests {
 
         for (label, charged, want_delay, want_quota) in cases {
             let metrics = BrokerMetrics::new();
-            let applied = metrics.record_applied_throttle(0, &charged);
+            let charges: Vec<QuotaCharge> = charged.into_iter().map(Into::into).collect();
+            let applied = metrics.record_applied_throttle(0, &charges);
             assert!(applied == want_delay, "{label}");
 
             let rendered = render(&metrics).await;
@@ -468,6 +517,8 @@ mod tests {
                 == vec![
                     "krabka_broker_connection_closes_total{reason=\"decode_error\"} 1",
                     "krabka_broker_connection_closes_total{reason=\"idle\"} 2",
+                    "krabka_broker_connection_closes_total{reason=\"max_connections\"} 1",
+                    "krabka_broker_connection_closes_total{reason=\"max_connections_per_ip\"} 1",
                     "krabka_broker_connection_closes_total{reason=\"peer_closed\"} 1",
                     "krabka_broker_connection_closes_total{reason=\"sasl_session_expired\"} 1",
                 ]

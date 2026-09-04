@@ -196,4 +196,14 @@ pub struct QuorumStateSnapshot {
     /// Per-replica fetch offset, populated on the leader for voters and
     /// observers.
     pub per_replica_fetch_offset: std::collections::BTreeMap<NodeId, i64>,
+    /// Per-replica last fetch timestamp in wall-clock milliseconds.
+    pub per_replica_last_fetch_ms: std::collections::BTreeMap<NodeId, i64>,
+    /// Per-replica last caught-up timestamp in wall-clock milliseconds.
+    pub per_replica_last_caught_up_ms: std::collections::BTreeMap<NodeId, i64>,
+    /// Discovered directory identities for observer replicas.
+    pub observer_directory_ids: std::collections::BTreeMap<NodeId, uuid::Uuid>,
+    /// Whether this node currently leads the metadata quorum.
+    pub is_leader: bool,
+    /// Raft consensus state name (leader, follower, candidate, observer).
+    pub current_state: &'static str,
 }

@@ -267,6 +267,21 @@ def blurb(schema):
         return text + " "
     return ""
 
+def description_of(schema):
+    """The cell text for one key, including the one schemars cannot supply.
+
+    An internally tagged enum's discriminator is not a struct field, so it has
+    no doc comment and schemars emits it with a `const` and no `description`.
+    Every other empty description is a missing doc comment and stays empty, so
+    that the emptiness is still visible in the page.
+    """
+    text = cell(schema.get("description", ""))
+    if text:
+        return text
+    if "const" in schema:
+        return "Selects this variant of the table."
+    return ""
+
 def _rows(root, resolved, path):
     """One section's table rows and the subsections its keys point at.
 
@@ -314,7 +329,7 @@ def _rows(root, resolved, path):
             type_label(root, field),
             default,
             units_label(key, target),
-            cell(target.get("description", "")),
+            description_of(target),
         ))
     return rows, nested
 

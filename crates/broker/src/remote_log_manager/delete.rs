@@ -37,6 +37,7 @@ pub(crate) async fn cascade_remote_partition_delete(
     archive: ArchiveMode,
     rsm: Arc<dyn RemoteStorageManager>,
     rlmm: Arc<dyn RemoteLogMetadataManager>,
+    index_cache: Arc<krabka_remote_storage::RemoteIndexCache>,
 ) {
     if let Err(e) = put_partition_state(
         &rlmm,
@@ -76,7 +77,7 @@ pub(crate) async fn cascade_remote_partition_delete(
         if md.state() == RemoteLogSegmentState::DeleteSegmentFinished {
             continue;
         }
-        let _ = delete_one_segment(&tp, broker_id, &md, archive, &rsm, &rlmm).await;
+        let _ = delete_one_segment(&tp, broker_id, &md, archive, &rsm, &rlmm, &index_cache).await;
     }
 
     if let Err(e) = put_partition_state(
@@ -125,8 +126,14 @@ pub(super) async fn delete_one_segment(
     archive: ArchiveMode,
     rsm: &Arc<dyn RemoteStorageManager>,
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    index_cache: &Arc<krabka_remote_storage::RemoteIndexCache>,
 ) -> bool {
     let id = md.remote_log_segment_id().clone();
+    // Kafka drops a segment's `RemoteIndexCache` entries as it enters
+    // `DeleteSegmentStarted`, so a segment nothing can read any more stops
+    // holding the cache's byte budget against the segments that are still
+    // readable.
+    index_cache.remove_segment(id.id);
     // Transition to DeleteSegmentStarted unless the segment is already
     // there (cascade may retry against a partially-cleaned partition).
     if md.state() == RemoteLogSegmentState::CopySegmentFinished {
@@ -203,6 +210,13 @@ mod tests {
     use krabka_remote_storage::{InmemoryRemoteLogMetadataManager, LocalTieredStorage};
 
     use super::*;
+
+    /// The delete paths take an index cache so a segment they remove stops
+    /// holding its bytes. These tests assert on the RLMM lifecycle, so the
+    /// cache they pass stores nothing.
+    fn disabled_index_cache() -> Arc<krabka_remote_storage::RemoteIndexCache> {
+        Arc::new(krabka_remote_storage::RemoteIndexCache::disabled())
+    }
     use crate::remote_log_manager::{
         copy_eligible,
         test_support::{FakeWormArchive, rolled_log, synth_export, tier, tp},
@@ -228,8 +242,15 @@ mod tests {
         .await;
         assert!(copied == exports.len());
 
-        cascade_remote_partition_delete(tp(), 1, ArchiveMode::Mutable, rsm.clone(), rlmm.clone())
-            .await;
+        cascade_remote_partition_delete(
+            tp(),
+            1,
+            ArchiveMode::Mutable,
+            rsm.clone(),
+            rlmm.clone(),
+            disabled_index_cache(),
+        )
+        .await;
 
         // All segments are gone from the cache.
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
@@ -259,7 +280,15 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         // No add — partition has no segments. Cascade still walks the
         // three partition-delete states without error.
-        cascade_remote_partition_delete(tp(), 1, ArchiveMode::Mutable, rsm, rlmm.clone()).await;
+        cascade_remote_partition_delete(
+            tp(),
+            1,
+            ArchiveMode::Mutable,
+            rsm,
+            rlmm.clone(),
+            disabled_index_cache(),
+        )
+        .await;
         // No segments after, no panics; that's the test.
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
     }
@@ -281,8 +310,15 @@ mod tests {
         check!(copied == 2);
 
         // The RSM panics on delete, so reaching one fails this test.
-        cascade_remote_partition_delete(tp(), 1, ArchiveMode::WriteOnce, rsm.clone(), rlmm.clone())
-            .await;
+        cascade_remote_partition_delete(
+            tp(),
+            1,
+            ArchiveMode::WriteOnce,
+            rsm.clone(),
+            rlmm.clone(),
+            disabled_index_cache(),
+        )
+        .await;
 
         check!(
             rlmm.list_remote_log_segments(&tp()).unwrap().is_empty(),

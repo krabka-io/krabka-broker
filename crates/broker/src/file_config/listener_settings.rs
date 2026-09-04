@@ -99,6 +99,26 @@ pub(super) fn apply_listener_settings(
         cfg.features.transaction_two_phase_commit_enable =
             value.trim().eq_ignore_ascii_case("true");
     }
+    let num_val = settings
+        .server_properties
+        .get("quota.window.num")
+        .and_then(|v| v.trim().parse::<u32>().ok());
+    let size_val = settings
+        .server_properties
+        .get("quota.window.size.seconds")
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if num_val.is_some() || size_val.is_some() {
+        let num = num_val.unwrap_or(11);
+        let size_secs = size_val.unwrap_or(1);
+        if cfg.quota_throttle_max == defaults.quota_throttle_max {
+            let s = u32::try_from(size_secs * u64::from(num.saturating_sub(1))).unwrap_or(u32::MAX);
+            cfg.quota_throttle_max = krabka_units::secs(s);
+        }
+        if cfg.quota_window == defaults.quota_window {
+            let s = u32::try_from(size_secs * u64::from(num)).unwrap_or(u32::MAX);
+            cfg.quota_window = krabka_units::secs(s);
+        }
+    }
     if let Some(protocol) = settings.controller_listener_protocol
         && cfg.controller_listener_protocol == defaults.controller_listener_protocol
     {
@@ -256,6 +276,26 @@ connections_max_idle = "5s"
         let mut cfg2 = BrokerConfig::default();
         absent.apply_to(&mut cfg2).unwrap();
         assert!(!cfg2.features.transaction_two_phase_commit_enable);
+    }
+
+    #[test]
+    fn apply_to_reads_quota_window_properties() {
+        use krabka_units::secs;
+
+        use crate::config::BrokerConfig;
+
+        let toml = r#"
+[server_properties]
+"quota.window.num" = "6"
+"quota.window.size.seconds" = "2"
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        // size * (num - 1) = 2 * 5 = 10s
+        assert!(cfg.quota_throttle_max == secs(10));
+        // size * num = 2 * 6 = 12s
+        assert!(cfg.quota_window == secs(12));
     }
     #[test]
     fn apply_to_propagates_tls_config() {

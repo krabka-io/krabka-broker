@@ -1,13 +1,32 @@
-//! Per-(topic, partition) replication task.
+//! Per-leader replication task.
 //!
-//! The task issues standard Kafka `Fetch` requests against the leader of the
-//! partition, with `replica_id` set to the `node_id` of the local broker. It
-//! appends each returned batch to the local `krabka-log`. On
-//! `OFFSET_OUT_OF_RANGE` it truncates the local log to 0 and restarts. On
-//! `NOT_LEADER_FOR_PARTITION` it returns, so that the next reconcile of the
-//! supervisor evaluates the partition again.
+//! One task -- a *fetcher* -- owns one connection to one leader and every
+//! partition this broker follows from that leader. Each round it folds those
+//! partitions into a single Kafka `Fetch` request, with `replica_id` set to
+//! this broker's `node_id`, and applies the response row by row: appending the
+//! batches each row carries, truncating on the KIP-320 in-band divergence
+//! signal, and resetting on `OFFSET_OUT_OF_RANGE`. A partition the leader
+//! answers `NOT_LEADER_OR_FOLLOWER` is dropped from the fetcher, and the next
+//! supervisor reconcile decides where it belongs.
+//!
+//! Kafka's shape, and the reason for it: a `ReplicaFetcherThread` per
+//! `(leader, fetcher id)` pair, with `num.replica.fetchers` fetchers per
+//! leader and partitions hashed onto them. A follower of ten thousand
+//! partitions across three peers holds a handful of connections and sends a
+//! handful of Fetch requests per round, rather than ten thousand of each. The
+//! per-round request is a KIP-227 incremental one after the first, so a
+//! caught-up follower's request names almost nothing at all.
+//!
+//! The supervisor adds and removes partitions on a running fetcher through
+//! [`FollowedPartitions`] rather than by spawning and cancelling a task, so a
+//! reassignment does not redial the leader.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    hash::{Hash as _, Hasher as _},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
@@ -25,11 +44,12 @@ mod follower_throttle;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod hot_path;
 mod response;
+mod session;
 #[cfg(test)]
 mod test_support;
 mod truncation;
 
-use self::fetch_loop::run_inner;
+use self::fetch_loop::run_fetcher_loop;
 use crate::{
     broker::spawn_partition_with_replication_target, config::ReplicationRuntimeConfig,
     partition::ReplicationTarget, partition_registry::PartitionRegistry, throttle::ThrottleState,
@@ -67,11 +87,12 @@ pub(crate) struct Config {
     pub log_dirs: Vec<PathBuf>,
     pub log_settings: LogConfig,
     pub client_id: String,
-    pub shutdown: CancellationToken,
     /// Shared outbound dialer.
     ///
     /// The dialer connects through TLS and SASL when the inter-broker listener
-    /// needs them. It falls back to raw TCP for PLAINTEXT.
+    /// needs them. It falls back to raw TCP for PLAINTEXT. The fetcher's own
+    /// connection carries the Fetch rounds; this one is for the
+    /// `OffsetForLeaderEpoch` lookup a fenced partition makes on its own.
     pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
     pub inter_broker_listener_protocol: ListenerProtocol,
     pub inter_broker_server_name: String,
@@ -108,35 +129,77 @@ pub(crate) struct Config {
     pub metrics: crate::metrics::BrokerMetrics,
 }
 
-/// Entry point. Drives one (topic, partition) replication loop until cancelled.
-pub(crate) async fn run(cfg: Config) {
+/// A `(topic, partition)` pair, as the fetcher's partition map keys it.
+pub(crate) type FollowedKey = (Arc<str>, PartitionIndex);
+
+/// The partitions one fetcher follows, shared with the supervisor.
+///
+/// The supervisor replaces entries as metadata moves; the fetcher takes a
+/// snapshot at the top of each round. The lock is held only for the clone, so
+/// a reconcile never waits on a Fetch.
+pub(crate) type FollowedPartitions = Arc<Mutex<BTreeMap<FollowedKey, Arc<Config>>>>;
+
+/// Everything one fetcher needs that is the same for every partition it
+/// follows: which leader it dials, how it dials, and how it paces itself.
+pub(crate) struct FetcherConfig {
+    pub node_id: NodeId,
+    pub leader_node_id: NodeId,
+    /// The `host` portion of the leader from the metadata image: the
+    /// inter-broker endpoint when one is available, and the legacy broker host
+    /// if not.
+    pub leader_host: String,
+    pub leader_port: u16,
+    pub client_id: String,
+    pub shutdown: CancellationToken,
+    /// Shared outbound dialer. It runs TLS and SASL when the inter-broker
+    /// listener needs them, and falls back to raw TCP for PLAINTEXT.
+    pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
+    pub inter_broker_listener_protocol: ListenerProtocol,
+    pub inter_broker_server_name: String,
+    pub replication: ReplicationRuntimeConfig,
+    /// The partitions this fetcher follows right now.
+    pub followed: FollowedPartitions,
+}
+
+/// Which of a leader's fetchers owns `key`.
+///
+/// Kafka's `AbstractFetcherManager.getFetcherId`: the topic's hash and the
+/// partition index, folded onto `num.replica.fetchers`. The mapping is stable,
+/// so a partition stays on one fetcher for as long as its leader does, and a
+/// topic's partitions spread across the fetchers rather than piling onto one.
+pub(crate) fn fetcher_id_for(topic: &str, partition: i32, fetchers: usize) -> usize {
+    let fetchers = fetchers.max(1);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    topic.hash(&mut hasher);
+    partition.hash(&mut hasher);
+    usize::try_from(hasher.finish() % fetchers as u64).unwrap_or(0)
+}
+
+/// Entry point. Drives one leader's replication loop until cancelled.
+pub(crate) async fn run_fetcher(fetcher: FetcherConfig) {
     info!(
-        topic = %cfg.topic,
-        partition = cfg.partition.get(),
-        leader_node_id = cfg.leader_node_id.0,
-        "replicator.started"
+        leader_node_id = fetcher.leader_node_id.0,
+        host = %fetcher.leader_host,
+        port = fetcher.leader_port,
+        "replicator.fetcher.started"
     );
 
-    // First-run materialization of the local on-disk partition.
-    if let Err(e) = ensure_local_partition(&cfg) {
-        warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator failed to open local partition; aborting");
-        return;
+    if let Err(e) = run_fetcher_loop(&fetcher).await {
+        warn!(error = %e, leader_node_id = fetcher.leader_node_id.0,
+            "replicator fetcher stopped on unrecoverable error");
     }
 
-    if let Err(e) = run_inner(&cfg).await {
-        warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator stopped on unrecoverable error");
-    }
-
-    info!(topic = %cfg.topic, partition = cfg.partition.get(), "replicator.stopped");
+    info!(
+        leader_node_id = fetcher.leader_node_id.0,
+        "replicator.fetcher.stopped"
+    );
 }
 
 /// Builds or recovers the on-disk `Partition` for this follower.
 ///
 /// The function inserts the partition into the shared `partitions` map of the
 /// broker. The function is idempotent.
-fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
+pub(super) fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
     // `materialize_if_vacant` runs the build under the per-key lock, so two
     // concurrent replicators for the same partition can never both build it.
     cfg.partitions
@@ -228,13 +291,16 @@ mod tests {
         );
     }
 
+    /// Adding a partition to a fetcher is what opens its on-disk log, and the
+    /// log opens against the target the metadata image named -- otherwise the
+    /// first response would be applied to a partition whose replication target
+    /// is still the default.
     #[tokio::test]
-    async fn run_materializes_local_partition_before_observing_cancelled_shutdown() {
+    async fn following_a_partition_materializes_it_against_its_replication_target() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        cfg.shutdown.cancel();
         let partitions = cfg.partitions.clone();
 
-        run(cfg).await;
+        ensure_local_partition(&cfg).expect("materialize");
 
         let partition = partitions
             .get(TOPIC, PartitionIndex(PARTITION))
@@ -247,5 +313,33 @@ mod tests {
                     leader_epoch: krabka_metadata::LeaderEpoch(4),
                 }
         );
+    }
+
+    /// Kafka hashes a partition onto one of a leader's fetchers and keeps it
+    /// there, so the connection a partition rides on does not move under it
+    /// between rounds. With one fetcher every partition lands on it.
+    #[test]
+    fn the_fetcher_a_partition_hashes_onto_is_stable_and_in_range() {
+        for fetchers in [0_usize, 1, 4, 7] {
+            let bound = fetchers.max(1);
+            for partition in 0..32 {
+                let first = fetcher_id_for("orders", partition, fetchers);
+                assert!(first < bound, "{fetchers} fetchers, partition {partition}");
+                assert!(first == fetcher_id_for("orders", partition, fetchers));
+            }
+        }
+        for partition in 0..32 {
+            assert!(fetcher_id_for("orders", partition, 1) == 0);
+        }
+    }
+
+    /// A leader's partitions spread across its fetchers rather than piling
+    /// onto one, which is the whole point of `num.replica.fetchers`.
+    #[test]
+    fn several_fetchers_carry_more_than_one_of_a_topic_s_partitions_each() {
+        let used: std::collections::BTreeSet<usize> = (0..64)
+            .map(|partition| fetcher_id_for("orders", partition, 4))
+            .collect();
+        assert!(used.len() == 4, "64 partitions reached only {used:?}");
     }
 }

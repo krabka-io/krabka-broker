@@ -64,6 +64,9 @@ listener is open to peers you do not control.
 | `krabka_broker_under_min_isr_partition_count` | gauge | - | `ReplicaManager,name=UnderMinIsrPartitionCount` | Partitions this broker leads whose ISR is below `min.insync.replicas`. They reject `acks=all` with `NOT_ENOUGH_REPLICAS`. Alert on `> 0`. [Runbook](runbooks/under-min-isr-partitions.md). |
 | `krabka_broker_offline_partitions_count` | gauge | - | `ReplicaManager,name=OfflinePartitionsCount` | Partitions with no live leader. Alert on `> 0`. [Runbook](runbooks/offline-partitions.md). |
 | `krabka_broker_replica_lag_records` | gauge | `topic`, `partition`, `replica` | `FetcherLagMetrics,name=ConsumerLag,clientId=ReplicaFetcherThread-*,topic=<t>,partition=<p>` | Records a follower of a partition this broker leads has yet to fetch: the leader's log end offset minus the follower's last-fetched offset. `replica` is the follower's node id. Kafka reports this on the follower; krabka reports it on the leader, one series per follower. Where `under_replicated_partitions` says only that a follower left the ISR, this says how far behind it is while it is still in. [Runbook](runbooks/replica-lag.md). |
+| `krabka_broker_replication_throttled_bytes_out_total` | counter | - | `LeaderReplication,name=byte-rate` | KIP-73: replication bytes the leader-side throttle granted to a throttled follower. Flat at the configured rate during a reassignment means the throttle is biting; flat at zero with a reassignment in flight means something else is. |
+| `krabka_broker_replication_throttled_bytes_in_total` | counter | - | `FollowerReplication,name=byte-rate` | KIP-73: replication bytes the follower-side throttle granted for a throttled partition. |
+| `krabka_broker_replication_throttle_sleeps_total` | counter | - | - | KIP-73 rounds the throttle held back rather than merely capped: a follower fetch whose bucket had nothing left. krabka drops the partition from the round instead of delaying it, so there is no `throttle_time_ms` to observe and this is the series that says the throttle refused. |
 | `krabka_broker_replica_lag_max_records` | gauge | - | `ReplicaFetcherManager,name=MaxLag,clientId=Replica` | The largest value `replica_lag_records` carries on this broker, or zero when it leads no partition with a follower. Alert on this series rather than on an aggregate of the per-follower family. [Runbook](runbooks/replica-lag.md). |
 | `krabka_broker_isr_shrinks_total` | counter | - | `ReplicaManager,name=IsrShrinksPerSec` | ISR shrinks this broker's maintenance loop proposed. |
 | `krabka_broker_isr_expands_total` | counter | - | `ReplicaManager,name=IsrExpandsPerSec` | ISR expands this broker's maintenance loop proposed. |
@@ -138,6 +141,27 @@ bucket of a phase says nothing about the same bucket of the total.
 | `krabka_broker_tiered_storage_rlmm_bootstrap_attempts_total` | counter | - | - | Bootstrap attempts. Climbs while stuck, flat once the gauge flips to 1. |
 | `krabka_broker_worm_manifests_sealed_total` | counter | - | - | KFC-5: WORM manifests the archive sealed and returned a valid chain receipt for, one per segment copied into a write-once archive. Flat while a WORM cluster tiers means the chain has stopped growing. |
 | `krabka_broker_worm_manifest_seal_failures_total` | counter | - | - | KFC-5: write-once segment copies that ended with no usable manifest -- the copy failed, the task panicked, or the receipt was missing or did not match the requested chain position. Alert on `rate(...[5m]) > 0`. |
+| `krabka_broker_remote_copy_bytes_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteCopyBytesPerSec` | Bytes of finished segment copies that reached the remote tier. |
+| `krabka_broker_remote_fetch_bytes_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteFetchBytesPerSec` | Bytes the remote tier served to a `Fetch` the local log could not answer. |
+| `krabka_broker_remote_copy_requests_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteCopyRequestsPerSec` | Segment copies attempted, whatever their outcome. |
+| `krabka_broker_remote_fetch_requests_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteFetchRequestsPerSec` | Cold-tier reads attempted, whatever their outcome. |
+| `krabka_broker_remote_delete_requests_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteDeleteRequestsPerSec` | Remote segment deletions attempted, whatever their outcome. |
+| `krabka_broker_remote_copy_errors_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteCopyErrorsPerSec` | Copies that did not finish. Alert on `rate(...[5m]) > 0`. [Runbook](runbooks/remote-copy-lag.md). |
+| `krabka_broker_remote_fetch_errors_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteFetchErrorsPerSec` | Cold-tier reads the tier refused or failed. A consumer reading history sees these as `OFFSET_OUT_OF_RANGE`. |
+| `krabka_broker_remote_delete_errors_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteDeleteErrorsPerSec` | Deletions that did not finish, including a metadata listing the pass could not read. |
+| `krabka_broker_remote_copy_lag_segments` | gauge | `topic` | `BrokerTopicMetrics,name=RemoteCopyLagSegments` | Sealed local segments this broker has not finished copying. Climbing means the tier is not keeping up. [Runbook](runbooks/remote-copy-lag.md). |
+| `krabka_broker_remote_copy_lag_bytes` | gauge | `topic` | `BrokerTopicMetrics,name=RemoteCopyLagBytes` | Total size of those segments; the local disk the tier is not yet relieving. |
+| `krabka_broker_remote_delete_lag_segments` | gauge | `topic` | `BrokerTopicMetrics,name=RemoteDeleteLagSegments` | Remote segments a retention pass has decided to remove and not yet removed. |
+| `krabka_broker_remote_delete_lag_bytes` | gauge | `topic` | `BrokerTopicMetrics,name=RemoteDeleteLagBytes` | Total size of those segments; object-store space retention has not reclaimed. |
+| `krabka_broker_remote_log_reader_task_queue_size` | gauge | - | `RemoteLogManager,name=RemoteLogReaderTaskQueueSize` | Cold-tier reads waiting for a slot in the bounded reader pool. |
+| `krabka_broker_remote_log_reader_avg_idle_percent` | gauge | - | `RemoteLogManager,name=RemoteLogReaderAvgIdlePercent` | Share of the reader pool's slots that are free. Zero for long means every cold read is queueing. |
+| `krabka_broker_remote_log_reader_fetch_duration_seconds` | histogram | - | `RemoteLogManager,name=RemoteLogReaderFetchRateAndTimeMs` | How long each cold read held its reader slot. |
+| `krabka_broker_remote_log_reader_rejected_total` | counter | - | - | Cold reads refused because the reader pool's pending queue was full. The partition is answered with an error rather than queued behind the tier. |
+| `krabka_broker_remote_index_cache_hits_total` | counter | - | - | Segment-index lookups served from `<log.dir>/remote-log-index-cache` without a download. |
+| `krabka_broker_remote_index_cache_misses_total` | counter | - | - | Segment-index lookups that downloaded the index object. A hit ratio near zero means the cache is too small for the working set. |
+| `krabka_broker_remote_index_cache_evictions_total` | counter | - | - | Cache entries dropped to stay inside `remote_storage.index_cache_size`. |
+| `krabka_broker_remote_index_cache_bytes` | gauge | - | - | Bytes the index cache currently holds. |
+| `krabka_broker_remote_index_cache_entries` | gauge | - | - | Entries the index cache currently holds. |
 
 ## Diskless WAL
 

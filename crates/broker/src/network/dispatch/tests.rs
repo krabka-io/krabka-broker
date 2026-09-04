@@ -343,6 +343,8 @@ fn no_closes() -> Vec<(&'static str, u64)> {
         ("sasl_session_expired", 0),
         ("decode_error", 0),
         ("peer_closed", 0),
+        ("max_connections", 0),
+        ("max_connections_per_ip", 0),
     ]
 }
 
@@ -368,6 +370,8 @@ async fn a_frame_that_is_not_a_request_closes_the_connection_as_a_decode_error()
                 ("sasl_session_expired", 0),
                 ("decode_error", 1),
                 ("peer_closed", 0),
+                ("max_connections", 0),
+                ("max_connections_per_ip", 0),
             ]
     );
 }
@@ -439,5 +443,240 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
             "{case}"
         );
         check!(close_counts(&metrics) == no_closes(), "{case}");
+    }
+}
+
+/// The `queued.max.requests` / `queued.max.request.bytes` budgets of #412.
+///
+/// Every test here drives `serve_connection_stream` over a loopback socket,
+/// which is what the loop is generic over: the sendfile sink a `Fetch`
+/// response writes through is a socket, and an in-memory pipe is not one.
+mod request_budget {
+    use assert2::{assert, check};
+    use futures_util::{SinkExt as _, StreamExt as _};
+
+    use super::{DEFAULT_MAX_FRAME_BYTES, close_counts, request_frame};
+    use crate::{broker::Broker, network::codec};
+
+    /// One connection served by the loop, and the client end already framed.
+    struct Served {
+        client: tokio_util::codec::Framed<
+            tokio::net::TcpStream,
+            tokio_util::codec::LengthDelimitedCodec,
+        >,
+        loop_task: tokio::task::JoinHandle<()>,
+    }
+
+    async fn serve(broker: &std::sync::Arc<Broker>) -> Served {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let spec = crate::config::ListenerSpec {
+            name: "PLAINTEXT".to_string(),
+            bind_addr: addr,
+            advertised: "127.0.0.1:9092".to_string(),
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
+        };
+        let broker = std::sync::Arc::clone(broker);
+        let loop_task = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
+        });
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect to the serve loop");
+        Served {
+            client: codec::frame(client, DEFAULT_MAX_FRAME_BYTES),
+            loop_task,
+        }
+    }
+
+    /// A byte budget that leaves the broker's own traffic room to move.
+    const BUDGET_BYTES: usize = 64 * 1024;
+
+    fn budget() -> krabka_units::ByteSize {
+        krabka_units::bytes(u32::try_from(BUDGET_BYTES).expect("the budget fits a u32"))
+    }
+
+    /// An `ApiVersions` v0 request with an empty body: the smallest frame the
+    /// loop answers without any authorization or metadata in the way.
+    fn api_versions_frame(correlation_id: i32) -> bytes::Bytes {
+        request_frame(18, 0, correlation_id, None, None, &[]).freeze()
+    }
+
+    /// An `ApiVersions` request padded past [`BUDGET_BYTES`]. The body is trailing
+    /// bytes the v0 decoder ignores, so what refuses the frame is the budget
+    /// and not the decode.
+    fn oversized_frame() -> bytes::Bytes {
+        request_frame(18, 0, 1, None, None, &vec![0_u8; 2 * BUDGET_BYTES]).freeze()
+    }
+
+    async fn broker_with(
+        configure: impl FnOnce(&mut crate::config::BrokerConfig),
+    ) -> (crate::BrokerHandle, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        configure(&mut cfg);
+        let handle = Broker::start(cfg).await.expect("start broker");
+        (handle, dir)
+    }
+
+    /// `queued.max.requests` bounds what the broker is *handling*, across every
+    /// connection. With one permit, a second connection's frame waits for the
+    /// first request to finish rather than being handled beside it.
+    ///
+    /// The permit the first request would hold is taken directly here, because
+    /// nothing else can hold a handler open for as long as the assertion needs.
+    #[tokio::test]
+    async fn a_second_request_waits_for_the_capacity_the_first_holds() {
+        let (handle, _dir) = broker_with(|cfg| cfg.queued_max_requests = 1).await;
+        let broker = handle.broker_arc_for_test();
+
+        let held = std::sync::Arc::clone(&broker.queued_requests_sem)
+            .acquire_owned()
+            .await
+            .expect("the only permit");
+
+        let mut served = serve(&broker).await;
+        served
+            .client
+            .send(api_versions_frame(1))
+            .await
+            .expect("send while the budget is spent");
+
+        // The frame is on the wire and the loop has read it; what it cannot do
+        // is handle it. A response now would mean the budget bounds nothing.
+        let early =
+            tokio::time::timeout(std::time::Duration::from_millis(200), served.client.next()).await;
+        assert!(
+            early.is_err(),
+            "a request must not be served past the budget"
+        );
+        check!(broker.metrics.queued_requests.get() == 0);
+
+        drop(held);
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(5), served.client.next())
+                .await
+                .expect("the freed permit admits the waiting request")
+                .expect("a response frame")
+                .expect("response decode");
+        check!(i32::from_be_bytes(response[..4].try_into().expect("correlation id")) == 1);
+
+        drop(served.client);
+        served
+            .loop_task
+            .await
+            .expect("serve loop joins on client EOF");
+        // The guard gave the permit and the byte gauge back.
+        check!(broker.queued_requests_sem.available_permits() == 1);
+        check!(broker.metrics.queued_request_bytes.get() == 0);
+        handle.shutdown().await;
+    }
+
+    /// A frame larger than the whole `queued.max.request.bytes` budget can
+    /// never be admitted, however long the broker waits, so the connection
+    /// ends the way one carrying bytes the broker cannot take does.
+    ///
+    /// The budget is big enough for the broker's own inter-broker traffic --
+    /// a budget under one ordinary request would wedge the broker itself
+    /// rather than test anything -- and the frame is deliberately bigger.
+    #[tokio::test]
+    async fn a_frame_over_the_whole_byte_budget_closes_the_connection() {
+        let (handle, _dir) = broker_with(|cfg| {
+            cfg.queued_max_request_bytes = Some(budget());
+        })
+        .await;
+        let broker = handle.broker_arc_for_test();
+
+        let mut served = serve(&broker).await;
+        let frame = oversized_frame();
+        assert!(
+            frame.len() > BUDGET_BYTES,
+            "the frame has to exceed the whole budget"
+        );
+        served
+            .client
+            .send(frame)
+            .await
+            .expect("send an oversized frame");
+
+        check!(
+            served.client.next().await.is_none(),
+            "the connection must close"
+        );
+        served
+            .loop_task
+            .await
+            .expect("serve loop joins after the refusal");
+        check!(
+            close_counts(&broker.metrics)
+                .into_iter()
+                .filter(|(_, count)| *count > 0)
+                .collect::<Vec<_>>()
+                == vec![("decode_error", 1)]
+        );
+        handle.shutdown().await;
+    }
+
+    /// A frame that fits the budget is served, and the budget is whole again
+    /// once the response is written.
+    #[tokio::test]
+    async fn a_frame_within_the_byte_budget_is_served_and_gives_the_bytes_back() {
+        let (handle, _dir) = broker_with(|cfg| {
+            cfg.queued_max_request_bytes = Some(budget());
+        })
+        .await;
+        let broker = handle.broker_arc_for_test();
+        let broker_for_budget = std::sync::Arc::clone(&broker);
+        let available = move || {
+            broker_for_budget
+                .queued_request_bytes
+                .as_ref()
+                .expect("the knob is on")
+                .available()
+        };
+
+        let mut served = serve(&broker).await;
+        served
+            .client
+            .send(api_versions_frame(9))
+            .await
+            .expect("send a frame inside the budget");
+        let response = served
+            .client
+            .next()
+            .await
+            .expect("a response frame")
+            .expect("response decode");
+        check!(i32::from_be_bytes(response[..4].try_into().expect("correlation id")) == 9);
+
+        drop(served.client);
+        served
+            .loop_task
+            .await
+            .expect("serve loop joins on client EOF");
+        // The broker's own connections draw on the same budget, so the wait
+        // is for it to come back whole rather than for one instant of it.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while available() != BUDGET_BYTES {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("every permit comes back once the requests are answered");
+        // The client hung up; the budget refused nothing.
+        check!(
+            close_counts(&broker.metrics)
+                .into_iter()
+                .filter(|(_, count)| *count > 0)
+                .collect::<Vec<_>>()
+                == vec![("peer_closed", 1)]
+        );
+        handle.shutdown().await;
     }
 }

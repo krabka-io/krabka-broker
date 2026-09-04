@@ -29,10 +29,12 @@ use krabka_broker::metrics::{
     ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
     BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
     ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel,
-    DirectoryLabel, PartitionLabel, QuotaType, QuotaTypeLabel, ReplicaLagLabel, SaslMechanismLabel,
-    SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
+    DirectoryLabel, PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel,
+    ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    WalShardLabel, WalVoterLabel,
 };
 use krabka_metadata::BreakGlassAction as GatedAction;
+use prometheus_client::metrics::family::Family;
 
 mod support;
 
@@ -119,43 +121,79 @@ fn canonical(body: &str) -> String {
 /// one of these groups or in [`seed_single_families`]. A `_` marks a
 /// label-free series, which the encoder writes on its own, or a family that
 /// [`seed_single_families`] covers.
-fn seed_grouped_families(metrics: &BrokerMetrics) {
-    let topic = TopicLabel {
-        topic: "orders".into(),
-    };
-    let partition = PartitionLabel {
-        topic: "orders".into(),
-        partition: 0,
-    };
-    let api_key = ApiKeyLabel {
-        api_key: "Produce".into(),
-    };
-    let group = BarrierGroupLabel {
-        group: "orders-cut".into(),
-    };
-    let shard = WalShardLabel {
-        topic_id: "00000000-0000-0000-0000-000000000001".into(),
-        partition: 0,
-    };
+/// The one label set of each shape that [`seed_grouped_families`] gives every
+/// family it seeds. The values are arbitrary; what matters is that each family
+/// carries exactly one series so the encoder writes its `# TYPE` line.
+struct SeedLabels {
+    topic: TopicLabel,
+    partition: PartitionLabel,
+    api_key: ApiKeyLabel,
+    group: BarrierGroupLabel,
+    shard: WalShardLabel,
+}
+
+impl SeedLabels {
+    fn new() -> Self {
+        Self {
+            topic: TopicLabel {
+                topic: "orders".into(),
+            },
+            partition: PartitionLabel {
+                topic: "orders".into(),
+                partition: 0,
+            },
+            api_key: ApiKeyLabel {
+                api_key: "Produce".into(),
+            },
+            group: BarrierGroupLabel {
+                group: "orders-cut".into(),
+            },
+            shard: WalShardLabel {
+                topic_id: "00000000-0000-0000-0000-000000000001".into(),
+                partition: 0,
+            },
+        }
+    }
+}
+
+/// Materializes one series in each of `families` under `label`.
+fn seed<L, M, C>(label: &L, families: &[&Family<L, M, C>])
+where
+    L: Clone + std::hash::Hash + Eq + prometheus_client::encoding::EncodeLabelSet,
+    C: prometheus_client::metrics::family::MetricConstructor<M>,
+{
+    for family in families {
+        drop(family.get_or_create(label));
+    }
+}
+
+/// Fails to compile when a family is added to [`BrokerMetrics`] and not
+/// accounted for by this suite.
+///
+/// The destructure names every field and uses no `..`, so a new family is a
+/// compile error here until its author decides where it is seeded: in one of
+/// [`seed_grouped_families`]'s groups, in [`seed_single_families`], or
+/// nowhere, because the encoder writes a label-free series on its own.
+fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
     let BrokerMetrics {
         registry: _,
-        topic_bytes_in,
-        topic_bytes_out,
-        topic_messages_in,
-        topic_produce_requests,
-        topic_fetch_requests,
-        topic_failed_produce_requests,
-        topic_failed_fetch_requests,
-        partition_bytes_in,
-        partition_bytes_out,
-        replication_bytes_in,
-        replication_bytes_out,
-        partition_disk_bytes,
+        topic_bytes_in: _,
+        topic_bytes_out: _,
+        topic_messages_in: _,
+        topic_produce_requests: _,
+        topic_fetch_requests: _,
+        topic_failed_produce_requests: _,
+        topic_failed_fetch_requests: _,
+        partition_bytes_in: _,
+        partition_bytes_out: _,
+        replication_bytes_in: _,
+        replication_bytes_out: _,
+        partition_disk_bytes: _,
         replica_lag: _,
         replica_lag_max: _,
         consumer_group_lag: _,
         share_group_backlog: _,
-        partition_cpu_micros,
+        partition_cpu_micros: _,
         partitions_led: _,
         partitions_total: _,
         under_replicated_partitions: _,
@@ -179,23 +217,23 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         successful_authentication: _,
         failed_authentication: _,
         authorization_denied: _,
-        api_requests,
-        unsupported_api_requests,
-        request_duration_seconds,
-        request_local_duration_seconds,
-        request_remote_duration_seconds,
-        request_throttle_duration_seconds,
+        api_requests: _,
+        unsupported_api_requests: _,
+        request_duration_seconds: _,
+        request_local_duration_seconds: _,
+        request_remote_duration_seconds: _,
+        request_throttle_duration_seconds: _,
         quota_throttle_duration_seconds: _,
         in_flight_requests: _,
         active_connections: _,
         connection_closes: _,
-        request_errors,
+        request_errors: _,
         tiered_storage_rlmm_topic_backed: _,
         tiered_storage_rlmm_bootstrap_attempts: _,
         worm_manifests_sealed_total: _,
         worm_manifest_seal_failures_total: _,
-        produce_message_conversions,
-        fetch_message_conversions,
+        produce_message_conversions: _,
+        fetch_message_conversions: _,
         unclean_leader_elections_total: _,
         audit_events: _,
         audit_write_failures: _,
@@ -207,101 +245,183 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         client_metrics_otlp_dropped_total: _,
         client_metrics_otlp_failed_total: _,
         log_cleaner_runs_total: _,
-        log_compactions_total,
-        barrier_epochs_started_total,
-        barrier_epochs_committed_total,
-        barrier_epochs_published_partial_total,
-        barrier_injection_duration_seconds,
-        barrier_latest_epoch,
-        barrier_markers_written_total,
+        log_compactions_total: _,
+        barrier_epochs_started_total: _,
+        barrier_epochs_committed_total: _,
+        barrier_epochs_published_partial_total: _,
+        barrier_injection_duration_seconds: _,
+        barrier_latest_epoch: _,
+        barrier_markers_written_total: _,
         barrier_groups_coordinated: _,
-        delivery_watermark,
-        delivery_pending_records,
+        delivery_watermark: _,
+        delivery_pending_records: _,
         delivery_activation_lateness_seconds: _,
         delivery_scheduler_wakeups_total: _,
         schema_validation_rejections: _,
         schema_validation_cache_hits: _,
         schema_validation_cache_misses: _,
         delivery_clock_uncertainty_seconds: _,
-        topic_freeze_rejections,
+        topic_freeze_rejections: _,
         topic_freezes_active: _,
         break_glass_proposals: _,
         break_glass_refusals: _,
         break_glass_bypassed: _,
-        diskless_wal_durable_watermark,
+        diskless_wal_durable_watermark: _,
         diskless_wal_voter_lag: _,
         diskless_wal_quorum_loss_events_total: _,
         diskless_wal_flush_attempts_total: _,
         diskless_wal_flush_bytes_total: _,
         diskless_wal_flush_failures_total: _,
-        diskless_wal_index_projection_lag,
-        diskless_wal_trim_frontier,
+        diskless_wal_index_projection_lag: _,
+        diskless_wal_trim_frontier: _,
         diskless_wal_expired_ranges_total: _,
         diskless_wal_cold_read_hits_total: _,
         diskless_wal_cold_read_misses_total: _,
         diskless_wal_cold_read_errors_total: _,
+        raft_current_state: _,
+        raft_current_epoch: _,
+        raft_high_watermark: _,
+        raft_log_end_offset: _,
+        raft_voters: _,
+        raft_observers: _,
+        metadata_last_applied_offset: _,
+        metadata_lag_records: _,
+        broker_state: _,
+        active_brokers: _,
+        fenced_brokers: _,
+        global_topics: _,
+        global_partitions: _,
+        at_min_isr_partition_count: _,
+        reassigning_partitions: _,
+        preferred_replica_imbalance: _,
+        remote_copy_bytes_total: _,
+        remote_fetch_bytes_total: _,
+        remote_copy_requests_total: _,
+        remote_fetch_requests_total: _,
+        remote_delete_requests_total: _,
+        remote_copy_errors_total: _,
+        remote_fetch_errors_total: _,
+        remote_delete_errors_total: _,
+        remote_copy_lag_bytes: _,
+        remote_copy_lag_segments: _,
+        remote_delete_lag_bytes: _,
+        remote_delete_lag_segments: _,
+        replication_throttled_bytes_out_total: _,
+        replication_throttled_bytes_in_total: _,
+        replication_throttle_sleeps_total: _,
+        quota_entity_throttle_seconds_total: _,
+        queued_requests: _,
+        queued_request_bytes: _,
+        remote_log_reader_task_queue_size: _,
+        remote_log_reader_avg_idle_percent: _,
+        remote_log_reader_fetch_duration_seconds: _,
+        remote_log_reader_rejected_total: _,
+        remote_index_cache_hits_total: _,
+        remote_index_cache_misses_total: _,
+        remote_index_cache_evictions_total: _,
+        remote_index_cache_bytes: _,
+        remote_index_cache_entries: _,
         lag_series: _,
     } = metrics;
+}
 
-    for family in [
-        topic_bytes_in,
-        topic_bytes_out,
-        topic_messages_in,
-        topic_produce_requests,
-        topic_fetch_requests,
-        topic_failed_produce_requests,
-        topic_failed_fetch_requests,
-        produce_message_conversions,
-        fetch_message_conversions,
-        barrier_markers_written_total,
-        topic_freeze_rejections,
-    ] {
-        drop(family.get_or_create(&topic));
-    }
-    for family in [
-        partition_bytes_in,
-        partition_bytes_out,
-        replication_bytes_in,
-        replication_bytes_out,
-        partition_cpu_micros,
-        log_compactions_total,
-    ] {
-        drop(family.get_or_create(&partition));
-    }
-    for family in [
-        partition_disk_bytes,
-        delivery_watermark,
-        delivery_pending_records,
-    ] {
-        drop(family.get_or_create(&partition));
-    }
-    for family in [api_requests, unsupported_api_requests, request_errors] {
-        drop(family.get_or_create(&api_key));
-    }
-    for family in [
-        request_duration_seconds,
-        request_local_duration_seconds,
-        request_remote_duration_seconds,
-        request_throttle_duration_seconds,
-    ] {
-        drop(family.get_or_create(&api_key));
-    }
-    for family in [
-        barrier_epochs_started_total,
-        barrier_epochs_committed_total,
-        barrier_epochs_published_partial_total,
-    ] {
-        drop(family.get_or_create(&group));
-    }
-    drop(barrier_injection_duration_seconds.get_or_create(&group));
-    drop(barrier_latest_epoch.get_or_create(&group));
-    for family in [
-        diskless_wal_durable_watermark,
-        diskless_wal_index_projection_lag,
-        diskless_wal_trim_frontier,
-    ] {
-        drop(family.get_or_create(&shard));
-    }
+fn seed_grouped_families(metrics: &BrokerMetrics) {
+    every_family_is_accounted_for(metrics);
+    let SeedLabels {
+        topic,
+        partition,
+        api_key,
+        group,
+        shard,
+    } = SeedLabels::new();
+
+    seed(
+        &topic,
+        &[
+            &metrics.topic_bytes_in,
+            &metrics.topic_bytes_out,
+            &metrics.topic_messages_in,
+            &metrics.topic_produce_requests,
+            &metrics.topic_fetch_requests,
+            &metrics.topic_failed_produce_requests,
+            &metrics.topic_failed_fetch_requests,
+            &metrics.produce_message_conversions,
+            &metrics.fetch_message_conversions,
+            &metrics.barrier_markers_written_total,
+            &metrics.topic_freeze_rejections,
+            &metrics.remote_copy_bytes_total,
+            &metrics.remote_fetch_bytes_total,
+            &metrics.remote_copy_requests_total,
+            &metrics.remote_fetch_requests_total,
+            &metrics.remote_delete_requests_total,
+            &metrics.remote_copy_errors_total,
+            &metrics.remote_fetch_errors_total,
+            &metrics.remote_delete_errors_total,
+        ],
+    );
+    seed(
+        &topic,
+        &[
+            &metrics.remote_copy_lag_bytes,
+            &metrics.remote_copy_lag_segments,
+            &metrics.remote_delete_lag_bytes,
+            &metrics.remote_delete_lag_segments,
+        ],
+    );
+    seed(
+        &partition,
+        &[
+            &metrics.partition_bytes_in,
+            &metrics.partition_bytes_out,
+            &metrics.replication_bytes_in,
+            &metrics.replication_bytes_out,
+            &metrics.partition_cpu_micros,
+            &metrics.log_compactions_total,
+        ],
+    );
+    seed(
+        &partition,
+        &[
+            &metrics.partition_disk_bytes,
+            &metrics.delivery_watermark,
+            &metrics.delivery_pending_records,
+        ],
+    );
+    seed(
+        &api_key,
+        &[
+            &metrics.api_requests,
+            &metrics.unsupported_api_requests,
+            &metrics.request_errors,
+        ],
+    );
+    seed(
+        &api_key,
+        &[
+            &metrics.request_duration_seconds,
+            &metrics.request_local_duration_seconds,
+            &metrics.request_remote_duration_seconds,
+            &metrics.request_throttle_duration_seconds,
+        ],
+    );
+    seed(
+        &group,
+        &[
+            &metrics.barrier_epochs_started_total,
+            &metrics.barrier_epochs_committed_total,
+            &metrics.barrier_epochs_published_partial_total,
+        ],
+    );
+    seed(&group, &[&metrics.barrier_injection_duration_seconds]);
+    seed(&group, &[&metrics.barrier_latest_epoch]);
+    seed(
+        &shard,
+        &[
+            &metrics.diskless_wal_durable_watermark,
+            &metrics.diskless_wal_index_projection_lag,
+            &metrics.diskless_wal_trim_frontier,
+        ],
+    );
 }
 
 /// Gives one label set to every family whose label type no other family
@@ -397,6 +517,18 @@ fn seed_single_families(metrics: &BrokerMetrics) {
                 topic_id: "00000000-0000-0000-0000-000000000001".into(),
                 partition: 0,
                 voter: 1,
+            }),
+    );
+    for state in RaftStateLabel::ALL {
+        drop(metrics.raft_current_state.get_or_create(&state));
+    }
+    drop(
+        metrics
+            .quota_entity_throttle_seconds_total
+            .get_or_create(&QuotaEntityLabel {
+                quota_type: QuotaType::Produce,
+                user: Some("alice".into()),
+                client_id: Some("producer-1".into()),
             }),
     );
 }

@@ -1,10 +1,13 @@
 //! Unit tests for the remote-retention eviction set and its delete pass.
 
+use std::sync::Arc;
+
 use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
     CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
-    LogSegmentData, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate, RemoteStorageError,
+    LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate,
+    RemoteStorageError, RemoteStorageManager,
 };
 use krabka_units::{bytes, hours, millis};
 use uuid::Uuid;
@@ -296,13 +299,11 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
         1,
         RemoteRetentionBounds {
             log_config: &cfg,
-            archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
         },
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
     .await;
     assert!(outcome.deleted == exports.len());
@@ -364,13 +365,11 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
         1,
         RemoteRetentionBounds {
             log_config: &cfg,
-            archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: 1,
         },
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
     .await;
     assert!(outcome == RemoteRetentionOutcome::default());
@@ -397,13 +396,11 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
         1,
         RemoteRetentionBounds {
             log_config: &cfg,
-            archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms(),
         },
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
     .await;
     assert!(outcome == RemoteRetentionOutcome::default());
@@ -497,13 +494,11 @@ async fn remote_retention_pass_never_reaches_the_rsm_for_a_write_once_archive() 
         1,
         RemoteRetentionBounds {
             log_config: &cfg,
-            archive: ArchiveMode::WriteOnce,
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
         },
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
     )
     .await;
 
@@ -541,13 +536,11 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
             1,
             RemoteRetentionBounds {
                 log_config: &cfg,
-                archive,
                 log_start_offset: NO_FLOOR,
                 deleted_below: None,
                 now_ms: now_ms() + 1_000_000,
             },
-            &rsm,
-            &rlmm,
+            &tier(archive, &rsm, &rlmm),
         )
         .await;
 
@@ -727,13 +720,11 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
         1,
         RemoteRetentionBounds {
             log_config: &cfg,
-            archive: ArchiveMode::Mutable,
             log_start_offset: floor,
             deleted_below: Some(floor),
             now_ms: 1,
         },
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
     .await;
 
@@ -789,13 +780,11 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
         1,
         RemoteRetentionBounds {
             log_config: &cfg,
-            archive: ArchiveMode::Mutable,
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
         },
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
     .await;
 
@@ -847,13 +836,11 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
         1,
         RemoteRetentionBounds {
             log_config: &cfg,
-            archive: ArchiveMode::Mutable,
             log_start_offset: inferred,
             deleted_below: None,
             now_ms: 1,
         },
-        &rsm,
-        &rlmm,
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
     .await;
 
@@ -862,5 +849,72 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
     check!(
         rlmm.list_remote_log_segments(&tp()).unwrap().len() == exports.len(),
         "the archive is intact"
+    );
+}
+
+/// KIP-405's `RemoteDeleteRequestsPerSec`, `RemoteDeleteErrorsPerSec` and the
+/// two delete-lag gauges. Without them an archive whose deletes are failing
+/// shows nothing at all: the pass stops at the first failure and retries on
+/// the next tick, and object-store spend is the only other symptom.
+#[tokio::test]
+async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
+    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    seed_finished_segments(&rlmm, 3);
+    let rsm_impl = Arc::new(RefusesDeleteRsm::default());
+    let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+    let metrics = crate::metrics::BrokerMetrics::new();
+    let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+    let tier = crate::remote_log_manager::RemoteTier {
+        archive: ArchiveMode::Mutable,
+        rsm: &rsm,
+        rlmm: &rlmm,
+        metrics: &metrics,
+        index_cache: &index_cache,
+    };
+    let cfg = LogConfig {
+        retention: Some(millis(1)),
+        ..LogConfig::default()
+    };
+
+    let outcome = remote_retention_pass(
+        &tp(),
+        1,
+        RemoteRetentionBounds {
+            log_config: &cfg,
+            log_start_offset: NO_FLOOR,
+            deleted_below: None,
+            now_ms: now_ms() + 1_000_000,
+        },
+        &tier,
+    )
+    .await;
+
+    check!(outcome.deleted == 0);
+    let topic = crate::metrics::TopicLabel {
+        topic: Arc::from(tp().topic.as_str()),
+    };
+    // The lag is what the pass decided to remove, recorded before it tried.
+    check!(
+        metrics
+            .remote_delete_lag_segments
+            .get_or_create(&topic)
+            .get()
+            == 3
+    );
+    // The pass stops at the first failure to keep the contiguous-prefix
+    // invariant, so exactly one attempt and one error are recorded.
+    check!(
+        metrics
+            .remote_delete_requests_total
+            .get_or_create(&topic)
+            .get()
+            == 1
+    );
+    check!(
+        metrics
+            .remote_delete_errors_total
+            .get_or_create(&topic)
+            .get()
+            == 1
     );
 }

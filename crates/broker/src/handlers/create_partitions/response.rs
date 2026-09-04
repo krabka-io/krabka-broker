@@ -40,7 +40,7 @@ pub(super) fn finish_response(
     // that caused it exactly once per request.
     let delay = broker.metrics.record_applied_throttle(
         ApiKey::CreatePartitions as i16,
-        &[(crate::metrics::QuotaType::ControllerMutation, delay)],
+        &[(crate::metrics::QuotaType::ControllerMutation, delay).into()],
     );
     let resp = create_partitions_response(results, crate::quota::throttle_time_ms(delay));
     // KIP-219: the KIP-599 window is reported here and enforced by the

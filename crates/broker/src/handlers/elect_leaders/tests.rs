@@ -28,7 +28,6 @@ use crate::{
     codes,
     config::BreakGlassConfig,
     handlers::RequestContext,
-    heartbeat::controller_state::ControllerLivenessState,
     leader_election::ElectionType,
     test_support::{peer, principal, start_broker_with},
     time_util::now_ms,
@@ -116,10 +115,8 @@ fn elected() -> PartitionRecord {
 
 /// Broker 2 alive, broker 1 dead, so an unclean election has an out-of-ISR
 /// replica to elect.
-async fn liveness() -> ControllerLivenessState {
-    let liveness = ControllerLivenessState::new(krabka_units::secs(30));
-    liveness.record_heartbeat(2).await;
-    liveness
+fn alive() -> HashSet<u64> {
+    HashSet::from([2])
 }
 
 async fn broker_with(config: BreakGlassConfig) -> (BrokerHandle, tempfile::TempDir) {
@@ -138,7 +135,7 @@ async fn elect(
     image: &MetadataImage,
     election: ElectionType,
 ) -> (PartitionResult, Vec<MetadataRecord>) {
-    let liveness = liveness().await;
+    let alive = alive();
     let witnesses = HashSet::new();
     let principal = principal("admin");
     let peer = peer();
@@ -147,7 +144,7 @@ async fn elect(
         broker,
         image,
         ctx: &ctx,
-        liveness: &liveness,
+        alive: &alive,
         witnesses: &witnesses,
         election,
     };
@@ -203,7 +200,7 @@ async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
     let (handle, _dir) = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
     let image = image_with(&[approved_proposal(TOPIC)]);
-    let liveness = liveness().await;
+    let alive = alive();
     let witnesses = HashSet::new();
     let principal = principal("admin");
     let peer = peer();
@@ -212,7 +209,7 @@ async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
         broker: &broker,
         image: &image,
         ctx: &ctx,
-        liveness: &liveness,
+        alive: &alive,
         witnesses: &witnesses,
         election: ElectionType::Unclean,
     };

@@ -4,9 +4,7 @@
 //! binary entry point is `bin/broker.rs`.
 
 pub use krabka_raft::BootstrapMode;
-use krabka_units::{
-    ByteSize, Ratio, Time, days, gibibytes, hours, mebibytes, millis, minutes, percent, secs,
-};
+use krabka_units::{ByteSize, Time, days, gibibytes, hours, mebibytes, millis, minutes, secs};
 
 mod break_glass;
 mod broker_config;
@@ -121,17 +119,30 @@ pub const DEFAULT_TLS_RELOAD_INTERVAL: Time = secs(30);
 /// `connections.max.idle.ms`, whose default is 600000.
 pub const DEFAULT_CONNECTIONS_MAX_IDLE: Time = minutes(10);
 
+/// KIP-13: default width of the sliding window a client byte-rate quota is
+/// measured over, and therefore the burst a bucket allows before it throttles.
+/// Kafka's `quota.window.num` (11) times `quota.window.size.seconds` (1).
+pub const DEFAULT_QUOTA_WINDOW: Time = secs(11);
+
 /// Default `RemoteLogManager` copy / retention cadence.
 pub const DEFAULT_REMOTE_LOG_MANAGER_INTERVAL: Time = secs(30);
+
+/// KIP-405: default number of concurrent cold-tier reads. Matches Kafka's
+/// `remote.log.reader.threads`.
+pub const DEFAULT_REMOTE_READER_THREADS: usize = 10;
+
+/// KIP-405: default number of cold-tier reads that may wait for a reader slot
+/// before one is refused. Matches Kafka's
+/// `remote.log.reader.max.pending.tasks`.
+pub const DEFAULT_REMOTE_READER_MAX_PENDING_TASKS: usize = 100;
+
+/// KIP-405: default byte budget of the on-disk remote index cache. Matches
+/// Kafka's `remote.log.index.file.cache.total.size.bytes`.
+pub const DEFAULT_REMOTE_INDEX_CACHE_SIZE: ByteSize = gibibytes(1);
 
 /// KIP-460: default auto-rebalance tick cadence. Matches Kafka's
 /// `leader.imbalance.check.interval.seconds`.
 pub const DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL: Time = minutes(5);
-
-/// KIP-460: default minimum fraction of imbalanced partitions before the
-/// auto-rebalance ticker acts. Matches Kafka's
-/// `leader.imbalance.per.broker.percentage`.
-pub const DEFAULT_LEADER_IMBALANCE_PER_BROKER: Ratio = percent(10);
 
 /// KIP-227: default incremental-fetch session cache capacity. Matches Kafka's
 /// `max.incremental.fetch.session.cache.slots`.

@@ -92,7 +92,7 @@ fn charge_request_quota(
     );
     let delay = broker.metrics.record_applied_throttle(
         krabka_protocol::api_key::ApiKey::ApiVersions as i16,
-        &[(crate::metrics::QuotaType::Request, request_delay)],
+        &[(crate::metrics::QuotaType::Request, request_delay).into()],
     );
     // KIP-219: the response goes out now and the connection is muted for the
     // window afterwards. Sleeping here would hold the handshake back past the

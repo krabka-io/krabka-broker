@@ -107,26 +107,46 @@ pub(crate) async fn handle(
     //   Some([{topic, [p, q, ...]}]) → exact set
     let targets = resolve_targets(&image, &req);
 
+    // Which brokers an election may elect. Read from replicated state rather
+    // than this node's heartbeat registry, because `controllerId` rotates and
+    // an `AdminClient` sends the election to whichever broker it last named.
+    let alive = crate::handlers::offline_replicas::live_brokers(broker, &image).await;
+
     // Run the algorithm per target; accumulate new records to submit
     // and per-partition results to ship back.
     let env = ElectionEnv {
         broker,
         image: &image,
         ctx,
-        liveness: &broker.liveness,
+        alive: &alive,
         // Witness nodes never lead a partition. Build the set once for the
         // whole request, not once per target partition.
         witnesses: &crate::config_keys::witness_node_ids(&image),
         election,
     };
+    // KIP-460: a request that named no topics asked about every partition, and
+    // Kafka answers such a request only with the partitions it acted on --
+    // `ReplicationControlManager.electLeaders` drops every
+    // `ELECTION_NOT_NEEDED` row when `topicPartitions` is null, because "we do
+    // not return partitions which already have the desired leader". Without
+    // this, `kafka-leader-election --all-topic-partitions` prints a
+    // "valid replica already elected" line for every partition in the cluster,
+    // internal topics included, where Kafka prints nothing.
+    let elect_all_partitions = req.topic_partitions.is_none();
     let mut by_topic: HashMap<String, Vec<PartitionResult>> = HashMap::new();
     let mut batch = ElectionBatch::default();
     for (topic, partitions) in &targets {
         let mut rows = Vec::with_capacity(partitions.len());
         for &p in partitions {
-            rows.push(elect_one(&env, &mut batch, topic, p).await);
+            let row = elect_one(&env, &mut batch, topic, p).await;
+            if elect_all_partitions && row.error_code == codes::ELECTION_NOT_NEEDED {
+                continue;
+            }
+            rows.push(row);
         }
-        by_topic.insert(topic.clone(), rows);
+        if !elect_all_partitions || !rows.is_empty() {
+            by_topic.insert(topic.clone(), rows);
+        }
     }
 
     // KIP-966: an election decides which replicas are still known to hold

@@ -430,6 +430,8 @@ The break-glass suite covers each gated transition with and without an approval,
 
 **JVM acceptance, tagged `manual`.** `kafka-console-producer` against a frozen topic gets a `PolicyViolationException` and exits non-zero. `kafka-topics --delete` with no proposal fails and carries the broker's message. `kafka-leader-election --election-type unclean` fails without a proposal and succeeds with one. `kafka-configs --alter` cannot set a freeze key.
 
+The reassignment cancel is the one gated transition whose premise a single broker cannot host, because a cancel needs a reassignment that is still running and the JVM tool sends nothing for a partition that is not reassigning. It is covered on a three-broker cluster in [`crates/broker/tests/jvm_acceptance_reassign/cancel_gate.rs`](../../crates/broker/tests/jvm_acceptance_reassign/cancel_gate.rs), which runs the same `kafka-reassign-partitions --cancel` three times against the same cluster: with the gate off, with it on and unapproved, and with it on and approved by two distinct principals. The middle run is what checks that the refusal reaches the operator -- Kafka's own `PolicyViolationException`, and the broker's own sentence out of `error_message` -- and the two either side of it are what show the gate is a gate rather than a wall.
+
 ## Rejected Alternatives
 
 ### The `write.freeze` Topic Config as the Storage

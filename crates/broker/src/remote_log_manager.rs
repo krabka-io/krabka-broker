@@ -79,6 +79,7 @@ async fn disable_and_delete_remote(
     archive: ArchiveMode,
     rsm: &Arc<dyn RemoteStorageManager>,
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    index_cache: &Arc<krabka_remote_storage::RemoteIndexCache>,
 ) {
     let Some(topic_id) = image.topic(&partition.topic).map(|t| t.topic_id) else {
         return;
@@ -102,6 +103,7 @@ async fn disable_and_delete_remote(
         archive,
         Arc::clone(rsm),
         Arc::clone(rlmm),
+        Arc::clone(index_cache),
     )
     .await;
 
@@ -155,6 +157,9 @@ pub(crate) struct RemoteLogManagerContext {
     pub archive: ArchiveMode,
     pub rsm: Arc<dyn RemoteStorageManager>,
     pub rlmm: Arc<dyn RemoteLogMetadataManager>,
+    /// The reader's index cache, so a segment this task deletes stops holding
+    /// the cache's byte budget.
+    pub index_cache: Arc<krabka_remote_storage::RemoteIndexCache>,
     pub metrics: BrokerMetrics,
     pub node_id: NodeId,
     pub broker_id: i32,
@@ -162,15 +167,18 @@ pub(crate) struct RemoteLogManagerContext {
 
 /// The remote tier a sweep writes through, and the counters that watch it.
 ///
-/// Bundled because the four travel together down the whole copy path and
-/// nothing below picks one without the others: the archive mode decides
-/// whether a manifest is sealed at all, the two managers do the sealing, and
-/// the metrics are where the outcome is recorded.
+/// Bundled because they travel together down the whole copy path and nothing
+/// below picks one without the others: the archive mode decides whether a
+/// manifest is sealed at all, the two managers do the sealing, the metrics are
+/// where the outcome is recorded, and the index cache is what a delete has to
+/// release so a segment nothing can read stops holding the read path's byte
+/// budget.
 pub(crate) struct RemoteTier<'a> {
     pub archive: ArchiveMode,
     pub rsm: &'a Arc<dyn RemoteStorageManager>,
     pub rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
     pub metrics: &'a BrokerMetrics,
+    pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
 }
 
 impl RemoteLogManagerContext {
@@ -180,6 +188,7 @@ impl RemoteLogManagerContext {
             rsm: &self.rsm,
             rlmm: &self.rlmm,
             metrics: &self.metrics,
+            index_cache: &self.index_cache,
         }
     }
 }
@@ -255,6 +264,7 @@ async fn tick_all(
                     tier.archive,
                     tier.rsm,
                     tier.rlmm,
+                    tier.index_cache,
                 )
                 .await;
             }
@@ -327,13 +337,11 @@ async fn tick_all(
                 broker_id,
                 RemoteRetentionBounds {
                     log_config: &log_config,
-                    archive: tier.archive,
                     log_start_offset,
                     deleted_below,
                     now_ms: now_ms(),
                 },
-                tier.rsm,
-                tier.rlmm,
+                tier,
             )
             .await;
             // The records the pass deleted are now in no tier at all, so the
@@ -455,6 +463,7 @@ mod tests {
                 archive: ArchiveMode::Mutable,
                 rsm,
                 rlmm: rlmm.clone(),
+                index_cache: Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
                 metrics: BrokerMetrics::new(),
                 node_id: NodeId(1),
                 broker_id: 1,

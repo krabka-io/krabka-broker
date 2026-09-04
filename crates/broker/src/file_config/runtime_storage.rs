@@ -36,6 +36,7 @@ impl RuntimeFileConfig {
             cfg.operator_recovery_deadline
         );
         set_runtime_time_millis!(runtime, quota_throttle_max, cfg.quota_throttle_max);
+        set_runtime_time_millis!(runtime, quota_window, cfg.quota_window);
         set_runtime_time_millis!(
             runtime,
             controller_mutation_quota_window,
@@ -182,6 +183,10 @@ impl RuntimeFileConfig {
             cfg.socket_request_max,
             whole_bytes_u32
         );
+        set_runtime_usize!(runtime, queued_max_requests, cfg.queued_max_requests);
+        if let Some(bytes) = runtime.queued_max_request_bytes.take() {
+            cfg.queued_max_request_bytes = Some(bytes);
+        }
         set_runtime_size_bytes!(runtime, sendfile_min, cfg.sendfile_min, whole_bytes_usize);
         set_runtime_size_bytes!(
             runtime,

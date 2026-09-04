@@ -53,6 +53,27 @@ impl Engine {
     pub fn quorum_state_snapshot(&self) -> QuorumStateSnapshot {
         let qs = self.core.quorum_state();
         let mut per_replica_fetch_offset = self.replica_fetch_offsets.clone();
+        let mut per_replica_last_fetch_ms = std::collections::BTreeMap::new();
+        let mut per_replica_last_caught_up_ms = std::collections::BTreeMap::new();
+        let is_leader = self.core.role().is_leader();
+        let current_state = match self.core.role() {
+            Role::Leader { .. } => "leader",
+            // A resigned leader has stepped down and is waiting out its
+            // epoch: it leads nothing and it is not campaigning, which is
+            // what `DescribeQuorum` calls a follower.
+            Role::Follower { .. } | Role::Resigned => "follower",
+            Role::Candidate { .. }
+            | Role::Prospective { .. }
+            | Role::Unattached { .. }
+            | Role::Voted { .. } => "candidate",
+            Role::Observer { .. } => "observer",
+        };
+        let now_ms = self
+            .wall_clock_base
+            .checked_add(std::time::Duration::from_millis(self.now().0))
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+
         if let Role::Leader { replicas, .. } = self.core.role() {
             // The leader's own matched index is its log end offset — its local
             // log is, by definition, fully matched against itself. The
@@ -63,14 +84,38 @@ impl Engine {
             // `per_voter_fetch_offset` is a wire-facing DescribeQuorum DTO of raw
             // `i64`s; the peer entries already come from the core as `i64`.
             per_replica_fetch_offset.insert(self.core.me(), self.log.log_end_offset().0);
+            per_replica_last_fetch_ms.insert(self.core.me(), now_ms);
+            per_replica_last_caught_up_ms.insert(self.core.me(), now_ms);
             for (id, progress) in replicas {
                 per_replica_fetch_offset.insert(*id, progress.fetch_offset);
+                let fetch_ms = if progress.last_fetch.0 == 0 {
+                    -1
+                } else {
+                    self.wall_clock_base
+                        .checked_add(std::time::Duration::from_millis(progress.last_fetch.0))
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+                };
+                let caught_up_ms = if progress.last_caught_up.0 == 0 {
+                    -1
+                } else {
+                    self.wall_clock_base
+                        .checked_add(std::time::Duration::from_millis(progress.last_caught_up.0))
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+                };
+                per_replica_last_fetch_ms.insert(*id, fetch_ms);
+                per_replica_last_caught_up_ms.insert(*id, caught_up_ms);
             }
         }
-        let observers = per_replica_fetch_offset
+        let observers: Vec<NodeId> = per_replica_fetch_offset
             .keys()
             .filter(|id| !qs.voters.contains(**id))
             .copied()
+            .collect();
+        let observer_directory_ids: std::collections::BTreeMap<NodeId, uuid::Uuid> = observers
+            .iter()
+            .filter_map(|id| self.replica_directory_ids.get(id).map(|dir| (*id, *dir)))
             .collect();
         QuorumStateSnapshot {
             leader_id: qs.leader_id,
@@ -83,6 +128,11 @@ impl Engine {
             voted_directory_id: qs.voted_key.as_ref().map(|key| key.directory_id),
             observers,
             per_replica_fetch_offset,
+            per_replica_last_fetch_ms,
+            per_replica_last_caught_up_ms,
+            observer_directory_ids,
+            is_leader,
+            current_state,
         }
     }
 

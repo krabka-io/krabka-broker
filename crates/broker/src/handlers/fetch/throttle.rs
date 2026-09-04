@@ -35,8 +35,18 @@ pub(super) fn throttle_follower_responses(
     }
     if byte_count > 0 {
         let granted = broker.throttle_state.leader_out.try_consume(byte_count);
+        // KIP-73: the measured leader-side throttled-replication rate, which
+        // Kafka publishes as
+        // `kafka.server:type=LeaderReplication,name=byte-rate`. It is what
+        // tells an operator whose reassignment is not moving whether the
+        // throttle is biting or something else is wrong.
+        broker.metrics.record_replication_throttled_out(granted);
         if granted < byte_count {
             truncate_throttled_responses(responses, &indexes, granted);
+            // The bucket had less than the round asked for, so some of what
+            // this follower was owed is held back. Kafka delays the fetch;
+            // krabka truncates it and the follower re-asks next round.
+            broker.metrics.record_replication_throttle_sleep();
         }
     }
 }
@@ -77,8 +87,8 @@ pub(super) fn apply_consumer_fetch_quota(
     let delay = broker.metrics.record_applied_throttle(
         super::FETCH_API_KEY,
         &[
-            (crate::metrics::QuotaType::Fetch, data_delay),
-            (crate::metrics::QuotaType::Request, request_delay),
+            (crate::metrics::QuotaType::Fetch, data_delay).into(),
+            (crate::metrics::QuotaType::Request, request_delay).into(),
         ],
     );
     if delay <= <Time as TimeExt>::ZERO {
@@ -142,33 +152,44 @@ fn consume_consumer_quota(
     client_id: &str,
     bytes: u64,
     maximum: Time,
-) -> Time {
+) -> crate::quota::QuotaDelay {
     let Some((entity_key, rate)) =
         crate::quota::lookup_quota_with_key(image, principal, client_id, "consumer_byte_rate")
     else {
-        return <Time as TimeExt>::ZERO;
+        return crate::quota::QuotaDelay::zero();
     };
     if rate <= 0.0 {
-        return <Time as TimeExt>::ZERO;
+        return crate::quota::QuotaDelay::zero();
     }
+    let user = entity_key
+        .iter()
+        .find(|(k, _)| k == "user")
+        .and_then(|(_, v)| v.clone());
+    let client_id_opt = entity_key
+        .iter()
+        .find(|(k, _)| k == "client-id")
+        .and_then(|(_, v)| v.clone());
     let bucket = buckets.get_or_create(
         "consumer_byte_rate",
         &entity_key,
+        principal,
+        client_id,
         rate.to_u64().unwrap_or(u64::MAX),
     );
     let granted = bucket.try_consume(bytes);
     if granted >= bytes {
-        return <Time as TimeExt>::ZERO;
+        return crate::quota::QuotaDelay::zero();
     }
     let overage = bytes - granted;
     let delay_secs = overage.to_f64().unwrap_or(f64::MAX) / rate;
-    Time::from_secs_f64(delay_secs).min(maximum)
+    let delay = Time::from_secs_f64(delay_secs).min(maximum);
+    crate::quota::QuotaDelay::new(delay, user, client_id_opt)
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::{Time, convert::TimeExt, millis};
+    use krabka_units::{Time, convert::TimeExt, millis, secs};
 
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {
@@ -188,14 +209,16 @@ mod tests {
             config_key: "consumer_byte_rate".into(),
             config_value: Some(1024.0),
         }));
-        let buckets = crate::quota::QuotaBuckets::new();
+        // A one-second window, so 4096 bytes at 1024 B/s is over the burst
+        // rather than inside the default 11-second one.
+        let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
         let delay_match =
             super::consume_consumer_quota(&img, &buckets, "alice", "app-x", 4096, millis(25));
         assert!(
             delay_match == millis(25),
             "tuple quota match should honor the configured cap; got {delay_match:?}"
         );
-        let buckets2 = crate::quota::QuotaBuckets::new();
+        let buckets2 = crate::quota::QuotaBuckets::with_window(secs(1));
         let delay_other =
             super::consume_consumer_quota(&img, &buckets2, "alice", "other", 4096, millis(25));
         assert!(

@@ -35,6 +35,9 @@ One per condition the registry tells operators to alert on.
 
 | Alert | Runbook |
 | :--- | :--- |
+| `KrabkaNoActiveController` | [no-active-controller](runbooks/no-active-controller.md) |
+| `KrabkaBrokerDown` | [broker-down](runbooks/broker-down.md) |
+| `KrabkaMetadataLag` | [metadata-quorum-loss](runbooks/metadata-quorum-loss.md) |
 | `KrabkaUnderReplicatedPartitions` | [under-replicated-partitions](runbooks/under-replicated-partitions.md) |
 | `KrabkaUnderMinIsrPartitions` | [under-min-isr-partitions](runbooks/under-min-isr-partitions.md) |
 | `KrabkaOfflinePartitions` | [offline-partitions](runbooks/offline-partitions.md) |
@@ -48,6 +51,9 @@ One per condition the registry tells operators to alert on.
 | `KrabkaFailedProduceRequests` | [failed-produce-requests](runbooks/failed-produce-requests.md) |
 | `KrabkaIdleConnectionCloses` | [idle-connection-closes](runbooks/idle-connection-closes.md) |
 | `KrabkaRlmmBootstrapStuck` | [rlmm-bootstrap-stuck](runbooks/rlmm-bootstrap-stuck.md) |
+| `KrabkaRemoteCopyErrors` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
+| `KrabkaRemoteCopyLagGrowing` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
+| `KrabkaRemoteFetchErrors` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
 | `KrabkaAuthenticationFailures` | [authentication-failures](runbooks/authentication-failures.md) |
 | `KrabkaAuthorizationDenials` | [authorization-denials](runbooks/authorization-denials.md) |
 | `KrabkaAuditWriteFailures`, `KrabkaAuditRecordsDropped` | [audit-write-failures](runbooks/audit-write-failures.md) |

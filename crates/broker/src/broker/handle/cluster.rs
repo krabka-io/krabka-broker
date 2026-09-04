@@ -332,6 +332,38 @@ impl BrokerHandle {
         );
     }
 
+    /// Test-only: await until this node would let an operator elect `node` --
+    /// the predicate `ElectLeaders` itself reads.
+    ///
+    /// [`Self::wait_until_broker_alive`] settles on the controller's own
+    /// heartbeat registry, which only the quorum leader keeps. `ElectLeaders`
+    /// cannot read that, because `controllerId` names a rotating unfenced
+    /// broker rather than the quorum leader and an `AdminClient` sends the
+    /// election wherever that rotation last pointed. It reads the replicated
+    /// set instead, which trails the registry by up to one liveness tick, so a
+    /// test that drives an election over the wire settles here.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn wait_until_broker_electable(&self, node: u64) {
+        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+            loop {
+                let image = self.broker.controller.current_image();
+                if crate::handlers::offline_replicas::live_brokers(&self.broker, &image)
+                    .await
+                    .contains(&node)
+                {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        assert2::assert!(
+            res.is_ok(),
+            "wait_until_broker_electable({node}) timed out after {TEST_AWAITER_TIMEOUT:?}"
+        );
+    }
+
     /// Test-only: await until this node's image has applied metadata offset
     /// `offset` or later. See [`Self::metadata_offset_for_test`] for the offset
     /// to pass.

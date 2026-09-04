@@ -9,6 +9,7 @@ use num_traits::cast::{NumCast, ToPrimitive as _};
 
 mod buckets;
 mod controller_mutation;
+mod expiry;
 mod lookup;
 mod producer;
 mod request;
@@ -23,7 +24,71 @@ pub use request::consume_request_quota;
 pub(crate) use throttle_slot::ThrottleSlot;
 
 mod refresh;
+pub(crate) use expiry::run as run_expiry;
 pub use refresh::run;
+
+/// Result of consuming a client quota, carrying the delay and the resolved
+/// entity identity (`user` and `client_id`) that the match was charged to (#418).
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuotaDelay {
+    pub delay: Time,
+    pub user: Option<String>,
+    pub client_id: Option<String>,
+}
+
+impl QuotaDelay {
+    /// No throttle, charged to nobody.
+    #[must_use]
+    pub fn zero() -> Self {
+        Self {
+            delay: <Time as TimeExt>::ZERO,
+            user: None,
+            client_id: None,
+        }
+    }
+
+    /// A throttle of `delay`, charged to the principal and client id whose
+    /// quota produced it (KIP-599 labels the applied throttle by entity).
+    #[must_use]
+    pub fn new(delay: Time, user: Option<String>, client_id: Option<String>) -> Self {
+        Self {
+            delay,
+            user,
+            client_id,
+        }
+    }
+}
+
+impl std::ops::Deref for QuotaDelay {
+    type Target = Time;
+    fn deref(&self) -> &Self::Target {
+        &self.delay
+    }
+}
+
+impl PartialEq<Time> for QuotaDelay {
+    fn eq(&self, other: &Time) -> bool {
+        self.delay == *other
+    }
+}
+
+impl PartialEq<QuotaDelay> for Time {
+    fn eq(&self, other: &QuotaDelay) -> bool {
+        *self == other.delay
+    }
+}
+
+impl PartialOrd<Time> for QuotaDelay {
+    fn partial_cmp(&self, other: &Time) -> Option<std::cmp::Ordering> {
+        self.delay.partial_cmp(other)
+    }
+}
+
+impl PartialOrd<QuotaDelay> for Time {
+    fn partial_cmp(&self, other: &QuotaDelay) -> Option<std::cmp::Ordering> {
+        self.partial_cmp(&other.delay)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct QuotaConsumption<'a> {
@@ -41,9 +106,9 @@ fn consume_configured_quota(
     initial_rate: impl FnOnce(f64) -> Option<u64>,
     delay_for_overage: impl FnOnce(u64, f64, u64) -> Time,
     maximum_delay: Time,
-) -> Time {
+) -> QuotaDelay {
     if request.amount == 0 {
-        return <Time as TimeExt>::ZERO;
+        return QuotaDelay::zero();
     }
     let Some((mut entity_key, rate)) = lookup::lookup_quota_with_key(
         request.image,
@@ -51,23 +116,37 @@ fn consume_configured_quota(
         request.client_id,
         request.quota_key,
     ) else {
-        return <Time as TimeExt>::ZERO;
+        return QuotaDelay::zero();
     };
     if !rate.is_finite() || rate <= 0.0 {
-        return <Time as TimeExt>::ZERO;
+        return QuotaDelay::zero();
     }
     let Some(initial_rate) = initial_rate(rate) else {
-        return <Time as TimeExt>::ZERO;
+        return QuotaDelay::zero();
     };
+    let user = entity_key
+        .iter()
+        .find(|(k, _)| k == "user")
+        .and_then(|(_, v)| v.clone());
+    let client_id = entity_key
+        .iter()
+        .find(|(k, _)| k == "client-id")
+        .and_then(|(_, v)| v.clone());
+
     bucket_entity_key(&mut entity_key);
-    let bucket = request
-        .buckets
-        .get_or_create(request.quota_key, &entity_key, initial_rate);
+    let bucket = request.buckets.get_or_create(
+        request.quota_key,
+        &entity_key,
+        request.principal,
+        request.client_id,
+        initial_rate,
+    );
     let granted = bucket.try_consume(request.amount);
     if granted >= request.amount {
-        return <Time as TimeExt>::ZERO;
+        return QuotaDelay::zero();
     }
-    delay_for_overage(request.amount - granted, rate, initial_rate).min(maximum_delay)
+    let delay = delay_for_overage(request.amount - granted, rate, initial_rate).min(maximum_delay);
+    QuotaDelay::new(delay, user, client_id)
 }
 
 /// A quota delay as Kafka's `throttle_time_ms` wire field.
@@ -333,7 +412,9 @@ mod tests {
     #[test]
     fn consume_configured_quota_caps_overage_delay() {
         let image = image_with_quota(vec![("user", Some("alice"))], "producer_byte_rate", 1.0);
-        let buckets = QuotaBuckets::new();
+        // A one-second window: at 1 B/s the burst is one byte, so 10 bytes
+        // leaves the 9-byte overage the closure below checks.
+        let buckets = QuotaBuckets::with_window(secs(1));
 
         let delay = consume_configured_quota(
             QuotaConsumption {

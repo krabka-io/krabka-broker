@@ -50,7 +50,7 @@ use crate::{broker::Broker, codes, error::BrokerError};
     fields(api = "DescribeQuorum", version, req_bytes = req_bytes.len()),
     err,
 )]
-pub(crate) fn handle(
+pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
     _correlation_id: i32,
@@ -58,9 +58,6 @@ pub(crate) fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let image = broker.controller.current_image();
-
-    let mut cur: &[u8] = req_bytes;
-    let req = DescribeQuorumRequest::decode(&mut cur, version)?;
 
     // Whole-request Cluster Describe gate. DescribeQuorum is
     // cluster-wide raft introspection — same gate as DescribeCluster.
@@ -71,6 +68,18 @@ pub(crate) fn handle(
         };
         return crate::handlers::encode_response(&resp, version);
     }
+
+    // Broker-only observer forward to the active controller quorum (#392)
+    if let Some(forwarded) = broker
+        .controller
+        .forward_raw(55, version, Bytes::copy_from_slice(req_bytes))
+        .await
+    {
+        return forwarded.map_err(BrokerError::from);
+    }
+
+    let mut cur: &[u8] = req_bytes;
+    let req = DescribeQuorumRequest::decode(&mut cur, version)?;
 
     // Snapshot raft state once — cheap clone of openraft's metrics
     // watch value. Carries the live current_term, last_applied_index,

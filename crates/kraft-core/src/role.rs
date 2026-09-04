@@ -9,6 +9,10 @@ use crate::types::{NodeId, SimInstant};
 pub struct ReplicaProgress {
     /// Highest offset the follower has acknowledged, that is, its fetch offset.
     pub fetch_offset: i64,
+    /// Logical instant the leader received the most recent Fetch from this follower.
+    pub last_fetch: SimInstant,
+    /// Logical instant this follower was known to be caught up with the leader's log end.
+    pub last_caught_up: SimInstant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

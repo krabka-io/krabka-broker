@@ -217,7 +217,7 @@ krabka_broker_in_flight_requests 0
 # HELP krabka_broker_active_connections Number of client connections currently open to this broker (gauge). Incremented when the per-connection serve loop starts, decremented when it exits (EOF / error / SASL expiry)..
 # TYPE krabka_broker_active_connections gauge
 krabka_broker_active_connections 0
-# HELP krabka_broker_connection_closes Cumulative count of client connections the broker closed on its own, labelled by reason: idle, sasl_session_expired, decode_error, peer_closed. Alert on rate(...{reason="idle"}[5m]) to catch a peer that connects and then sends nothing..
+# HELP krabka_broker_connection_closes Cumulative count of client connections the broker closed on its own, labelled by reason: idle, sasl_session_expired, decode_error, peer_closed, max_connections, max_connections_per_ip. Alert on rate(...{reason="idle"}[5m]) to catch a peer that connects and then sends nothing, and on the two max_connections reasons to catch a listener refusing clients at its limit..
 # TYPE krabka_broker_connection_closes counter
 krabka_broker_connection_closes_total{reason="idle"} 0
 # HELP krabka_broker_request_errors Per-Kafka-API count of requests whose handler returned an error (dispatcher closed the connection). Labelled by the ApiKey variant name; disjoint from unsupported_api_requests. Alert on rate(...) > 0 to catch handler-level faults..
@@ -401,4 +401,150 @@ krabka_broker_worm_manifests_sealed_total 0
 # HELP krabka_broker_worm_manifest_seal_failures Write-once segment copies that ended without a usable manifest..
 # TYPE krabka_broker_worm_manifest_seal_failures counter
 krabka_broker_worm_manifest_seal_failures_total 0
+# HELP krabka_broker_raft_current_state Current state of the KRaft consensus state machine (one-hot across leader, follower, candidate, observer).
+# TYPE krabka_broker_raft_current_state gauge
+krabka_broker_raft_current_state{state="candidate"} 0
+krabka_broker_raft_current_state{state="follower"} 0
+krabka_broker_raft_current_state{state="leader"} 0
+krabka_broker_raft_current_state{state="observer"} 0
+# HELP krabka_broker_raft_current_epoch Current KRaft leader epoch.
+# TYPE krabka_broker_raft_current_epoch gauge
+krabka_broker_raft_current_epoch 0
+# HELP krabka_broker_raft_high_watermark High watermark offset of the local metadata log.
+# TYPE krabka_broker_raft_high_watermark gauge
+krabka_broker_raft_high_watermark 0
+# HELP krabka_broker_raft_log_end_offset Log end offset of the local metadata log.
+# TYPE krabka_broker_raft_log_end_offset gauge
+krabka_broker_raft_log_end_offset 0
+# HELP krabka_broker_raft_voters Number of active KRaft voters.
+# TYPE krabka_broker_raft_voters gauge
+krabka_broker_raft_voters 0
+# HELP krabka_broker_raft_observers Number of active KRaft observers.
+# TYPE krabka_broker_raft_observers gauge
+krabka_broker_raft_observers 0
+# HELP krabka_broker_metadata_last_applied_offset Highest metadata record offset applied to the active metadata image.
+# TYPE krabka_broker_metadata_last_applied_offset gauge
+krabka_broker_metadata_last_applied_offset 0
+# HELP krabka_broker_metadata_lag_records Lag in records between the quorum committed high watermark and this node's applied metadata offset.
+# TYPE krabka_broker_metadata_lag_records gauge
+krabka_broker_metadata_lag_records 0
+# HELP krabka_broker_broker_state Kafka BrokerState lifecycle code (1=STARTING, 2=RECOVERY, 3=RUNNING, 6=PENDING_CONTROLLED_SHUTDOWN, 7=SHUTTING_DOWN).
+# TYPE krabka_broker_broker_state gauge
+krabka_broker_broker_state 0
+# HELP krabka_broker_active_brokers Number of unfenced brokers in the cluster (reported by active controller).
+# TYPE krabka_broker_active_brokers gauge
+krabka_broker_active_brokers 0
+# HELP krabka_broker_fenced_brokers Number of fenced brokers in the cluster (reported by active controller).
+# TYPE krabka_broker_fenced_brokers gauge
+krabka_broker_fenced_brokers 0
+# HELP krabka_broker_global_topics Total number of topics in the cluster metadata image (reported by active controller).
+# TYPE krabka_broker_global_topics gauge
+krabka_broker_global_topics 0
+# HELP krabka_broker_global_partitions Total number of topic partitions in the cluster metadata image (reported by active controller).
+# TYPE krabka_broker_global_partitions gauge
+krabka_broker_global_partitions 0
+# HELP krabka_broker_at_min_isr_partition_count Number of partitions whose in-sync replica count equals min.insync.replicas.
+# TYPE krabka_broker_at_min_isr_partition_count gauge
+krabka_broker_at_min_isr_partition_count 0
+# HELP krabka_broker_reassigning_partitions Number of partitions currently undergoing replica reassignment.
+# TYPE krabka_broker_reassigning_partitions gauge
+krabka_broker_reassigning_partitions 0
+# HELP krabka_broker_preferred_replica_imbalance Number of partitions whose current leader is not the preferred replica.
+# TYPE krabka_broker_preferred_replica_imbalance gauge
+krabka_broker_preferred_replica_imbalance 0
+# HELP krabka_broker_queued_requests Number of client requests currently queued awaiting execution.
+# TYPE krabka_broker_queued_requests gauge
+krabka_broker_queued_requests 0
+# HELP krabka_broker_queued_request_bytes Total bytes of client requests currently queued awaiting execution.
+# TYPE krabka_broker_queued_request_bytes gauge
+krabka_broker_queued_request_bytes 0
+# HELP krabka_broker_remote_copy_bytes Cumulative bytes successfully copied to remote storage per topic.
+# TYPE krabka_broker_remote_copy_bytes counter
+krabka_broker_remote_copy_bytes_total{topic="orders"} 0
+# HELP krabka_broker_remote_fetch_bytes Cumulative bytes served from remote storage per topic.
+# TYPE krabka_broker_remote_fetch_bytes counter
+krabka_broker_remote_fetch_bytes_total{topic="orders"} 0
+# HELP krabka_broker_remote_copy_requests Cumulative copy attempts to remote storage per topic.
+# TYPE krabka_broker_remote_copy_requests counter
+krabka_broker_remote_copy_requests_total{topic="orders"} 0
+# HELP krabka_broker_remote_fetch_requests Cumulative fetch attempts from remote storage per topic.
+# TYPE krabka_broker_remote_fetch_requests counter
+krabka_broker_remote_fetch_requests_total{topic="orders"} 0
+# HELP krabka_broker_remote_delete_requests Cumulative delete requests submitted to remote storage per topic.
+# TYPE krabka_broker_remote_delete_requests counter
+krabka_broker_remote_delete_requests_total{topic="orders"} 0
+# HELP krabka_broker_remote_copy_errors Cumulative failed remote copy attempts per topic.
+# TYPE krabka_broker_remote_copy_errors counter
+krabka_broker_remote_copy_errors_total{topic="orders"} 0
+# HELP krabka_broker_remote_fetch_errors Cumulative failed remote fetch attempts per topic.
+# TYPE krabka_broker_remote_fetch_errors counter
+krabka_broker_remote_fetch_errors_total{topic="orders"} 0
+# HELP krabka_broker_remote_delete_errors Cumulative failed remote delete attempts per topic.
+# TYPE krabka_broker_remote_delete_errors counter
+krabka_broker_remote_delete_errors_total{topic="orders"} 0
+# HELP krabka_broker_remote_copy_lag_bytes Bytes in eligible log segments pending remote copy per topic.
+# TYPE krabka_broker_remote_copy_lag_bytes gauge
+krabka_broker_remote_copy_lag_bytes{topic="orders"} 0
+# HELP krabka_broker_remote_copy_lag_segments Number of eligible log segments pending remote copy per topic.
+# TYPE krabka_broker_remote_copy_lag_segments gauge
+krabka_broker_remote_copy_lag_segments{topic="orders"} 0
+# HELP krabka_broker_remote_delete_lag_bytes Bytes in expired remote segments pending remote deletion per topic.
+# TYPE krabka_broker_remote_delete_lag_bytes gauge
+krabka_broker_remote_delete_lag_bytes{topic="orders"} 0
+# HELP krabka_broker_remote_delete_lag_segments Number of expired remote segments pending remote deletion per topic.
+# TYPE krabka_broker_remote_delete_lag_segments gauge
+krabka_broker_remote_delete_lag_segments{topic="orders"} 0
+# HELP krabka_broker_replication_throttled_bytes_out Outbound replication bytes throttled by leader replication quota.
+# TYPE krabka_broker_replication_throttled_bytes_out counter
+krabka_broker_replication_throttled_bytes_out_total 0
+# HELP krabka_broker_replication_throttled_bytes_in Inbound replication bytes throttled by follower replication quota.
+# TYPE krabka_broker_replication_throttled_bytes_in counter
+krabka_broker_replication_throttled_bytes_in_total 0
+# HELP krabka_broker_replication_throttle_sleeps Replication fetch requests delayed or rejected by replication quota.
+# TYPE krabka_broker_replication_throttle_sleeps counter
+krabka_broker_replication_throttle_sleeps_total 0
+# HELP krabka_broker_quota_entity_throttle_seconds Cumulative throttle duration in seconds applied per quota entity.
+# TYPE krabka_broker_quota_entity_throttle_seconds counter
+krabka_broker_quota_entity_throttle_seconds_total{quota_type="Produce",user="alice",client_id="producer-1"} 0.0
+# HELP krabka_broker_remote_log_reader_task_queue_size Cold-tier reads waiting for a slot in the bounded remote reader pool.
+# TYPE krabka_broker_remote_log_reader_task_queue_size gauge
+krabka_broker_remote_log_reader_task_queue_size 0
+# HELP krabka_broker_remote_log_reader_avg_idle_percent Percentage of the remote reader pool's slots that are currently free.
+# TYPE krabka_broker_remote_log_reader_avg_idle_percent gauge
+krabka_broker_remote_log_reader_avg_idle_percent 0.0
+# HELP krabka_broker_remote_log_reader_fetch_duration_seconds Time each cold-tier read spent holding a remote reader slot.
+# TYPE krabka_broker_remote_log_reader_fetch_duration_seconds histogram
+krabka_broker_remote_log_reader_fetch_duration_seconds_sum 0.0
+krabka_broker_remote_log_reader_fetch_duration_seconds_count 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.0001"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.0005"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.001"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.005"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.01"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.025"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.05"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.1"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.25"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.5"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="1.0"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="10.0"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="+Inf"} 0
+# HELP krabka_broker_remote_log_reader_rejected Cold-tier reads refused because the remote reader pool's pending queue was full.
+# TYPE krabka_broker_remote_log_reader_rejected counter
+krabka_broker_remote_log_reader_rejected_total 0
+# HELP krabka_broker_remote_index_cache_hits Remote segment index lookups served from the on-disk index cache.
+# TYPE krabka_broker_remote_index_cache_hits counter
+krabka_broker_remote_index_cache_hits_total 0
+# HELP krabka_broker_remote_index_cache_misses Remote segment index lookups that downloaded the index object.
+# TYPE krabka_broker_remote_index_cache_misses counter
+krabka_broker_remote_index_cache_misses_total 0
+# HELP krabka_broker_remote_index_cache_evictions Remote index cache entries dropped to stay inside the byte budget.
+# TYPE krabka_broker_remote_index_cache_evictions counter
+krabka_broker_remote_index_cache_evictions_total 0
+# HELP krabka_broker_remote_index_cache_bytes Bytes currently held by the remote index cache.
+# TYPE krabka_broker_remote_index_cache_bytes gauge
+krabka_broker_remote_index_cache_bytes 0
+# HELP krabka_broker_remote_index_cache_entries Entries currently held by the remote index cache.
+# TYPE krabka_broker_remote_index_cache_entries gauge
+krabka_broker_remote_index_cache_entries 0
 # EOF

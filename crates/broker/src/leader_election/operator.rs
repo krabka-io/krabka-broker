@@ -4,10 +4,10 @@
 //! off a broker that asked to shut down. Both are pure: the caller submits
 //! the returned record.
 
+use std::collections::HashSet;
+
 use krabka_metadata::PartitionRecord;
 use krabka_raft::NodeId;
-
-use crate::heartbeat::controller_state::ControllerLivenessState;
 
 #[cfg(test)]
 mod tests;
@@ -57,9 +57,13 @@ pub(crate) enum ElectError {
 /// `witnesses` is the set of witness nodes. A controlled shutdown must not
 /// hand leadership to a node that serves no client, so the drain target is
 /// always a data replica.
-pub(crate) async fn select_replacement_leader_for_shutdown(
+///
+/// `alive` is the set of broker ids leadership may move to. The drain runs on
+/// the controller, so the caller passes its heartbeat registry's
+/// [`alive_snapshot`](crate::heartbeat::controller_state::ControllerLivenessState::alive_snapshot).
+pub(crate) fn select_replacement_leader_for_shutdown(
     image: &krabka_metadata::MetadataImage,
-    liveness: &ControllerLivenessState,
+    alive: &HashSet<u64>,
     witnesses: &std::collections::HashSet<NodeId>,
     topic: &str,
     partition: i32,
@@ -76,7 +80,7 @@ pub(crate) async fn select_replacement_leader_for_shutdown(
         if n == shutting_down || witnesses.contains(&n) {
             continue;
         }
-        if liveness.is_alive(n.0).await {
+        if alive.contains(&n.0) {
             new_leader = Some(n);
             break;
         }
@@ -107,11 +111,20 @@ pub(crate) async fn select_replacement_leader_for_shutdown(
 /// `witnesses` is the set of witness nodes. No election of either type can
 /// give leadership to a witness. The caller builds the set once per scan.
 ///
+/// `alive` is the set of broker ids this election may elect, and the caller
+/// chooses where it comes from. The controller's own loops read their
+/// heartbeat registry. `ElectLeaders` cannot: `controllerId` names a rotating
+/// unfenced broker rather than the quorum leader, so an `AdminClient` sends
+/// the election to whichever broker that rotation last named, and only the
+/// controller keeps a registry. That path passes the replicated set from
+/// [`live_brokers`](crate::handlers::offline_replicas::live_brokers) instead,
+/// which every node computes the same way.
+///
 /// Pure: no I/O, no panics. The caller must submit the returned record
 /// through the controller.
-pub(crate) async fn select_new_leader_for_partition(
+pub(crate) fn select_new_leader_for_partition(
     image: &krabka_metadata::MetadataImage,
-    liveness: &ControllerLivenessState,
+    alive: &HashSet<u64>,
     witnesses: &std::collections::HashSet<NodeId>,
     topic: &str,
     partition: i32,
@@ -138,7 +151,7 @@ pub(crate) async fn select_new_leader_for_partition(
             if !pr.isr.contains(&preferred) {
                 return Err(ElectError::PreferredNotInIsr);
             }
-            if !liveness.is_alive(preferred.0).await {
+            if !alive.contains(&preferred.0) {
                 return Err(ElectError::PreferredNotAlive);
             }
             let (partition_epoch, leader_epoch) = crate::metadata_epoch::next_partition_change(
@@ -167,14 +180,14 @@ pub(crate) async fn select_new_leader_for_partition(
             // partition available, and it must not block the operator who
             // accepts the data loss.
             for &n in &pr.isr {
-                if !witnesses.contains(&n) && liveness.is_alive(n.0).await {
+                if !witnesses.contains(&n) && alive.contains(&n.0) {
                     return Err(ElectError::ElectionNotNeeded);
                 }
             }
             // Find the first alive replica that can serve clients, in or out
             // of ISR.
             for &n in &pr.replicas {
-                if !witnesses.contains(&n) && liveness.is_alive(n.0).await {
+                if !witnesses.contains(&n) && alive.contains(&n.0) {
                     let (partition_epoch, leader_epoch) =
                         crate::metadata_epoch::next_partition_change(
                             pr.partition_epoch,

@@ -4,7 +4,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
-use krabka_units::{ByteSize, Ratio, Time};
+use krabka_units::{ByteSize, Time};
 
 use crate::runtime_args::RuntimeArgs;
 
@@ -268,14 +268,6 @@ pub struct Args {
         value_parser = krabka_units::parse::positive_time
     )]
     pub leader_imbalance_check_interval: Option<Time>,
-
-    /// Minimum per-broker leader imbalance percentage before auto-rebalance acts.
-    #[arg(
-        long,
-        env = "KRABKA_LEADER_IMBALANCE_PER_BROKER",
-        value_parser = krabka_units::parse::ratio
-    )]
-    pub leader_imbalance_per_broker: Option<Ratio>,
 
     /// TLS cert/key reload polling interval. `0s` disables the watcher.
     #[arg(long, env = "KRABKA_TLS_RELOAD_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]

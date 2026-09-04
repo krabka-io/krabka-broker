@@ -104,25 +104,17 @@ fn runtime_policy_cli_rejects_invalid_and_accepts_valid_values() {
         assert!(Args::try_parse_from(args).is_ok() == accepted);
     }
 
-    let args = Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=101%"])
-        .expect("parse ratio");
-    assert!(
-        args.apply_runtime_to(&mut BrokerConfig::default(), None)
-            .is_err()
-    );
+    // KIP-460: the cluster-wide imbalance ratio is the ZooKeeper controller's
+    // gate, and the KRaft controller krabka follows has none. The flag is gone
+    // rather than accepted-and-ignored, so a start-up that still passes it
+    // fails loudly instead of quietly rebalancing on every tick.
+    assert!(Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=100%"]).is_err());
 
     let args = Args::try_parse_from(["krabka-broker", "--record-decompression-max-ratio=101"])
         .expect("parse positive ratio");
     assert!(
         args.apply_runtime_to(&mut BrokerConfig::default(), None)
             .is_err()
-    );
-
-    let args = Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=100%"])
-        .expect("parse ratio");
-    assert!(
-        args.apply_runtime_to(&mut BrokerConfig::default(), None)
-            .is_ok()
     );
 
     let args = Args::try_parse_from(["krabka-broker", "--metadata-snapshot-fetch-max=1073741825B"])
@@ -141,7 +133,6 @@ fn runtime_policy_cli_reads_krabka_environment() {
         [
             ("KRABKA_CLEANER_INTERVAL", Some("17ms")),
             ("KRABKA_SOCKET_REQUEST_MAX", Some("100MiB")),
-            ("KRABKA_LEADER_IMBALANCE_PER_BROKER", Some("10%")),
             ("KRABKA_METADATA_SNAPSHOT_FETCH_MAX", Some("512MiB")),
             ("KRABKA_CONTROLLER_HEARTBEAT_INTERVAL", Some("500ms")),
             ("KRABKA_CONTROLLER_FETCH_MISS_LIMIT", Some("7")),
@@ -166,7 +157,6 @@ fn runtime_policy_cli_reads_krabka_environment() {
             let args = Args::try_parse_from(["krabka-broker"]).expect("parse environment");
             assert!(args.runtime.cleaner_interval == Some(Time::from_millis(17)));
             assert!(args.runtime.socket_request_max == Some(krabka_units::mebibytes(100)));
-            assert!(args.leader_imbalance_per_broker == Some(krabka_units::fraction(0.1)));
             assert!(args.metadata_snapshot_fetch_max == Some(krabka_units::mebibytes(512)));
             assert!(args.controller_fetch_miss_limit == Some(7));
             assert!(args.metadata_raft_command_queue_capacity == Some(512));

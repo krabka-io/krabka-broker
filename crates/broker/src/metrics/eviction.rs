@@ -63,10 +63,34 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::{BrokerMetrics, PartitionLabel, SchemaRejectionLabel, TopicLabel};
+use super::{BrokerMetrics, PartitionLabel, QuotaType, SchemaRejectionLabel, TopicLabel};
 use crate::schema_validation::RejectReason;
 
 impl BrokerMetrics {
+    /// Releases the per-entity throttle series one expired quota bucket
+    /// published.
+    ///
+    /// A bucket materialises its series the first time that entity is
+    /// throttled, and `prometheus-client` never releases one on its own. The
+    /// quota-expiry sweep calls this so an inactive tenant's label set leaves
+    /// the `/metrics` body with its bucket, rather than staying in the body
+    /// for the life of the process. The label set is the one
+    /// `observe_quota_throttle_for_entity` builds, so a bucket that was never
+    /// throttled has no series and the removal is a no-op.
+    pub fn evict_quota_entity_series(
+        &self,
+        quota_type: QuotaType,
+        user: Option<String>,
+        client_id: Option<String>,
+    ) {
+        self.quota_entity_throttle_seconds_total
+            .remove(&crate::metrics::QuotaEntityLabel {
+                quota_type,
+                user,
+                client_id,
+            });
+    }
+
     /// Drop every series that any per-partition family carries for `label`.
     ///
     /// This is the one entry point for partition-series eviction: a caller
@@ -115,6 +139,22 @@ impl BrokerMetrics {
             &self.fetch_message_conversions,
             &self.barrier_markers_written_total,
             &self.topic_freeze_rejections,
+            &self.remote_copy_bytes_total,
+            &self.remote_fetch_bytes_total,
+            &self.remote_copy_requests_total,
+            &self.remote_fetch_requests_total,
+            &self.remote_delete_requests_total,
+            &self.remote_copy_errors_total,
+            &self.remote_fetch_errors_total,
+            &self.remote_delete_errors_total,
+        ] {
+            family.remove(&label);
+        }
+        for family in [
+            &self.remote_copy_lag_bytes,
+            &self.remote_copy_lag_segments,
+            &self.remote_delete_lag_bytes,
+            &self.remote_delete_lag_segments,
         ] {
             family.remove(&label);
         }

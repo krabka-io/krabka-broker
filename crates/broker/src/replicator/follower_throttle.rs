@@ -38,7 +38,14 @@ pub(super) fn follower_partition_fetch_cap(cfg: &Config) -> FetchThrottleDecisio
         .throttle_state
         .follower_in
         .try_consume(cfg.replication.fetch_max.bytes_u64());
+    // KIP-73: the measured follower-side throttled-replication rate, Kafka's
+    // `kafka.server:type=FollowerReplication,name=byte-rate`.
+    cfg.metrics.record_replication_throttled_in(granted);
     if granted == 0 {
+        // Nothing was left to grant, so this partition sits the round out
+        // entirely rather than fetching a capped amount. That refusal is what
+        // this counter records; there is no delay to observe.
+        cfg.metrics.record_replication_throttle_sleep();
         FetchThrottleDecision::Sleep
     } else {
         FetchThrottleDecision::Fetch(ByteSize::from_bytes(granted))

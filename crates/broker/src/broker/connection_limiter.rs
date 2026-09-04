@@ -30,6 +30,13 @@ pub(crate) struct ConnectionLimiter {
     per_ip: Arc<DashMap<IpAddr, usize>>,
 }
 
+/// The connection ceiling that refused an inbound connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectionLimit {
+    Global,
+    PerIp,
+}
+
 impl ConnectionLimiter {
     pub(super) fn new(max_connections: usize, max_connections_per_ip: usize) -> Self {
         Self {
@@ -42,10 +49,9 @@ impl ConnectionLimiter {
 
     /// Try to reserve a connection slot for `ip`. On success returns a
     /// [`ConnectionGuard`] that releases both the global and per-IP slot
-    /// on drop. Returns `None`, and reserves nothing, when either the
-    /// global or the per-IP cap is already reached. The caller then
-    /// closes the socket, which matches Kafka's silent-drop behavior.
-    pub(super) fn try_acquire(&self, ip: IpAddr) -> Option<ConnectionGuard> {
+    /// on drop. Returns `Err(ConnectionLimit)`, and reserves nothing, when either
+    /// the global or the per-IP cap is already reached.
+    pub(super) fn try_acquire(&self, ip: IpAddr) -> Result<ConnectionGuard, ConnectionLimit> {
         // Global cap. `fetch_update` keeps the increment atomic so two
         // concurrent accepts can't both slip past the ceiling.
         let global_ok = self
@@ -55,7 +61,7 @@ impl ConnectionLimiter {
             })
             .is_ok();
         if !global_ok {
-            return None;
+            return Err(ConnectionLimit::Global);
         }
         // Per-IP cap. The DashMap entry lock serializes the read-modify
         // on a single IP. On rejection we must undo the global reserve.
@@ -63,11 +69,11 @@ impl ConnectionLimiter {
         if *entry >= self.max_connections_per_ip {
             drop(entry);
             self.total.fetch_sub(1, Ordering::AcqRel);
-            return None;
+            return Err(ConnectionLimit::PerIp);
         }
         *entry += 1;
         drop(entry);
-        Some(ConnectionGuard {
+        Ok(ConnectionGuard {
             limiter: self.clone(),
             ip,
         })
@@ -153,7 +159,7 @@ mod tests {
         let _g = limiter.try_acquire(a).expect("first connection accepted");
         // Global ceiling of 1 reached — a different IP is still rejected,
         // and the rejection reserves nothing (per-IP entry not created).
-        check!(limiter.try_acquire(b).is_none());
+        check!(limiter.try_acquire(b).err() == Some(ConnectionLimit::Global));
         check!(limiter.total() == 1);
         check!(limiter.per_ip_count(b) == 0);
         check!(limiter.per_ip.get(&b).is_none());
@@ -167,7 +173,7 @@ mod tests {
         let _g1 = limiter.try_acquire(a).expect("first from a");
         // Second from the same IP rejected; global must be rolled back so
         // the count reflects only the one live connection.
-        check!(limiter.try_acquire(a).is_none());
+        check!(limiter.try_acquire(a).err() == Some(ConnectionLimit::PerIp));
         check!(limiter.total() == 1);
         check!(limiter.per_ip_count(a) == 1);
         // A different IP is still under its own per-IP ceiling.

@@ -1,9 +1,16 @@
-//! Interpretation of one `Fetch` response.
+//! Interpretation of one partition row of a `Fetch` response.
 //!
-//! The module locates this task's partition in the response, appends the
-//! records it carries, and maps every Kafka error code to the next action of
-//! the fetch loop, including the KIP-320 in-band divergence signal and the
-//! backoffs that keep a persistent error from hot-spinning the CPU.
+//! One request now covers every partition a fetcher follows on one leader, so
+//! the response carries a row per partition rather than exactly one row. This
+//! module handles one row: it applies the identity, epoch and target checks
+//! that the single-row path always applied, appends the records the row
+//! carries, and maps every Kafka error code to what the fetcher should do with
+//! that partition -- including the KIP-320 in-band divergence signal.
+//!
+//! A row never sleeps. A backoff is the fetcher's, not one partition's: a
+//! sleep taken here would stall every other partition sharing the round, which
+//! is the cost the batching exists to remove. A row that wants one says so
+//! with [`RowAction::Backoff`] and the loop applies the longest of them once.
 
 use krabka_log::Offset;
 use krabka_protocol::{
@@ -11,7 +18,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::RecordsPayload,
 };
-use krabka_units::convert::TimeExt;
+use krabka_units::Time;
 use krabka_verified::ReplicaFetchMutation;
 use tracing::{info, warn};
 
@@ -21,32 +28,39 @@ use super::{
 };
 use crate::codes;
 
-/// Outcome of one fetch round.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LoopAction {
+/// What the fetcher should do with one partition after reading its row.
+///
+/// It is not `Eq`: [`RowAction::Backoff`] carries a [`Time`], whose `f64`
+/// storage is only `PartialEq`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum RowAction {
+    /// Keep following the partition and fetch it again next round.
     Continue,
-    StopNotLeader,
+    /// Stop following the partition. The leader disowned it, or the response
+    /// was fenced against a target this follower no longer has. The next
+    /// supervisor reconcile decides where it belongs.
+    Drop,
+    /// Keep following the partition, but hold the whole round back first, so a
+    /// persistent error does not hot-spin the fetch loop.
+    Backoff(Time),
 }
 
+/// Applies one partition row of a response against the partition it names.
+///
+/// `part_resp` is taken by *mutable* reference so the record batches can be
+/// moved out of it (via `records.take()`) and handed to the writer without a
+/// deep clone per batch.
+///
+/// `request_leader_epoch` is the epoch this follower sent for *this* partition
+/// in the request the row answers. The metadata image may advance while a
+/// request is in flight, and a batched request carries a different epoch per
+/// row, so the fence is per row and not per response.
 // KIP-320 in-band truncation + KIP-101 epoch fence add match arms
-pub(super) async fn handle_response(
-    mut resp: FetchResponse,
+pub(super) async fn handle_partition_response(
+    part_resp: &mut PartitionData,
     cfg: &Config,
     request_leader_epoch: i32,
-) -> LoopAction {
-    // The replicator only ever requests one (topic, partition) per Fetch.
-    // Match the field carried by the negotiated version (`topic` at v <= 12,
-    // `topic_id` at v >= 13). If both are populated, both must agree. Require
-    // one unique partition row so a contradictory or duplicated response is
-    // side-effect free.
-    //
-    // Take `resp` BY VALUE and resolve the matching partition by *mutable*
-    // reference so the record batches can be moved out (via `records.take()`)
-    // and handed to the writer without a deep clone per batch.
-    let Some(part_resp) = find_partition_response(&mut resp, cfg) else {
-        return LoopAction::Continue;
-    };
-
+) -> RowAction {
     let target_matches = !replication_target_changed(cfg);
     let reported_leader = &part_resp.current_leader;
     let reported_leader_absent =
@@ -76,7 +90,7 @@ pub(super) async fn handle_response(
             reported_leader_epoch = reported_leader.leader_epoch,
             "replicator: discarding fenced Fetch response"
         );
-        return LoopAction::StopNotLeader;
+        return RowAction::Drop;
     }
 
     match mutation {
@@ -90,7 +104,7 @@ pub(super) async fn handle_response(
             if replication_target_changed(cfg) {
                 warn!(topic = %cfg.topic, partition = cfg.partition.get(),
                     "replicator: skipping diverging_epoch truncation from stale target");
-                return LoopAction::StopNotLeader;
+                return RowAction::Drop;
             }
             let end_offset = part_resp.diverging_epoch.end_offset;
             if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
@@ -102,7 +116,7 @@ pub(super) async fn handle_response(
                     Err(error) => {
                         warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
                             "replicator: skipping diverging_epoch truncation from stale local target");
-                        return LoopAction::StopNotLeader;
+                        return RowAction::Drop;
                     }
                 };
                 // Wrap the wire `i64` into `Offset` for the log-layer call.
@@ -131,14 +145,14 @@ pub(super) async fn handle_response(
                     ),
                 }
             }
-            LoopAction::Continue
+            RowAction::Continue
         }
 
         ReplicaFetchMutation::Append => {
             let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
                 warn!(topic = %cfg.topic, partition = cfg.partition.get(),
                     "replicator: local partition vanished between fetches");
-                return LoopAction::Continue;
+                return RowAction::Continue;
             };
             let _target_guard = match part
                 .lock_replication_target(task_replication_target(cfg))
@@ -148,7 +162,7 @@ pub(super) async fn handle_response(
                 Err(error) => {
                     warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
                         "replicator: discarding response for stale local target");
-                    return LoopAction::StopNotLeader;
+                    return RowAction::Drop;
                 }
             };
             // Move the parsed v2 batches out of the owned response so each
@@ -160,7 +174,7 @@ pub(super) async fn handle_response(
             if let Some(RecordsPayload::V2(batches)) = part_resp.records.take() {
                 for batch in batches {
                     if replication_target_changed(cfg) {
-                        return LoopAction::StopNotLeader;
+                        return RowAction::Drop;
                     }
                     // Capture byte count before the move into replicate_batch
                     // so the metrics update only fires on a successful append.
@@ -200,10 +214,10 @@ pub(super) async fn handle_response(
             // served from this follower are bounded correctly. Done on every
             // successful response, including empty ones. Wrap the wire `i64`.
             if replication_target_changed(cfg) {
-                return LoopAction::StopNotLeader;
+                return RowAction::Drop;
             }
             part.set_follower_hw(Offset(part_resp.high_watermark)).await;
-            LoopAction::Continue
+            RowAction::Continue
         }
 
         ReplicaFetchMutation::Retry => match part_resp.error_code {
@@ -211,10 +225,9 @@ pub(super) async fn handle_response(
             codes::UNKNOWN_TOPIC_OR_PARTITION => {
                 // Leader hasn't materialized its side yet
                 // (CreateTopics-vs-replicator race).
-                tokio::time::sleep(cfg.replication.unknown_topic_retry_delay.to_std()).await;
-                LoopAction::Continue
+                RowAction::Backoff(cfg.replication.unknown_topic_retry_delay)
             }
-            codes::NOT_LEADER_OR_FOLLOWER => LoopAction::StopNotLeader,
+            codes::NOT_LEADER_OR_FOLLOWER => RowAction::Drop,
             codes::FENCED_LEADER_EPOCH | codes::UNKNOWN_LEADER_EPOCH => {
                 // Stale-response guard: if the target changed, this
                 // follower-replicator is stale — STOP it. Without this it neither
@@ -226,7 +239,7 @@ pub(super) async fn handle_response(
                 if replication_target_changed(cfg) {
                     warn!(topic = %cfg.topic, partition = cfg.partition.get(),
                     "replicator: stopping on fenced epoch from stale target");
-                    return LoopAction::StopNotLeader;
+                    return RowAction::Drop;
                 }
                 if part_resp.error_code == codes::FENCED_LEADER_EPOCH {
                     warn!(
@@ -254,19 +267,14 @@ pub(super) async fn handle_response(
                 // Back off before re-fetching so a persistent fence (e.g. our
                 // leader_epoch hasn't caught up to the new leader's yet) doesn't
                 // hot-spin the CPU between fetch and fence.
-                tokio::select! {
-                    () = cfg.shutdown.cancelled() => return LoopAction::StopNotLeader,
-                    () = tokio::time::sleep(cfg.replication.epoch_fence_backoff.to_std()) => {}
-                }
-                LoopAction::Continue
+                RowAction::Backoff(cfg.replication.epoch_fence_backoff)
             }
             other => {
                 warn!(
                     error_code = other,
                     "replicator: unexpected fetch error_code"
                 );
-                tokio::time::sleep(cfg.replication.unexpected_error_backoff.to_std()).await;
-                LoopAction::Continue
+                RowAction::Backoff(cfg.replication.unexpected_error_backoff)
             }
         },
 
@@ -274,29 +282,111 @@ pub(super) async fn handle_response(
     }
 }
 
-fn find_partition_response<'a>(
-    response: &'a mut FetchResponse,
-    cfg: &Config,
-) -> Option<&'a mut PartitionData> {
-    let mut found = None;
-    for (topic_index, topic) in response.responses.iter().enumerate() {
-        if !fetch_topic_identity_matches(topic, cfg) {
+/// One partition this round asked about, and the epoch it asked under.
+pub(super) struct RoundEntry<'round> {
+    pub(super) cfg: &'round Config,
+    /// The `current_leader_epoch` this follower sent for this partition. The
+    /// metadata image can advance while the request is in flight, so the fence
+    /// is against what was sent and not against what is current.
+    pub(super) request_leader_epoch: i32,
+}
+
+/// Applies one response to every partition of the round that asked for it.
+///
+/// Returns one action per entry of `round`, in the same order.
+///
+/// A partition the response does not mention gets [`RowAction::Continue`]: on
+/// a KIP-227 incremental fetch the leader answers only with the partitions
+/// whose state changed, so silence is the normal answer for a caught-up
+/// partition and not an error.
+///
+/// The response is indexed once, so a round covering ten thousand partitions
+/// costs one pass over the rows rather than one scan per partition. A
+/// partition named by two rows resolves to neither, which is what the
+/// single-row path did: a contradictory response is side-effect free.
+pub(super) async fn apply_response(
+    response: &mut FetchResponse,
+    round: &[RoundEntry<'_>],
+) -> Vec<RowAction> {
+    let index = ResponseIndex::of(response);
+    let mut actions = Vec::with_capacity(round.len());
+    for entry in round {
+        let Some(location) = index.locate(response, entry.cfg) else {
+            actions.push(RowAction::Continue);
             continue;
-        }
-        for (partition_index, partition) in topic.partitions.iter().enumerate() {
-            if partition.partition_index == cfg.partition
-                && found.replace((topic_index, partition_index)).is_some()
-            {
-                return None;
+        };
+        let Some(part_resp) = response
+            .responses
+            .get_mut(location.0)
+            .and_then(|topic| topic.partitions.get_mut(location.1))
+        else {
+            actions.push(RowAction::Continue);
+            continue;
+        };
+        actions.push(
+            handle_partition_response(part_resp, entry.cfg, entry.request_leader_epoch).await,
+        );
+    }
+    actions
+}
+
+/// Where each `(topic identity, partition)` sits in one response.
+///
+/// A key that two rows claim maps to `None`, so the partition it names is left
+/// untouched.
+#[derive(Default)]
+struct ResponseIndex {
+    by_id: std::collections::HashMap<(WireUuid, i32), Option<(usize, usize)>>,
+    by_name: std::collections::HashMap<(String, i32), Option<(usize, usize)>>,
+}
+
+impl ResponseIndex {
+    fn of(response: &FetchResponse) -> Self {
+        let mut index = Self::default();
+        for (topic_index, topic) in response.responses.iter().enumerate() {
+            for (partition_index, partition) in topic.partitions.iter().enumerate() {
+                let at = (topic_index, partition_index);
+                if topic.topic_id != WireUuid::ZERO {
+                    index
+                        .by_id
+                        .entry((topic.topic_id, partition.partition_index))
+                        .and_modify(|slot| *slot = None)
+                        .or_insert(Some(at));
+                }
+                if !topic.topic.is_empty() {
+                    index
+                        .by_name
+                        .entry((topic.topic.clone(), partition.partition_index))
+                        .and_modify(|slot| *slot = None)
+                        .or_insert(Some(at));
+                }
             }
         }
+        index
     }
-    let (topic_index, partition_index) = found?;
-    response
-        .responses
-        .get_mut(topic_index)?
-        .partitions
-        .get_mut(partition_index)
+
+    /// The row that answers `cfg`, if exactly one does and its identity
+    /// matches on every field the negotiated version populated.
+    fn locate(&self, response: &FetchResponse, cfg: &Config) -> Option<(usize, usize)> {
+        let by_id = (cfg.topic_id != WireUuid::ZERO)
+            .then(|| self.by_id.get(&(cfg.topic_id, cfg.partition.get())))
+            .flatten();
+        let by_name = self
+            .by_name
+            .get(&(cfg.topic.to_string(), cfg.partition.get()));
+        // A key claimed twice under either identity is ambiguous under both:
+        // the row it would resolve to is one of a contradictory pair.
+        let at = match (by_id, by_name) {
+            (Some(Some(at)), None) | (None, Some(Some(at))) => *at,
+            (Some(Some(id_at)), Some(Some(name_at))) if id_at == name_at => *id_at,
+            // Either identity claimed twice, the two identities disagreeing
+            // about which row answers, or no row at all: none of them names
+            // one unambiguous row, and none of them may mutate anything.
+            _ => return None,
+        };
+        let topic = response.responses.get(at.0)?;
+        fetch_topic_identity_matches(topic, cfg).then_some(at)
+    }
 }
 
 fn fetch_topic_identity_matches(topic: &FetchableTopicResponse, cfg: &Config) -> bool {
@@ -305,6 +395,27 @@ fn fetch_topic_identity_matches(topic: &FetchableTopicResponse, cfg: &Config) ->
     (name_present || id_present)
         && (!name_present || topic.topic.as_str() == &*cfg.topic)
         && (!id_present || topic.topic_id == cfg.topic_id)
+}
+
+/// Applies one response to one partition, as the single-partition path used
+/// to. It is the batched path with a round of one, so the tests below still
+/// exercise the identity, epoch and target checks exactly as they run in
+/// production.
+#[cfg(test)]
+pub(super) async fn handle_response(
+    mut resp: FetchResponse,
+    cfg: &Config,
+    request_leader_epoch: i32,
+) -> RowAction {
+    let round = [RoundEntry {
+        cfg,
+        request_leader_epoch,
+    }];
+    apply_response(&mut resp, &round)
+        .await
+        .into_iter()
+        .next()
+        .expect("a round of one answers one action")
 }
 
 #[cfg(test)]
@@ -338,8 +449,11 @@ mod tests {
         }
     }
 
+    /// A row that wants a backoff says so and returns; the sleep is the
+    /// fetcher's, because a sleep taken here would hold back every other
+    /// partition sharing the round.
     #[tokio::test(start_paused = true)]
-    async fn unexpected_error_uses_configured_backoff() {
+    async fn unexpected_error_asks_for_the_configured_backoff() {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         cfg.replication.unexpected_error_backoff = secs(37);
         let response = fetch_response(
@@ -348,17 +462,14 @@ mod tests {
             partition_response(PARTITION, codes::INVALID_REQUEST),
         );
 
-        let response_task =
-            tokio::spawn(async move { handle_response(response, &cfg, cfg.leader_epoch.0).await });
-        tokio::task::yield_now().await;
-        assert!(!response_task.is_finished());
+        let started = tokio::time::Instant::now();
+        let action = handle_response(response, &cfg, cfg.leader_epoch.0).await;
 
-        tokio::time::advance(Duration::from_secs(36)).await;
-        tokio::task::yield_now().await;
-        assert!(!response_task.is_finished());
-
-        tokio::time::advance(Duration::from_secs(1)).await;
-        assert!(response_task.await.unwrap() == LoopAction::Continue);
+        assert!(action == RowAction::Backoff(secs(37)));
+        assert!(
+            started.elapsed() == Duration::ZERO,
+            "the row must not sleep on behalf of the round"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -375,17 +486,9 @@ mod tests {
             partition_response(PARTITION, codes::UNKNOWN_LEADER_EPOCH),
         );
 
-        let response_task =
-            tokio::spawn(async move { handle_response(response, &cfg, cfg.leader_epoch.0).await });
-        tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(37)).await;
-        tokio::task::yield_now().await;
+        let action = handle_response(response, &cfg, cfg.leader_epoch.0).await;
 
-        assert!(
-            response_task.is_finished(),
-            "UNKNOWN_LEADER_EPOCH attempted an OffsetForLeaderEpoch connection"
-        );
-        assert!(response_task.await.unwrap() == LoopAction::Continue);
+        assert!(action == RowAction::Backoff(secs(37)));
         assert!(listener.accept().is_err(), "unexpected epoch lookup");
     }
 
@@ -398,7 +501,7 @@ mod tests {
             partition_response(PARTITION, codes::NOT_LEADER_OR_FOLLOWER),
         );
 
-        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == LoopAction::StopNotLeader);
+        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Drop);
     }
 
     #[tokio::test]
@@ -410,7 +513,7 @@ mod tests {
             partition_response(PARTITION, codes::NOT_LEADER_OR_FOLLOWER),
         );
 
-        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == LoopAction::StopNotLeader);
+        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Drop);
     }
 
     #[tokio::test]
@@ -429,7 +532,7 @@ mod tests {
                 partition_response(PARTITION, codes::NOT_LEADER_OR_FOLLOWER),
             ),
         ] {
-            assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == LoopAction::Continue);
+            assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
         }
 
         let mut duplicate = fetch_response(
@@ -440,7 +543,7 @@ mod tests {
         duplicate.responses[0]
             .partitions
             .push(partition_response(PARTITION, codes::NOT_LEADER_OR_FOLLOWER));
-        assert!(handle_response(duplicate, &cfg, cfg.leader_epoch.0).await == LoopAction::Continue);
+        assert!(handle_response(duplicate, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
     }
 
     #[tokio::test]
@@ -474,9 +577,7 @@ mod tests {
                 },
             );
 
-            assert!(
-                handle_response(resp, &cfg, cfg.leader_epoch.0).await == LoopAction::StopNotLeader
-            );
+            assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Drop);
         }
     }
 
@@ -503,9 +604,7 @@ mod tests {
             },
         );
 
-        assert!(
-            handle_response(resp, &cfg, cfg.leader_epoch.0 - 1).await == LoopAction::StopNotLeader
-        );
+        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0 - 1).await == RowAction::Drop);
         assert!(part.log_end_offset() == Offset(1));
     }
 
@@ -525,7 +624,7 @@ mod tests {
                 ..PartitionData::default()
             },
         );
-        assert!(handle_response(bad, &cfg, cfg.leader_epoch.0).await == LoopAction::Continue);
+        assert!(handle_response(bad, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
         assert!(part.log_end_offset() == Offset(0));
 
         let retry = fetch_response(
@@ -538,7 +637,7 @@ mod tests {
                 ..PartitionData::default()
             },
         );
-        assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == LoopAction::Continue);
+        assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
         assert!(part.log_end_offset() == Offset(1));
     }
 
@@ -551,7 +650,7 @@ mod tests {
             partition_response(PARTITION + 1, codes::NOT_LEADER_OR_FOLLOWER),
         );
 
-        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == LoopAction::Continue);
+        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
     }
 
     #[tokio::test]
@@ -572,7 +671,7 @@ mod tests {
             },
         );
 
-        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == LoopAction::StopNotLeader);
+        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Drop);
     }
 
     #[tokio::test]
@@ -584,6 +683,6 @@ mod tests {
             partition_response(PARTITION, codes::OFFSET_OUT_OF_RANGE),
         );
 
-        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == LoopAction::StopNotLeader);
+        assert!(handle_response(resp, &cfg, cfg.leader_epoch.0).await == RowAction::Drop);
     }
 }

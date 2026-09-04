@@ -25,9 +25,11 @@ in the broker configuration.
 
 1. Check that every broker in the preferred site is up and unfenced. A fenced
    broker cannot take leadership back.
-2. Check `leader_imbalance_check_interval` and `leader_imbalance_per_broker`.
-   The automatic preferred-replica election runs only when the imbalance on a
-   broker passes the ratio. A small drift can sit below it.
+2. Check `leader_imbalance_check_interval`. It is how long a drift can sit
+   before the next scan sees it. There is no imbalance ratio to cross: the
+   scan restores every partition whose preferred replica is back in the ISR,
+   capped at a thousand elections per tick, so a very large cluster takes
+   several ticks to finish.
 3. Check `krabka_broker_under_replicated_partitions` in the preferred site. A
    replica that is not in the ISR cannot be elected.
 

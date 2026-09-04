@@ -18,6 +18,8 @@ pub(super) const DEFAULT_KERBEROS_SERVICE_NAME: &str = "kafka";
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileGssapiConfig {
+    /// Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI
+    /// accept path reads it to answer a client's ticket.
     pub keytab_path: std::path::PathBuf,
     /// `sasl.kerberos.service.name`. Defaults to `"kafka"` when omitted.
     pub service_name: Option<String>,
@@ -42,9 +44,16 @@ pub struct FileGssapiConfig {
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum FileInterBrokerCredentials {
     Gssapi {
+        /// Keytab that holds the key for `client_principal`.
         keytab_path: std::path::PathBuf,
+        /// Kerberos principal this broker authenticates as when it dials a
+        /// peer.
         client_principal: String,
+        /// The peer's `sasl.kerberos.service.name`. Defaults to `"kafka"`
+        /// when omitted.
         service_name: Option<String>,
+        /// KDC endpoint (for example `tcp://kdc:88`) used to obtain the
+        /// service ticket, bypassing krb5.conf discovery.
         kdc_url: String,
     },
     #[serde(rename = "oauth-bearer")]

@@ -21,6 +21,7 @@ use super::{
     now_ms,
     rlmm::rlmm_mutate,
 };
+use crate::metrics::RemoteTierPath;
 
 /// What one [`copy_one`] attempt left behind.
 #[derive(Debug)]
@@ -47,6 +48,38 @@ pub(super) enum CopyOutcome {
 /// already says where the manifest was meant to sit, and a durable metadata
 /// manager shows that even if the broker dies mid-copy.
 pub(super) async fn copy_one(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    leader_epoch: krabka_ids::LeaderEpoch,
+    ex: &SegmentExport,
+    chain: ChainPosition,
+) -> CopyOutcome {
+    // KIP-405's `RemoteCopyRequestsPerSec` and its errors and bytes twins.
+    // The attempt is counted here rather than at each of the copy's many
+    // return points, so the error count is exactly the attempts that did not
+    // finish and the two divide into a failure rate.
+    tier.metrics
+        .record_remote_request(RemoteTierPath::Copy, &tp.topic);
+    let outcome = copy_one_inner(tier, tp, broker_id, leader_epoch, ex, chain).await;
+    match outcome {
+        // The bytes are counted on a *finished* copy, not on the backend PUT
+        // returning: a copy whose metadata never reached `CopySegmentFinished`
+        // moved bytes no consumer can read, and counting those would say the
+        // tier is keeping up when it is not.
+        CopyOutcome::Copied { .. } => {
+            tier.metrics
+                .record_remote_bytes(RemoteTierPath::Copy, &tp.topic, ex.size.bytes_u64());
+        }
+        CopyOutcome::Failed => {
+            tier.metrics
+                .record_remote_error(RemoteTierPath::Copy, &tp.topic);
+        }
+    }
+    outcome
+}
+
+async fn copy_one_inner(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
@@ -642,11 +675,13 @@ mod tests {
             let rlmm: Arc<dyn RemoteLogMetadataManager> =
                 Arc::new(InmemoryRemoteLogMetadataManager::new());
             let metrics = BrokerMetrics::new();
+            let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
             let tier = RemoteTier {
                 archive: chain.archive(),
                 rsm: &rsm,
                 rlmm: &rlmm,
                 metrics: &metrics,
+                index_cache: &index_cache,
             };
 
             copy_one(

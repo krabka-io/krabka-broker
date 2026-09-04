@@ -22,6 +22,47 @@ pub(super) fn controller_listener(bound: std::net::SocketAddr) -> Listener {
     }
 }
 
+/// The controller endpoint a voter RPC should publish for this node.
+///
+/// A controller bound to a concrete address publishes that address: it is what
+/// the socket actually answers on, and it is what the operator chose.
+///
+/// A controller bound to `0.0.0.0` has no address of its own, and
+/// [`controller_listener`] falls back to a guess -- `HOSTNAME`, or
+/// `127.0.0.1`. Publishing that guess is worse than publishing nothing: it
+/// replaces a committed endpoint every other node can reach with one that
+/// resolves, for whoever reads it, back to the reader. `advertised` -- this
+/// node's own `controller.quorum.voters` entry, which is how the rest of the
+/// cluster is configured to reach it -- is the address to publish instead, and
+/// only that case takes it.
+pub(super) fn advertised_controller_listener(
+    advertised: Option<&str>,
+    bound: std::net::SocketAddr,
+) -> Listener {
+    if !bound.ip().is_unspecified() {
+        return controller_listener(bound);
+    }
+    let Some((host, port)) = advertised.and_then(split_host_port) else {
+        return controller_listener(bound);
+    };
+    Listener {
+        name: "CONTROLLER".to_string(),
+        host,
+        port,
+        ..Default::default()
+    }
+}
+
+/// Splits a `host:port` endpoint, taking the port after the last colon so an
+/// unbracketed IPv6 literal does not split in the middle of an address.
+fn split_host_port(endpoint: &str) -> Option<(String, u16)> {
+    let (host, port) = endpoint.rsplit_once(':')?;
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_string(), port.parse().ok()?))
+}
+
 pub(super) fn select_bootstrap_server(bootstrap_servers: &[String], attempt: usize) -> &str {
     &bootstrap_servers[attempt % bootstrap_servers.len()]
 }
@@ -58,6 +99,57 @@ mod tests {
         assert2::assert!((listener.name) == ("CONTROLLER"));
         assert2::assert!((listener.host) == ("192.0.2.10"));
         assert2::assert!((listener.port) == (19093));
+    }
+
+    /// A concrete bind is the address the socket answers on, so it is
+    /// published even when the node also carries an advertised endpoint.
+    #[test]
+    fn a_bound_controller_publishes_the_address_it_answers_on() {
+        let listener = advertised_controller_listener(
+            Some("controller.example:19093"),
+            "192.0.2.10:19093".parse().unwrap(),
+        );
+
+        assert!((listener.host.as_str(), listener.port) == ("192.0.2.10", 19093));
+    }
+
+    /// A wildcard bind has no address of its own, so the configured endpoint
+    /// is published rather than the `127.0.0.1` guess.
+    #[test]
+    fn a_wildcard_bind_publishes_the_configured_endpoint() {
+        let listener = advertised_controller_listener(
+            Some("controller.example:19093"),
+            "0.0.0.0:19093".parse().unwrap(),
+        );
+
+        assert!(
+            (
+                listener.name.as_str(),
+                listener.host.as_str(),
+                listener.port
+            ) == ("CONTROLLER", "controller.example", 19093)
+        );
+    }
+
+    /// Nothing configured leaves the guess as the only answer there is.
+    #[test]
+    fn a_wildcard_bind_with_nothing_configured_falls_back_to_the_bound_listener() {
+        let bound = "0.0.0.0:19093".parse().unwrap();
+
+        assert!(advertised_controller_listener(None, bound) == controller_listener(bound));
+    }
+
+    /// An endpoint the port cannot be read out of is no better than nothing.
+    #[test]
+    fn an_unparseable_advertised_endpoint_falls_back_to_the_bound_listener() {
+        let bound = "0.0.0.0:19093".parse().unwrap();
+
+        for endpoint in ["controller.example", "controller.example:", ":19093"] {
+            assert!(
+                advertised_controller_listener(Some(endpoint), bound) == controller_listener(bound),
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]

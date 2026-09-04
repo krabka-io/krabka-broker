@@ -33,6 +33,61 @@ fn remote_batch_is_deliverable(
     krabka_log::batch_is_deliverable(policy, uncertainty_ms, max_timestamp, now_ms)
 }
 
+/// Records how long a cold-tier read held its reader slot, on whichever of
+/// `try_remote_read`'s many exits the read leaves by.
+///
+/// A guard rather than a call at the end because the read returns early on a
+/// held-back batch, on an aborted-transaction failure and on every remote
+/// error, and a slot the reader held is a slot the pool could not hand out
+/// however the read ended.
+struct ReadTimer<'metrics> {
+    metrics: &'metrics crate::metrics::BrokerMetrics,
+    started: std::time::Instant,
+}
+
+impl<'metrics> ReadTimer<'metrics> {
+    fn started(metrics: &'metrics crate::metrics::BrokerMetrics) -> Self {
+        Self {
+            metrics,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for ReadTimer<'_> {
+    fn drop(&mut self) {
+        self.metrics
+            .observe_remote_reader_fetch(self.started.elapsed());
+    }
+}
+
+/// Answers one partition of a `Fetch` that the bounded reader pool refused.
+///
+/// Kafka's `ReplicaManager.processRemoteFetches` catches the executor's
+/// `RejectedExecutionException` and turns it into a `LogReadResult` carrying
+/// that exception, which `Errors.forException` has no mapping for, so the
+/// partition goes out as `UNKNOWN_SERVER_ERROR`. A client sees a retryable
+/// server-side failure on that partition and the rest of the request is
+/// unaffected -- which is the whole point of the cap: the local paths keep
+/// their resources instead of queueing behind the cold tier.
+///
+/// Returns zero served bytes, because the partition carries an error and no
+/// records.
+fn reject_saturated(p: &mut PendingRead) -> usize {
+    tracing::warn!(
+        topic = %p.topic_name,
+        partition = p.partition_index,
+        offset = p.fetch_offset,
+        "remote-reader: reader pool saturated; refusing the cold-tier read"
+    );
+    p.out.error_code = codes::UNKNOWN_SERVER_ERROR;
+    p.out.records = None;
+    if p.read_committed {
+        p.out.aborted_transactions = Some(Vec::new());
+    }
+    0
+}
+
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
 /// local log returned `OFFSET_OUT_OF_RANGE` and the topic has
 /// `remote.storage.enable=true`.
@@ -45,6 +100,12 @@ fn remote_batch_is_deliverable(
 /// serves whole batches with no offset limit, and it is the one read path the
 /// local delivery watermark cannot bound, so it checks the batch's own
 /// activation time instead. See [`remote_batch_is_deliverable`].
+///
+/// The whole cold read -- the batch and, for a read-committed fetch, the
+/// segment's aborted-transaction list -- runs under one permit from the
+/// reader's bounded pool, exactly as Kafka runs one `RemoteLogReader` task per
+/// remote fetch. A read that arrives with the pool's pending queue already
+/// full is refused: see [`reject_saturated`].
 pub(super) async fn try_remote_read(
     broker: &Broker,
     p: &mut PendingRead,
@@ -64,6 +125,13 @@ pub(super) async fn try_remote_read(
     if !remote_storage_enable {
         return None;
     }
+    // KIP-405's `RemoteFetchRequestsPerSec`. Counted once this partition is
+    // known to be tiered, so a cluster with no tiered topic materialises no
+    // series, and before the reader pool can refuse the read, so a refusal
+    // still shows up as an attempt.
+    broker
+        .metrics
+        .record_remote_request(crate::metrics::RemoteTierPath::Fetch, &p.topic_name);
     // KIP-405: the remote tier serves `[log_start, local_log_start)` and
     // nothing below. An offset under the global floor was deleted by
     // `DeleteRecords` or by remote retention, so it stays
@@ -111,6 +179,16 @@ pub(super) async fn try_remote_read(
             .unwrap_or(current_leader_epoch)
     };
     let max_bytes = usize::try_from(p.max_bytes.max(0)).unwrap_or(0);
+
+    // KIP-405's `remote.log.reader.threads` / `.max.pending.tasks` cap. The
+    // permit is held for the batch read and the `.txnindex` read below, so one
+    // cold fetch occupies one reader slot however many objects it touches.
+    let Ok(_permit) = reader.pool.acquire().await else {
+        return Some(reject_saturated(p));
+    };
+    // Kafka's `RemoteLogReaderFetchRateAndTimeMs` measures the reader task,
+    // which is exactly the span this permit covers.
+    let _read_timer = ReadTimer::started(&broker.metrics);
 
     match reader
         .fetch_batch(&tp, leader_epoch, p.fetch_offset, max_bytes)
@@ -199,6 +277,13 @@ pub(super) async fn try_remote_read(
 
             p.out.error_code = codes::NONE;
             p.out.records = Some(batch.into());
+            // KIP-405's `RemoteFetchBytesPerSec`: what the tier actually
+            // served, which is the batch that is about to go out.
+            broker.metrics.record_remote_bytes(
+                crate::metrics::RemoteTierPath::Fetch,
+                &p.topic_name,
+                u64::try_from(bytes_est).unwrap_or(0),
+            );
             Some(bytes_est)
         }
         Ok(None) => None,
@@ -218,6 +303,13 @@ pub(super) async fn try_remote_read(
             None
         }
         Err(e) => {
+            // KIP-405's `RemoteFetchErrorsPerSec`. `NotReady` above is not one
+            // of these: it is the metadata partition still catching up, which
+            // the caller already surfaces as a retryable error code and
+            // `failed_fetch_requests` already counts.
+            broker
+                .metrics
+                .record_remote_error(crate::metrics::RemoteTierPath::Fetch, &p.topic_name);
             tracing::warn!(
                 topic = %p.topic_name,
                 partition = p.partition_index,
@@ -251,6 +343,46 @@ mod tests {
     /// untouched `p.out` is what says it never got there.
     /// The topic every tiered-read case below uses.
     const TIERED_TOPIC: &str = "tiered-delete-records";
+
+    /// KIP-405's `remote.log.reader.max.pending.tasks`: a cold read that
+    /// arrives with the reader pool's queue already full is answered with an
+    /// error for that partition rather than parked behind the running reads.
+    /// Kafka's executor throws `RejectedExecutionException`, which
+    /// `Errors.forException` does not map, so the row goes out as
+    /// `UNKNOWN_SERVER_ERROR`.
+    ///
+    /// The read-committed case also gets an empty aborted-transaction list,
+    /// because a read-committed consumer reads that field and a `None` there
+    /// means "read uncommitted", not "no aborts".
+    #[test]
+    fn a_refused_cold_read_answers_the_partition_with_an_error_and_no_records() {
+        for read_committed in [false, true] {
+            let mut pending = super::super::plan::PendingRead {
+                topic_name: TIERED_TOPIC.to_string(),
+                topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
+                partition_index: 0,
+                current_leader_epoch: 0,
+                last_fetched_epoch: -1,
+                fetch_offset: 7,
+                max_bytes: 1024,
+                read_committed,
+                is_follower_fetch: false,
+                partition: None,
+                out: krabka_protocol::owned::fetch_response::PartitionData {
+                    error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                    ..Default::default()
+                },
+                cpu_micros: 0,
+            };
+
+            let served = super::reject_saturated(&mut pending);
+
+            check!(served == 0);
+            check!(pending.out.error_code == crate::codes::UNKNOWN_SERVER_ERROR);
+            check!(pending.out.records.is_none());
+            check!(pending.out.aborted_transactions.is_some() == read_committed);
+        }
+    }
 
     /// The topic id every tiered-read case below uses.
     fn tiered_topic_id() -> uuid::Uuid {

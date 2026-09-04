@@ -227,6 +227,7 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
         from: NodeId(3),
         fetch_epoch: 0,
         fetch_offset: 0,
+        replica_directory_id: uuid::Uuid::nil(),
     }
     .encode();
     let fetch_resp_body = net
@@ -355,6 +356,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
         from: NodeId(3),
         fetch_epoch: 0,
         fetch_offset: 0,
+        replica_directory_id: uuid::Uuid::nil(),
     }
     .encode();
     let body = net

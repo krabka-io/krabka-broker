@@ -27,6 +27,10 @@ pub enum BrokerError {
     #[error("protocol: {0}")]
     Protocol(#[from] krabka_protocol::ProtocolError),
 
+    /// Consensus or raft transport error.
+    #[error("raft: {0}")]
+    Raft(#[from] krabka_raft::RaftError),
+
     /// The peer sent an `(api_key, version)` pair that the handler table
     /// cannot serve.
     #[error("unsupported api_key={api_key} version={version}")]
@@ -302,9 +306,6 @@ pub enum BrokerError {
 
     #[error("invalid leader_imbalance_check_interval = {value}: must be >= 1")]
     InvalidLeaderRebalanceInterval { value: u64 },
-
-    #[error("invalid leader_imbalance_per_broker_percentage = {percent}: must be <= 100")]
-    InvalidLeaderRebalanceThreshold { percent: f64 },
 
     /// Runtime tuning contains an invalid scalar or field relation.
     #[error("invalid runtime configuration: {0}")]

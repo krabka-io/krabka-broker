@@ -119,6 +119,18 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     handle.wait_until_brokers_registered(2).await;
     assert!(handle.broker_count() == 2);
 
+    // The peer registered just above never heartbeats this node, and this
+    // node is the only controller, yet the peer is electable: `ElectLeaders`
+    // decides liveness from the replicated fencing state rather than from the
+    // controller's local heartbeat registry, so any node serving the request
+    // answers the same. `broker_alive_for_test` reads that local registry
+    // instead, which is why an id nothing ever registered is not alive there.
+    handle.wait_until_broker_electable(handle.node_id()).await;
+    handle
+        .wait_until_broker_electable(handle.node_id() + 1)
+        .await;
+    check!(!handle.broker_alive_for_test(u64::MAX).await);
+
     let topic = "handle-mutant-topic";
     let partition_leader = handle.node_id() + 1;
     let partition_isr = [partition_leader, handle.node_id()];

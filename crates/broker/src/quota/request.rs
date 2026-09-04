@@ -33,7 +33,7 @@ pub fn consume_request_quota(
     client_id: &str,
     elapsed_micros: u64,
     maximum_delay: Time,
-) -> Time {
+) -> super::QuotaDelay {
     consume_configured_quota(
         QuotaConsumption {
             image,
@@ -124,10 +124,11 @@ mod tests {
 
     #[test]
     fn overage_returns_scaled_uncapped_delay() {
-        // rate=100% gives a 1_000_000 us/sec budget. The bucket starts with
-        // one second of burst, so 1_500_000 us leaves a 500_000 us overage.
+        // rate=100% gives a 1_000_000 us/sec budget. A one-second window
+        // starts the bucket with one second of burst, so 1_500_000 us leaves
+        // a 500_000 us overage.
         let img = img_with_quota(vec![("user", Some("alice"))], 100.0);
-        let buckets = QuotaBuckets::new();
+        let buckets = QuotaBuckets::with_window(secs(1));
 
         let delay = consume_request_quota(&img, &buckets, "alice", "", 1_500_000, secs(1));
 

@@ -276,3 +276,46 @@ fn a_replica_on_a_dead_log_dir_neither_leads_nor_stays_in_the_isr() {
         assert!(actual == case.expected, "case {}", case.name);
     }
 }
+
+/// The set an operator election may elect from, which every node computes the
+/// same way so that a rotating `controllerId` cannot change the answer.
+///
+/// A registration is what makes a broker electable and the unavailable set is
+/// what takes it back, including for a broker whose heartbeat this node has
+/// never seen -- the case that made `ElectLeaders` depend on where it landed.
+#[test]
+fn electable_is_the_registered_brokers_the_unavailable_set_does_not_name() {
+    let good = dir(0x600d);
+    let img = image(
+        &[(1, vec![good]), (2, vec![good]), (3, vec![good])],
+        &[1, 2],
+        &[good, good],
+    );
+
+    let cases: [(&str, Vec<u64>, Vec<u64>); 4] = [
+        ("nothing unavailable", vec![], vec![1, 2, 3]),
+        ("one fenced broker", vec![2], vec![1, 3]),
+        ("every broker unavailable", vec![1, 2, 3], vec![]),
+        (
+            "an unavailable broker that never registered",
+            vec![9],
+            vec![1, 2, 3],
+        ),
+    ];
+
+    for (name, unavailable, expected) in cases {
+        let actual = electable(&img, &unavailable.into_iter().collect());
+
+        assert!(actual == expected.into_iter().collect(), "case {name}");
+    }
+}
+
+/// A broker the image does not carry a registration for is not electable, even
+/// though nothing reports it unavailable.
+#[test]
+fn an_unregistered_broker_is_never_electable() {
+    let good = dir(0x600d);
+    let img = image(&[(1, vec![good])], &[1, 2], &[good, good]);
+
+    assert!(electable(&img, &HashSet::new()) == HashSet::from([1]));
+}

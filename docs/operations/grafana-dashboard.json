@@ -627,6 +627,272 @@
       }
     },
     {
+      "id": 72,
+      "type": "stat",
+      "title": "Active controllers in cluster",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum(krabka_broker_active_controller)",
+          "legendFormat": "controllers"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 73,
+      "type": "timeseries",
+      "title": "Broker up",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "up{job=\"krabka-broker\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 74,
+      "type": "timeseries",
+      "title": "Metadata lag records",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_metadata_lag_records{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 75,
+      "type": "timeseries",
+      "title": "Raft state",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 27
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_raft_current_state{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} {{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 76,
+      "type": "timeseries",
+      "title": "Raft epoch and high watermark",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 27
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_raft_current_epoch{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} epoch"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "krabka_broker_raft_high_watermark{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} high watermark"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 77,
+      "type": "timeseries",
+      "title": "Broker state and registrations",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 27
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_broker_state{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} state"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "krabka_broker_active_brokers{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} active brokers"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "krabka_broker_fenced_brokers{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} fenced brokers"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "D",
+          "expr": "krabka_broker_preferred_replica_imbalance{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} preferred-replica imbalance"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
       "id": 14,
       "type": "row",
       "title": "Traffic",
@@ -635,7 +901,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 38
       },
       "panels": []
     },
@@ -651,7 +917,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 23
+        "y": 39
       },
       "targets": [
         {
@@ -689,7 +955,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 23
+        "y": 39
       },
       "targets": [
         {
@@ -727,7 +993,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 23
+        "y": 39
       },
       "targets": [
         {
@@ -765,7 +1031,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 31
+        "y": 47
       },
       "targets": [
         {
@@ -812,7 +1078,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 31
+        "y": 47
       },
       "targets": [
         {
@@ -860,7 +1126,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 31
+        "y": 47
       },
       "targets": [
         {
@@ -907,7 +1173,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 39
+        "y": 55
       },
       "targets": [
         {
@@ -945,7 +1211,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 39
+        "y": 55
       },
       "targets": [
         {
@@ -983,7 +1249,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 39
+        "y": 55
       },
       "targets": [
         {
@@ -1027,7 +1293,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 63
       },
       "panels": []
     },
@@ -1043,7 +1309,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 48
+        "y": 64
       },
       "targets": [
         {
@@ -1082,7 +1348,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 48
+        "y": 64
       },
       "targets": [
         {
@@ -1121,7 +1387,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 48
+        "y": 64
       },
       "targets": [
         {
@@ -1157,7 +1423,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 72
       },
       "panels": []
     },
@@ -1173,7 +1439,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 57
+        "y": 73
       },
       "targets": [
         {
@@ -1211,7 +1477,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 57
+        "y": 73
       },
       "targets": [
         {
@@ -1249,7 +1515,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 57
+        "y": 73
       },
       "targets": [
         {
@@ -1297,7 +1563,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 65
+        "y": 81
       },
       "targets": [
         {
@@ -1363,7 +1629,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 65
+        "y": 81
       },
       "targets": [
         {
@@ -1429,7 +1695,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 65
+        "y": 81
       },
       "targets": [
         {
@@ -1468,7 +1734,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 73
+        "y": 89
       },
       "targets": [
         {
@@ -1506,7 +1772,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 73
+        "y": 89
       },
       "targets": [
         {
@@ -1544,7 +1810,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 73
+        "y": 89
       },
       "targets": [
         {
@@ -1583,7 +1849,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 81
+        "y": 97
       },
       "targets": [
         {
@@ -1621,7 +1887,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 81
+        "y": 97
       },
       "targets": [
         {
@@ -1659,7 +1925,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 81
+        "y": 97
       },
       "targets": [
         {
@@ -1712,7 +1978,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 105
       },
       "panels": []
     },
@@ -1728,7 +1994,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 90
+        "y": 106
       },
       "targets": [
         {
@@ -1775,7 +2041,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 90
+        "y": 106
       },
       "targets": [
         {
@@ -1813,7 +2079,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 90
+        "y": 106
       },
       "targets": [
         {
@@ -1857,7 +2123,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 98
+        "y": 114
       },
       "panels": []
     },
@@ -1873,7 +2139,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 99
+        "y": 115
       },
       "targets": [
         {
@@ -1911,7 +2177,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 99
+        "y": 115
       },
       "targets": [
         {
@@ -1950,7 +2216,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 99
+        "y": 115
       },
       "targets": [
         {
@@ -1997,7 +2263,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 107
+        "y": 123
       },
       "targets": [
         {
@@ -2045,7 +2311,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 107
+        "y": 123
       },
       "targets": [
         {
@@ -2080,7 +2346,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 131
       },
       "panels": []
     },
@@ -2096,7 +2362,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 116
+        "y": 132
       },
       "targets": [
         {
@@ -2135,7 +2401,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 116
+        "y": 132
       },
       "targets": [
         {
@@ -2174,7 +2440,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 116
+        "y": 132
       },
       "targets": [
         {
@@ -2213,7 +2479,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 124
+        "y": 140
       },
       "targets": [
         {
@@ -2260,7 +2526,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 124
+        "y": 140
       },
       "targets": [
         {
@@ -2298,7 +2564,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 124
+        "y": 140
       },
       "targets": [
         {
@@ -2354,7 +2620,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 132
+        "y": 148
       },
       "targets": [
         {
@@ -2399,7 +2665,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 140
+        "y": 156
       },
       "panels": []
     },
@@ -2415,7 +2681,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 141
+        "y": 157
       },
       "targets": [
         {
@@ -2472,7 +2738,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 141
+        "y": 157
       },
       "targets": [
         {
@@ -2510,7 +2776,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 141
+        "y": 157
       },
       "targets": [
         {
@@ -2566,7 +2832,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 149
+        "y": 165
       },
       "targets": [
         {
@@ -2613,7 +2879,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 149
+        "y": 165
       },
       "targets": [
         {
@@ -2661,7 +2927,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 149
+        "y": 165
       },
       "targets": [
         {
@@ -2699,7 +2965,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 157
+        "y": 173
       },
       "targets": [
         {
@@ -2737,7 +3003,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 157
+        "y": 173
       },
       "targets": [
         {
@@ -2775,7 +3041,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 157
+        "y": 173
       },
       "targets": [
         {
@@ -2822,7 +3088,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 165
+        "y": 181
       },
       "targets": [
         {
@@ -2860,7 +3126,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 165
+        "y": 181
       },
       "targets": [
         {
@@ -2908,7 +3174,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 165
+        "y": 181
       },
       "targets": [
         {
@@ -2988,6 +3254,430 @@
         }
       },
       "description": "Alert: write failures or dropped > 0."
+    },
+    {
+      "id": 80,
+      "type": "row",
+      "title": "Tiered storage",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 190
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 81,
+      "type": "timeseries",
+      "title": "Remote tier bytes / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 191
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (topic) (rate(krabka_broker_remote_copy_bytes_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "copy {{topic}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "sum by (topic) (rate(krabka_broker_remote_fetch_bytes_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "fetch {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "KIP-405 traffic to and from the object store. Copy going flat while the topic still produces is the first sign the tier has stalled."
+    },
+    {
+      "id": 82,
+      "type": "timeseries",
+      "title": "Remote tier requests / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 191
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum(rate(krabka_broker_remote_copy_requests_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "copy"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "sum(rate(krabka_broker_remote_fetch_requests_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "fetch"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "sum(rate(krabka_broker_remote_delete_requests_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "delete"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Attempts on each of the tier's three paths, whatever their outcome. Divide the errors panel by this for a failure rate."
+    },
+    {
+      "id": 83,
+      "type": "timeseries",
+      "title": "Remote tier errors / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 191
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (topic) (rate(krabka_broker_remote_copy_errors_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "copy {{topic}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "sum by (topic) (rate(krabka_broker_remote_fetch_errors_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "fetch {{topic}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "sum by (topic) (rate(krabka_broker_remote_delete_errors_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "delete {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Anything above zero here fires KrabkaRemoteCopyErrors or KrabkaRemoteFetchErrors. See runbooks/remote-copy-lag.md."
+    },
+    {
+      "id": 84,
+      "type": "timeseries",
+      "title": "Remote copy lag",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 199
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_remote_copy_lag_segments{instance=~\"$instance\"}",
+          "legendFormat": "segments {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Sealed local segments this broker has not finished copying. Climbing means local disk is filling at the rate the tier is behind."
+    },
+    {
+      "id": 85,
+      "type": "timeseries",
+      "title": "Remote delete lag",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 199
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_remote_delete_lag_segments{instance=~\"$instance\"}",
+          "legendFormat": "segments {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Remote segments a retention pass has decided to remove and not yet removed. Object-store space retention has not reclaimed."
+    },
+    {
+      "id": 86,
+      "type": "timeseries",
+      "title": "Cold-read reader pool",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 199
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_remote_log_reader_task_queue_size{instance=~\"$instance\"}",
+          "legendFormat": "queued {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "krabka_broker_remote_log_reader_avg_idle_percent{instance=~\"$instance\"}",
+          "legendFormat": "idle % {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "rate(krabka_broker_remote_log_reader_rejected_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "rejected/s {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "The bounded cold-tier reader pool. A queue that is never empty with idle at zero means cold reads are saturating it; rejections mean a Fetch was answered with an error rather than queued."
+    },
+    {
+      "id": 87,
+      "type": "timeseries",
+      "title": "Remote index cache",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 207
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "rate(krabka_broker_remote_index_cache_hits_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "hits/s {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "rate(krabka_broker_remote_index_cache_misses_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "misses/s {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "rate(krabka_broker_remote_index_cache_evictions_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "evictions/s {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "A miss downloads the segment's index object again. A hit ratio near zero with steady evictions means remote_storage.index_cache_size is smaller than the working set."
+    },
+    {
+      "id": 88,
+      "type": "timeseries",
+      "title": "Replication throttle byte rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 207
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "rate(krabka_broker_replication_throttled_bytes_out_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "leader out {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "rate(krabka_broker_replication_throttled_bytes_in_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "follower in {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "rate(krabka_broker_replication_throttle_sleeps_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "held back/s {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "KIP-73. During a reassignment, a rate sitting at the configured throttle means the throttle is biting; a rate at zero with the reassignment stalled means something else is."
     }
   ]
 }

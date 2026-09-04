@@ -26,11 +26,13 @@ use crate::{
         DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,
         DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
         DEFAULT_JWKS_REFRESH_INTERVAL, DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
-        DEFAULT_LEADER_IMBALANCE_PER_BROKER, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
+        DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
-        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_TXN_ID_EXPIRATION, FreezeConfig, NodeRole,
-        ReplicationRuntimeConfig, RlmmKind, feature_flags::test_feature_flags, shared_epoch_ms,
+        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_INDEX_CACHE_SIZE,
+        DEFAULT_REMOTE_READER_MAX_PENDING_TASKS, DEFAULT_REMOTE_READER_THREADS,
+        DEFAULT_TXN_ID_EXPIRATION, FreezeConfig, NodeRole, ReplicationRuntimeConfig, RlmmKind,
+        feature_flags::test_feature_flags, shared_epoch_ms,
     },
     operator_keys::OperatorKeys,
 };
@@ -89,6 +91,7 @@ impl BrokerConfig {
             unclean_recovery_balanced_deadline: secs(30),
             operator_recovery_deadline: secs(25),
             quota_throttle_max: secs(1),
+            quota_window: secs(1),
             controller_mutation_quota_window: secs(1),
             self_registration_max_attempts: 8,
             observer_fetch_max: mebibytes(1),
@@ -108,6 +111,8 @@ impl BrokerConfig {
             share_recovery_read_max: mebibytes(1),
             share_session_cache_max_when_unlimited: 10_000,
             socket_request_max: mebibytes(100),
+            queued_max_requests: 500,
+            queued_max_request_bytes: None,
             sendfile_min: kibibytes(4),
             socket_send_buffer: mebibytes(1),
             socket_receive_buffer: mebibytes(1),
@@ -235,7 +240,6 @@ impl BrokerConfig {
                 crate::share_coordinator::config::ShareCoordinatorConfig::default(),
             ),
             leader_imbalance_check_interval: DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
-            leader_imbalance_per_broker: DEFAULT_LEADER_IMBALANCE_PER_BROKER,
             #[cfg(any(test, feature = "test-helpers"))]
             cleaner_interval_override: None,
             // Short interval so hot-reload tests don't wait long for a
@@ -291,6 +295,11 @@ impl BrokerConfig {
             remote_log_metadata: RlmmKind::InMemory,
             // Ordinary mutable tiered storage in tests; WORM is opt-in.
             remote_storage_worm: None,
+            // The production reader bounds: a test that saturates the pool
+            // wants the same shape a broker runs with.
+            remote_reader_threads: DEFAULT_REMOTE_READER_THREADS,
+            remote_reader_max_pending_tasks: DEFAULT_REMOTE_READER_MAX_PENDING_TASKS,
+            remote_index_cache_size: DEFAULT_REMOTE_INDEX_CACHE_SIZE,
             // Audit enabled by default (secure-by-default / `FedRAMP` MLA).
             audit_enabled: true,
             audit_failure_mode: krabka_audit::AuditMode::FailOpen,

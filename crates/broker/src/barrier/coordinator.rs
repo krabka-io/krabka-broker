@@ -108,6 +108,35 @@ pub(crate) fn validate_spec(spec: &GroupSpec) -> Result<(), BarrierError> {
     Ok(())
 }
 
+pub(crate) fn validate_spec_limits(
+    spec: &GroupSpec,
+    max_topics: usize,
+    max_retained_cuts: i32,
+    min_interval: Time,
+) -> Result<(), BarrierError> {
+    validate_spec(spec)?;
+    if spec.topics.len() > max_topics {
+        return Err(BarrierError::InvalidDefinition(format!(
+            "a barrier group may have at most {max_topics} topics, got {}",
+            spec.topics.len()
+        )));
+    }
+    if spec.retained_cuts > max_retained_cuts {
+        return Err(BarrierError::InvalidDefinition(format!(
+            "retained_cuts is {}, exceeding maximum {max_retained_cuts}",
+            spec.retained_cuts
+        )));
+    }
+    if let Some(interval) = spec.interval
+        && interval.millis_i64() < min_interval.millis_i64()
+    {
+        return Err(BarrierError::InvalidDefinition(format!(
+            "injection interval {interval:?} is below minimum {min_interval:?}"
+        )));
+    }
+    Ok(())
+}
+
 /// Per-broker barrier coordinator.
 ///
 /// `Broker::start` builds it and shares it with the barrier wire handlers and
@@ -349,6 +378,48 @@ mod tests {
         for (case, spec, ok) in cases {
             check!(validate_spec(spec).is_ok() == *ok, "{case}");
         }
+    }
+
+    #[test]
+    fn validate_spec_limits_enforces_bounds() {
+        let max_topics = 3;
+        let max_retained_cuts = 10;
+        let min_interval = krabka_units::secs(1);
+
+        // Good spec
+        let good = spec(&["t1", "t2"], Some(krabka_units::secs(2)), 5);
+        assert!(validate_spec_limits(&good, max_topics, max_retained_cuts, min_interval).is_ok());
+
+        // Too many topics
+        let too_many_topics = spec(&["t1", "t2", "t3", "t4"], Some(krabka_units::secs(2)), 5);
+        assert!(
+            validate_spec_limits(
+                &too_many_topics,
+                max_topics,
+                max_retained_cuts,
+                min_interval
+            )
+            .is_err()
+        );
+
+        // Too many cuts
+        let too_many_cuts = spec(&["t1"], Some(krabka_units::secs(2)), 15);
+        assert!(
+            validate_spec_limits(&too_many_cuts, max_topics, max_retained_cuts, min_interval)
+                .is_err()
+        );
+
+        // Interval below minimum
+        let interval_too_short = spec(&["t1"], Some(krabka_units::millis(500)), 5);
+        assert!(
+            validate_spec_limits(
+                &interval_too_short,
+                max_topics,
+                max_retained_cuts,
+                min_interval
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]

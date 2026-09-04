@@ -9,13 +9,13 @@ use uuid::Uuid;
 
 use super::*;
 use crate::leader_election::test_support::{
-    img_with_partition, liveness_with_alive, no_witnesses, witnesses,
+    alive_set, img_with_partition, no_witnesses, witnesses,
 };
 
 #[tokio::test]
 async fn preferred_happy_path() {
     let img = img_with_partition("foo", 0, /*leader*/ 2, &[1, 2, 3], &[1, 2, 3]);
-    let l = liveness_with_alive(&[1, 2, 3]).await;
+    let l = alive_set(&[1, 2, 3]);
     let new_pr = select_new_leader_for_partition(
         &img,
         &l,
@@ -24,7 +24,6 @@ async fn preferred_happy_path() {
         0,
         ElectionType::Preferred,
     )
-    .await
     .expect("should elect");
     let expected = PartitionRecord {
         topic: "foo".into(),
@@ -49,7 +48,7 @@ async fn preferred_election_rejects_exhausted_metadata_epochs() {
         record.partition_epoch = partition_epoch;
         record.leader_epoch = LeaderEpoch(leader_epoch);
         img.apply(&krabka_metadata::MetadataRecord::V1Partition(record));
-        let l = liveness_with_alive(&[1, 2, 3]).await;
+        let l = alive_set(&[1, 2, 3]);
 
         let error = select_new_leader_for_partition(
             &img,
@@ -59,7 +58,6 @@ async fn preferred_election_rejects_exhausted_metadata_epochs() {
             0,
             ElectionType::Preferred,
         )
-        .await
         .expect_err("exhausted epoch must fail closed");
 
         assert!(error == ElectError::EpochExhausted);
@@ -85,7 +83,7 @@ async fn preferred_election_error_cases() {
     ];
     for (leader, isr, alive, expected) in cases {
         let img = img_with_partition("foo", 0, leader, &[1, 2, 3], isr);
-        let l = liveness_with_alive(alive).await;
+        let l = alive_set(alive);
         let err = select_new_leader_for_partition(
             &img,
             &l,
@@ -94,7 +92,6 @@ async fn preferred_election_error_cases() {
             0,
             ElectionType::Preferred,
         )
-        .await
         .unwrap_err();
         assert!(
             err == expected,
@@ -107,10 +104,9 @@ async fn preferred_election_error_cases() {
 async fn unclean_happy_path() {
     // ISR is just {1}, broker 1 is dead, brokers 2/3 are alive.
     let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1]);
-    let l = liveness_with_alive(&[2, 3]).await;
+    let l = alive_set(&[2, 3]);
     let new_pr =
         select_new_leader_for_partition(&img, &l, &no_witnesses(), "foo", 0, ElectionType::Unclean)
-            .await
             .expect("unclean should elect");
     let expected = PartitionRecord {
         topic: "foo".into(),
@@ -130,10 +126,9 @@ async fn unclean_happy_path() {
 #[tokio::test]
 async fn unclean_no_alive_replicas() {
     let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1]);
-    let l = liveness_with_alive(&[]).await; // everyone dead
+    let l = alive_set(&[]); // everyone dead
     let err =
         select_new_leader_for_partition(&img, &l, &no_witnesses(), "foo", 0, ElectionType::Unclean)
-            .await
             .unwrap_err();
     assert!(err == ElectError::NoEligibleReplica);
 }
@@ -141,10 +136,9 @@ async fn unclean_no_alive_replicas() {
 #[tokio::test]
 async fn unclean_isr_member_alive_returns_election_not_needed() {
     let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1, 2]);
-    let l = liveness_with_alive(&[1, 2]).await; // ISR has live member
+    let l = alive_set(&[1, 2]); // ISR has live member
     let err =
         select_new_leader_for_partition(&img, &l, &no_witnesses(), "foo", 0, ElectionType::Unclean)
-            .await
             .unwrap_err();
     assert!(err == ElectError::ElectionNotNeeded);
 }
@@ -153,7 +147,7 @@ async fn unclean_isr_member_alive_returns_election_not_needed() {
 async fn shutdown_replacement_picks_alive_isr_member() {
     // Broker 1 is leader and wants to shut down. ISR is {1,2,3}, all alive.
     let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = liveness_with_alive(&[1, 2, 3]).await;
+    let l = alive_set(&[1, 2, 3]);
     let new_pr = select_replacement_leader_for_shutdown(
         &img,
         &l,
@@ -162,7 +156,6 @@ async fn shutdown_replacement_picks_alive_isr_member() {
         0,
         /*shutting_down*/ NodeId(1),
     )
-    .await
     .expect("should pick replacement");
     // ISR untouched — shutting-down broker stays in ISR until dead.
     let expected = PartitionRecord {
@@ -185,10 +178,9 @@ async fn shutdown_replacement_skips_dead_isr_members() {
     // Broker 1 (leader) wants to drain. ISR {1,2,3} but 2 is dead.
     // Replacement should be 3.
     let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = liveness_with_alive(&[1, 3]).await;
+    let l = alive_set(&[1, 3]);
     let new_pr =
         select_replacement_leader_for_shutdown(&img, &l, &no_witnesses(), "foo", 0, NodeId(1))
-            .await
             .expect("should pick replacement");
     assert!(new_pr.leader == 3);
     assert!(new_pr.leader_epoch == 6);
@@ -210,7 +202,7 @@ async fn shutdown_replacement_error_cases() {
     ];
     for (isr, alive, shutting_down, expected) in cases {
         let img = img_with_partition("foo", 0, 1, &[1, 2, 3], isr);
-        let l = liveness_with_alive(alive).await;
+        let l = alive_set(alive);
         let err = select_replacement_leader_for_shutdown(
             &img,
             &l,
@@ -219,7 +211,6 @@ async fn shutdown_replacement_error_cases() {
             0,
             NodeId(shutting_down),
         )
-        .await
         .unwrap_err();
         assert!(
             err == expected,
@@ -231,10 +222,9 @@ async fn shutdown_replacement_error_cases() {
 #[tokio::test]
 async fn shutdown_replacement_unknown_partition() {
     let img = MetadataImage::new(Uuid::nil());
-    let l = liveness_with_alive(&[1]).await;
+    let l = alive_set(&[1]);
     let err =
         select_replacement_leader_for_shutdown(&img, &l, &no_witnesses(), "ghost", 0, NodeId(1))
-            .await
             .unwrap_err();
     assert!(err == ElectError::UnknownTopicOrPartition);
 }
@@ -242,7 +232,7 @@ async fn shutdown_replacement_unknown_partition() {
 #[tokio::test]
 async fn unknown_topic_returns_error() {
     let img = MetadataImage::new(Uuid::nil());
-    let l = liveness_with_alive(&[]).await;
+    let l = alive_set(&[]);
     let err = select_new_leader_for_partition(
         &img,
         &l,
@@ -251,7 +241,6 @@ async fn unknown_topic_returns_error() {
         0,
         ElectionType::Preferred,
     )
-    .await
     .unwrap_err();
     assert!(err == ElectError::UnknownTopicOrPartition);
 }
@@ -261,7 +250,7 @@ async fn preferred_election_refuses_a_witness_preferred_replica() {
     // Site-aware placement put the witness first in `replicas`, so the
     // preferred replica can never lead.
     let img = img_with_partition("foo", 0, /*leader*/ 2, &[1, 2, 3], &[1, 2, 3]);
-    let l = liveness_with_alive(&[1, 2, 3]).await;
+    let l = alive_set(&[1, 2, 3]);
     let err = select_new_leader_for_partition(
         &img,
         &l,
@@ -270,7 +259,6 @@ async fn preferred_election_refuses_a_witness_preferred_replica() {
         0,
         ElectionType::Preferred,
     )
-    .await
     .unwrap_err();
     assert!(err == ElectError::PreferredIsWitness);
 }
@@ -281,7 +269,7 @@ async fn operator_unclean_election_skips_a_witness_replica() {
     // unclean election. The alive witness 2 must not take leadership, and
     // it must not report the election as unneeded either.
     let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
-    let l = liveness_with_alive(&[2, 3]).await;
+    let l = alive_set(&[2, 3]);
     let new_pr = select_new_leader_for_partition(
         &img,
         &l,
@@ -290,7 +278,6 @@ async fn operator_unclean_election_skips_a_witness_replica() {
         0,
         ElectionType::Unclean,
     )
-    .await
     .expect("unclean should elect the data replica");
     let expected = PartitionRecord {
         topic: "foo".into(),
@@ -312,10 +299,9 @@ async fn controlled_shutdown_never_drains_leadership_to_a_witness() {
     // Broker 1 leads and wants to drain. ISR is {1, 2, 3} with 2 the
     // witness, so the drain target is data replica 3.
     let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = liveness_with_alive(&[1, 2, 3]).await;
+    let l = alive_set(&[1, 2, 3]);
     let new_pr =
         select_replacement_leader_for_shutdown(&img, &l, &witnesses(&[2]), "foo", 0, NodeId(1))
-            .await
             .expect("should pick the data replica");
     let expected = PartitionRecord {
         topic: "foo".into(),
@@ -337,10 +323,9 @@ async fn controlled_shutdown_reports_no_eligible_replica_when_only_a_witness_rem
     // ISR is {1, 2} with 2 the witness. Nothing can take leadership, so
     // the drain gate must not count this partition.
     let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
-    let l = liveness_with_alive(&[1, 2, 3]).await;
+    let l = alive_set(&[1, 2, 3]);
     let err =
         select_replacement_leader_for_shutdown(&img, &l, &witnesses(&[2]), "foo", 0, NodeId(1))
-            .await
             .unwrap_err();
     assert!(err == ElectError::NoEligibleReplica);
 }

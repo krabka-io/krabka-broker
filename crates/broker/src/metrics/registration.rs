@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 
 use crate::metrics::{BrokerMetrics, SharedRegistry};
 
+mod cluster_and_quorum;
 mod requests_and_resources;
 mod subsystems;
 mod topics_and_replication;
@@ -174,6 +175,49 @@ impl BrokerMetrics {
             diskless_wal_cold_read_hits_total: Counter::default(),
             diskless_wal_cold_read_misses_total: Counter::default(),
             diskless_wal_cold_read_errors_total: Counter::default(),
+            raft_current_state: Family::default(),
+            raft_current_epoch: Gauge::default(),
+            raft_high_watermark: Gauge::default(),
+            raft_log_end_offset: Gauge::default(),
+            raft_voters: Gauge::default(),
+            raft_observers: Gauge::default(),
+            metadata_last_applied_offset: Gauge::default(),
+            metadata_lag_records: Gauge::default(),
+            broker_state: Gauge::default(),
+            active_brokers: Gauge::default(),
+            fenced_brokers: Gauge::default(),
+            global_topics: Gauge::default(),
+            global_partitions: Gauge::default(),
+            at_min_isr_partition_count: Gauge::default(),
+            reassigning_partitions: Gauge::default(),
+            preferred_replica_imbalance: Gauge::default(),
+            remote_copy_bytes_total: Family::default(),
+            remote_fetch_bytes_total: Family::default(),
+            remote_copy_requests_total: Family::default(),
+            remote_fetch_requests_total: Family::default(),
+            remote_delete_requests_total: Family::default(),
+            remote_copy_errors_total: Family::default(),
+            remote_fetch_errors_total: Family::default(),
+            remote_delete_errors_total: Family::default(),
+            remote_copy_lag_bytes: Family::default(),
+            remote_copy_lag_segments: Family::default(),
+            remote_delete_lag_bytes: Family::default(),
+            remote_delete_lag_segments: Family::default(),
+            replication_throttled_bytes_out_total: Counter::default(),
+            replication_throttled_bytes_in_total: Counter::default(),
+            replication_throttle_sleeps_total: Counter::default(),
+            quota_entity_throttle_seconds_total: Family::default(),
+            queued_requests: Gauge::default(),
+            queued_request_bytes: Gauge::default(),
+            remote_log_reader_task_queue_size: Gauge::default(),
+            remote_log_reader_avg_idle_percent: Gauge::default(),
+            remote_log_reader_fetch_duration_seconds: Histogram::new(REQUEST_DURATION_BUCKETS),
+            remote_log_reader_rejected_total: Counter::default(),
+            remote_index_cache_hits_total: Counter::default(),
+            remote_index_cache_misses_total: Counter::default(),
+            remote_index_cache_evictions_total: Counter::default(),
+            remote_index_cache_bytes: Gauge::default(),
+            remote_index_cache_entries: Gauge::default(),
         }
     }
 
@@ -197,6 +241,9 @@ impl BrokerMetrics {
             metrics.register_group_6(&mut registry);
             metrics.register_group_7(&mut registry);
             metrics.register_group_8(&mut registry);
+            metrics.register_group_9(&mut registry);
+            metrics.register_group_10(&mut registry);
+            metrics.register_group_11(&mut registry);
         }
         metrics
     }

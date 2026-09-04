@@ -133,6 +133,45 @@ impl MetadataWriter for QuorumForwarder {
         Err(last_err)
     }
 
+    async fn forward_raw(
+        &self,
+        api_key: i16,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Result<bytes::Bytes, RaftError> {
+        let hint = *self.leader.borrow();
+        let order = build_forward_order(&self.voters, hint);
+        let mut last_err = RaftError::NotLeader {
+            current_leader: hint,
+        };
+        for (target, addr) in &order {
+            let opts = krabka_client_core::ConnectionOptions {
+                client_id: self.client_id.clone(),
+                dispatch_queue_capacity: self.client_dispatch_queue_capacity,
+                frame_max: self.client_frame_max,
+                ..krabka_client_core::ConnectionOptions::default()
+            };
+            let conn = match self.dialer.dial(*target, addr, opts).await {
+                Ok(c) => c,
+                Err(e) => {
+                    last_err = RaftError::Network(e);
+                    continue;
+                }
+            };
+            let resp = match conn.raw_request(api_key, version, body.clone()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    conn.close();
+                    last_err = RaftError::Network(e);
+                    continue;
+                }
+            };
+            conn.close();
+            return Ok(resp);
+        }
+        Err(last_err)
+    }
+
     async fn submit_delegation_token_mutations(
         &self,
         mutations: Vec<DelegationTokenMutation>,

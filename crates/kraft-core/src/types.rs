@@ -9,7 +9,7 @@ use uuid::Uuid;
 ///
 /// The caller always injects the time. The state machine never reads the
 /// system clock, which keeps it deterministic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SimInstant(pub u64);
 
 impl SimInstant {

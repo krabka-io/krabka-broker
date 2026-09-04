@@ -126,6 +126,14 @@ pub(super) fn prepare_fetch(
 /// Re-group the flat `(key, state)` list that `FetchSessionCache::classify`
 /// returns into per-topic chunks.
 ///
+/// The grouping key is the topic's whole identity, not its name. KIP-516 moved
+/// a Fetch's topic identity to `topic_id` at v13, and a v13 request carries no
+/// names at all, so a cache holding several id-only topics holds several keys
+/// whose `topic_name` is the empty string. Grouping by name alone would fold
+/// every one of them into a single entry under whichever `topic_id` arrived
+/// first -- and the read loop would then serve every one of those partitions
+/// out of that one topic.
+///
 /// The topic order is the order in which the keys first appear. `HashMap`
 /// iteration order is not stable across runs, but it is stable within a single
 /// classify call.
@@ -133,11 +141,15 @@ fn group_cached_into_effective_topics(
     cached: &[(FetchSessionKey, CachedPartitionState)],
 ) -> Vec<EffectiveTopic> {
     use std::collections::HashMap;
-    let mut order: Vec<String> = Vec::new();
-    let mut by_topic: HashMap<String, EffectiveTopic> = HashMap::new();
+    /// A topic's whole identity: the KIP-516 id, and the name that older
+    /// versions key on.
+    type TopicIdentity = (WireUuid, String);
+    let mut order: Vec<TopicIdentity> = Vec::new();
+    let mut by_topic: HashMap<TopicIdentity, EffectiveTopic> = HashMap::new();
     for (k, s) in cached {
+        let identity = (k.topic_id, k.topic_name.clone());
         let entry = by_topic
-            .entry(k.topic_name.clone())
+            .entry(identity.clone())
             .or_insert_with(|| EffectiveTopic {
                 topic: k.topic_name.clone(),
                 topic_id: k.topic_id,
@@ -150,12 +162,96 @@ fn group_cached_into_effective_topics(
             fetch_offset: s.fetch_offset,
             partition_max_bytes: s.max_bytes,
         });
-        if !order.iter().any(|t| t == &k.topic_name) {
-            order.push(k.topic_name.clone());
+        if !order.contains(&identity) {
+            order.push(identity);
         }
     }
     order
         .into_iter()
-        .map(|n| by_topic.remove(&n).expect("populated above"))
+        .map(|identity| by_topic.remove(&identity).expect("populated above"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    fn key(id: u8, name: &str, partition: i32) -> FetchSessionKey {
+        FetchSessionKey {
+            topic_id: WireUuid([id; 16]),
+            topic_name: name.to_owned(),
+            partition,
+        }
+    }
+
+    fn state(fetch_offset: i64) -> CachedPartitionState {
+        CachedPartitionState {
+            fetch_offset,
+            ..CachedPartitionState::default()
+        }
+    }
+
+    /// A v13 session caches several topics with no name at all. Each must come
+    /// back as its own topic, under its own id.
+    #[test]
+    fn nameless_cached_topics_do_not_collapse_into_one() {
+        let cached = vec![
+            (key(1, "", 0), state(10)),
+            (key(2, "", 0), state(20)),
+            (key(3, "", 0), state(30)),
+        ];
+
+        let grouped = group_cached_into_effective_topics(&cached);
+
+        let shape: Vec<(WireUuid, Vec<(i32, i64)>)> = grouped
+            .iter()
+            .map(|topic| {
+                (
+                    topic.topic_id,
+                    topic
+                        .partitions
+                        .iter()
+                        .map(|partition| (partition.partition, partition.fetch_offset))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert!(
+            shape
+                == vec![
+                    (WireUuid([1; 16]), vec![(0, 10)]),
+                    (WireUuid([2; 16]), vec![(0, 20)]),
+                    (WireUuid([3; 16]), vec![(0, 30)]),
+                ]
+        );
+    }
+
+    /// One topic's partitions still group together, in first-seen order.
+    #[test]
+    fn one_topic_s_partitions_group_under_it() {
+        let cached = vec![
+            (key(1, "orders", 2), state(10)),
+            (key(2, "", 0), state(20)),
+            (key(1, "orders", 0), state(30)),
+        ];
+
+        let grouped = group_cached_into_effective_topics(&cached);
+
+        let shape: Vec<(String, Vec<i32>)> = grouped
+            .iter()
+            .map(|topic| {
+                (
+                    topic.topic.clone(),
+                    topic
+                        .partitions
+                        .iter()
+                        .map(|partition| partition.partition)
+                        .collect(),
+                )
+            })
+            .collect();
+        assert!(shape == vec![("orders".to_owned(), vec![2, 0]), (String::new(), vec![0]),]);
+    }
 }

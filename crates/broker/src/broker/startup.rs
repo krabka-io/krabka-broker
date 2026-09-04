@@ -258,7 +258,7 @@ impl Broker {
             tls_dynamic.as_ref(),
             (&partitions, &producer_state, &log_dir_status, &log_dir_ids),
             (&txn_coordinator, &share_coordinator),
-            (&diskless_runtime, metrics),
+            (&diskless_runtime, metrics, Some(health.clone())),
         )
         .await?;
 

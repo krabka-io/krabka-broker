@@ -10,6 +10,38 @@
 # `crates/broker/tests/` check that every series an `expr` names is one the
 # broker exports. Load the file with `promtool check rules`.
 groups:
+  - name: krabka-broker-cluster
+    rules:
+      - alert: KrabkaNoActiveController
+        expr: (sum(krabka_broker_active_controller) != 1) or absent(krabka_broker_active_controller)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the cluster has {{ $value }} active controllers, not 1"
+          description: "Exactly one broker holds raft leadership of the metadata quorum. Zero means no metadata change commits; more than one means the scrape spans two clusters."
+          runbook: docs/operations/runbooks/no-active-controller.md
+
+      - alert: KrabkaBrokerDown
+        expr: up{job="krabka-broker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} does not answer a scrape"
+          description: "Prometheus cannot reach the broker's /metrics endpoint. Every other rule is per-instance and stops firing for a broker whose series are gone, so this rule is the one that sees a dead process."
+          runbook: docs/operations/runbooks/broker-down.md
+
+      - alert: KrabkaMetadataLag
+        expr: krabka_broker_metadata_lag_records > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} trails the metadata quorum by {{ $value }} records"
+          description: "The node's applied __cluster_metadata offset is behind the quorum's committed offset. 100 records is DEFAULT_READINESS_MAX_METADATA_LAG in crates/broker/src/config.rs, the same bound /readyz reports metadata_lag against."
+          runbook: docs/operations/runbooks/metadata-quorum-loss.md
+
   - name: krabka-broker-availability
     rules:
       - alert: KrabkaUnderReplicatedPartitions
@@ -145,6 +177,36 @@ groups:
           summary: "{{ $labels.instance }} cannot bootstrap the topic-backed RLMM"
           description: "The broker keeps retrying the __remote_log_metadata bootstrap and still answers from the fail-closed placeholder. Tiered reads and copies wait."
           runbook: docs/operations/runbooks/rlmm-bootstrap-stuck.md
+
+      - alert: KrabkaRemoteCopyErrors
+        expr: rate(krabka_broker_remote_copy_errors_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} cannot copy {{ $labels.topic }} to the remote tier"
+          description: "Segment copies are failing, so local retention cannot release the disk they sit on and history stops reaching the tier. The object store, its credentials, or its bucket policy is the usual cause."
+          runbook: docs/operations/runbooks/remote-copy-lag.md
+
+      - alert: KrabkaRemoteCopyLagGrowing
+        expr: deriv(krabka_broker_remote_copy_lag_segments[15m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is falling behind on remote copies for {{ $labels.topic }}"
+          description: "The number of sealed local segments waiting to be copied has climbed for half an hour. The tier is producing more slowly than the topic is, and local disk fills at the difference. A copy that is failing outright fires KrabkaRemoteCopyErrors instead."
+          runbook: docs/operations/runbooks/remote-copy-lag.md
+
+      - alert: KrabkaRemoteFetchErrors
+        expr: rate(krabka_broker_remote_fetch_errors_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} cannot serve {{ $labels.topic }} from the remote tier"
+          description: "A consumer reading history is being answered OFFSET_OUT_OF_RANGE because the tier will not serve the segment. Records already evicted locally are unreadable until this clears."
+          runbook: docs/operations/runbooks/remote-copy-lag.md
 
       - alert: KrabkaWormSealFailures
         expr: rate(krabka_broker_worm_manifest_seal_failures_total[5m]) > 0

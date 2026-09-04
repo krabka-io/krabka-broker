@@ -33,6 +33,8 @@ mod lag;
 mod log_cleaner;
 mod phases;
 mod registration;
+mod remote_reader;
+mod remote_tier;
 mod replication;
 mod request;
 mod schema_validation;
@@ -46,11 +48,13 @@ pub use self::{
         ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
         BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, ClientSoftwareLabel,
         ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel,
-        FetchDrainPath, FetchDrainPathLabel, PartitionLabel, QuotaType, QuotaTypeLabel,
-        ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
-        WalShardLabel, WalVoterLabel,
+        FetchDrainPath, FetchDrainPathLabel, PartitionLabel, QuotaEntityLabel, QuotaType,
+        QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
+        ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
+    remote_reader::{RemoteReaderLevels, RemoteReaderTotals},
+    remote_tier::RemoteTierPath,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -648,6 +652,78 @@ pub struct BrokerMetrics {
     pub diskless_wal_cold_read_hits_total: Counter,
     pub diskless_wal_cold_read_misses_total: Counter,
     pub diskless_wal_cold_read_errors_total: Counter,
+    // --- Milestone 11 KRaft quorum and cluster state metrics (#390) ---
+    pub raft_current_state: Family<RaftStateLabel, Gauge>,
+    pub raft_current_epoch: Gauge,
+    pub raft_high_watermark: Gauge,
+    pub raft_log_end_offset: Gauge,
+    pub raft_voters: Gauge,
+    pub raft_observers: Gauge,
+    pub metadata_last_applied_offset: Gauge,
+    pub metadata_lag_records: Gauge,
+    pub broker_state: Gauge,
+    pub active_brokers: Gauge,
+    pub fenced_brokers: Gauge,
+    pub global_topics: Gauge,
+    pub global_partitions: Gauge,
+    pub at_min_isr_partition_count: Gauge,
+    pub reassigning_partitions: Gauge,
+    pub preferred_replica_imbalance: Gauge,
+
+    // --- Milestone 11 Tiered Storage and replication throttling metrics (#420) ---
+    pub remote_copy_bytes_total: Family<TopicLabel, Counter>,
+    pub remote_fetch_bytes_total: Family<TopicLabel, Counter>,
+    pub remote_copy_requests_total: Family<TopicLabel, Counter>,
+    pub remote_fetch_requests_total: Family<TopicLabel, Counter>,
+    pub remote_delete_requests_total: Family<TopicLabel, Counter>,
+    pub remote_copy_errors_total: Family<TopicLabel, Counter>,
+    pub remote_fetch_errors_total: Family<TopicLabel, Counter>,
+    pub remote_delete_errors_total: Family<TopicLabel, Counter>,
+    pub remote_copy_lag_bytes: Family<TopicLabel, Gauge>,
+    pub remote_copy_lag_segments: Family<TopicLabel, Gauge>,
+    pub remote_delete_lag_bytes: Family<TopicLabel, Gauge>,
+    pub remote_delete_lag_segments: Family<TopicLabel, Gauge>,
+    pub replication_throttled_bytes_out_total: Counter,
+    pub replication_throttled_bytes_in_total: Counter,
+    pub replication_throttle_sleeps_total: Counter,
+
+    // --- Milestone 11 KIP-405 remote reader pool and index cache (#422) ---
+    /// Cold-tier reads waiting for a reader slot. Kafka's
+    /// `RemoteLogReaderTaskQueueSize`.
+    pub remote_log_reader_task_queue_size: Gauge,
+    /// The share of the reader pool's slots that are free, as a percentage.
+    /// Kafka's `RemoteLogReaderAvgIdlePercent`, reported instantaneously
+    /// because Prometheus does its own averaging.
+    pub remote_log_reader_avg_idle_percent: Gauge<f64, AtomicU64>,
+    /// How long each cold-tier read took. The seconds-valued histogram that
+    /// stands for Kafka's `RemoteLogReaderFetchRateAndTimeMs` meter: the rate
+    /// is `rate(..._count[5m])` and the mean is `..._sum / ..._count`.
+    pub remote_log_reader_fetch_duration_seconds: Histogram,
+    /// Cold-tier reads refused because the pool's pending queue was full.
+    pub remote_log_reader_rejected_total: Counter,
+    /// Segment-index lookups served from the on-disk cache.
+    pub remote_index_cache_hits_total: Counter,
+    /// Segment-index lookups that had to download the index object.
+    pub remote_index_cache_misses_total: Counter,
+    /// Cache entries dropped to stay inside the byte budget.
+    pub remote_index_cache_evictions_total: Counter,
+    /// Bytes the index cache currently holds.
+    pub remote_index_cache_bytes: Gauge,
+    /// Entries the index cache currently holds.
+    pub remote_index_cache_entries: Gauge,
+
+    // --- Milestone 11 Quota entity and request queue metrics (#418, #412) ---
+    /// KIP-599 / KIP-13: cumulative throttle time charged to each quota
+    /// entity, in seconds.
+    ///
+    /// A float counter, because a throttle is routinely a fraction of a
+    /// second and an integer one would have to round every delay to a whole
+    /// second before adding it -- which turns a hundred 20 ms throttles into
+    /// either zero seconds or a hundred.
+    pub quota_entity_throttle_seconds_total: Family<QuotaEntityLabel, Counter<f64, AtomicU64>>,
+    pub queued_requests: Gauge,
+    pub queued_request_bytes: Gauge,
+
     /// The label sets [`Self::replica_lag`] and [`Self::consumer_group_lag`]
     /// currently carry, so that a caller holding only part of a lag label set
     /// can still release the series. See [`LagSeriesIndex`].

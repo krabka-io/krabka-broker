@@ -36,15 +36,24 @@ fn leader_site_drift_partitions(
         .count()
 }
 
+/// Spawns the timer that samples the broker's cluster gauges.
+///
+/// `observability` is the registry the sample is written to and the health
+/// state the broker-state gauge reads; they travel together because every
+/// sample writes the first from the second.
 pub(super) fn spawn_broker_gauge_updater(
     partitions: Arc<PartitionRegistry>,
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
     node_id: krabka_metadata::NodeId,
-    metrics: crate::metrics::BrokerMetrics,
+    observability: (
+        crate::metrics::BrokerMetrics,
+        Option<crate::health::HealthState>,
+    ),
     config: &BrokerConfig,
     shutdown: CancellationToken,
 ) {
+    let (metrics, health) = observability;
     let poll_interval = config.gauge_poll_interval;
     let default_min_insync_replicas = config.default_min_insync_replicas;
     let static_voter_count = config.controller_quorum_voters.len();
@@ -85,31 +94,32 @@ pub(super) fn spawn_broker_gauge_updater(
                     (topic.name.as_str(), minimum)
                 })
                 .collect();
-            let mut health = (0_usize, 0_usize, 0_usize);
+            let mut partition_health = (0_usize, 0_usize, 0_usize);
             for partition in image.all_partitions() {
                 if partition.leader == node_id {
-                    health.0 += usize::from(partition.isr.len() < partition.replicas.len());
+                    partition_health.0 +=
+                        usize::from(partition.isr.len() < partition.replicas.len());
                     let minimum = minimum_isr
                         .get(partition.topic.as_str())
                         .copied()
                         .unwrap_or(default_min_insync_replicas);
-                    health.1 += usize::from(
+                    partition_health.1 += usize::from(
                         i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) < minimum,
                     );
                 }
-                health.2 += usize::from(
+                partition_health.2 += usize::from(
                     partition.replicas.contains(&node_id) && !alive.contains(&partition.leader.0),
                 );
             }
             metrics
                 .under_replicated_partitions
-                .set(i64::try_from(health.0).unwrap_or(i64::MAX));
+                .set(i64::try_from(partition_health.0).unwrap_or(i64::MAX));
             metrics
                 .under_min_isr_partition_count
-                .set(i64::try_from(health.1).unwrap_or(i64::MAX));
+                .set(i64::try_from(partition_health.1).unwrap_or(i64::MAX));
             metrics
                 .offline_partitions_count
-                .set(i64::try_from(health.2).unwrap_or(i64::MAX));
+                .set(i64::try_from(partition_health.2).unwrap_or(i64::MAX));
             metrics.leader_site_drift_partitions.set(
                 i64::try_from(leader_site_drift_partitions(&image, node_id)).unwrap_or(i64::MAX),
             );
@@ -123,6 +133,106 @@ pub(super) fn spawn_broker_gauge_updater(
             metrics
                 .active_controller
                 .set(i64::from(u8::from(is_controller)));
+
+            // Cluster state metrics published by the active controller (#390)
+            if is_controller {
+                let active = image
+                    .brokers()
+                    .filter(|b| alive.contains(&b.node_id.0))
+                    .count();
+                let fenced = image
+                    .brokers()
+                    .filter(|b| !alive.contains(&b.node_id.0))
+                    .count();
+                metrics
+                    .active_brokers
+                    .set(i64::try_from(active).unwrap_or(i64::MAX));
+                metrics
+                    .fenced_brokers
+                    .set(i64::try_from(fenced).unwrap_or(i64::MAX));
+                metrics
+                    .global_topics
+                    .set(i64::try_from(image.topics().count()).unwrap_or(i64::MAX));
+                let mut total_partitions = 0_usize;
+                let mut at_min_isr = 0_usize;
+                let mut reassigning = 0_usize;
+                let mut preferred_imbalance = 0_usize;
+                for partition in image.all_partitions() {
+                    total_partitions += 1;
+                    let minimum = minimum_isr
+                        .get(partition.topic.as_str())
+                        .copied()
+                        .unwrap_or(default_min_insync_replicas);
+                    if i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) == minimum {
+                        at_min_isr += 1;
+                    }
+                    if !partition.adding_replicas.is_empty()
+                        || !partition.removing_replicas.is_empty()
+                    {
+                        reassigning += 1;
+                    }
+                    if partition
+                        .replicas
+                        .first()
+                        .is_some_and(|pref| *pref != partition.leader)
+                    {
+                        preferred_imbalance += 1;
+                    }
+                }
+                metrics
+                    .global_partitions
+                    .set(i64::try_from(total_partitions).unwrap_or(i64::MAX));
+                metrics
+                    .at_min_isr_partition_count
+                    .set(i64::try_from(at_min_isr).unwrap_or(i64::MAX));
+                metrics
+                    .reassigning_partitions
+                    .set(i64::try_from(reassigning).unwrap_or(i64::MAX));
+                metrics
+                    .preferred_replica_imbalance
+                    .set(i64::try_from(preferred_imbalance).unwrap_or(i64::MAX));
+            } else {
+                metrics.active_brokers.set(0);
+                metrics.fenced_brokers.set(0);
+                metrics.global_topics.set(0);
+                metrics.global_partitions.set(0);
+                metrics.at_min_isr_partition_count.set(0);
+                metrics.reassigning_partitions.set(0);
+                metrics.preferred_replica_imbalance.set(0);
+            }
+
+            // KRaft consensus metrics (#390)
+            if let Some(snap) = controller.quorum_snapshot() {
+                for state_label in crate::metrics::RaftStateLabel::ALL {
+                    let is_active = i64::from(state_label.state == snap.current_state);
+                    metrics
+                        .raft_current_state
+                        .get_or_create(&state_label)
+                        .set(is_active);
+                }
+                metrics.raft_current_epoch.set(i64::from(snap.leader_epoch));
+                metrics.raft_high_watermark.set(snap.high_watermark);
+                metrics.raft_log_end_offset.set(snap.log_end_offset);
+                metrics
+                    .raft_voters
+                    .set(i64::try_from(snap.voters.len()).unwrap_or(i64::MAX));
+                metrics
+                    .raft_observers
+                    .set(i64::try_from(snap.observers.len()).unwrap_or(i64::MAX));
+            }
+
+            // Metadata applied offset and lag (#390)
+            let applied_offset = controller.current_metadata_offset();
+            let committed_offset = controller.quorum_committed_offset();
+            metrics.metadata_last_applied_offset.set(applied_offset);
+            let metadata_lag = committed_offset.saturating_sub(applied_offset).max(0);
+            metrics.metadata_lag_records.set(metadata_lag);
+
+            // Broker lifecycle state (#390)
+            if let Some(h) = &health {
+                metrics.broker_state.set(h.broker_state());
+            }
+
             let ignored_static_voters =
                 usize::from(image.kraft_version() >= 1).saturating_mul(static_voter_count);
             metrics
@@ -196,7 +306,7 @@ mod tests {
             Arc::new(fake_source(image, None)),
             Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
             node_id,
-            metrics.clone(),
+            (metrics.clone(), None),
             &config,
             shutdown.child_token(),
         );

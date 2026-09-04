@@ -9,9 +9,15 @@
 //!    is therefore the only one that materializes the partition on the
 //!    leader broker reliably.
 //!
-//! 2. **Spawns a `replicator::run` task** per `(topic, partition)`
-//!    where this broker is in `replicas` but is NOT the leader, and
-//!    cancels tasks for partitions removed from the image.
+//! 2. **Spawns a `replicator::run_fetcher` task** per `(leader, fetcher id)`
+//!    this broker follows anything from, hands it the partitions where this
+//!    broker is in `replicas` but is NOT the leader, and cancels a fetcher
+//!    once nothing is left for it to follow.
+//!
+//!    A partition that joins or leaves a running fetcher does so through the
+//!    fetcher's shared partition map, so a reassignment costs a map write
+//!    rather than a task teardown and a fresh dial. `num.replica.fetchers`
+//!    (`[runtime] replica_fetchers`) says how many fetchers a leader gets.
 
 use std::{
     collections::HashMap,
@@ -60,18 +66,21 @@ struct WalFollowerSpec {
     leader_epoch: krabka_metadata::LeaderEpoch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ReplicatorTaskTarget {
-    topic_id: uuid::Uuid,
-    leader: NodeId,
-    leader_epoch: krabka_metadata::LeaderEpoch,
-}
+/// Which fetcher a partition belongs to: its leader, and the fetcher id the
+/// partition hashes onto within that leader.
+type FetcherKey = (NodeId, usize);
 
-#[derive(Debug)]
-struct ReplicatorTask {
+/// One running fetcher: the task, the token that stops it, the partitions it
+/// follows, and the endpoint it dialled.
+struct FetcherTask {
     shutdown: CancellationToken,
-    target: ReplicatorTaskTarget,
     handle: JoinHandle<()>,
+    /// Shared with the running task. A reconcile writes the partitions the
+    /// fetcher should follow; the fetcher reads them at the top of each round.
+    followed: crate::replicator::FollowedPartitions,
+    /// The leader endpoint this fetcher dialled. A leader that re-registers on
+    /// a different address needs a new connection, which means a new fetcher.
+    endpoint: (String, u16),
 }
 
 #[derive(Debug)]
@@ -102,7 +111,7 @@ pub(crate) struct ReplicatorSupervisor {
     log_dirs: Vec<PathBuf>,
     log_config: LogConfig,
     client_id: String,
-    tasks: DashMap<TopicPartition, ReplicatorTask>,
+    tasks: DashMap<FetcherKey, FetcherTask>,
     wal_tasks: DashMap<crate::wal::quorum::registry::ShardId, WalFollowerTask>,
     wal_task_targets: DashMap<crate::wal::quorum::registry::ShardId, WalFollowerSpec>,
     shutdown: CancellationToken,
@@ -309,7 +318,7 @@ impl ReplicatorSupervisor {
         let task_keys = self
             .tasks
             .iter()
-            .map(|entry| entry.key().clone())
+            .map(|entry| *entry.key())
             .collect::<Vec<_>>();
         for key in task_keys {
             if let Some((_, task)) = self.tasks.remove(&key) {

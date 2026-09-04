@@ -137,29 +137,85 @@ fn snapshot_response_state(
     out
 }
 
+/// The cached set, indexed by each half of a topic's identity.
+///
+/// A response row carries the name the broker resolved *and* the topic id,
+/// but a cache entry created by a KIP-516 request carries only the id (Fetch
+/// v13 sends no names) -- and one created by an older request carries only the
+/// name. Looking the row up by the whole key would miss both, so every
+/// partition would look new, every response would carry the whole subscription
+/// set, and `finalize_incremental` would find nothing to update. The lookup
+/// therefore matches on either half, id first, exactly as the session diff
+/// does when it merges a request row into the cached set.
+struct CachedIndex<'cache> {
+    by_id: std::collections::HashMap<
+        (WireUuid, i32),
+        (&'cache FetchSessionKey, &'cache CachedPartitionState),
+    >,
+    by_name: std::collections::HashMap<
+        (&'cache str, i32),
+        (&'cache FetchSessionKey, &'cache CachedPartitionState),
+    >,
+}
+
+impl<'cache> CachedIndex<'cache> {
+    fn of(
+        cached: &'cache std::collections::HashMap<FetchSessionKey, CachedPartitionState>,
+    ) -> Self {
+        let mut index = Self {
+            by_id: std::collections::HashMap::new(),
+            by_name: std::collections::HashMap::new(),
+        };
+        for (key, state) in cached {
+            if key.topic_id != WireUuid::ZERO {
+                index
+                    .by_id
+                    .insert((key.topic_id, key.partition), (key, state));
+            }
+            if !key.topic_name.is_empty() {
+                index
+                    .by_name
+                    .insert((key.topic_name.as_str(), key.partition), (key, state));
+            }
+        }
+        index
+    }
+
+    fn get(
+        &self,
+        topic_id: WireUuid,
+        topic_name: &str,
+        partition: i32,
+    ) -> Option<(&'cache FetchSessionKey, &'cache CachedPartitionState)> {
+        self.by_id
+            .get(&(topic_id, partition))
+            .or_else(|| self.by_name.get(&(topic_name, partition)))
+            .copied()
+    }
+}
+
 /// KIP-227 incremental-response filter.
 ///
 /// The function drops the partitions whose outgoing state matches the cached
 /// `last_*` snapshot. The broker already told the client these values, and a
 /// second send would waste bytes. The function returns the
-/// `(key, sent_state)` list for the partitions that survived. The caller uses
-/// that list to update the cache's `last_*` fields to what it just emitted.
+/// `(key, sent_state)` list for the partitions that survived, keyed by the
+/// key the cache actually holds so the caller's update lands on it. The caller
+/// uses that list to update the cache's `last_*` fields to what it just
+/// emitted.
 fn filter_incremental_response(
     responses: &mut Vec<FetchableTopicResponse>,
     cached: &std::collections::HashMap<FetchSessionKey, CachedPartitionState>,
 ) -> Vec<(FetchSessionKey, CachedPartitionState)> {
+    let index = CachedIndex::of(cached);
     let mut sent: Vec<(FetchSessionKey, CachedPartitionState)> = Vec::new();
     for tr in responses.iter_mut() {
         tr.partitions.retain(|p| {
-            let key = FetchSessionKey {
-                topic_name: tr.topic.clone(),
-                topic_id: tr.topic_id,
-                partition: p.partition_index,
-            };
+            let entry = index.get(tr.topic_id, &tr.topic, p.partition_index);
             let aborted_hash = hash_aborted_transactions(p.aborted_transactions.as_ref());
             let records_present = p.records.as_ref().is_some_and(|b| b.payload_len() > 0);
-            let changed = match cached.get(&key) {
-                Some(prev) => {
+            let changed = match entry {
+                Some((_, prev)) => {
                     records_present
                         || p.error_code != prev.last_error_code
                         || p.high_watermark != prev.last_high_watermark
@@ -175,6 +231,14 @@ fn filter_incremental_response(
                 None => true,
             };
             if changed {
+                let key = entry.map_or_else(
+                    || FetchSessionKey {
+                        topic_name: tr.topic.clone(),
+                        topic_id: tr.topic_id,
+                        partition: p.partition_index,
+                    },
+                    |(key, _)| key.clone(),
+                );
                 sent.push((
                     key,
                     CachedPartitionState {
@@ -217,4 +281,140 @@ fn hash_aborted_transactions(list: Option<&Vec<AbortedTransaction>>) -> u64 {
         }
     }
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_protocol::owned::fetch_response::{EpochEndOffset, PartitionData};
+
+    use super::*;
+
+    fn cached_entry(
+        topic_name: &str,
+        topic_id: u8,
+        partition: i32,
+        high_watermark: i64,
+    ) -> (FetchSessionKey, CachedPartitionState) {
+        (
+            FetchSessionKey {
+                topic_name: topic_name.to_owned(),
+                topic_id: WireUuid([topic_id; 16]),
+                partition,
+            },
+            sent_state(high_watermark),
+        )
+    }
+
+    /// What the broker recorded for a partition it answered with
+    /// `partition_data(high_watermark)`. Deriving it from the same row keeps
+    /// the "nothing changed" case honest: every field the filter compares is
+    /// set from the row rather than left at whichever default happens to
+    /// match.
+    fn sent_state(high_watermark: i64) -> CachedPartitionState {
+        let row = partition_data(high_watermark);
+        CachedPartitionState {
+            last_high_watermark: row.high_watermark,
+            last_last_stable_offset: row.last_stable_offset,
+            last_log_start_offset: row.log_start_offset,
+            last_preferred_read_replica: row.preferred_read_replica,
+            last_aborted_txns_hash: hash_aborted_transactions(row.aborted_transactions.as_ref()),
+            last_error_code: row.error_code,
+            ..CachedPartitionState::default()
+        }
+    }
+
+    fn partition_data(high_watermark: i64) -> PartitionData {
+        PartitionData {
+            partition_index: 0,
+            high_watermark,
+            diverging_epoch: EpochEndOffset {
+                epoch: -1,
+                end_offset: -1,
+                ..EpochEndOffset::default()
+            },
+            ..PartitionData::default()
+        }
+    }
+
+    fn topic_response(topic: &str, topic_id: u8, high_watermark: i64) -> FetchableTopicResponse {
+        FetchableTopicResponse {
+            topic: topic.to_owned(),
+            topic_id: WireUuid([topic_id; 16]),
+            partitions: vec![partition_data(high_watermark)],
+            ..FetchableTopicResponse::default()
+        }
+    }
+
+    /// A Fetch v13 request names topics by id alone, so the cached key it
+    /// created has no name -- while the response row the broker built carries
+    /// the name it resolved. The unchanged partition still has to drop out.
+    #[test]
+    fn an_unchanged_partition_cached_by_id_alone_is_not_resent() {
+        let cached: std::collections::HashMap<_, _> =
+            [cached_entry("", 7, 0, 42)].into_iter().collect();
+        let mut responses = vec![topic_response("orders", 7, 42)];
+
+        let sent = filter_incremental_response(&mut responses, &cached);
+
+        assert!(responses.is_empty());
+        assert!(sent.is_empty());
+    }
+
+    /// The same row, changed. It is sent, and the state comes back under the
+    /// key the cache holds -- not under the response's resolved name, which
+    /// `finalize_incremental` would not find.
+    #[test]
+    fn a_changed_partition_reports_the_key_the_cache_holds() {
+        let cached: std::collections::HashMap<_, _> =
+            [cached_entry("", 7, 0, 42)].into_iter().collect();
+        let mut responses = vec![topic_response("orders", 7, 43)];
+
+        let sent = filter_incremental_response(&mut responses, &cached);
+
+        assert!(
+            sent == vec![(
+                FetchSessionKey {
+                    topic_name: String::new(),
+                    topic_id: WireUuid([7; 16]),
+                    partition: 0,
+                },
+                sent_state(43),
+            )]
+        );
+    }
+
+    /// A pre-KIP-516 session caches the name and no id, and the response
+    /// carries both. The name half has to match on its own.
+    #[test]
+    fn a_partition_cached_by_name_alone_still_matches() {
+        let cached: std::collections::HashMap<_, _> =
+            [cached_entry("orders", 0, 0, 42)].into_iter().collect();
+        let mut responses = vec![topic_response("orders", 7, 42)];
+
+        let sent = filter_incremental_response(&mut responses, &cached);
+
+        assert!(responses.is_empty());
+        assert!(sent.is_empty());
+    }
+
+    /// Two topics cached by id alone are two partitions, not one: the filter
+    /// must not answer for `b` out of `a`'s cached state.
+    #[test]
+    fn two_nameless_cached_topics_are_told_apart_by_id() {
+        let cached: std::collections::HashMap<_, _> =
+            [cached_entry("", 1, 0, 10), cached_entry("", 2, 0, 20)]
+                .into_iter()
+                .collect();
+        let mut responses = vec![topic_response("a", 1, 10), topic_response("b", 2, 99)];
+
+        let sent = filter_incremental_response(&mut responses, &cached);
+
+        let surviving: Vec<(String, i64)> = responses
+            .iter()
+            .map(|topic| (topic.topic.clone(), topic.partitions[0].high_watermark))
+            .collect();
+        assert!(surviving == vec![("b".to_owned(), 99)]);
+        assert!(sent.len() == 1);
+    }
 }

@@ -88,6 +88,8 @@ pub fn metadata_progress(
 /// than saying only that something is wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotReady {
+    /// Controlled shutdown is draining leadership.
+    ShuttingDown,
     /// The log dirs have not finished recovering.
     LogDirRecovery,
     /// The data-plane listeners are not accepting yet.
@@ -112,6 +114,7 @@ impl NotReady {
     #[must_use]
     pub fn condition(self) -> &'static str {
         match self {
+            Self::ShuttingDown => "shutting_down",
             Self::LogDirRecovery => "log_dir_recovery",
             Self::ListenersBound => "listeners_bound",
             Self::MetadataQuorumUnreached => "metadata_quorum_unreached",
@@ -124,6 +127,7 @@ impl std::fmt::Display for NotReady {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "not ready: {}: ", self.condition())?;
         match *self {
+            Self::ShuttingDown => f.write_str("controlled shutdown is draining leadership"),
             Self::LogDirRecovery => f.write_str("log directory recovery has not completed"),
             Self::ListenersBound => f.write_str("the data-plane listeners are not bound"),
             Self::MetadataQuorumUnreached => {
@@ -148,6 +152,7 @@ pub struct HealthState {
 
 struct Inner {
     max_metadata_lag: u64,
+    shutting_down: AtomicBool,
     log_dir_recovery_complete: AtomicBool,
     listeners_bound: AtomicBool,
     progress: OnceLock<Arc<dyn MetadataProgress>>,
@@ -174,11 +179,17 @@ impl HealthState {
         Self {
             inner: Arc::new(Inner {
                 max_metadata_lag,
+                shutting_down: AtomicBool::new(false),
                 log_dir_recovery_complete: AtomicBool::new(false),
                 listeners_bound: AtomicBool::new(false),
                 progress: OnceLock::new(),
             }),
         }
+    }
+
+    /// Called when controlled shutdown begins draining leadership.
+    pub fn mark_shutting_down(&self) {
+        self.inner.shutting_down.store(true, Ordering::Release);
     }
 
     /// Called once the log dirs have been scanned and every recovered
@@ -203,12 +214,30 @@ impl HealthState {
         let _ = self.inner.progress.set(progress);
     }
 
+    /// Returns the Kafka `BrokerState` ordinal (1=STARTING, 2=RECOVERY,
+    /// 3=RUNNING, 6=`PENDING_CONTROLLED_SHUTDOWN`, 7=`SHUTTING_DOWN`).
+    #[must_use]
+    pub fn broker_state(&self) -> i64 {
+        if self.inner.shutting_down.load(Ordering::Acquire) {
+            6 // PENDING_CONTROLLED_SHUTDOWN
+        } else if !self.inner.log_dir_recovery_complete.load(Ordering::Acquire) {
+            2 // RECOVERY
+        } else if !self.inner.listeners_bound.load(Ordering::Acquire) {
+            1 // STARTING
+        } else {
+            3 // RUNNING
+        }
+    }
+
     /// The readiness verdict: `Ok(())`, or the first condition that fails.
     ///
     /// # Errors
     ///
     /// Returns the [`NotReady`] condition blocking readiness.
     pub fn readiness(&self) -> Result<(), NotReady> {
+        if self.inner.shutting_down.load(Ordering::Acquire) {
+            return Err(NotReady::ShuttingDown);
+        }
         if !self.inner.log_dir_recovery_complete.load(Ordering::Acquire) {
             return Err(NotReady::LogDirRecovery);
         }

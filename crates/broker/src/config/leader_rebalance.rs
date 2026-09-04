@@ -1,10 +1,14 @@
-//! KIP-460 automatic leader rebalancing: the cadence and the imbalance
-//! threshold the ticker reads, and the bounds they must stay inside.
+//! KIP-460 automatic leader rebalancing: the cadence the ticker reads, and
+//! the bounds it must stay inside.
+//!
+//! There is no imbalance-ratio threshold. Kafka's
+//! `leader.imbalance.per.broker.percentage` belongs to the `ZooKeeper`
+//! controller; the `KRaft` controller ignores it and restores every partition
+//! whose preferred replica is available, bounded only by how many elections
+//! it will submit in one pass. krabka is `KRaft`-only, so it follows the
+//! `KRaft` controller.
 
-use krabka_units::{
-    Ratio, Time,
-    convert::{RatioExt, TimeExt},
-};
+use krabka_units::{Time, convert::TimeExt};
 
 use crate::{BrokerError, config::BrokerConfig};
 
@@ -13,13 +17,6 @@ impl BrokerConfig {
         if self.leader_imbalance_check_interval <= <Time as TimeExt>::ZERO {
             return Err(BrokerError::InvalidLeaderRebalanceInterval { value: 0 });
         }
-        if self.leader_imbalance_per_broker > <Ratio as RatioExt>::ONE {
-            // The error reports the operator-facing percentage, which is how
-            // `leader.imbalance.per.broker.percentage` is written.
-            return Err(BrokerError::InvalidLeaderRebalanceThreshold {
-                percent: self.leader_imbalance_per_broker.percent_f64(),
-            });
-        }
         Ok(())
     }
 }
@@ -27,7 +24,7 @@ impl BrokerConfig {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_units::{minutes, percent};
+    use krabka_units::minutes;
 
     use super::*;
 
@@ -36,7 +33,6 @@ mod tests {
         let c = BrokerConfig::default();
         check!(c.features.auto_leader_rebalance_enable);
         check!(c.leader_imbalance_check_interval == minutes(5));
-        check!(c.leader_imbalance_per_broker == percent(10));
     }
 
     #[test]
@@ -55,29 +51,5 @@ mod tests {
             c.validate(),
             Err(BrokerError::InvalidLeaderRebalanceInterval { value: 0 })
         ));
-    }
-
-    #[test]
-    fn rebalance_threshold_over_100_rejected_by_validate() {
-        let c = BrokerConfig {
-            leader_imbalance_per_broker: percent(101),
-            ..BrokerConfig::default()
-        };
-        assert!(matches!(
-            c.validate(),
-            Err(BrokerError::InvalidLeaderRebalanceThreshold { percent })
-                if (percent - 101.0).abs() < 1e-9
-        ));
-    }
-
-    #[test]
-    fn rebalance_threshold_100_is_allowed_by_validate() {
-        let c = BrokerConfig {
-            leader_imbalance_per_broker: percent(100),
-            ..BrokerConfig::default()
-        };
-
-        c.validate()
-            .expect("100% leader imbalance threshold is the maximum valid value");
     }
 }

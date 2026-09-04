@@ -13,7 +13,7 @@
 //!   (`api_key=18`) is the one EXCEPT case: its response header is always
 //!   v0.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use futures_util::SinkExt;
@@ -39,6 +39,74 @@ pub(crate) mod sasl;
 mod session;
 #[cfg(test)]
 mod test_support;
+
+/// The broker-wide `queued.max.request.bytes` budget (#412).
+///
+/// The total is carried beside the semaphore because
+/// [`tokio::sync::Semaphore::acquire_many`] does not refuse a request for more
+/// permits than the semaphore was built with -- it waits, and no response can
+/// ever free enough room, so the wait never ends. The comparison against
+/// `total` is what turns that into a refusal.
+pub(crate) struct RequestByteBudget {
+    permits: Arc<tokio::sync::Semaphore>,
+    total: usize,
+}
+
+impl RequestByteBudget {
+    /// One permit per byte. `Semaphore` caps its permit count well below
+    /// `usize::MAX`, so a budget above that ceiling is clamped to it rather
+    /// than rejected: at that size the knob is off in every sense that
+    /// matters.
+    pub(crate) fn of(budget: usize) -> Self {
+        let total = budget.min(tokio::sync::Semaphore::MAX_PERMITS);
+        Self {
+            permits: Arc::new(tokio::sync::Semaphore::new(total)),
+            total,
+        }
+    }
+
+    /// The permits not currently spent. Test-only: what production code cares
+    /// about is whether a frame is admitted, not how much room is left.
+    #[cfg(test)]
+    pub(crate) fn available(&self) -> usize {
+        self.permits.available_permits()
+    }
+}
+
+/// What the `queued.max.request.bytes` budget said about one frame.
+enum RequestBytes {
+    /// The frame may be handled. The permit, when there is one, is the budget
+    /// it spent.
+    Granted(Option<tokio::sync::OwnedSemaphorePermit>),
+    /// The frame is larger than the whole budget, so no amount of waiting can
+    /// admit it.
+    TooLarge,
+}
+
+/// Charges `frame_bytes` against the broker-wide request-byte budget, waiting
+/// for room when there is none.
+///
+/// `None` for the budget means the knob is off, which is Kafka's default, and
+/// every frame is granted immediately.
+async fn acquire_request_bytes(broker: &Broker, frame_bytes: usize) -> RequestBytes {
+    let Some(budget) = broker.queued_request_bytes.as_ref() else {
+        return RequestBytes::Granted(None);
+    };
+    if frame_bytes > budget.total {
+        return RequestBytes::TooLarge;
+    }
+    // A zero-byte frame is not a request the codec would hand back, but taking
+    // no permits for one would let it through the budget unmeasured either
+    // way, and `acquire_many(0)` is a no-op that would say "granted" without
+    // proving the budget has room.
+    let wanted = u32::try_from(frame_bytes).unwrap_or(u32::MAX).max(1);
+    match budget.permits.clone().acquire_many_owned(wanted).await {
+        Ok(permit) => RequestBytes::Granted(Some(permit)),
+        // The semaphore is never closed, and the size was checked above.
+        Err(_) => RequestBytes::TooLarge,
+    }
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -48,7 +116,7 @@ mod unsupported_version;
 pub use self::accept::serve_connection_on_listener;
 use self::{
     fetch::dispatch_fetch,
-    guards::{ActiveConnectionGuard, InFlightGuard},
+    guards::{ActiveConnectionGuard, InFlightGuard, QueuedRequestGuard},
     registry::{DispatchContext, send_registry_response},
     response::{ResponseShape, apply_request_quota, encode_response},
     sasl::{SaslFrameOutcome, try_handle_sasl_frame},
@@ -290,6 +358,37 @@ async fn serve_connection_stream<S>(
         else {
             break;
         };
+        // `queued.max.requests`: Kafka's bound is the depth of the request
+        // queue, so the wait belongs after the read and not before it. A
+        // connection sitting idle has nothing queued and must hold no
+        // capacity; taking a permit to wait on the socket would let a broker
+        // with more idle connections than permits stop serving anything.
+        let Ok(permit) = broker.queued_requests_sem.clone().acquire_owned().await else {
+            break;
+        };
+        // KIP-style `queued.max.request.bytes`: charge the frame against the
+        // broker-wide byte budget and hold it until the response is written,
+        // so a client that opens a hundred connections and sends a hundred
+        // megabytes on each cannot make the broker hold all of it at once.
+        let bytes_permit = match acquire_request_bytes(&broker, frame.len()).await {
+            RequestBytes::Granted(permit) => permit,
+            RequestBytes::TooLarge => {
+                // No response can ever free enough room, so waiting would be
+                // waiting forever. The codec refuses a frame over
+                // `socket.request.max.bytes` the same way.
+                tracing::warn!(
+                    peer = %peer,
+                    frame_bytes = frame.len(),
+                    "frame exceeds queued.max.request.bytes, closing"
+                );
+                broker
+                    .metrics
+                    .record_connection_close(crate::metrics::ConnectionCloseReason::DecodeError);
+                break;
+            }
+        };
+        let _queued_guard =
+            QueuedRequestGuard::new(permit, bytes_permit, &broker.metrics, frame.len());
         let Some((parsed, req_span)) = parse_connection_request(&broker, &frame, &peer) else {
             // Bytes the broker cannot read as a request are the same reason
             // as bytes the codec refused, one layer further in: the peer sent

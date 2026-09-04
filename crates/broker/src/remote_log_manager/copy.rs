@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use krabka_log::SegmentExport;
 use krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition};
+use krabka_units::convert::ByteSizeExt as _;
 use tracing::warn;
 
 use super::{
@@ -63,6 +64,21 @@ pub(crate) async fn copy_eligible(
         }
     }
 
+    // KIP-405's `RemoteCopyLagSegments` / `RemoteCopyLagBytes`, recorded
+    // before the round the way `RLMCopyTask.copyLogSegmentsToRemote` does:
+    // the sealed local segments this partition has not finished copying, and
+    // their total size. A tier that has stopped keeping up shows a lag that
+    // climbs, where a rate would merely stop.
+    let pending: Vec<&SegmentExport> = exports
+        .iter()
+        .filter(|ex| !known.contains(&ex.base_offset.0))
+        .collect();
+    tier.metrics.set_remote_copy_lag(
+        &tp.topic,
+        u64::try_from(pending.len()).unwrap_or(u64::MAX),
+        pending.iter().map(|ex| ex.size.bytes_u64()).sum(),
+    );
+
     let mut chain = ChainPosition::seed(tier.archive, &listed);
     let mut copied = 0;
     for ex in exports {
@@ -103,12 +119,137 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::remote_log_manager::{
-        ArchiveMode,
-        test_support::{
-            FakeWormArchive, rolled_log, stuck_started_segment, synth_export, tier, tp,
+    use crate::{
+        metrics::BrokerMetrics,
+        remote_log_manager::{
+            ArchiveMode, RemoteTier,
+            test_support::{
+                FakeWormArchive, rolled_log, stuck_started_segment, synth_export, tier, tp,
+            },
         },
     };
+
+    /// KIP-405's `RemoteCopyRequestsPerSec`, `RemoteCopyBytesPerSec` and the
+    /// two copy-lag gauges. An operator whose object store starts refusing
+    /// writes learns about it from these; before them, a stalled tier was
+    /// visible only as consumer lag and a filling disk.
+    #[tokio::test]
+    async fn a_copy_round_records_its_requests_bytes_and_lag() {
+        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let metrics = BrokerMetrics::new();
+        let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+        let tier = RemoteTier {
+            archive: ArchiveMode::Mutable,
+            rsm: &rsm,
+            rlmm: &rlmm,
+            metrics: &metrics,
+            index_cache: &index_cache,
+        };
+        let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
+
+        let copied = copy_eligible(&tier, &tp(), 1, LeaderEpoch(0), exports).await;
+
+        check!(copied == 2);
+        let topic = crate::metrics::TopicLabel {
+            topic: std::sync::Arc::from(tp().topic.as_str()),
+        };
+        check!(
+            metrics
+                .remote_copy_requests_total
+                .get_or_create(&topic)
+                .get()
+                == 2
+        );
+        check!(metrics.remote_copy_errors_total.get_or_create(&topic).get() == 0);
+        check!(metrics.remote_copy_bytes_total.get_or_create(&topic).get() == 128);
+        // The lag is what the round found waiting, recorded before it ran.
+        check!(metrics.remote_copy_lag_segments.get_or_create(&topic).get() == 2);
+        check!(metrics.remote_copy_lag_bytes.get_or_create(&topic).get() == 128);
+    }
+
+    /// A copy the backend refuses counts as an error and moves no bytes, so
+    /// the ratio of the two counters is a failure rate an alert can read.
+    #[tokio::test]
+    async fn a_refused_copy_counts_an_error_and_no_bytes() {
+        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(RefusingRsm);
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let metrics = BrokerMetrics::new();
+        let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+        let tier = RemoteTier {
+            archive: ArchiveMode::Mutable,
+            rsm: &rsm,
+            rlmm: &rlmm,
+            metrics: &metrics,
+            index_cache: &index_cache,
+        };
+
+        let copied = copy_eligible(
+            &tier,
+            &tp(),
+            1,
+            LeaderEpoch(0),
+            vec![synth_export(0, 9, 100, 64)],
+        )
+        .await;
+
+        check!(copied == 0);
+        let topic = crate::metrics::TopicLabel {
+            topic: std::sync::Arc::from(tp().topic.as_str()),
+        };
+        check!(
+            metrics
+                .remote_copy_requests_total
+                .get_or_create(&topic)
+                .get()
+                == 1
+        );
+        check!(metrics.remote_copy_errors_total.get_or_create(&topic).get() == 1);
+        check!(metrics.remote_copy_bytes_total.get_or_create(&topic).get() == 0);
+    }
+
+    /// An RSM that refuses every copy, so the error path is the only one a
+    /// round over it can take.
+    struct RefusingRsm;
+
+    impl RemoteStorageManager for RefusingRsm {
+        fn copy_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            Err(RemoteStorageError::Io(std::io::Error::other(
+                "the backend refused the copy",
+            )))
+        }
+        fn fetch_log_segment(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+            _start: u32,
+            _end: Option<u32>,
+        ) -> Result<Vec<u8>, RemoteStorageError> {
+            Err(RemoteStorageError::SegmentNotFound(
+                metadata.remote_log_segment_id().clone(),
+            ))
+        }
+        fn fetch_index(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+            _index_type: IndexType,
+        ) -> Result<Vec<u8>, RemoteStorageError> {
+            Err(RemoteStorageError::SegmentNotFound(
+                metadata.remote_log_segment_id().clone(),
+            ))
+        }
+        fn delete_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            Ok(())
+        }
+    }
 
     /// An RSM whose copy always succeeds, handing back `receipt` verbatim,
     /// and whose delete always succeeds. It touches no files, so tests can

@@ -57,6 +57,7 @@ mod tests {
             from: NodeId(2),
             fetch_epoch: 1,
             fetch_offset: 5,
+            replica_directory_id: uuid::Uuid::nil(),
         };
         let mut c = &req.encode()[..];
         let dreq = FetchRequest::decode(&mut c, FETCH_VERSION).unwrap();

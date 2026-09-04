@@ -10,10 +10,7 @@ use std::collections::HashSet;
 
 use krabka_metadata::{MetadataImage, NodeId};
 
-use crate::{
-    broker::Broker, handlers::RequestContext, heartbeat::controller_state::ControllerLivenessState,
-    leader_election::ElectionType,
-};
+use crate::{broker::Broker, handlers::RequestContext, leader_election::ElectionType};
 
 /// Everything one partition's election reads, and nothing it writes.
 ///
@@ -23,7 +20,7 @@ pub(super) struct ElectionEnv<'a> {
     pub(super) broker: &'a Broker,
     pub(super) image: &'a MetadataImage,
     pub(super) ctx: &'a RequestContext<'a>,
-    pub(super) liveness: &'a ControllerLivenessState,
+    pub(super) alive: &'a HashSet<u64>,
     pub(super) witnesses: &'a HashSet<NodeId>,
     pub(super) election: ElectionType,
 }

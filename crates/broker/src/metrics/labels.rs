@@ -336,15 +336,21 @@ pub enum ConnectionCloseReason {
     DecodeError,
     /// The client closed its end of the connection.
     PeerClosed,
+    /// Inbound connection rejected because `max.connections` was reached.
+    MaxConnections,
+    /// Inbound connection rejected because `max.connections.per.ip` was reached.
+    MaxConnectionsPerIp,
 }
 
 impl ConnectionCloseReason {
     /// Every reason, in the order the module documents them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::Idle,
         Self::SaslSessionExpired,
         Self::DecodeError,
         Self::PeerClosed,
+        Self::MaxConnections,
+        Self::MaxConnectionsPerIp,
     ];
 
     /// The `reason` label value this variant renders as.
@@ -355,6 +361,8 @@ impl ConnectionCloseReason {
             Self::SaslSessionExpired => "sasl_session_expired",
             Self::DecodeError => "decode_error",
             Self::PeerClosed => "peer_closed",
+            Self::MaxConnections => "max_connections",
+            Self::MaxConnectionsPerIp => "max_connections_per_ip",
         }
     }
 }
@@ -366,8 +374,8 @@ impl EncodeLabelValue for ConnectionCloseReason {
 }
 
 /// Connection-close label set, paired with the `connection_closes` counter
-/// family. Cardinality is bounded at four, because the field is the closed
-/// [`ConnectionCloseReason`] enum and no caller can name a fifth reason.
+/// family. Cardinality is bounded at six, because the field is the closed
+/// [`ConnectionCloseReason`] enum and no caller can name a seventh reason.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ConnectionCloseReasonLabel {
     pub reason: ConnectionCloseReason,
@@ -376,15 +384,20 @@ pub struct ConnectionCloseReasonLabel {
 /// The client quota that caused a throttle the broker applied.
 ///
 /// Kafka splits its quotas the same way, and names them the same way in
-/// `kafka.server:type=*QuotaManager`. The four variants are the quotas whose
+/// `kafka.server:type=*QuotaManager`. The five variants are the quotas whose
 /// delay this broker *sleeps* on: `producer_byte_rate` (KIP-13),
-/// `consumer_byte_rate` (KIP-13), `request_percentage` (KIP-124), and
+/// `consumer_byte_rate` (KIP-13), `request_percentage` (KIP-124),
 /// `controller_mutation_rate` (KIP-599), which `CreateTopics`,
 /// `CreatePartitions` and `DeleteTopics` apply inline once they have assembled
-/// their response. Kafka's `LeaderReplication` and `FollowerReplication`
-/// quotas are absent because KIP-73 throttles a follower fetch by dropping
-/// partitions out of the response rather than by delaying it, so there is no
-/// sleep to attribute.
+/// their response, and `connection_creation_rate` (KIP-612) on the accept path.
+/// Kafka's `LeaderReplication` and `FollowerReplication` quotas are absent
+/// because KIP-73 throttles a follower fetch by dropping partitions out of the
+/// response rather than by delaying it, so there is no sleep to attribute. The
+/// replication throttle is published as its own byte-rate instead:
+/// `replication_throttled_bytes_out` and `replication_throttled_bytes_in`,
+/// which stand for Kafka's `LeaderReplication` and `FollowerReplication`
+/// `byte-rate` sensors, with `replication_throttle_sleeps` for the rounds it
+/// held back entirely.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum QuotaType {
     /// KIP-13 `producer_byte_rate`, charged on the Produce path.
@@ -396,16 +409,37 @@ pub enum QuotaType {
     /// KIP-599 `controller_mutation_rate`, charged on the topic-mutating
     /// admin apis by the number of partitions the request moves.
     ControllerMutation,
+    /// KIP-612 `connection_creation_rate`, charged on the accept path.
+    ConnectionCreation,
 }
 
 impl QuotaType {
     /// Every quota the broker applies a throttle for.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Produce,
         Self::Fetch,
         Self::Request,
         Self::ControllerMutation,
+        Self::ConnectionCreation,
     ];
+
+    /// The dynamic-config key this quota is configured under, as
+    /// `AlterClientQuotas` spells it.
+    ///
+    /// It is the inverse of the key each bucket is created under, and it is
+    /// what lets the quota-expiry sweep find the series an expired bucket
+    /// published. `None` for a key no quota is charged against.
+    #[must_use]
+    pub fn from_config_key(key: &str) -> Option<Self> {
+        match key {
+            "producer_byte_rate" => Some(Self::Produce),
+            "consumer_byte_rate" => Some(Self::Fetch),
+            "request_percentage" => Some(Self::Request),
+            "controller_mutation_rate" => Some(Self::ControllerMutation),
+            "connection_creation_rate" => Some(Self::ConnectionCreation),
+            _ => None,
+        }
+    }
 
     /// The `quota_type` label value this variant renders as. The spelling is
     /// Kafka's own `QuotaType` name, so one dashboard query reads the same
@@ -417,6 +451,7 @@ impl QuotaType {
             Self::Fetch => "Fetch",
             Self::Request => "Request",
             Self::ControllerMutation => "ControllerMutation",
+            Self::ConnectionCreation => "connection_creation_rate",
         }
     }
 }
@@ -428,12 +463,41 @@ impl EncodeLabelValue for QuotaType {
 }
 
 /// Applied-quota label set, paired with the `quota_throttle_duration_seconds`
-/// histogram family. Cardinality is bounded at four, because the field is the
+/// histogram family. Cardinality is bounded at five, because the field is the
 /// closed [`QuotaType`] enum: no principal, client id or topic reaches this
 /// label set, so no client can invent a series.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct QuotaTypeLabel {
     pub quota_type: QuotaType,
+}
+
+/// `KRaft` voter consensus state label set, paired with `raft_current_state`.
+/// One-hot encoded across the four mutually exclusive states.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct RaftStateLabel {
+    pub state: &'static str,
+}
+
+impl RaftStateLabel {
+    pub const LEADER: Self = Self { state: "leader" };
+    pub const FOLLOWER: Self = Self { state: "follower" };
+    pub const CANDIDATE: Self = Self { state: "candidate" };
+    pub const OBSERVER: Self = Self { state: "observer" };
+    pub const ALL: [Self; 4] = [
+        Self::LEADER,
+        Self::FOLLOWER,
+        Self::CANDIDATE,
+        Self::OBSERVER,
+    ];
+}
+
+/// Per-entity client quota label set, paired with
+/// `quota_entity_throttle_seconds_total`.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct QuotaEntityLabel {
+    pub quota_type: QuotaType,
+    pub user: Option<String>,
+    pub client_id: Option<String>,
 }
 
 /// The drain path a fetch response's records regions took to the socket.

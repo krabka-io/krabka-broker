@@ -148,6 +148,7 @@ async fn follower_fetch_redirects_to_current_leader() {
             from: NodeId(3),
             fetch_epoch: 1,
             fetch_offset: 0,
+            replica_directory_id: uuid::Uuid::nil(),
         }
         .encode(),
         reply,
@@ -179,6 +180,7 @@ async fn fetch_without_leader_returns_error_instead_of_dropping_reply() {
             from: NodeId(2),
             fetch_epoch: leader_epoch,
             fetch_offset: 0,
+            replica_directory_id: uuid::Uuid::nil(),
         }
         .encode(),
         reply,

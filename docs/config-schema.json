@@ -1,4 +1,3 @@
-
 {
   "$defs": {
     "AuthzType": {
@@ -36,12 +35,14 @@
       "properties": {
         "every_n": {
           "default": 1000,
+          "description": "Emit a checkpoint after this many audit records.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "every_secs": {
           "default": 60,
+          "description": "Emit a checkpoint at least this often, in seconds.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -108,9 +109,11 @@
       "description": "`[audit.signing]` — Ed25519 checkpoint signing key.",
       "properties": {
         "key_id": {
+          "description": "Key id recorded on each checkpoint, so a verifier can follow a key\nrotation.",
           "type": "string"
         },
         "key_path": {
+          "description": "Path to the PKCS#8 Ed25519 private key that signs audit checkpoints.",
           "type": "string"
         }
       },
@@ -126,10 +129,12 @@
       "properties": {
         "dir": {
           "default": "audit-spool",
+          "description": "Directory that holds the spool files. A relative path resolves under\nthe broker's log directory.",
           "type": "string"
         },
         "max_bytes": {
           "default": 1073741824,
+          "description": "Cap on the total size of the spool on disk.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -161,6 +166,7 @@
         },
         "super_users": {
           "default": [],
+          "description": "Principals that bypass every ACL check, Kafka's `super.users`. The\nactive authorizer and the delegation-token `act-as` gate both read it.\nEmpty is the default and grants no bypass.",
           "items": {
             "type": "string"
           },
@@ -229,6 +235,7 @@
       "type": "object"
     },
     "FileClientAuthMode": {
+      "description": "Whether a TLS listener asks for and requires a client certificate,\nKafka's `ssl.client.auth`. `Disabled` is the default and never asks;\n`Optional` asks and accepts a connection that presents none; `Required`\nrejects a connection that presents none. `Optional` and `Required` both\nneed a `client_ca_path`.",
       "enum": [
         "Disabled",
         "Optional",
@@ -318,6 +325,7 @@
           ]
         },
         "keytab_path": {
+          "description": "Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI\naccept path reads it to answer a client's ticket.",
           "type": "string"
         },
         "max_time_skew": {
@@ -364,15 +372,19 @@
           "additionalProperties": false,
           "properties": {
             "client_principal": {
+              "description": "Kerberos principal this broker authenticates as when it dials a\npeer.",
               "type": "string"
             },
             "kdc_url": {
+              "description": "KDC endpoint (for example `tcp://kdc:88`) used to obtain the\nservice ticket, bypassing krb5.conf discovery.",
               "type": "string"
             },
             "keytab_path": {
+              "description": "Keytab that holds the key for `client_principal`.",
               "type": "string"
             },
             "service_name": {
+              "description": "The peer's `sasl.kerberos.service.name`. Defaults to `\"kafka\"`\nwhen omitted.",
               "type": [
                 "string",
                 "null"
@@ -501,9 +513,11 @@
     "FileListener": {
       "properties": {
         "advertised": {
+          "description": "`host:port` published to clients in `Metadata` responses, Kafka's\n`advertised.listeners` entry for this listener.",
           "type": "string"
         },
         "bind_addr": {
+          "description": "Local `host:port` this listener binds.",
           "type": "string"
         },
         "connections_max_idle": {
@@ -525,9 +539,11 @@
           ]
         },
         "name": {
+          "description": "Listener name, for example `\"PLAINTEXT\"` or `\"SASL_SSL\"`. It is the\nname `inter_broker_listener_name` and Kafka's\n`listener.security.protocol.map` refer to.",
           "type": "string"
         },
         "protocol": {
+          "description": "Security protocol this listener speaks: `Plaintext`, `Ssl`,\n`SaslPlaintext`, or `SaslSsl`.",
           "type": "string"
         },
         "sasl_config": {
@@ -563,6 +579,7 @@
       "properties": {
         "enabled_mechanisms": {
           "default": [],
+          "description": "SASL mechanisms this listener accepts, Kafka's\n`sasl.enabled.mechanisms`. Each entry is a wire name such as `PLAIN`,\n`SCRAM-SHA-256`, `GSSAPI`, or `OAUTHBEARER`; an unknown name is\nrejected at parse time.",
           "items": {
             "type": "string"
           },
@@ -826,6 +843,15 @@
           ],
           "description": "Native Google Cloud Storage backend parameters. Omit to use\n`storage_dir` or `[remote_storage.s3]`."
         },
+        "index_cache_size": {
+          "default": null,
+          "description": "Byte budget of the on-disk cache of remote segment indexes under\n`<log_dir>/remote-log-index-cache`. Kafka's\n`remote.log.index.file.cache.total.size.bytes`; defaults to 1 GiB.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kafka_metadata": {
           "anyOf": [
             {
@@ -836,6 +862,24 @@
             }
           ],
           "description": "Opt-in to the topic-backed `RemoteLogMetadataManager`.\nWhen absent, the broker uses the in-memory fixture."
+        },
+        "reader_max_pending_tasks": {
+          "description": "How many cold-tier reads may wait for a reader slot before one is\nrefused. Kafka's `remote.log.reader.max.pending.tasks`; defaults to\n100.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reader_threads": {
+          "description": "How many cold-tier reads may run at once. Kafka's\n`remote.log.reader.threads`; defaults to 10.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "s3": {
           "anyOf": [
@@ -1107,18 +1151,22 @@
     "FileTlsConfig": {
       "properties": {
         "cert_path": {
+          "description": "PEM file holding this listener's server certificate chain.",
           "type": "string"
         },
         "client_auth": {
-          "$ref": "#/$defs/FileClientAuthMode"
+          "$ref": "#/$defs/FileClientAuthMode",
+          "description": "Whether this listener asks for and requires a client certificate.\nSee [`FileClientAuthMode`]. Defaults to `Disabled`."
         },
         "client_ca_path": {
+          "description": "PEM file of CA(s) this listener validates client certificates\nagainst. Absent leaves mTLS without a client trust store, so\n`client_auth` has to be `Disabled`.",
           "type": [
             "string",
             "null"
           ]
         },
         "key_path": {
+          "description": "PEM file holding the private key for `cert_path`.",
           "type": "string"
         },
         "principal_mapping_rules": {
@@ -1229,6 +1277,7 @@
       "properties": {
         "acl_max_principal": {
           "default": null,
+          "description": "Maximum encoded ACL principal length.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1237,6 +1286,7 @@
         },
         "acl_max_resource_name": {
           "default": null,
+          "description": "Maximum encoded ACL resource-name length.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1244,6 +1294,7 @@
           ]
         },
         "audit_event_queue_capacity": {
+          "description": "Capacity of the asynchronous audit event queue.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1253,6 +1304,7 @@
         },
         "audit_partition_wait_timeout": {
           "default": null,
+          "description": "Maximum wait for the audit partition to become available.",
           "format": "duration",
           "type": [
             "string",
@@ -1261,6 +1313,7 @@
         },
         "audit_spool_replay_interval": {
           "default": null,
+          "description": "Cadence at which the audit spool replays records it could not append.",
           "format": "duration",
           "type": [
             "string",
@@ -1269,6 +1322,7 @@
         },
         "audit_stats_poll_interval": {
           "default": null,
+          "description": "Cadence of the audit statistics poll.",
           "format": "duration",
           "type": [
             "string",
@@ -1277,6 +1331,7 @@
         },
         "audit_tail_read_max": {
           "default": null,
+          "description": "Maximum bytes read by one audit tail request.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1284,6 +1339,7 @@
           ]
         },
         "audit_tail_window_offsets": {
+          "description": "Number of offsets included in one audit tail request.",
           "format": "int64",
           "type": [
             "integer",
@@ -1292,6 +1348,7 @@
         },
         "auto_join_retry_backoff": {
           "default": null,
+          "description": "Retry delay between KIP-853 dynamic-quorum auto-join attempts.",
           "format": "duration",
           "type": [
             "string",
@@ -1300,6 +1357,7 @@
         },
         "auto_join_voter_request_timeout": {
           "default": null,
+          "description": "Timeout carried by a dynamic-quorum `AddRaftVoter` request.",
           "format": "duration",
           "type": [
             "string",
@@ -1308,6 +1366,7 @@
         },
         "barrier_injection_timeout": {
           "default": null,
+          "description": "Deadline for one barrier injection to reach every target partition.",
           "format": "duration",
           "type": [
             "string",
@@ -1315,6 +1374,7 @@
           ]
         },
         "barrier_max_groups": {
+          "description": "Maximum number of barrier groups the cluster accepts.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1323,6 +1383,7 @@
           ]
         },
         "barrier_max_topics_per_group": {
+          "description": "Maximum number of topics in one barrier group.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1332,6 +1393,7 @@
         },
         "barrier_min_injection_interval": {
           "default": null,
+          "description": "Shortest periodic injection interval a barrier group may ask for.",
           "format": "duration",
           "type": [
             "string",
@@ -1340,6 +1402,7 @@
         },
         "barrier_recovery_read_max": {
           "default": null,
+          "description": "Maximum bytes requested by one `__barrier_state` recovery read.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1347,6 +1410,7 @@
           ]
         },
         "barrier_retained_cuts": {
+          "description": "Number of cuts a barrier group keeps before it tombstones the oldest.",
           "format": "int32",
           "type": [
             "integer",
@@ -1354,6 +1418,7 @@
           ]
         },
         "barrier_state_num_partitions": {
+          "description": "Partition count of the `__barrier_state` internal topic.",
           "format": "int32",
           "type": [
             "integer",
@@ -1361,6 +1426,7 @@
           ]
         },
         "barrier_state_replication_factor": {
+          "description": "Replication factor of the `__barrier_state` internal topic.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -1371,6 +1437,7 @@
         },
         "classic_group_initial_rebalance_delay": {
           "default": null,
+          "description": "Initial delay before a classic group begins rebalancing, Kafka's\n`group.initial.rebalance.delay.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1379,6 +1446,7 @@
         },
         "cleaner_interval": {
           "default": null,
+          "description": "Cadence of log cleaner maintenance.",
           "format": "duration",
           "type": [
             "string",
@@ -1387,6 +1455,7 @@
         },
         "client_metrics_default_interval": {
           "default": null,
+          "description": "Default KIP-714 client telemetry subscription push interval.",
           "format": "duration",
           "type": [
             "string",
@@ -1395,6 +1464,7 @@
         },
         "client_metrics_eviction_tick": {
           "default": null,
+          "description": "Cadence at which the KIP-714 client-metrics cache evicts entries.",
           "format": "duration",
           "type": [
             "string",
@@ -1402,6 +1472,7 @@
           ]
         },
         "client_metrics_otlp_queue_capacity": {
+          "description": "Capacity of the client-metrics OTLP forwarding queue.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1411,6 +1482,7 @@
         },
         "client_metrics_prom_snapshot_ttl": {
           "default": null,
+          "description": "Lifetime of a Prometheus client-metrics snapshot.",
           "format": "duration",
           "type": [
             "string",
@@ -1419,6 +1491,7 @@
         },
         "client_metrics_stale_floor": {
           "default": null,
+          "description": "Minimum age at which a client-metrics entry counts as stale.",
           "format": "duration",
           "type": [
             "string",
@@ -1426,6 +1499,7 @@
           ]
         },
         "client_metrics_stale_push_intervals": {
+          "description": "Number of missed push intervals after which client metrics expire.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1435,6 +1509,7 @@
         },
         "client_metrics_telemetry_max": {
           "default": null,
+          "description": "Maximum accepted KIP-714 client telemetry payload size.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1443,6 +1518,7 @@
         },
         "connection_creation_throttle_max": {
           "default": null,
+          "description": "Maximum KIP-612 connection-creation quota delay.",
           "format": "duration",
           "type": [
             "string",
@@ -1451,6 +1527,7 @@
         },
         "consumer_group_heartbeat_interval": {
           "default": null,
+          "description": "Default KIP-848 consumer-group heartbeat interval, Kafka's\n`group.consumer.heartbeat.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1459,6 +1536,7 @@
         },
         "consumer_group_max_heartbeat_interval": {
           "default": null,
+          "description": "Upper bound on the negotiated consumer-group heartbeat interval,\nKafka's `group.consumer.max.heartbeat.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1467,6 +1545,7 @@
         },
         "consumer_group_max_session_timeout": {
           "default": null,
+          "description": "Upper bound on the negotiated consumer-group session timeout, Kafka's\n`group.consumer.max.session.timeout.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1474,6 +1553,7 @@
           ]
         },
         "consumer_group_max_size": {
+          "description": "Maximum number of members in one consumer group, Kafka's\n`group.consumer.max.size`.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1483,6 +1563,7 @@
         },
         "consumer_group_min_heartbeat_interval": {
           "default": null,
+          "description": "Lower bound on the negotiated consumer-group heartbeat interval,\nKafka's `group.consumer.min.heartbeat.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1491,6 +1572,7 @@
         },
         "consumer_group_min_session_timeout": {
           "default": null,
+          "description": "Lower bound on the negotiated consumer-group session timeout, Kafka's\n`group.consumer.min.session.timeout.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1499,6 +1581,7 @@
         },
         "consumer_group_session_timeout": {
           "default": null,
+          "description": "Default KIP-848 consumer-group session timeout, Kafka's\n`group.consumer.session.timeout.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1507,6 +1590,7 @@
         },
         "controlled_shutdown_drain_timeout": {
           "default": null,
+          "description": "How long a controlled shutdown waits for the controller to acknowledge\n`should_shut_down` before it falls back to a hard shutdown.",
           "format": "duration",
           "type": [
             "string",
@@ -1515,6 +1599,7 @@
         },
         "controller_election_timeout": {
           "default": null,
+          "description": "Controller election timeout, Kafka's\n`controller.quorum.fetch.timeout.ms`. It is the follower fetch\nwatchdog, and 1.5x of it is the leader's check-quorum window: a leader\nthat a majority of the voters has not fetched from within that window\nresigns its epoch.",
           "format": "duration",
           "type": [
             "string",
@@ -1522,6 +1607,7 @@
           ]
         },
         "controller_fetch_miss_limit": {
+          "description": "Consecutive follower fetch misses tolerated before a new election.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1531,6 +1617,7 @@
         },
         "controller_heartbeat_interval": {
           "default": null,
+          "description": "Raft heartbeat interval on the controller quorum. It should stay at or\nbelow `controller_election_timeout / 3`.",
           "format": "duration",
           "type": [
             "string",
@@ -1539,6 +1626,7 @@
         },
         "controller_mutation_quota_window": {
           "default": null,
+          "description": "Time window whose throughput defines the KIP-599 controller-mutation\nquota burst capacity.",
           "format": "duration",
           "type": [
             "string",
@@ -1546,6 +1634,7 @@
           ]
         },
         "coordinator_actor_mailbox_capacity": {
+          "description": "Mailbox capacity of each coordinator actor.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1555,6 +1644,7 @@
         },
         "coordinator_session_expiry_tick": {
           "default": null,
+          "description": "Cadence of the consumer-group session expiry scan.",
           "format": "duration",
           "type": [
             "string",
@@ -1563,6 +1653,7 @@
         },
         "coordinator_shutdown_ack_timeout": {
           "default": null,
+          "description": "Maximum wait for coordinator shutdown acknowledgements.",
           "format": "duration",
           "type": [
             "string",
@@ -1570,6 +1661,7 @@
           ]
         },
         "default_min_insync_replicas": {
+          "description": "Broker default for a topic's `min.insync.replicas`, Kafka's\n`min.insync.replicas`. A topic override wins over it.",
           "format": "int32",
           "type": [
             "integer",
@@ -1578,6 +1670,7 @@
         },
         "delegation_token_default_renew_period": {
           "default": null,
+          "description": "KIP-48: default renew period, Kafka's\n`delegation.token.expiry.time.ms`. It is the initial expiry offset at\ncreate time, and the implicit renew period when a\n`RenewDelegationToken` request asks for `-1`.",
           "format": "duration",
           "type": [
             "string",
@@ -1586,6 +1679,7 @@
         },
         "delegation_token_expiry_check_interval": {
           "default": null,
+          "description": "KIP-48: cadence of the sweep that tombstones expired delegation tokens,\nKafka's `delegation.token.expiry.check.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1594,6 +1688,7 @@
         },
         "delegation_token_max_lifetime": {
           "default": null,
+          "description": "KIP-48: hard upper bound on a delegation token's lifetime, Kafka's\n`delegation.token.max.lifetime.ms`. A renew request is clamped to it.",
           "format": "duration",
           "type": [
             "string",
@@ -1602,6 +1697,7 @@
         },
         "diskless_wal_flush_interval": {
           "default": null,
+          "description": "Cadence of diskless WAL flushes to the object store.",
           "format": "duration",
           "type": [
             "string",
@@ -1610,6 +1706,7 @@
         },
         "diskless_wal_flush_max_size": {
           "default": null,
+          "description": "Maximum bytes included in one diskless WAL object-store flush.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1618,6 +1715,7 @@
         },
         "diskless_wal_hot_tail_max_size": {
           "default": null,
+          "description": "Broker-wide byte ceiling for quorum-committed diskless hot-tail\nbatches.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1626,6 +1724,7 @@
         },
         "diskless_wal_index_projection_timeout": {
           "default": null,
+          "description": "Maximum wait for a published diskless WAL index record to be projected.",
           "format": "duration",
           "type": [
             "string",
@@ -1633,6 +1732,7 @@
           ]
         },
         "diskless_wal_local_replica_count": {
+          "description": "Local replica count used in diskless WAL mode.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1641,6 +1741,7 @@
           ]
         },
         "diskless_wal_trim_safety_lag": {
+          "description": "Committed offsets retained behind the diskless WAL trim frontier.",
           "format": "int64",
           "type": [
             "integer",
@@ -1649,6 +1750,7 @@
         },
         "future_log_move_read_chunk": {
           "default": null,
+          "description": "Bytes copied per read during a KIP-113 future-log move.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1657,6 +1759,7 @@
         },
         "future_log_move_retry_backoff": {
           "default": null,
+          "description": "Retry delay after a KIP-113 future-log move fails.",
           "format": "duration",
           "type": [
             "string",
@@ -1665,6 +1768,7 @@
         },
         "gauge_poll_interval": {
           "default": null,
+          "description": "Cadence at which broker gauges are refreshed.",
           "format": "duration",
           "type": [
             "string",
@@ -1673,6 +1777,7 @@
         },
         "heartbeat_interval": {
           "default": null,
+          "description": "How often this broker sends `BrokerHeartbeat` to the controller leader.",
           "format": "duration",
           "type": [
             "string",
@@ -1681,6 +1786,7 @@
         },
         "heartbeat_timeout": {
           "default": null,
+          "description": "How long the controller waits without a heartbeat before it marks a\nbroker dead.",
           "format": "duration",
           "type": [
             "string",
@@ -1688,6 +1794,7 @@
           ]
         },
         "inter_broker_server_name": {
+          "description": "TLS SNI and SASL server name used for outbound inter-broker\nconnections.",
           "type": [
             "string",
             "null"
@@ -1695,6 +1802,7 @@
         },
         "isr_scan_interval": {
           "default": null,
+          "description": "Cadence of in-sync-replica maintenance.",
           "format": "duration",
           "type": [
             "string",
@@ -1703,15 +1811,8 @@
         },
         "leader_imbalance_check_interval": {
           "default": null,
+          "description": "How often the auto-rebalance ticker fires, Kafka's\n`leader.imbalance.check.interval.seconds`.",
           "format": "duration",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "leader_imbalance_per_broker": {
-          "default": null,
-          "format": "ratio",
           "type": [
             "string",
             "null"
@@ -1719,6 +1820,7 @@
         },
         "liveness_tick_interval": {
           "default": null,
+          "description": "Cadence of broker liveness maintenance.",
           "format": "duration",
           "type": [
             "string",
@@ -1727,6 +1829,7 @@
         },
         "log_delivery_clock_uncertainty": {
           "default": null,
+          "description": "Declared bound on how far this broker's clock can be from true time. It\nhas an effect only under the scheduled delivery policy: a batch becomes\nvisible once `max_timestamp + log_delivery_clock_uncertainty <= now`,\nso delivery is never early and is late by at most twice this bound.",
           "format": "duration",
           "type": [
             "string",
@@ -1735,6 +1838,7 @@
         },
         "log_read_buffer_cap": {
           "default": null,
+          "description": "Cap on the initial allocation a decoded or raw segment read makes.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1743,6 +1847,7 @@
         },
         "log_segment_bytes": {
           "default": null,
+          "description": "Roll the active segment once it grows past this. Kafka's\n`log.segment.bytes`, the broker default for a topic's `segment.bytes`.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1751,6 +1856,7 @@
         },
         "log_timestamp_scan_window": {
           "default": null,
+          "description": "Size of the window a timestamp search reads the log in.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1758,6 +1864,7 @@
           ]
         },
         "max_connections": {
+          "description": "Maximum number of live broker connections across all listeners, Kafka's\n`max.connections`. A connection accepted past this ceiling is closed\nimmediately.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1766,6 +1873,7 @@
           ]
         },
         "max_connections_per_ip": {
+          "description": "Maximum number of live connections from any single client IP, Kafka's\n`max.connections.per.ip`.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1774,6 +1882,7 @@
           ]
         },
         "max_incremental_fetch_session_cache_slots": {
+          "description": "KIP-227: maximum number of incremental-fetch sessions kept in the per-\nbroker cache, Kafka's `max.incremental.fetch.session.cache.slots`. When\nthe cache is full a non-privileged session is evicted in LRU order.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1782,6 +1891,7 @@
           ]
         },
         "max_produce_group": {
+          "description": "Maximum number of produce requests combined into one append group.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1800,6 +1910,7 @@
         },
         "metadata_max_bytes_between_snapshots": {
           "default": null,
+          "description": "Committed metadata-log bytes between snapshots, Kafka's\n`metadata.log.max.record.bytes.between.snapshots`.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1808,6 +1919,7 @@
         },
         "metadata_max_snapshot_interval": {
           "default": null,
+          "description": "Maximum time between metadata-log snapshots, Kafka's\n`metadata.log.max.snapshot.interval.ms`. Zero disables the time-based\ncap.",
           "format": "duration",
           "type": [
             "string",
@@ -1815,6 +1927,7 @@
           ]
         },
         "metadata_raft_command_queue_capacity": {
+          "description": "Capacity of the metadata Raft engine command queue.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1824,6 +1937,7 @@
         },
         "metadata_raft_fetch_max": {
           "default": null,
+          "description": "Per-read and per-snapshot-request byte budget on the metadata Raft log.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1832,6 +1946,7 @@
         },
         "metadata_snapshot_fetch_max": {
           "default": null,
+          "description": "Maximum metadata snapshot size a follower fetches. The Raft core\nenforces an immutable 1 GiB ceiling above it.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1839,6 +1954,7 @@
           ]
         },
         "metadata_snapshot_interval_records": {
+          "description": "KIP-630: snapshot the metadata log once the committed offset advances\nthis many records past the last snapshot, then prune below it.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -1848,6 +1964,7 @@
         },
         "oauth_jwks_http_timeout": {
           "default": null,
+          "description": "Timeout for one OAuth JWKS fetch.",
           "format": "duration",
           "type": [
             "string",
@@ -1856,6 +1973,7 @@
         },
         "observer_fetch_max": {
           "default": null,
+          "description": "Maximum bytes fetched by one metadata observer request.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1863,6 +1981,7 @@
           ]
         },
         "observer_lag_bound": {
+          "description": "KIP-853: maximum log-entry lag an observer may have and still be\npromotable to a voter.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -1872,6 +1991,7 @@
         },
         "observer_poll_interval": {
           "default": null,
+          "description": "Cadence of the KIP-853 observer promotion poll.",
           "format": "duration",
           "type": [
             "string",
@@ -1880,6 +2000,7 @@
         },
         "offsets_retention": {
           "default": null,
+          "description": "How long a committed consumer offset is kept after its group becomes\nempty, Kafka's `offsets.retention.minutes`. It must be a whole number\nof minutes.",
           "format": "duration",
           "type": [
             "string",
@@ -1888,6 +2009,7 @@
         },
         "offsets_retention_check_interval": {
           "default": null,
+          "description": "Cadence of the expired-offset sweep, Kafka's\n`offsets.retention.check.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1896,6 +2018,7 @@
         },
         "offsets_topic_metadata_wait_timeout": {
           "default": null,
+          "description": "Maximum wait for `__consumer_offsets` metadata before a request fails.",
           "format": "duration",
           "type": [
             "string",
@@ -1903,6 +2026,7 @@
           ]
         },
         "offsets_topic_num_partitions": {
+          "description": "Partition count of the `__consumer_offsets` internal topic, Kafka's\n`offsets.topic.num.partitions`.",
           "format": "int32",
           "type": [
             "integer",
@@ -1910,6 +2034,7 @@
           ]
         },
         "offsets_topic_replication_factor": {
+          "description": "Replication factor of the `__consumer_offsets` internal topic, Kafka's\n`offsets.topic.replication.factor`.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -1920,6 +2045,7 @@
         },
         "opa_http_timeout": {
           "default": null,
+          "description": "Timeout for one OPA authorization request.",
           "format": "duration",
           "type": [
             "string",
@@ -1928,6 +2054,7 @@
         },
         "operator_recovery_deadline": {
           "default": null,
+          "description": "Deadline for an operator-triggered unclean recovery.",
           "format": "duration",
           "type": [
             "string",
@@ -1936,6 +2063,7 @@
         },
         "partition_disk_scan_interval": {
           "default": null,
+          "description": "Cadence of the partition disk-usage scan that feeds the\n`partition_disk_bytes` gauge. Zero disables the scanner and spawns no\nbackground task.",
           "format": "duration",
           "type": [
             "string",
@@ -1943,6 +2071,7 @@
           ]
         },
         "partition_writer_queue_depth": {
+          "description": "Capacity of each partition-writer request queue.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1952,6 +2081,7 @@
         },
         "producer_id_expiration": {
           "default": null,
+          "description": "How long a producer id may stay idle before its state expires, Kafka's\n`producer.id.expiration.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -1960,14 +2090,43 @@
         },
         "producer_id_expiration_scan_interval": {
           "default": null,
+          "description": "Cadence of the producer-state expiry scan, Kafka's\n`producer.id.expiration.check.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
             "null"
           ]
         },
+        "queued_max_request_bytes": {
+          "default": null,
+          "description": "Maximum byte size across all queued requests before accepting\nadditional requests is paused, Kafka's `queued.max.request.bytes`.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "queued_max_requests": {
+          "description": "Maximum number of queued requests allowed in the broker dispatch queue,\nKafka's `queued.max.requests`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "quota_throttle_max": {
           "default": null,
+          "description": "Maximum client quota throttle delay, which bounds how long one response\nmutes a client. Equivalent to Kafka's `quota.window.size.seconds *\n(quota.window.num - 1)`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quota_window": {
+          "default": null,
+          "description": "Time window that sizes the client byte-rate quota token bucket's burst\ncapacity. Equivalent to Kafka's sampling window `quota.window.num *\nquota.window.size.seconds`.",
           "format": "duration",
           "type": [
             "string",
@@ -1976,6 +2135,7 @@
         },
         "record_decompression_max_ratio": {
           "default": null,
+          "description": "Maximum accepted decompression ratio for a produced record batch.",
           "format": "ratio",
           "type": [
             "string",
@@ -1984,6 +2144,7 @@
         },
         "record_decompression_output_ceiling": {
           "default": null,
+          "description": "Maximum decompressed-output allowance granted to a record batch.",
           "format": "byte-size",
           "type": [
             "string",
@@ -1992,6 +2153,7 @@
         },
         "record_decompression_output_floor": {
           "default": null,
+          "description": "Minimum decompressed-output allowance granted to a record batch,\nwhatever the ratio bound computes.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2000,14 +2162,25 @@
         },
         "remote_log_manager_interval": {
           "default": null,
+          "description": "KIP-405: tick cadence of the `RemoteLogManager` copy and retention\ntask. Kafka's `remote.log.manager.task.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
             "null"
           ]
         },
+        "replica_fetchers": {
+          "description": "How many fetchers this broker runs per leader it follows, Kafka's\n`num.replica.fetchers`. Every partition followed from one leader is\nhashed onto one of that leader's fetchers, and each fetcher holds one\nconnection and sends one batched `Fetch` per round.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "replica_lag_time_max": {
           "default": null,
+          "description": "Maximum follower lag before the leader proposes an ISR shrink. Kafka's\n`replica.lag.time.max.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2016,6 +2189,7 @@
         },
         "replication_epoch_fence_backoff": {
           "default": null,
+          "description": "Retry delay after a leader-epoch fence.",
           "format": "duration",
           "type": [
             "string",
@@ -2024,6 +2198,7 @@
         },
         "replication_fetch_max": {
           "default": null,
+          "description": "Maximum bytes a follower requests from a leader in one replication\nfetch. It reaches the leader as the fetch request's `max_bytes`.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2032,6 +2207,7 @@
         },
         "replication_fetch_max_wait": {
           "default": null,
+          "description": "Maximum time a leader holds a replication fetch that is not yet\nsatisfied. It reaches the leader as the fetch request's `max_wait_ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2040,6 +2216,7 @@
         },
         "replication_fetch_min": {
           "default": null,
+          "description": "Minimum bytes that satisfy a replication fetch. It reaches the leader\nas the fetch request's `min_bytes`, which the leader honours as a\nfloor.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2048,6 +2225,7 @@
         },
         "replication_reconnect_delay_cap": {
           "default": null,
+          "description": "Maximum delay between leader reconnection attempts.",
           "format": "duration",
           "type": [
             "string",
@@ -2056,6 +2234,7 @@
         },
         "replication_reconnect_initial_delay": {
           "default": null,
+          "description": "Initial delay before a follower reconnects to a leader.",
           "format": "duration",
           "type": [
             "string",
@@ -2064,6 +2243,7 @@
         },
         "replication_send_error_backoff": {
           "default": null,
+          "description": "Retry delay after sending a replication request fails.",
           "format": "duration",
           "type": [
             "string",
@@ -2072,6 +2252,7 @@
         },
         "replication_throttle_exhausted_backoff": {
           "default": null,
+          "description": "Delay after a follower exhausts its replication throttle budget.",
           "format": "duration",
           "type": [
             "string",
@@ -2080,6 +2261,7 @@
         },
         "replication_unexpected_error_backoff": {
           "default": null,
+          "description": "Retry delay after an unexpected replication error.",
           "format": "duration",
           "type": [
             "string",
@@ -2088,6 +2270,7 @@
         },
         "replication_unknown_topic_retry_delay": {
           "default": null,
+          "description": "Retry delay when the leader does not yet know the topic.",
           "format": "duration",
           "type": [
             "string",
@@ -2096,6 +2279,7 @@
         },
         "rlmm_bootstrap_backoff_initial": {
           "default": null,
+          "description": "Initial retry delay while remote-log metadata bootstrap is incomplete.",
           "format": "duration",
           "type": [
             "string",
@@ -2104,6 +2288,7 @@
         },
         "rlmm_bootstrap_backoff_max": {
           "default": null,
+          "description": "Maximum retry delay while remote-log metadata bootstrap is incomplete.",
           "format": "duration",
           "type": [
             "string",
@@ -2112,6 +2297,7 @@
         },
         "rlmm_reconcile_tick": {
           "default": null,
+          "description": "Cadence of KIP-405 remote-log metadata reconciliation.",
           "format": "duration",
           "type": [
             "string",
@@ -2120,6 +2306,7 @@
         },
         "schema_registry_http_timeout": {
           "default": null,
+          "description": "Timeout for one schema-registry request.",
           "format": "duration",
           "type": [
             "string",
@@ -2128,6 +2315,7 @@
         },
         "self_registration_backoff_max": {
           "default": null,
+          "description": "Maximum delay between broker self-registration attempts.",
           "format": "duration",
           "type": [
             "string",
@@ -2136,6 +2324,7 @@
         },
         "self_registration_backoff_min": {
           "default": null,
+          "description": "Initial delay between broker self-registration attempts.",
           "format": "duration",
           "type": [
             "string",
@@ -2143,6 +2332,7 @@
           ]
         },
         "self_registration_max_attempts": {
+          "description": "Maximum self-registration attempts before startup fails.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -2152,6 +2342,7 @@
         },
         "sendfile_min": {
           "default": null,
+          "description": "Minimum response size eligible for a `sendfile` kernel drain. Smaller\nresponses go through the `pread` and write copy.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2160,6 +2351,7 @@
         },
         "share_group_backlog_poll_interval": {
           "default": null,
+          "description": "Cadence of the share-group backlog poll.",
           "format": "duration",
           "type": [
             "string",
@@ -2167,6 +2359,7 @@
           ]
         },
         "share_group_enable": {
+          "description": "Whether the broker serves KIP-932 share groups, Kafka's\n`group.share.enable`.",
           "type": [
             "boolean",
             "null"
@@ -2174,6 +2367,7 @@
         },
         "share_group_heartbeat_interval": {
           "default": null,
+          "description": "Default share-group heartbeat interval, Kafka's\n`group.share.heartbeat.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2181,12 +2375,14 @@
           ]
         },
         "share_group_isolation_level": {
+          "description": "Transaction isolation for share-group reads, Kafka's\n`share.group.isolation.level`. Either `read-uncommitted`, which reads\nup to the high watermark, or `read-committed`, which clamps reads to\nthe last stable offset.",
           "type": [
             "string",
             "null"
           ]
         },
         "share_group_max_delivery_attempts": {
+          "description": "Number of times a share record may be delivered before it is archived,\nKafka's `group.share.delivery.count.limit`.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -2196,6 +2392,7 @@
           ]
         },
         "share_group_max_inflight_records": {
+          "description": "Maximum records a share partition may hold in flight, Kafka's\n`group.share.partition.max.record.locks`.",
           "format": "int32",
           "type": [
             "integer",
@@ -2203,6 +2400,7 @@
           ]
         },
         "share_group_max_size": {
+          "description": "Maximum number of members in one share group, Kafka's\n`group.share.max.size`.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2212,6 +2410,7 @@
         },
         "share_group_record_lock_duration": {
           "default": null,
+          "description": "How long an acquired share record stays locked before it is released\nfor redelivery, Kafka's `group.share.record.lock.duration.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2220,6 +2419,7 @@
         },
         "share_group_session_timeout": {
           "default": null,
+          "description": "Default share-group session timeout, Kafka's\n`group.share.session.timeout.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2228,6 +2428,7 @@
         },
         "share_recovery_read_max": {
           "default": null,
+          "description": "Maximum bytes read by one share-state recovery read.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2235,6 +2436,7 @@
           ]
         },
         "share_session_cache_max_when_unlimited": {
+          "description": "Ceiling on the share-session cache when the group count is unlimited.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2243,6 +2445,7 @@
           ]
         },
         "share_state_num_partitions": {
+          "description": "Partition count of the `__share_group_state` internal topic, Kafka's\n`share.coordinator.state.topic.num.partitions`.",
           "format": "int32",
           "type": [
             "integer",
@@ -2250,6 +2453,7 @@
           ]
         },
         "share_state_replication_factor": {
+          "description": "Replication factor of the `__share_group_state` internal topic, Kafka's\n`share.coordinator.state.topic.replication.factor`.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -2260,6 +2464,7 @@
         },
         "socket_receive_buffer": {
           "default": null,
+          "description": "Broker socket receive-buffer size, Kafka's\n`socket.receive.buffer.bytes`.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2268,6 +2473,7 @@
         },
         "socket_request_max": {
           "default": null,
+          "description": "Maximum encoded request size accepted from a socket, Kafka's\n`socket.request.max.bytes`.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2276,6 +2482,7 @@
         },
         "socket_send_buffer": {
           "default": null,
+          "description": "Broker socket send-buffer size, Kafka's `socket.send.buffer.bytes`.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2284,6 +2491,7 @@
         },
         "startup_leader_wait_timeout": {
           "default": null,
+          "description": "Maximum time the broker waits for a controller leader during startup.",
           "format": "duration",
           "type": [
             "string",
@@ -2291,6 +2499,7 @@
           ]
         },
         "streams_group_acceptable_recovery_lag": {
+          "description": "Changelog lag, in records, below which a task is treated as caught up,\nthe group's `streams.acceptable.recovery.lag`.",
           "format": "int64",
           "type": [
             "integer",
@@ -2298,12 +2507,14 @@
           ]
         },
         "streams_group_assignor": {
+          "description": "Server-side task assignor for streams groups: `auto`, `sticky`, or\n`highly-available`. `auto` picks `highly-available` when the topology\nhas a stateful subtopology and `sticky` otherwise.",
           "type": [
             "string",
             "null"
           ]
         },
         "streams_group_enable": {
+          "description": "Whether the broker serves KIP-1071 streams groups.",
           "type": [
             "boolean",
             "null"
@@ -2311,6 +2522,7 @@
         },
         "streams_group_heartbeat_interval": {
           "default": null,
+          "description": "Default streams-group heartbeat interval, the group's\n`streams.heartbeat.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2318,6 +2530,7 @@
           ]
         },
         "streams_group_max_size": {
+          "description": "Maximum number of members in one streams group.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2326,6 +2539,7 @@
           ]
         },
         "streams_group_num_standby_replicas": {
+          "description": "Number of standby replicas the assignor places for each task, the\ngroup's `streams.num.standby.replicas`.",
           "format": "int32",
           "type": [
             "integer",
@@ -2333,6 +2547,7 @@
           ]
         },
         "streams_group_num_warmup_replicas": {
+          "description": "Maximum number of warm-up replicas the assignor may move at once, the\ngroup's `streams.num.warmup.replicas`.",
           "format": "int32",
           "type": [
             "integer",
@@ -2341,6 +2556,7 @@
         },
         "streams_group_session_timeout": {
           "default": null,
+          "description": "Default streams-group session timeout, the group's\n`streams.session.timeout.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2349,6 +2565,7 @@
         },
         "streams_group_task_offset_interval": {
           "default": null,
+          "description": "Cadence at which members report task offsets, the group's\n`streams.task.offset.interval.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2356,6 +2573,7 @@
           ]
         },
         "streams_internal_topic_replication_factor": {
+          "description": "Replication factor of the internal topics a streams group creates, such\nas its repartition and changelog topics.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -2366,6 +2584,7 @@
         },
         "sync_group_follower_wait": {
           "default": null,
+          "description": "Maximum time a classic-protocol follower waits for its `SyncGroup`\nassignment.",
           "format": "duration",
           "type": [
             "string",
@@ -2374,6 +2593,7 @@
         },
         "telemetry_decompressed_output_ceiling": {
           "default": null,
+          "description": "Maximum decompressed-output allowance granted to a telemetry payload.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2382,6 +2602,7 @@
         },
         "telemetry_decompressed_output_floor": {
           "default": null,
+          "description": "Minimum decompressed-output allowance granted to a telemetry payload,\nwhatever the ratio bound computes.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2390,6 +2611,7 @@
         },
         "telemetry_max_decompression_ratio": {
           "default": null,
+          "description": "Maximum accepted decompression ratio for a KIP-714 telemetry payload.",
           "format": "ratio",
           "type": [
             "string",
@@ -2398,6 +2620,7 @@
         },
         "tls_reload_interval": {
           "default": null,
+          "description": "Cadence at which the TLS watcher polls the certificate, key, and\nclient-CA files and rebuilds the server configuration if any changed.\nZero disables the periodic watcher.",
           "format": "duration",
           "type": [
             "string",
@@ -2406,6 +2629,7 @@
         },
         "transaction_max_timeout": {
           "default": null,
+          "description": "Maximum transaction timeout a producer may request, Kafka's\n`transaction.max.timeout.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2414,6 +2638,7 @@
         },
         "transaction_min_timeout": {
           "default": null,
+          "description": "Minimum transaction timeout a producer may request.",
           "format": "duration",
           "type": [
             "string",
@@ -2422,6 +2647,7 @@
         },
         "transaction_recovery_read_max": {
           "default": null,
+          "description": "Maximum bytes requested by one `__transaction_state` recovery read.",
           "format": "byte-size",
           "type": [
             "string",
@@ -2429,6 +2655,7 @@
           ]
         },
         "transaction_state_num_partitions": {
+          "description": "Partition count of the `__transaction_state` internal topic, Kafka's\n`transaction.state.log.num.partitions`.",
           "format": "int32",
           "type": [
             "integer",
@@ -2436,6 +2663,7 @@
           ]
         },
         "transaction_state_replication_factor": {
+          "description": "Replication factor of the `__transaction_state` internal topic, Kafka's\n`transaction.state.log.replication.factor`.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -2446,6 +2674,7 @@
         },
         "txn_abort_cleanup_interval": {
           "default": null,
+          "description": "KIP-98: how often the idle-transaction reaper scans for `Ongoing`\ntransactions whose timeout has elapsed and aborts them. Kafka's\n`transaction.abort.timed.out.transaction.cleanup.interval.ms`. Zero\ndisables the reaper and spawns no background task.",
           "format": "duration",
           "type": [
             "string",
@@ -2454,6 +2683,7 @@
         },
         "txn_id_expiration": {
           "default": null,
+          "description": "KIP-98: how long a transactional id may sit in a terminal or idle state\nbefore the coordinator tombstones it out of `__transaction_state`.\nKafka's `transactional.id.expiration.ms`.",
           "format": "duration",
           "type": [
             "string",
@@ -2462,6 +2692,7 @@
         },
         "txn_id_expiration_cleanup_interval": {
           "default": null,
+          "description": "KIP-98: how often the transactional-id expiry sweep scans the\n`__transaction_state` partitions this broker leads. Kafka's\n`transaction.remove.expired.transaction.cleanup.interval.ms`. Zero\ndisables the sweep and spawns no background task.",
           "format": "duration",
           "type": [
             "string",
@@ -2470,6 +2701,7 @@
         },
         "unclean_recovery_aggressive_deadline": {
           "default": null,
+          "description": "Replica-log collection deadline under the aggressive unclean-recovery\nstrategy.",
           "format": "duration",
           "type": [
             "string",
@@ -2478,6 +2710,7 @@
         },
         "unclean_recovery_balanced_deadline": {
           "default": null,
+          "description": "Replica-log collection deadline under the balanced unclean-recovery\nstrategy.",
           "format": "duration",
           "type": [
             "string",
@@ -2485,6 +2718,7 @@
           ]
         },
         "unclean_recovery_queue_capacity": {
+          "description": "Capacity of the unclean-recovery work queue.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2548,6 +2782,7 @@
       "description": "`[break_glass]` section — the two-person rule over the privileged\ntransitions. Absent leaves the `BrokerConfig` defaults, which run no\nbreak-glass workflow."
     },
     "broker_id": {
+      "description": "This node's id, Kafka's `node.id` / `broker.id`. It is the id the\nbroker registers with the controller and reports in `Metadata`\nresponses. Absent leaves the `BrokerConfig` default intact.",
       "format": "int32",
       "type": [
         "integer",
@@ -2683,6 +2918,7 @@
       "description": "Credentials this broker uses to authenticate *to* peer brokers and\ncontroller listeners (inter-broker initiate path)."
     },
     "inter_broker_listener_name": {
+      "description": "Name of the listener that carries inter-broker traffic — raft,\nreplication, and heartbeats. Kafka's `inter.broker.listener.name`. It\nmust match a `name` in [`listeners`][Self::listeners] when that list is\nnon-empty. Absent leaves the `BrokerConfig` default `\"PLAINTEXT\"`.",
       "type": [
         "string",
         "null"
@@ -2707,6 +2943,7 @@
       "type": "array"
     },
     "log_dir": {
+      "description": "Primary log directory, the first entry of Kafka's `log.dirs`. It holds\nthe `__cluster_metadata` raft log, and it is the partition data\ndirectory when [`extra_log_dirs`][Self::extra_log_dirs] is empty.\nAbsent leaves the `BrokerConfig` default intact.",
       "type": [
         "string",
         "null"
@@ -2831,6 +3068,7 @@
         "type": "string"
       },
       "default": {},
+      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, and `quota.window.size.seconds`. Any other entry is\naccepted and ignored. A key set here loses to the equivalent dedicated\nkey, which is applied first.",
       "type": "object"
     },
     "stretch": {

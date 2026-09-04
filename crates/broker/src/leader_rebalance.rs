@@ -3,17 +3,22 @@
 //! A background task on the controller leader scans every partition
 //! periodically. For each partition where
 //! `select_new_leader_for_partition(Preferred)` succeeds, the task queues a
-//! `V1Partition` update. The task submits one batch per tick when the
-//! cluster-wide imbalance ratio crosses the configured threshold.
+//! `V1Partition` update and submits the batch.
+//!
+//! There is no cluster-wide imbalance ratio to cross first. That gate is the
+//! `ZooKeeper` controller's `leader.imbalance.per.broker.percentage`; the
+//! `KRaft` controller's `maybeBalancePartitionLeaders` has none, and restores every
+//! partition whose preferred replica is back in the ISR. It bounds the work
+//! by count instead: at most `MAX_ELECTIONS_PER_TICK` elections in one pass,
+//! so a cluster that restarts a broker holding a hundred thousand partitions
+//! does not put them all into one metadata batch. The remainder is picked up
+//! by the next tick.
 
-use std::{cmp::Ordering, collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use krabka_metadata::{MetadataImage, MetadataRecord};
-use krabka_units::{
-    Ratio, Time,
-    convert::{RatioExt, TimeExt as _},
-};
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -31,10 +36,13 @@ pub(crate) trait ControllerLike: Send + Sync {
     async fn submit_change(&self, records: Vec<MetadataRecord>) -> Result<(), String>;
 }
 
+/// Kafka's `QuorumController.MAX_ELECTIONS_PER_IMBALANCE`: the most preferred
+/// elections one balancing pass will submit.
+pub(crate) const MAX_ELECTIONS_PER_TICK: usize = 1000;
+
 #[derive(Debug, Clone)]
 pub(crate) struct AutoRebalanceConfig {
     pub check_interval: Time,
-    pub imbalance_threshold: Ratio,
 }
 
 /// Spawned task entry point.
@@ -64,7 +72,7 @@ pub(crate) async fn run(
 pub(crate) async fn rebalance_tick(
     controller: &dyn ControllerLike,
     liveness: &ControllerLivenessState,
-    cfg: &AutoRebalanceConfig,
+    _cfg: &AutoRebalanceConfig,
 ) {
     let image = controller.current_image();
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
@@ -73,6 +81,9 @@ pub(crate) async fn rebalance_tick(
     // Witness nodes never lead. Build the set once per tick, not once per
     // partition, so the tick stays a single walk over the image.
     let witnesses = crate::config_keys::witness_node_ids(&image);
+    // One lock acquisition for the whole tick rather than one per partition;
+    // the set is exactly `is_alive` over every broker the registry knows.
+    let alive = liveness.alive_snapshot().await;
     // Single O(P) walk over every partition.
     for pr in image.all_partitions() {
         let Some(next_total) = total.checked_add(1) else {
@@ -82,14 +93,12 @@ pub(crate) async fn rebalance_tick(
         total = next_total;
         if let Ok(new_pr) = select_new_leader_for_partition(
             &image,
-            liveness,
+            &alive,
             &witnesses,
             &pr.topic,
             pr.partition,
             ElectionType::Preferred,
-        )
-        .await
-        {
+        ) {
             // PreferredAlreadyLeader, PreferredIsWitness and any other Err are
             // silently skipped this tick.
             if !selected_keys.insert((new_pr.topic.clone(), new_pr.partition)) {
@@ -101,134 +110,28 @@ pub(crate) async fn rebalance_tick(
                 return;
             }
             to_submit.push(MetadataRecord::V1Partition(new_pr));
+            if to_submit.len() >= MAX_ELECTIONS_PER_TICK {
+                debug!(
+                    limit = MAX_ELECTIONS_PER_TICK,
+                    "auto-rebalance: election cap reached; the rest waits for the next tick"
+                );
+                break;
+            }
         }
     }
     let imbalanced = u64::try_from(to_submit.len()).unwrap_or(u64::MAX);
-    let threshold_met = exact_ratio_at_least(imbalanced, total, cfg.imbalance_threshold);
     if !krabka_verified::preferred_rebalance_admission(
         total,
         imbalanced,
         selected_keys.len() == to_submit.len(),
         true,
-        threshold_met,
     ) {
-        debug!(
-            imbalanced,
-            total, threshold_met, "auto-rebalance: batch admission denied"
-        );
+        debug!(imbalanced, total, "auto-rebalance: batch admission denied");
         return;
     }
     info!(count = imbalanced, "auto-rebalance: submitting elections");
     if let Err(e) = controller.submit_change(to_submit).await {
         warn!(error = %e, "auto-rebalance submit failed");
-    }
-}
-
-/// Compare `selected / total` with the stored ratio's shortest decimal form.
-/// This preserves operator percentage semantics (`10%` is exactly `1/10`)
-/// and avoids both truncated percentages and lossy count conversion.
-fn exact_ratio_at_least(selected: u64, total: u64, threshold: Ratio) -> bool {
-    if selected == 0 || total == 0 || selected > total {
-        return false;
-    }
-    let value = threshold.as_f64();
-    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-        return false;
-    }
-    if value == 0.0 {
-        return true;
-    }
-    match decimal_threshold(value) {
-        ExactThreshold::Invalid => false,
-        ExactThreshold::TinyPositive => true,
-        ExactThreshold::Fraction(numerator, denominator) => fraction_at_least(
-            u128::from(selected),
-            u128::from(total),
-            numerator,
-            denominator,
-        ),
-    }
-}
-
-enum ExactThreshold {
-    Invalid,
-    TinyPositive,
-    Fraction(u128, u128),
-}
-
-fn decimal_threshold(value: f64) -> ExactThreshold {
-    let text = value.to_string();
-    let (mantissa, exponent) = text
-        .split_once(['e', 'E'])
-        .map_or((text.as_str(), 0_i32), |(mantissa, exponent)| {
-            (mantissa, exponent.parse::<i32>().unwrap_or(i32::MIN))
-        });
-    if exponent == i32::MIN {
-        return ExactThreshold::Invalid;
-    }
-    let (whole, fractional) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let scale = i32::try_from(fractional.len()).unwrap_or(i32::MAX) - exponent;
-    if scale > 38 {
-        // The shortest binary64 decimal has at most 17 significant digits.
-        // Beyond 38 decimal places it is below 1 / u64::MAX, so any nonzero
-        // selected count is above it.
-        return ExactThreshold::TinyPositive;
-    }
-    let digits = format!("{whole}{fractional}");
-    let Some(mut numerator) = digits.parse::<u128>().ok() else {
-        return ExactThreshold::Invalid;
-    };
-    let denominator = if scale >= 0 {
-        let Some(denominator) = 10_u128.checked_pow(u32::try_from(scale).unwrap_or(u32::MAX))
-        else {
-            return ExactThreshold::TinyPositive;
-        };
-        denominator
-    } else {
-        let Some(multiplier) = 10_u128.checked_pow(scale.unsigned_abs()) else {
-            return ExactThreshold::Invalid;
-        };
-        let Some(scaled) = numerator.checked_mul(multiplier) else {
-            return ExactThreshold::Invalid;
-        };
-        numerator = scaled;
-        1
-    };
-    ExactThreshold::Fraction(numerator, denominator)
-}
-
-/// Compare two nonnegative fractions exactly without cross-multiplication.
-/// The continued-fraction walk uses only division and remainder, so even the
-/// `u64` count boundaries and a 38-digit decimal denominator cannot overflow.
-fn fraction_at_least(
-    mut left_numerator: u128,
-    mut left_denominator: u128,
-    mut right_numerator: u128,
-    mut right_denominator: u128,
-) -> bool {
-    let mut reversed = false;
-    loop {
-        let left_quotient = left_numerator / left_denominator;
-        let right_quotient = right_numerator / right_denominator;
-        if left_quotient != right_quotient {
-            return match left_quotient.cmp(&right_quotient) {
-                Ordering::Greater => !reversed,
-                Ordering::Less => reversed,
-                Ordering::Equal => unreachable!(),
-            };
-        }
-        let left_remainder = left_numerator % left_denominator;
-        let right_remainder = right_numerator % right_denominator;
-        if left_remainder == 0 || right_remainder == 0 {
-            return match left_remainder.cmp(&right_remainder) {
-                Ordering::Greater => !reversed,
-                Ordering::Less => reversed,
-                Ordering::Equal => true,
-            };
-        }
-        (left_numerator, left_denominator) = (left_denominator, left_remainder);
-        (right_numerator, right_denominator) = (right_denominator, right_remainder);
-        reversed = !reversed;
     }
 }
 
@@ -238,7 +141,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{PartitionRecord, TopicRecord};
-    use krabka_units::{millis, minutes, percent, secs};
+    use krabka_units::{millis, minutes, secs};
     use uuid::Uuid;
 
     use super::*;
@@ -363,30 +266,6 @@ mod tests {
         l
     }
 
-    #[test]
-    fn exact_threshold_comparison_handles_boundaries_and_invalid_values() {
-        assert!(exact_ratio_at_least(10, 100, percent(10)));
-        assert!(!exact_ratio_at_least(999, 10_000, percent(10)));
-        assert!(exact_ratio_at_least(109, 1_000, percent(10)));
-        assert!(exact_ratio_at_least(u64::MAX, u64::MAX, percent(100)));
-        assert!(!exact_ratio_at_least(u64::MAX - 1, u64::MAX, percent(100)));
-        assert!(exact_ratio_at_least(
-            1,
-            u64::MAX,
-            krabka_units::fraction(f64::MIN_POSITIVE)
-        ));
-        for invalid in [
-            krabka_units::fraction(f64::NAN),
-            krabka_units::fraction(f64::INFINITY),
-            krabka_units::fraction(-0.1),
-            krabka_units::fraction(1.1),
-        ] {
-            assert!(!exact_ratio_at_least(1, 1, invalid));
-        }
-        assert!(!exact_ratio_at_least(0, 1, percent(0)));
-        assert!(!exact_ratio_at_least(2, 1, percent(0)));
-    }
-
     #[tokio::test]
     async fn offline_or_out_of_isr_preferred_replica_is_not_submitted() {
         let offline = MockController::new(img_with_n_partitions(1, 0), true);
@@ -396,7 +275,6 @@ mod tests {
         }
         let cfg = AutoRebalanceConfig {
             check_interval: minutes(5),
-            imbalance_threshold: <Ratio as RatioExt>::ZERO,
         };
         rebalance_tick(&offline, &liveness, &cfg).await;
         assert!(offline.submitted.lock().unwrap().is_empty());
@@ -418,7 +296,6 @@ mod tests {
         let liveness = liveness_all_alive().await;
         let cfg = AutoRebalanceConfig {
             check_interval: minutes(5),
-            imbalance_threshold: <Ratio as RatioExt>::ZERO,
         };
 
         rebalance_tick(&mock, &liveness, &cfg).await;
@@ -429,58 +306,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn below_threshold_skips_submit() {
-        // 5 imbalanced out of 100 → 5%; threshold 10% → no submit.
+    async fn a_small_imbalance_is_still_restored() {
+        // 5 imbalanced out of 100. The ZooKeeper controller's 10% gate would
+        // leave those five partitions led from the wrong broker until enough
+        // others joined them; the KRaft controller restores them now, which
+        // is what a rolling restart needs (#394).
         let mock = MockController::new(img_with_n_partitions(5, 95), true);
         let liveness = liveness_all_alive().await;
         let cfg = AutoRebalanceConfig {
             check_interval: minutes(5),
-            imbalance_threshold: percent(10),
         };
         rebalance_tick(&mock, &liveness, &cfg).await;
-        assert!(mock.submitted.lock().unwrap().is_empty());
+        assert!(mock.submitted.lock().unwrap().len() == 5);
     }
 
     #[tokio::test]
-    async fn exact_threshold_submits_imbalanced_set() {
-        // 10 imbalanced out of 100 is exactly 10%; threshold 10% should submit.
-        let mock = MockController::new(img_with_n_partitions(10, 90), true);
-        let liveness = liveness_all_alive().await;
-        let cfg = AutoRebalanceConfig {
-            check_interval: minutes(5),
-            imbalance_threshold: percent(10),
-        };
-        rebalance_tick(&mock, &liveness, &cfg).await;
-        assert!(mock.submitted.lock().unwrap().len() == 10);
-    }
-
-    /// The threshold is a [`Ratio`], so the code compares a fraction that
-    /// falls between two whole percentages at full precision.
-    /// `floor(100 * r) < T` and `r < T / 100` agree for every integer `T`.
-    /// This test therefore pins that the move away from the old truncating
-    /// `(imbalanced * 100) / total` left the KIP-460 decision boundary
-    /// exactly where it was.
-    #[tokio::test]
-    async fn fractional_percentages_compare_against_the_threshold_exactly() {
-        // 200 partitions gives half-percent granularity either side of 10%.
-        for (imbalanced, balanced, want_submitted) in
-            [(19_usize, 181_usize, 0_usize), (21, 179, 21)]
-        {
+    async fn every_imbalanced_partition_is_submitted_whatever_the_share() {
+        // No ratio decides anything any more: the same tick submits 19 of 200
+        // and 21 of 200 alike, where the retired 10% gate passed only the
+        // second.
+        for (imbalanced, balanced) in [(19_usize, 181_usize), (21, 179)] {
             let mock = MockController::new(img_with_n_partitions(imbalanced, balanced), true);
             let liveness = liveness_all_alive().await;
             let cfg = AutoRebalanceConfig {
                 check_interval: minutes(5),
-                imbalance_threshold: percent(10),
             };
 
             rebalance_tick(&mock, &liveness, &cfg).await;
 
             assert!(
-                mock.submitted.lock().unwrap().len() == want_submitted,
+                mock.submitted.lock().unwrap().len() == imbalanced,
                 "{imbalanced}/{} imbalanced",
                 imbalanced + balanced
             );
         }
+    }
+
+    /// Kafka's `MAX_ELECTIONS_PER_IMBALANCE`: one pass submits at most a
+    /// thousand elections, so a broker that comes back holding far more
+    /// partitions than that does not produce one enormous metadata batch.
+    #[tokio::test]
+    async fn a_tick_submits_at_most_the_election_cap() {
+        let over_cap = MAX_ELECTIONS_PER_TICK + 25;
+        let mock = MockController::new(img_with_n_partitions(over_cap, 0), true);
+        let liveness = liveness_all_alive().await;
+        let cfg = AutoRebalanceConfig {
+            check_interval: minutes(5),
+        };
+
+        rebalance_tick(&mock, &liveness, &cfg).await;
+
+        assert!(mock.submitted.lock().unwrap().len() == MAX_ELECTIONS_PER_TICK);
     }
 
     #[tokio::test]
@@ -494,7 +370,6 @@ mod tests {
         let liveness = liveness_all_alive().await;
         let cfg = AutoRebalanceConfig {
             check_interval: secs(1),
-            imbalance_threshold: <Ratio as RatioExt>::ZERO,
         };
         rebalance_tick(&mock, &liveness, &cfg).await;
         assert!(
@@ -504,13 +379,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn above_threshold_submits_imbalanced_set() {
-        // 20 imbalanced out of 100 → 20%; threshold 10% → submit 20.
+    async fn every_submitted_record_promotes_the_preferred_replica() {
         let mock = MockController::new(img_with_n_partitions(20, 80), true);
         let liveness = liveness_all_alive().await;
         let cfg = AutoRebalanceConfig {
             check_interval: minutes(5),
-            imbalance_threshold: percent(10),
         };
         rebalance_tick(&mock, &liveness, &cfg).await;
         let submitted = mock.submitted.lock().unwrap();
@@ -535,7 +408,6 @@ mod tests {
             liveness,
             AutoRebalanceConfig {
                 check_interval: millis(10),
-                imbalance_threshold: <Ratio as RatioExt>::ZERO,
             },
             shutdown.clone(),
         ));
