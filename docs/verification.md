@@ -278,14 +278,14 @@ an unordered network. Its `three_voters_append` config checks leader
 completeness under a stale majority: three voters, one client append, leader
 epochs through two, at most two in-flight messages, and at most one crashed node
 at a time, whose omission model drops that node's traffic and so leaves it
-behind the committed prefix. The pinned run reached 445,169 unique states and
-generated 1,650,634 transitions at depth 42, below its depth-60 and
-6,000,000-state truncation guards. The `leader_completeness` property requires
-every node that believes it leads epoch `e` to hold each entry committed in an
-epoch at or below `e`, stamped with the epoch it committed under; the
-`stale_candidate_refused` witness requires a refused vote response actually
-addressed to a candidate whose log end is behind the voter's, which is what
-would disappear if the config stopped reaching a stale-majority election.
+behind the committed prefix. The pinned run reached 445,169 unique states,
+asserted by `PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND`, at depth 42, below its
+depth-60 and 6,000,000-state truncation guards. The `leader_completeness`
+property requires every node that believes it leads epoch `e` to hold each entry
+committed in an epoch at or below `e`, stamped with the epoch it committed
+under; the `stale_candidate_refused` witness requires a refused vote response
+actually addressed to a candidate whose log end is behind the voter's, which is
+what would disappear if the config stopped reaching a stale-majority election.
 Removing the log-recency conjunct from `handle_vote_request` makes this config
 fail. Wire encoding, disk durability, wall-clock timing, volatile-state loss on
 restart, and behavior beyond the stated bounds remain outside the model.
