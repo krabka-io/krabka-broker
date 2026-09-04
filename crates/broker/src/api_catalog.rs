@@ -270,14 +270,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-219",
         claim: "Respond first, then mute the channel for the throttle time",
-        status: KipStatus::Partial,
+        status: KipStatus::Implemented,
         module: "crates/broker/src/network/dispatch/response.rs",
         tests: &[
             "crates/broker/tests/client_quotas/throttling.rs",
             "crates/broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "The dispatch loop echoes a request-quota delay by patching a leading `ThrottleTimeMs`. The throttle-echo section below lists the APIs whose schema puts the field elsewhere.",
+        note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs; the rest are `InlineExempt`, so only a reply outside their advertised version range can be held without an echo.",
     },
     KipAnnotation {
         key: "KIP-226",

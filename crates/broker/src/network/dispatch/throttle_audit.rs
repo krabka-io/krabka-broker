@@ -86,7 +86,8 @@ enum QuotaReach {
 ///   offset, so it alone could be patched by a second, per-API offset table.
 ///   That is not worth a second patching mode for one API: the fix that
 ///   covers all seven is to set the field on the typed response before
-///   encoding, the way the Produce and Fetch handlers already do.
+///   encoding, the way the Produce, Fetch and `ApiVersions` handlers already
+///   do.
 ///
 /// The `reach` column says what that costs on the wire, which is not the same
 /// for all seven -- see [`QuotaReach`].
