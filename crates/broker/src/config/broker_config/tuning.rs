@@ -39,6 +39,10 @@ macro_rules! tuning_fields {
             pub isr_scan_interval: Time,
             /// Log cleaner maintenance cadence.
             pub cleaner_interval: Time,
+            /// Local-retention maintenance cadence: how often the broker
+            /// applies `retention.ms`, `retention.bytes` and `segment.ms` to
+            /// every log it hosts. Kafka's `log.retention.check.interval.ms`.
+            pub log_retention_check_interval: Time,
             /// Retry delay when moving a future log fails.
             pub future_log_move_retry_backoff: Time,
             /// Client-metrics cache eviction cadence.

@@ -51,6 +51,9 @@ async fn tiered_storage_round_trip_through_minio() {
         // shapes they always have. The WORM suite is what covers them on.
         conditional_put: false,
         checksum_sha256: false,
+        // The request bounds are not what this suite exercises; take the
+        // backend's own defaults.
+        ..krabka_remote_storage::S3Config::default()
     };
     let (broker, _dir, _cfg) =
         start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
@@ -112,6 +115,9 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
         multipart_chunk_size: 1024,
         conditional_put: false,
         checksum_sha256: false,
+        // The request bounds are not what this suite exercises; take the
+        // backend's own defaults.
+        ..krabka_remote_storage::S3Config::default()
     };
     let (broker, _dir, _cfg) =
         start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
@@ -223,6 +229,9 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
         // shapes they always have. The WORM suite is what covers them on.
         conditional_put: false,
         checksum_sha256: false,
+        // The request bounds are not what this suite exercises; take the
+        // backend's own defaults.
+        ..krabka_remote_storage::S3Config::default()
     };
 
     // Boot with the durable topic-backed RLMM.
@@ -392,6 +401,9 @@ async fn restored_cluster_serves_the_jvm_console_consumer() {
         multipart_chunk_size: 1024,
         conditional_put: false,
         checksum_sha256: false,
+        // The request bounds are not what this suite exercises; take the
+        // backend's own defaults.
+        ..krabka_remote_storage::S3Config::default()
     };
     let (broker, source_dir, _cfg) =
         start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;

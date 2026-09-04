@@ -9,7 +9,11 @@ use krabka_ids::Offset;
 use tracing::instrument;
 
 use super::RewriteOutput;
-use crate::{error::LogError, name};
+use crate::{
+    error::LogError,
+    io::{IoTarget, LogIo},
+    name,
+};
 
 /// Promote the three `.swap` files that [`rewrite_segments`] produced to final
 /// segment files, and delete all consumed sealed segments in between.
@@ -34,66 +38,72 @@ use crate::{error::LogError, name};
     err,
 )]
 pub fn atomic_swap(
+    io: &dyn LogIo,
     dir: &Path,
     consumed_base_offsets: &[Offset],
     rewrite: &RewriteOutput,
 ) -> Result<(), LogError> {
     // Step 1: fsync swap files. Open with write access so
     // `FlushFileBuffers` (Windows) / `fsync` (Linux) succeeds.
-    OpenOptions::new()
-        .write(true)
-        .open(&rewrite.log_swap)?
-        .sync_all()?;
-    OpenOptions::new()
-        .write(true)
-        .open(&rewrite.index_swap)?
-        .sync_all()?;
-    OpenOptions::new()
-        .write(true)
-        .open(&rewrite.timeindex_swap)?
-        .sync_all()?;
+    for swap in [
+        &rewrite.log_swap,
+        &rewrite.index_swap,
+        &rewrite.timeindex_swap,
+    ] {
+        let file = OpenOptions::new().write(true).open(swap)?;
+        io.sync_file(IoTarget::CompactionSwap, &file)?;
+    }
     if let Some(txn_swap) = &rewrite.txnindex_swap {
-        OpenOptions::new().write(true).open(txn_swap)?.sync_all()?;
+        let file = OpenOptions::new().write(true).open(txn_swap)?;
+        io.sync_file(IoTarget::CompactionSwap, &file)?;
     }
 
     // Step 2: delete originals (including consumed `.txnindex` files — the
     // rewritten survivor `.txnindex` carries forward only surviving aborted
     // transactions).
     for base in consumed_base_offsets {
-        let _ = std::fs::remove_file(name::log_path(dir, base.0));
-        let _ = std::fs::remove_file(name::index_path(dir, base.0));
-        let _ = std::fs::remove_file(name::timeindex_path(dir, base.0));
-        let _ = std::fs::remove_file(name::txnindex_path(dir, base.0));
+        for path in [
+            name::log_path(dir, base.0),
+            name::index_path(dir, base.0),
+            name::timeindex_path(dir, base.0),
+            name::txnindex_path(dir, base.0),
+        ] {
+            let _ = io.remove_file(IoTarget::CompactionSwap, &path);
+        }
     }
 
     // Step 3: rename swap → final.
-    std::fs::rename(
+    io.rename(
+        IoTarget::CompactionSwap,
         &rewrite.log_swap,
-        name::log_path(dir, rewrite.new_base_offset.0),
+        &name::log_path(dir, rewrite.new_base_offset.0),
     )?;
-    std::fs::rename(
+    io.rename(
+        IoTarget::CompactionSwap,
         &rewrite.index_swap,
-        name::index_path(dir, rewrite.new_base_offset.0),
+        &name::index_path(dir, rewrite.new_base_offset.0),
     )?;
-    std::fs::rename(
+    io.rename(
+        IoTarget::CompactionSwap,
         &rewrite.timeindex_swap,
-        name::timeindex_path(dir, rewrite.new_base_offset.0),
+        &name::timeindex_path(dir, rewrite.new_base_offset.0),
     )?;
     if let Some(txn_swap) = &rewrite.txnindex_swap {
-        std::fs::rename(
+        io.rename(
+            IoTarget::CompactionSwap,
             txn_swap,
-            name::txnindex_path(dir, rewrite.new_base_offset.0),
+            &name::txnindex_path(dir, rewrite.new_base_offset.0),
         )?;
     }
 
-    // Step 4: fsync the directory. On Windows this is a no-op
-    // (`std::fs::File::open` on a dir fails with EACCES); guard the call.
-    #[cfg(unix)]
-    {
-        if let Ok(d) = std::fs::File::open(dir) {
-            let _ = d.sync_all();
-        }
-    }
+    // Step 4: fsync the directory, and report a failure rather than swallow
+    // it. Until this returns, the renames above live only in the directory's
+    // page cache: a crash here restores the pre-compaction names, and on a
+    // compacted topic that is a tombstoned key coming back to life. The
+    // caller must treat the swap as unfinished, and
+    // [`crate::recovery::swap_orphan_recover`] heals whichever of the two
+    // name sets survived on the next `Log::open`.
+    io.sync_dir(dir)?;
     Ok(())
 }
 
@@ -106,9 +116,12 @@ mod tests {
     use krabka_units::prelude::secs;
 
     use super::*;
-    use crate::compact::{
-        CleanedTransactionMetadata, RewriteRetention, build_offset_map, rewrite_segments,
-        test_support::{INDEX_INTERVAL, make_record, write_sealed_segment},
+    use crate::{
+        compact::{
+            CleanedTransactionMetadata, RewriteRetention, build_offset_map, rewrite_segments,
+            test_support::{make_record, write_sealed_segment},
+        },
+        io::FileIo,
     };
 
     #[test]
@@ -132,6 +145,7 @@ mod tests {
             let map = build_offset_map(&segment_refs).unwrap();
             let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
             rewrite_segments(
+                &FileIo,
                 dir.path(),
                 &segment_refs,
                 &map,
@@ -141,12 +155,11 @@ mod tests {
                     delete_retention: secs(1),
                 },
                 &HashMap::new(),
-                INDEX_INTERVAL,
             )
             .unwrap()
             // first_segment, second_segment dropped here — file handles closed
         };
-        atomic_swap(dir.path(), &[Offset(0), Offset(10)], &rewrite).unwrap();
+        atomic_swap(&FileIo, dir.path(), &[Offset(0), Offset(10)], &rewrite).unwrap();
 
         // After swap: only one .log (base 0). The base 10 segment is gone.
         check!(name::log_path(dir.path(), 0).exists());

@@ -146,6 +146,7 @@ mod tests {
             rlmm: &rlmm,
             metrics: &metrics,
             index_cache: &index_cache,
+            copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
         };
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
 
@@ -184,6 +185,7 @@ mod tests {
             rlmm: &rlmm,
             metrics: &metrics,
             index_cache: &index_cache,
+            copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
         };
 
         let copied = copy_eligible(

@@ -28,10 +28,11 @@ use assert2::assert;
 use krabka_broker::metrics::{
     ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
     BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
-    ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel,
-    DirectoryLabel, PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel,
-    ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
-    WalShardLabel, WalVoterLabel,
+    CleanerFailureLabel, CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
+    ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel,
+    QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
+    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
+    WalVoterLabel,
 };
 use krabka_metadata::BreakGlassAction as GatedAction;
 use prometheus_client::metrics::family::Family;
@@ -245,6 +246,11 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         client_metrics_otlp_dropped_total: _,
         client_metrics_otlp_failed_total: _,
         log_cleaner_runs_total: _,
+        log_cleaner_failures: _,
+        log_retention_runs_total: _,
+        log_retention_failures: _,
+        log_cleaner_uncleanable_partitions: _,
+        offline_log_dirs: _,
         log_compactions_total: _,
         barrier_epochs_started_total: _,
         barrier_epochs_committed_total: _,
@@ -496,6 +502,24 @@ fn seed_single_families(metrics: &BrokerMetrics) {
             .get_or_create(&SchemaRejectionLabel {
                 topic: "orders".into(),
                 reason: "unframed".into(),
+            }),
+    );
+    drop(
+        metrics
+            .log_cleaner_failures
+            .get_or_create(&CleanerFailureLabel {
+                topic: "orders".into(),
+                partition: 0,
+                reason: CleanerFailureReason::Io,
+            }),
+    );
+    drop(
+        metrics
+            .log_retention_failures
+            .get_or_create(&CleanerFailureLabel {
+                topic: "orders".into(),
+                partition: 0,
+                reason: CleanerFailureReason::Io,
             }),
     );
     drop(

@@ -105,7 +105,7 @@ impl Log {
         // included: `DeleteRecords` is acknowledged as soon as the trim does,
         // and a trimmed partition can then sit idle with no later `sync()` to
         // pay a deferred debt.
-        log_start_offset_checkpoint::write(&self.dir, new_start)?;
+        log_start_offset_checkpoint::write(&*self.io, &self.dir, new_start)?;
         self.start_offset = new_start;
         // Whoever calls this deleted the records below `new_start`, so the
         // floor now means something a reader may be refused against, and the
@@ -305,7 +305,13 @@ impl Log {
         self.config.read().unwrap().clone()
     }
 
-    /// Replace the active log-file I/O implementation for fault-injection tests.
+    /// Replace the log's I/O implementation for fault-injection tests.
+    ///
+    /// This reaches every durable write the log makes: the active `.log`, both
+    /// sparse indexes of every segment, the `.stampindex` sidecars, the
+    /// leader-epoch checkpoint, and -- through `self.io`, which the free
+    /// functions take -- the producer snapshots, the compaction swap, and the
+    /// segment deletions retention performs.
     #[cfg(any(test, feature = "test-helpers"))]
     pub fn test_set_io(&mut self, io: std::sync::Arc<dyn crate::io::LogIo>) {
         self.io = io.clone();
@@ -313,8 +319,12 @@ impl Log {
             segment.set_io(io.clone());
         }
         if let Some(active) = &mut self.active {
-            active.set_io(io);
+            active.set_io(io.clone());
         }
+        for index in self.stamp_indexes.values_mut() {
+            index.set_io(io.clone());
+        }
+        self.epoch_checkpoint.set_io(io);
     }
 
     /// Return all aborted transactions whose offset range overlaps

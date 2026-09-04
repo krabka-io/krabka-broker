@@ -23,11 +23,15 @@
 //! Kafka's row count has no counterpart: a per-partition file holds exactly one
 //! value.
 
-use std::{fs, io::Write as _, path::Path};
+use std::{fs, path::Path};
 
 use krabka_ids::Offset;
 
-use crate::{error::LogError, name};
+use crate::{
+    error::LogError,
+    io::{IoTarget, LogIo},
+    name,
+};
 
 /// Read the checkpointed log start offset. A missing file gives `None`, which
 /// means "no trim has moved the start past what the segment names say".
@@ -75,34 +79,24 @@ fn parse(contents: &str) -> Result<Offset, LogError> {
 /// may be no later `sync` to pay the debt: a crash would drop the rename and
 /// serve the deleted records again. A trim is an administrative operation, so
 /// the extra fsync costs nothing that matters.
-pub(crate) fn write(dir: &Path, log_start_offset: Offset) -> Result<(), LogError> {
+pub(crate) fn write(io: &dyn LogIo, dir: &Path, log_start_offset: Offset) -> Result<(), LogError> {
     let path = name::log_start_offset_checkpoint_path(dir);
     let tmp = path.with_extension("tmp");
     {
-        let mut file = fs::File::create(&tmp).map_err(LogError::Io)?;
-        file.write_all(format!("0\n{}\n", log_start_offset.0).as_bytes())
-            .map_err(LogError::Io)?;
-        file.sync_data().map_err(LogError::Io)?;
-    }
-    fs::rename(&tmp, &path).map_err(LogError::Io)?;
-    sync_dir(dir)
-}
-
-/// `fsync` the partition directory so the rename above is durable.
-///
-/// Rust's standard directory-open path is supported on Unix. Windows provides
-/// no equivalent through `std`, which is the same split [`crate::Log::sync`]
-/// already lives with; the file contents are synced before the rename on both.
-fn sync_dir(dir: &Path) -> Result<(), LogError> {
-    #[cfg(unix)]
-    {
-        fs::File::open(dir)
-            .and_then(|handle| handle.sync_all())
+        let file = fs::File::create(&tmp).map_err(LogError::Io)?;
+        crate::io::write_all(
+            io,
+            IoTarget::LogStartOffsetCheckpoint,
+            &file,
+            format!("0\n{}\n", log_start_offset.0).as_bytes(),
+        )
+        .map_err(LogError::Io)?;
+        io.sync_file(IoTarget::LogStartOffsetCheckpoint, &file)
             .map_err(LogError::Io)?;
     }
-    #[cfg(not(unix))]
-    let _ = dir;
-    Ok(())
+    io.rename(IoTarget::LogStartOffsetCheckpoint, &tmp, &path)
+        .map_err(LogError::Io)?;
+    io.sync_dir(dir).map_err(LogError::Io)
 }
 
 /// Drop the checkpoint. A log that was reset holds no records at all, so the
@@ -126,10 +120,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(read(dir.path()).unwrap() == None);
 
-        write(dir.path(), Offset(42)).unwrap();
+        write(&crate::io::FileIo, dir.path(), Offset(42)).unwrap();
         assert!(read(dir.path()).unwrap() == Some(Offset(42)));
 
-        write(dir.path(), Offset(100)).unwrap();
+        write(&crate::io::FileIo, dir.path(), Offset(100)).unwrap();
         assert!(read(dir.path()).unwrap() == Some(Offset(100)));
 
         remove(dir.path()).unwrap();
@@ -139,7 +133,7 @@ mod tests {
     #[test]
     fn writes_the_versioned_two_line_format() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), Offset(7)).unwrap();
+        write(&crate::io::FileIo, dir.path(), Offset(7)).unwrap();
         let contents =
             fs::read_to_string(name::log_start_offset_checkpoint_path(dir.path())).unwrap();
         assert!(contents == "0\n7\n");

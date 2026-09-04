@@ -9,8 +9,12 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
-use crate::cleaner::test_support::{
-    compactable_partition, compactable_partition_with_config, record_count,
+use crate::{
+    cleaner::test_support::{
+        block_compaction_swap, compactable_partition, compactable_partition_in_registry,
+        compactable_partition_with_config, record_count,
+    },
+    metrics::{CleanerFailureLabel, CleanerFailureReason},
 };
 
 #[tokio::test]
@@ -50,7 +54,14 @@ async fn tick_all_compacts_only_local_leader_compact_topics() {
         .collect();
 
     let metrics = BrokerMetrics::new();
-    tick_all(&registry, None, NodeId(7), &metrics).await;
+    tick_all(
+        &registry,
+        None,
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
 
     // A single `tick_all` is exactly one cleaner sweep, so the run counter
     // must advance by one. This pins `record_cleaner_run` against a no-op
@@ -95,7 +106,14 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
     );
 
     let metrics = BrokerMetrics::new();
-    tick_all(&registry, None, NodeId(7), &metrics).await;
+    tick_all(
+        &registry,
+        None,
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
     assert!(
         record_count(&partition) == before,
         "ratio must hold it back"
@@ -111,7 +129,14 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
             max_compaction_lag: Some(krabka_units::millis(1)),
             ..base
         });
-    tick_all(&registry, None, NodeId(7), &metrics).await;
+    tick_all(
+        &registry,
+        None,
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
     assert!(
         record_count(&partition) < before,
         "the max lag must force a pass"
@@ -191,7 +216,14 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
         ("tenant-a.", PatternType::Prefixed),
     ]);
 
-    tick_all(&registry, Some(&image), NodeId(7), &BrokerMetrics::new()).await;
+    tick_all(
+        &registry,
+        Some(&image),
+        NodeId(7),
+        &BrokerMetrics::new(),
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
 
     // (topic, whether the sweep should have compacted it)
     let expected = [
@@ -217,14 +249,28 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
     let metrics = BrokerMetrics::new();
 
-    tick_all(&registry, Some(&image), NodeId(7), &metrics).await;
+    tick_all(
+        &registry,
+        Some(&image),
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
     check!(
         record_count(partition) == *before,
         "the frozen sweep removes no record"
     );
 
     thaw(&mut image, "orders", PatternType::Literal);
-    tick_all(&registry, Some(&image), NodeId(7), &metrics).await;
+    tick_all(
+        &registry,
+        Some(&image),
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
 
     check!(
         record_count(partition) < *before,
@@ -269,5 +315,122 @@ fn freeze_stops_compaction_reads_the_registry_the_produce_path_reads() {
             !freeze_stops_compaction(None, topic),
             "{label}: a sweep with no metadata authority resolves no freeze"
         );
+    }
+}
+
+// ── A cleaner that cannot clean ──────────────────────────────────
+
+/// How many times the cleaner failed `topic-0` for `reason`.
+fn failures(metrics: &BrokerMetrics, topic: &str, reason: CleanerFailureReason) -> u64 {
+    metrics
+        .log_cleaner_failures
+        .get_or_create(&CleanerFailureLabel {
+            topic: topic.into(),
+            partition: 0,
+            reason,
+        })
+        .get()
+}
+
+/// A compaction that fails against the disk is the failure mode with no other
+/// signal: the topic is compacted, so local retention deletes nothing either,
+/// and the dir fills while `kafka-log-dirs --describe` still calls it online.
+/// The sweep has to account it, refuse to count itself as a pass, and leave
+/// the partition marked uncleanable until a pass succeeds.
+#[tokio::test]
+async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
+    let dir = tempfile::tempdir().expect("log root");
+    let status = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+    let registry = PartitionRegistry::new();
+    let partition = compactable_partition_in_registry(&dir, "orders", NodeId(7), status.clone());
+    let before = record_count(&partition);
+    registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
+    // A directory where the rewrite must create its `.swap` file: the open
+    // fails with EISDIR, which is a storage error the filesystem raises.
+    let blocked = block_compaction_swap(&dir, "orders");
+
+    let metrics = BrokerMetrics::new();
+    let mut uncleanable = UncleanablePartitions::default();
+    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+
+    check!(record_count(&partition) == before, "nothing was compacted");
+    check!(failures(&metrics, "orders", CleanerFailureReason::Io) == 1);
+    check!(
+        metrics.log_cleaner_runs_total.get() == 0,
+        "a sweep that failed every partition it swept is not a pass"
+    );
+    check!(metrics.log_cleaner_uncleanable_partitions.get() == 1);
+    check!(
+        status.is_offline(dir.path()),
+        "a background write failure takes the dir offline, as a produce would"
+    );
+
+    // The same partition, once the disk takes the write again: the sweep
+    // compacts it, drops the uncleanable mark, and counts itself.
+    for swap in blocked {
+        std::fs::remove_dir(&swap).expect("unblock the swap path");
+    }
+    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+
+    check!(record_count(&partition) < before, "the retry compacted");
+    check!(failures(&metrics, "orders", CleanerFailureReason::Io) == 1);
+    check!(metrics.log_cleaner_runs_total.get() == 1);
+    check!(metrics.log_cleaner_uncleanable_partitions.get() == 0);
+}
+
+/// A partition this broker stops leading is not the cleaner's to clean, so it
+/// leaves the uncleanable set rather than holding the gauge above zero for as
+/// long as the process lives.
+#[tokio::test]
+async fn a_partition_this_broker_stops_leading_leaves_the_uncleanable_set() {
+    let dir = tempfile::tempdir().expect("log root");
+    let status = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+    let registry = PartitionRegistry::new();
+    let partition = compactable_partition_in_registry(&dir, "orders", NodeId(7), status);
+    registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
+    let blocked = block_compaction_swap(&dir, "orders");
+
+    let metrics = BrokerMetrics::new();
+    let mut uncleanable = UncleanablePartitions::default();
+    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+    check!(metrics.log_cleaner_uncleanable_partitions.get() == 1);
+
+    partition.current_leader.store(8, Ordering::Relaxed);
+    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+
+    check!(
+        metrics.log_cleaner_uncleanable_partitions.get() == 0,
+        "the follower replica is another broker's cleaner's problem"
+    );
+    check!(
+        metrics.log_cleaner_runs_total.get() == 1,
+        "the sweep that swept nothing is a pass"
+    );
+    drop(blocked);
+}
+
+/// The reason label is the error class an operator acts on, so the mapping is
+/// pinned rather than left to whichever error the sweep happened to see.
+#[test]
+fn failure_reason_separates_a_disk_from_a_dead_writer() {
+    let cases = [
+        (
+            "an io error from the log layer is the disk",
+            BrokerError::Log(krabka_log::LogError::Io(std::io::Error::other("EIO"))),
+            CleanerFailureReason::Io,
+        ),
+        (
+            "a dead writer actor reached no disk at all",
+            BrokerError::Replication("partition writer dead".into()),
+            CleanerFailureReason::Writer,
+        ),
+        (
+            "anything else the log refused",
+            BrokerError::Log(krabka_log::LogError::Corrupt("bad crc".into())),
+            CleanerFailureReason::Other,
+        ),
+    ];
+    for (label, error, want) in cases {
+        check!(failure_reason(&error) == want, "{label}");
     }
 }

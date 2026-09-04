@@ -381,6 +381,59 @@ pub struct ConnectionCloseReasonLabel {
     pub reason: ConnectionCloseReason,
 }
 
+/// Why one partition's compaction pass failed, as a metric label.
+///
+/// The cleaner classifies every `compact_log` error into one of these three,
+/// so the `log_cleaner_failures` family carries at most three series per
+/// partition however the failure is spelled. The distinction is the one an
+/// operator acts on: a storage failure is a disk to replace, and a writer
+/// failure is a partition whose actor is gone.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum CleanerFailureReason {
+    /// The log layer returned an `io::Error`. The compaction rewrite, the
+    /// swap or an fsync failed against the disk, and the writer arm has
+    /// already asked the log-dir registry to take the dir offline.
+    Io,
+    /// The partition's writer actor was gone, or dropped the acknowledgement
+    /// before it answered. Nothing reached the disk.
+    Writer,
+    /// Any other error the log layer returned, such as a corrupt segment the
+    /// rewrite could not read.
+    Other,
+}
+
+impl CleanerFailureReason {
+    /// The `reason` label value this variant renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Io => "io",
+            Self::Writer => "writer",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl EncodeLabelValue for CleanerFailureReason {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Compaction-failure label set, paired with the `log_cleaner_failures`
+/// counter family.
+///
+/// The partition half is bounded exactly as [`PartitionLabel`] is -- the
+/// cleaner only ever sweeps partitions this broker leads -- and `reason` is
+/// the closed [`CleanerFailureReason`] enum, so a partition that fails every
+/// way it can adds three series and no client input reaches the set.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct CleanerFailureLabel {
+    pub topic: Arc<str>,
+    pub partition: i32,
+    pub reason: CleanerFailureReason,
+}
+
 /// The client quota that caused a throttle the broker applied.
 ///
 /// Kafka splits its quotas the same way, and names them the same way in

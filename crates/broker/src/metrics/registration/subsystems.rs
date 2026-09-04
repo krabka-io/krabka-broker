@@ -58,9 +58,52 @@ impl BrokerMetrics {
 
         registry.register(
             "log_cleaner_runs",
-            "Cumulative count of completed log-compaction sweeps run by \
-             this broker's cleaner (one per tick_all pass).",
+            "Cumulative count of clean log-compaction sweeps run by this \
+             broker's cleaner (one per tick_all pass that failed no \
+             partition).",
             self.log_cleaner_runs_total.clone(),
+        );
+
+        registry.register(
+            "log_cleaner_failures",
+            "Per-partition, per-reason cumulative count of compaction passes \
+             that failed. Alert on rate(...) > 0: compaction and local \
+             retention stop together, so a failing cleaner is a disk that \
+             fills with nothing else to say so.",
+            self.log_cleaner_failures.clone(),
+        );
+
+        registry.register(
+            "log_retention_runs",
+            "Cumulative count of clean local-retention sweeps run by this \
+             broker (one per pass that failed no partition). The half of log \
+             maintenance Kafka's LogManager.cleanupLogs does.",
+            self.log_retention_runs_total.clone(),
+        );
+
+        registry.register(
+            "log_retention_failures",
+            "Per-partition, per-reason cumulative count of local-retention \
+             passes that failed. Alert on rate(...) > 0: a broker that never \
+             evicts a segment looks like one with nothing to evict until the \
+             disk fills.",
+            self.log_retention_failures.clone(),
+        );
+
+        registry.register(
+            "log_cleaner_uncleanable_partitions",
+            "Partitions this broker leads whose most recent compaction \
+             attempt failed and which have not compacted since. Mirrors \
+             Kafka's LogCleanerManager uncleanable-partitions-count.",
+            self.log_cleaner_uncleanable_partitions.clone(),
+        );
+
+        registry.register(
+            "offline_log_dirs",
+            "Log directories this broker has marked offline, whether by the \
+             startup writability probe or by a live write/fsync failure. \
+             Mirrors kafka.log:type=LogManager,name=OfflineLogDirectoryCount.",
+            self.offline_log_dirs.clone(),
         );
 
         registry.register(

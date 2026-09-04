@@ -218,7 +218,7 @@ impl Log {
         self.stamp_indexes
             .retain(|base, _| !drop_set.contains(base));
         for base in &to_drop {
-            let _ = retention::delete_segment_files(&self.dir, *base);
+            let _ = retention::delete_segment_files(&*self.io, &self.dir, *base);
         }
 
         // Every dropped segment ended below `target`, so the first offset

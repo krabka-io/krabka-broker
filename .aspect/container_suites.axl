@@ -25,6 +25,25 @@ _BROKER_MANIFEST_PATHS = ["crates/broker/BUILD.bazel", "crates/broker/Cargo.toml
 # changes what the suite asserts about it.
 _IMAGE_PATH_PREFIXES = ["packaging/"]
 
+# The broker suites that run brokers as processes out of that same image, and so
+# have to be selected by a `packaging/` change for the same reason the image
+# suite is. `//crates/broker:BUILD.bazel` names them in `krabka_image`; they are
+# named here too because the rdeps query cannot see the image's layer list from
+# a broker source file any better than it can from `packaging/`.
+_IMAGE_SUITES = ["process_kill_durability"]
+
+# Container suites that must never enter this matrix, whatever a change
+# touches. `soak` runs a three-broker cluster under continuous load for four
+# hours: no pull request can wait for it, and putting it in the nightly's
+# twelve-way shard would put four hours on the critical path of a job that
+# otherwise finishes in one. It has a scheduled lane of its own in
+# `.github/workflows/ci.yml`, which names
+# `//crates/broker:soak_docker_test` directly.
+#
+# This is the only reason a suite belongs here. A suite that is merely slow
+# still runs in the matrix; a suite whose own job already runs it does not.
+_OWN_LANE_SUITES = ["soak"]
+
 # Rust is one Bazel target at crate granularity, so rdeps turns every broker
 # source change into every broker container suite. These are the narrower
 # feature contracts worth gating on a PR; the complete matrix remains nightly.
@@ -130,6 +149,16 @@ _FEATURE_RULES = [
         "crates/broker/src/raft_handshake",
         "crates/broker/src/wal/quorum",
     ], ["jvm_static_quorum_spike"]),
+    # What survives a kill is decided in the log crate: the fsync policy, the
+    # segment write path and the open-time tail recovery that reads back what
+    # the write path left. `process_kill_durability` is the only suite that
+    # exercises any of the three against a process that really died.
+    ([
+        "crates/log/src/config.rs",
+        "crates/log/src/recovery.rs",
+        "crates/log/src/segment",
+        "crates/log/src/log/open.rs",
+    ], ["process_kill_durability"]),
     ([
         "crates/broker/src/handlers/describe_configs/resources/broker_logger",
         "crates/broker/src/handlers/incremental_alter_configs/broker_logger_scope",
@@ -213,15 +242,34 @@ def _starts_with_any(value, prefixes):
 def _target(suite):
     return _BROKER_TARGET_PREFIX + suite + _DOCKER_TEST_SUFFIX
 
+def _without_own_lane(targets):
+    """`targets` minus the suites that have a scheduled lane of their own.
+
+    Applied to the raw `bazel query` answer as well as inside `_select`,
+    because the full-matrix run -- a schedule or a dispatch, where there is no
+    merge base to narrow by -- takes every docker-tagged target verbatim and
+    never reaches the path-based selection at all.
+    """
+    kept = []
+    for label in targets:
+        if label in [_target(suite) for suite in _OWN_LANE_SUITES]:
+            continue
+        kept.append(label)
+    return kept
+
 def _broker_suites(available_targets):
     suites = {}
     for label in available_targets:
         if label.startswith(_BROKER_TARGET_PREFIX) and label.endswith(_DOCKER_TEST_SUFFIX):
-            suites[label[len(_BROKER_TARGET_PREFIX):-len(_DOCKER_TEST_SUFFIX)]] = True
+            suite = label[len(_BROKER_TARGET_PREFIX):-len(_DOCKER_TEST_SUFFIX)]
+            if suite not in _OWN_LANE_SUITES:
+                suites[suite] = True
     return suites
 
 def _mapped_suites():
     suites = {"jvm_consumer_group_next_gen": True}
+    for suite in _IMAGE_SUITES:
+        suites[suite] = True
     for _, selected in _FEATURE_RULES:
         for suite in selected:
             suites[suite] = True
@@ -250,6 +298,8 @@ def _select(paths, available_targets):
         if path:
             if _starts_with_any(path, _IMAGE_PATH_PREFIXES):
                 image = True
+                for suite in _IMAGE_SUITES:
+                    suites[suite] = True
 
             if path in _BROKER_MANIFEST_PATHS:
                 # The image suite is the only one that runs the broker and the
@@ -488,6 +538,32 @@ def _check(condition, message):
 
 def _self_test():
     available = [_target(suite) for suite in _mapped_suites().keys()] + [_IMAGE_SUITE_TARGET]
+
+    # The soak lane is scheduled-only. Neither its own sources, nor the crate
+    # manifest that selects every other suite, nor the raw query answer the
+    # full-matrix run uses may put it in the `docker` matrix -- a four-hour
+    # suite in a twelve-way shard would hold the whole nightly open.
+    with_soak = available + [_target("soak")]
+    _check(
+        _select(["crates/broker/tests/soak.rs"], with_soak) == [],
+        "the soak suite must not be selected by its own sources",
+    )
+    _check(
+        _select(["crates/broker/tests/soak/drift.rs"], with_soak) == [],
+        "the soak suite must not be selected by its helper modules",
+    )
+    _check(
+        _target("soak") not in _select(["crates/broker/BUILD.bazel"], with_soak),
+        "the crate manifest selects every suite but the soak one",
+    )
+    _check(
+        _without_own_lane([_target("soak"), _target("jvm_features")]) == [_target("jvm_features")],
+        "the full-matrix target list drops the soak suite",
+    )
+    _check(
+        _select(["crates/broker/src/features.rs"], with_soak) == [_target("jvm_features")],
+        "excluding the soak suite leaves every other selection alone",
+    )
     _check(
         _select(["crates/broker/src/delivery/scheduler.rs"], available) == [_target("jvm_deliver_at_time")],
         "delivery source must select deliver-at-time",
@@ -563,17 +639,31 @@ def _self_test():
         "the offline-dir failover path must select the unavailable-partitions differential",
     )
     _check(
-        _select(["packaging/BUILD.bazel"], available) == [_IMAGE_SUITE_TARGET],
-        "a change to the image's layer list must select the image suite",
+        _select(["packaging/BUILD.bazel"], available) ==
+        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability")]),
+        "a change to the image's layer list must select the image suite and the suites that run it",
     )
     _check(
-        _select(["packaging/image_binaries_test.sh"], available) == [_IMAGE_SUITE_TARGET],
-        "a change to what the image asserts must select the image suite",
+        _select(["packaging/image_binaries_test.sh"], available) ==
+        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability")]),
+        "a change to what the image asserts must select the image suite and the suites that run it",
     )
     _check(
         sorted(_select(["packaging/base.apko.yaml", "crates/broker/src/barrier/cut.rs"], available)) ==
-        sorted([_IMAGE_SUITE_TARGET, _target("jvm_barrier_markers")]),
+        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability"), _target("jvm_barrier_markers")]),
         "a change to both must select both",
+    )
+    _check(
+        _select(["crates/broker/tests/process_kill_durability.rs"], available) == [_target("process_kill_durability")],
+        "the kill suite's own source must select it, and nothing else",
+    )
+    _check(
+        _target("process_kill_durability") in _select(["crates/log/src/recovery.rs"], available),
+        "open-time tail recovery must select the suite that kills a broker and reopens its log",
+    )
+    _check(
+        _IMAGE_SUITE_TARGET not in _select(["crates/log/src/recovery.rs"], available),
+        "a log source edit must not build an image; it cannot change what the image carries",
     )
     _check(_select(["crates/broker/src/codes.rs"], available) == [], "unmapped broker source must select nothing")
     _check(
@@ -791,7 +881,7 @@ def _is_deleted_source(path):
     )
 
 def _affected_targets(ctx, base):
-    all_targets = sorted(run(ctx, "bazel", ["query", "attr(tags, 'docker', " + _SUITE_SCOPE + ")"]))
+    all_targets = _without_own_lane(sorted(run(ctx, "bazel", ["query", "attr(tags, 'docker', " + _SUITE_SCOPE + ")"])))
     if not valid_base(ctx, base):
         return all_targets
 
@@ -825,7 +915,7 @@ def _affected_targets(ctx, base):
             files.append(path)
     if files:
         expression = "attr(tags, 'docker', rdeps(" + _SUITE_SCOPE + ", set(" + " ".join(files) + ")))"
-        for label in run(ctx, "bazel", ["query", expression]):
+        for label in _without_own_lane(run(ctx, "bazel", ["query", expression])):
             targets[label] = True
 
     return sorted(targets.keys())

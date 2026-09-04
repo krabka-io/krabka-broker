@@ -3,13 +3,13 @@
 //! and the writer live together because they are the two halves of one
 //! byte-for-byte Kafka format, and a change to either has to move the other.
 
-use std::{fmt::Write as _, fs, io::Write, path::PathBuf};
+use std::{fmt::Write as _, fs, path::PathBuf};
 
 use krabka_ids::{LeaderEpoch, Offset};
 use tracing::instrument;
 
 use super::{EpochEntry, LeaderEpochCheckpoint, is_strict_successor};
-use crate::error::LogError;
+use crate::{error::LogError, io::IoTarget};
 
 impl LeaderEpochCheckpoint {
     /// Open or recover the checkpoint at `path`. A missing file gives an
@@ -29,7 +29,11 @@ impl LeaderEpochCheckpoint {
             Err(e) => return Err(LogError::Io(e)),
         };
         tracing::Span::current().record("entries", entries.len());
-        Ok(Self { path, entries })
+        Ok(Self {
+            path,
+            io: crate::io::file_io(),
+            entries,
+        })
     }
 
     fn parse(s: &str) -> Result<Vec<EpochEntry>, LogError> {
@@ -84,11 +88,16 @@ impl LeaderEpochCheckpoint {
         }
         let tmp = self.path.with_extension("tmp");
         {
-            let mut f = fs::File::create(&tmp).map_err(LogError::Io)?;
-            f.write_all(s.as_bytes()).map_err(LogError::Io)?;
-            f.sync_data().map_err(LogError::Io)?;
+            let f = fs::File::create(&tmp).map_err(LogError::Io)?;
+            crate::io::write_all(&*self.io, IoTarget::LeaderEpochCheckpoint, &f, s.as_bytes())
+                .map_err(LogError::Io)?;
+            self.io
+                .sync_file(IoTarget::LeaderEpochCheckpoint, &f)
+                .map_err(LogError::Io)?;
         }
-        fs::rename(&tmp, &self.path).map_err(LogError::Io)?;
+        self.io
+            .rename(IoTarget::LeaderEpochCheckpoint, &tmp, &self.path)
+            .map_err(LogError::Io)?;
         Ok(())
     }
 }

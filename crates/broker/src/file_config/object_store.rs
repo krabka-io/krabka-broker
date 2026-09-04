@@ -6,6 +6,7 @@
 //! layers over whichever of the two backends is selected and cannot be used
 //! with the local filesystem backend.
 
+use krabka_units::Time;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -55,6 +56,31 @@ pub struct FileRemoteStorageS3Config {
     /// [`krabka_remote_storage::S3Config`] default of `true` applies.
     #[serde(default)]
     pub checksum_sha256: Option<bool>,
+    /// How many times one object-store request is retried before the error
+    /// reaches the broker. When `None`, [`krabka_object_store::DEFAULT_MAX_RETRIES`]
+    /// (10) applies; `0` disables retries. Under a store that answers
+    /// `503 SlowDown` this is what bounds how long one call holds its
+    /// caller before the failure is counted and the sweep moves on.
+    pub max_retries: Option<usize>,
+    /// Ceiling on the wall-clock time one request may spend across all of
+    /// its retries. When `None`,
+    /// [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it
+    /// under 5 minutes: retries reuse the original request's credentials.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub retry_timeout: Option<Time>,
+    /// Ceiling on one HTTP request, connect phase included. When `None`,
+    /// [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This
+    /// is the bound on a store that accepts the connection and then
+    /// answers nothing.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub request_timeout: Option<Time>,
+    /// Ceiling on the connect phase alone. When `None`,
+    /// [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub connect_timeout: Option<Time>,
 }
 
 impl std::fmt::Debug for FileRemoteStorageS3Config {
@@ -75,6 +101,10 @@ impl std::fmt::Debug for FileRemoteStorageS3Config {
             .field("multipart_chunk_size", &self.multipart_chunk_size)
             .field("conditional_put", &self.conditional_put)
             .field("checksum_sha256", &self.checksum_sha256)
+            .field("max_retries", &self.max_retries)
+            .field("retry_timeout", &self.retry_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .finish()
     }
 }
@@ -118,6 +148,31 @@ pub struct FileRemoteStorageGcsConfig {
     /// When `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]
     /// applies.
     pub multipart_chunk_size: Option<usize>,
+    /// How many times one object-store request is retried before the error
+    /// reaches the broker. When `None`, [`krabka_object_store::DEFAULT_MAX_RETRIES`]
+    /// (10) applies; `0` disables retries. Under a store that answers
+    /// `503 SlowDown` this is what bounds how long one call holds its
+    /// caller before the failure is counted and the sweep moves on.
+    pub max_retries: Option<usize>,
+    /// Ceiling on the wall-clock time one request may spend across all of
+    /// its retries. When `None`,
+    /// [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it
+    /// under 5 minutes: retries reuse the original request's credentials.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub retry_timeout: Option<Time>,
+    /// Ceiling on one HTTP request, connect phase included. When `None`,
+    /// [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This
+    /// is the bound on a store that accepts the connection and then
+    /// answers nothing.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub request_timeout: Option<Time>,
+    /// Ceiling on the connect phase alone. When `None`,
+    /// [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub connect_timeout: Option<Time>,
 }
 
 impl std::fmt::Debug for FileRemoteStorageGcsConfig {
@@ -139,6 +194,10 @@ impl std::fmt::Debug for FileRemoteStorageGcsConfig {
             .field("allow_http", &self.allow_http)
             .field("multipart_threshold", &self.multipart_threshold)
             .field("multipart_chunk_size", &self.multipart_chunk_size)
+            .field("max_retries", &self.max_retries)
+            .field("retry_timeout", &self.retry_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .finish()
     }
 }
@@ -198,6 +257,10 @@ mod tests {
             multipart_chunk_size: None,
             conditional_put: None,
             checksum_sha256: None,
+            max_retries: None,
+            retry_timeout: None,
+            request_timeout: None,
+            connect_timeout: None,
         };
         let dbg = format!("{cfg:?}");
         // Secrets are redacted; non-secret fields are still printed.
@@ -328,6 +391,10 @@ service_account_path = "/etc/gcs/key.json"
             allow_http: false,
             multipart_threshold: None,
             multipart_chunk_size: None,
+            max_retries: None,
+            retry_timeout: None,
+            request_timeout: None,
+            connect_timeout: None,
         };
         let rendered = format!("{gcs:?}");
         // All three credential fields are redacted; non-secret fields are
@@ -462,5 +529,78 @@ region = "us-east-1"
         check!(rendered.contains("/etc/krabka/worm-signing.pk8"));
         check!(rendered.contains("worm-2026-q3"));
         check!(!rendered.contains("***"));
+    }
+
+    /// The four durability bounds reach `S3Config` from the TOML, and each
+    /// one that the TOML omits falls back to the backend's own default
+    /// rather than to a value restated here.
+    #[test]
+    fn remote_storage_s3_bounds_parse_and_default() {
+        let toml = r#"
+[remote_storage.s3]
+bucket = "krabka-prod"
+region = "us-east-1"
+max_retries = 3
+request_timeout = "10s"
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        let defaults = krabka_remote_storage::S3Config::default();
+        match cfg.remote_storage_backend {
+            Some(crate::config::RemoteStorageBackend::S3(s3)) => {
+                check!(s3.max_retries == 3);
+                check!(s3.request_timeout == std::time::Duration::from_secs(10));
+                check!(s3.retry_timeout == defaults.retry_timeout);
+                check!(s3.connect_timeout == defaults.connect_timeout);
+            }
+            other => panic!("expected S3 backend, got {other:?}"),
+        }
+    }
+
+    /// The same four bounds on the GCS table.
+    #[test]
+    fn remote_storage_gcs_bounds_parse_and_default() {
+        let toml = r#"
+[remote_storage.gcs]
+bucket = "krabka-prod"
+retry_timeout = "45s"
+connect_timeout = "2s"
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        let defaults = krabka_remote_storage::GcsConfig::default();
+        match cfg.remote_storage_backend {
+            Some(crate::config::RemoteStorageBackend::Gcs(gcs)) => {
+                check!(gcs.retry_timeout == std::time::Duration::from_secs(45));
+                check!(gcs.connect_timeout == std::time::Duration::from_secs(2));
+                check!(gcs.max_retries == defaults.max_retries);
+                check!(gcs.request_timeout == defaults.request_timeout);
+            }
+            other => panic!("expected GCS backend, got {other:?}"),
+        }
+    }
+
+    /// `0` disables retries, and it has to survive the `Option` plumbing:
+    /// `unwrap_or(default)` on a `Some(0)` would otherwise be indistinguishable
+    /// from an omitted key if the mapping ever collapsed to `unwrap_or_default`.
+    #[test]
+    fn zero_max_retries_disables_retries_rather_than_defaulting() {
+        let toml = r#"
+[remote_storage.s3]
+bucket = "b"
+region = "us-east-1"
+max_retries = 0
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        match cfg.remote_storage_backend {
+            Some(crate::config::RemoteStorageBackend::S3(s3)) => {
+                check!(s3.max_retries == 0);
+            }
+            other => panic!("expected S3 backend, got {other:?}"),
+        }
     }
 }

@@ -1,7 +1,8 @@
 //! Background maintenance loops: ISR upkeep, the disk-usage scanner, JWKS
 //! refresh, auto leader rebalance, reassignment completion, producer-id
-//! expiry, and the log cleaner. They share no state with each other, so they
-//! are grouped here purely as the periodic work the broker spawns at startup.
+//! expiry, the log cleaner and the local-retention sweep. They share no state
+//! with each other, so they are grouped here purely as the periodic work the
+//! broker spawns at startup.
 
 use std::sync::Arc;
 
@@ -161,6 +162,22 @@ pub(super) fn spawn_cluster_data_maintenance(
         Arc::clone(partitions),
         config.node_id,
         cleaner,
+        shutdown.child_token(),
+        metrics.clone(),
+    ));
+    // Local retention, beside the cleaner and on its own Kafka setting
+    // (`log.retention.check.interval.ms`). It reads the same freeze registry,
+    // because retention removes data from the log and the KFC-9 rule refuses
+    // every operation that does. It takes no `node_id`: Kafka's
+    // `LogManager.cleanupLogs` runs over every log the broker hosts, so a
+    // follower trims its own replica rather than accumulating segments until
+    // it is elected.
+    let mut retention =
+        crate::log_retention::LogRetentionConfig::system(config.log_retention_check_interval);
+    retention.metadata = Some(Arc::clone(controller));
+    tokio::spawn(crate::log_retention::run(
+        Arc::clone(partitions),
+        retention,
         shutdown.child_token(),
         metrics.clone(),
     ));

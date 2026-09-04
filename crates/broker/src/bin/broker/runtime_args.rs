@@ -73,6 +73,8 @@ pub struct RuntimeArgs {
     pub isr_scan_interval: Option<Time>,
     #[arg(long, env = "KRABKA_CLEANER_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub cleaner_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_LOG_RETENTION_CHECK_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub log_retention_check_interval: Option<Time>,
     #[arg(long, env = "KRABKA_FUTURE_LOG_MOVE_RETRY_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     pub future_log_move_retry_backoff: Option<Time>,
     #[arg(long, env = "KRABKA_CLIENT_METRICS_EVICTION_TICK", value_parser = krabka_units::parse::positive_time)]

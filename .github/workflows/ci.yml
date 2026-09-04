@@ -785,6 +785,72 @@ jobs:
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
+  # Four hours of continuous traffic across a three-broker cluster, and a
+  # failure when a resource level drifts rather than only when something
+  # crashes.
+  #
+  # Its own job, and not a member of the `docker` matrix, for two reasons. The
+  # matrix is a twelve-way shard of suites that finish in minutes, and one
+  # four-hour member would hold the whole shard -- and the nightly report that
+  # waits on it -- open for four hours. And the matrix runs on every pull
+  # request whose diff selects a suite, which is exactly what a four-hour lane
+  # must never do. `.aspect/container_suites.axl` drops
+  # `//crates/broker:soak_docker_test` from every selection it makes, with a
+  # unit test that says so; this is the only job that names it.
+  #
+  # `--test_timeout` because Bazel's longest built-in timeout, `eternal`, is
+  # one hour. The value is the soak plus an hour for the image load, the
+  # cluster boot and the read-back at the end.
+  soak:
+    name: soak · four hours
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # The soak itself is four hours; the rest is the compile, the image and the
+    # verification pass.
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/reclaim-disk
+
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          # Redundant beside the remote cache, and it is what consumed the
+          # 10 GB repository-wide Actions quota. Off explicitly: omitting the
+          # input leaves setup-aspect's default disk cache switched on.
+          disk-cache: false
+          repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          # Everything that is not a pull request is a trusted context: pushes
+          # to `main`, the nightly, a dispatch, a release tag. Pull requests
+          # read only.
+          upload: ${{ github.event_name != 'pull_request' }}
+
+      # Each broker advertises `host.docker.internal` so that its two peers and
+      # the host-side clients reach it by one name. The containers resolve it
+      # through `--add-host=host.docker.internal:host-gateway`; the host needs
+      # this line, exactly as the `docker` matrix does.
+      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+
+      - name: soak
+        env:
+          KRABKA_SOAK_SECONDS: "14400"
+        run: |
+          set -euo pipefail
+          bazel test \
+            --config=docker \
+            --test_timeout=18000 \
+            --test_env=KRABKA_SOAK_SECONDS \
+            --test_output=streamed \
+            //crates/broker:soak_docker_test
+
   # The external half of the link check.
   #
   # `checks` runs lychee with `--offline`, which resolves file-relative links
@@ -1091,7 +1157,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links, bench]
+    needs: [select, docker, gssapi, links, bench, soak]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
@@ -1127,12 +1193,13 @@ jobs:
 
       # `contains(needs.*.result, 'failure')` and nothing else. `needs.*.result`
       # also yields `skipped` and `cancelled`, and neither is a red lane:
-      # `gssapi` is skipped on any event that is not a schedule or a dispatch,
-      # `docker` is skipped when the suite selection is empty, and a cancelled
-      # run means a human or the concurrency group stopped it. (`links` and
-      # `bench` are the two dependencies that cannot be skipped here: both
-      # `if:`s admit the same `schedule` this job's does, so on a scheduled run
-      # each always has a `success`, `failure` or `cancelled` of its own.)
+      # `gssapi` and `soak` are skipped on any event that is not a schedule or a
+      # dispatch, `docker` is skipped when the suite selection is empty, and a
+      # cancelled run means a human or the concurrency group stopped it.
+      # (`links` and `bench` are the two dependencies that cannot be skipped
+      # here: both `if:`s admit the same `schedule` this job's does, so on a
+      # scheduled run each always has a `success`, `failure` or `cancelled` of
+      # its own.)
       - name: report the failure
         if: contains(needs.*.result, 'failure')
         run: |

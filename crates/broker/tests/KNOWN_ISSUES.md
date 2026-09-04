@@ -72,3 +72,39 @@ Docker on Windows with the bridge-gateway pattern is not reliable. The
 JVM command-line tools also behave inconsistently under Docker Desktop
 on Windows. The dedicated CI lane currently runs only on Ubuntu, so this
 acceptance path has no validated Windows CI or runtime result.
+
+## A follower replica of a compacted topic is never compacted
+
+The soak lane (`soak.rs`) still fails its open-descriptor assertion, and this is
+what is left behind it. Local retention now runs — `soak-retention`'s segments
+are trimmed, its retention-cycle count clears ten, and the log-directory series
+is level — but the descriptor count still climbs on all three brokers, about one
+per second, and every one of those descriptors belongs to `soak-compacted`.
+
+Counting the segment files inside each container 150 s into a run says why:
+
+```text
+krabka-soak-1  soak-compacted-0: 2   soak-compacted-1: 27  soak-compacted-2: 26
+krabka-soak-2  soak-compacted-0: 28  soak-compacted-1: 2   soak-compacted-2: 28
+krabka-soak-3  soak-compacted-0: 27  soak-compacted-1: 27  soak-compacted-2: 2
+```
+
+For each partition exactly one broker holds two segments and the other two hold
+twenty-eight and rising. The one holding two is the leader. `crate::cleaner`'s
+sweep skips a partition whose `current_leader` is not this node
+(`crates/broker/src/cleaner/sweep.rs`), so a follower replica of a compacted
+topic is never compacted, and since `cleanup.policy=compact` sets no
+`retention.ms` there is nothing else to bound its segment count either. Kafka's
+`LogCleanerManager` walks every log the broker hosts, exactly as
+`LogManager.cleanupLogs` does, so a Kafka follower compacts its own replica.
+
+The local-retention sweep added in `crate::log_retention` deliberately applies
+no leadership filter for that reason. The cleaner's filter was left as it was:
+changing when compaction runs is a separate decision from making retention run
+at all, and it touches the `log_cleaner_uncleanable_partitions` contract, which
+is documented as "partitions this broker leads".
+
+Until that is settled the soak lane fails on the descriptor trend alone. Every
+other assertion it makes — the cycle counts, the cleaner-failure count, the
+resident set, the metric cardinality, the log-directory size, and the read-back
+of every acked record — passes.

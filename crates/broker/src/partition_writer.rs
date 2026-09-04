@@ -26,6 +26,7 @@ mod append;
 mod compaction;
 mod mutations;
 mod produce;
+mod retention;
 mod storage;
 mod swap;
 
@@ -50,6 +51,7 @@ use self::{
     compaction::handle_compact,
     mutations::{handle_replicate, handle_reset, handle_trim, handle_truncate},
     produce::handle_produce,
+    retention::handle_retention,
     storage::lock_log,
     swap::swap_future_log,
 };
@@ -209,6 +211,9 @@ pub async fn run_with_sequencer(
             WriterMessage::SetLogConfig { config, ack } => {
                 lock_log(&log).set_config(config);
                 let _ = ack.send(());
+            }
+            WriterMessage::Retain { ack } => {
+                handle_retention((&log, &log_dir, &log_dir_status), ack).await;
             }
             WriterMessage::Compact { ack } => {
                 handle_compact(

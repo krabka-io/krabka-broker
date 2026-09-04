@@ -143,6 +143,13 @@ pub enum WriterMessage {
     Compact {
         ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
     },
+    /// Run one local-retention pass: the time-based segment roll, then the
+    /// `retention.ms` and `retention.bytes` eviction of sealed segments. The
+    /// writer actor serializes this with appends for the same reason
+    /// [`WriterMessage::Compact`] is serialized -- both mutate the log.
+    Retain {
+        ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
+    },
     /// Trim from the start of the log: drop sealed segments whose last
     /// offset is `< new_start`, advance `log_start_offset` if `new_start`
     /// falls inside the active segment. Returns the resulting

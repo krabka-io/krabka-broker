@@ -167,6 +167,48 @@ groups:
           description: "A peer opens connections and then sends nothing. The metric comment names the signal but no threshold; one per second is a starting point."
           runbook: docs/operations/runbooks/idle-connection-closes.md
 
+  - name: krabka-broker-saturation
+    rules:
+      - alert: KrabkaRequestLatencyHigh
+        expr: histogram_quantile(0.99, sum by (le, instance, api_key) (rate(krabka_broker_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} answers {{ $labels.api_key }} in {{ $value }}s at p99"
+          description: "The full handler round trip is slow while the broker is up and every partition is in-ISR. This is the shape an operator gets as producer timeouts and no page. The metric comment names no threshold; one second at p99 for ten minutes is a starting point, and a cluster whose clients set a shorter request.timeout.ms needs a smaller one."
+          runbook: docs/operations/runbooks/broker-saturation.md
+
+      - alert: KrabkaQuotaThrottleHigh
+        expr: histogram_quantile(0.99, sum by (le, instance, quota_type) (rate(krabka_broker_quota_throttle_duration_seconds_bucket[5m]))) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} sleeps {{ $value }}s at p99 on the {{ $labels.quota_type }} quota"
+          description: "The broker is holding clients in the KIP-219 throttle. The series only observes throttled requests, so this fires on how hard the quota bites rather than on how many requests meet it. The metric comment names no threshold; one second at p99 over fifteen minutes is a starting point."
+          runbook: docs/operations/runbooks/broker-saturation.md
+
+      - alert: KrabkaInFlightRequestsClimbing
+        expr: min_over_time(krabka_broker_in_flight_requests[10m]) > 64
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} holds {{ $value }} requests in flight and the floor is not falling"
+          description: "The metric comment says a sustained climb is a handler stall or a wedged controller. min_over_time is what separates a busy broker, whose in-flight count returns to a low floor, from one whose floor has moved up. The comment names no threshold; 64 requests over ten minutes is a starting point to tune against the fleet's normal floor."
+          runbook: docs/operations/runbooks/broker-saturation.md
+
+      - alert: KrabkaFetchZeroCopyLost
+        expr: sum by (instance) (rate(krabka_broker_fetch_response_drain_total{path="sendfile"}[5m])) == 0 and sum by (instance) (rate(krabka_broker_fetch_response_drain_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} drains no Fetch response through sendfile"
+          description: "Fetches are being served and none of them takes the zero-copy path. On a plaintext cluster the metric's own comment calls this a zero-copy regression. Scope this rule to the brokers whose consumers read plaintext, or whose TLS listeners have krabka_broker_ktls_enabled at 1: a TLS listener without kTLS encrypts in userspace and legitimately reports no sendfile."
+          runbook: docs/operations/runbooks/fetch-zero-copy-regression.md
+
   - name: krabka-broker-subsystems
     rules:
       - alert: KrabkaRlmmBootstrapStuck
@@ -313,3 +355,57 @@ groups:
           summary: "WAL voter {{ $labels.voter }} lags shard {{ $labels.topic_id }}/{{ $labels.partition }} by {{ $value }} offsets"
           description: "A voter's durable offset trails the leader log end. The metric comment names no threshold; 10000 offsets over ten minutes is a starting point."
           runbook: docs/operations/runbooks/diskless-wal-voter-lag.md
+
+  - name: krabka-broker-features
+    rules:
+      - alert: KrabkaSchemaRegistryUnavailable
+        expr: sum by (instance, topic) (rate(krabka_broker_schema_validation_rejections_total{reason="registry_unavailable"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} rejects produces to {{ $labels.topic }} because the schema registry is unreachable"
+          description: "KFC-7 validation could not reach the registry and [schema_registry].fail_open is false, which is the default, so the produce is refused rather than accepted unvalidated. An external HTTP service is a hard dependency of the produce path here; without this rule the first signal is the producer's own errors."
+          runbook: docs/operations/runbooks/schema-registry-unavailable.md
+
+      - alert: KrabkaDeliveryActivationLate
+        expr: histogram_quantile(0.99, sum by (le, instance) (rate(krabka_broker_delivery_activation_lateness_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} activates KFC-1 batches {{ $value }}s past their deadline at p99"
+          description: "A healthy broker reports zero. The metric comment says a rising tail means the bound the broker publishes is not honest, or that the scheduler is starved of CPU. One second at p99 over ten minutes is a starting point; a cluster that sells a tighter delivery bound needs a smaller one."
+          runbook: docs/operations/runbooks/delivery-activation-lateness.md
+
+  - name: krabka-broker-local-storage
+    rules:
+      - alert: KrabkaLogCleanerFailures
+        expr: sum by (instance, topic, reason) (rate(krabka_broker_log_cleaner_failures_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} fails to compact {{ $labels.topic }} ({{ $labels.reason }})"
+          description: "A compaction pass failed. On a compacted topic the cleaner is also what bounds the log, so compaction and local retention stop together and the disk keeps filling with no other signal. A reason of io is a storage failure the broker has already reported to its log-dir registry."
+          runbook: docs/operations/runbooks/log-cleaner-stalled.md
+
+      - alert: KrabkaUncleanablePartitions
+        expr: krabka_broker_log_cleaner_uncleanable_partitions > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} cannot clean {{ $value }} partitions"
+          description: "Partitions whose most recent compaction attempt failed and which have not compacted since, the count Kafka's LogCleanerManager publishes as uncleanable-partitions-count. A partition that stays here through half an hour of sweeps is not going to recover on its own."
+          runbook: docs/operations/runbooks/log-cleaner-stalled.md
+
+      - alert: KrabkaOfflineLogDirs
+        expr: krabka_broker_offline_log_dirs > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} has {{ $value }} log directories offline"
+          description: "A log directory failed the startup writability probe or a live write or fsync to it failed. Every partition on that dir answers KAFKA_STORAGE_ERROR until the broker restarts, and JBOD placement stops using it."
+          runbook: docs/operations/runbooks/offline-log-dir.md

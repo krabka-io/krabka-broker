@@ -3,7 +3,7 @@
 
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom},
     path::Path,
 };
 
@@ -13,7 +13,10 @@ use zerocopy::{
     byteorder::{I64, U32},
 };
 
-use crate::error::LogError;
+use crate::{
+    error::LogError,
+    io::{IoTarget, LogIo},
+};
 
 /// 12 bytes per entry: timestamp as i64 BE and `relative_offset` as u32 BE.
 pub const TIME_ENTRY_SIZE: usize = 12;
@@ -31,6 +34,7 @@ const _: [(); TIME_ENTRY_SIZE] = [(); std::mem::size_of::<TimeEntryRaw>()];
 #[derive(Debug)]
 pub struct TimeIndex {
     file: File,
+    io: std::sync::Arc<dyn LogIo>,
     entries: Vec<(i64, u32)>,
 }
 
@@ -69,7 +73,11 @@ impl TimeIndex {
             entries.push((ts, rel));
         }
         tracing::Span::current().record("entries", entries.len());
-        Ok(Self { file, entries })
+        Ok(Self {
+            file,
+            io: crate::io::file_io(),
+            entries,
+        })
     }
 
     /// Append an entry. The caller must keep the entries monotonic.
@@ -79,7 +87,7 @@ impl TimeIndex {
             relative_offset: U32::new(relative_offset),
         };
         self.file.seek(SeekFrom::End(0))?;
-        self.file.write_all(raw.as_bytes())?;
+        crate::io::write_all(&*self.io, IoTarget::TimeIndex, &self.file, raw.as_bytes())?;
         self.entries.push((timestamp, relative_offset));
         Ok(())
     }
@@ -125,7 +133,14 @@ impl TimeIndex {
 
     #[instrument(level = "debug", skip_all, err)]
     pub fn flush(&mut self) -> Result<(), LogError> {
-        self.file.sync_data().map_err(LogError::Io)
+        self.io
+            .sync_file(IoTarget::TimeIndex, &self.file)
+            .map_err(LogError::Io)
+    }
+
+    /// Route this index's writes and syncs through `io`.
+    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn LogIo>) {
+        self.io = io;
     }
 }
 

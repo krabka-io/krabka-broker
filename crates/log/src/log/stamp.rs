@@ -50,10 +50,9 @@ impl Log {
             .iter()
             .chain(self.active.iter())
             .map(|segment| {
-                Ok((
-                    segment.base_offset(),
-                    StampIndex::open(segment.stamp_index_path())?,
-                ))
+                let mut index = StampIndex::open(segment.stamp_index_path())?;
+                index.set_io(self.io.clone());
+                Ok((segment.base_offset(), index))
             })
             .collect::<Result<BTreeMap<_, _>, LogError>>()?;
         let pending_ranges: Vec<(Offset, Offset)> = self
@@ -160,8 +159,9 @@ impl Log {
         path: PathBuf,
     ) -> Result<(), LogError> {
         if self.stamp_source.is_some() {
-            self.stamp_indexes
-                .insert(base_offset, StampIndex::open(path)?);
+            let mut index = StampIndex::open(path)?;
+            index.set_io(self.io.clone());
+            self.stamp_indexes.insert(base_offset, index);
         }
         Ok(())
     }

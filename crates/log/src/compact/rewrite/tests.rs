@@ -11,8 +11,7 @@ use super::*;
 use crate::compact::{
     build_offset_map,
     test_support::{
-        INDEX_INTERVAL, RETENTION, control_batch, make_record, write_sealed_batches,
-        write_sealed_segment,
+        RETENTION, control_batch, make_record, write_sealed_batches, write_sealed_segment,
     },
 };
 
@@ -25,6 +24,7 @@ fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
     let txn = CleanedTransactionMetadata::build(segment_refs, &map).unwrap();
     let active: HashMap<ProducerId, Offset> = HashMap::new();
     rewrite_segments(
+        &crate::io::FileIo,
         dir,
         segment_refs,
         &map,
@@ -34,7 +34,6 @@ fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
             delete_retention: RETENTION,
         },
         &active,
-        INDEX_INTERVAL,
     )
     .unwrap()
 }
@@ -218,6 +217,7 @@ fn rewrite_tombstone_gets_horizon_stamp() {
     let ret = 50i64;
     let retention = Time::from_millis(ret);
     let out = rewrite_segments(
+        &crate::io::FileIo,
         dir.path(),
         &segment_refs,
         &map,
@@ -227,7 +227,6 @@ fn rewrite_tombstone_gets_horizon_stamp() {
             delete_retention: retention,
         },
         &HashMap::new(),
-        INDEX_INTERVAL,
     )
     .unwrap();
     let bytes = fs::read(&out.log_swap).unwrap();
@@ -273,6 +272,7 @@ fn rewrite_marker_dropped_when_data_gone_and_horizon_elapsed() {
     let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
     // now=200 >= horizon 100 → marker deleted.
     let out = rewrite_segments(
+        &crate::io::FileIo,
         dir.path(),
         &segment_refs,
         &map,
@@ -282,7 +282,6 @@ fn rewrite_marker_dropped_when_data_gone_and_horizon_elapsed() {
             delete_retention: millis(50),
         },
         &HashMap::new(),
-        INDEX_INTERVAL,
     )
     .unwrap();
     let bytes = fs::read(&out.log_swap).unwrap();
@@ -332,6 +331,7 @@ fn rewrite_retain_empty_for_active_producer() {
     let mut active = HashMap::new();
     active.insert(ProducerId(1000), Offset(0)); // pid 1000 active, last batch base 0
     let out = rewrite_segments(
+        &crate::io::FileIo,
         dir.path(),
         &segment_refs,
         &map,
@@ -341,7 +341,6 @@ fn rewrite_retain_empty_for_active_producer() {
             delete_retention: RETENTION,
         },
         &active,
-        INDEX_INTERVAL,
     )
     .unwrap();
     let bytes = fs::read(&out.log_swap).unwrap();

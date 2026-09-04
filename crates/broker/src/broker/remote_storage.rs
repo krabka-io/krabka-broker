@@ -140,6 +140,7 @@ pub(super) fn start_remote_storage(
         },
         crate::remote_log_manager::RemoteLogManagerConfig {
             interval: config.remote_log_manager_interval,
+            copy_timeout: config.remote_copy_timeout,
         },
         shutdown.child_token(),
     ));

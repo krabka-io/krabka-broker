@@ -51,6 +51,8 @@ pub(super) async fn prepare_startup_transport(
         config.inter_broker_credentials.clone(),
         config.client_dispatch_queue_capacity,
         config.client_frame_max,
+        config.socket_send_buffer,
+        config.socket_receive_buffer,
     ));
     Ok(StartupTransport {
         tls_dynamic,

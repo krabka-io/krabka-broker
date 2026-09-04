@@ -6,7 +6,7 @@
 //! every site that creates a segment.
 
 #[cfg(unix)]
-use std::{fs, path::Path};
+use std::path::Path;
 
 use krabka_ids::Offset;
 
@@ -71,16 +71,15 @@ impl Log {
             // segment, offset-index, and time-index handles above have still
             // been flushed with `sync_data`.
             #[cfg(unix)]
-            Self::sync_log_dir(&self.dir)?;
+            Self::sync_log_dir(&*self.io, &self.dir)?;
             self.dir_sync_needed = false;
         }
         Ok(())
     }
 
     #[cfg(unix)]
-    fn sync_log_dir(dir: &Path) -> Result<(), LogError> {
-        let log_dir = fs::File::open(dir)?;
-        log_dir.sync_all()?;
+    fn sync_log_dir(io: &dyn crate::io::LogIo, dir: &Path) -> Result<(), LogError> {
+        io.sync_dir(dir)?;
         #[cfg(test)]
         sync_observer::record_dir_sync(dir.to_path_buf());
         Ok(())

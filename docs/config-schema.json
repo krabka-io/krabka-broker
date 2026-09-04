@@ -832,6 +832,15 @@
       "additionalProperties": false,
       "description": "TOML shape of `[remote_storage]`. Maps to\n[`crate::BrokerConfig::remote_storage_backend`].\n\nExactly one of `storage_dir` (local filesystem), `[remote_storage.s3]`\n(S3-compatible object store), or `[remote_storage.gcs]` (native Google\nCloud Storage) should be set. Setting more than one errors at load time.",
       "properties": {
+        "copy_timeout": {
+          "default": null,
+          "description": "Deadline on one segment copy to the remote tier. Defaults to 10\nminutes.\n\nThe sweep copies segments one after another, so a copy that hangs on a\nstalled object store holds up every other partition on the broker.\nPast this deadline the copy is abandoned and retried on the next tick;\nthe segment stays in `CopySegmentStarted`, which local retention\nrefuses to delete against.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gcs": {
           "anyOf": [
             {
@@ -933,10 +942,28 @@
           "description": "GCS bucket name.",
           "type": "string"
         },
+        "connect_timeout": {
+          "default": null,
+          "description": "Ceiling on the connect phase alone. When `None`,\n[`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "endpoint": {
           "description": "Optional custom GCS API base URL (for emulators / fakes).",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "max_retries": {
+          "description": "How many times one object-store request is retried before the error\nreaches the broker. When `None`, [`krabka_object_store::DEFAULT_MAX_RETRIES`]\n(10) applies; `0` disables retries. Under a store that answers\n`503 SlowDown` this is what bounds how long one call holds its\ncaller before the failure is counted and the sweep moves on.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -960,6 +987,24 @@
         },
         "prefix": {
           "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_timeout": {
+          "default": null,
+          "description": "Ceiling on one HTTP request, connect phase included. When `None`,\n[`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This\nis the bound on a store that accepts the connection and then\nanswers nothing.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry_timeout": {
+          "default": null,
+          "description": "Ceiling on the wall-clock time one request may spend across all of\nits retries. When `None`,\n[`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it\nunder 5 minutes: retries reuse the original request's credentials.",
+          "format": "duration",
           "type": [
             "string",
             "null"
@@ -1021,10 +1066,28 @@
             "null"
           ]
         },
+        "connect_timeout": {
+          "default": null,
+          "description": "Ceiling on the connect phase alone. When `None`,\n[`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "endpoint": {
           "description": "Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "max_retries": {
+          "description": "How many times one object-store request is retried before the error\nreaches the broker. When `None`, [`krabka_object_store::DEFAULT_MAX_RETRIES`]\n(10) applies; `0` disables retries. Under a store that answers\n`503 SlowDown` this is what bounds how long one call holds its\ncaller before the failure is counted and the sweep moves on.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -1056,6 +1119,24 @@
         "region": {
           "description": "AWS region. Required even for non-AWS endpoints (use any value).",
           "type": "string"
+        },
+        "request_timeout": {
+          "default": null,
+          "description": "Ceiling on one HTTP request, connect phase included. When `None`,\n[`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This\nis the bound on a store that accepts the connection and then\nanswers nothing.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry_timeout": {
+          "default": null,
+          "description": "Ceiling on the wall-clock time one request may spend across all of\nits retries. When `None`,\n[`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it\nunder 5 minutes: retries reuse the original request's credentials.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "secret_access_key": {
           "description": "Explicit secret access key. Falls back to the AWS credential chain\nwhen omitted.",
@@ -1840,6 +1921,15 @@
           "default": null,
           "description": "Cap on the initial allocation a decoded or raw segment read makes.",
           "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_retention_check_interval": {
+          "default": null,
+          "description": "Cadence of local-retention maintenance: how often `retention.ms`,\n`retention.bytes` and `segment.ms` are applied to every hosted log.",
+          "format": "duration",
           "type": [
             "string",
             "null"

@@ -280,6 +280,7 @@ impl Log {
             let txn_meta =
                 crate::compact::CleanedTransactionMetadata::build(&sealed_refs, &offset_map)?;
             crate::compact::rewrite_segments(
+                &*self.io,
                 &self.dir,
                 &sealed_refs,
                 &offset_map,
@@ -289,12 +290,11 @@ impl Log {
                     delete_retention,
                 },
                 &ctx.active_producers,
-                index_interval,
             )?
         };
 
         self.segments.drain(..consumed);
-        crate::compact::atomic_swap(&self.dir, &consumed_bases, &rewrite)?;
+        crate::compact::atomic_swap(&*self.io, &self.dir, &consumed_bases, &rewrite)?;
 
         // Validation scans the new log from byte zero, rebuilds both sparse
         // indexes, and derives exact offset and timestamp frontiers before the

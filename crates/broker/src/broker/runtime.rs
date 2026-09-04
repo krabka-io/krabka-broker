@@ -267,7 +267,7 @@ pub(super) async fn start_broker_runtime(
         client_metrics,
     } = start_observability(config, &metrics, &supervisor_shutdown).await?;
     spawn_broker_gauge_updater(
-        Arc::clone(storage.0),
+        (Arc::clone(storage.0), storage.2.clone()),
         Arc::clone(controller),
         Arc::clone(&liveness),
         config.node_id,

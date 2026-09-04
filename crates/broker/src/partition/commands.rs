@@ -140,6 +140,30 @@ impl Partition {
             .map_err(|_| BrokerError::Replication("compact ack dropped".into()))?
     }
 
+    /// Send a `WriterMessage::Retain` to the partition's writer actor and
+    /// await the ack. The broker-wide log-retention sweep
+    /// ([`crate::log_retention`]) calls this.
+    ///
+    /// Retention deletes segment files, so it goes through the writer for the
+    /// same reason [`Partition::compact_log`] does: the writer task owns the
+    /// only `&mut Log`, and a background task taking the log mutex directly
+    /// would run a segment deletion concurrently with an append.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrokerError::Replication` if the writer is dead or the ack is
+    /// dropped, and whatever `Log::tick` returned otherwise.
+    pub async fn retain_log(&self) -> Result<(), BrokerError> {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        self.writer_tx
+            .send(WriterMessage::Retain { ack: ack_tx })
+            .await
+            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
+        ack_rx
+            .await
+            .map_err(|_| BrokerError::Replication("retain ack dropped".into()))?
+    }
+
     /// Append `batch` to the local log at the next assigned offset. The append
     /// goes through the partition's writer task, so it stays ordered with
     /// all other produce appends. Returns the assigned `base_offset`.
