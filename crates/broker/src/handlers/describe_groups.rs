@@ -277,10 +277,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// A live classic group is projected with its stored `protocol_type`, its
-    /// selected protocol name (`""` while the group is empty) and its state.
-    /// Without the KIP-430 flag the bitfield keeps the `i32::MIN` "not present"
-    /// sentinel.
+    /// A live classic group is projected with its state and, per Kafka, the
+    /// empty string for the `protocol_type` and `protocol_data` a group that
+    /// has not yet joined a protocol carries. Without the KIP-430 flag the
+    /// bitfield keeps the `i32::MIN` "not present" sentinel, which is what
+    /// separates this row from `the_authorized_operations_bitfield_is_filled_only_on_opt_in`.
     #[tokio::test]
     async fn a_classic_group_is_projected_without_the_kip430_bitfield() {
         let (broker_handle, _dir) =
@@ -298,14 +299,15 @@ mod tests {
                     error_message: None,
                     group_id: "classic-a".into(),
                     group_state: "Empty".into(),
-                    protocol_type: "consumer".into(),
+                    protocol_type: String::new(),
                     protocol_data: String::new(),
                     members: vec![],
                     authorized_operations: i32::MIN,
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 }],
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }
+            },
+            "{resp:?}"
         );
         broker_handle.shutdown().await;
     }
