@@ -127,7 +127,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/broker/src/throttle/mod.rs",
         tests: &["crates/broker/tests/throttle.rs"],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "The measured throttled-replication rate is published as `krabka_broker_replication_throttled_bytes_out` and `krabka_broker_replication_throttled_bytes_in`, which stand for Kafka's `kafka.server:type=LeaderReplication,name=byte-rate` and its `FollowerReplication` twin, with `krabka_broker_replication_throttle_sleeps` for the rounds the throttle held back entirely. Kafka delays a throttled fetch; krabka drops the partition from the round and the follower re-asks, so there is no `throttle_time_ms` to attribute and the byte-rate is what says whether the throttle is biting.",
     },
     KipAnnotation {
         key: "KIP-98",
@@ -416,7 +416,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/restore/tests/roundtrip/consume.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "The tier's traffic and lag are published per topic under the `krabka_broker_remote_*` names, which stand for Kafka's `BrokerTopicMetrics` `RemoteCopyBytesPerSec`, `RemoteFetchBytesPerSec`, the three `Remote*RequestsPerSec` and `Remote*ErrorsPerSec` meters, and the four `Remote*Lag*` gauges. The bounded reader pool and the on-disk index cache report `krabka_broker_remote_log_reader_task_queue_size`, `_avg_idle_percent` and `_fetch_duration_seconds` for Kafka's `RemoteLogManager` gauges, plus rejection and cache hit / miss counters Kafka has no counterpart for.",
     },
     KipAnnotation {
         key: "KIP-412",

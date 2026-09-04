@@ -4,12 +4,9 @@
 //!
 //! A write-once archive evicts nothing, so the pass ends before it lists.
 
-use std::sync::Arc;
-
 use krabka_log::{LogConfig, Offset};
 use krabka_remote_storage::{
-    RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentState,
-    RemoteStorageManager, TopicIdPartition,
+    RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
 };
 use krabka_units::{
     ByteSize, Time,
@@ -18,6 +15,7 @@ use krabka_units::{
 use tracing::warn;
 
 use super::{NO_BYTES, archive::ArchiveMode, delete::delete_one_segment};
+use crate::metrics::RemoteTierPath;
 
 /// KIP-405: compute the set of finished remote segments the topic no longer
 /// keeps, in oldest-first order. Mirrors
@@ -110,7 +108,6 @@ fn segment_size(md: &RemoteLogSegmentMetadata) -> ByteSize {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RemoteRetentionBounds<'a> {
     pub log_config: &'a LogConfig,
-    pub archive: ArchiveMode,
     /// The partition's current `log_start_offset`, whatever established it.
     /// The pass may only report a floor above this one, and only across
     /// offsets it removed itself.
@@ -156,17 +153,20 @@ pub(crate) async fn remote_retention_pass(
     tp: &TopicIdPartition,
     broker_id: i32,
     bounds: RemoteRetentionBounds<'_>,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
-    index_cache: &Arc<krabka_remote_storage::RemoteIndexCache>,
+    tier: &super::RemoteTier<'_>,
 ) -> RemoteRetentionOutcome {
+    let (rsm, rlmm, index_cache) = (tier.rsm, tier.rlmm, tier.index_cache);
     let RemoteRetentionBounds {
         log_config,
-        archive,
         log_start_offset,
         deleted_below,
         now_ms,
     } = bounds;
+    // The archive mode comes from the tier and not from the bounds: a tier
+    // that refuses deletes and a bounds struct that says it accepts them
+    // could not both be right, and there is no reason to let a caller write
+    // that pair down.
+    let archive = tier.archive;
     if archive == ArchiveMode::WriteOnce {
         return RemoteRetentionOutcome::default();
     }
@@ -181,6 +181,14 @@ pub(crate) async fn remote_retention_pass(
         Err(e) => {
             warn!(topic = %tp.topic, partition = tp.partition, error = %e,
                   "remote-log-manager: failed to list remote segments for retention");
+            // A listing this pass cannot read is a delete attempt it cannot
+            // make: Kafka counts the same failure under
+            // `RemoteDeleteErrorsPerSec`, and without it a tier whose metadata
+            // store is unreachable shows no errors at all.
+            tier.metrics
+                .record_remote_request(RemoteTierPath::Delete, &tp.topic);
+            tier.metrics
+                .record_remote_error(RemoteTierPath::Delete, &tp.topic);
             return RemoteRetentionOutcome::default();
         }
     };
@@ -194,6 +202,18 @@ pub(crate) async fn remote_retention_pass(
         deleted_below,
         now_ms,
     );
+    // KIP-405's `RemoteDeleteLagSegments` / `RemoteDeleteLagBytes`, recorded
+    // before the round the way `RLMExpirationTask` does: the remote segments
+    // this pass has decided to remove and has not removed yet. A tier whose
+    // deletes are failing shows a lag that climbs.
+    tier.metrics.set_remote_delete_lag(
+        &tp.topic,
+        u64::try_from(evict.len()).unwrap_or(u64::MAX),
+        evict
+            .iter()
+            .map(|md| u64::try_from(md.segment_size_in_bytes().max(0)).unwrap_or(0))
+            .sum(),
+    );
     let mut outcome = RemoteRetentionOutcome::default();
     // The floor may only cross offsets this pass actually removed, in one
     // unbroken run up from where it stands. The finished list is not always a
@@ -205,7 +225,11 @@ pub(crate) async fn remote_retention_pass(
     let mut floor = log_start_offset;
     let mut contiguous = true;
     for md in evict {
+        tier.metrics
+            .record_remote_request(RemoteTierPath::Delete, &tp.topic);
         if !delete_one_segment(tp, broker_id, &md, archive, rsm, rlmm, index_cache).await {
+            tier.metrics
+                .record_remote_error(RemoteTierPath::Delete, &tp.topic);
             // Stop at the first failure to preserve the contiguous-prefix
             // invariant — the next tick re-tries from the same base.
             break;

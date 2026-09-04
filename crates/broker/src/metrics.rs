@@ -34,6 +34,7 @@ mod log_cleaner;
 mod phases;
 mod registration;
 mod remote_reader;
+mod remote_tier;
 mod replication;
 mod request;
 mod schema_validation;
@@ -53,6 +54,7 @@ pub use self::{
     },
     lag::LagSeriesIndex,
     remote_reader::{RemoteReaderLevels, RemoteReaderTotals},
+    remote_tier::RemoteTierPath,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in

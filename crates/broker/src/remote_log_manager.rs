@@ -337,14 +337,11 @@ async fn tick_all(
                 broker_id,
                 RemoteRetentionBounds {
                     log_config: &log_config,
-                    archive: tier.archive,
                     log_start_offset,
                     deleted_below,
                     now_ms: now_ms(),
                 },
-                tier.rsm,
-                tier.rlmm,
-                tier.index_cache,
+                tier,
             )
             .await;
             // The records the pass deleted are now in no tier at all, so the

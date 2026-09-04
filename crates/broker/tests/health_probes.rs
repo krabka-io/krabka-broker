@@ -178,3 +178,27 @@ async fn readyz_is_503_when_shutting_down() {
     handle.shutdown().await;
 }
 
+/// A draining node reports the drain ahead of every other pending condition.
+///
+/// A roll script polls `/readyz` to decide when the previous node has left
+/// rotation. A broker that answered `log_dir_recovery` while it was in fact
+/// handing leadership away would tell that script the node is still coming
+/// up, not going down, and the two call for opposite actions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutting_down_outranks_every_other_not_ready_condition() {
+    let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
+    let probes = serve_probes(state.clone()).await;
+
+    // A freshly built state is not ready for a startup reason, so this is the
+    // case where two conditions hold at once.
+    let (status, body) = get(probes, "/readyz").await;
+    check!(status.contains("503 Service Unavailable"), "{status}");
+    check!(!body.starts_with("not ready: shutting_down"), "{body}");
+
+    state.mark_shutting_down();
+
+    let (status, body) = get(probes, "/readyz").await;
+    check!(status.contains("503 Service Unavailable"), "{status}");
+    check!(body.starts_with("not ready: shutting_down: "), "{body}");
+}
+

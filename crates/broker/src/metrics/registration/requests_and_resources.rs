@@ -227,9 +227,11 @@ impl BrokerMetrics {
             "connection_closes",
             "Cumulative count of client connections the broker closed on its \
              own, labelled by reason: idle, sasl_session_expired, \
-             decode_error, peer_closed. Alert on \
+             decode_error, peer_closed, max_connections, \
+             max_connections_per_ip. Alert on \
              rate(...{reason=\"idle\"}[5m]) to catch a peer that connects and \
-             then sends nothing.",
+             then sends nothing, and on the two max_connections reasons to \
+             catch a listener refusing clients at its limit.",
             self.connection_closes.clone(),
         );
 

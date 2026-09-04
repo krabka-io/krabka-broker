@@ -9,6 +9,7 @@ use num_traits::cast::{NumCast, ToPrimitive as _};
 
 mod buckets;
 mod controller_mutation;
+mod expiry;
 mod lookup;
 mod producer;
 mod request;
@@ -24,6 +25,7 @@ pub(crate) use throttle_slot::ThrottleSlot;
 
 mod refresh;
 pub use refresh::run;
+pub(crate) use expiry::run as run_expiry;
 
 /// Result of consuming a client quota, carrying the delay and the resolved
 /// entity identity (`user` and `client_id`) that the match was charged to (#418).

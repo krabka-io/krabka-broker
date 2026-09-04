@@ -46,6 +46,28 @@ async fn declared_clock_bound_is_exported_in_seconds() {
     }
 }
 
+/// Materialises the KIP-405 tier families and the KIP-73 replication
+/// byte-rate counters, so the name check below runs against a registry that
+/// actually carries them (#420). `prometheus-client` writes no `# TYPE` line
+/// for a family with no live label set, so a family nothing has touched is
+/// invisible to a name check.
+fn seed_remote_tier_and_replication_throttle(m: &BrokerMetrics) {
+    for path in [
+        crate::metrics::RemoteTierPath::Copy,
+        crate::metrics::RemoteTierPath::Fetch,
+        crate::metrics::RemoteTierPath::Delete,
+    ] {
+        m.record_remote_request(path, "topic-a");
+        m.record_remote_error(path, "topic-a");
+        m.record_remote_bytes(path, "topic-a", 64);
+    }
+    m.set_remote_copy_lag("topic-a", 2, 200);
+    m.set_remote_delete_lag("topic-a", 1, 100);
+    m.record_replication_throttled_out(1_024);
+    m.record_replication_throttled_in(512);
+    m.record_replication_throttle_sleep();
+}
+
 #[tokio::test]
 async fn registry_has_broker_prefix_and_all_metrics() {
     let m = BrokerMetrics::new();
@@ -59,6 +81,7 @@ async fn registry_has_broker_prefix_and_all_metrics() {
     m.record_replication_in(&topic_a, 0, 4096);
     m.record_replication_out(&topic_a, 0, 8192);
     m.record_cleaner_run();
+    seed_remote_tier_and_replication_throttle(&m);
     m.record_compaction("topic-a", 0);
     let barrier_group = BarrierGroupLabel {
         group: "orders-cut".into(),
@@ -205,6 +228,30 @@ async fn registry_has_broker_prefix_and_all_metrics() {
         "krabka_broker_break_glass_proposals",
         "krabka_broker_break_glass_refusals_total",
         "krabka_broker_break_glass_bypassed_total",
+        "krabka_broker_remote_copy_bytes_total",
+        "krabka_broker_remote_fetch_bytes_total",
+        "krabka_broker_remote_copy_requests_total",
+        "krabka_broker_remote_fetch_requests_total",
+        "krabka_broker_remote_delete_requests_total",
+        "krabka_broker_remote_copy_errors_total",
+        "krabka_broker_remote_fetch_errors_total",
+        "krabka_broker_remote_delete_errors_total",
+        "krabka_broker_remote_copy_lag_bytes",
+        "krabka_broker_remote_copy_lag_segments",
+        "krabka_broker_remote_delete_lag_bytes",
+        "krabka_broker_remote_delete_lag_segments",
+        "krabka_broker_replication_throttled_bytes_out_total",
+        "krabka_broker_replication_throttled_bytes_in_total",
+        "krabka_broker_replication_throttle_sleeps_total",
+        "krabka_broker_remote_log_reader_task_queue_size",
+        "krabka_broker_remote_log_reader_avg_idle_percent",
+        "krabka_broker_remote_log_reader_fetch_duration_seconds",
+        "krabka_broker_remote_log_reader_rejected_total",
+        "krabka_broker_remote_index_cache_hits_total",
+        "krabka_broker_remote_index_cache_misses_total",
+        "krabka_broker_remote_index_cache_evictions_total",
+        "krabka_broker_remote_index_cache_bytes",
+        "krabka_broker_remote_index_cache_entries",
     ] {
         assert!(buf.contains(needle), "missing {needle} in:\n{buf}");
     }

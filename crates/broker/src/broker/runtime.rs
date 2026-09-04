@@ -103,6 +103,15 @@ fn start_runtime_watchers(
         Arc::clone(&quota_buckets),
         shutdown.child_token(),
     ));
+    // KIP-13 / KIP-599: a bucket, and the per-entity throttle series it
+    // publishes, live only as long as the client behind them keeps arriving
+    // (#396). Without this a cluster's `/metrics` body grows by one label set
+    // per client id it has ever seen.
+    tokio::spawn(crate::quota::run_expiry(
+        Arc::clone(&quota_buckets),
+        metrics.clone(),
+        shutdown.child_token(),
+    ));
     if config.delegation_token_secret_key.is_some() {
         let interval = config.delegation_token_expiry_check_interval;
         let token_controller: Arc<dyn crate::delegation_token_cleanup::DelegationTokenController> =

@@ -35,8 +35,18 @@ pub(super) fn throttle_follower_responses(
     }
     if byte_count > 0 {
         let granted = broker.throttle_state.leader_out.try_consume(byte_count);
+        // KIP-73: the measured leader-side throttled-replication rate, which
+        // Kafka publishes as
+        // `kafka.server:type=LeaderReplication,name=byte-rate`. It is what
+        // tells an operator whose reassignment is not moving whether the
+        // throttle is biting or something else is wrong.
+        broker.metrics.record_replication_throttled_out(granted);
         if granted < byte_count {
             truncate_throttled_responses(responses, &indexes, granted);
+            // The bucket had less than the round asked for, so some of what
+            // this follower was owed is held back. Kafka delays the fetch;
+            // krabka truncates it and the follower re-asks next round.
+            broker.metrics.record_replication_throttle_sleep();
         }
     }
 }

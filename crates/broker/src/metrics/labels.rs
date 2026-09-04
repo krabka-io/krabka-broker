@@ -392,7 +392,12 @@ pub struct ConnectionCloseReasonLabel {
 /// their response, and `connection_creation_rate` (KIP-612) on the accept path.
 /// Kafka's `LeaderReplication` and `FollowerReplication` quotas are absent
 /// because KIP-73 throttles a follower fetch by dropping partitions out of the
-/// response rather than by delaying it, so there is no sleep to attribute.
+/// response rather than by delaying it, so there is no sleep to attribute. The
+/// replication throttle is published as its own byte-rate instead:
+/// `replication_throttled_bytes_out` and `replication_throttled_bytes_in`,
+/// which stand for Kafka's `LeaderReplication` and `FollowerReplication`
+/// `byte-rate` sensors, with `replication_throttle_sleeps` for the rounds it
+/// held back entirely.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum QuotaType {
     /// KIP-13 `producer_byte_rate`, charged on the Produce path.
@@ -417,6 +422,24 @@ impl QuotaType {
         Self::ControllerMutation,
         Self::ConnectionCreation,
     ];
+
+    /// The dynamic-config key this quota is configured under, as
+    /// `AlterClientQuotas` spells it.
+    ///
+    /// It is the inverse of the key each bucket is created under, and it is
+    /// what lets the quota-expiry sweep find the series an expired bucket
+    /// published. `None` for a key no quota is charged against.
+    #[must_use]
+    pub fn from_config_key(key: &str) -> Option<Self> {
+        match key {
+            "producer_byte_rate" => Some(Self::Produce),
+            "consumer_byte_rate" => Some(Self::Fetch),
+            "request_percentage" => Some(Self::Request),
+            "controller_mutation_rate" => Some(Self::ControllerMutation),
+            "connection_creation_rate" => Some(Self::ConnectionCreation),
+            _ => None,
+        }
+    }
 
     /// The `quota_type` label value this variant renders as. The spelling is
     /// Kafka's own `QuotaType` name, so one dashboard query reads the same

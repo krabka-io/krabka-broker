@@ -125,6 +125,13 @@ pub(super) async fn try_remote_read(
     if !remote_storage_enable {
         return None;
     }
+    // KIP-405's `RemoteFetchRequestsPerSec`. Counted once this partition is
+    // known to be tiered, so a cluster with no tiered topic materialises no
+    // series, and before the reader pool can refuse the read, so a refusal
+    // still shows up as an attempt.
+    broker
+        .metrics
+        .record_remote_request(crate::metrics::RemoteTierPath::Fetch, &p.topic_name);
     // KIP-405: the remote tier serves `[log_start, local_log_start)` and
     // nothing below. An offset under the global floor was deleted by
     // `DeleteRecords` or by remote retention, so it stays
@@ -270,6 +277,13 @@ pub(super) async fn try_remote_read(
 
             p.out.error_code = codes::NONE;
             p.out.records = Some(batch.into());
+            // KIP-405's `RemoteFetchBytesPerSec`: what the tier actually
+            // served, which is the batch that is about to go out.
+            broker.metrics.record_remote_bytes(
+                crate::metrics::RemoteTierPath::Fetch,
+                &p.topic_name,
+                u64::try_from(bytes_est).unwrap_or(0),
+            );
             Some(bytes_est)
         }
         Ok(None) => None,
@@ -289,6 +303,13 @@ pub(super) async fn try_remote_read(
             None
         }
         Err(e) => {
+            // KIP-405's `RemoteFetchErrorsPerSec`. `NotReady` above is not one
+            // of these: it is the metadata partition still catching up, which
+            // the caller already surfaces as a retryable error code and
+            // `failed_fetch_requests` already counts.
+            broker
+                .metrics
+                .record_remote_error(crate::metrics::RemoteTierPath::Fetch, &p.topic_name);
             tracing::warn!(
                 topic = %p.topic_name,
                 partition = p.partition_index,
