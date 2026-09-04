@@ -320,7 +320,10 @@ mod tests {
     /// leaves no stale sentence behind.
     #[test]
     fn every_recorded_intent_is_non_empty_and_keyed_once() {
-        let mut keys: Vec<i16> = RANGE_DIVERGENCE_INTENTS.iter().map(|(key, _)| *key).collect();
+        let mut keys: Vec<i16> = RANGE_DIVERGENCE_INTENTS
+            .iter()
+            .map(|(key, _)| *key)
+            .collect();
         let unique: std::collections::BTreeSet<i16> = keys.iter().copied().collect();
         keys.sort_unstable();
         assert!(keys == unique.into_iter().collect::<Vec<i16>>());

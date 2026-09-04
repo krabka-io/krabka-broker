@@ -320,9 +320,7 @@ async fn handle_reports_and_records_a_request_quota_throttle() {
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     check!(resp.throttle_time_ms > 0, "{resp:?}");
-    check!(
-        context.take_throttle() > <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO
-    );
+    check!(context.take_throttle() > <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO);
 
     broker_handle.shutdown().await;
 }
