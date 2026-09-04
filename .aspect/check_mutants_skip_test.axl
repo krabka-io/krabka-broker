@@ -93,9 +93,13 @@ def _test_a_reason_below_the_attribute_does_not_justify(_ctx):
     )
 
 def _test_the_reason_of_the_function_above_does_not_carry_over(_ctx):
-    check(
-        not _justified("// cargo-mutants: reason.\n" + _SKIP + "\nfn ok() {}\n\n" + _SKIP + "\nfn missing() {}\n"),
-        "the second skip in the file",
+    check_eq(
+        "the second skip in the file, at line 5",
+        unjustified([_source(
+            "crates/a/src/pair.rs",
+            "// cargo-mutants: reason.\n" + _SKIP + "\nfn ok() {}\n\n" + _SKIP + "\nfn missing() {}\n",
+        )]),
+        [("crates/a/src/pair.rs", 5)],
     )
 
 def _test_a_file_without_a_skip_holds_nothing(_ctx):

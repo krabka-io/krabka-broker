@@ -411,6 +411,9 @@ jobs:
       # An exclude_re entry pinned to a path that a refactor moved or renamed stops matching anything, and the mutant it used to suppress comes back as an unexplained survivor.
       - name: mutants config
         run: aspect check-mutants-config
+      # A mutants::skip removes a function from the sweep, so an unexplained one silently shrinks the tier that measures the tests. Every skip states which of the README's two accepted reasons it is.
+      - name: justified mutants::skip attributes
+        run: aspect check-mutants-skip
       # Every crate has a README and the root README crate table names it.
       - name: crate READMEs
         run: aspect check-crate-readmes

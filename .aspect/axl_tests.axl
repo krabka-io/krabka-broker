@@ -18,6 +18,7 @@ load("./check_images_test.axl", "check_images_tests")
 load("./check_kfcs_test.axl", "check_kfcs_tests")
 load("./check_metrics_contract_test.axl", "check_metrics_contract_tests")
 load("./check_mutants_config_test.axl", "check_mutants_config_tests")
+load("./check_mutants_skip_test.axl", "check_mutants_skip_tests")
 load("./check_scripts_test.axl", "check_scripts_tests")
 load("./check_version_pins_test.axl", "check_version_pins_tests")
 load("./creusot_image_tag_test.axl", "creusot_image_tag_tests")
@@ -38,6 +39,7 @@ SUITES = [
     check_kfcs_tests,
     check_metrics_contract_tests,
     check_mutants_config_tests,
+    check_mutants_skip_tests,
     check_scripts_tests,
     check_version_pins_tests,
     creusot_image_tag_tests,
