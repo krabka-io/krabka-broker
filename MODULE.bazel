@@ -58,7 +58,7 @@ git_override(
 # the toolchain links with lld instead, makes a local build and a CI build the
 # same build, and is what rules_rs_mutants needs on macOS, where Xcode's
 # cc_wrapper leaves a mutant link without `DEVELOPER_DIR`.
-bazel_dep(name = "llvm", version = "0.8.18")
+bazel_dep(name = "llvm", version = "0.8.19")
 
 register_toolchains("@llvm//toolchain:all")
 
