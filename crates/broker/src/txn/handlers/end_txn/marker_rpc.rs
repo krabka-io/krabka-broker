@@ -40,6 +40,12 @@ use crate::{
 ///
 /// The caller resolves the current `__transaction_state` partition leader epoch
 /// from the metadata image and stamps it on every marker.
+// cargo-mutants: an I/O-only wrapper with no in-process signal. It dials a remote
+// broker through the shared `InterBrokerClient`, sends one
+// `WriteTxnMarkersRequest` and maps the reply; no test in this process can build
+// the connection, so every mutant of the dial-and-send sequence survives
+// unobserved. The marker batch it sends is built by `marker::build`, which is
+// mutation-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn send_write_txn_markers(
     context: MarkerDispatchContext<'_>,

@@ -56,5 +56,8 @@ cannot be killed.
 
 A red scheduled run comments on the open `nightly-red` issue, or opens one, the
 same way `ci.yml` reports its own scheduled lanes; the next all-green scheduled
-run closes it. [`CONTRIBUTING.md`](../CONTRIBUTING.md) describes running one
+run closes it. The two workflows share that one issue, so a green `ci.yml`
+nightly can close an issue whose mutation half is still red, and the next
+Sunday's sweep refiles it. This table is the record that does not reset: a
+crate whose sweep stays red simply stops getting a new date. [`CONTRIBUTING.md`](../CONTRIBUTING.md) describes running one
 crate's sweep locally.

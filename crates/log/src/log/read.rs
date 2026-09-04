@@ -143,7 +143,7 @@ impl Log {
         fields(batches = tracing::field::Empty),
         err,
     )]
-    // The `current_offset = base + last_offset_delta + 1` cursor advance only
+    // cargo-mutants: the `current_offset = base + last_offset_delta + 1` cursor advance only
     // ever moves the cursor too LOW under these mutations; each segment's
     // `read` self-filters via `batch_last >= offset` and clamps sub-base
     // offsets, so a too-low cursor yields the same batches and `start_offset`

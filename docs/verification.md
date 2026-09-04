@@ -20,7 +20,11 @@ also run live, digest-pinned Kafka brokers as reference systems.
 The checks do not prove the whole broker. This catalog states the formal
 boundary in detail. The repository README describes the
 [mutation](../README.md#mutation-testing) and
-[container](../README.md#container-suites) tiers.
+[container](../README.md#container-suites) tiers. Mutation testing stands in
+for authorship only while it is actually running, so the sweeps are scheduled
+weekly per crate and the
+[mutation sweep baseline](mutants-baseline.md) records the last run in which
+each swept crate came back with no survivor.
 
 ## Catalog Boundary
 

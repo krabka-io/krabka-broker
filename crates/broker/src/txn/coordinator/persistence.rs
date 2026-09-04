@@ -175,6 +175,11 @@ impl TxnCoordinator {
     /// Returns [`BrokerError`] without publishing a partial recovery image if
     /// a partition is missing, a read or decode fails, a record is misplaced,
     /// an offset overflows, or two transactions claim one producer ID.
+    // cargo-mutants: orchestration only. It reads each locally-led
+    // `__transaction_state` partition off disk and feeds every record to
+    // `apply_recovered_record` / `RecoveredTransactions`, which carry the
+    // decisions and are mutation-tested in their own right; what is left here is
+    // the log walk itself, which has no in-process signal of its own.
     #[cfg_attr(test, mutants::skip)]
     #[tracing::instrument(name = "txn_coordinator_recover", level = "info", skip_all, err)]
     pub(crate) async fn recover(&self, image: &MetadataImage) -> Result<(), BrokerError> {

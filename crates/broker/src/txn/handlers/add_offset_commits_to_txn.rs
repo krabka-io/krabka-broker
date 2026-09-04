@@ -30,7 +30,7 @@ use crate::{
     },
 };
 
-// The pid/epoch guard (`||`) is only reachable with a fully-seeded coordinator
+// cargo-mutants: the pid/epoch guard (`||`) is only reachable with a fully-seeded coordinator
 // (this broker must lead the tid's `__transaction_state` partition and hold a
 // live `TxnEntry` in its private `state` map); the entry can only be installed
 // via `coord.put`/raft, so the branch cannot be reached from an in-file unit

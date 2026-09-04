@@ -1,8 +1,11 @@
 # cargo-mutants configuration — https://mutants.rs
 #
 # Read by local cargo-mutants and by Bazel through the label flag in `.bazelrc`.
-# The manually triggered Bazel sweep has no survivor baseline, so any missed
-# mutant fails its shard.
+# The Bazel sweep has no survivor baseline, so any missed mutant fails its
+# shard. It runs weekly over every crate in the `mutants` workflow's schedule,
+# as well as on demand, so an entry added here is what the gate believes about
+# every later run: `docs/mutants-baseline.md` records when each crate's sweep
+# last passed.
 
 test_tool = "nextest"
 profile = "mutants"

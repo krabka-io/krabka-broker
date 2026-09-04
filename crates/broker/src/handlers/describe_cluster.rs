@@ -34,12 +34,24 @@ use crate::{
 /// `DescribeCluster` `endpoint_type` (KIP-919): `1` = BROKERS.
 const ENDPOINT_TYPE_BROKERS: i8 = 1;
 
-// cargo-mutants: the only surviving mutants here flip `-1` node/controller-id
-// sentinel fallbacks (`try_from(id).unwrap_or(-1)`, `watch_leader().map_or(-1, ..)`);
-// broker/controller ids are int32 on the wire so `try_from` never fails, and a
-// started test broker always has an elected leader, making the fallbacks
-// unreachable with realistic inputs. Response shape is pinned by the tests below.
+/// The `broker_id` a registration's [`NodeId`](krabka_metadata::NodeId) projects
+/// to on the wire.
+///
+/// `DescribeClusterResponse.brokers[].brokerId` is an int32, and so is the
+/// `nodeId` every registration path validates, so the conversion cannot fail
+/// for a registration the controller accepted. `-1` is the sentinel a client
+/// reads as "no such node" if one ever did.
+// cargo-mutants: an unobservable sentinel. No registration this broker can hold
+// carries a node id above `i32::MAX`, so nothing a test constructs reaches the
+// `-1` arm and no mutation of it changes an observable byte. Only the fallback
+// is skipped -- `handle` itself stays in the sweep, because the branches around
+// it (endpoint type, authorization, fenced filtering, KIP-430 opt-in) are all
+// wire-visible and are asserted by the tests below.
 #[cfg_attr(test, mutants::skip)]
+fn wire_broker_id(node_id: u64) -> i32 {
+    i32::try_from(node_id).unwrap_or(-1)
+}
+
 #[tracing::instrument(
     name = "handle_describe_cluster",
     level = "info",
@@ -111,7 +123,7 @@ pub(crate) async fn handle(
                 inter_broker_name,
             );
             DescribeClusterBroker {
-                broker_id: i32::try_from(b.node_id.0).unwrap_or(-1),
+                broker_id: wire_broker_id(b.node_id.0),
                 host,
                 port,
                 rack: b.rack.clone(),
@@ -288,6 +300,80 @@ mod tests {
         };
         assert!(*broker_row == expected_row);
         broker_handle.shutdown().await;
+    }
+
+    /// KIP-919: a broker listener serves only `endpoint_type=BROKERS`. Any
+    /// other value is refused before the authorizer is consulted, with the
+    /// requested type echoed back so the client can tell which one it asked
+    /// for.
+    #[tokio::test]
+    async fn a_non_broker_endpoint_type_is_refused_before_authorization() {
+        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("alice");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let controllers = DescribeClusterRequest {
+            endpoint_type: 2,
+            ..Default::default()
+        };
+
+        let bytes = handle(&broker, VERSION, 123, &encode_request(&controllers), &ctx)
+            .await
+            .expect("handle");
+
+        let expected = DescribeClusterResponse {
+            throttle_time_ms: 0,
+            error_code: codes::MISMATCHED_ENDPOINT_TYPE,
+            error_message: Some("broker listener requires endpoint_type=BROKERS".into()),
+            endpoint_type: 2,
+            cluster_id: String::new(),
+            controller_id: 0,
+            brokers: vec![],
+            cluster_authorized_operations: 0,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        assert!(decode_response(&bytes) == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// KIP-430: the bitfield is filled only when the request opts in. Without
+    /// the flag the field keeps the `i32::MIN` "not present" sentinel, which
+    /// `broker_endpoint_response_preserves_non_default_fields` pins; with it,
+    /// the response carries the operations the principal actually holds on the
+    /// singleton `Cluster` resource.
+    #[tokio::test]
+    async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
+        let authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        let (broker_handle, _dir) = start_broker(Arc::clone(&authorizer) as _).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let bytes = handle(&broker, VERSION, 123, &encode_request(&request(true)), &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        let expected = authorized_operations_bits(
+            authorizer.as_ref(),
+            &broker.controller.current_image(),
+            &p,
+            &peer,
+            ResourceType::Cluster,
+            CLUSTER_RESOURCE_NAME,
+        );
+        assert!(expected != i32::MIN);
+        assert!(resp.cluster_authorized_operations == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// `wire_broker_id` is the `-1` sentinel fallback that the sweep skips: an
+    /// id the controller can register always projects to itself.
+    #[test]
+    fn a_registered_node_id_projects_to_itself() {
+        assert!(wire_broker_id(42) == 42);
     }
 
     #[tokio::test]

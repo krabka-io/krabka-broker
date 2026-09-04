@@ -136,7 +136,7 @@ impl Segment {
         ),
         err,
     )]
-    // The only mutant here flips the sparse-index `rel = batch_base - seg_base`
+    // cargo-mutants: the only mutant here flips the sparse-index `rel = batch_base - seg_base`
     // to `+`, corrupting an OFFSET-INDEX hint only. Every read/truncate path
     // treats the index as a lower-bound hint and re-scans + filters, so an
     // inflated `rel` (seg_base > 0) resolves to the from-start fallback and

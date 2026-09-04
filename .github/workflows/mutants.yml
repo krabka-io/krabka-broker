@@ -183,6 +183,14 @@ jobs:
   # the same minimal block instead, against the same label and the same body
   # shape: one open `nightly-red` issue is the whole signal, and either
   # workflow's red schedule reaches it.
+  #
+  # One asymmetry comes with sharing the label, and it is deliberate rather
+  # than unnoticed: `ci.yml` closes every open `nightly-red` issue on its green
+  # nightly, including one this workflow filed, so a red sweep's issue can be
+  # closed by a green container run before the next Sunday refiles it. The
+  # alternative -- a second label -- buys a second thing to watch, and the
+  # last-green table in `docs/mutants-baseline.md` is the durable record either
+  # way: it is what goes stale when a sweep stays red.
   report:
     name: nightly report
     needs: [prepare, mutants]
