@@ -81,7 +81,7 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 # identically under Cargo, which is how the monorepo leaves it. Declaring the
 # runtime makes the suite a function of the build rather than of whether the
 # machine happens to have a JDK installed.
-bazel_dep(name = "rules_java", version = "9.8.0")
+bazel_dep(name = "rules_java", version = "9.9.0")
 
 pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
 
