@@ -373,6 +373,49 @@ survivor fails its shard. Two things to know about the results:
 * The `cargo-mutants` version is pinned by `tools/mutants/Cargo.lock`, not by
   whatever is on `PATH`.
 
+### Skipping a mutant
+
+A skip removes code from the tier that measures the tests, so it needs a reason
+that survives review. Two reasons are accepted for the function-level
+`#[cfg_attr(test, mutants::skip)]` attribute:
+
+* **An I/O-only wrapper with no in-process signal.** The function dials a
+  socket, fsyncs a file, or spawns a task, and nothing it does is observable
+  from inside the test process — so every mutant of it survives no matter how
+  good the tests are.
+* **Orchestration whose every branch is a call into a separately
+  mutation-tested kernel.** The decisions live elsewhere and are measured
+  there; what is left is the loop or the match that dispatches to them.
+
+Whichever it is, write it down. A `// cargo-mutants: <reason>` line goes
+directly above the attribute, naming the reason as it applies to *this*
+function — only other attributes, doc comments and blank lines may sit between
+the two. `aspect check-mutants-skip` fails on a skip with no such line, and CI
+runs it in the `checks` job.
+
+**"Integration-tested" is not an accepted reason.** The sweep runs unit tests
+and ordinary `tests/*.rs` only; it excludes the manual and Docker-backed
+suites. A skip justified by integration coverage therefore removes exactly the
+code the mutation tier never sees, which is the opposite of what it should do.
+Either the behavior can be asserted in process — write that test and drop the
+skip — or the function is one of the two cases above and the reason should say
+so.
+
+Prefer a [`.cargo/mutants.toml`](.cargo/mutants.toml) `exclude_re` entry when
+what survives is an **equivalent mutant of one expression**: a comparison whose
+two branches agree at the boundary the mutation moves, or a field whose written
+value is already its `Default`. The attribute is function-wide and would take
+the function's other, killable mutants out of the sweep with it; the regex
+names just the one. The trade is that a regex keyed to a path or a line number
+rots when the code moves, which `aspect check-mutants-config` catches — so the
+attribute is still the better choice when the equivalent mutant is the *only*
+one the function generates.
+
+The sibling rule is `aspect check-creusot-skip`, which makes the attribute
+mandatory on every `#[cfg(creusot)]` function in `crates/verified`: those are
+never compiled in a normal build, so cargo-mutants would report each as an
+unexplained survivor.
+
 ## Storage formatting
 
 A KRaft node must have its log directory formatted before the broker will boot —

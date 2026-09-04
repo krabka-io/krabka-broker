@@ -26,6 +26,18 @@ weekly per crate and the
 [mutation sweep baseline](mutants-baseline.md) records the last run in which
 each swept crate came back with no survivor.
 
+A mutation skip narrows that evidence, so the README's
+[skipping a mutant](../README.md#skipping-a-mutant) rule bounds it. A
+function-level `#[cfg_attr(test, mutants::skip)]` is accepted for an I/O-only
+wrapper with no in-process signal, or for orchestration whose every branch
+calls into a separately mutation-tested kernel, and it must carry a
+`// cargo-mutants: <reason>` line saying which — `aspect check-mutants-skip`
+fails the build otherwise. An equivalent mutant of a single expression belongs
+in `.cargo/mutants.toml`'s `exclude_re` instead, so the function's other
+mutants stay in the sweep. Integration coverage is explicitly not a reason: the
+sweep runs unit tests and ordinary `tests/*.rs` only, so a skip resting on the
+container suites removes precisely the code this tier would otherwise measure.
+
 ## Catalog Boundary
 
 This catalog covers safety-critical, deterministic decisions implemented in
