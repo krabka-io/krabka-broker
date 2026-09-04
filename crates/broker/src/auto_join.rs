@@ -50,6 +50,15 @@ pub(crate) struct AutoJoinParams {
     pub directory_id: uuid::Uuid,
     pub cluster_id: Option<uuid::Uuid>,
     pub bootstrap_servers: Vec<String>,
+    /// This node's own controller endpoint as the rest of the cluster is
+    /// configured to reach it, from its `controller.quorum.voters` entry.
+    ///
+    /// The voter RPCs publish this rather than the address the controller
+    /// socket is bound to. A controller that binds `0.0.0.0` has no routable
+    /// address to report, and the fallback for one is a guess -- `HOSTNAME`,
+    /// or `127.0.0.1` -- so publishing it would replace a committed endpoint
+    /// every other node can reach with one only this node can.
+    pub advertised_controller: Option<String>,
     /// Protocol of the bootstrap server's controller listener.
     pub listener_protocol: krabka_security::ListenerProtocol,
     pub inter_broker_server_name: String,

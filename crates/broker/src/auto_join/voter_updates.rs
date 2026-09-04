@@ -13,7 +13,7 @@ use krabka_units::convert::TimeExt as _;
 
 use super::{
     AutoJoinParams,
-    request::{controller_listener, select_bootstrap_server},
+    request::{advertised_controller_listener, select_bootstrap_server},
     rpc::send_update_voter,
 };
 use crate::codes;
@@ -29,7 +29,10 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
         );
         return;
     };
-    let listener = controller_listener(params.controller.controller_bound_addr());
+    let listener = advertised_controller_listener(
+        params.advertised_controller.as_deref(),
+        params.controller.controller_bound_addr(),
+    );
     let mut last_updated = None;
     let mut next_server = 0usize;
     loop {

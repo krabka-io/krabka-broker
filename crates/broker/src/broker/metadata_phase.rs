@@ -254,6 +254,11 @@ fn spawn_auto_join(
         directory_id: config.directory_id,
         cluster_id: config.cluster_id,
         bootstrap_servers: config.bootstrap_servers.clone(),
+        advertised_controller: config
+            .controller_quorum_voters
+            .iter()
+            .find(|(id, _)| *id == config.node_id)
+            .map(|(_, endpoint)| endpoint.clone()),
         listener_protocol,
         inter_broker_server_name: config
             .controller_server_name

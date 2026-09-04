@@ -12,7 +12,9 @@ use krabka_units::convert::TimeExt as _;
 use super::{
     AutoJoinParams,
     outcome::{JoinOutcome, log_join_outcome},
-    request::{build_add_raft_voter_request, controller_listener, select_bootstrap_server},
+    request::{
+        advertised_controller_listener, build_add_raft_voter_request, select_bootstrap_server,
+    },
     rpc::{send_add_raft_voter, send_remove_raft_voter},
 };
 
@@ -44,7 +46,7 @@ pub(crate) async fn run(params: AutoJoinParams) {
         return;
     };
     let directory_id = krabka_protocol::primitives::uuid::Uuid(*params.directory_id.as_bytes());
-    let listener = controller_listener(bound);
+    let listener = advertised_controller_listener(params.advertised_controller.as_deref(), bound);
 
     let protocol = params.listener_protocol;
     let server_name = params.inter_broker_server_name;
@@ -173,6 +175,7 @@ mod tests {
             cluster_id: None,
             // Unroutable: would hang the loop if `run` ignored auto_join=false.
             bootstrap_servers: vec!["127.0.0.1:1".to_string()],
+            advertised_controller: None,
             listener_protocol: krabka_security::ListenerProtocol::Plaintext,
             inter_broker_server_name: "broker.internal".to_string(),
             controller: broker.controller_for_test(),
@@ -202,6 +205,7 @@ mod tests {
             directory_id: uuid::Uuid::from_u128(7),
             cluster_id: None,
             bootstrap_servers: vec!["127.0.0.1:1".to_string()],
+            advertised_controller: None,
             listener_protocol: krabka_security::ListenerProtocol::Plaintext,
             inter_broker_server_name: "broker.internal".to_string(),
             controller: source.clone(),
