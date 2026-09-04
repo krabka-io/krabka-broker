@@ -64,6 +64,15 @@ pub(crate) struct ExportRow {
 }
 
 /// Parse an exported offsets CSV, sorted.
+///
+/// The tool writes this file with a Jackson `CsvMapper`, and
+/// apache/kafka:4.3.1 quotes the string columns while leaving the numeric ones
+/// bare -- `"orders",0,3`. The quoting is not part of the claim these cases
+/// make, so [`unquote`] takes it back off before the fields are compared.
+///
+/// Splitting on `,` before unquoting would mis-split a field that contained a
+/// comma. A Kafka topic name cannot (`[a-zA-Z0-9._-]` only), and the group ids
+/// this suite uses cannot either, so the simple split is enough here.
 pub(crate) fn parse_export_csv(stdout: &str) -> Vec<ExportRow> {
     let mut rows: Vec<ExportRow> = stdout
         .lines()
@@ -77,15 +86,28 @@ pub(crate) fn parse_export_csv(stdout: &str) -> Vec<ExportRow> {
                 _ => return None,
             };
             Some(ExportRow {
-                group: group.map(str::to_owned),
-                topic: topic.to_owned(),
-                partition: partition.parse().ok()?,
-                offset: offset.parse().ok()?,
+                group: group.map(unquote),
+                topic: unquote(topic),
+                partition: unquote(partition).parse().ok()?,
+                offset: unquote(offset).parse().ok()?,
             })
         })
         .collect();
     rows.sort();
     rows
+}
+
+/// One CSV field with its surrounding quotes removed, and any doubled quote
+/// inside it read back as the single quote it stands for. A field that is not
+/// quoted is returned as it came.
+fn unquote(field: &str) -> String {
+    let Some(inner) = field
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return field.to_owned();
+    };
+    inner.replace("\"\"", "\"")
 }
 
 /// The fully-qualified Kafka exception class names a tool printed, sorted and
@@ -244,6 +266,30 @@ mod tests {
         check!(parse_export_csv("t,0,12\n") == vec![three]);
         check!(parse_export_csv("g,t,0,12\n") == vec![four]);
         check!(parse_export_csv("\n\n") == Vec::new());
+    }
+
+    /// apache/kafka:4.3.1 writes this file through a Jackson `CsvMapper` that
+    /// quotes the string columns and leaves the numeric ones bare, so the same
+    /// row arrives quoted from one side and plain from the other and the two
+    /// must still compare equal.
+    #[test]
+    fn a_quoted_export_row_reads_the_same_as_a_plain_one() {
+        check!(parse_export_csv("\"t\",0,12\n") == parse_export_csv("t,0,12\n"));
+        check!(parse_export_csv("\"g\",\"t\",0,12\n") == parse_export_csv("g,t,0,12\n"));
+    }
+
+    /// A quote inside a quoted field is written doubled, and reads back as one.
+    #[test]
+    fn a_doubled_quote_inside_a_field_reads_back_as_one() {
+        check!(
+            parse_export_csv("\"a\"\"b\",0,12\n")
+                == vec![ExportRow {
+                    group: None,
+                    topic: "a\"b".to_owned(),
+                    partition: 0,
+                    offset: 12,
+                }]
+        );
     }
 
     #[test]

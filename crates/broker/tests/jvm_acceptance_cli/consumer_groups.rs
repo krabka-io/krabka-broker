@@ -731,15 +731,19 @@ async fn group_delete_and_reset_refusals_match_apache_kafka() {
                 "--dry-run",
             ],
         );
+        // The exit status is not the signal here: apache/kafka:4.3.1 prints
+        // this refusal, then prints the empty NEW-OFFSET header and exits 0.
+        // What the tool does promise is that it names the state it refused on
+        // and proposes nothing, so that is what both sides are held to.
         assert!(
-            !reset.succeeded(),
-            "{}: a reset of a live group must be refused:\n{}",
+            reset.text().contains("can only be reset if the group"),
+            "{}: the refusal must name the group's state, got:\n{}",
             side.label(),
             reset.text(),
         );
         assert!(
-            reset.text().contains("can only be reset if the group"),
-            "{}: the refusal must name the group's state, got:\n{}",
+            parse_reset_table(&reset.text()) == Vec::<ResetRow>::new(),
+            "{}: a refused reset must propose no offsets, got:\n{}",
             side.label(),
             reset.text(),
         );
