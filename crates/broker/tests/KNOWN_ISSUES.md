@@ -73,30 +73,38 @@ JVM command-line tools also behave inconsistently under Docker Desktop
 on Windows. The dedicated CI lane currently runs only on Ubuntu, so this
 acceptance path has no validated Windows CI or runtime result.
 
-## Local retention and time-based segment roll never run
+## A follower replica of a compacted topic is never compacted
 
-The soak lane (`soak.rs`, the `soak` job in `.github/workflows/ci.yml`) found
-this on its first run against three broker containers: after three minutes of
-steady produce into a topic configured `retention.ms=60s`,
-`retention.bytes=4MiB` and `segment.ms=5s`, not one sealed segment had been
-deleted on any of the three brokers, and each broker's open-descriptor count
-was still climbing — 120 to 170 on one node over the run's second half, roughly
-one descriptor per segment created.
+The soak lane (`soak.rs`) still fails its open-descriptor assertion, and this is
+what is left behind it. Local retention now runs — `soak-retention`'s segments
+are trimmed, its retention-cycle count clears ten, and the log-directory series
+is level — but the descriptor count still climbs on all three brokers, about one
+per second, and every one of those descriptors belongs to `soak-compacted`.
 
-Both behaviours live in `krabka_log::Log::tick`: the time-based roll at the top
-of `crates/log/src/log/tick.rs` and the `retention::time_based_evict` /
-size-based eviction below it. Nothing in `crates/broker` calls that method. The
-cleaner's sweep says as much in a comment — "the delete half is the retention
-sweep's, in `Log::tick`" (`crates/broker/src/cleaner/sweep.rs`) — but no such
-sweep is spawned beside the cleaner in `broker/maintenance.rs`, so a live broker
-applies `retention.ms`, `retention.bytes` and `segment.ms` to nothing.
+Counting the segment files inside each container 150 s into a run says why:
 
-What still works, and what the soak run confirmed: `segment.bytes` rolls on the
-append path (`crates/log/src/log/append.rs`), and compaction runs on the
-cleaner's interval. So the log is segmented and compacted; it is only never
-trimmed.
+```text
+krabka-soak-1  soak-compacted-0: 2   soak-compacted-1: 27  soak-compacted-2: 26
+krabka-soak-2  soak-compacted-0: 28  soak-compacted-1: 2   soak-compacted-2: 28
+krabka-soak-3  soak-compacted-0: 27  soak-compacted-1: 27  soak-compacted-2: 2
+```
 
-Until a retention sweep is spawned, the soak lane fails on two of its
-assertions — the retention cycle count, and the open-descriptor trend that
-accumulating segments produce. Both are true statements about the broker, so
-neither is relaxed here.
+For each partition exactly one broker holds two segments and the other two hold
+twenty-eight and rising. The one holding two is the leader. `crate::cleaner`'s
+sweep skips a partition whose `current_leader` is not this node
+(`crates/broker/src/cleaner/sweep.rs`), so a follower replica of a compacted
+topic is never compacted, and since `cleanup.policy=compact` sets no
+`retention.ms` there is nothing else to bound its segment count either. Kafka's
+`LogCleanerManager` walks every log the broker hosts, exactly as
+`LogManager.cleanupLogs` does, so a Kafka follower compacts its own replica.
+
+The local-retention sweep added in `crate::log_retention` deliberately applies
+no leadership filter for that reason. The cleaner's filter was left as it was:
+changing when compaction runs is a separate decision from making retention run
+at all, and it touches the `log_cleaner_uncleanable_partitions` contract, which
+is documented as "partitions this broker leads".
+
+Until that is settled the soak lane fails on the descriptor trend alone. Every
+other assertion it makes — the cycle counts, the cleaner-failure count, the
+resident set, the metric cardinality, the log-directory size, and the read-back
+of every acked record — passes.

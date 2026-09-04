@@ -57,6 +57,11 @@ impl RuntimeFileConfig {
         set_runtime_time_millis!(runtime, cleaner_interval, cfg.cleaner_interval);
         set_runtime_time_millis!(
             runtime,
+            log_retention_check_interval,
+            cfg.log_retention_check_interval
+        );
+        set_runtime_time_millis!(
+            runtime,
             future_log_move_retry_backoff,
             cfg.future_log_move_retry_backoff
         );

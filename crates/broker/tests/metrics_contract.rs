@@ -247,6 +247,8 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         client_metrics_otlp_failed_total: _,
         log_cleaner_runs_total: _,
         log_cleaner_failures: _,
+        log_retention_runs_total: _,
+        log_retention_failures: _,
         log_cleaner_uncleanable_partitions: _,
         offline_log_dirs: _,
         log_compactions_total: _,
@@ -505,6 +507,15 @@ fn seed_single_families(metrics: &BrokerMetrics) {
     drop(
         metrics
             .log_cleaner_failures
+            .get_or_create(&CleanerFailureLabel {
+                topic: "orders".into(),
+                partition: 0,
+                reason: CleanerFailureReason::Io,
+            }),
+    );
+    drop(
+        metrics
+            .log_retention_failures
             .get_or_create(&CleanerFailureLabel {
                 topic: "orders".into(),
                 partition: 0,

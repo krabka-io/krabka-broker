@@ -37,21 +37,27 @@
 //! A 64 KiB segment is what makes the roll count reachable: at this suite's
 //! produce rate each partition of `soak-retention` fills one every half-minute
 //! or so, and the roll is driven by `segment.bytes` on the append path.
-//! `--cleaner-interval` is set to one second (the broker default is thirty), so
-//! a three-minute local run gets around 180 sweep opportunities rather than
-//! six. The cycle counts below are asserted from counters and from the segment
-//! files themselves, not inferred from the clock: a soak that silently never
-//! rolled a segment or never swept fails.
+//! `--cleaner-interval` and `--log-retention-check-interval` are both set to
+//! one second (the broker defaults are thirty seconds and five minutes), so a
+//! three-minute local run gets around 180 opportunities of each kind rather
+//! than six and zero. Those two flags are what make ten cycles of each kind
+//! reachable inside the run; see [`cluster`], which sets them. The cycle counts
+//! below are asserted from counters and from the segment files themselves, not
+//! inferred from the clock: a soak that silently never rolled a segment, never
+//! swept or never trimmed fails.
 //!
-//! `segment.ms` and `retention.ms`/`retention.bytes` are set for the same
-//! reason, and neither is applied by a live broker today. Both live in
-//! `krabka_log::Log::tick`, which nothing in `crates/broker` calls, so a
-//! sealed segment is never deleted and the descriptor count climbs for as long
-//! as the producer runs. That is recorded in `tests/KNOWN_ISSUES.md`; it is
-//! also exactly the failure this lane exists to catch, and it is what the lane
-//! reports today. The settings stay as written because they are what the suite
-//! asks of the broker, and relaxing the assertion would be relaxing the
-//! question.
+//! `segment.ms` and `retention.ms`/`retention.bytes` are applied by the
+//! broker-wide local-retention sweep in `krabka_broker::log_retention`, which
+//! dispatches `krabka_log::Log::tick` through each partition's writer actor on
+//! `log.retention.check.interval.ms`. Until that sweep existed nothing in
+//! `crates/broker` called `Log::tick`, so a sealed segment was never deleted
+//! and the descriptor count climbed for as long as the producer ran -- which is
+//! the failure this lane found on its first run and the reason it exists.
+//!
+//! `soak-compacted` has no `retention.ms`, exactly as a compacted Kafka topic
+//! has none: the cleaner is what bounds it. That makes it the control against
+//! `soak-retention`, and the lane's remaining failure is on it rather than on
+//! the retention topic -- see `tests/KNOWN_ISSUES.md`.
 //!
 //! # What fails it
 //!

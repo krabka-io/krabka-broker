@@ -62,6 +62,13 @@ const READY_TIMEOUT: Duration = Duration::from_secs(120);
 /// this suite insists on. One second makes the cycle count reachable in both.
 const CLEANER_INTERVAL: &str = "1s";
 
+/// How often the local-retention sweep runs. The default is five minutes
+/// (Kafka's `log.retention.check.interval.ms`), which a three-minute run would
+/// not reach even once. One second gives the run about 180 opportunities, so
+/// the ten retention cycles this suite insists on are reachable in the short
+/// run as well as the nightly one.
+const RETENTION_CHECK_INTERVAL: &str = "1s";
+
 /// The image tag to run.
 pub(crate) fn image() -> String {
     std::env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
@@ -261,6 +268,7 @@ impl SoakBroker {
             "--metrics-listen-addr=0.0.0.0:9404",
             "--health-listen-addr=none",
             &format!("--cleaner-interval={CLEANER_INTERVAL}"),
+            &format!("--log-retention-check-interval={RETENTION_CHECK_INTERVAL}"),
         ]);
     }
 

@@ -1,7 +1,9 @@
-//! Log-compaction accounting: the sweep counter the cleaner bumps once per
+//! Log-maintenance accounting: the sweep counter the cleaner bumps once per
 //! clean pass, the per-partition counter of compactions that passed, the
 //! per-partition failure counter, and the uncleanable-partition gauge that
-//! says how many partitions the cleaner has lost.
+//! says how many partitions the cleaner has lost -- plus the same pair of
+//! sweep and failure counters for the local-retention loop, which fails a
+//! disk in the same way and is alerted on the same way.
 
 use std::sync::Arc;
 
@@ -45,6 +47,33 @@ impl BrokerMetrics {
             reason,
         };
         self.log_cleaner_failures.get_or_create(&lbl).inc();
+    }
+
+    /// Account one clean local-retention sweep (a full pass that failed no
+    /// partition), the counterpart of [`Self::record_cleaner_run`] for the
+    /// broker-wide local-retention loop.
+    pub fn record_retention_run(&self) {
+        self.log_retention_runs_total.inc();
+    }
+
+    /// Account one failed local-retention pass
+    /// (`Partition::retain_log` returned `Err`), under the reason the sweep
+    /// classified the error as.
+    ///
+    /// The label carries the same three reasons compaction failures do, so an
+    /// operator reads and alerts on both series the same way.
+    pub fn record_retention_failure(
+        &self,
+        topic: &str,
+        partition: i32,
+        reason: CleanerFailureReason,
+    ) {
+        let lbl = CleanerFailureLabel {
+            topic: Arc::from(topic),
+            partition,
+            reason,
+        };
+        self.log_retention_failures.get_or_create(&lbl).inc();
     }
 
     /// Publish the count of partitions whose most recent compaction attempt

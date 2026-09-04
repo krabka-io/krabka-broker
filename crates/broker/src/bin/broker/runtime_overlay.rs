@@ -26,6 +26,7 @@ impl RuntimeArgs {
             gauge_poll_interval,
             isr_scan_interval,
             cleaner_interval,
+            log_retention_check_interval,
             future_log_move_retry_backoff,
             rlmm_reconcile_tick,
             rlmm_bootstrap_backoff_initial,

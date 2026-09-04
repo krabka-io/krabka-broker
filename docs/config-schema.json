@@ -1926,6 +1926,15 @@
             "null"
           ]
         },
+        "log_retention_check_interval": {
+          "default": null,
+          "description": "Cadence of local-retention maintenance: how often `retention.ms`,\n`retention.bytes` and `segment.ms` are applied to every hosted log.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "log_segment_bytes": {
           "default": null,
           "description": "Roll the active segment once it grows past this. Kafka's\n`log.segment.bytes`, the broker default for a topic's `segment.bytes`.",

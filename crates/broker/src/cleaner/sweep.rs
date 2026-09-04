@@ -121,7 +121,9 @@ pub(crate) async fn tick_all(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             // A policy list containing `compact` is what makes a partition the
             // cleaner's work, so `compact,delete` is swept exactly as `compact`
-            // is; the delete half is the retention sweep's, in `Log::tick`.
+            // is; the delete half is the local-retention sweep's, in
+            // `crate::log_retention`, which runs on its own interval and over
+            // every hosted log rather than only the led ones.
             let compacted = log.config_snapshot().cleanup_policy.contains_compact();
             (
                 compacted,

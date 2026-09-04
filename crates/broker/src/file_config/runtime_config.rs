@@ -59,6 +59,11 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub cleaner_interval: Option<Time>,
+    /// Cadence of local-retention maintenance: how often `retention.ms`,
+    /// `retention.bytes` and `segment.ms` are applied to every hosted log.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub log_retention_check_interval: Option<Time>,
     /// Retry delay after a KIP-113 future-log move fails.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]

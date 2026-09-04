@@ -512,6 +512,26 @@ pub struct BrokerMetrics {
     /// `writer` for a partition whose actor is gone, and `other` for
     /// anything else the log layer returned.
     pub log_cleaner_failures: Family<CleanerFailureLabel, Counter>,
+    /// Cumulative count of *clean* local-retention sweeps run by this broker
+    /// — one increment per pass of the broker-wide local-retention loop that
+    /// failed no partition, whether or not any segment was evicted.
+    /// Mirrors [`Self::log_cleaner_runs_total`] for the half of Kafka's log
+    /// maintenance that `LogManager.cleanupLogs` does.
+    pub log_retention_runs_total: Counter,
+    /// Per-partition, per-reason cumulative count of local-retention passes
+    /// that failed. One increment per failed `Partition::retain_log` call.
+    ///
+    /// This is the counter that says segments are not coming off the disk.
+    /// Nothing else reports it: a broker that never evicts a segment looks
+    /// exactly like one with nothing to evict until the disk fills. Alert on
+    /// `rate(log_retention_failures_total[15m]) > 0`.
+    ///
+    /// `reason` is [`CleanerFailureReason`], read exactly as it is on
+    /// [`Self::log_cleaner_failures`]: `io` for a storage failure, which the
+    /// writer arm has already reported to the log-dir registry, `writer` for
+    /// a partition whose actor is gone, and `other` for anything else the log
+    /// layer returned.
+    pub log_retention_failures: Family<CleanerFailureLabel, Counter>,
     /// Partitions this broker leads whose most recent compaction attempt
     /// failed and which have not compacted since.
     ///

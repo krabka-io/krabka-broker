@@ -422,6 +422,7 @@ Validated operational policy loaded from `[runtime]`.
 | `liveness_tick_interval` | string | broker default | duration | Cadence of broker liveness maintenance. |
 | `log_delivery_clock_uncertainty` | string | broker default | duration | Declared bound on how far this broker's clock can be from true time. It has an effect only under the scheduled delivery policy: a batch becomes visible once `max_timestamp + log_delivery_clock_uncertainty <= now`, so delivery is never early and is late by at most twice this bound. |
 | `log_read_buffer_cap` | string | broker default | byte size | Cap on the initial allocation a decoded or raw segment read makes. |
+| `log_retention_check_interval` | string | broker default | duration | Cadence of local-retention maintenance: how often `retention.ms`, `retention.bytes` and `segment.ms` are applied to every hosted log. |
 | `log_segment_bytes` | string | broker default | byte size | Roll the active segment once it grows past this. Kafka's `log.segment.bytes`, the broker default for a topic's `segment.bytes`. |
 | `log_timestamp_scan_window` | string | broker default | byte size | Size of the window a timestamp search reads the log in. |
 | `max_connections` | integer (uint) | broker default |  | Maximum number of live broker connections across all listeners, Kafka's `max.connections`. A connection accepted past this ceiling is closed immediately. |

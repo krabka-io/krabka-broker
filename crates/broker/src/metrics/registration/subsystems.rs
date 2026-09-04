@@ -74,6 +74,23 @@ impl BrokerMetrics {
         );
 
         registry.register(
+            "log_retention_runs",
+            "Cumulative count of clean local-retention sweeps run by this \
+             broker (one per pass that failed no partition). The half of log \
+             maintenance Kafka's LogManager.cleanupLogs does.",
+            self.log_retention_runs_total.clone(),
+        );
+
+        registry.register(
+            "log_retention_failures",
+            "Per-partition, per-reason cumulative count of local-retention \
+             passes that failed. Alert on rate(...) > 0: a broker that never \
+             evicts a segment looks like one with nothing to evict until the \
+             disk fills.",
+            self.log_retention_failures.clone(),
+        );
+
+        registry.register(
             "log_cleaner_uncleanable_partitions",
             "Partitions this broker leads whose most recent compaction \
              attempt failed and which have not compacted since. Mirrors \

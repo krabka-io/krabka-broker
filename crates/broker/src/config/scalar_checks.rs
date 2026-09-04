@@ -46,6 +46,10 @@ impl BrokerConfig {
             ("isr_scan_interval", self.isr_scan_interval),
             ("cleaner_interval", self.cleaner_interval),
             (
+                "log_retention_check_interval",
+                self.log_retention_check_interval,
+            ),
+            (
                 "diskless_wal_flush_interval",
                 self.diskless_wal_flush_interval,
             ),

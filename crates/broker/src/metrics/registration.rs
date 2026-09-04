@@ -138,6 +138,8 @@ impl BrokerMetrics {
             client_metrics_otlp_failed_total: Counter::default(),
             log_cleaner_runs_total: Counter::default(),
             log_cleaner_failures: Family::default(),
+            log_retention_runs_total: Counter::default(),
+            log_retention_failures: Family::default(),
             log_cleaner_uncleanable_partitions: Gauge::default(),
             offline_log_dirs: Gauge::default(),
             log_compactions_total: Family::default(),

@@ -197,6 +197,7 @@ async fn registry_has_broker_prefix_and_all_metrics() {
         "krabka_broker_fetch_message_conversions_total",
         "krabka_broker_unclean_leader_elections_total",
         "krabka_broker_log_cleaner_runs_total",
+        "krabka_broker_log_retention_runs_total",
         "krabka_broker_log_compactions_total",
         "krabka_broker_api_requests_total",
         "krabka_broker_unsupported_api_requests_total",

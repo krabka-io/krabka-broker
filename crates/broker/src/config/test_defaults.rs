@@ -66,6 +66,7 @@ impl BrokerConfig {
             gauge_poll_interval: secs(1),
             isr_scan_interval: secs(1),
             cleaner_interval: secs(30),
+            log_retention_check_interval: minutes(5),
             future_log_move_retry_backoff: millis(50),
             client_metrics_eviction_tick: minutes(1),
             client_metrics_stale_floor: minutes(10),
