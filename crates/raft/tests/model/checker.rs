@@ -391,7 +391,7 @@ impl Model for ConsensusModel {
                     s.committed_epochs
                         .iter()
                         .enumerate()
-                        .filter(|(_, &epoch)| epoch <= leader_epoch)
+                        .filter(|&(_, &epoch)| epoch <= leader_epoch)
                         .all(|(offset, &epoch)| {
                             i64::try_from(offset)
                                 .is_ok_and(|offset| n.log.epoch_at(offset) == Some(epoch))
