@@ -213,6 +213,7 @@ mod tests {
     fn error_row(group_id: &str, error_code: i16) -> DescribedGroup {
         DescribedGroup {
             error_code,
+            error_message: None,
             group_id: group_id.to_string(),
             group_state: String::new(),
             protocol_type: String::new(),
@@ -294,6 +295,7 @@ mod tests {
                 throttle_time_ms: 0,
                 groups: vec![DescribedGroup {
                     error_code: codes::NONE,
+                    error_message: None,
                     group_id: "classic-a".into(),
                     group_state: "Empty".into(),
                     protocol_type: "consumer".into(),
