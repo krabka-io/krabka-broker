@@ -4,3 +4,10 @@ coverage:
       default:
         target: 91.15%
         threshold: 0.5%
+
+# `bazel coverage` instruments the integration suites themselves (see the
+# `--instrument_test_targets` note in .bazelrc), so their sources reach the
+# report alongside the code they drive. A test file is covered by construction:
+# counting it would raise the project number without describing the product.
+ignore:
+  - "crates/*/tests/**"
