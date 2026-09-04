@@ -136,7 +136,7 @@ use_repo(apk, "broker_base_lock", "creusot_base_lock", "kdc_base_lock")
 # ---------------------------------------------------------------------------
 # Format and lint. See //tools/format and //tools/lint.
 # ---------------------------------------------------------------------------
-bazel_dep(name = "aspect_rules_lint", version = "2.7.2")
+bazel_dep(name = "aspect_rules_lint", version = "2.9.0")
 
 # Supplies a clippy aspect shaped the way `aspect lint` expects -- it writes the
 # `rules_lint_machine` output group, which the aspect from @rules_rust does not.
