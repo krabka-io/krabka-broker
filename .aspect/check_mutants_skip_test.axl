@@ -1,0 +1,181 @@
+"""Unit tests for `check_mutants_skip.axl`."""
+
+load("./check_mutants_skip.axl", "count_skips", "is_justified", "is_skip_attribute", "read_sources", "unjustified")
+load("./testing.axl", "check", "check_eq", "suite", "suite_task", "temp_tree")
+
+# The attribute this repository writes, and a justified and an unjustified
+# function carrying it.
+_SKIP = "#[cfg_attr(test, mutants::skip)]"
+_JUSTIFIED = "// cargo-mutants: an fsync wrapper with no in-process signal.\n" + _SKIP + "\nfn ok() {}\n"
+_BARE = _SKIP + "\nfn missing() {}\n"
+
+def _source(path, text):
+    return struct(path = path, text = text)
+
+def _justified(text):
+    """Whether the first skip attribute in `text` is justified."""
+    lines = text.splitlines()
+    for index in range(len(lines)):
+        if is_skip_attribute(lines[index].strip()):
+            return is_justified(lines, index)
+    fail("no skip attribute in %r" % text)
+
+def _test_an_attribute_carrying_the_token_is_a_skip(_ctx):
+    for line in [
+        "#[cfg_attr(test, mutants::skip)]",
+        "    #[cfg_attr(test, mutants::skip)]",
+        "#[mutants::skip]",
+        "#[cfg_attr(test, mutants::skip)] // trailing",
+    ]:
+        check(is_skip_attribute(line.strip()), "%r is a skip" % line)
+
+def _test_a_line_that_only_mentions_the_token_is_not(_ctx):
+    for line in [
+        "// `#[mutants::skip]` rather than an exclude_re, because ...",
+        "/// See `mutants::skip`.",
+        "let skip = \"mutants::skip\";",
+        "#[cfg_attr(test, ignore)]",
+        "",
+    ]:
+        check(not is_skip_attribute(line.strip()), "%r is not a skip" % line)
+
+def _test_the_reason_directly_above_justifies(_ctx):
+    check(_justified(_JUSTIFIED), "the reason directly above")
+
+def _test_no_reason_at_all_does_not(_ctx):
+    check(not _justified(_BARE), "nothing above the attribute")
+
+def _test_a_blank_line_between_the_two_is_allowed(_ctx):
+    check(_justified("// cargo-mutants: reason.\n\n" + _SKIP + "\nfn f() {}\n"), "a blank line between")
+
+def _test_a_wrapped_reason_is_read_to_its_first_line(_ctx):
+    check(
+        _justified("// cargo-mutants: the reason runs on\n// to a second and a third line.\n" + _SKIP + "\nfn f() {}\n"),
+        "a multi-line reason",
+    )
+
+def _test_another_attribute_between_the_two_is_stepped_over(_ctx):
+    check(
+        _justified("// cargo-mutants: reason.\n" + _SKIP + "\n#[must_use]\nfn f() {}\n"),
+        "the skip above another attribute",
+    )
+    check(
+        _justified("// cargo-mutants: reason.\n#[must_use]\n" + _SKIP + "\nfn f() {}\n"),
+        "the skip below another attribute",
+    )
+
+def _test_a_multi_line_attribute_between_the_two_is_stepped_over(_ctx):
+    # A `#[tracing::instrument(...)]` block sits between the reason and the
+    # skip in several handlers; a walk that took one line per attribute would
+    # land inside it and call the skip unjustified.
+    check(
+        _justified(
+            "// cargo-mutants: reason.\n#[tracing::instrument(\n    name = \"h\",\n    fields(a = [1, 2]),\n)]\n" +
+            _SKIP + "\nfn f() {}\n",
+        ),
+        "a wrapped attribute between",
+    )
+
+def _test_a_doc_comment_between_the_two_is_stepped_over(_ctx):
+    check(_justified("// cargo-mutants: reason.\n/// Doc.\n" + _SKIP + "\nfn f() {}\n"), "a doc comment between")
+
+def _test_code_above_the_attribute_does_not_justify(_ctx):
+    check(not _justified("fn other() {}\n\n" + _SKIP + "\nfn f() {}\n"), "a previous item above")
+    check(not _justified("}\n" + _SKIP + "\nfn f() {}\n"), "a closing brace above")
+
+def _test_an_unrelated_comment_alone_does_not_justify(_ctx):
+    check(not _justified("// Just a note.\n" + _SKIP + "\nfn f() {}\n"), "a comment without the marker")
+
+def _test_a_reason_below_the_attribute_does_not_justify(_ctx):
+    check(
+        not _justified(_SKIP + "\n// cargo-mutants: reason.\nfn f() {}\n"),
+        "the reason under the attribute",
+    )
+
+def _test_the_reason_of_the_function_above_does_not_carry_over(_ctx):
+    check(
+        not _justified("// cargo-mutants: reason.\n" + _SKIP + "\nfn ok() {}\n\n" + _SKIP + "\nfn missing() {}\n"),
+        "the second skip in the file",
+    )
+
+def _test_a_file_without_a_skip_holds_nothing(_ctx):
+    check_eq("no skip", unjustified([_source("crates/a/src/lib.rs", "fn f() {}\n")]), [])
+
+def _test_an_unjustified_skip_is_reported_at_its_own_line(_ctx):
+    check_eq(
+        "the attribute's line, not the function's",
+        unjustified([_source("crates/a/src/lib.rs", "fn above() {}\n\n" + _BARE)]),
+        [("crates/a/src/lib.rs", 3)],
+    )
+
+def _test_every_offender_in_a_tree_is_reported(_ctx):
+    check_eq(
+        "one report per offender, in path order",
+        unjustified([
+            _source("crates/a/src/bare.rs", _BARE),
+            _source("crates/a/src/ok.rs", _JUSTIFIED),
+            _source("crates/b/src/both.rs", _JUSTIFIED + "\n" + _BARE),
+        ]),
+        [("crates/a/src/bare.rs", 1), ("crates/b/src/both.rs", 5)],
+    )
+
+def _test_the_skips_are_counted(_ctx):
+    check_eq(
+        "every skip, justified or not",
+        count_skips([_source("crates/a/src/bare.rs", _BARE), _source("crates/a/src/ok.rs", _JUSTIFIED)]),
+        2,
+    )
+
+def _test_read_sources_reads_the_crates_tree(ctx):
+    root = temp_tree(ctx, {
+        "crates/a/src/lib.rs": _JUSTIFIED,
+        "crates/b/src/inner/mod.rs": _BARE,
+        "crates/a/README.md": "not a source",
+        "tools/mutants/src/main.rs": _BARE,
+    })
+    check_eq(
+        "the .rs files under crates/, and nothing else",
+        read_sources(ctx.std.fs, root),
+        [
+            struct(path = "crates/a/src/lib.rs", text = _JUSTIFIED),
+            struct(path = "crates/b/src/inner/mod.rs", text = _BARE),
+        ],
+    )
+
+def _test_a_tree_with_an_offender_fails_and_the_fixed_tree_passes(ctx):
+    root = temp_tree(ctx, {
+        "crates/a/src/bare.rs": _BARE,
+        "crates/a/src/ok.rs": _JUSTIFIED,
+    })
+    check_eq(
+        "the offender the report names",
+        unjustified(read_sources(ctx.std.fs, root)),
+        [("crates/a/src/bare.rs", 1)],
+    )
+
+    ctx.std.fs.write(root + "/crates/a/src/bare.rs", "// cargo-mutants: reason.\n" + _BARE)
+    check_eq("the fixed tree", unjustified(read_sources(ctx.std.fs, root)), [])
+
+check_mutants_skip_tests = suite("check-mutants-skip", [
+    _test_an_attribute_carrying_the_token_is_a_skip,
+    _test_a_line_that_only_mentions_the_token_is_not,
+    _test_the_reason_directly_above_justifies,
+    _test_no_reason_at_all_does_not,
+    _test_a_blank_line_between_the_two_is_allowed,
+    _test_a_wrapped_reason_is_read_to_its_first_line,
+    _test_another_attribute_between_the_two_is_stepped_over,
+    _test_a_multi_line_attribute_between_the_two_is_stepped_over,
+    _test_a_doc_comment_between_the_two_is_stepped_over,
+    _test_code_above_the_attribute_does_not_justify,
+    _test_an_unrelated_comment_alone_does_not_justify,
+    _test_a_reason_below_the_attribute_does_not_justify,
+    _test_the_reason_of_the_function_above_does_not_carry_over,
+    _test_a_file_without_a_skip_holds_nothing,
+    _test_an_unjustified_skip_is_reported_at_its_own_line,
+    _test_every_offender_in_a_tree_is_reported,
+    _test_the_skips_are_counted,
+    _test_read_sources_reads_the_crates_tree,
+    _test_a_tree_with_an_offender_fails_and_the_fixed_tree_passes,
+])
+
+test_check_mutants_skip = suite_task(check_mutants_skip_tests)
