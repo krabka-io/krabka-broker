@@ -102,6 +102,10 @@ impl Default for BrokerConfig {
             share_recovery_read_max: mebibytes(1),
             share_session_cache_max_when_unlimited: 10_000,
             socket_request_max: mebibytes(100),
+            // The floor of `benches/fetch_drain.rs`'s sweep, not a
+            // measured crossover: nothing below 4 KiB has been benchmarked.
+            // `BrokerConfig::sendfile_min`'s doc comment has the sweep, and
+            // the `bench` job of the `ci` workflow is what re-measures it.
             sendfile_min: kibibytes(4),
             socket_send_buffer: mebibytes(1),
             socket_receive_buffer: mebibytes(1),

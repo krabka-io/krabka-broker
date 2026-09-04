@@ -206,11 +206,13 @@ pub(super) fn encode_response(
 /// runs: the dispatch entries whose policy is
 /// `RequestQuotaPolicy::ApplyFallbackAccounting` (the `DispatchEntry::plain`
 /// ones) and the unsupported-version reply path, which takes it for every
-/// `api_key`. The `InlineExempt` entries -- every handler that takes a
-/// `RequestContext`, which is most of the admin and ACL surface -- are exempt
-/// from the request quota altogether and so are neither delayed nor throttle-
-/// stamped. Narrowing that exemption is KIP-124 work rather than KIP-219 work;
-/// this table is what a narrowing would land on.
+/// `api_key`. The `SelfAccounted` entries -- `Produce`, `Fetch` and
+/// `ApiVersions` -- charge the quota in their handler and set
+/// `ThrottleTimeMs` on the typed response before encoding, so they never reach
+/// this predicate. The `InlineExempt` entries -- most of the admin and ACL
+/// surface -- are exempt from the request quota altogether and so are neither
+/// delayed nor throttle-stamped. Narrowing that exemption is KIP-124 work
+/// rather than KIP-219 work; this table is what a narrowing would land on.
 ///
 /// `Produce` (0) and `Fetch` (1) never reach this predicate. Both their
 /// bandwidth quota and their share of the request quota are charged by the

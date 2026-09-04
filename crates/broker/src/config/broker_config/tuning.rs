@@ -135,8 +135,17 @@ macro_rules! tuning_fields {
             /// the kernel and through the `pread` + write copy, and finds no
             /// crossover inside its range: the kernel drain wins at every
             /// size, by 15% to 23% at 4 KiB and by 30% to 50% from 16 KiB up.
-            /// The threshold sits at the smallest size that was measured
-            /// rather than below it, because nothing below it was measured.
+            ///
+            /// The sweep has never measured below 4 KiB, so where the
+            /// crossover actually is -- or whether there is one at all -- is
+            /// unknown. The threshold sits at the smallest size that was
+            /// measured rather than below it for that reason and no other.
+            /// Widening the sweep downwards is a change to
+            /// `benches/fetch_drain.rs`, and the wider result would appear in
+            /// the `bench` job of the `ci` workflow, which runs that suite on
+            /// the nightly schedule and prints it into the job summary; the
+            /// numbers above are what the latest scheduled `ci` run in the
+            /// Actions tab reproduces.
             pub sendfile_min: ByteSize,
             /// Broker socket send-buffer size.
             pub socket_send_buffer: ByteSize,

@@ -132,6 +132,15 @@ Both run the same workspace test set, and CI runs both -- Bazel in the `ci` and
 examples, which `cargo nextest` cannot; `cargo test --workspace --doc` covers
 those.
 
+Benchmarks are Cargo's alone: there is no `crate_bench` rule, so `cargo bench -p
+krabka-broker` (and `-p krabka-log` for the storage suite) is how you get a
+number on your own machine. The other way is to read one somebody else already
+took: the `bench` job of the `ci` workflow runs every criterion suite on the
+nightly schedule, prints the tables into its job summary, and keeps the samples
+as a `criterion-baseline` artifact that the next run compares against. A
+performance figure quoted in a comment names that job; the latest scheduled `ci`
+run in the Actions tab is where its current value lives.
+
 ### Everything CI does, locally
 
 The [Aspect CLI](https://github.com/aspect-build/aspect-cli) narrows each task to

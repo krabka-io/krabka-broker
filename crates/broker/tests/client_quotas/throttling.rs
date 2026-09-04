@@ -720,3 +720,132 @@ async fn request_quota_patch_uses_the_reply_version_not_the_request_version() {
 
     handle.shutdown().await;
 }
+
+/// `ApiVersions` v3 is the version driven below: v1 is the first with a
+/// `ThrottleTimeMs` at all, and v3 is the first flexible one, which is what a
+/// modern client negotiates with.
+const API_VERSIONS_VERSION: i16 = 3;
+
+/// Drives one `ApiVersions` v3 handshake on an already-authenticated `stream`
+/// and returns the decoded response.
+///
+/// The request body is flexible from v3, but the `ApiVersions` *response*
+/// header is v0 at every version -- Kafka's one header exception, so that a
+/// client which has not yet learned the broker's versions can always parse the
+/// reply. The two header flexibilities therefore differ.
+async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersionsResponse {
+    let req = ApiVersionsRequest {
+        client_software_name: "krabka-quota-test".to_string(),
+        client_software_version: "0.0.1".to_string(),
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    req.encode(&mut body, API_VERSIONS_VERSION)
+        .expect("encode ApiVersions");
+    let resp_bytes = round_trip_split_header(
+        stream,
+        API_VERSIONS_KEY,
+        API_VERSIONS_VERSION,
+        corr_id,
+        true,
+        false,
+        &body,
+    )
+    .await
+    .expect("ApiVersions round-trip");
+    let mut cur: &[u8] = &resp_bytes;
+    ApiVersionsResponse::decode(&mut cur, API_VERSIONS_VERSION).expect("decode ApiVersionsResponse")
+}
+
+/// Test 9: `ApiVersions` reports the request-quota delay it was held for.
+///
+/// `ApiVersionsResponse` carries `ThrottleTimeMs` behind the `ApiKeys` array,
+/// so the dispatch loop's leading-int32 patch cannot reach it. Its dispatch
+/// entry is `RequestQuotaPolicy::SelfAccounted` for that reason: the handler
+/// charges the KIP-124 request quota and fills the field in on the typed
+/// response, the way Kafka's `handleApiVersionsRequest` answers through
+/// `requestHelper.sendResponseMaybeThrottle`. Without that, a client held by
+/// the quota reads `throttle_time_ms = 0` and never backs off.
+///
+/// One authenticated connection drives the handshake until the
+/// `(user=alice) request_percentage` bucket runs dry, which is what the
+/// `AddOffsetsToTxn` test above does on the patched path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttle_is_reported_on_api_versions() {
+    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
+        "admin",
+        &[("admin", "admin-secret"), ("alice", "alice-secret")],
+    )
+    .await;
+
+    let mut stream = sasl_plain_authenticate(addr, "alice", b"alice-secret")
+        .await
+        .expect("SASL authenticate for ApiVersions");
+
+    // Baseline: no quota is configured yet, so there is no delay to report.
+    let baseline = drive_api_versions(&mut stream, 10).await;
+    assert!(
+        baseline.error_code == 0,
+        "ApiVersions must succeed, error_code={}",
+        baseline.error_code
+    );
+    assert!(
+        baseline.throttle_time_ms == 0,
+        "unthrottled response must report throttle_time_ms=0, got {}",
+        baseline.throttle_time_ms
+    );
+
+    let alter_resp = drive_alter_client_quotas_sasl(
+        addr,
+        "admin",
+        "admin-secret",
+        vec![(
+            vec![("user".into(), Some("alice".into()))],
+            vec![("request_percentage".into(), 0.001, false)],
+        )],
+        false,
+    )
+    .await;
+    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
+
+    handle
+        .wait_for_image(|img| {
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            img.client_quotas()
+                .get(&key)
+                .and_then(|cfgs| cfgs.get("request_percentage"))
+                == Some(&0.001)
+        })
+        .await;
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut corr_id = 11;
+    let throttled = loop {
+        let resp = drive_api_versions(&mut stream, corr_id).await;
+        corr_id += 1;
+        if resp.throttle_time_ms > 0 {
+            break resp;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "no request-quota throttle on ApiVersions after 15s"
+        );
+    };
+
+    // The handler set the field on the typed response, so nothing else moved:
+    // the advertised table and the feature rows are the baseline's.
+    assert!(
+        throttled
+            == ApiVersionsResponse {
+                throttle_time_ms: throttled.throttle_time_ms,
+                ..baseline
+            }
+    );
+    assert!(
+        throttled.throttle_time_ms <= QUOTA_THROTTLE_MAX_MS,
+        "reported back-off must stay inside quota_throttle_max, got {}",
+        throttled.throttle_time_ms
+    );
+
+    handle.shutdown().await;
+}
