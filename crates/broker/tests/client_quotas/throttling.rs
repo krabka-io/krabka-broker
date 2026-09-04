@@ -33,7 +33,7 @@ use super::{
     wire::{round_trip_split_header, sasl_plain_authenticate},
 };
 
-/// `ApiVersions` is api_key 18.
+/// `ApiVersions` is `api_key` 18.
 const API_VERSIONS_KEY: i16 = 18;
 
 /// The broker's default `quota_throttle_max`, in milliseconds. KIP-219 caps

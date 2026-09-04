@@ -140,20 +140,19 @@ fn range_divergence_intent(api_key: i16, verdict: Verdict) -> Option<String> {
     if verdict != Verdict::RangeDiffers {
         return None;
     }
-    let intent = RANGE_DIVERGENCE_INTENTS
+    let Some((_, intent)) = RANGE_DIVERGENCE_INTENTS
         .iter()
         .find(|(key, _)| *key == api_key)
-        .map(|(_, intent)| (*intent).to_owned())
-        .unwrap_or_else(|| {
-            panic!(
-                "api_key {api_key} now advertises a different range from the \
-                 oracle and no intent is recorded for it. Add an entry to \
-                 `RANGE_DIVERGENCE_INTENTS` saying whether krabka means to \
-                 diverge here -- and, if it does not, change \
-                 `api_catalog::supported_apis` instead."
-            )
-        });
-    Some(intent)
+    else {
+        panic!(
+            "api_key {api_key} now advertises a different range from the \
+             oracle and no intent is recorded for it. Add an entry to \
+             `RANGE_DIVERGENCE_INTENTS` saying whether krabka means to \
+             diverge here -- and, if it does not, change \
+             `api_catalog::supported_apis` instead."
+        )
+    };
+    Some((*intent).to_owned())
 }
 
 /// Both advertised tables, joined and sorted by API key.
