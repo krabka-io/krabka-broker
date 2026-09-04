@@ -211,10 +211,16 @@ temp-env = "0.3"
 # Mock OPA server for OpaAuthorizer unit tests — wiremock
 # answers HTTP on a random local port and lets us assert call counts.
 wiremock = "0.6"
-# Drives `benches/produce.rs` and `benches/fetch_session.rs`. The
-# `codspeed-criterion-compat` shim is the one `krabka-log` already uses:
-# criterion's API under a name that also runs under CodSpeed's instrumented
-# walltime.
+# Drives the six `[[bench]]` targets below. `codspeed-criterion-compat` is
+# criterion under another name: outside `cargo codspeed` it *is* criterion,
+# which is how it runs everywhere it runs today. CodSpeed's instrumented
+# walltime is not wired up and is not planned -- it needs an account and a
+# repository secret this project does not have -- so nothing here depends on
+# the shim being anything more than criterion.
+#
+# `ci.yml`'s `bench` job is what executes these, nightly and on demand, against
+# a criterion `main` baseline it carries between runs. `krabka-log` declares
+# the same dependency for `benches/log.rs`.
 criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
 
 # The produce hot path: `prepare_batch`'s verbatim-versus-owned decision and
