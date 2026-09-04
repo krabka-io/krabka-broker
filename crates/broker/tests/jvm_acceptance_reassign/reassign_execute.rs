@@ -220,8 +220,8 @@ use crate::{
 };
 
 /// Where the documents these cases write are placed inside the container.
-const TOPICS_JSON: &str = "/krabka-topics-to-move.json";
-const PLAN_JSON: &str = "/krabka-reassignment.json";
+const TOPICS_JSON: &str = "/tmp/krabka-topics-to-move.json";
+const PLAN_JSON: &str = "/tmp/krabka-reassignment.json";
 /// Where the SASL client configuration is mounted for the cluster cases.
 const CLIENT_PROPS: &str = "/client.properties";
 

@@ -90,7 +90,7 @@ const WIRE_CANCEL_REASSIGNMENT: i8 = 5;
 const POLICY_VIOLATION_EXCEPTION: &str = "org.apache.kafka.common.errors.PolicyViolationException";
 
 /// Where the tool's files are placed inside its container.
-const PLAN_JSON: &str = "/krabka-cancel-plan.json";
+const PLAN_JSON: &str = "/tmp/krabka-cancel-plan.json";
 const CLIENT_PROPS: &str = "/client.properties";
 
 /// The refusal the gate words when no proposal covers the request.

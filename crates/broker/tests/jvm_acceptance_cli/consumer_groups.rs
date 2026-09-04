@@ -303,7 +303,7 @@ const RESET_CURRENT: i64 = 3;
 
 /// Where the `--from-file` and `--execute` cases put their offsets document
 /// inside whichever container the tool runs in.
-const OFFSETS_CSV: &str = "/krabka-offsets.csv";
+const OFFSETS_CSV: &str = "/tmp/krabka-offsets.csv";
 
 /// One `kafka-consumer-groups` invocation against `side`.
 fn consumer_groups(side: &Side<'_>, args: &[&str]) -> CliRun {

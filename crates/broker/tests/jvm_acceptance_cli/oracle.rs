@@ -409,6 +409,12 @@ impl Oracle {
     ///
     /// `docker cp` would need a host tempfile and a second process; the shell
     /// redirect needs neither, and the image has a shell.
+    ///
+    /// `path` has to be somewhere the image's own user can write, which means
+    /// `/tmp`: `apache/kafka` does not run as root, so a path at the container
+    /// root fails with `Permission denied`. A file the container should see at
+    /// a fixed path outside `/tmp` is a bind mount on `docker run` instead,
+    /// which the directory's permissions do not apply to.
     pub(crate) fn put_file(&self, path: &str, contents: &str) {
         let mut command = Command::new("docker");
         command

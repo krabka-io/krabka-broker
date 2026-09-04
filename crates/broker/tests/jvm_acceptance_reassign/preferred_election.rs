@@ -217,7 +217,7 @@ const SELECTOR_PARTITIONS: i32 = 3;
 
 /// Where the `--path-to-json-file` document is placed inside whichever
 /// container the tool runs in.
-const ELECTION_JSON: &str = "/krabka-election.json";
+const ELECTION_JSON: &str = "/tmp/krabka-election.json";
 
 /// Every partition of [`SELECTOR_TOPIC`].
 fn selector_partitions() -> Vec<TopicPartition> {

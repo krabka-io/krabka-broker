@@ -175,7 +175,7 @@ const ACL_TXN_ID: &str = "krabka-acl-shorthand-txn";
 const DENIED_HOST: &str = "10.11.12.13";
 
 /// Where the SASL client configuration is mounted for krabka's half.
-const CONTAINER_PROPS: &str = "/client.properties";
+const CONTAINER_PROPS: &str = "/tmp/client.properties";
 
 /// One `kafka-acls` invocation on `side`.
 ///
