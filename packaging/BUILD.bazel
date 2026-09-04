@@ -24,12 +24,15 @@ load("@rules_img//img:load.bzl", "image_load")
 load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
 load("@rules_img//img:push.bzl", "image_push")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel:krabka_image.bzl", "KRABKA_IMAGE_TAG")
 
 package(default_visibility = ["//visibility:public"])
 
 # What `image_load` tags the image with locally, and what the Docker-driven test
-# then runs. A push supplies its own tags; see `push` below.
-IMAGE_TAG = "docker.io/krabka-io/krabka-broker:dev"
+# then runs. A push supplies its own tags; see `push` below. The constant lives
+# in //bazel:krabka_image.bzl because //bazel/defs.bzl needs the same string for
+# the Rust suites that run brokers out of this image.
+IMAGE_TAG = KRABKA_IMAGE_TAG
 
 # The one architecture this image is built and published for. `base.apko.yaml`
 # names it too, and `image_binaries_test` holds the layers to it, so a broker
@@ -142,6 +145,18 @@ image_load(
     name = "image_load",
     image = ":image",
     tag = IMAGE_TAG,
+)
+
+# The tarball `image_load` produces, in the same shape //bazel/images gives the
+# Kafka images: what a container-driven Rust suite consumes so
+# //bazel:docker_test.sh can `docker load` the broker image before the suite
+# runs. `target_compatible_with` on `image` propagates through both rules, so
+# off x86_64 a suite that names this tarball is skipped rather than built.
+filegroup(
+    name = "image_tar",
+    srcs = [":image_load"],
+    output_group = "tarball",
+    tags = ["docker"],
 )
 
 # The same binaries, run through a Docker daemon under the base image's own

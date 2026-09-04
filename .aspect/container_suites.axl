@@ -25,6 +25,13 @@ _BROKER_MANIFEST_PATHS = ["crates/broker/BUILD.bazel", "crates/broker/Cargo.toml
 # changes what the suite asserts about it.
 _IMAGE_PATH_PREFIXES = ["packaging/"]
 
+# The broker suites that run brokers as processes out of that same image, and so
+# have to be selected by a `packaging/` change for the same reason the image
+# suite is. `//crates/broker:BUILD.bazel` names them in `krabka_image`; they are
+# named here too because the rdeps query cannot see the image's layer list from
+# a broker source file any better than it can from `packaging/`.
+_IMAGE_SUITES = ["process_kill_durability"]
+
 # Rust is one Bazel target at crate granularity, so rdeps turns every broker
 # source change into every broker container suite. These are the narrower
 # feature contracts worth gating on a PR; the complete matrix remains nightly.
@@ -130,6 +137,16 @@ _FEATURE_RULES = [
         "crates/broker/src/raft_handshake",
         "crates/broker/src/wal/quorum",
     ], ["jvm_static_quorum_spike"]),
+    # What survives a kill is decided in the log crate: the fsync policy, the
+    # segment write path and the open-time tail recovery that reads back what
+    # the write path left. `process_kill_durability` is the only suite that
+    # exercises any of the three against a process that really died.
+    ([
+        "crates/log/src/config.rs",
+        "crates/log/src/recovery.rs",
+        "crates/log/src/segment",
+        "crates/log/src/log/open.rs",
+    ], ["process_kill_durability"]),
     ([
         "crates/broker/src/handlers/describe_configs/resources/broker_logger",
         "crates/broker/src/handlers/incremental_alter_configs/broker_logger_scope",
@@ -222,6 +239,8 @@ def _broker_suites(available_targets):
 
 def _mapped_suites():
     suites = {"jvm_consumer_group_next_gen": True}
+    for suite in _IMAGE_SUITES:
+        suites[suite] = True
     for _, selected in _FEATURE_RULES:
         for suite in selected:
             suites[suite] = True
@@ -250,6 +269,8 @@ def _select(paths, available_targets):
         if path:
             if _starts_with_any(path, _IMAGE_PATH_PREFIXES):
                 image = True
+                for suite in _IMAGE_SUITES:
+                    suites[suite] = True
 
             if path in _BROKER_MANIFEST_PATHS:
                 # The image suite is the only one that runs the broker and the
@@ -563,17 +584,31 @@ def _self_test():
         "the offline-dir failover path must select the unavailable-partitions differential",
     )
     _check(
-        _select(["packaging/BUILD.bazel"], available) == [_IMAGE_SUITE_TARGET],
-        "a change to the image's layer list must select the image suite",
+        _select(["packaging/BUILD.bazel"], available) ==
+        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability")]),
+        "a change to the image's layer list must select the image suite and the suites that run it",
     )
     _check(
-        _select(["packaging/image_binaries_test.sh"], available) == [_IMAGE_SUITE_TARGET],
-        "a change to what the image asserts must select the image suite",
+        _select(["packaging/image_binaries_test.sh"], available) ==
+        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability")]),
+        "a change to what the image asserts must select the image suite and the suites that run it",
     )
     _check(
         sorted(_select(["packaging/base.apko.yaml", "crates/broker/src/barrier/cut.rs"], available)) ==
-        sorted([_IMAGE_SUITE_TARGET, _target("jvm_barrier_markers")]),
+        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability"), _target("jvm_barrier_markers")]),
         "a change to both must select both",
+    )
+    _check(
+        _select(["crates/broker/tests/process_kill_durability.rs"], available) == [_target("process_kill_durability")],
+        "the kill suite's own source must select it, and nothing else",
+    )
+    _check(
+        _target("process_kill_durability") in _select(["crates/log/src/recovery.rs"], available),
+        "open-time tail recovery must select the suite that kills a broker and reopens its log",
+    )
+    _check(
+        _IMAGE_SUITE_TARGET not in _select(["crates/log/src/recovery.rs"], available),
+        "a log source edit must not build an image; it cannot change what the image carries",
     )
     _check(_select(["crates/broker/src/codes.rs"], available) == [], "unmapped broker source must select nothing")
     _check(

@@ -16,6 +16,7 @@ load("@rules_rs//rs:rust_test.bzl", "rust_test")
 load("@rules_rs_mutants//mutants:cargo_mutants_test.bzl", "cargo_mutants_test")
 load("@rules_rust//rust:defs.bzl", "rust_doc", "rust_doc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel:krabka_image.bzl", "KRABKA_IMAGE_TAG", "KRABKA_IMAGE_TAR")
 load("//tools/lint:linters.bzl", "clippy_test")
 
 def docker_test_exec_properties(recycling_key):
@@ -217,6 +218,7 @@ def crate_tests(
         compile_data = None,
         cpu_heavy = [],
         docker = {},
+        krabka_image = [],
         env = {},
         rustc_env = {},
         unit_rustc_env_files = [],
@@ -241,6 +243,12 @@ def crate_tests(
         `cargo::rustc-env` line from a build script. Unit tests alone, because
         the values a build produces are for `src/`; an integration suite that
         needs one can be given `rustc_env` instead.
+      krabka_image: test stems that additionally run brokers as real processes
+        out of //packaging's broker image. The image's tarball joins whatever
+        `docker` names for the stem, so //bazel:docker_test.sh loads it before
+        the suite starts, and `KRABKA_BROKER_IMAGE` tells the suite which tag to
+        `docker run`. A stem may appear here without a `docker` entry, which is
+        a suite that needs the broker image and no Kafka one.
       manual: test stems to tag `manual` — Docker-driven or otherwise
         non-hermetic suites, the Bazel equivalent of their `#[ignore]`.
       no_harness: test stems declared `harness = false` in Cargo.toml.
@@ -254,6 +262,13 @@ def crate_tests(
       unit_tags: extra tags for the unit-test target.
     """
     unit = lib + "_test"
+
+    # The stems that get a Docker wrapper: those with images to load, plus those
+    # that need only the broker image. One dict so the rest of this macro asks a
+    # single question.
+    docker_stems = dict(docker)
+    for stem in krabka_image:
+        docker_stems.setdefault(stem, [])
     integration_srcs = native.glob(["tests/*.rs"], allow_empty = True)
     integration_stems = [src[len("tests/"):-len(".rs")] for src in integration_srcs]
     rust_test(
@@ -293,7 +308,7 @@ def crate_tests(
             integration_tests = [
                 ":" + stem + "_test"
                 for stem in integration_stems
-                if stem not in manual and stem not in docker
+                if stem not in manual and stem not in docker_stems
             ],
             jobs = mutants_jobs,
             library = ":" + lib,
@@ -315,7 +330,7 @@ def crate_tests(
         stem = src[len("tests/"):-len(".rs")]
         rust_test(
             name = stem + "_test",
-            args = ["--ignored", "--test-threads=1"] if stem in manual or stem in docker else [],
+            args = ["--ignored", "--test-threads=1"] if stem in manual or stem in docker_stems else [],
             srcs = [src] + helpers,
             crate_root = src,
             aliases = _aliases(["deps", "dev_deps"]),
@@ -334,7 +349,7 @@ def crate_tests(
             # off as a clean run -- so the flakiness stays visible instead of
             # being hidden by a `#[ignore]`.
             flaky = stem in cpu_heavy,
-            tags = (["manual"] if stem in manual or stem in docker else []) +
+            tags = (["manual"] if stem in manual or stem in docker_stems else []) +
                    (["cpu:4", "timing-sensitive"] if stem in cpu_heavy else []),
             use_libtest_harness = stem not in no_harness,
             # One call, not two concatenated: an integration test links the
@@ -344,7 +359,7 @@ def crate_tests(
             deps = all_crate_deps(normal = True, normal_dev = True) + [":" + lib],
         )
 
-        if stem not in docker:
+        if stem not in docker_stems:
             continue
 
         # The same sources built again for the digest-pinned Docker wrapper.
@@ -367,7 +382,22 @@ def crate_tests(
             deps = all_crate_deps(normal = True, normal_dev = True) + [":" + lib],
         )
 
-        image_tars = ["//bazel/images:%s_tar" % image for image in docker[stem]]
+        image_tars = ["//bazel/images:%s_tar" % image for image in docker_stems[stem]]
+        krabka_broker_image = stem in krabka_image
+        if krabka_broker_image:
+            image_tars = image_tars + [KRABKA_IMAGE_TAR]
+
+        docker_env = dict(env)
+        docker_env["JAVA_HOME"] = "$(JAVABASE)"
+        docker_env["KRABKA_IMAGE_TARS"] = ":".join([
+            "$(rootpath %s)" % tar
+            for tar in image_tars
+        ])
+        if krabka_broker_image:
+            # Which tag the loaded broker image answers to. The suite carries the
+            # same string as its fallback, so this is only worth setting where it
+            # is true. See //bazel/krabka_image.bzl.
+            docker_env["KRABKA_BROKER_IMAGE"] = KRABKA_IMAGE_TAG
 
         # The Docker daemon is the one thing here Bazel cannot own, so it is the
         # one thing left undeclared: `no-sandbox` for the socket, and `external`
@@ -395,19 +425,23 @@ def crate_tests(
             toolchains = ["@rules_java//toolchains:current_java_runtime"],
             # JAVA_HOME points the wrapper at the hermetic JDK, which it puts on
             # PATH. `jvm_tiered_storage` shells out to `java` directly.
-            env = dict(env, JAVA_HOME = "$(JAVABASE)", KRABKA_IMAGE_TARS = ":".join([
-                "$(rootpath %s)" % tar
-                for tar in image_tars
-            ])),
+            env = docker_env,
             tags = [
                 "docker",
                 "external",
                 "no-sandbox",
-            ],
+                # A suite that runs the broker image inherits
+                # //packaging:image_docker_test's constraint: on a BuildBuddy
+                # microVM `image_load` reports success and `docker run` then
+                # cannot find the image, because the loader and the daemon do
+                # not share an image store there. Unresolved, and the same wall
+                # this would hit under `--config=docker-rbe`, so keep these on
+                # the invoking machine. The Kafka-only suites are unaffected.
+            ] + (["no-remote-exec"] if krabka_broker_image else []),
             # The daemon the comment above calls the one thing Bazel cannot
             # own is the one thing a BuildBuddy executor can. See
             # `docker_test_exec_properties`.
             exec_properties = docker_test_exec_properties(
-                ",".join(sorted(docker[stem])),
+                ",".join(sorted(docker_stems[stem])),
             ),
         )

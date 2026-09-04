@@ -212,6 +212,12 @@ crate_tests(
     # exports for a `[[bin]]` in the same package. Bazel exports no such thing,
     # so the same name is set here from the binary's own target.
     env = {"CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)"},
+    # The one suite that runs brokers as real processes out of //packaging's
+    # image rather than as in-process handles, so a `docker kill -s KILL` is a
+    # kill of the thing that holds the log. It needs no Kafka image, so it names
+    # no `docker` entry: //bazel/defs.bzl gives it the same Docker wrapper on the
+    # strength of this list alone.
+    krabka_image = ["process_kill_durability"],
     lib = "broker",
     # Suites whose `#[ignore]`d cases drive real containers, and the images
     # each one starts. //bazel/images pins those by digest and //bazel/defs.bzl
