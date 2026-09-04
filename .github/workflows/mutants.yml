@@ -1,6 +1,11 @@
 name: mutants
 
 on:
+  schedule:
+    # Weekly, Sunday 07:00 UTC. Every crate below at its declared shard width
+    # is tens of runner-hours, so it runs on its own day rather than beside the
+    # 05:00 nightly in `ci.yml`.
+    - cron: "0 7 * * 0"
   workflow_dispatch:
     inputs:
       crate:
@@ -24,8 +29,6 @@ jobs:
     timeout-minutes: 20
     outputs:
       matrix: ${{ steps.prepare.outputs.matrix }}
-      target: ${{ steps.prepare.outputs.target }}
-      timeout: ${{ steps.prepare.outputs.timeout }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
@@ -53,25 +56,64 @@ jobs:
           SHARDS: ${{ inputs.shards }}
         run: |
           set -euo pipefail
-          [[ "${CRATE}" =~ ^[a-z0-9-]+$ ]]
-          (( SHARDS >= 1 && SHARDS <= 64 ))
-          target="//crates/${CRATE}:${CRATE}_mutants"
-          bazel query "${target}"
-          matrix="$(jq -nc --argjson total "${SHARDS}" \
-            '[range(0; $total) | {index: ., number: (. + 1), total: $total}]')"
-          echo "matrix=${matrix}" >>"${GITHUB_OUTPUT}"
-          echo "target=${target}" >>"${GITHUB_OUTPUT}"
-          if [[ "${CRATE}" == broker ]]; then
-            echo "timeout=300" >>"${GITHUB_OUTPUT}"
+          # The scheduled sweep is the gate of record, so it names the crates
+          # whose sweeps have to stay green rather than taking one from an
+          # input. Every name here has to emit `//crates/<name>:<name>_mutants`,
+          # which the `bazel query` below is what proves.
+          if [[ "${GITHUB_EVENT_NAME}" == schedule ]]; then
+            crates=(raft kraft-core log verified throttle audit authz broker)
           else
-            echo "timeout=60" >>"${GITHUB_OUTPUT}"
+            [[ "${CRATE}" =~ ^[a-z0-9-]+$ ]]
+            (( SHARDS >= 1 && SHARDS <= 64 ))
+            crates=("${CRATE}")
           fi
 
+          matrix='[]'
+          for crate in "${crates[@]}"; do
+            target="//crates/${crate}:${crate}_mutants"
+            bazel query "${target}"
+            if [[ "${GITHUB_EVENT_NAME}" == schedule ]]; then
+              # The width a crate declares for itself: `crate_tests`'
+              # `mutants_shards` reaches the rule as `shard_count`, and raft,
+              # log and broker each carry a number of their own. Reading it back
+              # off the target keeps the schedule from restating -- and then
+              # outgrowing -- what the BUILD file already says.
+              total="$(bazel query --output=build "${target}" \
+                | sed -ne 's/^  shard_count = \([0-9]*\),$/\1/p')"
+              [[ -n "${total}" ]]
+            else
+              total="${SHARDS}"
+            fi
+            # The per-crate timeout travels in the matrix entry rather than in
+            # a job output: one scheduled run carries every crate at once, and
+            # broker's sweep is the one that needs the hours.
+            if [[ "${crate}" == broker ]]; then
+              timeout=300
+            else
+              timeout=60
+            fi
+            matrix="$(jq -c \
+              --argjson prev "${matrix}" \
+              --arg crate "${crate}" \
+              --arg target "${target}" \
+              --argjson total "${total}" \
+              --argjson timeout "${timeout}" \
+              -n '$prev + [range(0; $total) | {
+                crate: $crate,
+                target: $target,
+                index: .,
+                number: (. + 1),
+                total: $total,
+                timeout: $timeout,
+              }]')"
+          done
+          echo "matrix=${matrix}" >>"${GITHUB_OUTPUT}"
+
   mutants:
-    name: ${{ inputs.crate }} · ${{ matrix.shard.number }}/${{ matrix.shard.total }}
+    name: ${{ matrix.shard.crate }} · ${{ matrix.shard.number }}/${{ matrix.shard.total }}
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(needs.prepare.outputs.timeout) }}
+    timeout-minutes: ${{ matrix.shard.timeout }}
     strategy:
       fail-fast: false
       matrix:
@@ -97,8 +139,204 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-      - run: |
+
+      # The pinned runner in `rules_rs_mutants` writes no `outcomes.json`,
+      # `caught.txt` or `missed.txt`: it enumerates mutants with
+      # `cargo-mutants --list --json` and then builds and tests each one itself,
+      # reporting through stdout alone -- one `N mutants: C caught, M missed, U
+      # unviable` line and one `MISSED <label>` line per survivor. The shard
+      # also runs under `bazel run`, so there is no `bazel-testlogs` entry to
+      # collect either. The log is therefore the artifact, with the survivor
+      # labels split out beside it so a red crate can be read without rerunning
+      # a sweep that costs an hour of a runner.
+      - name: sweep
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p shard
           aspect mutants-shard \
-            --target '${{ needs.prepare.outputs.target }}' \
+            --target '${{ matrix.shard.target }}' \
             --index '${{ matrix.shard.index }}' \
-            --count '${{ matrix.shard.total }}'
+            --count '${{ matrix.shard.total }}' 2>&1 | tee shard/sweep.log
+          code="${PIPESTATUS[0]}"
+          grep '^MISSED ' shard/sweep.log >shard/missed.txt || true
+          if [ "${code}" -eq 0 ]; then
+            echo green >shard/status
+          else
+            echo red >shard/status
+          fi
+          exit "${code}"
+
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-${{ matrix.shard.crate }}-${{ matrix.shard.number }}
+          path: shard/
+          retention-days: 90
+
+  # `ci.yml`'s `nightly-report` files and closes one `nightly-red` issue for the
+  # scheduled lanes of that workflow, and says a new scheduled lane should
+  # extend its `needs` rather than file on its own. A `needs` cannot cross
+  # workflows, and the alternative -- a `workflow_run` consumer -- would put the
+  # sweep's result behind a second run that reports under `ci.yml`'s name and
+  # can only read this run's conclusion through the API. So this job replicates
+  # the same minimal block instead, against the same label and the same body
+  # shape: one open `nightly-red` issue is the whole signal, and either
+  # workflow's red schedule reaches it.
+  report:
+    name: nightly report
+    needs: [prepare, mutants]
+    # `always()`: the point is to run when a shard failed, and a plain `needs`
+    # would skip this job exactly then.
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The workflow-level block is `contents: read` + `id-token: write`. This is
+    # the only job that reads artifacts, writes issues, or commits the baseline,
+    # so the grants stay here rather than widening every shard's token.
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: nightly-red
+      MATRIX: ${{ needs.prepare.outputs.matrix }}
+      DOC: docs/mutants-baseline.md
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A crate is green only when every shard the matrix gave it uploaded a
+      # `green` status: a shard that failed to start uploads nothing, and a
+      # missing status must not read as a pass. `gh run download` rather than
+      # `actions/download-artifact` for the same reason `ci.yml`'s `bench` lane
+      # gives -- it is preinstalled and this is one API call.
+      - id: outcomes
+        name: collect the shard outcomes
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh run download "${GITHUB_RUN_ID}" \
+            --dir artifacts --pattern 'mutants-*' || true
+          : >green.txt
+          : >red.txt
+          for crate in $(jq -r '[.[].crate] | unique | .[]' <<<"${MATRIX:-[]}"); do
+            expected="$(jq -r --arg c "${crate}" \
+              '[.[] | select(.crate == $c)] | length' <<<"${MATRIX}")"
+            actual="$(grep -lx green \
+              "artifacts/mutants-${crate}-"*/status 2>/dev/null | wc -l)"
+            echo "${crate}: ${actual}/${expected} shards green"
+            if [ "${actual}" -eq "${expected}" ]; then
+              echo "${crate}" >>green.txt
+            else
+              echo "${crate}" >>red.txt
+            fi
+          done
+          {
+            echo "green=$(paste -sd' ' green.txt)"
+            echo "red=$(paste -sd' ' red.txt)"
+          } >>"${GITHUB_OUTPUT}"
+
+      # `gh issue create --label` fails outright when the label does not exist,
+      # which would turn "a sweep is red" into "the reporting job is red" with
+      # nothing filed. `--force` makes it idempotent, and the description
+      # matches `ci.yml`'s so whichever workflow gets there first says the same
+      # thing.
+      - name: ensure the label exists
+        run: |
+          set -euo pipefail
+          gh label create "${LABEL}" \
+            --color b60205 \
+            --description 'A scheduled lane failed; a green scheduled run closes this' \
+            --force
+
+      # A red crate, or a `prepare` that never produced a matrix. `cancelled`
+      # is neither: a run somebody stopped part-way proves nothing either way.
+      - name: report the failure
+        if: steps.outcomes.outputs.red != '' || contains(needs.*.result, 'failure')
+        run: |
+          set -euo pipefail
+          crates="$(sed -e 's/^/- `/' -e 's/$/`/' red.txt)"
+          if [ -z "${crates}" ]; then
+            crates='- the sweep never started; see the run'
+          fi
+          body="$(printf '%s\n\nRed crates:\n\n%s\n\n%s\n\nRun: %s\n' \
+            "The scheduled \`${GITHUB_WORKFLOW}\` sweep failed." \
+            "${crates}" \
+            "Each shard uploads its log as \`mutants-<crate>-<shard>\`; the \`MISSED\` lines in \`missed.txt\` name the survivors. A survivor is either a test gap to close or, when the mutant is equivalent, an entry for \`.cargo/mutants.toml\` with a line saying why." \
+            "${RUN_URL}")"
+          number="$(gh issue list \
+            --label "${LABEL}" --state open --limit 1 \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create \
+              --label "${LABEL}" \
+              --title "Nightly ${GITHUB_WORKFLOW} is red" \
+              --body "${body}"
+          fi
+
+      - name: close the issue on a green run
+        if: ${{ steps.outcomes.outputs.red == '' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        run: |
+          set -euo pipefail
+          for number in $(gh issue list \
+            --label "${LABEL}" --state open --limit 100 \
+            --json number --jq '.[].number'); do
+            gh issue close "${number}" \
+              --reason completed \
+              --comment "The scheduled \`${GITHUB_WORKFLOW}\` sweep is green again: ${RUN_URL}"
+          done
+
+      # The last-green record. Rows for crates that were not green this run are
+      # carried across verbatim, so the file always says when each crate's
+      # sweep last passed rather than only what this run did.
+      - name: record the last green sweep
+        if: steps.outcomes.outputs.green != ''
+        run: |
+          set -euo pipefail
+          declare -A rows
+          while IFS= read -r line; do
+            crate="$(cut -d'|' -f2 <<<"${line}" | tr -d ' `')"
+            rows["${crate}"]="${line}"
+          done < <(grep '^| `' "${DOC}" || true)
+
+          {
+            sed -n '1,/^<!-- BEGIN last-green -->$/p' "${DOC}"
+            echo '| Crate | Last green sweep | Run |'
+            echo '| --- | --- | --- |'
+            for crate in $(jq -r '[.[].crate] | unique | .[]' <<<"${MATRIX}"); do
+              if grep -qx "${crate}" green.txt; then
+                printf '| `%s` | %s | [%s](%s) |\n' \
+                  "${crate}" "$(date -u +%F)" "${GITHUB_RUN_ID}" "${RUN_URL}"
+              else
+                printf '%s\n' "${rows[${crate}]:-| \`${crate}\` | never | -- |}"
+              fi
+            done
+            sed -n '/^<!-- END last-green -->$/,$p' "${DOC}"
+          } >"${DOC}.next"
+          mv "${DOC}.next" "${DOC}"
+
+          {
+            echo '## Last green sweep'
+            echo
+            sed -n '/^| Crate |/,/^$/p' "${DOC}"
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+          if git diff --quiet -- "${DOC}"; then
+            echo "no new green sweep to record"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qm "docs: record the last green mutation sweeps" -- "${DOC}"
+          # Best effort by design: the run's token can push only where branch
+          # protection lets it, and a rejected push must not turn a green sweep
+          # red. The table in the job summary above is then the record, which
+          # `docs/mutants-baseline.md` says.
+          if ! git push -q origin "HEAD:${GITHUB_REF_NAME}"; then
+            echo "::warning::could not push ${DOC}; the job summary carries this run's table"
+          fi
