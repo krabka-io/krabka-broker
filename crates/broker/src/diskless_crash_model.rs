@@ -19,6 +19,15 @@ const APPENDERS: usize = 2;
 const MAX_DEPTH: usize = 24;
 const TARGET_STATE_COUNT: usize = 100_000;
 
+// The exact unique-state count of the exhaustive BFS over this model.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES: usize = 17_701;
+
 const WITNESS_KRAFT_FSYNC_GAP: u8 = 1 << 0;
 const WITNESS_PUT_BEFORE_INDEX: u8 = 1 << 1;
 const WITNESS_MID_FSYNC: u8 = 1 << 2;
@@ -310,6 +319,11 @@ fn run() {
     );
     assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
     assert2::assert!(checker.state_count() < TARGET_STATE_COUNT, "truncated");
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == PINNED_UNIQUE_STATES,
+        "unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
