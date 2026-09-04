@@ -102,17 +102,17 @@ impl QuorumStateMachine {
         if !pre_vote && candidate_epoch > self.state.leader_epoch {
             self.transition_to_unattached(candidate_epoch, now, &mut actions);
         }
-        let _up_to_date = Self::log_is_up_to_date(log, cand_log);
+        let up_to_date = Self::log_is_up_to_date(log, cand_log);
         let granted = if pre_vote {
             // Non-binding: grant if log is up to date and we don't already
             // follow a leader in this (or a higher) epoch.
-            self.state.leader_id.is_none()
+            up_to_date && self.state.leader_id.is_none()
         } else {
             let not_voted_other = match self.state.voted_key {
                 None => true,
                 Some(key) => self.same_voter(key, candidate_key),
             };
-            not_voted_other && self.state.leader_id.is_none()
+            up_to_date && not_voted_other && self.state.leader_id.is_none()
         };
         if granted && !pre_vote {
             // Binding: persist the vote, become Voted.

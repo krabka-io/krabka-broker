@@ -254,6 +254,23 @@ hardware, sink durability, explicit operator recovery of poisoned replay, and
 behavior beyond the stated bounds remain outside the model. Adapter tests cover
 malformed, missing, stale, and committed poison plus loss-counter saturation.
 
+The `KRaft` model runs the production `QuorumStateMachine` for every node over
+an unordered network. Its `three_voters_append` config checks leader
+completeness under a stale majority: three voters, one client append, leader
+epochs through two, at most two in-flight messages, and at most one crashed node
+at a time, whose omission model drops that node's traffic and so leaves it
+behind the committed prefix. The pinned run reached 445,169 unique states and
+generated 1,650,634 transitions at depth 42, below its depth-60 and
+6,000,000-state truncation guards. The `leader_completeness` property requires
+every node that believes it leads epoch `e` to hold each entry committed in an
+epoch at or below `e`, stamped with the epoch it committed under; the
+`stale_candidate_refused` witness requires a refused vote response actually
+addressed to a candidate whose log end is behind the voter's, which is what
+would disappear if the config stopped reaching a stale-majority election.
+Removing the log-recency conjunct from `handle_vote_request` makes this config
+fail. Wire encoding, disk durability, wall-clock timing, volatile-state loss on
+restart, and behavior beyond the stated bounds remain outside the model.
+
 The share-group membership model drives the production [`ShareGroupState`](../crates/broker/src/coordinator/unified/share/state.rs) join, leave, and timeout transitions; the production [assignment reconciler](../crates/broker/src/coordinator/unified/share/actor/assignment.rs) and share assignor; the shared member-epoch fence; and the production [snapshot/apply replay adapters](../crates/broker/src/coordinator/unified/share/actor/seed.rs). It exhaustively checks two member IDs, one topic with one or two partitions, four logical timeout ticks, epochs through five, and one crash/replay in every reachable ordering. The pinned run reached 23,084 unique states and generated 164,361 transitions at depth 16, below its depth-64 and one-million-state truncation guards. Properties require unique `(member, topic, partition)` coordinates, bounded assignments for members at the target epoch, nonnegative fenced epochs, and exact durable replay projection; reachability witnesses cover unknown-member, stale, and forward heartbeat rejection, timeout, metadata reassignment, replay, and two-member membership. Cross-member partition overlap remains intentional KIP-932 behavior when members outnumber partitions. Request decoding, actor mailbox delivery, offsets-log append durability, cache publication, wall-clock scheduling, metadata snapshot consistency, and share-state persister I/O remain outside the model. A failed offsets-log append is covered by an adapter test: the actor returns `COORDINATOR_LOAD_IN_PROGRESS`, publishes no partial batch, and relies on durable replay after restart.
 
 The streams-group reconciliation model drives the production [`StreamsGroupState`](../crates/broker/src/coordinator/unified/streams/state.rs) membership, timeout, target-installation, and cooperative active-task transitions; the production [streams assignor](../crates/broker/src/coordinator/unified/streams/actor/reconciliation.rs); the shared member-epoch fence; and the production [snapshot/apply replay adapters](../crates/broker/src/coordinator/unified/streams/actor/records.rs). It exhaustively checks two member IDs, one subtopology with one or two tasks, three logical timeout ticks, topology epochs through two, group epochs through five, and one crash/replay in every reachable ordering. The pinned run reached 43,256 unique states and generated 186,829 transitions at depth 16, below its depth-64 and one-million-state truncation guards. Properties require exclusive current and target active-task ownership, topology-valid assignments, nonnegative fenced epochs, coherent group phases, and exact durable replay projection. Reachability witnesses cover unknown-member, stale, and forward heartbeat rejection; timeout; topology growth; replay; withheld ownership; release; and two-member membership. Request decoding, actor mailbox delivery, offsets-log append durability, cache publication, wall-clock scheduling, metadata-source snapshots, and internal-topic I/O remain outside the model. Adapter tests cover malformed reports, epoch exhaustion, retry, stale and forward epochs, and failed log appends. A failed append returns `COORDINATOR_LOAD_IN_PROGRESS`, publishes no partial batch, and leaves recovery to durable replay after the actor restarts.
