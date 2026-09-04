@@ -25,6 +25,8 @@ mod append;
 mod compaction;
 mod control;
 mod delivery;
+#[cfg(test)]
+mod faults;
 mod open;
 mod read;
 mod stamp;

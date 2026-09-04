@@ -5,14 +5,13 @@
 use std::{
     collections::HashMap,
     fs::OpenOptions,
-    io::Write,
     path::{Path, PathBuf},
 };
 
 use bytes::{Bytes, BytesMut};
 use krabka_ids::{Offset, ProducerId};
 use krabka_protocol::records::RecordBatch;
-use krabka_units::prelude::{ByteSize, Time, TimeExt};
+use krabka_units::prelude::{Time, TimeExt};
 use tracing::instrument;
 
 use super::{
@@ -89,13 +88,13 @@ pub struct RewriteRetention {
     err,
 )]
 pub fn rewrite_segments(
+    io: &dyn crate::io::LogIo,
     dir: &Path,
     segments: &[&Segment],
     offset_map: &HashMap<Bytes, Offset>,
     txn_meta: &CleanedTransactionMetadata,
     retention: RewriteRetention,
     active_producers: &HashMap<ProducerId, Offset>,
-    _index_interval: ByteSize,
 ) -> Result<RewriteOutput, LogError> {
     // The Creusot-verified retain kernel is stated over integer milliseconds,
     // and the horizon it computes is stamped into an on-disk `base_timestamp`,
@@ -118,7 +117,7 @@ pub fn rewrite_segments(
     // and let Segment::open populate them via tail-scan in the recovery
     // promotion path. (Sparse indexes are derivable from the .log; an
     // empty index is correct and small.)
-    let mut log_file = OpenOptions::new()
+    let log_file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
@@ -219,7 +218,7 @@ pub fn rewrite_segments(
             };
             let mut buf = BytesMut::with_capacity(out_batch.encoded_len());
             out_batch.encode(&mut buf)?;
-            log_file.write_all(&buf)?;
+            crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, &log_file, &buf)?;
             let batch_last = Offset(out_batch.base_offset + i64::from(out_batch.last_offset_delta));
             if batch_last > last_kept_offset {
                 last_kept_offset = batch_last;
@@ -249,14 +248,14 @@ pub fn rewrite_segments(
 
         let mut buf = BytesMut::with_capacity(out_batch.encoded_len());
         out_batch.encode(&mut buf)?;
-        log_file.write_all(&buf)?;
+        crate::io::write_all(io, crate::io::IoTarget::CompactionSwap, &log_file, &buf)?;
 
         let batch_last = Offset(out_batch.base_offset + i64::from(out_batch.last_offset_delta));
         if batch_last > last_kept_offset {
             last_kept_offset = batch_last;
         }
     }
-    log_file.sync_all()?;
+    io.sync_file(crate::io::IoTarget::CompactionSwap, &log_file)?;
 
     // Rebuild the survivor `.txnindex`: carry forward aborted-txn entries
     // whose aborted data still partially survives. Producers whose data is

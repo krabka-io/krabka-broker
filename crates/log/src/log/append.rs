@@ -378,7 +378,7 @@ impl Log {
         // describes. Flush the segment first, then fsync and publish the
         // boundary snapshot.
         self.active_segment_flush()?;
-        producer_snapshot::write(&self.dir, new_base, &self.producer_state)?;
+        producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
         let mut old = self
             .active
             .take()

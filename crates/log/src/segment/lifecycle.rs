@@ -78,6 +78,8 @@ impl Segment {
     }
 
     pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn crate::io::LogIo>) {
+        self.offset_index.set_io(io.clone());
+        self.time_index.set_io(io.clone());
         self.io = io;
     }
 

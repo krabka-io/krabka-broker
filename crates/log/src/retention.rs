@@ -10,7 +10,25 @@ use krabka_ids::Offset;
 use krabka_units::prelude::TimeExt as _;
 use tracing::instrument;
 
-use crate::{config::LogConfig, error::LogError, name, segment::Segment};
+use crate::{
+    config::LogConfig,
+    error::LogError,
+    io::{IoTarget, LogIo},
+    name,
+    segment::Segment,
+};
+
+/// Suffix a segment file wears between the moment retention claims it and the
+/// moment it is unlinked, mirroring Kafka's `.deleted` rename.
+pub(crate) const DELETED_SUFFIX: &str = "deleted";
+
+/// The tombstone name for `path`: the same name with `.deleted` appended.
+pub(crate) fn deleted_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".");
+    name.push(DELETED_SUFFIX);
+    std::path::PathBuf::from(name)
+}
 
 pub fn now_ms(now: SystemTime) -> i64 {
     let millis = now
@@ -42,18 +60,56 @@ pub fn time_based_evict(sealed: &[&Segment], config: &LogConfig, now: SystemTime
     out
 }
 
+/// Remove one segment's whole file set: the `.log`, both sparse indexes, and
+/// the optional `.txnindex` and `.stampindex` sidecars.
+///
+/// Every file is first renamed to a `<name>.deleted` tombstone and only then
+/// unlinked, the way Kafka's `deleteSegments` renames before it deletes. A
+/// failure part-way through therefore leaves names that say what they are: a
+/// tombstone nothing reads, or a file still under its live name. Neither is a
+/// segment whose `.log` is gone and whose sidecars are invisible to the
+/// `.log`-keyed directory scan in [`crate::Log::open`], and
+/// [`crate::recovery::deleted_orphan_recover`] reclaims both on the next open.
+///
+/// # Errors
+/// Returns the first rename or unlink error. A missing file is not one: a
+/// segment need not carry either optional sidecar, and a retried deletion
+/// finds part of the set already gone.
 #[instrument(level = "debug", skip_all, fields(dir = %dir.display(), base_offset = base_offset.0), err)]
-pub fn delete_segment_files(dir: &Path, base_offset: Offset) -> Result<(), LogError> {
-    std::fs::remove_file(name::log_path(dir, base_offset.0))?;
-    std::fs::remove_file(name::index_path(dir, base_offset.0))?;
-    std::fs::remove_file(name::timeindex_path(dir, base_offset.0))?;
-    remove_optional(name::txnindex_path(dir, base_offset.0))?;
-    remove_optional(name::stampindex_path(dir, base_offset.0))?;
+pub fn delete_segment_files(
+    io: &dyn LogIo,
+    dir: &Path,
+    base_offset: Offset,
+) -> Result<(), LogError> {
+    let mut tombstones = Vec::with_capacity(5);
+    for path in [
+        name::log_path(dir, base_offset.0),
+        name::index_path(dir, base_offset.0),
+        name::timeindex_path(dir, base_offset.0),
+        name::txnindex_path(dir, base_offset.0),
+        name::stampindex_path(dir, base_offset.0),
+    ] {
+        let tombstone = deleted_path(&path);
+        match io.rename(IoTarget::SegmentDeletion, &path, &tombstone) {
+            Ok(()) => tombstones.push(tombstone),
+            // Absent under its live name: either this segment never had the
+            // sidecar, or an earlier attempt already renamed it.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if tombstone.exists() {
+                    tombstones.push(tombstone);
+                }
+            }
+            Err(error) => return Err(LogError::Io(error)),
+        }
+    }
+    for tombstone in tombstones {
+        remove_optional(io, &tombstone)?;
+    }
     Ok(())
 }
 
-fn remove_optional(path: std::path::PathBuf) -> Result<(), LogError> {
-    match std::fs::remove_file(path) {
+fn remove_optional(io: &dyn LogIo, path: &Path) -> Result<(), LogError> {
+    match io.remove_file(IoTarget::SegmentDeletion, path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(LogError::Io(error)),
@@ -67,6 +123,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::io::FileIo;
 
     /// A sealed segment carrying `n` two-record batches, timestamps from
     /// `ts_base`.
@@ -139,7 +196,7 @@ mod tests {
             std::fs::write(path, []).unwrap();
         }
 
-        delete_segment_files(dir.path(), base).unwrap();
+        delete_segment_files(&FileIo, dir.path(), base).unwrap();
 
         assert2::assert!(paths.iter().all(|path| !path.exists()));
     }
@@ -156,7 +213,55 @@ mod tests {
             std::fs::write(path, []).unwrap();
         }
 
-        delete_segment_files(dir.path(), base).unwrap();
+        delete_segment_files(&FileIo, dir.path(), base).unwrap();
+    }
+
+    /// Every file is renamed to its `.deleted` tombstone before any of them is
+    /// unlinked, so a failure part-way through leaves names that say what they
+    /// are rather than a `.log` that is gone and sidecars nothing can see.
+    #[test]
+    fn deletion_renames_every_file_to_a_tombstone_before_it_unlinks_any() {
+        /// Lets every rename through and refuses every unlink.
+        #[derive(Debug)]
+        struct NoUnlink;
+
+        impl LogIo for NoUnlink {
+            fn remove_file(&self, _target: IoTarget, _path: &Path) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let base = Offset(9);
+        let live = [
+            name::log_path(dir.path(), base.0),
+            name::index_path(dir.path(), base.0),
+            name::timeindex_path(dir.path(), base.0),
+            name::stampindex_path(dir.path(), base.0),
+        ];
+        for path in &live {
+            std::fs::write(path, b"bytes").unwrap();
+        }
+
+        let error = delete_segment_files(&NoUnlink, dir.path(), base)
+            .expect_err("the refused unlink must be reported");
+
+        check!(matches!(error, LogError::Io(_)));
+        for path in &live {
+            check!(!path.exists(), "renamed away: {}", path.display());
+            check!(
+                deleted_path(path).exists(),
+                "tombstoned: {}",
+                deleted_path(path).display()
+            );
+        }
+
+        // The retry finds the live names gone and the tombstones present, and
+        // finishes the job from there.
+        delete_segment_files(&FileIo, dir.path(), base).unwrap();
+        for path in &live {
+            check!(!deleted_path(path).exists());
+        }
     }
 
     #[test]
@@ -165,6 +270,6 @@ mod tests {
         let path = dir.path().join("not-a-file");
         std::fs::create_dir(&path).unwrap();
 
-        assert2::assert!(let Err(LogError::Io(_)) = remove_optional(path));
+        assert2::assert!(let Err(LogError::Io(_)) = remove_optional(&FileIo, &path));
     }
 }

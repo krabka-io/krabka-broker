@@ -28,6 +28,7 @@ mod test_support;
 #[derive(Debug)]
 pub struct LeaderEpochCheckpoint {
     path: PathBuf,
+    io: std::sync::Arc<dyn crate::io::LogIo>,
     entries: Vec<EpochEntry>,
 }
 
@@ -38,6 +39,15 @@ pub const UNDEFINED_EPOCH: LeaderEpoch = LeaderEpoch(-1);
 pub const UNDEFINED_OFFSET: Offset = Offset(-1);
 
 impl LeaderEpochCheckpoint {
+    /// Route this checkpoint's writes, syncs and renames through `io`.
+    ///
+    /// Only [`crate::Log::test_set_io`] calls this: the checkpoint is opened
+    /// with the real filesystem and stays there unless a test replaces it.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn crate::io::LogIo>) {
+        self.io = io;
+    }
+
     #[must_use]
     pub fn latest_epoch(&self) -> Option<LeaderEpoch> {
         self.entries.iter().map(|e| e.epoch).max()

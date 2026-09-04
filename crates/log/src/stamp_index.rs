@@ -11,7 +11,7 @@
 //! retained and truncated with its segment. It never leaves the broker on any
 //! client-facing API. This mirrors the `.txnindex` sidecar pattern.
 
-use std::{fs::OpenOptions, io::Write, path::PathBuf};
+use std::{fs::OpenOptions, path::PathBuf, sync::Arc};
 
 use krabka_ids::Offset;
 use tracing::instrument;
@@ -20,7 +20,10 @@ use zerocopy::{
     byteorder::{I64, U64},
 };
 
-use crate::error::LogError;
+use crate::{
+    error::LogError,
+    io::{IoTarget, LogIo},
+};
 
 const ENTRY_BYTES: usize = 24;
 
@@ -48,6 +51,7 @@ const _: [(); ENTRY_BYTES] = [(); std::mem::size_of::<StampEntryRaw>()];
 #[derive(Debug)]
 pub struct StampIndex {
     path: PathBuf,
+    io: Arc<dyn LogIo>,
     entries: Vec<StampEntry>,
 }
 
@@ -107,7 +111,11 @@ impl StampIndex {
             Err(e) => return Err(LogError::Io(e)),
         }
         tracing::Span::current().record("entries", entries.len());
-        Ok(Self { path, entries })
+        Ok(Self {
+            path,
+            io: crate::io::file_io(),
+            entries,
+        })
     }
 
     /// Append one stamped-range entry.
@@ -161,7 +169,7 @@ impl StampIndex {
                 self.path.display()
             )));
         };
-        let mut f = OpenOptions::new()
+        let f = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
@@ -171,8 +179,11 @@ impl StampIndex {
             last_offset: I64::new(entry.last_offset.0),
             stamp: U64::new(entry.stamp),
         };
-        f.write_all(raw.as_bytes()).map_err(LogError::Io)?;
-        f.sync_data().map_err(LogError::Io)?;
+        crate::io::write_all(&*self.io, IoTarget::StampIndex, &f, raw.as_bytes())
+            .map_err(LogError::Io)?;
+        self.io
+            .sync_file(IoTarget::StampIndex, &f)
+            .map_err(LogError::Io)?;
         self.entries.insert(position, entry);
         Ok(())
     }
@@ -248,7 +259,7 @@ impl StampIndex {
     }
 
     fn rewrite(&self, entries: &[StampEntry]) -> Result<(), LogError> {
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
@@ -260,9 +271,17 @@ impl StampIndex {
                 last_offset: I64::new(entry.last_offset.0),
                 stamp: U64::new(entry.stamp),
             };
-            file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
+            crate::io::write_all(&*self.io, IoTarget::StampIndex, &file, raw.as_bytes())
+                .map_err(LogError::Io)?;
         }
-        file.sync_data().map_err(LogError::Io)
+        self.io
+            .sync_file(IoTarget::StampIndex, &file)
+            .map_err(LogError::Io)
+    }
+
+    /// Route this sidecar's writes and syncs through `io`.
+    pub(crate) fn set_io(&mut self, io: Arc<dyn LogIo>) {
+        self.io = io;
     }
 
     #[must_use]

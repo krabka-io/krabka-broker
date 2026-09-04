@@ -64,6 +64,10 @@ impl Log {
         // Heal any orphaned compaction `.swap` files before
         // we scan the directory for segments.
         crate::recovery::swap_orphan_recover(&dir)?;
+        // …and reclaim what an interrupted segment deletion left: `.deleted`
+        // tombstones, and sidecars whose `.log` the scan below can no longer
+        // see. Both are invisible to every later pass otherwise.
+        crate::recovery::deleted_orphan_recover(&FileIo, &dir)?;
 
         let mut base_offsets: Vec<i64> = Vec::new();
         for entry in fs::read_dir(&dir)? {
@@ -214,7 +218,7 @@ impl Log {
                 // out-of-range value on disk. It is inert against this log,
                 // but appends move the log end, and the next open would find
                 // the stale value back in range and hide live records.
-                log_start_offset_checkpoint::write(&log.dir, effective)?;
+                log_start_offset_checkpoint::write(&*log.io, &log.dir, effective)?;
             }
         }
         // Recovery needs no durable watermark: the schedule is in the records,
@@ -277,7 +281,7 @@ impl Log {
                 self.apply_recovered_batch_state(batch)?;
                 let covered: Vec<_> = boundaries.range(..=advanced_to).copied().collect();
                 for boundary in covered {
-                    producer_snapshot::write(&self.dir, boundary, &self.producer_state)?;
+                    producer_snapshot::write(&*self.io, &self.dir, boundary, &self.producer_state)?;
                     let _ = boundaries.remove(&boundary);
                 }
             }

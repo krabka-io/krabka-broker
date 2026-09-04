@@ -3,7 +3,7 @@
 
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom},
     path::Path,
 };
 
@@ -12,7 +12,10 @@ use zerocopy::{
     BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, byteorder::U32,
 };
 
-use crate::error::LogError;
+use crate::{
+    error::LogError,
+    io::{IoTarget, LogIo},
+};
 
 /// 8 bytes per entry.
 pub const OFFSET_ENTRY_SIZE: usize = 8;
@@ -30,6 +33,7 @@ const _: [(); OFFSET_ENTRY_SIZE] = [(); std::mem::size_of::<OffsetEntryRaw>()];
 #[derive(Debug)]
 pub struct OffsetIndex {
     file: File,
+    io: std::sync::Arc<dyn LogIo>,
     /// Entries currently in the file. The constructor loads them into memory
     /// lazily.
     entries: Vec<(u32, u32)>,
@@ -74,7 +78,11 @@ impl OffsetIndex {
             entries.push((rel, pos));
         }
         tracing::Span::current().record("entries", entries.len());
-        Ok(Self { file, entries })
+        Ok(Self {
+            file,
+            io: crate::io::file_io(),
+            entries,
+        })
     }
 
     /// Append a new entry. The caller must keep the entries monotonic.
@@ -84,7 +92,7 @@ impl OffsetIndex {
             position: U32::new(position),
         };
         self.file.seek(SeekFrom::End(0))?;
-        self.file.write_all(raw.as_bytes())?;
+        crate::io::write_all(&*self.io, IoTarget::OffsetIndex, &self.file, raw.as_bytes())?;
         self.entries.push((relative_offset, position));
         Ok(())
     }
@@ -136,7 +144,14 @@ impl OffsetIndex {
 
     #[instrument(level = "debug", skip_all, err)]
     pub fn flush(&mut self) -> Result<(), LogError> {
-        self.file.sync_data().map_err(LogError::Io)
+        self.io
+            .sync_file(IoTarget::OffsetIndex, &self.file)
+            .map_err(LogError::Io)
+    }
+
+    /// Route this index's writes and syncs through `io`.
+    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn LogIo>) {
+        self.io = io;
     }
 }
 

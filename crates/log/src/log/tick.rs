@@ -101,14 +101,35 @@ impl Log {
             .map(Segment::base_offset)
             .collect();
 
-        let evict: HashSet<Offset> = to_evict.iter().copied().collect();
-        tracing::Span::current().record("evicted", evict.len());
-        self.segments.retain(|s| !evict.contains(&s.base_offset()));
-        self.sealed_txn_indexes
-            .retain(|base, _| !evict.contains(base));
-        self.stamp_indexes.retain(|base, _| !evict.contains(base));
+        // Unlink first, and forget only what actually left the disk. A failed
+        // unlink otherwise drops the segment from `self.segments` -- and from
+        // `Log::size`, and from the partition's disk gauge -- while its bytes
+        // stay on the filesystem with nothing left to retry them. Eviction is
+        // a prefix, so stopping at the first failure keeps it one.
+        let mut deleted: HashSet<Offset> = HashSet::with_capacity(to_evict.len());
+        let mut failure: Option<LogError> = None;
         for base in to_evict {
-            let _ = retention::delete_segment_files(&self.dir, base);
+            match retention::delete_segment_files(&*self.io, &self.dir, base) {
+                Ok(()) => {
+                    deleted.insert(base);
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        tracing::Span::current().record("evicted", deleted.len());
+        self.segments
+            .retain(|s| !deleted.contains(&s.base_offset()));
+        self.sealed_txn_indexes
+            .retain(|base, _| !deleted.contains(base));
+        self.stamp_indexes.retain(|base, _| !deleted.contains(base));
+        if let Some(error) = failure {
+            // The floor still follows whatever did come off disk, so the log
+            // start is refreshed before the failure is reported.
+            self.set_log_start_offset(self.first_local_offset())?;
+            return Err(error);
         }
         // Ordinary retention deletes the records outright: nothing holds them
         // any more, so the global floor follows the files off disk (Kafka's
