@@ -14,6 +14,7 @@ load("./check_crate_readmes_test.axl", "check_crate_readmes_tests")
 load("./check_creusot_packages_test.axl", "check_creusot_packages_tests")
 load("./check_creusot_skip_test.axl", "check_creusot_skip_tests")
 load("./check_design_docs_test.axl", "check_design_docs_tests")
+load("./check_images_test.axl", "check_images_tests")
 load("./check_kfcs_test.axl", "check_kfcs_tests")
 load("./check_metrics_contract_test.axl", "check_metrics_contract_tests")
 load("./check_mutants_config_test.axl", "check_mutants_config_tests")
@@ -32,6 +33,7 @@ SUITES = [
     check_creusot_packages_tests,
     check_creusot_skip_tests,
     check_design_docs_tests,
+    check_images_tests,
     check_kfcs_tests,
     check_metrics_contract_tests,
     check_mutants_config_tests,
