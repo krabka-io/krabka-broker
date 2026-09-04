@@ -28,10 +28,11 @@ use assert2::assert;
 use krabka_broker::metrics::{
     ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
     BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
-    CleanerFailureLabel, CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel,
-    DirectoryLabel, PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel,
-    ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
-    WalShardLabel, WalVoterLabel,
+    CleanerFailureLabel, CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
+    ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel,
+    QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
+    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
+    WalVoterLabel,
 };
 use krabka_metadata::BreakGlassAction as GatedAction;
 use prometheus_client::metrics::family::Family;

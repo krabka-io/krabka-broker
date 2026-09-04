@@ -23,7 +23,6 @@
 use std::sync::Arc;
 
 use assert2::{assert, check};
-
 use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_object_store::fault::{FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp};
 use krabka_remote_storage::{
@@ -200,7 +199,10 @@ async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series(
     let copied = copy_eligible(&tier, &tp(), 1, LeaderEpoch(0), exports.clone()).await;
 
     check!(copied == 0);
-    check!(store.attempts(StoreOp::Put) > 0, "the store was never asked");
+    check!(
+        store.attempts(StoreOp::Put) > 0,
+        "the store was never asked"
+    );
     let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
     check!(
         listed
@@ -334,7 +336,10 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
 /// far enough ahead that every segment is otherwise expired.
 #[tokio::test(flavor = "multi_thread")]
 async fn local_retention_keeps_segments_whose_copy_never_finished() {
-    let cases: [(&str, fn() -> Arc<FaultInjectingStore>, Time); 2] = [
+    /// One misbehaving store and the copy deadline it is driven under.
+    type Case = (&'static str, fn() -> Arc<FaultInjectingStore>, Time);
+
+    let cases: [Case; 2] = [
         (
             "throttled",
             throttling_store,
@@ -374,7 +379,10 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
 
         check!(removed == 0, "{case}");
         let log = partition.log.lock().expect("partition log mutex poisoned");
-        check!(log.local_log_start_offset() == exports[0].base_offset, "{case}");
+        check!(
+            log.local_log_start_offset() == exports[0].base_offset,
+            "{case}"
+        );
         check!(log.tierable_segments().len() == exports.len(), "{case}");
     }
 }

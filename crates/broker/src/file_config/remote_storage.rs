@@ -140,7 +140,9 @@ fn s3_config(s3: &FileRemoteStorageS3Config) -> krabka_remote_storage::S3Config 
         conditional_put: s3.conditional_put.unwrap_or(defaults.conditional_put),
         checksum_sha256: s3.checksum_sha256.unwrap_or(defaults.checksum_sha256),
         max_retries: s3.max_retries.unwrap_or(defaults.max_retries),
-        retry_timeout: s3.retry_timeout.map_or(defaults.retry_timeout, TimeExt::to_std),
+        retry_timeout: s3
+            .retry_timeout
+            .map_or(defaults.retry_timeout, TimeExt::to_std),
         request_timeout: s3
             .request_timeout
             .map_or(defaults.request_timeout, TimeExt::to_std),

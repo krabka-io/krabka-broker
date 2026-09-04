@@ -87,7 +87,10 @@ pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<std::pat
             blocked.push(swap);
         }
     }
-    assert2::assert!(!blocked.is_empty(), "the fixture sealed no segment to block");
+    assert2::assert!(
+        !blocked.is_empty(),
+        "the fixture sealed no segment to block"
+    );
     blocked
 }
 

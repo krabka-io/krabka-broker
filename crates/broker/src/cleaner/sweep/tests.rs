@@ -9,11 +9,13 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
-use crate::cleaner::test_support::{
-    block_compaction_swap, compactable_partition, compactable_partition_in_registry,
-    compactable_partition_with_config, record_count,
+use crate::{
+    cleaner::test_support::{
+        block_compaction_swap, compactable_partition, compactable_partition_in_registry,
+        compactable_partition_with_config, record_count,
+    },
+    metrics::{CleanerFailureLabel, CleanerFailureReason},
 };
-use crate::metrics::{CleanerFailureLabel, CleanerFailureReason};
 
 #[tokio::test]
 async fn tick_all_compacts_only_local_leader_compact_topics() {
@@ -52,7 +54,14 @@ async fn tick_all_compacts_only_local_leader_compact_topics() {
         .collect();
 
     let metrics = BrokerMetrics::new();
-    tick_all(&registry, None, NodeId(7), &metrics, &mut UncleanablePartitions::default()).await;
+    tick_all(
+        &registry,
+        None,
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
 
     // A single `tick_all` is exactly one cleaner sweep, so the run counter
     // must advance by one. This pins `record_cleaner_run` against a no-op
@@ -97,7 +106,14 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
     );
 
     let metrics = BrokerMetrics::new();
-    tick_all(&registry, None, NodeId(7), &metrics, &mut UncleanablePartitions::default()).await;
+    tick_all(
+        &registry,
+        None,
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
     assert!(
         record_count(&partition) == before,
         "ratio must hold it back"
@@ -113,7 +129,14 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
             max_compaction_lag: Some(krabka_units::millis(1)),
             ..base
         });
-    tick_all(&registry, None, NodeId(7), &metrics, &mut UncleanablePartitions::default()).await;
+    tick_all(
+        &registry,
+        None,
+        NodeId(7),
+        &metrics,
+        &mut UncleanablePartitions::default(),
+    )
+    .await;
     assert!(
         record_count(&partition) < before,
         "the max lag must force a pass"

@@ -38,14 +38,20 @@ fn leader_site_drift_partitions(
 
 /// Spawns the timer that samples the broker's cluster gauges.
 ///
+/// `storage` is what this broker holds locally: the partitions it hosts and
+/// the health of the directories they sit in. They travel together because
+/// one pass samples both, and neither is reachable from the metadata image.
+///
 /// `observability` is the registry the sample is written to and the health
 /// state the broker-state gauge reads; they travel together because every
 /// sample writes the first from the second.
 pub(super) fn spawn_broker_gauge_updater(
-    partitions: Arc<PartitionRegistry>,
+    storage: (
+        Arc<PartitionRegistry>,
+        crate::log_dir_status::LogDirRegistry,
+    ),
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
-    log_dir_status: crate::log_dir_status::LogDirRegistry,
     node_id: krabka_metadata::NodeId,
     observability: (
         crate::metrics::BrokerMetrics,
@@ -54,6 +60,7 @@ pub(super) fn spawn_broker_gauge_updater(
     config: &BrokerConfig,
     shutdown: CancellationToken,
 ) {
+    let (partitions, log_dir_status) = storage;
     let (metrics, health) = observability;
     let poll_interval = config.gauge_poll_interval;
     let default_min_insync_replicas = config.default_min_insync_replicas;
@@ -308,10 +315,12 @@ mod tests {
         config.default_min_insync_replicas = 2;
         let shutdown = CancellationToken::new();
         spawn_broker_gauge_updater(
-            Arc::new(PartitionRegistry::new()),
+            (
+                Arc::new(PartitionRegistry::new()),
+                crate::log_dir_status::LogDirRegistry::default(),
+            ),
             Arc::new(fake_source(image, None)),
             Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
-            crate::log_dir_status::LogDirRegistry::default(),
             node_id,
             (metrics.clone(), None),
             &config,
@@ -342,13 +351,12 @@ mod tests {
         config.gauge_poll_interval = millis(1);
         let shutdown = CancellationToken::new();
         spawn_broker_gauge_updater(
-            Arc::new(PartitionRegistry::new()),
+            (Arc::new(PartitionRegistry::new()), log_dirs.clone()),
             Arc::new(fake_source(
                 krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
                 None,
             )),
             Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
-            log_dirs.clone(),
             krabka_metadata::NodeId(1),
             (metrics.clone(), None),
             &config,
