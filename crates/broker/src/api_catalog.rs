@@ -71,7 +71,7 @@ pub const FORWARDING_KEY: &str = "KIP-590";
 
 /// Where the out-of-scope decision for mixed quorums and JVM-side forwarding
 /// is written down. The generator checks that this line still says so.
-pub const OUT_OF_SCOPE_CITATION: &str = "crates/raft/src/lib.rs:52";
+pub const OUT_OF_SCOPE_CITATION: &str = "crates/raft/src/lib.rs:54";
 
 /// The per-KIP rows of `docs/KIP_MATRIX.md`, in ascending KIP order, with the
 /// non-KIP scope rows last.
@@ -644,7 +644,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_role_separated_admin.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "The broker side of KIP-590 is not needed: a Krabka broker reaches its controller over the krabka-private `SubmitChange` RPC (`crates/broker/src/metadata_source/observer_source.rs`), and a JVM controller is outside the compatibility target (crates/raft/src/lib.rs:52).",
+        note: "The broker side of KIP-590 is not needed: a Krabka broker reaches its controller over the krabka-private `SubmitChange` RPC (`crates/broker/src/metadata_source/observer_source.rs`), and a JVM controller is outside the compatibility target (crates/raft/src/lib.rs:54).",
     },
     KipAnnotation {
         key: "KIP-595",
@@ -1062,7 +1062,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/raft/src/lib.rs",
         tests: &[],
         clients: ClientEvidence::NotCovered,
-        note: "Outside the raft crate's compatibility target: crates/raft/src/lib.rs:52.",
+        note: "Outside the raft crate's compatibility target: crates/raft/src/lib.rs:54.",
     },
 ];
 // END KIP_ANNOTATIONS
