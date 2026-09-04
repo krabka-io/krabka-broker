@@ -750,15 +750,47 @@ def _span(versions):
         return "not advertised"
     return "%d-%d" % (versions["min"], versions["max"])
 
+# What the intent column says for a row that has nothing to explain.
+NO_INTENT = "--"
+
+def intent_cell(row):
+    """The intent column of one advertised-version row.
+
+    A `range_differs` row carries the sentence the differential suite recorded
+    for it; every other verdict carries none. Both halves are enforced rather
+    than tolerated: `DivergenceReport::build` panics on a range divergence with
+    no intent, and a fixture that reached here without one -- a hand edit, or a
+    regeneration against an older suite -- would render a blank cell that reads
+    as "no reason needed" instead of failing.
+    """
+    intent = row.get("intent")
+    if row["verdict"] == "range_differs":
+        if not intent:
+            fail(
+                "api key %d advertises a different range from the oracle and " % row["api_key"] +
+                "records no intent; regenerate divergence.json from a suite " +
+                "that fills `RANGE_DIVERGENCE_INTENTS`",
+            )
+        return intent
+    if intent:
+        fail(
+            "api key %d records a divergence intent but its verdict is %r" % (
+                row["api_key"],
+                row["verdict"],
+            ),
+        )
+    return NO_INTENT
+
 def api_versions_rows(report):
     """The advertised-version rows of a decoded `divergence.json`."""
     return "\n".join([
-        "| %s | %d | %s | %s | %s |" % (
+        "| %s | %d | %s | %s | %s | %s |" % (
             row["name"],
             row["api_key"],
             _span(row["krabka"]),
             _span(row["kafka"]),
             VERDICTS[row["verdict"]],
+            intent_cell(row),
         )
         for row in report["apis"]
     ])
@@ -919,8 +951,16 @@ account for every such row:
   client-telemetry exporter is configured, and this oracle configures none.
   krabka advertises them unconditionally.
 
-| API | Key | krabka | Kafka | Verdict |
-| :--- | ---: | :--- | :--- | :--- |
+A row whose ranges differ carries the reason krabka means to differ, recorded
+beside the ranges themselves in `RANGE_DIVERGENCE_INTENTS`
+([`divergence.rs`](../crates/broker/tests/api_versions_differential/divergence.rs)).
+The suite panics on a range divergence with no entry there, so a range that
+moves cannot reach this page unexplained. Every other verdict leaves the column
+empty: a matching range needs no reason, and the one-sided rows are accounted
+for by the two facts above.
+
+| API | Key | krabka | Kafka | Verdict | Intent |
+| :--- | ---: | :--- | :--- | :--- | :--- |
 {api_rows}
 
 The Bazel Docker lane supplies each image from a digest-pinned OCI repository.

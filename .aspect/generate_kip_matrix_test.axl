@@ -14,6 +14,7 @@ load(
     "docker_map",
     "image_for",
     "image_legend",
+    "intent_cell",
     "is_word_char",
     "kafka_image_keys",
     "kcat_evidence",
@@ -498,6 +499,15 @@ def _test_api_versions_rows(_ctx):
             "krabka": {"min": 0, "max": 13},
             "kafka": {"min": 0, "max": 13},
             "verdict": "same",
+            "intent": None,
+        },
+        {
+            "api_key": 1,
+            "name": "Fetch",
+            "krabka": {"min": 0, "max": 18},
+            "kafka": {"min": 4, "max": 18},
+            "verdict": "range_differs",
+            "intent": "Intended: krabka still serves the pre-v4 request shapes.",
         },
         {
             "api_key": 72,
@@ -505,14 +515,42 @@ def _test_api_versions_rows(_ctx):
             "krabka": {"min": 0, "max": 0},
             "kafka": None,
             "verdict": "krabka_only",
+            "intent": None,
         },
     ]}
     check_eq(
-        "a matching key and one the oracle never advertised",
+        "a matching key, a divergence carrying its intent, and a krabka-only key",
         api_versions_rows(report),
-        "| Produce | 0 | 0-13 | 0-13 | match |\n" +
-        "| GetTelemetrySubscriptions | 72 | 0-0 | not advertised | krabka only |",
+        "| Produce | 0 | 0-13 | 0-13 | match | -- |\n" +
+        "| Fetch | 1 | 0-18 | 4-18 | range differs | " +
+        "Intended: krabka still serves the pre-v4 request shapes. |\n" +
+        "| GetTelemetrySubscriptions | 72 | 0-0 | not advertised | krabka only | -- |",
     )
+
+def _test_intent_cell(_ctx):
+    check_eq(
+        "a range divergence renders its recorded sentence",
+        intent_cell({"api_key": 18, "verdict": "range_differs", "intent": "Intended: KIP-1242."}),
+        "Intended: KIP-1242.",
+    )
+    for verdict in ["same", "krabka_only", "kafka_only"]:
+        check_eq(
+            "a %s row has nothing to explain" % verdict,
+            intent_cell({"api_key": 3, "verdict": verdict, "intent": None}),
+            "--",
+        )
+
+def _test_intent_cell_rejects(_ctx):
+    for name, row in [
+        ("a range divergence with no intent", {"api_key": 1, "verdict": "range_differs", "intent": None}),
+        ("a range divergence with an empty intent", {"api_key": 1, "verdict": "range_differs", "intent": ""}),
+        ("an intent on a matching range", {"api_key": 3, "verdict": "same", "intent": "why?"}),
+    ]:
+        check_eq(
+            name + " is rejected",
+            check_fails(lambda row = row: intent_cell(row)),
+            True,
+        )
 
 def _test_kcat_evidence(_ctx):
     check_eq(
@@ -621,6 +659,8 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_librdkafka_clients,
     _test_log_contract_rows,
     _test_api_versions_rows,
+    _test_intent_cell,
+    _test_intent_cell_rejects,
     _test_kcat_evidence,
     _test_kip_row,
     _test_kip_row_without_evidence,
