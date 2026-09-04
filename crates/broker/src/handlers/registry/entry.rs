@@ -218,14 +218,6 @@ impl DispatchRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_plain(&self, api_key: ApiKeyCode) -> Option<PlainHandler> {
-        match self.get(api_key)?.kind {
-            DispatchKind::Plain(handler) => Some(handler),
-            _ => None,
-        }
-    }
-
-    #[cfg(test)]
     pub(crate) fn get_context(&self, api_key: ApiKeyCode) -> Option<ContextHandler> {
         match self.get(api_key)?.kind {
             DispatchKind::Context(handler) => Some(handler),

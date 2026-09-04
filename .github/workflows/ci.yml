@@ -805,6 +805,140 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --no-progress --root-dir "${{ github.workspace }}" --max-retries 3 --exclude '^http://schema-registry:8081' --exclude '^http://opa:8181' './**/*.md'
 
+  # The criterion benches, on the nightly schedule and on demand.
+  #
+  # Seven bench targets exist -- `produce`, `fetch_session`, `fetch_handoff`,
+  # `fetch_drain`, `perf_deferrals` and `metric_labels` in `//crates/broker`,
+  # `log` in `//crates/log` -- and until this job nothing ran them. The numbers
+  # quoted at the `PERF -- measured; decision: KEEP` sites and behind the
+  # `sendfile_min` default came from a developer's laptop and could not be
+  # reproduced from the repository; those comments now name this lane instead.
+  #
+  # Not on pull requests, and deliberately: a shared runner's wall clock moves
+  # by tens of percent between runs, so a per-pull-request number would be a
+  # coin flip dressed as a gate. What a pull request needs is that the benches
+  # still compile, and `cargo`'s `cargo clippy --workspace --all-targets`
+  # already type-checks every `[[bench]]` target -- adding
+  # `cargo bench --no-run` beside it would compile them a second time for the
+  # same answer. Regression *thresholds* on top of this baseline are a
+  # follow-up, not part of this lane.
+  #
+  # CodSpeed is the road not taken. Both manifests pull criterion in as
+  # `codspeed-criterion-compat`, whose comment promised an instrumented-walltime
+  # run that was never wired up, and wiring it needs a CodSpeed account and a
+  # `CODSPEED_TOKEN` secret this repository does not have -- a token reference
+  # that resolves to the empty string fails at the point of use, which is worse
+  # than not claiming it. So the shim runs as what it also is, plain criterion,
+  # and both manifests now say so. The comparison instead comes from criterion's
+  # own baseline: `--save-baseline main` loads the `main` baseline this job
+  # downloads from its last green run, prints the change against it, and writes
+  # the new samples back under the same name for the next run to read.
+  #
+  # `gh` rather than a fourth pinned action to move that directory, for the
+  # reason `nightly-report` gives: it is preinstalled and this is one API call.
+  bench:
+    name: criterion benches
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Seven suites of criterion's default 100 samples, plus the compile.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # `gh run download` reads the Actions API, which `contents: read` does
+      # not cover. Read-only: this job publishes its baseline through
+      # `upload-artifact`, not through the API.
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BASELINE: criterion-baseline
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/reclaim-disk
+
+      # Same three steps as `cargo`, for the same reason: `rust-toolchain.toml`
+      # is the single pin, so read the channel out of it rather than restating
+      # it here.
+      - id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -ne 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          test -n "${channel}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Its own namespace: the bench profile's artifacts are not the ones
+          # `cargo`'s clippy and nextest run leaves behind.
+          key: bench
+
+      # Best-effort, and the first run has nothing to find: with no `main`
+      # baseline on disk criterion reports absolute times and no change
+      # column, which is exactly what a first run can honestly say.
+      - name: restore the previous baseline
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list \
+            --workflow ci.yml --branch main --event schedule --status success \
+            --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -z "${run_id}" ]; then
+            echo "No green scheduled run to take a baseline from; measuring absolute times only."
+            exit 0
+          fi
+          mkdir -p target/criterion
+          if gh run download "${run_id}" --name "${BASELINE}" --dir target/criterion; then
+            echo "Baseline restored from run ${run_id}."
+          else
+            echo "Run ${run_id} carries no ${BASELINE} artifact; measuring absolute times only."
+          fi
+
+      # `--save-baseline main` is both halves of the comparison: criterion
+      # loads the `main` baseline the step above restored, prints each
+      # benchmark's change against it, and then overwrites it with this run's
+      # samples for the next run to compare against.
+      #
+      # `shell: bash` for pipefail, so a bench that fails to build or panics
+      # fails this step instead of being masked by `tee`.
+      - name: bench
+        shell: bash
+        run: |
+          cargo bench -p krabka-broker -p krabka-log -- --save-baseline main \
+            | tee bench.log
+
+      # The `bench_ratio` tables -- the ones the `PERF` comments quote -- are
+      # plain `println!` output interleaved with criterion's own result lines,
+      # and both belong in the summary. Only criterion's per-benchmark progress
+      # chatter is dropped.
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## criterion'
+            echo
+            echo "Baseline \`main\`, refreshed by this run. Artifact: \`${BASELINE}\`."
+            echo
+            echo '```'
+            grep -v '^Benchmarking ' bench.log || true
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # The next run's `main` baseline, and the raw samples behind any number
+      # this lane is cited for. 90 days so a quoted figure outlives the quarter
+      # it was measured in.
+      - name: upload the baseline
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.BASELINE }}
+          path: target/criterion/
+          retention-days: 90
+
   # Push the broker image.
   #
   # Not `aspect delivery`: its "only what changed" tracking needs
@@ -922,10 +1056,10 @@ jobs:
   # The scheduled lanes' only reader.
   #
   # `docker` (the full JVM/librdkafka container matrix), `gssapi` (both
-  # Kerberos acceptance cases) and `links` (every external URL in the markdown
-  # the pull-request lychee run skips under `--offline`) run once a day, on the
-  # 05:00 UTC schedule, and `gate` deliberately excludes scheduled runs -- they
-  # gate no merge. Nothing else consumed their result, so a red nightly was
+  # Kerberos acceptance cases), `links` (every external URL in the markdown
+  # the pull-request lychee run skips under `--offline`) and `bench` (the seven
+  # criterion suites) run once a day, on the 05:00 UTC schedule, and `gate`
+  # deliberately excludes scheduled runs -- they gate no merge. Nothing else consumed their result, so a red nightly was
   # visible only to whoever opened the Actions tab. This job is what turns it
   # into an issue, and it is the only reporting path the scheduled lanes have:
   # a new lane extends `needs` here rather than filing on its own.
@@ -944,7 +1078,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links]
+    needs: [select, docker, gssapi, links, bench]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
@@ -998,6 +1132,11 @@ jobs:
           hint=''
           if [ "$(jq -r '.links.result' <<<"${NEEDS}")" = failure ]; then
             hint=$'\nA broken link is either wrong -- fix the markdown -- or correct but permanently unreachable to a checker, Confluence answering 403 to bots being the usual case, and that one goes in `.lycheeignore` with a line saying why.\n'
+          fi
+          # A red `bench` lane leaves no baseline for the next run to compare
+          # against, so the issue says where this run's numbers went.
+          if [ "$(jq -r '.bench.result' <<<"${NEEDS}")" = failure ]; then
+            hint="${hint}"$'\nThe criterion lane failed, so no `main` baseline was published and the next run measures absolute times only. This run\'s partial output is in the job summary; the `criterion-baseline` artifact, if the upload got that far, holds the samples.\n'
           fi
           body="$(printf '%s\n\nFailed jobs:\n\n%s\n%s\nRun: %s\n' \
             "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${hint}" "${RUN_URL}")"
