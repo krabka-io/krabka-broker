@@ -825,8 +825,9 @@ jobs:
   # Branch protection can only name checks statically, and `docker` is a matrix
   # built from the impacted-suite query, so its jobs are named at run time and
   # can never appear in that list. Before this job the protected set was `build
-  # · test · lint · format`, `coverage` and `docgen`: `cargo deny`, the Creusot
-  # proofs and every container suite could go red without blocking a merge.
+  # · test · lint · format`, `coverage` and `docgen`: `cargo deny`, the Cargo
+  # clippy and nextest lane, the Creusot proofs and every container suite could
+  # go red without blocking a merge.
   # This job depends on all of them, so protection needs only this one name and
   # a job added below is covered by adding it to `needs`.
   #
@@ -852,6 +853,7 @@ jobs:
       - ci
       - coverage
       - supply-chain
+      - cargo
       - checks
       - proofs
       - select

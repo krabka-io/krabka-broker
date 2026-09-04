@@ -127,8 +127,10 @@ bazel run //:broker_bin -- --help
 cargo nextest run --workspace
 ```
 
-Both run the same 3392 tests. Bazel additionally runs the 9 rustdoc examples,
-which `cargo nextest` cannot; `cargo test --workspace --doc` covers those.
+Both run the same workspace test set, and CI runs both -- Bazel in the `ci` and
+`coverage` jobs, Cargo in the `cargo` job. Bazel additionally runs the rustdoc
+examples, which `cargo nextest` cannot; `cargo test --workspace --doc` covers
+those.
 
 ### Everything CI does, locally
 

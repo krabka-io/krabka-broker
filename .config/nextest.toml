@@ -21,6 +21,17 @@
 [profile.ci]
 slow-timeout = { period = "60s", terminate-after = 10 }
 
+# The two suites `//crates/broker`'s `crate_tests(manual = ...)` list also
+# holds out, for the same reasons it gives: `describe_groups_jvm` records a
+# fixture into `tests/fixtures/` against a real Kafka rather than asserting
+# anything, and `gssapi_e2e` drives a Docker-Compose-managed KDC that writes
+# keytabs beside it. Neither is runnable on a CI runner with no broker to
+# record from and no Compose stack to talk to.
+#
+# The container-backed cases in every other suite need no entry here: they are
+# `#[ignore]`d, and nextest runs an ignored test only when asked.
+default-filter = "not (binary(describe_groups_jvm) + binary(gssapi_e2e))"
+
 [profile.ci.junit]
 path = "junit.xml"
 
