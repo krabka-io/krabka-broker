@@ -366,9 +366,20 @@ mod tests {
     use crate::replicator::{
         FollowedPartitions,
         test_support::{
-            LEADER_ID, NODE_ID, PARTITION, TOPIC, WIRE_TOPIC_ID, image_with_leader, test_config,
+            LEADER_ID, NODE_ID, PARTITION, TOPIC, WIRE_TOPIC_ID, image_with_follower_throttle,
+            image_with_leader, test_config,
         },
     };
+
+    /// A throttled fetcher whose follower-in bucket is empty, so every
+    /// partition it follows wants a fetch this round and none may have one.
+    fn throttled_out() -> (Config, tempfile::TempDir) {
+        let (cfg, log_dir) = test_config(image_with_follower_throttle("*"));
+        cfg.throttle_state
+            .follower_in
+            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1024), bytes(0));
+        (cfg, log_dir)
+    }
 
     /// A fetcher over `followed`, dialling nowhere. Every test here drives the
     /// request-building half, which never touches the connection.
@@ -519,6 +530,44 @@ mod tests {
 
         check!(round.entries.is_empty());
         check!(round.wanted.is_empty());
+        check!(!round.all_throttled);
+    }
+
+    /// A round in which every partition wanted a fetch and the KIP-73 bucket
+    /// granted none says so, which is what makes the loop wait for the refill
+    /// rather than spin through an empty round at the fetch interval.
+    #[test]
+    fn a_round_the_throttle_emptied_reports_itself_as_throttled() {
+        let (cfg, _log_dir) = throttled_out();
+        let mut followed = BTreeMap::new();
+        followed.insert((Arc::clone(&cfg.topic), cfg.partition), Arc::new(cfg));
+
+        let round = plan_round(&followed, &DelayedUntil::new());
+
+        check!(round.entries.is_empty());
+        check!(round.all_throttled);
+    }
+
+    /// A partition the leader disowned is held back before the throttle is
+    /// consulted at all: it is not asking for bytes it was refused, it is not
+    /// asking at all. The same round without the hold-back reports itself
+    /// throttled, so this pins the order of the two and not merely that the
+    /// round came back empty.
+    #[test]
+    fn a_delayed_partition_is_skipped_before_the_throttle_is_consulted() {
+        let (cfg, _log_dir) = throttled_out();
+        let key = (Arc::clone(&cfg.topic), cfg.partition);
+        let mut followed = BTreeMap::new();
+        followed.insert(key.clone(), Arc::new(cfg));
+        let mut delayed = DelayedUntil::new();
+        delayed.insert(
+            key,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        );
+
+        let round = plan_round(&followed, &delayed);
+
+        check!(round.entries.is_empty());
         check!(!round.all_throttled);
     }
 
