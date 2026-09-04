@@ -339,6 +339,32 @@ mod tests {
         let _ = DivergenceReport::build("oracle:1.2.3", &[api(3, 0, 13)], &[api(3, 0, 12)]);
     }
 
+    /// The checked-in fixture is byte-for-byte what [`DivergenceReport::store`]
+    /// writes for the report it decodes to.
+    ///
+    /// The differential suite needs Docker, so the file is sometimes edited by
+    /// hand between regenerations. This is what keeps such an edit from
+    /// producing a file the next regeneration would reformat, which would show
+    /// up as noise in the diff that is meant to be the change under review.
+    #[test]
+    fn the_checked_in_report_is_exactly_what_store_writes() {
+        let checked_in = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("api_versions")
+            .join("divergence.json");
+        let report = DivergenceReport::load(&checked_in);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rewritten = dir.path().join("divergence.json");
+        report.store(&rewritten);
+
+        assert!(
+            std::fs::read_to_string(&rewritten).expect("read rewritten")
+                == std::fs::read_to_string(&checked_in).expect("read checked-in")
+        );
+    }
+
     #[test]
     fn report_round_trips_through_json() {
         let report = DivergenceReport::build("oracle:1.2.3", &[api(18, 0, 4)], &[api(18, 0, 5)]);
