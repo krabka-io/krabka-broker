@@ -241,12 +241,11 @@ decision functions with a small environment. Read the model's `DRIVEN` and
 
 Every unique-state count cited below is asserted by the model's own runner
 against a `PINNED_UNIQUE_STATES` constant -- one per config where a runner
-drives several -- and not merely recorded here. An
-exhaustive breadth-first search over a fixed model visits a deterministic set
-of states, so the exact count is a checkable fact rather than a bound. The
-generated-transition count is not pinned anywhere: it depends on when the
-search's worker threads deduplicate, and so varies between runs of the same
-model.
+drives several -- and not merely recorded here. An exhaustive breadth-first
+search over a fixed model visits a deterministic set of states, so the exact
+count is a checkable fact rather than a bound. The generated-transition count
+is not pinned anywhere: it depends on when the search's worker threads
+deduplicate, and so varies between runs of the same model.
 
 To change a pin, run the model, read the count the runner prints, and write
 that number into the constant. A changed count is a changed model, never a
@@ -260,18 +259,19 @@ leaves a smaller search still passing every upper bound.
 The audit spool model drives the production append planner, loss-state update,
 and replay-recovery classifier. It checks two records, two loss events, a
 two-record spool, sync cadence two, at most two crashes, and every reachable
-ordering through depth 25. The run reaches exactly 11,184 unique states,
-pinned by `PINNED_UNIQUE_STATES` in
+ordering through depth 25. The run reaches exactly 11,184 unique states, pinned
+by `PINNED_UNIQUE_STATES` in
 [`spool_model`](../crates/audit/src/spool_model.rs), below its depth-48 and
 500,000-state truncation guards. Properties require every durably admitted
-record to remain delivered or durably pending, at-most-once automatic
-delivery, nondecreasing loss-marker generations, and complete loss accounting. Reachability witnesses cover torn
-append recovery, retry after a definite sink failure, fail-stop poison after an
-uncertain delivery, cleanup after a committed cursor, and loss-marker
-reconciliation after reopen. Filesystem and directory-sync semantics, storage
-hardware, sink durability, explicit operator recovery of poisoned replay, and
-behavior beyond the stated bounds remain outside the model. Adapter tests cover
-malformed, missing, stale, and committed poison plus loss-counter saturation.
+record to remain delivered or durably pending, at-most-once automatic delivery,
+nondecreasing loss-marker generations, and complete loss accounting.
+Reachability witnesses cover torn append recovery, retry after a definite sink
+failure, fail-stop poison after an uncertain delivery, cleanup after a
+committed cursor, and loss-marker reconciliation after reopen. Filesystem and
+directory-sync semantics, storage hardware, sink durability, explicit operator
+recovery of poisoned replay, and behavior beyond the stated bounds remain
+outside the model. Adapter tests cover malformed, missing, stale, and committed
+poison plus loss-counter saturation.
 
 The `KRaft` model runs the production `QuorumStateMachine` for every node over
 an unordered network. Its `three_voters_append` config checks leader
