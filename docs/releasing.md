@@ -45,6 +45,18 @@ just shipped as unreleased.
 [X.Y.Z]: https://github.com/krabka-io/krabka-broker/releases/tag/vX.Y.Z
 ```
 
+A changelog entry that quotes a performance number takes it from the latest
+scheduled run of the `bench` job in
+[`ci.yml`](../.github/workflows/ci.yml) -- the nightly criterion lane -- and not
+from the tables in the source comments. Those tables record why a decision was
+made and are not re-measured when the code around them changes, so a release
+that repeats one is republishing an undated figure. The job summary of that run
+holds the `bench_ratio` tables, and its `criterion-baseline` artifact holds the
+samples; if the newest scheduled run is red, say no number rather than reaching
+for an older one. The same applies to the `sendfile_min` default and the two
+`PERF -- measured; decision: KEEP` sites: check the run before repeating them in
+release notes.
+
 Open a pull request with the version bump and the changelog entry together, and
 merge it. The tag names that merge commit.
 

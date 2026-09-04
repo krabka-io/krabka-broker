@@ -8,10 +8,16 @@
 use std::time::{Duration, Instant};
 
 use assert2::assert;
-use krabka_protocol::owned::{
-    add_offsets_to_txn_response::AddOffsetsToTxnResponse,
-    allocate_producer_ids_response::AllocateProducerIdsResponse,
+use bytes::BytesMut;
+use krabka_protocol::{
+    Decode, Encode,
+    owned::{
+        add_offsets_to_txn_response::AddOffsetsToTxnResponse,
+        allocate_producer_ids_response::AllocateProducerIdsResponse,
+        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+    },
 };
+use tokio::net::TcpStream;
 
 use super::{
     cluster::{
@@ -24,8 +30,11 @@ use super::{
         drive_unsupported_allocate_producer_ids,
     },
     quota_admin::drive_alter_client_quotas_sasl,
-    wire::sasl_plain_authenticate,
+    wire::{round_trip_split_header, sasl_plain_authenticate},
 };
+
+/// `ApiVersions` is api_key 18.
+const API_VERSIONS_KEY: i16 = 18;
 
 /// The broker's default `quota_throttle_max`, in milliseconds. KIP-219 caps
 /// the reported back-off at this, so no response may carry more.
