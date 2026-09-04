@@ -50,6 +50,18 @@ fn decode_response(version: i16, bytes: &Bytes) -> ApiVersionsResponse {
     crate::test_support::decode_response(bytes, version)
 }
 
+/// The anonymous, plaintext context the dispatch loop builds for a handshake
+/// on an unauthenticated connection. `handle` reads it to charge the KIP-124
+/// request quota, which no broker in this module configures, so every response
+/// below reports `throttle_time_ms = 0`.
+fn anonymous_principal() -> krabka_security::Principal {
+    krabka_security::Principal {
+        name: "ANONYMOUS".to_string(),
+        auth_method: krabka_security::AuthMethod::Anonymous,
+        groups: vec![],
+    }
+}
+
 async fn start_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     crate::test_support::start_broker_with(|_cfg| {}).await
 }
@@ -123,10 +135,13 @@ fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
 async fn handle_rejects_each_invalid_v3_client_info_field() {
     let (broker_handle, _dir) = start_broker().await;
     let broker = broker_handle.broker_arc_for_test();
+    let principal = anonymous_principal();
+    let peer = crate::test_support::peer();
+    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
 
     for (name, version) in [("", "1.0.0"), ("krabka-test", "")] {
         let req = request(name, version);
-        let bytes = handle(&broker, API_VERSIONS_V3, 7, &req)
+        let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
             .await
             .expect("ApiVersions handler");
         let resp = decode_response(API_VERSIONS_V3, &bytes);
@@ -141,12 +156,15 @@ async fn handle_rejects_each_invalid_v3_client_info_field() {
 async fn handle_accepts_legacy_request_without_client_info() {
     let (broker_handle, _dir) = start_broker().await;
     let broker = broker_handle.broker_arc_for_test();
+    let principal = anonymous_principal();
+    let peer = crate::test_support::peer();
+    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
     let req = ApiVersionsRequest::default();
     let mut req_bytes = BytesMut::with_capacity(req.encoded_len(0));
     req.encode(&mut req_bytes, 0)
         .expect("encode legacy ApiVersionsRequest");
 
-    let bytes = handle(&broker, 0, 7, &req_bytes)
+    let bytes = handle(&broker, 0, 7, &req_bytes, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(0, &bytes);
@@ -161,6 +179,9 @@ async fn handle_accepts_legacy_request_without_client_info() {
 async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     let (broker_handle, _dir) = start_broker().await;
     let broker = broker_handle.broker_arc_for_test();
+    let principal = anonymous_principal();
+    let peer = crate::test_support::peer();
+    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
     wait_for_leader(&broker).await;
     broker
         .controller
@@ -174,7 +195,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     assert!(image.finalized_features_epoch() > 0);
 
     let req = request("krabka-test", "1.0.0");
-    let bytes = handle(&broker, API_VERSIONS_V3, 7, &req)
+    let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
         .await
         .expect("ApiVersions handler");
     let resp = decode_response(API_VERSIONS_V3, &bytes);
@@ -209,6 +230,9 @@ async fn handle_applies_kip1242_routing_checks() {
     let (broker_handle, _dir) =
         crate::test_support::start_broker_with(|cfg| cfg.broker_id = 42).await;
     let broker = broker_handle.broker_arc_for_test();
+    let principal = anonymous_principal();
+    let peer = crate::test_support::peer();
+    let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
     let cluster_id = broker.controller.current_image().cluster_id().to_string();
     let node_id = i32::try_from(broker.config.node_id.0).expect("node id fits Kafka wire");
     assert!(node_id != broker.config.broker_id);
@@ -230,7 +254,7 @@ async fn handle_applies_kip1242_routing_checks() {
         ),
     ] {
         let request = routing_request(request_cluster_id, request_node_id);
-        let bytes = handle(&broker, API_VERSIONS_V5, 7, &request)
+        let bytes = handle(&broker, API_VERSIONS_V5, 7, &request, &context)
             .await
             .expect("ApiVersions v5 handler");
         let response = decode_response(API_VERSIONS_V5, &bytes);

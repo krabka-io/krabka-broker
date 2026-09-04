@@ -988,7 +988,10 @@ jobs:
       # also yields `skipped` and `cancelled`, and neither is a red lane:
       # `gssapi` is skipped on any event that is not a schedule or a dispatch,
       # `docker` is skipped when the suite selection is empty, and a cancelled
-      # run means a human or the concurrency group stopped it.
+      # run means a human or the concurrency group stopped it. (`links` is the
+      # one dependency that cannot be skipped here: its `if:` is the same
+      # `schedule` this job's is, so on a scheduled run it always has a
+      # `success`, `failure` or `cancelled` of its own.)
       - name: report the failure
         if: contains(needs.*.result, 'failure')
         run: |
@@ -1000,9 +1003,7 @@ jobs:
           # so the issue says where the two answers live.
           hint=''
           if [ "$(jq -r '.links.result' <<<"${NEEDS}")" = failure ]; then
-            hint='
-A broken link is either wrong (fix the markdown) or correct but permanently unreachable to a checker -- Confluence answers 403 to bots, for one -- in which case it goes in `.lycheeignore` with a line saying why.
-'
+            hint="$(printf '\n%s\n' 'A broken link is either wrong -- fix the markdown -- or correct but permanently unreachable to a checker, Confluence answering 403 to bots being the usual case, and that one goes in `.lycheeignore` with a line saying why.')"
           fi
           body="$(printf '%s\n\nFailed jobs:\n\n%s\n%s\nRun: %s\n' \
             "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${hint}" "${RUN_URL}")"
