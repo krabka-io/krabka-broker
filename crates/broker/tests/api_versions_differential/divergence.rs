@@ -125,6 +125,37 @@ const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
     ),
 ];
 
+/// The recorded intent for one row of the join.
+///
+/// Only a [`Verdict::RangeDiffers`] row carries one: a matching range needs no
+/// explanation, and a one-sided row is explained once, in prose, by the
+/// oracle's listener and configuration rather than per API key.
+///
+/// # Panics
+///
+/// Panics when a range differs and [`RANGE_DIVERGENCE_INTENTS`] has no entry
+/// for the key. That is the point of the table: a new divergence stops the
+/// differential suite until someone writes down whether it is meant.
+fn range_divergence_intent(api_key: i16, verdict: Verdict) -> Option<String> {
+    if verdict != Verdict::RangeDiffers {
+        return None;
+    }
+    let intent = RANGE_DIVERGENCE_INTENTS
+        .iter()
+        .find(|(key, _)| *key == api_key)
+        .map(|(_, intent)| (*intent).to_owned())
+        .unwrap_or_else(|| {
+            panic!(
+                "api_key {api_key} now advertises a different range from the \
+                 oracle and no intent is recorded for it. Add an entry to \
+                 `RANGE_DIVERGENCE_INTENTS` saying whether krabka means to \
+                 diverge here -- and, if it does not, change \
+                 `api_catalog::supported_apis` instead."
+            )
+        });
+    Some(intent)
+}
+
 /// Both advertised tables, joined and sorted by API key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DivergenceReport {
@@ -234,6 +265,11 @@ mod tests {
         VersionRange { min, max }
     }
 
+    /// The recorded intent for `api_key`, as `build` writes it.
+    fn intent(api_key: i16) -> Option<String> {
+        range_divergence_intent(api_key, Verdict::RangeDiffers)
+    }
+
     #[test]
     fn join_covers_both_tables_and_labels_each_key() {
         let krabka = vec![api(0, 3, 12), api(1, 4, 17), api(80, 0, 1)];
@@ -249,6 +285,7 @@ mod tests {
                             krabka: Some(range(3, 12)),
                             kafka: Some(range(3, 12)),
                             verdict: Verdict::Same,
+                            intent: None,
                         },
                         ApiRow {
                             api_key: 1,
@@ -256,6 +293,7 @@ mod tests {
                             krabka: Some(range(4, 17)),
                             kafka: Some(range(4, 18)),
                             verdict: Verdict::RangeDiffers,
+                            intent: intent(1),
                         },
                         ApiRow {
                             api_key: 80,
@@ -263,6 +301,7 @@ mod tests {
                             krabka: Some(range(0, 1)),
                             kafka: None,
                             verdict: Verdict::KrabkaOnly,
+                            intent: None,
                         },
                         ApiRow {
                             api_key: 88,
@@ -270,10 +309,34 @@ mod tests {
                             krabka: None,
                             kafka: Some(range(0, 0)),
                             verdict: Verdict::KafkaOnly,
+                            intent: None,
                         },
                     ],
                 }
         );
+    }
+
+    /// Every recorded intent is reachable, so a key that stops diverging
+    /// leaves no stale sentence behind.
+    #[test]
+    fn every_recorded_intent_is_non_empty_and_keyed_once() {
+        let mut keys: Vec<i16> = RANGE_DIVERGENCE_INTENTS.iter().map(|(key, _)| *key).collect();
+        let unique: std::collections::BTreeSet<i16> = keys.iter().copied().collect();
+        keys.sort_unstable();
+        assert!(keys == unique.into_iter().collect::<Vec<i16>>());
+        assert!(
+            RANGE_DIVERGENCE_INTENTS
+                .iter()
+                .all(|(_, intent)| !intent.trim().is_empty())
+        );
+    }
+
+    /// A range that starts differing with nothing written for it fails the
+    /// differential suite rather than landing in the checked-in file.
+    #[test]
+    #[should_panic(expected = "no intent is recorded")]
+    fn an_unrecorded_range_divergence_panics() {
+        let _ = DivergenceReport::build("oracle:1.2.3", &[api(3, 0, 13)], &[api(3, 0, 12)]);
     }
 
     #[test]
