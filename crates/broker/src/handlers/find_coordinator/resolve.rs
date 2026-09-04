@@ -128,6 +128,13 @@ mod tests {
 
     const TOPIC_ID: &str = "BQUFBQUFBQUFBQUFBQUFBQ";
 
+    /// `wire_node_id` is the `-1` sentinel fallback the sweep skips: a node id
+    /// the controller can register always projects to itself.
+    #[test]
+    fn a_registered_leader_projects_to_its_own_node_id() {
+        assert!(wire_node_id(krabka_metadata::NodeId(42)) == 42);
+    }
+
     #[test]
     fn share_key_parser_accepts_kafka_uuid_and_colons_in_group() {
         let key = format!("group:with:colon:{TOPIC_ID}:7");
