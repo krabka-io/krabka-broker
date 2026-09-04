@@ -212,12 +212,24 @@ crate_tests(
     # exports for a `[[bin]]` in the same package. Bazel exports no such thing,
     # so the same name is set here from the binary's own target.
     env = {"CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)"},
-    # The one suite that runs brokers as real processes out of //packaging's
-    # image rather than as in-process handles, so a `docker kill -s KILL` is a
-    # kill of the thing that holds the log. It needs no Kafka image, so it names
-    # no `docker` entry: //bazel/defs.bzl gives it the same Docker wrapper on the
+    # The suites that run brokers as real processes out of //packaging's image
+    # rather than as in-process handles. For `process_kill_durability` that is
+    # what makes a `docker kill -s KILL` a kill of the thing that holds the log;
+    # for `soak` it is what makes a resident set and a descriptor count readable
+    # per broker from `/proc`. Neither needs a Kafka image, so neither names a
+    # `docker` entry: //bazel/defs.bzl gives them the Docker wrapper on the
     # strength of this list alone.
-    krabka_image = ["process_kill_durability"],
+    #
+    # `soak` runs for four hours and is scheduled-only. Its `#[ignore]` keeps it
+    # out of `cargo test`, the `docker` tag keeps it out of `bazel test //...`,
+    # and `.aspect/container_suites.axl` drops it from every `docker`-matrix
+    # selection -- the `soak` job in `.github/workflows/ci.yml` is the one place
+    # that names it, and it passes a `--test_timeout` because Bazel's longest
+    # built-in timeout is an hour.
+    krabka_image = [
+        "process_kill_durability",
+        "soak",
+    ],
     lib = "broker",
     # Suites whose `#[ignore]`d cases drive real containers, and the images
     # each one starts. //bazel/images pins those by digest and //bazel/defs.bzl

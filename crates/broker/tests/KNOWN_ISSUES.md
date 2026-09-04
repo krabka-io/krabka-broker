@@ -72,3 +72,31 @@ Docker on Windows with the bridge-gateway pattern is not reliable. The
 JVM command-line tools also behave inconsistently under Docker Desktop
 on Windows. The dedicated CI lane currently runs only on Ubuntu, so this
 acceptance path has no validated Windows CI or runtime result.
+
+## Local retention and time-based segment roll never run
+
+The soak lane (`soak.rs`, the `soak` job in `.github/workflows/ci.yml`) found
+this on its first run against three broker containers: after three minutes of
+steady produce into a topic configured `retention.ms=60s`,
+`retention.bytes=4MiB` and `segment.ms=5s`, not one sealed segment had been
+deleted on any of the three brokers, and each broker's open-descriptor count
+was still climbing — 120 to 170 on one node over the run's second half, roughly
+one descriptor per segment created.
+
+Both behaviours live in `krabka_log::Log::tick`: the time-based roll at the top
+of `crates/log/src/log/tick.rs` and the `retention::time_based_evict` /
+size-based eviction below it. Nothing in `crates/broker` calls that method. The
+cleaner's sweep says as much in a comment — "the delete half is the retention
+sweep's, in `Log::tick`" (`crates/broker/src/cleaner/sweep.rs`) — but no such
+sweep is spawned beside the cleaner in `broker/maintenance.rs`, so a live broker
+applies `retention.ms`, `retention.bytes` and `segment.ms` to nothing.
+
+What still works, and what the soak run confirmed: `segment.bytes` rolls on the
+append path (`crates/log/src/log/append.rs`), and compaction runs on the
+cleaner's interval. So the log is segmented and compacted; it is only never
+trimmed.
+
+Until a retention sweep is spawned, the soak lane fails on two of its
+assertions — the retention cycle count, and the open-descriptor trend that
+accumulating segments produce. Both are true statements about the broker, so
+neither is relaxed here.
