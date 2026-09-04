@@ -38,7 +38,20 @@ const MAX_STATES: usize = 6_000_000;
 /// are bounded, so their diameter sits well under this value.
 const MAX_DEPTH: usize = 60;
 
-fn run(model: ConsensusModel, label: &str) {
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_834;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 43_811;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 779_078;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 445_169;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 230_591;
+
+fn run(model: ConsensusModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -56,6 +69,11 @@ fn run(model: ConsensusModel, label: &str) {
     // bounds get retuned rather than passing a non-exhaustive check.
     assert2::assert!(checker.max_depth() < MAX_DEPTH);
     assert2::assert!(checker.state_count() < MAX_STATES);
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
@@ -64,6 +82,7 @@ fn three_voters_election_safety() {
     run(
         ConsensusModel::elections(&[NodeId(1), NodeId(2), NodeId(3)]),
         "three_voters_election_safety",
+        PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY,
     );
 }
 
@@ -72,6 +91,7 @@ fn two_voters_linearizable() {
     run(
         ConsensusModel::linearizable(&[NodeId(1), NodeId(2)], 2),
         "two_voters_linearizable",
+        PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE,
     );
 }
 
@@ -83,6 +103,7 @@ fn three_voters_faults() {
     run(
         ConsensusModel::faults(&[NodeId(1), NodeId(2), NodeId(3)]),
         "three_voters_faults",
+        PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS,
     );
 }
 
@@ -96,6 +117,7 @@ fn three_voters_append() {
     run(
         ConsensusModel::three_voters_append(&[NodeId(1), NodeId(2), NodeId(3)], 1),
         "three_voters_append",
+        PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND,
     );
 }
 
@@ -108,5 +130,6 @@ fn two_voters_append_via_linearizable() {
         // minority WAL-node loss.
         ConsensusModel::append_via(&[NodeId(1), NodeId(2)], 2),
         "two_voters_append_via_linearizable",
+        PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA,
     );
 }

@@ -9,7 +9,10 @@ use std::collections::HashSet;
 use krabka_metadata::PartitionRecord;
 use krabka_raft::NodeId;
 
-use super::{config::StretchModel, runner::run};
+use super::{
+    config::StretchModel,
+    runner::{PINNED_UNIQUE_STATES_RED_LEGACY_ELECT, PINNED_UNIQUE_STATES_RED_MIN_INSYNC_ONE, run},
+};
 use crate::{
     config_keys::RecoveryStrategy,
     leader_election::{FailoverDecision, failover_one},
@@ -59,6 +62,7 @@ fn red_witness_unaware_election_elects_a_witness() {
     run(
         StretchModel::three_sites(2, legacy_elect),
         "red_legacy_elect",
+        PINNED_UNIQUE_STATES_RED_LEGACY_ELECT,
     );
 }
 
@@ -73,5 +77,6 @@ fn red_min_insync_one_commits_in_a_minority() {
     run(
         StretchModel::three_sites(1, failover_one),
         "red_min_insync_one",
+        PINNED_UNIQUE_STATES_RED_MIN_INSYNC_ONE,
     );
 }

@@ -23,6 +23,17 @@ use super::reassign_one;
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 80;
 
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_BASIC: usize = 21;
+const PINNED_UNIQUE_STATES_LEADER_HANDOFF: usize = 42;
+const PINNED_UNIQUE_STATES_WIDE: usize = 310;
+
 /// Bounded config for the reassignment model. It lives here, not in the state.
 struct ReassignModel {
     replicas: Vec<NodeId>,
@@ -338,7 +349,7 @@ impl Model for ReassignModel {
     }
 }
 
-fn run(model: ReassignModel, label: &str) {
+fn run(model: ReassignModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -359,23 +370,40 @@ fn run(model: ReassignModel, label: &str) {
         checker.state_count() < MAX_STATES,
         "[{label}] hit state cap {MAX_STATES}: truncated, not exhaustive"
     );
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
 #[test]
 fn reassign_basic() {
     // Leader not removed: catch-up then completion to the target replica set.
-    run(ReassignModel::basic(), "reassign_basic");
+    run(
+        ReassignModel::basic(),
+        "reassign_basic",
+        PINNED_UNIQUE_STATES_BASIC,
+    );
 }
 
 #[test]
 fn reassign_leader_handoff() {
     // Leader in `removing`: catch-up, leader handoff, then completion.
-    run(ReassignModel::leader_handoff(), "reassign_leader_handoff");
+    run(
+        ReassignModel::leader_handoff(),
+        "reassign_leader_handoff",
+        PINNED_UNIQUE_STATES_LEADER_HANDOFF,
+    );
 }
 
 #[test]
 fn reassign_wide() {
     // 5 replicas, add 2 + remove 2, leader removed → handoff then completion.
-    run(ReassignModel::wide(), "reassign_wide");
+    run(
+        ReassignModel::wide(),
+        "reassign_wide",
+        PINNED_UNIQUE_STATES_WIDE,
+    );
 }

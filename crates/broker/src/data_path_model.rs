@@ -47,7 +47,13 @@ mod runner;
 mod state;
 mod truncation;
 
-use self::{model::DpModel, runner::run};
+use self::{
+    model::DpModel,
+    runner::{
+        PINNED_UNIQUE_STATES_CLEAN, PINNED_UNIQUE_STATES_DISKLESS, PINNED_UNIQUE_STATES_ELR,
+        PINNED_UNIQUE_STATES_UNCLEAN, run,
+    },
+};
 
 /// `min.insync.replicas` of 1, Kafka's default: the ELR rule clears the set
 /// on every ISR change, so no configuration below drives it.
@@ -60,6 +66,7 @@ fn data_clean() {
     run(
         DpModel::config(Instant::now(), false, false, NO_ELR, LONG_LOG),
         "data_clean",
+        PINNED_UNIQUE_STATES_CLEAN,
     );
 }
 
@@ -68,6 +75,7 @@ fn data_unclean() {
     run(
         DpModel::config(Instant::now(), true, false, NO_ELR, LONG_LOG),
         "data_unclean",
+        PINNED_UNIQUE_STATES_UNCLEAN,
     );
 }
 
@@ -87,6 +95,7 @@ fn data_elr() {
     run(
         DpModel::config(Instant::now(), true, false, 2, 3),
         "data_elr",
+        PINNED_UNIQUE_STATES_ELR,
     );
 }
 
@@ -95,6 +104,7 @@ fn data_diskless_wal_acked_never_lost() {
     run(
         DpModel::config(Instant::now(), false, true, NO_ELR, LONG_LOG),
         "data_diskless_wal_acked_never_lost",
+        PINNED_UNIQUE_STATES_DISKLESS,
     );
 }
 
@@ -103,5 +113,6 @@ fn data_diskless_offsets_gap_free_and_unique() {
     run(
         DpModel::config(Instant::now(), false, true, NO_ELR, LONG_LOG),
         "data_diskless_offsets_gap_free_and_unique",
+        PINNED_UNIQUE_STATES_DISKLESS,
     );
 }

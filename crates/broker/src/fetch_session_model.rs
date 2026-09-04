@@ -49,6 +49,16 @@ const TARGET_STATE_COUNT: usize = 30_000_000;
 const MAX_UNIQUE_STATES: usize = 500_000;
 const MAX_DEPTH: usize = 30;
 
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_BASIC: usize = 18;
+const PINNED_UNIQUE_STATES_WIDE: usize = 148;
+
 // Tiny symbolic universe. Names {A,B}, ids {U,V} (a rename = same id, new name).
 const NAME_A: &str = "A";
 const NAME_B: &str = "B";
@@ -282,7 +292,7 @@ impl Model for FsModel {
     }
 }
 
-fn run(model: FsModel, label: &str) {
+fn run(model: FsModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -305,6 +315,11 @@ fn run(model: FsModel, label: &str) {
         "[{label}] unique-state bound exceeded ({})",
         checker.unique_state_count()
     );
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
@@ -322,6 +337,7 @@ fn fetch_session_basic() {
             partitions: vec![0],
         },
         "fetch_session_basic",
+        PINNED_UNIQUE_STATES_BASIC,
     );
 }
 
@@ -347,5 +363,6 @@ fn fetch_session_wide() {
             partitions: vec![0],
         },
         "fetch_session_wide",
+        PINNED_UNIQUE_STATES_WIDE,
     );
 }

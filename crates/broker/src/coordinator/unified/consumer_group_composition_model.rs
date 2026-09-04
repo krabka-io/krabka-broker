@@ -64,7 +64,10 @@ mod state;
 use krabka_log::Offset;
 use krabka_protocol::primitives::uuid::Uuid;
 
-use self::{config::CgcModel, runner::run};
+use self::{
+    config::CgcModel,
+    runner::{PINNED_UNIQUE_STATES_BASIC, PINNED_UNIQUE_STATES_WIDE, run},
+};
 
 const TOPIC: Uuid = Uuid([7; 16]);
 const TOPIC_NAME: &str = "t";
@@ -72,10 +75,10 @@ const MAX_OFFSET: Offset = Offset(2); // bound the committed offset so the state
 
 #[test]
 fn cg_basic() {
-    run(CgcModel::basic(), "cg_basic");
+    run(CgcModel::basic(), "cg_basic", PINNED_UNIQUE_STATES_BASIC);
 }
 
 #[test]
 fn cg_wide() {
-    run(CgcModel::wide(), "cg_wide");
+    run(CgcModel::wide(), "cg_wide", PINNED_UNIQUE_STATES_WIDE);
 }

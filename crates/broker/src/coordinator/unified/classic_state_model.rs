@@ -38,7 +38,10 @@ mod state;
 #[path = "classic_state_model/fuzz.rs"]
 mod fuzz;
 
-use self::{config::ClassicModel, runner::run};
+use self::{
+    config::ClassicModel,
+    runner::{PINNED_UNIQUE_STATES_BASIC, PINNED_UNIQUE_STATES_WIDE, run},
+};
 
 #[test]
 fn classic_basic() {
@@ -49,6 +52,7 @@ fn classic_basic() {
             max_clock: 4,
         },
         "classic_basic",
+        PINNED_UNIQUE_STATES_BASIC,
     );
 }
 
@@ -61,5 +65,6 @@ fn classic_wide() {
             max_clock: 5,
         },
         "classic_wide",
+        PINNED_UNIQUE_STATES_WIDE,
     );
 }
