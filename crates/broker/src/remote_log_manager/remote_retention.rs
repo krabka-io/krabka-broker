@@ -158,6 +158,7 @@ pub(crate) async fn remote_retention_pass(
     bounds: RemoteRetentionBounds<'_>,
     rsm: &Arc<dyn RemoteStorageManager>,
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    index_cache: &Arc<krabka_remote_storage::RemoteIndexCache>,
 ) -> RemoteRetentionOutcome {
     let RemoteRetentionBounds {
         log_config,
@@ -204,7 +205,7 @@ pub(crate) async fn remote_retention_pass(
     let mut floor = log_start_offset;
     let mut contiguous = true;
     for md in evict {
-        if !delete_one_segment(tp, broker_id, &md, archive, rsm, rlmm).await {
+        if !delete_one_segment(tp, broker_id, &md, archive, rsm, rlmm, index_cache).await {
             // Stop at the first failure to preserve the contiguous-prefix
             // invariant — the next tick re-tries from the same base.
             break;

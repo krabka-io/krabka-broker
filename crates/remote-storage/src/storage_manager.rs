@@ -35,6 +35,17 @@ pub enum IndexType {
 }
 
 impl IndexType {
+    /// Every index kind, so a caller that has to act on all of them -- such as
+    /// dropping one segment's whole cache footprint -- cannot silently miss
+    /// one that is added later.
+    pub const ALL: [IndexType; 5] = [
+        IndexType::Offset,
+        IndexType::Timestamp,
+        IndexType::ProducerSnapshot,
+        IndexType::LeaderEpoch,
+        IndexType::Transaction,
+    ];
+
     /// The Kafka `LocalTieredStorage` filename suffix for this index type.
     /// Its remote leader-epoch artifact uses `.leader_epoch_checkpoint`,
     /// distinct from a partition log's local `leader-epoch-checkpoint` file.

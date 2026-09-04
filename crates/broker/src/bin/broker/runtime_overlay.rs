@@ -246,7 +246,6 @@ impl Args {
             txn_id_expiration,
             txn_id_expiration_cleanup_interval,
             leader_imbalance_check_interval,
-            leader_imbalance_per_broker,
             tls_reload_interval,
             heartbeat_interval,
             heartbeat_timeout,

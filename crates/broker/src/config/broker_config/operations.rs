@@ -14,11 +14,6 @@ macro_rules! operations_fields {
             /// Matches Kafka's `leader.imbalance.check.interval.seconds`.
             pub leader_imbalance_check_interval: Time,
 
-            /// Minimum fraction of imbalanced partitions before the
-            /// auto-rebalance ticker submits any changes. Default 10%. Matches
-            /// Kafka's `leader.imbalance.per.broker.percentage`.
-            pub leader_imbalance_per_broker: Ratio,
-
             /// Test-only: override the cleaner ticker interval.
             /// Production callers leave this as `None` (default 30s).
             #[cfg(any(test, feature = "test-helpers"))]

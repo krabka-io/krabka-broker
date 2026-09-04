@@ -343,6 +343,8 @@ fn no_closes() -> Vec<(&'static str, u64)> {
         ("sasl_session_expired", 0),
         ("decode_error", 0),
         ("peer_closed", 0),
+        ("max_connections", 0),
+        ("max_connections_per_ip", 0),
     ]
 }
 
@@ -368,6 +370,8 @@ async fn a_frame_that_is_not_a_request_closes_the_connection_as_a_decode_error()
                 ("sasl_session_expired", 0),
                 ("decode_error", 1),
                 ("peer_closed", 0),
+                ("max_connections", 0),
+                ("max_connections_per_ip", 0),
             ]
     );
 }

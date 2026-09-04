@@ -35,6 +35,8 @@ pub struct QuotaDelay {
 }
 
 impl QuotaDelay {
+    /// No throttle, charged to nobody.
+    #[must_use]
     pub fn zero() -> Self {
         Self {
             delay: <Time as TimeExt>::ZERO,
@@ -43,6 +45,9 @@ impl QuotaDelay {
         }
     }
 
+    /// A throttle of `delay`, charged to the principal and client id whose
+    /// quota produced it (KIP-599 labels the applied throttle by entity).
+    #[must_use]
     pub fn new(delay: Time, user: Option<String>, client_id: Option<String>) -> Self {
         Self {
             delay,
@@ -405,7 +410,9 @@ mod tests {
     #[test]
     fn consume_configured_quota_caps_overage_delay() {
         let image = image_with_quota(vec![("user", Some("alice"))], "producer_byte_rate", 1.0);
-        let buckets = QuotaBuckets::new();
+        // A one-second window: at 1 B/s the burst is one byte, so 10 bytes
+        // leaves the 9-byte overage the closure below checks.
+        let buckets = QuotaBuckets::with_window(secs(1));
 
         let delay = consume_configured_quota(
             QuotaConsumption {

@@ -135,6 +135,7 @@ pub mod dump;
 mod error;
 mod gcs;
 pub mod index;
+mod index_cache;
 mod inmemory;
 mod local;
 mod metadata;
@@ -150,6 +151,10 @@ pub use index::{
     TimeIndexEntry, TimestampMs, corrupt_log, end_position_for, first_batch_at_or_after,
     first_record_at_or_after_timestamp, parse_offset_index, parse_time_index, parse_txn_index,
     position_for_relative_offset, relative_offset_floor_for_timestamp, txn_overlaps,
+};
+pub use index_cache::{
+    DEFAULT_INDEX_CACHE_TOTAL_SIZE_BYTES, IndexCacheOutcome, IndexCacheStats, REMOTE_INDEX_CACHE_DIR,
+    RemoteIndexCache,
 };
 pub use inmemory::InmemoryRemoteLogMetadataManager;
 pub use krabka_object_store::{

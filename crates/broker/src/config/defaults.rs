@@ -25,10 +25,12 @@ use crate::{
         DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
         DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
         DEFAULT_JWKS_REFRESH_INTERVAL, DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
-        DEFAULT_LEADER_IMBALANCE_PER_BROKER, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
+        DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
-        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL,
+        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_QUOTA_WINDOW, DEFAULT_REMOTE_INDEX_CACHE_SIZE,
+        DEFAULT_REMOTE_LOG_MANAGER_INTERVAL, DEFAULT_REMOTE_READER_MAX_PENDING_TASKS,
+        DEFAULT_REMOTE_READER_THREADS,
         DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL,
         DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION,
         DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
@@ -83,7 +85,7 @@ impl Default for BrokerConfig {
             unclean_recovery_balanced_deadline: secs(30),
             operator_recovery_deadline: secs(25),
             quota_throttle_max: secs(10),
-            quota_window: secs(11),
+            quota_window: DEFAULT_QUOTA_WINDOW,
             controller_mutation_quota_window: secs(1),
             self_registration_max_attempts: 8,
             observer_fetch_max: mebibytes(1),
@@ -226,7 +228,6 @@ impl Default for BrokerConfig {
                 crate::share_coordinator::config::ShareCoordinatorConfig::default(),
             ),
             leader_imbalance_check_interval: DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
-            leader_imbalance_per_broker: DEFAULT_LEADER_IMBALANCE_PER_BROKER,
             #[cfg(any(test, feature = "test-helpers"))]
             cleaner_interval_override: None,
             tls_reload_interval: DEFAULT_TLS_RELOAD_INTERVAL,
@@ -280,6 +281,9 @@ impl Default for BrokerConfig {
             // WORM archive mode off by default. Operators enable it via
             // `[remote_storage.worm]` in `broker.toml`.
             remote_storage_worm: None,
+            remote_reader_threads: DEFAULT_REMOTE_READER_THREADS,
+            remote_reader_max_pending_tasks: DEFAULT_REMOTE_READER_MAX_PENDING_TASKS,
+            remote_index_cache_size: DEFAULT_REMOTE_INDEX_CACHE_SIZE,
             // Audit enabled by default (secure-by-default / `FedRAMP` MLA).
             audit_enabled: true,
             audit_failure_mode: krabka_audit::AuditMode::FailOpen,
@@ -404,7 +408,9 @@ mod tests {
                 secs(2),
                 secs(30),
                 secs(25),
-                secs(1),
+                // KIP-13's `quota.window.size.seconds` ceiling: Kafka caps an
+                // applied throttle at 10 s, and #397 moved krabka onto it.
+                secs(10),
                 secs(1),
             )
         );

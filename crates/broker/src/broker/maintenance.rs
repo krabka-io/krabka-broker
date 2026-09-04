@@ -130,7 +130,6 @@ pub(super) fn spawn_cluster_data_maintenance(
             Arc::clone(liveness),
             crate::leader_rebalance::AutoRebalanceConfig {
                 check_interval: config.leader_imbalance_check_interval,
-                imbalance_threshold: config.leader_imbalance_per_broker,
             },
             shutdown.child_token(),
         ));

@@ -214,7 +214,8 @@ impl HealthState {
         let _ = self.inner.progress.set(progress);
     }
 
-    /// Returns the Kafka BrokerState ordinal (1=STARTING, 2=RECOVERY, 3=RUNNING, 6=PENDING_CONTROLLED_SHUTDOWN, 7=SHUTTING_DOWN).
+    /// Returns the Kafka `BrokerState` ordinal (1=STARTING, 2=RECOVERY,
+    /// 3=RUNNING, 6=`PENDING_CONTROLLED_SHUTDOWN`, 7=`SHUTTING_DOWN`).
     #[must_use]
     pub fn broker_state(&self) -> i64 {
         if self.inner.shutting_down.load(Ordering::Acquire) {

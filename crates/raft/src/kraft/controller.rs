@@ -248,7 +248,7 @@ struct Engine {
     replica_fetch_offsets: BTreeMap<NodeId, i64>,
     /// Discovered directory identities for replicas (including observers).
     replica_directory_ids: BTreeMap<NodeId, uuid::Uuid>,
-    /// Base system time for mapping SimInstant to wall-clock time.
+    /// Base system time for mapping `SimInstant` to wall-clock time.
     wall_clock_base: std::time::SystemTime,
     /// Highest high watermark any leader has reported to this node in a Fetch
     /// response. A follower clamps its own HWM to its log end, so this is the

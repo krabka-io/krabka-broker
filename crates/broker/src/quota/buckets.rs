@@ -47,11 +47,16 @@ pub(super) struct ControllerMutationBucket {
 }
 
 impl QuotaBuckets {
+    /// Buckets sized by the default quota window. The broker builds its own
+    /// with [`Self::with_window`] from `[runtime] quota_window`; this is for
+    /// callers that have no config to read, which is the in-process tests.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_window(krabka_units::secs(11))
+        Self::with_window(crate::config::DEFAULT_QUOTA_WINDOW)
     }
 
+    /// Buckets whose byte-rate burst is `rate * quota_window`, which is the
+    /// window Kafka averages a client's rate over before it throttles.
     #[must_use]
     pub fn with_window(quota_window: Time) -> Self {
         Self {
@@ -68,6 +73,12 @@ impl QuotaBuckets {
 
     /// Returns the bucket for `(quota_key, entity_key)`, and creates it
     /// lazily if it does not exist. A new bucket starts at `initial_rate`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bucket's last-accessed timestamp was poisoned by a panic
+    /// while it was held. Nothing under that lock can panic, so a poisoned
+    /// one means the process is already unwinding.
     #[must_use]
     pub fn get_or_create(
         &self,
@@ -107,6 +118,15 @@ impl QuotaBuckets {
     }
 
     /// Expire buckets unused for more than `max_age` (Kafka uses 1 hour).
+    ///
+    /// Returns the `(quota_key, user, client_id)` of every bucket it dropped,
+    /// so the caller can unregister the metric series they carried.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bucket's last-accessed timestamp was poisoned by a panic
+    /// while it was held.
+    #[must_use]
     pub fn expire_inactive(
         &self,
         max_age: std::time::Duration,
@@ -175,6 +195,26 @@ mod tests {
 
     fn key(user: &str) -> EntityKey {
         vec![("user".into(), Some(user.into()))]
+    }
+
+    /// KIP-13 measures a client's rate over `quota.window.num` windows of
+    /// `quota.window.size.seconds`, so a client may spend a whole window's
+    /// worth of bytes before it is throttled. The configured window is what
+    /// sizes that burst, and `[runtime] quota_window` is what configures it
+    /// (#397, #418).
+    #[test]
+    fn the_configured_window_sizes_a_new_bucket_s_burst() {
+        for (window, rate, spend_without_throttle) in [
+            (krabka_units::secs(1), 1_024_u64, 1_024_u64),
+            (krabka_units::secs(11), 1_024, 11_264),
+        ] {
+            let buckets = QuotaBuckets::with_window(window);
+            let bucket =
+                buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", rate);
+
+            check!(bucket.try_consume(spend_without_throttle) == spend_without_throttle);
+            check!(bucket.try_consume(1) == 0, "{window:?} burst was not exhausted");
+        }
     }
 
     #[test]

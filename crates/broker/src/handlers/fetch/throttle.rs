@@ -179,7 +179,7 @@ fn consume_consumer_quota(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::{Time, convert::TimeExt, millis};
+    use krabka_units::{Time, convert::TimeExt, millis, secs};
 
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {
@@ -199,14 +199,16 @@ mod tests {
             config_key: "consumer_byte_rate".into(),
             config_value: Some(1024.0),
         }));
-        let buckets = crate::quota::QuotaBuckets::new();
+        // A one-second window, so 4096 bytes at 1024 B/s is over the burst
+        // rather than inside the default 11-second one.
+        let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
         let delay_match =
             super::consume_consumer_quota(&img, &buckets, "alice", "app-x", 4096, millis(25));
         assert!(
             delay_match == millis(25),
             "tuple quota match should honor the configured cap; got {delay_match:?}"
         );
-        let buckets2 = crate::quota::QuotaBuckets::new();
+        let buckets2 = crate::quota::QuotaBuckets::with_window(secs(1));
         let delay_other =
             super::consume_consumer_quota(&img, &buckets2, "alice", "other", 4096, millis(25));
         assert!(

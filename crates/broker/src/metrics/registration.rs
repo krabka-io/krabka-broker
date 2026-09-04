@@ -209,6 +209,15 @@ impl BrokerMetrics {
             quota_entity_throttle_seconds_total: Family::default(),
             queued_requests: Gauge::default(),
             queued_request_bytes: Gauge::default(),
+            remote_log_reader_task_queue_size: Gauge::default(),
+            remote_log_reader_avg_idle_percent: Gauge::default(),
+            remote_log_reader_fetch_duration_seconds: Histogram::new(REQUEST_DURATION_BUCKETS),
+            remote_log_reader_rejected_total: Counter::default(),
+            remote_index_cache_hits_total: Counter::default(),
+            remote_index_cache_misses_total: Counter::default(),
+            remote_index_cache_evictions_total: Counter::default(),
+            remote_index_cache_bytes: Gauge::default(),
+            remote_index_cache_entries: Gauge::default(),
         }
     }
 
@@ -234,6 +243,7 @@ impl BrokerMetrics {
             metrics.register_group_8(&mut registry);
             metrics.register_group_9(&mut registry);
             metrics.register_group_10(&mut registry);
+            metrics.register_group_11(&mut registry);
         }
         metrics
     }

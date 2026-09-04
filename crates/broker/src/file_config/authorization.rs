@@ -21,6 +21,9 @@ use serde::Deserialize;
 pub struct FileAuthorizationConfig {
     #[serde(rename = "type", default)]
     pub authz_type: AuthzType,
+    /// Principals that bypass every ACL check, Kafka's `super.users`. The
+    /// active authorizer and the delegation-token `act-as` gate both read it.
+    /// Empty is the default and grants no bypass.
     #[serde(default)]
     pub super_users: Vec<String>,
     /// `Some` iff `authz_type == Opa`. Required in that case;

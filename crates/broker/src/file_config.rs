@@ -190,7 +190,14 @@ pub struct FileConfig {
     /// Operational runtime policy. Present values replace the current broker
     /// value; absent values retain it.
     pub runtime: Option<RuntimeFileConfig>,
+    /// This node's id, Kafka's `node.id` / `broker.id`. It is the id the
+    /// broker registers with the controller and reports in `Metadata`
+    /// responses. Absent leaves the `BrokerConfig` default intact.
     pub broker_id: Option<i32>,
+    /// Primary log directory, the first entry of Kafka's `log.dirs`. It holds
+    /// the `__cluster_metadata` raft log, and it is the partition data
+    /// directory when [`extra_log_dirs`][Self::extra_log_dirs] is empty.
+    /// Absent leaves the `BrokerConfig` default intact.
     pub log_dir: Option<String>,
     /// Additional JBOD data directories (KIP-113). Maps to
     /// [`crate::BrokerConfig::extra_log_dirs`].
@@ -234,6 +241,10 @@ pub struct FileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_heartbeat_interval: Option<Time>,
+    /// Name of the listener that carries inter-broker traffic — raft,
+    /// replication, and heartbeats. Kafka's `inter.broker.listener.name`. It
+    /// must match a `name` in [`listeners`][Self::listeners] when that list is
+    /// non-empty. Absent leaves the `BrokerConfig` default `"PLAINTEXT"`.
     pub inter_broker_listener_name: Option<String>,
 
     /// Maximum number of live broker connections across all listeners
@@ -300,6 +311,12 @@ pub struct FileConfig {
 
     #[serde(default)]
     pub listeners: Vec<FileListener>,
+    /// Raw Apache Kafka `server.properties` keys, for the settings krabka
+    /// reads under their Kafka names rather than a dedicated TOML key. The
+    /// broker consults `transaction.two.phase.commit.enable`,
+    /// `quota.window.num`, and `quota.window.size.seconds`. Any other entry is
+    /// accepted and ignored. A key set here loses to the equivalent dedicated
+    /// key, which is applied first.
     #[serde(default)]
     pub server_properties: std::collections::BTreeMap<String, String>,
 

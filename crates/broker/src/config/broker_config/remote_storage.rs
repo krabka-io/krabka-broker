@@ -53,6 +53,41 @@ macro_rules! remote_storage_fields {
             ///
             /// TOML: `[remote_storage.worm]`
             pub remote_storage_worm: Option<krabka_remote_storage::WormConfig>,
+
+            /// KIP-405: how many cold-tier reads may be in flight at once
+            /// (Kafka's `remote.log.reader.threads`, default 10).
+            ///
+            /// Every remote read runs on the tokio blocking pool that WAL
+            /// fsync, local fetch and replica IO also use, so without a cap a
+            /// burst of cold-tier consumers starves the local paths. The
+            /// broker ignores it when `remote_storage_backend` is `None`.
+            ///
+            /// TOML: `[remote_storage] reader_threads = 10`
+            pub remote_reader_threads: usize,
+
+            /// KIP-405: how many cold-tier reads may wait for a reader slot
+            /// before the broker refuses one (Kafka's
+            /// `remote.log.reader.max.pending.tasks`, default 100).
+            ///
+            /// A `Fetch` that arrives with the queue already full is answered
+            /// with an error for that partition rather than parked, which is
+            /// what Kafka's `RejectedExecutionException` path does.
+            ///
+            /// TOML: `[remote_storage] reader_max_pending_tasks = 100`
+            pub remote_reader_max_pending_tasks: usize,
+
+            /// KIP-405: the total-byte budget of the on-disk cache of remote
+            /// segment index objects under
+            /// `<log_dir>/remote-log-index-cache` (Kafka's
+            /// `remote.log.index.file.cache.total.size.bytes`, default 1 GiB).
+            ///
+            /// Without it every `Fetch` that lands in the cold tier
+            /// re-downloads the segment's `.index`, and a read-committed one
+            /// its `.txnindex` as well. The broker ignores it when
+            /// `remote_storage_backend` is `None`.
+            ///
+            /// TOML: `[remote_storage] index_cache_size = "1GiB"`
+            pub remote_index_cache_size: ByteSize,
         }
     };
 }

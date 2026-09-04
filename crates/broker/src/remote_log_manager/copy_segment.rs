@@ -642,11 +642,13 @@ mod tests {
             let rlmm: Arc<dyn RemoteLogMetadataManager> =
                 Arc::new(InmemoryRemoteLogMetadataManager::new());
             let metrics = BrokerMetrics::new();
+            let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
             let tier = RemoteTier {
                 archive: chain.archive(),
                 rsm: &rsm,
                 rlmm: &rlmm,
                 metrics: &metrics,
+                index_cache: &index_cache,
             };
 
             copy_one(

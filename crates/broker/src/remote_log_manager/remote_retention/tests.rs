@@ -303,6 +303,7 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
         },
         &rsm,
         &rlmm,
+        &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
     )
     .await;
     assert!(outcome.deleted == exports.len());
@@ -371,6 +372,7 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
         },
         &rsm,
         &rlmm,
+        &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
     )
     .await;
     assert!(outcome == RemoteRetentionOutcome::default());
@@ -404,6 +406,7 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
         },
         &rsm,
         &rlmm,
+        &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
     )
     .await;
     assert!(outcome == RemoteRetentionOutcome::default());
@@ -504,6 +507,7 @@ async fn remote_retention_pass_never_reaches_the_rsm_for_a_write_once_archive() 
         },
         &rsm,
         &rlmm,
+        &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
     )
     .await;
 
@@ -548,6 +552,7 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
             },
             &rsm,
             &rlmm,
+            &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
         )
         .await;
 
@@ -734,6 +739,7 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
         },
         &rsm,
         &rlmm,
+        &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
     )
     .await;
 
@@ -796,6 +802,7 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
         },
         &rsm,
         &rlmm,
+        &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
     )
     .await;
 
@@ -854,6 +861,7 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
         },
         &rsm,
         &rlmm,
+        &Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
     )
     .await;
 

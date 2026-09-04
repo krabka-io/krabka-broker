@@ -38,6 +38,15 @@ pub(crate) fn shared_test_metrics() -> &'static BrokerMetrics {
     METRICS.get_or_init(BrokerMetrics::new)
 }
 
+/// The index cache every unit-test tier shares. It is disabled: these tests
+/// sweep the archive, and a cache that stores nothing cannot make one of them
+/// pass by holding bytes a later assertion expects to be gone.
+fn shared_test_index_cache() -> &'static Arc<krabka_remote_storage::RemoteIndexCache> {
+    static CACHE: std::sync::OnceLock<Arc<krabka_remote_storage::RemoteIndexCache>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()))
+}
+
 /// The tier a unit test sweeps, wired to the shared metrics.
 pub(crate) fn tier<'a>(
     archive: ArchiveMode,
@@ -49,6 +58,7 @@ pub(crate) fn tier<'a>(
         rsm,
         rlmm,
         metrics: shared_test_metrics(),
+        index_cache: shared_test_index_cache(),
     }
 }
 

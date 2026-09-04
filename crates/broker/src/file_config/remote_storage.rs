@@ -5,7 +5,7 @@
 //! `apply_remote_storage` resolves that choice, layers WORM archive mode over
 //! an object store, and builds the remote-log metadata manager's policy.
 
-use krabka_units::{ByteSize, Time};
+use krabka_units::{ByteSize, Time, convert::ByteSizeExt as _};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -39,6 +39,21 @@ pub struct FileRemoteStorageConfig {
     /// Opt-in to the topic-backed `RemoteLogMetadataManager`.
     /// When absent, the broker uses the in-memory fixture.
     pub kafka_metadata: Option<FileKafkaRlmmConfig>,
+    /// How many cold-tier reads may run at once. Kafka's
+    /// `remote.log.reader.threads`; defaults to 10.
+    #[schemars(range(min = 1))]
+    pub reader_threads: Option<usize>,
+    /// How many cold-tier reads may wait for a reader slot before one is
+    /// refused. Kafka's `remote.log.reader.max.pending.tasks`; defaults to
+    /// 100.
+    #[schemars(range(min = 1))]
+    pub reader_max_pending_tasks: Option<usize>,
+    /// Byte budget of the on-disk cache of remote segment indexes under
+    /// `<log_dir>/remote-log-index-cache`. Kafka's
+    /// `remote.log.index.file.cache.total.size.bytes`; defaults to 1 GiB.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub index_cache_size: Option<ByteSize>,
 }
 
 /// TOML shape of `[remote_storage.kafka_metadata]`. Maps to
@@ -92,6 +107,35 @@ pub(super) fn apply_remote_storage(
     cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let Some(rs) = remote else { return Ok(()) };
+    if let Some(threads) = rs.reader_threads {
+        if threads == 0 {
+            return Err(invalid_runtime_value(
+                "remote_storage.reader_threads",
+                "must be at least 1: a reader pool with no slots would refuse every cold read",
+            ));
+        }
+        cfg.remote_reader_threads = threads;
+    }
+    if let Some(pending) = rs.reader_max_pending_tasks {
+        if pending == 0 {
+            return Err(invalid_runtime_value(
+                "remote_storage.reader_max_pending_tasks",
+                "must be at least 1: a queue with no room would refuse every cold read that \
+                 arrives while another is running",
+            ));
+        }
+        cfg.remote_reader_max_pending_tasks = pending;
+    }
+    if let Some(size) = rs.index_cache_size {
+        if size.bytes_u64() == 0 {
+            return Err(invalid_runtime_value(
+                "remote_storage.index_cache_size",
+                "must be positive: set it above the largest index object, or the cache stores \
+                 nothing and every cold fetch re-downloads its indexes",
+            ));
+        }
+        cfg.remote_index_cache_size = size;
+    }
     let set_count = usize::from(rs.storage_dir.is_some())
         + usize::from(rs.s3.is_some())
         + usize::from(rs.gcs.is_some());
@@ -257,7 +301,7 @@ pub(super) fn apply_remote_storage(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_units::{mebibytes, millis, secs};
+    use krabka_units::{gibibytes, mebibytes, millis, secs};
 
     use crate::file_config::FileConfig;
 
@@ -375,6 +419,56 @@ snapshot_interval = "90s"
             assert!(error.to_string().contains(field), "{field}: {error}");
         }
     }
+    #[test]
+    fn reader_bounds_and_index_cache_size_default_to_kafkas_values() {
+        let toml = r#"
+[remote_storage]
+storage_dir = "/tmp/tier"
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        check!(cfg.remote_reader_threads == 10);
+        check!(cfg.remote_reader_max_pending_tasks == 100);
+        check!(cfg.remote_index_cache_size == gibibytes(1));
+    }
+
+    #[test]
+    fn reader_bounds_and_index_cache_size_are_overridable() {
+        let toml = r#"
+[remote_storage]
+storage_dir = "/tmp/tier"
+reader_threads = 4
+reader_max_pending_tasks = 32
+index_cache_size = "256MiB"
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        check!(cfg.remote_reader_threads == 4);
+        check!(cfg.remote_reader_max_pending_tasks == 32);
+        check!(cfg.remote_index_cache_size == mebibytes(256));
+    }
+
+    #[test]
+    fn a_zero_reader_bound_or_cache_size_is_rejected() {
+        for (field, value) in [
+            ("reader_threads", "0"),
+            ("reader_max_pending_tasks", "0"),
+            ("index_cache_size", "\"0B\""),
+        ] {
+            let source = format!(
+                "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n{field} = {value}\n"
+            );
+            let file: FileConfig = toml::from_str(&source).expect("parse syntax");
+            let mut config = crate::config::BrokerConfig::default();
+            let error = file
+                .apply_to(&mut config)
+                .expect_err("a zero reader bound must fail");
+            assert!(error.to_string().contains(field), "{field}: {error}");
+        }
+    }
+
     #[test]
     fn remote_storage_local_and_s3_together_rejected() {
         let toml = r#"

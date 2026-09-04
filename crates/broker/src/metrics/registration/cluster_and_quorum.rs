@@ -1,4 +1,4 @@
-//! Registration of KRaft quorum, cluster-wide metadata state, Tiered Storage,
+//! Registration of `KRaft` quorum, cluster-wide metadata state, tiered storage,
 //! replication throttling, and per-entity client quota metrics.
 
 use prometheus_client::registry::Registry;
@@ -179,6 +179,54 @@ impl BrokerMetrics {
             "quota_entity_throttle_seconds",
             "Cumulative throttle duration in seconds applied per quota entity",
             self.quota_entity_throttle_seconds_total.clone(),
+        );
+    }
+
+    pub(super) fn register_group_11(&self, registry: &mut Registry) {
+        registry.register(
+            "remote_log_reader_task_queue_size",
+            "Cold-tier reads waiting for a slot in the bounded remote reader pool",
+            self.remote_log_reader_task_queue_size.clone(),
+        );
+        registry.register(
+            "remote_log_reader_avg_idle_percent",
+            "Percentage of the remote reader pool's slots that are currently free",
+            self.remote_log_reader_avg_idle_percent.clone(),
+        );
+        registry.register(
+            "remote_log_reader_fetch_duration_seconds",
+            "Time each cold-tier read spent holding a remote reader slot",
+            self.remote_log_reader_fetch_duration_seconds.clone(),
+        );
+        registry.register(
+            "remote_log_reader_rejected",
+            "Cold-tier reads refused because the remote reader pool's pending queue was full",
+            self.remote_log_reader_rejected_total.clone(),
+        );
+        registry.register(
+            "remote_index_cache_hits",
+            "Remote segment index lookups served from the on-disk index cache",
+            self.remote_index_cache_hits_total.clone(),
+        );
+        registry.register(
+            "remote_index_cache_misses",
+            "Remote segment index lookups that downloaded the index object",
+            self.remote_index_cache_misses_total.clone(),
+        );
+        registry.register(
+            "remote_index_cache_evictions",
+            "Remote index cache entries dropped to stay inside the byte budget",
+            self.remote_index_cache_evictions_total.clone(),
+        );
+        registry.register(
+            "remote_index_cache_bytes",
+            "Bytes currently held by the remote index cache",
+            self.remote_index_cache_bytes.clone(),
+        );
+        registry.register(
+            "remote_index_cache_entries",
+            "Entries currently held by the remote index cache",
+            self.remote_index_cache_entries.clone(),
         );
     }
 }

@@ -21,6 +21,8 @@
 mod acl_authorized;
 #[path = "jvm_acceptance_sasl/acl_cli.rs"]
 mod acl_cli;
+#[path = "jvm_acceptance_sasl/acl_output.rs"]
+mod acl_output;
 #[path = "jvm_acceptance_sasl/acl_denied.rs"]
 mod acl_denied;
 #[path = "jvm_acceptance_sasl/acl_prefixed.rs"]
@@ -28,6 +30,10 @@ mod acl_prefixed;
 mod jvm_acceptance;
 #[path = "jvm_acceptance_sasl/oauthbearer.rs"]
 mod oauthbearer;
+// The oracle harness `acl_cli` compares against. It is `jvm_acceptance_cli`'s
+// file, shared rather than copied: see its own module documentation.
+#[path = "jvm_acceptance_cli/oracle.rs"]
+mod oracle;
 #[path = "jvm_acceptance_sasl/plain.rs"]
 mod plain;
 #[path = "jvm_acceptance_sasl/scram.rs"]

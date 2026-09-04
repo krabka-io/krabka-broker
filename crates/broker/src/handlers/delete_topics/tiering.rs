@@ -63,8 +63,9 @@ pub(super) fn spawn_remote_cascades(broker: &Broker, tiered_to_cascade: Vec<Topi
         for tp in tiered_to_cascade {
             let rsm = reader.rsm.clone();
             let rlmm = reader.rlmm.clone();
+            let index_cache = reader.index_cache.clone();
             tokio::spawn(crate::remote_log_manager::cascade_remote_partition_delete(
-                tp, broker_id, archive, rsm, rlmm,
+                tp, broker_id, archive, rsm, rlmm, index_cache,
             ));
         }
     }

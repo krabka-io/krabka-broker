@@ -28,7 +28,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | `auto_join` | boolean | broker default |  | Enable automatic dynamic controller enrollment. |
 | `bootstrap_servers` | array of string | `[]` |  | KIP-853 controller discovery endpoints. Hosts remain unresolved so DNS names can be refreshed on each retry. |
 | `break_glass` | table | broker default |  | TOML shape of `[break_glass]`. Maps to [`crate::config::BreakGlassConfig`]. Every field is `Option`, so `approvers = []` and `signed_actions = []` are each a written choice and are distinct from omitting the key. `deny_unknown_fields` so a misspelled key is rejected at parse time. See `[break_glass]` below. |
-| `broker_id` | integer (int32) | broker default |  |  |
+| `broker_id` | integer (int32) | broker default |  | This node's id, Kafka's `node.id` / `broker.id`. It is the id the broker registers with the controller and reports in `Metadata` responses. Absent leaves the `BrokerConfig` default intact. |
 | `connections_max_idle` | string | broker default | duration | How long a connection may go without a complete request frame before the broker closes it (Kafka `connections.max.idle.ms`). Absent leaves the `BrokerConfig` default of ten minutes, which is Kafka's 600000. A `[[listeners]]` entry may carry its own `connections_max_idle`, which wins for that listener. |
 | `connections_max_reauth` | string | broker default | duration | KIP-368 `connections.max.reauth.ms`: how long an authenticated SASL session may live before the client must re-authenticate in band. Absent, or non-positive, disables re-authentication, which is Kafka's default. It applies to every mechanism: PLAIN, SCRAM and GSSAPI sessions are bounded by it alone, while an OAUTHBEARER or delegation-token session expires at the earlier of its credential's expiry and this window. A `[[listeners]]` entry may carry its own `connections_max_reauth`, which wins for that listener. |
 | `controller_election_timeout` | string | broker default | duration | Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`. It is the follower fetch watchdog, and 1.5x of it is the leader's check-quorum window: a leader that has not been fetched from by a majority of the voters within that window resigns its epoch. Absent leaves the `BrokerConfig` default intact. |
@@ -43,10 +43,10 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | `heartbeat_interval` | string | broker default | duration | How often this broker sends `BrokerHeartbeat` to the controller leader. Absent leaves the `BrokerConfig` default intact. |
 | `heartbeat_timeout` | string | broker default | duration | Controller-side session timeout for broker heartbeats. Absent leaves the `BrokerConfig` default intact. |
 | `inter_broker_credentials` | table | broker default |  | TOML shape of `[inter_broker_credentials]`. A `type` discriminator selects the variant. PLAIN/SCRAM inter-broker over TOML remain intentionally unexposed. See the `[inter_broker_credentials]` sections below. |
-| `inter_broker_listener_name` | string | broker default |  |  |
+| `inter_broker_listener_name` | string | broker default |  | Name of the listener that carries inter-broker traffic — raft, replication, and heartbeats. Kafka's `inter.broker.listener.name`. It must match a `name` in [`listeners`][Self::listeners] when that list is non-empty. Absent leaves the `BrokerConfig` default `"PLAINTEXT"`. |
 | `inter_broker_principal_node_ids` | map of string to integer (uint64) | broker default |  | Exact authenticated principal name to broker node ID bindings for diskless WAL follower fetches. |
 | `listeners` | array of tables | `[]` |  | See `[[listeners]]` below. |
-| `log_dir` | string | broker default |  |  |
+| `log_dir` | string | broker default |  | Primary log directory, the first entry of Kafka's `log.dirs`. It holds the `__cluster_metadata` raft log, and it is the partition data directory when [`extra_log_dirs`][Self::extra_log_dirs] is empty. Absent leaves the `BrokerConfig` default intact. |
 | `max_connections` | integer (uint) | broker default |  | Maximum number of live broker connections across all listeners (Kafka `max.connections`). Connections accepted past this ceiling are closed immediately. Absent leaves the `BrokerConfig` default `usize::MAX` (unlimited), matching Kafka's `Integer.MAX_VALUE`. |
 | `max_connections_per_ip` | integer (uint) | broker default |  | Maximum number of live connections from any single client IP (Kafka `max.connections.per.ip`). Absent leaves the `BrokerConfig` default `usize::MAX` (unlimited). |
 | `oauthbearer` | table | broker default |  | TOML shape of `[oauthbearer]`. Maps to [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri` selects the signed-JWT validator; setting `introspection_endpoint_uri` selects the RFC 7662 introspection validator; the two endpoint URIs are mutually exclusive. With neither set, the unsecured-JWS validator (development only) is used, and that fallback is rejected at config-load unless `allow_unsecured = true`. See `[oauthbearer]` below. |
@@ -59,7 +59,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | `runtime` | table | broker default |  | Validated operational policy loaded from `[runtime]`. See `[runtime]` below. |
 | `sasl_plain` | table | broker default |  | TOML shape of `[sasl_plain]`. Maps to [`crate::BrokerConfig::plain_credentials`]. See `[sasl_plain]` below. |
 | `schema_registry` | table | broker default |  | TOML shape of `[schema_registry]`. Mirrors the constructor arguments of [`crate::schema_validation::SchemaValidator::new`], the one registry client each broker holds. `deny_unknown_fields` so a misspelled key is rejected at parse time. A silently ignored `fail_open` would leave the operator with the opposite of the policy they wrote. See `[schema_registry]` below. |
-| `server_properties` | map of string to string | `{}` |  |  |
+| `server_properties` | map of string to string | `{}` |  | Raw Apache Kafka `server.properties` keys, for the settings krabka reads under their Kafka names rather than a dedicated TOML key. The broker consults `transaction.two.phase.commit.enable`, `quota.window.num`, and `quota.window.size.seconds`. Any other entry is accepted and ignored. A key set here loses to the equivalent dedicated key, which is applied first. |
 | `stretch` | table | broker default |  | `[stretch]` TOML section — the three-site stretch deployment. The table is all-or-nothing. When it is present, all three fields must be, because a half-built profile would let the broker start with a site layout that no node agrees on. See `[stretch]` below. |
 | `super_users` | array of string | broker default |  | Principals that are unconditionally authorized for all operations, including KIP-48 delegation-token `act-as`. Super-user status does not substitute for authentication. The delegation-token RPCs (`CreateDelegationToken`, `RenewDelegationToken`, `ExpireDelegationToken`) require a principal that authenticated with SASL or mTLS, and answer `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or one-way-TLS connection whatever this list holds. Listing `"ANONYMOUS"` is therefore rejected by `BrokerConfig::validate`: it cannot enable token issuance, and it would make every unauthenticated client a super-user for all operations. Give the token-minting client a SASL credential or a client certificate and list that principal here. `None` and `Some(empty)` are equivalent — both leave `BrokerConfig.super_users` empty. |
 | `tls_config` | table | broker default |  | TLS material for the controller listener (and any listener whose `protocol` is TLS-bearing). See `[tls_config]` below. |
@@ -84,8 +84,8 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `every_n` | integer (uint64) | `1000` |  |  |
-| `every_secs` | integer (uint64) | `60` | seconds |  |
+| `every_n` | integer (uint64) | `1000` |  | Emit a checkpoint after this many audit records. |
+| `every_secs` | integer (uint64) | `60` | seconds | Emit a checkpoint at least this often, in seconds. |
 
 #### `[audit.signing]`
 
@@ -93,8 +93,8 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `key_id` | string | required |  |  |
-| `key_path` | string | required |  |  |
+| `key_id` | string | required |  | Key id recorded on each checkpoint, so a verifier can follow a key rotation. |
+| `key_path` | string | required |  | Path to the PKCS#8 Ed25519 private key that signs audit checkpoints. |
 
 #### `[audit.spool]`
 
@@ -102,8 +102,8 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `dir` | string | `"audit-spool"` |  |  |
-| `max_bytes` | integer (uint64) | `1073741824` | bytes |  |
+| `dir` | string | `"audit-spool"` |  | Directory that holds the spool files. A relative path resolves under the broker's log directory. |
+| `max_bytes` | integer (uint64) | `1073741824` | bytes | Cap on the total size of the spool on disk. |
 | `sync_every_n` | integer (uint64) | `1` |  | Number of appended records between durable file syncs. |
 
 ### `[authorization]`
@@ -113,7 +113,7 @@ TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust sid
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `opa` | table | broker default |  | TOML shape of `[authorization.opa]`. Mirrors the constructor arguments of [`crate::authorizer::opa::OpaAuthorizer::new`]. Defaults are picked to match Strimzi's `KafkaAuthorizationOpa` (`50_000` LRU entries, 1 h TTL, fail-closed on OPA error). See `[authorization.opa]` below. |
-| `super_users` | array of string | `[]` |  |  |
+| `super_users` | array of string | `[]` |  | Principals that bypass every ACL check, Kafka's `super.users`. The active authorizer and the delegation-token `act-as` gate both read it. Empty is the default and grants no bypass. |
 | `type` | one of `allow_all`, `simple`, `opa` | broker default |  | Which [`crate::authorizer::Authorizer`] impl to instantiate. `snake_case` to match the spec's `type = "allow_all" \| "simple" \| "opa"` wire shape. |
 
 #### `[authorization.opa]`
@@ -167,7 +167,7 @@ TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `pr
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `kdc` | string | broker default |  | KDC endpoint (e.g. `tcp://kdc:88`) that bypasses krb5.conf discovery; falls back to krb5.conf when omitted. |
-| `keytab_path` | string | required |  |  |
+| `keytab_path` | string | required |  | Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI accept path reads it to answer a client's ticket. |
 | `max_time_skew` | string | broker default | duration | Maximum tolerated difference between client and broker clocks. |
 | `principal_to_local_rules` | array of string | `[]` |  | `auth_to_local` rule specs, applied in order (first match wins). |
 | `realm` | string | broker default |  | Default Kerberos realm, used for principals that omit their realm. |
@@ -177,29 +177,29 @@ TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `pr
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `client_principal` | string | required |  |  |
-| `kdc_url` | string | required |  |  |
-| `keytab_path` | string | required |  |  |
-| `service_name` | string | broker default |  |  |
-| `type` | constant `"gssapi"` | required |  |  |
+| `client_principal` | string | required |  | Kerberos principal this broker authenticates as when it dials a peer. |
+| `kdc_url` | string | required |  | KDC endpoint (for example `tcp://kdc:88`) used to obtain the service ticket, bypassing krb5.conf discovery. |
+| `keytab_path` | string | required |  | Keytab that holds the key for `client_principal`. |
+| `service_name` | string | broker default |  | The peer's `sasl.kerberos.service.name`. Defaults to `"kafka"` when omitted. |
+| `type` | constant `"gssapi"` | required |  | Selects this variant of the table. |
 
 ### `[inter_broker_credentials]` with `type = "oauth-bearer"`
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `token_path` | string | required |  | File containing the bearer token. A trailing newline is ignored. The token itself never appears in the parsed config's `Debug` form. |
-| `type` | constant `"oauth-bearer"` | required |  |  |
+| `type` | constant `"oauth-bearer"` | required |  | Selects this variant of the table. |
 
 ### `[[listeners]]`
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `advertised` | string | required |  |  |
-| `bind_addr` | string | required |  |  |
+| `advertised` | string | required |  | `host:port` published to clients in `Metadata` responses, Kafka's `advertised.listeners` entry for this listener. |
+| `bind_addr` | string | required |  | Local `host:port` this listener binds. |
 | `connections_max_idle` | string | broker default | duration | Per-listener `connections.max.idle.ms`. Absent leaves this listener on the broker-wide `connections_max_idle`. Maps to an entry in [`crate::BrokerConfig::connections_max_idle_overrides`]. |
 | `connections_max_reauth` | string | broker default | duration | Per-listener KIP-368 `connections.max.reauth.ms`. Absent leaves this listener on the broker-wide `connections_max_reauth`. Maps to an entry in [`crate::BrokerConfig::connections_max_reauth_overrides`]. |
-| `name` | string | required |  |  |
-| `protocol` | string | required |  |  |
+| `name` | string | required |  | Listener name, for example `"PLAINTEXT"` or `"SASL_SSL"`. It is the name `inter_broker_listener_name` and Kafka's `listener.security.protocol.map` refer to. |
+| `protocol` | string | required |  | Security protocol this listener speaks: `Plaintext`, `Ssl`, `SaslPlaintext`, or `SaslSsl`. |
 | `sasl_config` | table | broker default |  | See `[listeners.sasl_config]` below. |
 | `tls_config` | table | broker default |  | See `[listeners.tls_config]` below. |
 
@@ -207,16 +207,16 @@ TOML shape of `[gssapi]`. Maps to [`krabka_security::gssapi::GssapiConfig`]. `pr
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `enabled_mechanisms` | array of string | `[]` |  |  |
+| `enabled_mechanisms` | array of string | `[]` |  | SASL mechanisms this listener accepts, Kafka's `sasl.enabled.mechanisms`. Each entry is a wire name such as `PLAIN`, `SCRAM-SHA-256`, `GSSAPI`, or `OAUTHBEARER`; an unknown name is rejected at parse time. |
 
 #### `[listeners.tls_config]`
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `cert_path` | string | required |  |  |
-| `client_auth` | one of `Disabled`, `Optional`, `Required` | broker default |  |  |
-| `client_ca_path` | string | broker default |  |  |
-| `key_path` | string | required |  |  |
+| `cert_path` | string | required |  | PEM file holding this listener's server certificate chain. |
+| `client_auth` | one of `Disabled`, `Optional`, `Required` | broker default |  | Whether a TLS listener asks for and requires a client certificate, Kafka's `ssl.client.auth`. `Disabled` is the default and never asks; `Optional` asks and accepts a connection that presents none; `Required` rejects a connection that presents none. `Optional` and `Required` both need a `client_ca_path`. |
+| `client_ca_path` | string | broker default |  | PEM file of CA(s) this listener validates client certificates against. Absent leaves mTLS without a client trust store, so `client_auth` has to be `Disabled`. |
+| `key_path` | string | required |  | PEM file holding the private key for `cert_path`. |
 | `principal_mapping_rules` | array of string | `["DEFAULT"]` |  | KIP-371 `ssl.principal.mapping.rules`: how the Subject DN of an mTLS peer certificate becomes the principal name ACLs and `super_users` are written against. Each entry is either `DEFAULT`, which uses the DN itself, or `RULE:pattern/replacement/[L\|U]`, where `pattern` has to match the whole DN, `replacement` may reference capture groups as `$1`, and a trailing `L` or `U` lowercases or uppercases the result. The rules are tried in order and the first match wins. Defaults to `["DEFAULT"]`, so a listener that says nothing keeps Kafka's behaviour of using the full DN. A malformed entry is rejected at startup. |
 | `trust_roots_path` | string | broker default |  | PEM file of CA(s) this broker trusts when validating a PEER's server cert as an outbound inter-broker / controller-quorum dialer. The operator renders the cluster CA here so KIP-595 controller peers can mutually authenticate over the controller listener. Maps to [`krabka_security::TlsConfig::trust_roots_path`]. |
 
@@ -274,7 +274,10 @@ TOML shape of `[remote_storage]`. Maps to [`crate::BrokerConfig::remote_storage_
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `gcs` | table | broker default |  | TOML shape of `[remote_storage.gcs]`. Maps to [`krabka_remote_storage::GcsConfig`]. Omitting all credential fields (`service_account_path`, `service_account_key`, `application_credentials_path`) selects GKE Workload Identity / Application Default Credentials (keyless) — the primary production path. See `[remote_storage.gcs]` below. |
+| `index_cache_size` | string | broker default | byte size | Byte budget of the on-disk cache of remote segment indexes under `<log_dir>/remote-log-index-cache`. Kafka's `remote.log.index.file.cache.total.size.bytes`; defaults to 1 GiB. |
 | `kafka_metadata` | table | broker default |  | TOML shape of `[remote_storage.kafka_metadata]`. Maps to [`crate::config::KafkaRlmmConfig`]. See `[remote_storage.kafka_metadata]` below. |
+| `reader_max_pending_tasks` | integer (uint) | broker default |  | How many cold-tier reads may wait for a reader slot before one is refused. Kafka's `remote.log.reader.max.pending.tasks`; defaults to 100. |
+| `reader_threads` | integer (uint) | broker default |  | How many cold-tier reads may run at once. Kafka's `remote.log.reader.threads`; defaults to 10. |
 | `s3` | table | broker default |  | TOML shape of `[remote_storage.s3]`. Maps to [`krabka_remote_storage::S3Config`]. See `[remote_storage.s3]` below. |
 | `storage_dir` | string | broker default |  | Root directory for the local `LocalTieredStorage` backend. |
 | `worm` | table | broker default |  | TOML shape of `[remote_storage.worm]`. Maps to [`krabka_remote_storage::WormConfig`]. Presence of the table enables WORM archive mode. Unlike [`FileRemoteStorageS3Config`] this derives `Debug` plainly, and that is deliberate: it holds a *path* to a signing key and the key's public id, neither of which is credential material, and an operator debugging a chain needs to see which key signed it. Do not "fix" this into a redacting impl. See `[remote_storage.worm]` below. |
@@ -346,170 +349,168 @@ Validated operational policy loaded from `[runtime]`.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `acl_max_principal` | string | broker default | byte size |  |
-| `acl_max_resource_name` | string | broker default | byte size |  |
-| `audit_event_queue_capacity` | integer (uint) | broker default |  |  |
-| `audit_partition_wait_timeout` | string | broker default | duration |  |
-| `audit_spool_replay_interval` | string | broker default | duration |  |
-| `audit_stats_poll_interval` | string | broker default | duration |  |
-| `audit_tail_read_max` | string | broker default | byte size |  |
-| `audit_tail_window_offsets` | integer (int64) | broker default |  |  |
-| `auto_join_retry_backoff` | string | broker default | duration |  |
-| `auto_join_voter_request_timeout` | string | broker default | duration |  |
-| `barrier_injection_timeout` | string | broker default | duration |  |
-| `barrier_max_groups` | integer (uint) | broker default |  |  |
-| `barrier_max_topics_per_group` | integer (uint) | broker default |  |  |
-| `barrier_min_injection_interval` | string | broker default | duration |  |
-| `barrier_recovery_read_max` | string | broker default | byte size |  |
-| `barrier_retained_cuts` | integer (int32) | broker default |  |  |
-| `barrier_state_num_partitions` | integer (int32) | broker default |  |  |
-| `barrier_state_replication_factor` | integer (int16) | broker default |  |  |
-| `classic_group_initial_rebalance_delay` | string | broker default | duration |  |
-| `cleaner_interval` | string | broker default | duration |  |
-| `client_metrics_default_interval` | string | broker default | duration |  |
-| `client_metrics_eviction_tick` | string | broker default | duration |  |
-| `client_metrics_otlp_queue_capacity` | integer (uint) | broker default |  |  |
-| `client_metrics_prom_snapshot_ttl` | string | broker default | duration |  |
-| `client_metrics_stale_floor` | string | broker default | duration |  |
-| `client_metrics_stale_push_intervals` | integer (uint32) | broker default |  |  |
-| `client_metrics_telemetry_max` | string | broker default | byte size |  |
-| `connection_creation_throttle_max` | string | broker default | duration |  |
-| `consumer_group_heartbeat_interval` | string | broker default | duration |  |
-| `consumer_group_max_heartbeat_interval` | string | broker default | duration |  |
-| `consumer_group_max_session_timeout` | string | broker default | duration |  |
-| `consumer_group_max_size` | integer (uint) | broker default |  |  |
-| `consumer_group_min_heartbeat_interval` | string | broker default | duration |  |
-| `consumer_group_min_session_timeout` | string | broker default | duration |  |
-| `consumer_group_session_timeout` | string | broker default | duration |  |
-| `controlled_shutdown_drain_timeout` | string | broker default | duration |  |
-| `controller_election_timeout` | string | broker default | duration |  |
-| `controller_fetch_miss_limit` | integer (uint32) | broker default |  |  |
-| `controller_heartbeat_interval` | string | broker default | duration |  |
-| `controller_mutation_quota_window` | string | broker default | duration |  |
-| `coordinator_actor_mailbox_capacity` | integer (uint) | broker default |  |  |
-| `coordinator_session_expiry_tick` | string | broker default | duration |  |
-| `coordinator_shutdown_ack_timeout` | string | broker default | duration |  |
-| `default_min_insync_replicas` | integer (int32) | broker default |  |  |
-| `delegation_token_default_renew_period` | string | broker default | duration |  |
-| `delegation_token_expiry_check_interval` | string | broker default | duration |  |
-| `delegation_token_max_lifetime` | string | broker default | duration |  |
-| `diskless_wal_flush_interval` | string | broker default | duration |  |
-| `diskless_wal_flush_max_size` | string | broker default | byte size |  |
-| `diskless_wal_hot_tail_max_size` | string | broker default | byte size |  |
-| `diskless_wal_index_projection_timeout` | string | broker default | duration |  |
-| `diskless_wal_local_replica_count` | integer (uint) | broker default |  |  |
-| `diskless_wal_trim_safety_lag` | integer (int64) | broker default |  |  |
-| `future_log_move_read_chunk` | string | broker default | byte size |  |
-| `future_log_move_retry_backoff` | string | broker default | duration |  |
-| `gauge_poll_interval` | string | broker default | duration |  |
-| `heartbeat_interval` | string | broker default | duration |  |
-| `heartbeat_timeout` | string | broker default | duration |  |
-| `inter_broker_server_name` | string | broker default |  |  |
-| `isr_scan_interval` | string | broker default | duration |  |
-| `leader_imbalance_check_interval` | string | broker default | duration |  |
-| `leader_imbalance_per_broker` | string | broker default | ratio |  |
-| `liveness_tick_interval` | string | broker default | duration |  |
-| `log_delivery_clock_uncertainty` | string | broker default | duration |  |
-| `log_read_buffer_cap` | string | broker default | byte size |  |
-| `log_segment_bytes` | string | broker default | byte size |  |
-| `log_timestamp_scan_window` | string | broker default | byte size |  |
-| `max_connections` | integer (uint) | broker default |  |  |
-| `max_connections_per_ip` | integer (uint) | broker default |  |  |
-| `max_incremental_fetch_session_cache_slots` | integer (uint) | broker default |  |  |
-| `max_produce_group` | integer (uint) | broker default |  |  |
+| `acl_max_principal` | string | broker default | byte size | Maximum encoded ACL principal length. |
+| `acl_max_resource_name` | string | broker default | byte size | Maximum encoded ACL resource-name length. |
+| `audit_event_queue_capacity` | integer (uint) | broker default |  | Capacity of the asynchronous audit event queue. |
+| `audit_partition_wait_timeout` | string | broker default | duration | Maximum wait for the audit partition to become available. |
+| `audit_spool_replay_interval` | string | broker default | duration | Cadence at which the audit spool replays records it could not append. |
+| `audit_stats_poll_interval` | string | broker default | duration | Cadence of the audit statistics poll. |
+| `audit_tail_read_max` | string | broker default | byte size | Maximum bytes read by one audit tail request. |
+| `audit_tail_window_offsets` | integer (int64) | broker default |  | Number of offsets included in one audit tail request. |
+| `auto_join_retry_backoff` | string | broker default | duration | Retry delay between KIP-853 dynamic-quorum auto-join attempts. |
+| `auto_join_voter_request_timeout` | string | broker default | duration | Timeout carried by a dynamic-quorum `AddRaftVoter` request. |
+| `barrier_injection_timeout` | string | broker default | duration | Deadline for one barrier injection to reach every target partition. |
+| `barrier_max_groups` | integer (uint) | broker default |  | Maximum number of barrier groups the cluster accepts. |
+| `barrier_max_topics_per_group` | integer (uint) | broker default |  | Maximum number of topics in one barrier group. |
+| `barrier_min_injection_interval` | string | broker default | duration | Shortest periodic injection interval a barrier group may ask for. |
+| `barrier_recovery_read_max` | string | broker default | byte size | Maximum bytes requested by one `__barrier_state` recovery read. |
+| `barrier_retained_cuts` | integer (int32) | broker default |  | Number of cuts a barrier group keeps before it tombstones the oldest. |
+| `barrier_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__barrier_state` internal topic. |
+| `barrier_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__barrier_state` internal topic. |
+| `classic_group_initial_rebalance_delay` | string | broker default | duration | Initial delay before a classic group begins rebalancing, Kafka's `group.initial.rebalance.delay.ms`. |
+| `cleaner_interval` | string | broker default | duration | Cadence of log cleaner maintenance. |
+| `client_metrics_default_interval` | string | broker default | duration | Default KIP-714 client telemetry subscription push interval. |
+| `client_metrics_eviction_tick` | string | broker default | duration | Cadence at which the KIP-714 client-metrics cache evicts entries. |
+| `client_metrics_otlp_queue_capacity` | integer (uint) | broker default |  | Capacity of the client-metrics OTLP forwarding queue. |
+| `client_metrics_prom_snapshot_ttl` | string | broker default | duration | Lifetime of a Prometheus client-metrics snapshot. |
+| `client_metrics_stale_floor` | string | broker default | duration | Minimum age at which a client-metrics entry counts as stale. |
+| `client_metrics_stale_push_intervals` | integer (uint32) | broker default |  | Number of missed push intervals after which client metrics expire. |
+| `client_metrics_telemetry_max` | string | broker default | byte size | Maximum accepted KIP-714 client telemetry payload size. |
+| `connection_creation_throttle_max` | string | broker default | duration | Maximum KIP-612 connection-creation quota delay. |
+| `consumer_group_heartbeat_interval` | string | broker default | duration | Default KIP-848 consumer-group heartbeat interval, Kafka's `group.consumer.heartbeat.interval.ms`. |
+| `consumer_group_max_heartbeat_interval` | string | broker default | duration | Upper bound on the negotiated consumer-group heartbeat interval, Kafka's `group.consumer.max.heartbeat.interval.ms`. |
+| `consumer_group_max_session_timeout` | string | broker default | duration | Upper bound on the negotiated consumer-group session timeout, Kafka's `group.consumer.max.session.timeout.ms`. |
+| `consumer_group_max_size` | integer (uint) | broker default |  | Maximum number of members in one consumer group, Kafka's `group.consumer.max.size`. |
+| `consumer_group_min_heartbeat_interval` | string | broker default | duration | Lower bound on the negotiated consumer-group heartbeat interval, Kafka's `group.consumer.min.heartbeat.interval.ms`. |
+| `consumer_group_min_session_timeout` | string | broker default | duration | Lower bound on the negotiated consumer-group session timeout, Kafka's `group.consumer.min.session.timeout.ms`. |
+| `consumer_group_session_timeout` | string | broker default | duration | Default KIP-848 consumer-group session timeout, Kafka's `group.consumer.session.timeout.ms`. |
+| `controlled_shutdown_drain_timeout` | string | broker default | duration | How long a controlled shutdown waits for the controller to acknowledge `should_shut_down` before it falls back to a hard shutdown. |
+| `controller_election_timeout` | string | broker default | duration | Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`. It is the follower fetch watchdog, and 1.5x of it is the leader's check-quorum window: a leader that a majority of the voters has not fetched from within that window resigns its epoch. |
+| `controller_fetch_miss_limit` | integer (uint32) | broker default |  | Consecutive follower fetch misses tolerated before a new election. |
+| `controller_heartbeat_interval` | string | broker default | duration | Raft heartbeat interval on the controller quorum. It should stay at or below `controller_election_timeout / 3`. |
+| `controller_mutation_quota_window` | string | broker default | duration | Time window whose throughput defines the KIP-599 controller-mutation quota burst capacity. |
+| `coordinator_actor_mailbox_capacity` | integer (uint) | broker default |  | Mailbox capacity of each coordinator actor. |
+| `coordinator_session_expiry_tick` | string | broker default | duration | Cadence of the consumer-group session expiry scan. |
+| `coordinator_shutdown_ack_timeout` | string | broker default | duration | Maximum wait for coordinator shutdown acknowledgements. |
+| `default_min_insync_replicas` | integer (int32) | broker default |  | Broker default for a topic's `min.insync.replicas`, Kafka's `min.insync.replicas`. A topic override wins over it. |
+| `delegation_token_default_renew_period` | string | broker default | duration | KIP-48: default renew period, Kafka's `delegation.token.expiry.time.ms`. It is the initial expiry offset at create time, and the implicit renew period when a `RenewDelegationToken` request asks for `-1`. |
+| `delegation_token_expiry_check_interval` | string | broker default | duration | KIP-48: cadence of the sweep that tombstones expired delegation tokens, Kafka's `delegation.token.expiry.check.interval.ms`. |
+| `delegation_token_max_lifetime` | string | broker default | duration | KIP-48: hard upper bound on a delegation token's lifetime, Kafka's `delegation.token.max.lifetime.ms`. A renew request is clamped to it. |
+| `diskless_wal_flush_interval` | string | broker default | duration | Cadence of diskless WAL flushes to the object store. |
+| `diskless_wal_flush_max_size` | string | broker default | byte size | Maximum bytes included in one diskless WAL object-store flush. |
+| `diskless_wal_hot_tail_max_size` | string | broker default | byte size | Broker-wide byte ceiling for quorum-committed diskless hot-tail batches. |
+| `diskless_wal_index_projection_timeout` | string | broker default | duration | Maximum wait for a published diskless WAL index record to be projected. |
+| `diskless_wal_local_replica_count` | integer (uint) | broker default |  | Local replica count used in diskless WAL mode. |
+| `diskless_wal_trim_safety_lag` | integer (int64) | broker default |  | Committed offsets retained behind the diskless WAL trim frontier. |
+| `future_log_move_read_chunk` | string | broker default | byte size | Bytes copied per read during a KIP-113 future-log move. |
+| `future_log_move_retry_backoff` | string | broker default | duration | Retry delay after a KIP-113 future-log move fails. |
+| `gauge_poll_interval` | string | broker default | duration | Cadence at which broker gauges are refreshed. |
+| `heartbeat_interval` | string | broker default | duration | How often this broker sends `BrokerHeartbeat` to the controller leader. |
+| `heartbeat_timeout` | string | broker default | duration | How long the controller waits without a heartbeat before it marks a broker dead. |
+| `inter_broker_server_name` | string | broker default |  | TLS SNI and SASL server name used for outbound inter-broker connections. |
+| `isr_scan_interval` | string | broker default | duration | Cadence of in-sync-replica maintenance. |
+| `leader_imbalance_check_interval` | string | broker default | duration | How often the auto-rebalance ticker fires, Kafka's `leader.imbalance.check.interval.seconds`. |
+| `liveness_tick_interval` | string | broker default | duration | Cadence of broker liveness maintenance. |
+| `log_delivery_clock_uncertainty` | string | broker default | duration | Declared bound on how far this broker's clock can be from true time. It has an effect only under the scheduled delivery policy: a batch becomes visible once `max_timestamp + log_delivery_clock_uncertainty <= now`, so delivery is never early and is late by at most twice this bound. |
+| `log_read_buffer_cap` | string | broker default | byte size | Cap on the initial allocation a decoded or raw segment read makes. |
+| `log_segment_bytes` | string | broker default | byte size | Roll the active segment once it grows past this. Kafka's `log.segment.bytes`, the broker default for a topic's `segment.bytes`. |
+| `log_timestamp_scan_window` | string | broker default | byte size | Size of the window a timestamp search reads the log in. |
+| `max_connections` | integer (uint) | broker default |  | Maximum number of live broker connections across all listeners, Kafka's `max.connections`. A connection accepted past this ceiling is closed immediately. |
+| `max_connections_per_ip` | integer (uint) | broker default |  | Maximum number of live connections from any single client IP, Kafka's `max.connections.per.ip`. |
+| `max_incremental_fetch_session_cache_slots` | integer (uint) | broker default |  | KIP-227: maximum number of incremental-fetch sessions kept in the per- broker cache, Kafka's `max.incremental.fetch.session.cache.slots`. When the cache is full a non-privileged session is evicted in LRU order. |
+| `max_produce_group` | integer (uint) | broker default |  | Maximum number of produce requests combined into one append group. |
 | `message_max_bytes` | string | broker default | byte size | Kafka's broker-wide `message.max.bytes`: the largest record batch a topic that sets no `max.message.bytes` accepts. |
-| `metadata_max_bytes_between_snapshots` | string | broker default | byte size |  |
-| `metadata_max_snapshot_interval` | string | broker default | duration |  |
-| `metadata_raft_command_queue_capacity` | integer (uint) | broker default |  |  |
-| `metadata_raft_fetch_max` | string | broker default | byte size |  |
-| `metadata_snapshot_fetch_max` | string | broker default | byte size |  |
-| `metadata_snapshot_interval_records` | integer (uint64) | broker default |  |  |
-| `oauth_jwks_http_timeout` | string | broker default | duration |  |
-| `observer_fetch_max` | string | broker default | byte size |  |
-| `observer_lag_bound` | integer (uint64) | broker default |  |  |
-| `observer_poll_interval` | string | broker default | duration |  |
-| `offsets_retention` | string | broker default | duration |  |
-| `offsets_retention_check_interval` | string | broker default | duration |  |
-| `offsets_topic_metadata_wait_timeout` | string | broker default | duration |  |
-| `offsets_topic_num_partitions` | integer (int32) | broker default |  |  |
-| `offsets_topic_replication_factor` | integer (int16) | broker default |  |  |
-| `opa_http_timeout` | string | broker default | duration |  |
-| `operator_recovery_deadline` | string | broker default | duration |  |
-| `partition_disk_scan_interval` | string | broker default | duration |  |
-| `partition_writer_queue_depth` | integer (uint) | broker default |  |  |
-| `producer_id_expiration` | string | broker default | duration |  |
-| `producer_id_expiration_scan_interval` | string | broker default | duration |  |
-| `queued_max_request_bytes` | string | broker default | byte size | Maximum byte size across all queued requests before accepting additional requests is paused. |
-| `queued_max_requests` | integer (uint) | broker default |  | Maximum number of queued requests allowed in the broker dispatch queue. |
-| `quota_throttle_max` | string | broker default | duration |  |
-| `quota_window` | string | broker default | duration | Time window used for calculating client byte rate and burst quota buckets. |
-| `record_decompression_max_ratio` | string | broker default | ratio |  |
-
-| `record_decompression_output_ceiling` | string | broker default | byte size |  |
-| `record_decompression_output_floor` | string | broker default | byte size |  |
-| `remote_log_manager_interval` | string | broker default | duration |  |
-| `replica_lag_time_max` | string | broker default | duration |  |
-| `replication_epoch_fence_backoff` | string | broker default | duration |  |
-| `replication_fetch_max` | string | broker default | byte size |  |
-| `replication_fetch_max_wait` | string | broker default | duration |  |
-| `replication_fetch_min` | string | broker default | byte size |  |
-| `replication_reconnect_delay_cap` | string | broker default | duration |  |
-| `replication_reconnect_initial_delay` | string | broker default | duration |  |
-| `replication_send_error_backoff` | string | broker default | duration |  |
-| `replication_throttle_exhausted_backoff` | string | broker default | duration |  |
-| `replication_unexpected_error_backoff` | string | broker default | duration |  |
-| `replication_unknown_topic_retry_delay` | string | broker default | duration |  |
-| `rlmm_bootstrap_backoff_initial` | string | broker default | duration |  |
-| `rlmm_bootstrap_backoff_max` | string | broker default | duration |  |
-| `rlmm_reconcile_tick` | string | broker default | duration |  |
-| `schema_registry_http_timeout` | string | broker default | duration |  |
-| `self_registration_backoff_max` | string | broker default | duration |  |
-| `self_registration_backoff_min` | string | broker default | duration |  |
-| `self_registration_max_attempts` | integer (uint32) | broker default |  |  |
-| `sendfile_min` | string | broker default | byte size |  |
-| `share_group_backlog_poll_interval` | string | broker default | duration |  |
-| `share_group_enable` | boolean | broker default |  |  |
-| `share_group_heartbeat_interval` | string | broker default | duration |  |
-| `share_group_isolation_level` | string | broker default |  |  |
-| `share_group_max_delivery_attempts` | integer (int16) | broker default |  |  |
-| `share_group_max_inflight_records` | integer (int32) | broker default |  |  |
-| `share_group_max_size` | integer (uint) | broker default |  |  |
-| `share_group_record_lock_duration` | string | broker default | duration |  |
-| `share_group_session_timeout` | string | broker default | duration |  |
-| `share_recovery_read_max` | string | broker default | byte size |  |
-| `share_session_cache_max_when_unlimited` | integer (uint) | broker default |  |  |
-| `share_state_num_partitions` | integer (int32) | broker default |  |  |
-| `share_state_replication_factor` | integer (int16) | broker default |  |  |
-| `socket_receive_buffer` | string | broker default | byte size |  |
-| `socket_request_max` | string | broker default | byte size |  |
-| `socket_send_buffer` | string | broker default | byte size |  |
-| `startup_leader_wait_timeout` | string | broker default | duration |  |
-| `streams_group_acceptable_recovery_lag` | integer (int64) | broker default |  |  |
-| `streams_group_assignor` | string | broker default |  |  |
-| `streams_group_enable` | boolean | broker default |  |  |
-| `streams_group_heartbeat_interval` | string | broker default | duration |  |
-| `streams_group_max_size` | integer (uint) | broker default |  |  |
-| `streams_group_num_standby_replicas` | integer (int32) | broker default |  |  |
-| `streams_group_num_warmup_replicas` | integer (int32) | broker default |  |  |
-| `streams_group_session_timeout` | string | broker default | duration |  |
-| `streams_group_task_offset_interval` | string | broker default | duration |  |
-| `streams_internal_topic_replication_factor` | integer (int16) | broker default |  |  |
-| `sync_group_follower_wait` | string | broker default | duration |  |
-| `telemetry_decompressed_output_ceiling` | string | broker default | byte size |  |
-| `telemetry_decompressed_output_floor` | string | broker default | byte size |  |
-| `telemetry_max_decompression_ratio` | string | broker default | ratio |  |
-| `tls_reload_interval` | string | broker default | duration |  |
-| `transaction_max_timeout` | string | broker default | duration |  |
-| `transaction_min_timeout` | string | broker default | duration |  |
-| `transaction_recovery_read_max` | string | broker default | byte size |  |
-| `transaction_state_num_partitions` | integer (int32) | broker default |  |  |
-| `transaction_state_replication_factor` | integer (int16) | broker default |  |  |
-| `txn_abort_cleanup_interval` | string | broker default | duration |  |
-| `txn_id_expiration` | string | broker default | duration |  |
-| `txn_id_expiration_cleanup_interval` | string | broker default | duration |  |
-| `unclean_recovery_aggressive_deadline` | string | broker default | duration |  |
-| `unclean_recovery_balanced_deadline` | string | broker default | duration |  |
-| `unclean_recovery_queue_capacity` | integer (uint) | broker default |  |  |
+| `metadata_max_bytes_between_snapshots` | string | broker default | byte size | Committed metadata-log bytes between snapshots, Kafka's `metadata.log.max.record.bytes.between.snapshots`. |
+| `metadata_max_snapshot_interval` | string | broker default | duration | Maximum time between metadata-log snapshots, Kafka's `metadata.log.max.snapshot.interval.ms`. Zero disables the time-based cap. |
+| `metadata_raft_command_queue_capacity` | integer (uint) | broker default |  | Capacity of the metadata Raft engine command queue. |
+| `metadata_raft_fetch_max` | string | broker default | byte size | Per-read and per-snapshot-request byte budget on the metadata Raft log. |
+| `metadata_snapshot_fetch_max` | string | broker default | byte size | Maximum metadata snapshot size a follower fetches. The Raft core enforces an immutable 1 GiB ceiling above it. |
+| `metadata_snapshot_interval_records` | integer (uint64) | broker default |  | KIP-630: snapshot the metadata log once the committed offset advances this many records past the last snapshot, then prune below it. |
+| `oauth_jwks_http_timeout` | string | broker default | duration | Timeout for one OAuth JWKS fetch. |
+| `observer_fetch_max` | string | broker default | byte size | Maximum bytes fetched by one metadata observer request. |
+| `observer_lag_bound` | integer (uint64) | broker default |  | KIP-853: maximum log-entry lag an observer may have and still be promotable to a voter. |
+| `observer_poll_interval` | string | broker default | duration | Cadence of the KIP-853 observer promotion poll. |
+| `offsets_retention` | string | broker default | duration | How long a committed consumer offset is kept after its group becomes empty, Kafka's `offsets.retention.minutes`. It must be a whole number of minutes. |
+| `offsets_retention_check_interval` | string | broker default | duration | Cadence of the expired-offset sweep, Kafka's `offsets.retention.check.interval.ms`. |
+| `offsets_topic_metadata_wait_timeout` | string | broker default | duration | Maximum wait for `__consumer_offsets` metadata before a request fails. |
+| `offsets_topic_num_partitions` | integer (int32) | broker default |  | Partition count of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.num.partitions`. |
+| `offsets_topic_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.replication.factor`. |
+| `opa_http_timeout` | string | broker default | duration | Timeout for one OPA authorization request. |
+| `operator_recovery_deadline` | string | broker default | duration | Deadline for an operator-triggered unclean recovery. |
+| `partition_disk_scan_interval` | string | broker default | duration | Cadence of the partition disk-usage scan that feeds the `partition_disk_bytes` gauge. Zero disables the scanner and spawns no background task. |
+| `partition_writer_queue_depth` | integer (uint) | broker default |  | Capacity of each partition-writer request queue. |
+| `producer_id_expiration` | string | broker default | duration | How long a producer id may stay idle before its state expires, Kafka's `producer.id.expiration.ms`. |
+| `producer_id_expiration_scan_interval` | string | broker default | duration | Cadence of the producer-state expiry scan, Kafka's `producer.id.expiration.check.interval.ms`. |
+| `queued_max_request_bytes` | string | broker default | byte size | Maximum byte size across all queued requests before accepting additional requests is paused, Kafka's `queued.max.request.bytes`. |
+| `queued_max_requests` | integer (uint) | broker default |  | Maximum number of queued requests allowed in the broker dispatch queue, Kafka's `queued.max.requests`. |
+| `quota_throttle_max` | string | broker default | duration | Maximum client quota throttle delay, which bounds how long one response mutes a client. Equivalent to Kafka's `quota.window.size.seconds * (quota.window.num - 1)`. |
+| `quota_window` | string | broker default | duration | Time window that sizes the client byte-rate quota token bucket's burst capacity. Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`. |
+| `record_decompression_max_ratio` | string | broker default | ratio | Maximum accepted decompression ratio for a produced record batch. |
+| `record_decompression_output_ceiling` | string | broker default | byte size | Maximum decompressed-output allowance granted to a record batch. |
+| `record_decompression_output_floor` | string | broker default | byte size | Minimum decompressed-output allowance granted to a record batch, whatever the ratio bound computes. |
+| `remote_log_manager_interval` | string | broker default | duration | KIP-405: tick cadence of the `RemoteLogManager` copy and retention task. Kafka's `remote.log.manager.task.interval.ms`. |
+| `replica_lag_time_max` | string | broker default | duration | Maximum follower lag before the leader proposes an ISR shrink. Kafka's `replica.lag.time.max.ms`. |
+| `replication_epoch_fence_backoff` | string | broker default | duration | Retry delay after a leader-epoch fence. |
+| `replication_fetch_max` | string | broker default | byte size | Maximum bytes a follower requests from a leader in one replication fetch. It reaches the leader as the fetch request's `max_bytes`. |
+| `replication_fetch_max_wait` | string | broker default | duration | Maximum time a leader holds a replication fetch that is not yet satisfied. It reaches the leader as the fetch request's `max_wait_ms`. |
+| `replication_fetch_min` | string | broker default | byte size | Minimum bytes that satisfy a replication fetch. It reaches the leader as the fetch request's `min_bytes`, which the leader honours as a floor. |
+| `replication_reconnect_delay_cap` | string | broker default | duration | Maximum delay between leader reconnection attempts. |
+| `replication_reconnect_initial_delay` | string | broker default | duration | Initial delay before a follower reconnects to a leader. |
+| `replication_send_error_backoff` | string | broker default | duration | Retry delay after sending a replication request fails. |
+| `replication_throttle_exhausted_backoff` | string | broker default | duration | Delay after a follower exhausts its replication throttle budget. |
+| `replication_unexpected_error_backoff` | string | broker default | duration | Retry delay after an unexpected replication error. |
+| `replication_unknown_topic_retry_delay` | string | broker default | duration | Retry delay when the leader does not yet know the topic. |
+| `rlmm_bootstrap_backoff_initial` | string | broker default | duration | Initial retry delay while remote-log metadata bootstrap is incomplete. |
+| `rlmm_bootstrap_backoff_max` | string | broker default | duration | Maximum retry delay while remote-log metadata bootstrap is incomplete. |
+| `rlmm_reconcile_tick` | string | broker default | duration | Cadence of KIP-405 remote-log metadata reconciliation. |
+| `schema_registry_http_timeout` | string | broker default | duration | Timeout for one schema-registry request. |
+| `self_registration_backoff_max` | string | broker default | duration | Maximum delay between broker self-registration attempts. |
+| `self_registration_backoff_min` | string | broker default | duration | Initial delay between broker self-registration attempts. |
+| `self_registration_max_attempts` | integer (uint32) | broker default |  | Maximum self-registration attempts before startup fails. |
+| `sendfile_min` | string | broker default | byte size | Minimum response size eligible for a `sendfile` kernel drain. Smaller responses go through the `pread` and write copy. |
+| `share_group_backlog_poll_interval` | string | broker default | duration | Cadence of the share-group backlog poll. |
+| `share_group_enable` | boolean | broker default |  | Whether the broker serves KIP-932 share groups, Kafka's `group.share.enable`. |
+| `share_group_heartbeat_interval` | string | broker default | duration | Default share-group heartbeat interval, Kafka's `group.share.heartbeat.interval.ms`. |
+| `share_group_isolation_level` | string | broker default |  | Transaction isolation for share-group reads, Kafka's `share.group.isolation.level`. Either `read-uncommitted`, which reads up to the high watermark, or `read-committed`, which clamps reads to the last stable offset. |
+| `share_group_max_delivery_attempts` | integer (int16) | broker default |  | Number of times a share record may be delivered before it is archived, Kafka's `group.share.delivery.count.limit`. |
+| `share_group_max_inflight_records` | integer (int32) | broker default |  | Maximum records a share partition may hold in flight, Kafka's `group.share.partition.max.record.locks`. |
+| `share_group_max_size` | integer (uint) | broker default |  | Maximum number of members in one share group, Kafka's `group.share.max.size`. |
+| `share_group_record_lock_duration` | string | broker default | duration | How long an acquired share record stays locked before it is released for redelivery, Kafka's `group.share.record.lock.duration.ms`. |
+| `share_group_session_timeout` | string | broker default | duration | Default share-group session timeout, Kafka's `group.share.session.timeout.ms`. |
+| `share_recovery_read_max` | string | broker default | byte size | Maximum bytes read by one share-state recovery read. |
+| `share_session_cache_max_when_unlimited` | integer (uint) | broker default |  | Ceiling on the share-session cache when the group count is unlimited. |
+| `share_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.num.partitions`. |
+| `share_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.replication.factor`. |
+| `socket_receive_buffer` | string | broker default | byte size | Broker socket receive-buffer size, Kafka's `socket.receive.buffer.bytes`. |
+| `socket_request_max` | string | broker default | byte size | Maximum encoded request size accepted from a socket, Kafka's `socket.request.max.bytes`. |
+| `socket_send_buffer` | string | broker default | byte size | Broker socket send-buffer size, Kafka's `socket.send.buffer.bytes`. |
+| `startup_leader_wait_timeout` | string | broker default | duration | Maximum time the broker waits for a controller leader during startup. |
+| `streams_group_acceptable_recovery_lag` | integer (int64) | broker default |  | Changelog lag, in records, below which a task is treated as caught up, the group's `streams.acceptable.recovery.lag`. |
+| `streams_group_assignor` | string | broker default |  | Server-side task assignor for streams groups: `auto`, `sticky`, or `highly-available`. `auto` picks `highly-available` when the topology has a stateful subtopology and `sticky` otherwise. |
+| `streams_group_enable` | boolean | broker default |  | Whether the broker serves KIP-1071 streams groups. |
+| `streams_group_heartbeat_interval` | string | broker default | duration | Default streams-group heartbeat interval, the group's `streams.heartbeat.interval.ms`. |
+| `streams_group_max_size` | integer (uint) | broker default |  | Maximum number of members in one streams group. |
+| `streams_group_num_standby_replicas` | integer (int32) | broker default |  | Number of standby replicas the assignor places for each task, the group's `streams.num.standby.replicas`. |
+| `streams_group_num_warmup_replicas` | integer (int32) | broker default |  | Maximum number of warm-up replicas the assignor may move at once, the group's `streams.num.warmup.replicas`. |
+| `streams_group_session_timeout` | string | broker default | duration | Default streams-group session timeout, the group's `streams.session.timeout.ms`. |
+| `streams_group_task_offset_interval` | string | broker default | duration | Cadence at which members report task offsets, the group's `streams.task.offset.interval.ms`. |
+| `streams_internal_topic_replication_factor` | integer (int16) | broker default |  | Replication factor of the internal topics a streams group creates, such as its repartition and changelog topics. |
+| `sync_group_follower_wait` | string | broker default | duration | Maximum time a classic-protocol follower waits for its `SyncGroup` assignment. |
+| `telemetry_decompressed_output_ceiling` | string | broker default | byte size | Maximum decompressed-output allowance granted to a telemetry payload. |
+| `telemetry_decompressed_output_floor` | string | broker default | byte size | Minimum decompressed-output allowance granted to a telemetry payload, whatever the ratio bound computes. |
+| `telemetry_max_decompression_ratio` | string | broker default | ratio | Maximum accepted decompression ratio for a KIP-714 telemetry payload. |
+| `tls_reload_interval` | string | broker default | duration | Cadence at which the TLS watcher polls the certificate, key, and client-CA files and rebuilds the server configuration if any changed. Zero disables the periodic watcher. |
+| `transaction_max_timeout` | string | broker default | duration | Maximum transaction timeout a producer may request, Kafka's `transaction.max.timeout.ms`. |
+| `transaction_min_timeout` | string | broker default | duration | Minimum transaction timeout a producer may request. |
+| `transaction_recovery_read_max` | string | broker default | byte size | Maximum bytes requested by one `__transaction_state` recovery read. |
+| `transaction_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__transaction_state` internal topic, Kafka's `transaction.state.log.num.partitions`. |
+| `transaction_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__transaction_state` internal topic, Kafka's `transaction.state.log.replication.factor`. |
+| `txn_abort_cleanup_interval` | string | broker default | duration | KIP-98: how often the idle-transaction reaper scans for `Ongoing` transactions whose timeout has elapsed and aborts them. Kafka's `transaction.abort.timed.out.transaction.cleanup.interval.ms`. Zero disables the reaper and spawns no background task. |
+| `txn_id_expiration` | string | broker default | duration | KIP-98: how long a transactional id may sit in a terminal or idle state before the coordinator tombstones it out of `__transaction_state`. Kafka's `transactional.id.expiration.ms`. |
+| `txn_id_expiration_cleanup_interval` | string | broker default | duration | KIP-98: how often the transactional-id expiry sweep scans the `__transaction_state` partitions this broker leads. Kafka's `transaction.remove.expired.transaction.cleanup.interval.ms`. Zero disables the sweep and spawns no background task. |
+| `unclean_recovery_aggressive_deadline` | string | broker default | duration | Replica-log collection deadline under the aggressive unclean-recovery strategy. |
+| `unclean_recovery_balanced_deadline` | string | broker default | duration | Replica-log collection deadline under the balanced unclean-recovery strategy. |
+| `unclean_recovery_queue_capacity` | integer (uint) | broker default |  | Capacity of the unclean-recovery work queue. |
 
 ### `[sasl_plain]`
 
@@ -546,10 +547,10 @@ TLS material for the controller listener (and any listener whose `protocol` is T
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `cert_path` | string | required |  |  |
-| `client_auth` | one of `Disabled`, `Optional`, `Required` | broker default |  |  |
-| `client_ca_path` | string | broker default |  |  |
-| `key_path` | string | required |  |  |
+| `cert_path` | string | required |  | PEM file holding this listener's server certificate chain. |
+| `client_auth` | one of `Disabled`, `Optional`, `Required` | broker default |  | Whether a TLS listener asks for and requires a client certificate, Kafka's `ssl.client.auth`. `Disabled` is the default and never asks; `Optional` asks and accepts a connection that presents none; `Required` rejects a connection that presents none. `Optional` and `Required` both need a `client_ca_path`. |
+| `client_ca_path` | string | broker default |  | PEM file of CA(s) this listener validates client certificates against. Absent leaves mTLS without a client trust store, so `client_auth` has to be `Disabled`. |
+| `key_path` | string | required |  | PEM file holding the private key for `cert_path`. |
 | `principal_mapping_rules` | array of string | `["DEFAULT"]` |  | KIP-371 `ssl.principal.mapping.rules`: how the Subject DN of an mTLS peer certificate becomes the principal name ACLs and `super_users` are written against. Each entry is either `DEFAULT`, which uses the DN itself, or `RULE:pattern/replacement/[L\|U]`, where `pattern` has to match the whole DN, `replacement` may reference capture groups as `$1`, and a trailing `L` or `U` lowercases or uppercases the result. The rules are tried in order and the first match wins. Defaults to `["DEFAULT"]`, so a listener that says nothing keeps Kafka's behaviour of using the full DN. A malformed entry is rejected at startup. |
 | `trust_roots_path` | string | broker default |  | PEM file of CA(s) this broker trusts when validating a PEER's server cert as an outbound inter-broker / controller-quorum dialer. The operator renders the cluster CA here so KIP-595 controller peers can mutually authenticate over the controller listener. Maps to [`krabka_security::TlsConfig::trust_roots_path`]. |
 

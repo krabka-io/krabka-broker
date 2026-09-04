@@ -127,13 +127,12 @@ pub(crate) fn validate_spec_limits(
             spec.retained_cuts
         )));
     }
-    if let Some(interval) = spec.interval {
-        if interval.millis_i64() < min_interval.millis_i64() {
-            return Err(BarrierError::InvalidDefinition(format!(
-                "injection interval {:?} is below minimum {:?}",
-                interval, min_interval
-            )));
-        }
+    if let Some(interval) = spec.interval
+        && interval.millis_i64() < min_interval.millis_i64()
+    {
+        return Err(BarrierError::InvalidDefinition(format!(
+            "injection interval {interval:?} is below minimum {min_interval:?}"
+        )));
     }
     Ok(())
 }

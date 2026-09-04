@@ -36,16 +36,24 @@ fn leader_site_drift_partitions(
         .count()
 }
 
+/// Spawns the timer that samples the broker's cluster gauges.
+///
+/// `observability` is the registry the sample is written to and the health
+/// state the broker-state gauge reads; they travel together because every
+/// sample writes the first from the second.
 pub(super) fn spawn_broker_gauge_updater(
     partitions: Arc<PartitionRegistry>,
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
     node_id: krabka_metadata::NodeId,
-    metrics: crate::metrics::BrokerMetrics,
+    observability: (
+        crate::metrics::BrokerMetrics,
+        Option<crate::health::HealthState>,
+    ),
     config: &BrokerConfig,
     shutdown: CancellationToken,
-    health: Option<crate::health::HealthState>,
 ) {
+    let (metrics, health) = observability;
     let poll_interval = config.gauge_poll_interval;
     let default_min_insync_replicas = config.default_min_insync_replicas;
     let static_voter_count = config.controller_quorum_voters.len();
@@ -190,12 +198,11 @@ pub(super) fn spawn_broker_gauge_updater(
             // KRaft consensus metrics (#390)
             if let Some(snap) = controller.quorum_snapshot() {
                 for state_label in crate::metrics::RaftStateLabel::ALL {
-                    let is_active = if state_label.state == snap.current_state {
-                        1
-                    } else {
-                        0
-                    };
-                    metrics.raft_current_state.get_or_create(&state_label).set(is_active);
+                    let is_active = i64::from(state_label.state == snap.current_state);
+                    metrics
+                        .raft_current_state
+                        .get_or_create(&state_label)
+                        .set(is_active);
                 }
                 metrics.raft_current_epoch.set(i64::from(snap.leader_epoch));
                 metrics.raft_high_watermark.set(snap.high_watermark);
@@ -289,10 +296,9 @@ mod tests {
             Arc::new(fake_source(image, None)),
             Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
             node_id,
-            metrics.clone(),
+            (metrics.clone(), None),
             &config,
             shutdown.child_token(),
-            None,
         );
 
         tokio::time::timeout(std::time::Duration::from_secs(1), async {

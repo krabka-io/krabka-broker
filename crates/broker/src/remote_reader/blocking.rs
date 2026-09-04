@@ -32,14 +32,28 @@ impl RemoteReader {
         }
     }
 
+    /// Reads one of a segment's indexes, from the bounded index cache when it
+    /// is already there and from the remote tier otherwise.
+    ///
+    /// The cache lookup and the download both run on the blocking pool: a hit
+    /// reads a local file, which is blocking work too, and running both there
+    /// keeps one code path rather than two. A consumer walking a cold segment
+    /// therefore downloads each index object once instead of once per `Fetch`,
+    /// which is what Kafka's `RemoteIndexCache` buys `RemoteLogManager.read`.
     pub(super) async fn fetch_index_blocking(
         &self,
         metadata: RemoteLogSegmentMetadata,
         kind: IndexType,
     ) -> Result<Vec<u8>, RemoteStorageError> {
         let rsm = self.rsm.clone();
-        match tokio::task::spawn_blocking(move || rsm.fetch_index(&metadata, kind)).await {
-            Ok(res) => res,
+        let cache = self.index_cache.clone();
+        let segment_id = metadata.remote_log_segment_id().id;
+        match tokio::task::spawn_blocking(move || {
+            cache.get_or_fetch(segment_id, kind, || rsm.fetch_index(&metadata, kind))
+        })
+        .await
+        {
+            Ok(res) => res.map(|(bytes, _)| bytes),
             Err(e) => {
                 warn!(error = %e, "remote-reader: fetch_index task panicked");
                 Err(RemoteStorageError::Io(std::io::Error::other(

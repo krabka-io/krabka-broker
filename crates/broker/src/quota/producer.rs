@@ -62,7 +62,9 @@ mod tests {
             vec![("user", Some("alice")), ("client-id", Some("app"))],
             128.0,
         );
-        let buckets = QuotaBuckets::new();
+        // A one-second window keeps the burst at the configured rate, so
+        // these amounts are about the overage and not about the window.
+        let buckets = QuotaBuckets::with_window(secs(1));
 
         let gold = consume_producer_quota(&img, &buckets, "alice", "app", "gold", 1024, secs(1));
         let bulk = consume_producer_quota(&img, &buckets, "alice", "app", "bulk", 64, secs(1));
@@ -92,7 +94,7 @@ mod tests {
     #[test]
     fn producer_quota_delay_reflects_exact_overage_at_configured_rate() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1_000.0);
-        let buckets = QuotaBuckets::new();
+        let buckets = QuotaBuckets::with_window(secs(1));
 
         let delay =
             consume_producer_quota(&img, &buckets, "alice", "app", "default", 1_250, secs(1));

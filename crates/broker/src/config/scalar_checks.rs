@@ -415,6 +415,17 @@ impl BrokerConfig {
                 "audit_tail_window_offsets must be positive".into(),
             ));
         }
+        self.validate_internal_topic_scalars()
+    }
+
+    /// The internal topics' partition counts, replication factors and the
+    /// transaction and barrier timeouts.
+    ///
+    /// Split out of [`Self::validate_additional_runtime_scalars`] because that
+    /// one function checks every remaining runtime scalar and had outgrown the
+    /// length a reader can hold; these three tables are the part that stands
+    /// on its own.
+    fn validate_internal_topic_scalars(&self) -> Result<(), BrokerError> {
         for (name, value) in [
             (
                 "default_min_insync_replicas",

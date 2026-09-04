@@ -151,7 +151,6 @@ fn unit_bearing_fields_carry_their_format() {
     let expected = [
         ("heartbeat_interval", "duration"),
         ("log_segment_bytes", "byte-size"),
-        ("leader_imbalance_per_broker", "ratio"),
     ];
     for (key, format) in expected {
         assert!(

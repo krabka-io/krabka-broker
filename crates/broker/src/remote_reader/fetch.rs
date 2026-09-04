@@ -130,8 +130,65 @@ mod tests {
 
     use super::*;
     use crate::remote_reader::test_support::{
-        NotReadyRlmm, populated_reader, sparse_remote_segment_reader, tp,
+        NotReadyRlmm, caching_sparse_remote_segment_reader, populated_reader,
+        sparse_remote_segment_reader, tp,
     };
+
+    /// KIP-405's `RemoteIndexCache`: a consumer walking one cold segment
+    /// downloads its `.index` once, not once per `Fetch`. Before the cache,
+    /// every batch a consumer read from the tier pulled the whole offset index
+    /// again, which is two or three object GETs per batch on a topic whose
+    /// segments are all remote.
+    #[tokio::test]
+    async fn two_fetches_of_one_segment_download_its_offset_index_once() {
+        let (reader, _dirs, index_fetches) = caching_sparse_remote_segment_reader();
+
+        for offset in [10, 12] {
+            reader
+                .fetch_batch(&tp(), LeaderEpoch(0), offset, 4096)
+                .await
+                .expect("ok")
+                .expect("both offsets are in the synthetic remote segment");
+        }
+
+        assert!(
+            index_fetches.load(std::sync::atomic::Ordering::Relaxed) == 1,
+            "the second fetch must read the cached index, not download it again"
+        );
+        let stats = reader.index_cache.stats();
+        assert!(stats.hits == 1 && stats.misses == 1, "{stats:?}");
+    }
+
+    /// The same segment's index is fetched again once the cache is told the
+    /// segment is going away, which is what keeps a deleted segment's bytes
+    /// from holding the budget against live ones.
+    #[tokio::test]
+    async fn dropping_a_segment_from_the_cache_makes_the_next_read_download_again() {
+        let (reader, _dirs, index_fetches) = caching_sparse_remote_segment_reader();
+        let segment_id = reader
+            .rlmm
+            .list_remote_log_segments(&tp())
+            .expect("list")
+            .first()
+            .expect("one segment")
+            .remote_log_segment_id()
+            .id;
+
+        reader
+            .fetch_batch(&tp(), LeaderEpoch(0), 10, 4096)
+            .await
+            .expect("ok")
+            .expect("a batch");
+        reader.index_cache.remove_segment(segment_id);
+        reader
+            .fetch_batch(&tp(), LeaderEpoch(0), 12, 4096)
+            .await
+            .expect("ok")
+            .expect("a batch");
+
+        assert!(index_fetches.load(std::sync::atomic::Ordering::Relaxed) == 2);
+        assert!(reader.index_cache.stats().hits == 0);
+    }
 
     #[tokio::test]
     async fn fetch_batch_finds_segment_and_returns_first_batch() {

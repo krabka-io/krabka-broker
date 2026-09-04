@@ -518,7 +518,12 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         // `delivery.max.delay.ms` bound answers with.
         BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards { .. }) => INVALID_TIMESTAMP,
         BrokerError::UnsupportedApi { .. } => UNSUPPORTED_VERSION,
-        BrokerError::PartitionWriterDied { .. } => NOT_LEADER_OR_FOLLOWER,
+        // A raft write that reached a node which is no longer the leader is
+        // the same answer to a client as a partition whose writer is gone:
+        // retry, after refreshing metadata.
+        BrokerError::PartitionWriterDied { .. }
+        | BrokerError::Raft(krabka_raft::RaftError::NotLeader { .. }) => NOT_LEADER_OR_FOLLOWER,
+        BrokerError::Raft(krabka_raft::RaftError::Network(_)) => REQUEST_TIMED_OUT,
         BrokerError::GroupInvalidState { .. } => REBALANCE_IN_PROGRESS,
         BrokerError::UnknownMember { .. } => UNKNOWN_MEMBER_ID,
         BrokerError::GenerationMismatch { .. } => ILLEGAL_GENERATION,
@@ -557,11 +562,8 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::Tls(_)
         | BrokerError::BootstrapFile { .. }
         | BrokerError::InvalidLeaderRebalanceInterval { .. }
-        | BrokerError::InvalidLeaderRebalanceThreshold { .. }
         | BrokerError::InvalidRuntimeConfig(_)
-        | BrokerError::ShutdownTimeout(_) => UNKNOWN_SERVER_ERROR,
-        BrokerError::Raft(krabka_raft::RaftError::NotLeader { .. }) => NOT_LEADER_OR_FOLLOWER,
-        BrokerError::Raft(krabka_raft::RaftError::Network(_)) => REQUEST_TIMED_OUT,
-        BrokerError::Raft(_) => UNKNOWN_SERVER_ERROR,
+        | BrokerError::ShutdownTimeout(_)
+        | BrokerError::Raft(_) => UNKNOWN_SERVER_ERROR,
     }
 }

@@ -448,7 +448,7 @@ pub struct QuotaTypeLabel {
     pub quota_type: QuotaType,
 }
 
-/// KRaft voter consensus state label set, paired with `raft_current_state`.
+/// `KRaft` voter consensus state label set, paired with `raft_current_state`.
 /// One-hot encoded across the four mutually exclusive states.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct RaftStateLabel {

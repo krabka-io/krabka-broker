@@ -94,7 +94,10 @@ fn start_runtime_watchers(
     let fetch_sessions = Arc::new(crate::fetch_session::FetchSessionCache::new(
         config.max_incremental_fetch_session_cache_slots,
     ));
-    let quota_buckets = Arc::new(crate::quota::QuotaBuckets::new());
+    // KIP-13's `quota.window.num` * `quota.window.size.seconds`: the window a
+    // client's byte rate is averaged over, which is also the burst a bucket
+    // allows before it throttles (#418).
+    let quota_buckets = Arc::new(crate::quota::QuotaBuckets::with_window(config.quota_window));
     tokio::spawn(crate::quota::run(
         controller.watch_image(),
         Arc::clone(&quota_buckets),
@@ -196,12 +199,16 @@ pub(super) async fn start_broker_runtime(
         &Arc<crate::txn::coordinator::TxnCoordinator>,
         &Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
     ),
-    // The two things the runtime needs pre-built: the diskless WAL runtime,
-    // and the metric registry the coordinators already report into.
-    runtime_deps: (&DisklessRuntime, crate::metrics::BrokerMetrics),
-    health: Option<crate::health::HealthState>,
+    // The three things the runtime needs pre-built: the diskless WAL runtime,
+    // the metric registry the coordinators already report into, and the
+    // health state the readiness probe and the gauge sampler both read.
+    runtime_deps: (
+        &DisklessRuntime,
+        crate::metrics::BrokerMetrics,
+        Option<crate::health::HealthState>,
+    ),
 ) -> Result<BrokerRuntimeStartup, BrokerError> {
-    let (diskless_runtime, metrics) = runtime_deps;
+    let (diskless_runtime, metrics, health) = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();
     let throttle_state = Arc::new(crate::throttle::ThrottleState::new());
     let inter_listener_protocol = config
@@ -255,10 +262,9 @@ pub(super) async fn start_broker_runtime(
         Arc::clone(controller),
         Arc::clone(&liveness),
         config.node_id,
-        metrics.clone(),
+        (metrics.clone(), health),
         config,
         supervisor_shutdown.child_token(),
-        health,
     );
     let disk_scanner_handle = spawn_storage_security_maintenance(
         config,

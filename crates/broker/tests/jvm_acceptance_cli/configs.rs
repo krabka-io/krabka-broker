@@ -365,3 +365,172 @@ async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
         "alter should be refused with Kafka's message: {rendered}"
     );
 }
+
+// ── the entity types `kafka-configs` reaches through the other two APIs ─────
+//
+// `topics` and `brokers`, above, are `IncrementalAlterConfigs` and
+// `DescribeConfigs`. The four entity types below are not: `groups` and
+// `client-metrics` are the same pair over two more resource types, and
+// `clients` and the `users`+`clients` tuple are `AlterClientQuotas` and
+// `DescribeClientQuotas` instead. `ConfigCommand` chooses which pair to send
+// from the `--entity-type` alone, so an entity type that reaches the wrong
+// handler -- or no handler -- is invisible to any test that only drives
+// `topics`.
+//
+// Each case runs the same `kafka-configs` binary, from the same
+// `apache/kafka:4.3.1` image, against krabka and against a stock broker of that
+// release, and compares the parsed answer.
+
+use crate::{
+    config_output::{Configs, parse_describe, quota_entities},
+    oracle::{Oracle, Side},
+};
+
+/// One entity type, addressed and altered the way an operator addresses it.
+///
+/// `entity` is spliced into both the `--alter` and the `--describe`, so the
+/// tuple case is expressible: it is two `--entity-type`/`--entity-name` pairs
+/// in one entity, and nothing but the argument list says so.
+struct EntityCase {
+    /// What a failure names.
+    label: &'static str,
+    /// The `--entity-type`/`--entity-name` arguments that address it.
+    entity: &'static [&'static str],
+    /// The `--add-config` argument.
+    add_config: &'static str,
+    /// The keys the describe must report back, whatever values it gives them.
+    ///
+    /// The values are not written down here: the quota path renders every
+    /// number as a Java `double`, so `1024` comes back as `1024.0`, and a
+    /// suite that pinned one spelling of that would be asserting Java's
+    /// `Double.toString` rather than anything about a broker. The oracle
+    /// settles the values instead.
+    keys: &'static [&'static str],
+    /// What the quota path calls this entity, or `None` for the entity types
+    /// that go through `DescribeConfigs` and print no such line.
+    quota_entity: Option<&'static str>,
+}
+
+/// The four entity types this file did not previously reach.
+///
+/// `groups` carries `share.auto.offset.reset` rather than one of the
+/// `consumer.*` group configs. That is the key both releases agree is a group
+/// config; the `consumer.*` ones are Kafka's and krabka does not register
+/// them, so a case built on those would be a report of that gap rather than a
+/// test of the `groups` entity type, which is what this table is for.
+const ENTITY_CASES: &[EntityCase] = &[
+    EntityCase {
+        label: "clients",
+        entity: &["--entity-type", "clients", "--entity-name", "krabka-client"],
+        add_config: "consumer_byte_rate=1024,producer_byte_rate=2048",
+        keys: &["consumer_byte_rate", "producer_byte_rate"],
+        quota_entity: Some("client-id 'krabka-client'"),
+    },
+    EntityCase {
+        label: "groups",
+        entity: &["--entity-type", "groups", "--entity-name", "krabka-cfg-grp"],
+        add_config: "share.auto.offset.reset=earliest",
+        keys: &["share.auto.offset.reset"],
+        quota_entity: None,
+    },
+    EntityCase {
+        label: "client-metrics",
+        entity: &[
+            "--entity-type",
+            "client-metrics",
+            "--entity-name",
+            "krabka-cfg-metrics",
+        ],
+        add_config: "interval.ms=60000,metrics=org.apache.kafka.",
+        keys: &["interval.ms", "metrics"],
+        quota_entity: None,
+    },
+    EntityCase {
+        label: "the users+clients tuple",
+        entity: &[
+            "--entity-type",
+            "users",
+            "--entity-name",
+            "krabka-cfg-user",
+            "--entity-type",
+            "clients",
+            "--entity-name",
+            "krabka-client",
+        ],
+        add_config: "request_percentage=42",
+        keys: &["request_percentage"],
+        // Both components, in the order `ConfigCommand` renders a tuple. A
+        // broker that dropped the client half would answer for the user alone,
+        // and every value above would still match.
+        quota_entity: Some("user-principal 'krabka-cfg-user', client-id 'krabka-client'"),
+    },
+];
+
+/// `--alter --add-config` then `--describe` over each entity type, compared
+/// with Apache Kafka.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Docker"]
+async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
+    // Kafka first: a key one release calls a group config and the other does
+    // not fails here, on the stock broker, rather than being read as a krabka
+    // bug.
+    let oracle = tokio::task::spawn_blocking(|| Oracle::start("configs-entities"))
+        .await
+        .expect("oracle boot");
+    let oracle_side = Side::Oracle(&oracle);
+
+    let (broker, _dir) = start_host_broker().await;
+    nc_check_connectivity();
+    let advertised = broker0_advertised().to_owned();
+    let krabka_side = Side::Krabka {
+        bootstrap: &advertised,
+    };
+
+    for case in ENTITY_CASES {
+        let mut answers: Vec<Configs> = Vec::new();
+        for side in [&oracle_side, &krabka_side] {
+            let mut alter = vec!["--bootstrap-server", side.bootstrap(), "--alter"];
+            alter.extend_from_slice(case.entity);
+            alter.extend_from_slice(&["--add-config", case.add_config]);
+            let altered = side.run("kafka-configs", &alter);
+            assert!(
+                altered.succeeded(),
+                "{}: --alter over {} was refused:\n{}",
+                side.label(),
+                case.label,
+                altered.text(),
+            );
+
+            let mut describe = vec!["--bootstrap-server", side.bootstrap(), "--describe"];
+            describe.extend_from_slice(case.entity);
+            let described = side.run("kafka-configs", &describe).expect_success();
+            let configs = parse_describe(&described.stdout);
+            for key in case.keys {
+                assert!(
+                    configs.contains_key(*key),
+                    "{}: --describe over {} lost {key}: got {configs:?}\n{}",
+                    side.label(),
+                    case.label,
+                    described.stdout,
+                );
+            }
+            let entities = quota_entities(&described.stdout);
+            let expected: Vec<String> = case.quota_entity.into_iter().map(str::to_owned).collect();
+            assert!(
+                entities == expected,
+                "{}: --describe over {} named {entities:?}, expected {expected:?}\n{}",
+                side.label(),
+                case.label,
+                described.stdout,
+            );
+            answers.push(configs);
+        }
+        assert!(
+            answers[0] == answers[1],
+            "{}: krabka and Apache Kafka disagreed: {answers:?}",
+            case.label,
+        );
+    }
+
+    broker.shutdown().await;
+}

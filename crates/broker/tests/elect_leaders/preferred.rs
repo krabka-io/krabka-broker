@@ -7,7 +7,7 @@ use assert2::assert;
 use crate::{
     cluster_lock, support,
     wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
-    wire::{create_topic_plaintext, drive_elect_leaders},
+    wire::{create_topic_plaintext, drive_elect_all_partitions, drive_elect_leaders},
 };
 
 /// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
@@ -122,4 +122,46 @@ async fn preferred_election_via_wire_returns_success() {
         h.shutdown().await;
     }
     drop(dead_dir);
+}
+
+/// KIP-460: a request that names no topics asks about every partition, and
+/// Kafka answers it only with the partitions it acted on --
+/// `ReplicationControlManager.electLeaders` drops every `ELECTION_NOT_NEEDED`
+/// row in that shape because "we do not return partitions which already have
+/// the desired leader". Returning them makes
+/// `kafka-leader-election --all-topic-partitions` on a healthy cluster print a
+/// "valid replica already elected" line for every partition, internal topics
+/// included, where Apache Kafka prints nothing at all.
+///
+/// The named shape is unaffected: a client that asked about one partition is
+/// told what happened to it, code 84 included. Both halves are checked here,
+/// against the same untouched cluster, so a change that filtered too much
+/// would fail on the second.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn electing_every_partition_omits_the_ones_already_on_their_preferred_leader() {
+    let _g = cluster_lock().lock().await;
+
+    let cluster = support::start_n_node_with_retry(3).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let broker1_addr = cluster[0].1.listen_addr;
+
+    // Nothing has failed over, so every partition is already led by its
+    // preferred replica and no election is needed anywhere.
+    create_topic_plaintext(broker1_addr, "foo-all-partitions", 1, 2).await;
+    wait_partition_exists(&cluster[0].0, "foo-all-partitions", 0).await;
+
+    let rows = drive_elect_all_partitions(broker1_addr, 0).await;
+
+    assert!(
+        rows.is_empty(),
+        "a cluster with nothing to elect must answer --all-topic-partitions with no rows, \
+         got {rows:?}"
+    );
+
+    // The same partition, named explicitly, still reports why it was skipped.
+    let named = drive_elect_leaders(broker1_addr, "foo-all-partitions", vec![0], 0).await;
+    assert!(
+        named == vec![(0, krabka_broker::codes::ELECTION_NOT_NEEDED)],
+        "a named partition must still report ELECTION_NOT_NEEDED, got {named:?}"
+    );
 }

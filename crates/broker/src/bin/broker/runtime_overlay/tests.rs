@@ -141,7 +141,6 @@ fn runtime_policy_cli_reads_krabka_environment() {
         [
             ("KRABKA_CLEANER_INTERVAL", Some("17ms")),
             ("KRABKA_SOCKET_REQUEST_MAX", Some("100MiB")),
-            ("KRABKA_LEADER_IMBALANCE_PER_BROKER", Some("10%")),
             ("KRABKA_METADATA_SNAPSHOT_FETCH_MAX", Some("512MiB")),
             ("KRABKA_CONTROLLER_HEARTBEAT_INTERVAL", Some("500ms")),
             ("KRABKA_CONTROLLER_FETCH_MISS_LIMIT", Some("7")),
@@ -166,7 +165,6 @@ fn runtime_policy_cli_reads_krabka_environment() {
             let args = Args::try_parse_from(["krabka-broker"]).expect("parse environment");
             assert!(args.runtime.cleaner_interval == Some(Time::from_millis(17)));
             assert!(args.runtime.socket_request_max == Some(krabka_units::mebibytes(100)));
-            assert!(args.leader_imbalance_per_broker == Some(krabka_units::fraction(0.1)));
             assert!(args.metadata_snapshot_fetch_max == Some(krabka_units::mebibytes(512)));
             assert!(args.controller_fetch_miss_limit == Some(7));
             assert!(args.metadata_raft_command_queue_capacity == Some(512));

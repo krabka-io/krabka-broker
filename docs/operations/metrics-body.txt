@@ -505,5 +505,46 @@ krabka_broker_replication_throttled_bytes_in_total 0
 krabka_broker_replication_throttle_sleeps_total 0
 # HELP krabka_broker_quota_entity_throttle_seconds Cumulative throttle duration in seconds applied per quota entity.
 # TYPE krabka_broker_quota_entity_throttle_seconds counter
-krabka_broker_quota_entity_throttle_seconds_total{quota_type="Produce",user="alice",client_id="producer-1"} 0
+krabka_broker_quota_entity_throttle_seconds_total{quota_type="Produce",user="alice",client_id="producer-1"} 0.0
+# HELP krabka_broker_remote_log_reader_task_queue_size Cold-tier reads waiting for a slot in the bounded remote reader pool.
+# TYPE krabka_broker_remote_log_reader_task_queue_size gauge
+krabka_broker_remote_log_reader_task_queue_size 0
+# HELP krabka_broker_remote_log_reader_avg_idle_percent Percentage of the remote reader pool's slots that are currently free.
+# TYPE krabka_broker_remote_log_reader_avg_idle_percent gauge
+krabka_broker_remote_log_reader_avg_idle_percent 0.0
+# HELP krabka_broker_remote_log_reader_fetch_duration_seconds Time each cold-tier read spent holding a remote reader slot.
+# TYPE krabka_broker_remote_log_reader_fetch_duration_seconds histogram
+krabka_broker_remote_log_reader_fetch_duration_seconds_sum 0.0
+krabka_broker_remote_log_reader_fetch_duration_seconds_count 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.0001"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.0005"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.001"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.005"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.01"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.025"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.05"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.1"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.25"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="0.5"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="1.0"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="10.0"} 0
+krabka_broker_remote_log_reader_fetch_duration_seconds_bucket{le="+Inf"} 0
+# HELP krabka_broker_remote_log_reader_rejected Cold-tier reads refused because the remote reader pool's pending queue was full.
+# TYPE krabka_broker_remote_log_reader_rejected counter
+krabka_broker_remote_log_reader_rejected_total 0
+# HELP krabka_broker_remote_index_cache_hits Remote segment index lookups served from the on-disk index cache.
+# TYPE krabka_broker_remote_index_cache_hits counter
+krabka_broker_remote_index_cache_hits_total 0
+# HELP krabka_broker_remote_index_cache_misses Remote segment index lookups that downloaded the index object.
+# TYPE krabka_broker_remote_index_cache_misses counter
+krabka_broker_remote_index_cache_misses_total 0
+# HELP krabka_broker_remote_index_cache_evictions Remote index cache entries dropped to stay inside the byte budget.
+# TYPE krabka_broker_remote_index_cache_evictions counter
+krabka_broker_remote_index_cache_evictions_total 0
+# HELP krabka_broker_remote_index_cache_bytes Bytes currently held by the remote index cache.
+# TYPE krabka_broker_remote_index_cache_bytes gauge
+krabka_broker_remote_index_cache_bytes 0
+# HELP krabka_broker_remote_index_cache_entries Entries currently held by the remote index cache.
+# TYPE krabka_broker_remote_index_cache_entries gauge
+krabka_broker_remote_index_cache_entries 0
 # EOF

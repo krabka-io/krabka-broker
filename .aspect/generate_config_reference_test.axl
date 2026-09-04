@@ -5,6 +5,7 @@ load(
     "cell",
     "contains_word",
     "default_label",
+    "description_of",
     "effective",
     "enum_values",
     "render",
@@ -31,6 +32,28 @@ def _test_cell_collapses_whitespace(_ctx):
 
 def _test_cell_escapes_the_column_separator(_ctx):
     check_eq("a pipe cannot end the cell", cell("a | b"), "a \\| b")
+
+def _test_description_of_names_an_enum_discriminator(_ctx):
+    # An internally tagged enum's `type` key is not a struct field, so schemars
+    # emits it with a `const` and no `description` and there is no doc comment
+    # anywhere to take one from. The generator supplies the sentence.
+    check_eq(
+        "a tag with no description",
+        description_of({"const": "gssapi"}),
+        "Selects this variant of the table.",
+    )
+
+    # A tag that does carry a description keeps it.
+    check_eq(
+        "a tag that says something",
+        description_of({"const": "gssapi", "description": "GSSAPI credentials."}),
+        "GSSAPI credentials.",
+    )
+
+    # Every other missing description is a missing doc comment, and stays
+    # visibly empty rather than being papered over.
+    check_eq("an undocumented field", description_of({"type": "string"}), "")
+    check_eq("a documented field", description_of({"description": "A knob."}), "A knob.")
 
 def _test_contains_word_respects_word_boundaries(_ctx):
     check_eq("the word alone", contains_word("seconds", "seconds"), True)
@@ -279,13 +302,13 @@ _FIXTURE_BODY = [
     "",
     "| Key | Type | Default | Units | Description |",
     "| :--- | :--- | :--- | :--- | :--- |",
-    "| `type` | constant `\"off\"` | broker default |  |  |",
+    "| `type` | constant `\"off\"` | broker default |  | Selects this variant of the table. |",
     "",
     "### `[authz]` with `type = \"on\"`",
     "",
     "| Key | Type | Default | Units | Description |",
     "| :--- | :--- | :--- | :--- | :--- |",
-    "| `type` | constant `\"on\"` | broker default |  |  |",
+    "| `type` | constant `\"on\"` | broker default |  | Selects this variant of the table. |",
     "| `path` | string | broker default |  |  |",
     "",
 ]
@@ -310,6 +333,7 @@ generate_config_reference_tests = suite("generate-config-reference", [
     _test_cell_collapses_whitespace,
     _test_cell_escapes_the_column_separator,
     _test_contains_word_respects_word_boundaries,
+    _test_description_of_names_an_enum_discriminator,
     _test_resolve_follows_a_local_ref,
     _test_effective_collapses_an_optional_struct,
     _test_effective_keeps_the_inner_description,

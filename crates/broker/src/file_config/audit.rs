@@ -53,8 +53,11 @@ impl Default for FileAuditConfig {
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FileAuditSpoolConfig {
+    /// Directory that holds the spool files. A relative path resolves under
+    /// the broker's log directory.
     #[serde(default = "default_spool_dir")]
     pub dir: String,
+    /// Cap on the total size of the spool on disk.
     #[serde(default = "default_spool_max_bytes")]
     pub max_bytes: u64,
     /// Number of appended records between durable file syncs.
@@ -88,7 +91,10 @@ fn default_spool_sync_every_n() -> NonZeroU64 {
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FileAuditSigningConfig {
+    /// Path to the PKCS#8 Ed25519 private key that signs audit checkpoints.
     pub key_path: String,
+    /// Key id recorded on each checkpoint, so a verifier can follow a key
+    /// rotation.
     pub key_id: String,
 }
 
@@ -96,8 +102,10 @@ pub struct FileAuditSigningConfig {
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FileAuditCheckpointConfig {
+    /// Emit a checkpoint after this many audit records.
     #[serde(default = "default_checkpoint_every_n")]
     pub every_n: u64,
+    /// Emit a checkpoint at least this often, in seconds.
     #[serde(default = "default_checkpoint_every_secs")]
     pub every_secs: u64,
 }

@@ -17,7 +17,7 @@ use crate::{
 /// A 3-broker PLAINTEXT cluster with automatic leader rebalance on.
 ///
 /// The cluster sets `auto_leader_rebalance_enable = true`,
-/// `leader_imbalance_check_interval = krabka_units::secs(1)`, and `leader_imbalance_per_broker = krabka_units::percent(0)`.
+/// and `leader_imbalance_check_interval = krabka_units::secs(1)`.
 ///
 /// Scenario:
 /// 1. Create an rf=2 topic over the wire. With 3 registered brokers,
@@ -61,7 +61,6 @@ async fn auto_rebalance_restores_preferred_leader() {
     );
     cfg0.features.auto_leader_rebalance_enable = true;
     cfg0.leader_imbalance_check_interval = krabka_units::secs(1);
-    cfg0.leader_imbalance_per_broker = krabka_units::percent(0);
 
     let mut cfg1 = support::broker_config(
         1,
@@ -73,7 +72,6 @@ async fn auto_rebalance_restores_preferred_leader() {
     );
     cfg1.features.auto_leader_rebalance_enable = true;
     cfg1.leader_imbalance_check_interval = krabka_units::secs(1);
-    cfg1.leader_imbalance_per_broker = krabka_units::percent(0);
 
     let mut cfg2 = support::broker_config(
         2,
@@ -85,7 +83,6 @@ async fn auto_rebalance_restores_preferred_leader() {
     );
     cfg2.features.auto_leader_rebalance_enable = true;
     cfg2.leader_imbalance_check_interval = krabka_units::secs(1);
-    cfg2.leader_imbalance_per_broker = krabka_units::percent(0);
 
     // Start all three statically; they elect among themselves over the wire.
     let mut client_ls = client_listeners.into_iter();

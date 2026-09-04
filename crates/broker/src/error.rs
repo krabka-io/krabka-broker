@@ -307,9 +307,6 @@ pub enum BrokerError {
     #[error("invalid leader_imbalance_check_interval = {value}: must be >= 1")]
     InvalidLeaderRebalanceInterval { value: u64 },
 
-    #[error("invalid leader_imbalance_per_broker_percentage = {percent}: must be <= 100")]
-    InvalidLeaderRebalanceThreshold { percent: f64 },
-
     /// Runtime tuning contains an invalid scalar or field relation.
     #[error("invalid runtime configuration: {0}")]
     InvalidRuntimeConfig(String),

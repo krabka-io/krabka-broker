@@ -275,6 +275,15 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         quota_entity_throttle_seconds_total: _,
         queued_requests: _,
         queued_request_bytes: _,
+        remote_log_reader_task_queue_size: _,
+        remote_log_reader_avg_idle_percent: _,
+        remote_log_reader_fetch_duration_seconds: _,
+        remote_log_reader_rejected_total: _,
+        remote_index_cache_hits_total: _,
+        remote_index_cache_misses_total: _,
+        remote_index_cache_evictions_total: _,
+        remote_index_cache_bytes: _,
+        remote_index_cache_entries: _,
         lag_series: _,
     } = metrics;
 

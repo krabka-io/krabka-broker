@@ -84,6 +84,48 @@ pub async fn round_trip(
 /// Allow, so this request passes without SASL. This function asserts that the
 /// top-level `error_code == 0`. It returns the per-partition
 /// `(partition_id, error_code)` rows for the topic named `topic`.
+/// Sends `ElectLeaders` with a null topic list -- the "every partition in the
+/// cluster" shape -- and returns every `(topic, partition, error_code)` row
+/// the broker answered with.
+pub async fn drive_elect_all_partitions(
+    addr: SocketAddr,
+    election_type: i8,
+) -> Vec<(String, i32, i16)> {
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let req = ElectLeadersRequest {
+        election_type,
+        topic_partitions: None,
+        timeout_ms: 30_000,
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    req.encode(&mut body, ELECT_LEADERS_VERSION)
+        .expect("encode ElectLeaders");
+    let resp_bytes = round_trip(&mut stream, 43, ELECT_LEADERS_VERSION, 1, true, &body)
+        .await
+        .expect("ElectLeaders round-trip");
+    let mut cur: &[u8] = &resp_bytes;
+    let resp = ElectLeadersResponse::decode(&mut cur, ELECT_LEADERS_VERSION)
+        .expect("decode ElectLeadersResponse");
+
+    assert!(
+        resp.error_code == 0,
+        "top-level error_code must be 0, got {}",
+        resp.error_code
+    );
+
+    resp.replica_election_results
+        .into_iter()
+        .flat_map(|result| {
+            let topic = result.topic;
+            result
+                .partition_result
+                .into_iter()
+                .map(move |p| (topic.clone(), p.partition_id, p.error_code))
+        })
+        .collect()
+}
+
 pub async fn drive_elect_leaders(
     addr: SocketAddr,
     topic: &str,

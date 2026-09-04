@@ -185,10 +185,9 @@ impl BrokerMetrics {
                 user: winning.user.clone(),
                 client_id: winning.client_id.clone(),
             };
-            let secs_u64 = (delay.secs_f64().round().max(1.0)) as u64;
             self.quota_entity_throttle_seconds_total
                 .get_or_create(&entity_label)
-                .inc_by(secs_u64);
+                .inc_by(delay.secs_f64());
         }
         delay
     }
@@ -518,6 +517,8 @@ mod tests {
                 == vec![
                     "krabka_broker_connection_closes_total{reason=\"decode_error\"} 1",
                     "krabka_broker_connection_closes_total{reason=\"idle\"} 2",
+                    "krabka_broker_connection_closes_total{reason=\"max_connections\"} 1",
+                    "krabka_broker_connection_closes_total{reason=\"max_connections_per_ip\"} 1",
                     "krabka_broker_connection_closes_total{reason=\"peer_closed\"} 1",
                     "krabka_broker_connection_closes_total{reason=\"sasl_session_expired\"} 1",
                 ]

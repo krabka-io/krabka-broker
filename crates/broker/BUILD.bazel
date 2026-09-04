@@ -110,8 +110,17 @@ crate_tests(
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
-        "jvm_acceptance_reassign": ["cp_kafka_7_5_0"],
+        # The 4.3.1 image twice over: the `--generate` and election-selector
+        # cases run its tools against krabka and against a stock broker of the
+        # same release, the way `unavailable_partitions_jvm` does.
+        "jvm_acceptance_reassign": [
+            "apache_kafka_4_3_1",
+            "cp_kafka_7_5_0",
+        ],
+        # As above, for the `kafka-acls` shorthands: the oracle half is a
+        # 4.3.1 broker with `StandardAuthorizer` turned on.
         "jvm_acceptance_sasl": [
+            "apache_kafka_4_3_1",
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],

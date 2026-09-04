@@ -16,7 +16,9 @@ use crate::{SslPrincipalMapper, config::ListenerSpec, file_config::FileConfigErr
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 pub struct FileTlsConfig {
+    /// PEM file holding this listener's server certificate chain.
     pub cert_path: std::path::PathBuf,
+    /// PEM file holding the private key for `cert_path`.
     pub key_path: std::path::PathBuf,
     /// PEM file of CA(s) this broker trusts when validating a PEER's server
     /// cert as an outbound inter-broker / controller-quorum dialer. The
@@ -24,7 +26,12 @@ pub struct FileTlsConfig {
     /// mutually authenticate over the controller listener. Maps to
     /// [`krabka_security::TlsConfig::trust_roots_path`].
     pub trust_roots_path: Option<std::path::PathBuf>,
+    /// PEM file of CA(s) this listener validates client certificates
+    /// against. Absent leaves mTLS without a client trust store, so
+    /// `client_auth` has to be `Disabled`.
     pub client_ca_path: Option<std::path::PathBuf>,
+    /// Whether this listener asks for and requires a client certificate.
+    /// See [`FileClientAuthMode`]. Defaults to `Disabled`.
     #[serde(default)]
     pub client_auth: FileClientAuthMode,
     /// KIP-371 `ssl.principal.mapping.rules`: how the Subject DN of an mTLS
@@ -46,6 +53,11 @@ fn default_principal_mapping_rules() -> Vec<String> {
     vec!["DEFAULT".to_owned()]
 }
 
+/// Whether a TLS listener asks for and requires a client certificate,
+/// Kafka's `ssl.client.auth`. `Disabled` is the default and never asks;
+/// `Optional` asks and accepts a connection that presents none; `Required`
+/// rejects a connection that presents none. `Optional` and `Required` both
+/// need a `client_ca_path`.
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
 pub enum FileClientAuthMode {
     #[default]
@@ -56,6 +68,10 @@ pub enum FileClientAuthMode {
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 pub struct FileListenerSaslConfig {
+    /// SASL mechanisms this listener accepts, Kafka's
+    /// `sasl.enabled.mechanisms`. Each entry is a wire name such as `PLAIN`,
+    /// `SCRAM-SHA-256`, `GSSAPI`, or `OAUTHBEARER`; an unknown name is
+    /// rejected at parse time.
     #[serde(default, deserialize_with = "deserialize_sasl_mechanisms")]
     #[schemars(with = "Vec<String>")]
     pub enabled_mechanisms: Vec<krabka_security::SaslMechanism>,
@@ -80,10 +96,18 @@ where
 
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 pub struct FileListener {
+    /// Listener name, for example `"PLAINTEXT"` or `"SASL_SSL"`. It is the
+    /// name `inter_broker_listener_name` and Kafka's
+    /// `listener.security.protocol.map` refer to.
     pub name: String,
+    /// Local `host:port` this listener binds.
     #[schemars(with = "String")]
     pub bind_addr: SocketAddr,
+    /// `host:port` published to clients in `Metadata` responses, Kafka's
+    /// `advertised.listeners` entry for this listener.
     pub advertised: String,
+    /// Security protocol this listener speaks: `Plaintext`, `Ssl`,
+    /// `SaslPlaintext`, or `SaslSsl`.
     #[schemars(with = "String")]
     pub protocol: ListenerProtocol,
     pub tls_config: Option<FileTlsConfig>,

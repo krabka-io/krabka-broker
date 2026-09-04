@@ -139,17 +139,6 @@ pub(super) fn positive_ratio(name: &str, value: Ratio) -> Result<Ratio, FileConf
     }
 }
 
-pub(super) fn unit_interval_ratio(name: &str, value: Ratio) -> Result<Ratio, FileConfigError> {
-    if value.as_f64().is_finite()
-        && value >= krabka_units::fraction(0.0)
-        && value <= krabka_units::fraction(1.0)
-    {
-        Ok(value)
-    } else {
-        Err(invalid_runtime_value(name, "must be between 0% and 100%"))
-    }
-}
-
 pub(super) fn positive_time(name: &str, value: Time) -> Result<Time, FileConfigError> {
     if value.secs_f64().is_finite() && value > Time::from_secs(0) {
         Ok(value)
@@ -424,7 +413,6 @@ mod tests {
         for (field, value) in [
             ("telemetry_max_decompression_ratio", "0"),
             ("record_decompression_max_ratio", "0"),
-            ("leader_imbalance_per_broker", "101%"),
         ] {
             let source = format!("[runtime]\n{field} = \"{value}\"\n");
             let file: FileConfig = toml::from_str(&source).expect("parse runtime config");

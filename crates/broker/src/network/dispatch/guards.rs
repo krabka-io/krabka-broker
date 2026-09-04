@@ -62,7 +62,10 @@ impl Drop for ActiveConnectionGuard {
 pub(super) struct QueuedRequestGuard {
     _permit: tokio::sync::OwnedSemaphorePermit,
     metrics: crate::metrics::BrokerMetrics,
-    bytes: usize,
+    /// The value this guard added to `queued_request_bytes`, kept as the
+    /// gauge's own type so the decrement on drop is exactly the increment
+    /// that was made and the gauge cannot drift.
+    bytes: i64,
 }
 
 impl QueuedRequestGuard {
@@ -71,9 +74,10 @@ impl QueuedRequestGuard {
         metrics: &crate::metrics::BrokerMetrics,
         bytes: usize,
     ) -> Self {
+        let bytes = i64::try_from(bytes).unwrap_or(i64::MAX);
         metrics.queued_requests.inc();
         if bytes > 0 {
-            metrics.queued_request_bytes.inc_by(bytes as i64);
+            metrics.queued_request_bytes.inc_by(bytes);
         }
         Self {
             _permit: permit,
@@ -87,7 +91,7 @@ impl Drop for QueuedRequestGuard {
     fn drop(&mut self) {
         self.metrics.queued_requests.dec();
         if self.bytes > 0 {
-            self.metrics.queued_request_bytes.dec_by(self.bytes as i64);
+            self.metrics.queued_request_bytes.dec_by(self.bytes);
         }
     }
 }

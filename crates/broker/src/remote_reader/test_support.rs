@@ -98,6 +98,104 @@ fn write_test_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path
     path
 }
 
+/// A [`RemoteStorageManager`] that counts the index objects it downloads and
+/// otherwise delegates.
+///
+/// It is how the tests tell a cache hit from a cache miss: the reader's own
+/// counters say what it thinks happened, and this says what actually reached
+/// the tier.
+pub struct CountingRsm {
+    inner: Arc<dyn RemoteStorageManager>,
+    index_fetches: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl CountingRsm {
+    pub fn new(inner: Arc<dyn RemoteStorageManager>) -> (Arc<Self>, Arc<std::sync::atomic::AtomicUsize>) {
+        let index_fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (
+            Arc::new(Self {
+                inner,
+                index_fetches: Arc::clone(&index_fetches),
+            }),
+            index_fetches,
+        )
+    }
+}
+
+impl RemoteStorageManager for CountingRsm {
+    fn copy_log_segment_data(
+        &self,
+        metadata: &RemoteLogSegmentMetadata,
+        data: &krabka_remote_storage::LogSegmentData,
+    ) -> Result<Option<krabka_remote_storage::CustomMetadata>, RemoteStorageError> {
+        self.inner.copy_log_segment_data(metadata, data)
+    }
+
+    fn fetch_log_segment(
+        &self,
+        metadata: &RemoteLogSegmentMetadata,
+        start_position: u32,
+        end_position: Option<u32>,
+    ) -> Result<Vec<u8>, RemoteStorageError> {
+        self.inner
+            .fetch_log_segment(metadata, start_position, end_position)
+    }
+
+    fn fetch_index(
+        &self,
+        metadata: &RemoteLogSegmentMetadata,
+        index_type: krabka_remote_storage::IndexType,
+    ) -> Result<Vec<u8>, RemoteStorageError> {
+        self.index_fetches
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.fetch_index(metadata, index_type)
+    }
+
+    fn delete_log_segment_data(
+        &self,
+        metadata: &RemoteLogSegmentMetadata,
+    ) -> Result<(), RemoteStorageError> {
+        self.inner.delete_log_segment_data(metadata)
+    }
+}
+
+/// The tempdirs a caching reader keeps alive: the remote tier and the index
+/// cache's log directory. Dropping either deletes what the reader reads.
+pub struct ReaderDirs {
+    pub _remote: tempfile::TempDir,
+    pub _log: tempfile::TempDir,
+}
+
+/// The `sparse_remote_segment_reader` fixture, with the production index cache
+/// turned on and a counting RSM underneath.
+pub fn caching_sparse_remote_segment_reader()
+-> (RemoteReader, ReaderDirs, Arc<std::sync::atomic::AtomicUsize>) {
+    let (reader, remote_dir) = sparse_remote_segment_reader();
+    let (counting, index_fetches) = CountingRsm::new(Arc::clone(&reader.rsm));
+    let log_dir = tempfile::tempdir().unwrap();
+    let cache = krabka_remote_storage::RemoteIndexCache::new(
+        log_dir.path(),
+        krabka_remote_storage::DEFAULT_INDEX_CACHE_TOTAL_SIZE_BYTES,
+    )
+    .unwrap();
+    let cached = RemoteReader::with_limits(
+        counting,
+        Arc::clone(&reader.rlmm),
+        crate::remote_reader::RemoteReaderLimits {
+            index_cache: Arc::new(cache),
+            pool: crate::remote_reader::ReaderPool::new(10, 100),
+        },
+    );
+    (
+        cached,
+        ReaderDirs {
+            _remote: remote_dir,
+            _log: log_dir,
+        },
+        index_fetches,
+    )
+}
+
 pub fn sparse_remote_segment_reader_with_max_timestamp(
     max_timestamp_ms: i64,
 ) -> (RemoteReader, tempfile::TempDir) {

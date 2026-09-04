@@ -33,6 +33,7 @@ mod lag;
 mod log_cleaner;
 mod phases;
 mod registration;
+mod remote_reader;
 mod replication;
 mod request;
 mod schema_validation;
@@ -51,6 +52,7 @@ pub use self::{
         SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
+    remote_reader::{RemoteReaderLevels, RemoteReaderTotals},
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -683,8 +685,40 @@ pub struct BrokerMetrics {
     pub replication_throttled_bytes_in_total: Counter,
     pub replication_throttle_sleeps_total: Counter,
 
+    // --- Milestone 11 KIP-405 remote reader pool and index cache (#422) ---
+    /// Cold-tier reads waiting for a reader slot. Kafka's
+    /// `RemoteLogReaderTaskQueueSize`.
+    pub remote_log_reader_task_queue_size: Gauge,
+    /// The share of the reader pool's slots that are free, as a percentage.
+    /// Kafka's `RemoteLogReaderAvgIdlePercent`, reported instantaneously
+    /// because Prometheus does its own averaging.
+    pub remote_log_reader_avg_idle_percent: Gauge<f64, AtomicU64>,
+    /// How long each cold-tier read took. The seconds-valued histogram that
+    /// stands for Kafka's `RemoteLogReaderFetchRateAndTimeMs` meter: the rate
+    /// is `rate(..._count[5m])` and the mean is `..._sum / ..._count`.
+    pub remote_log_reader_fetch_duration_seconds: Histogram,
+    /// Cold-tier reads refused because the pool's pending queue was full.
+    pub remote_log_reader_rejected_total: Counter,
+    /// Segment-index lookups served from the on-disk cache.
+    pub remote_index_cache_hits_total: Counter,
+    /// Segment-index lookups that had to download the index object.
+    pub remote_index_cache_misses_total: Counter,
+    /// Cache entries dropped to stay inside the byte budget.
+    pub remote_index_cache_evictions_total: Counter,
+    /// Bytes the index cache currently holds.
+    pub remote_index_cache_bytes: Gauge,
+    /// Entries the index cache currently holds.
+    pub remote_index_cache_entries: Gauge,
+
     // --- Milestone 11 Quota entity and request queue metrics (#418, #412) ---
-    pub quota_entity_throttle_seconds_total: Family<QuotaEntityLabel, Counter>,
+    /// KIP-599 / KIP-13: cumulative throttle time charged to each quota
+    /// entity, in seconds.
+    ///
+    /// A float counter, because a throttle is routinely a fraction of a
+    /// second and an integer one would have to round every delay to a whole
+    /// second before adding it -- which turns a hundred 20 ms throttles into
+    /// either zero seconds or a hundred.
+    pub quota_entity_throttle_seconds_total: Family<QuotaEntityLabel, Counter<f64, AtomicU64>>,
     pub queued_requests: Gauge,
     pub queued_request_bytes: Gauge,
 

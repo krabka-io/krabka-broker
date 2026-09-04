@@ -58,12 +58,14 @@ impl Engine {
         let is_leader = self.core.role().is_leader();
         let current_state = match self.core.role() {
             Role::Leader { .. } => "leader",
-            Role::Follower { .. } => "follower",
+            // A resigned leader has stepped down and is waiting out its
+            // epoch: it leads nothing and it is not campaigning, which is
+            // what `DescribeQuorum` calls a follower.
+            Role::Follower { .. } | Role::Resigned => "follower",
             Role::Candidate { .. }
             | Role::Prospective { .. }
             | Role::Unattached { .. }
             | Role::Voted { .. } => "candidate",
-            Role::Resigned { .. } => "follower",
             Role::Observer { .. } => "observer",
         };
         let now_ms = self

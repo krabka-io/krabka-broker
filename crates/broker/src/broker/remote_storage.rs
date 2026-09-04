@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tokio_util::sync::CancellationToken;
 
 use crate::{config::BrokerConfig, error::BrokerError, partition_registry::PartitionRegistry};
@@ -106,6 +107,25 @@ pub(super) fn start_remote_storage(
             None,
         ),
     };
+    // KIP-405's reader bounds. A cache directory that cannot be opened is not
+    // a reason to refuse to serve the tier: the reader falls back to
+    // downloading each index per fetch, which is what it did before the cache
+    // existed, and the startup warning says so.
+    let index_cache = match krabka_remote_storage::RemoteIndexCache::new(
+        &config.log_dir,
+        config.remote_index_cache_size.bytes_u64(),
+    ) {
+        Ok(cache) => cache,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                dir = %config.log_dir.display(),
+                "remote index cache unavailable; every cold fetch will re-download its indexes"
+            );
+            krabka_remote_storage::RemoteIndexCache::disabled()
+        }
+    };
+    let index_cache = Arc::new(index_cache);
     tokio::spawn(crate::remote_log_manager::run(
         crate::remote_log_manager::RemoteLogManagerContext {
             partitions: Arc::clone(partitions),
@@ -113,6 +133,7 @@ pub(super) fn start_remote_storage(
             archive,
             rsm: Arc::clone(&storage),
             rlmm: Arc::clone(&metadata),
+            index_cache: Arc::clone(&index_cache),
             metrics: metrics.clone(),
             node_id: config.node_id,
             broker_id: config.broker_id,
@@ -122,11 +143,70 @@ pub(super) fn start_remote_storage(
         },
         shutdown.child_token(),
     ));
+    let reader = Arc::new(crate::remote_reader::RemoteReader::with_limits(
+        storage,
+        metadata,
+        crate::remote_reader::RemoteReaderLimits {
+            index_cache,
+            pool: crate::remote_reader::ReaderPool::new(
+                config.remote_reader_threads,
+                config.remote_reader_max_pending_tasks,
+            ),
+        },
+    ));
+    spawn_remote_reader_gauges(
+        Arc::clone(&reader),
+        metrics.clone(),
+        config.gauge_poll_interval,
+        shutdown.child_token(),
+    );
     Ok(RemoteStorageStartup {
-        reader: Some(Arc::new(crate::remote_reader::RemoteReader::new(
-            storage, metadata,
-        ))),
+        reader: Some(reader),
         swap_target,
         diskless_read,
     })
+}
+
+/// Publishes the reader pool's depth and idle share and the index cache's
+/// hit / miss counters on the broker's gauge cadence.
+///
+/// The pool and the cache keep their own totals, so the sampler turns each
+/// monotonic total into the increment its counter has not seen yet. It is its
+/// own task rather than a branch of the broker gauge updater because the
+/// reader does not exist until this module has built the backend, which is
+/// after that updater is spawned.
+fn spawn_remote_reader_gauges(
+    reader: Arc<crate::remote_reader::RemoteReader>,
+    metrics: crate::metrics::BrokerMetrics,
+    poll_interval: krabka_units::Time,
+    shutdown: CancellationToken,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(poll_interval.to_std());
+        let mut reported = crate::metrics::RemoteReaderTotals::default();
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {}
+                () = shutdown.cancelled() => return,
+            }
+            let stats = reader.index_cache.stats();
+            let current = crate::metrics::RemoteReaderTotals {
+                index_cache_hits: stats.hits,
+                index_cache_misses: stats.misses,
+                index_cache_evictions: stats.evictions,
+                rejected_reads: u64::try_from(reader.pool.rejected()).unwrap_or(u64::MAX),
+            };
+            metrics.observe_remote_reader(
+                &reported,
+                current,
+                crate::metrics::RemoteReaderLevels {
+                    task_queue_size: u64::try_from(reader.pool.queue_size()).unwrap_or(u64::MAX),
+                    idle_percent: reader.pool.idle_percent(),
+                    index_cache_bytes: stats.bytes,
+                    index_cache_entries: stats.entries,
+                },
+            );
+            reported = current;
+        }
+    });
 }
