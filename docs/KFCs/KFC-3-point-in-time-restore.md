@@ -4,7 +4,7 @@ An offline tool that rebuilds a bootable krabka cluster from a KIP-405 archive, 
 
 ## Status
 
-**Adopted.** The implementation is the `krabka-restore` crate and the `krabka-restore` binary, merged in [#4](https://github.com/krabka-io/krabka-broker/pull/4). This document lands on branch `claude/point-in-time-restore-cli-9opk3c`.
+**Adopted.** The implementation is the `krabka-restore` crate and the `krabka-restore` binary. It merged to `main` through pull request [#4](https://github.com/krabka-io/krabka-broker/pull/4) and ships in release `v0.5.0` and every later release.
 
 No KIP defines restore, so this document is the specification for it. [KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage) defines the archive that the restore reads, and the sections below state where the restore's behaviour sits next to it.
 
@@ -157,7 +157,7 @@ So an emptied batch becomes a bare header with zero records, carrying the archiv
 
 ### Two Bounds, Two Shapes
 
-`--to-offset` truncates. The restore stops walking a partition at the first batch whose base offset is past the bound, and it never opens a segment that starts past it. The restored partition ends at the last batch that starts at or before the bound.
+`--to-offset` truncates, and the cut is record-exact. The restore stops walking a partition at the first batch whose base offset is past the bound, and it never opens a segment that starts past it. A batch that straddles the bound is decoded, and only its records at or below the bound are written. The restored partition ends at the offset the operator named.
 
 `--to-timestamp` filters. Every record whose timestamp is at or after the bound is dropped, wherever it sits, and a batch that holds only such records becomes the bare header above. The partition's offset range still reaches the archive's end.
 
@@ -165,7 +165,7 @@ The difference follows from the field. Offsets in a partition are monotonic by c
 
 The consequence is worth stating for an operator. After a timestamp-bounded restore, a consumer that seeks to end lands past the last surviving record, and the partition holds empty batches between the two. That is the same shape compaction produces at the tail of a partition, and clients already handle it.
 
-The offset cut is coarser than it looks, and an operator has to know it. The restore keeps a batch that straddles the bound whole, so the records that batch holds past the bound survive. The producer's batching therefore sets the granularity of `--to-offset`, and only a partition written one record per batch cuts exactly at the number. An operator who has to remove one record from inside a straddling batch removes it with `--exclude-offset`, which is a record-level predicate. Making the offset cut exact means re-encoding at most one batch per partition, with the machinery the exclude predicates already use, and this document does not claim that is done.
+The record-exact offset cut costs one re-encoded batch per partition. Only the single batch that straddles the bound is rewritten, and it takes the same path in `decide_batch` that an exclude predicate takes. Every other batch is either kept whole through the verbatim path or never read at all, because the walk stops at the first batch whose base offset is past the bound. The producer's batching does not set the granularity of `--to-offset`, so an operator does not need `--exclude-offset` to trim a batch that straddles the bound.
 
 ### Control Batches Are Never Filtered
 
@@ -197,7 +197,7 @@ A batch that the bound does not touch is written through the log's verbatim path
 
 That is not only an optimization. A restore that re-encoded every batch would hand back a log whose bytes no producer ever wrote, and the CRC of every batch would then attest to the restore tool rather than to the producer. Keeping the untouched path byte-exact means the restored log carries the producer's own evidence everywhere the operator did not deliberately change something.
 
-The bound also decides this without decoding. A partition with no exclude predicate and no timestamp bound answers `Keep` for every batch after one check, so the common restore, which is a full restore or an offset-bounded one, never decodes a record at all.
+The bound also decides this without decoding. A partition with no exclude predicate, no timestamp bound and no offset bound answers `Keep` for every batch after one check, so a full restore never decodes a record at all. An offset-bounded partition decodes only to place the cut, and the walk stops at the first batch past the bound.
 
 ### Leader Epochs Come Back Through the Batches
 
@@ -220,6 +220,8 @@ A restore cannot return what was never copied.
 Tiering is per topic, gated by `remote.storage.enable`, so a topic that was never enabled has nothing in the archive. Tiering is also per closed segment, so the active segment and any segment the broker had not yet copied are not there. The restore's reachable point in time is the end of the last archived segment, and not the moment the incident started. An operator who wants a tighter bound tunes the copy path, and not the restore.
 
 Internal topics follow the same rule. `__consumer_offsets` and `__transaction_state` are compacted and are not normally tiered, so committed group offsets and in-flight transaction state do not come back. The [Compatibility](#compatibility-deprecation-and-migration-plan) section lists what an operator has to restore by other means.
+
+Diskless topics are out of reach as well. A diskless partition holds its records in WAL objects under `diskless-wal/<broker-id>/<uuid>.ckwl`, and those are not archived segments. The archive scan in `discover::inventory` recognizes one key shape only: a partition directory named `<topic>-<partition>-<topic-uuid>`, with one segment artifact inside it. A diskless WAL key has one path part too many and no partition directory, so the scan puts it in `unrecognized` and the restore reads nothing from it. A restore of a diskless topic needs a reader for the WAL object format, which this design does not have.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -304,9 +306,9 @@ That would make the recovery tool depend on the broker crate, which means a reco
 
 It answers the wrong question. A batch that straddles the bound holds records on both sides of it, and the operator asked for the records before the bound. Keeping the whole batch restores records the operator meant to drop, which is the bad write they are recovering from. Dropping the whole batch loses records they meant to keep.
 
-The cost of the record-level bound is bounded and visible. A partition with no timestamp bound and no exclude predicate never decodes a record, and the report says how many batches were rewritten.
+The cost of the record-level bound is bounded and visible. A partition with no bound and no exclude predicate never decodes a record, and the report says how many batches were rewritten.
 
-The same argument applies to the offset cut, which is batch-granular today. [Two Bounds, Two Shapes](#two-bounds-two-shapes) states that asymmetry, what it costs an operator, and what closing it would take.
+The same argument decided the offset cut, which is record-exact for the same reason. [Two Bounds, Two Shapes](#two-bounds-two-shapes) states what that cut costs: one re-encoded batch per partition, on the path the exclude predicates already use.
 
 ### Skipping an Emptied Batch's Write
 

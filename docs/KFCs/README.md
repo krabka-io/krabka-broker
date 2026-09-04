@@ -40,7 +40,7 @@ Every KFC carries these headings, in this order. The order is the Apache Kafka K
 
 | Section | Content |
 | :--- | :--- |
-| Status | The current status value, and the branch or release that carries the implementation. |
+| Status | The current status value, and the pull request or release that carries the implementation. |
 | Motivation | The problem, and why the broker is the right place to solve it. |
 | Public Interfaces | Every config, error code, metric, and wire element that a client or an operator sees. |
 | Proposed Changes | The design and the reasons behind it. This is the longest section. |
@@ -56,7 +56,7 @@ The Rejected Alternatives section is not decoration. Most readers arrive with an
 | :--- | :--- |
 | `Draft` | The author still works on the document. The design can still change. |
 | `Under discussion` | The document is open for comment. No code depends on it yet. |
-| `Adopted` | The project accepted the design. The Status section names the branch or the release that carries the implementation. |
+| `Adopted` | The project accepted the design. The Status section names the pull request or the release that carries the implementation. |
 | `Rejected` | The project decided against the design. The document stays in the tree with the reason. |
 | `Superseded` | A later KFC replaces this one. The Status section names it. |
 

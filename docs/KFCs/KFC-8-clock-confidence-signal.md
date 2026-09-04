@@ -4,7 +4,7 @@ A measured, queryable signal for how wrong each node's clock can be, and a recor
 
 ## Status
 
-**Adopted.** The implementation is the clock block kind and the `/api/v1/clocks` ingest path in the metrics distributor. It also carries the shipped recording and alerting rule bundle, and the `krabka.hlc` record header in the client libraries. This document lands on branch `claude/clock-confidence-signal-w0veb8`.
+**Adopted.** The implementation is the clock block kind and the `/api/v1/clocks` ingest path in the metrics distributor. It also carries the shipped recording and alerting rule bundle, and the `krabka.hlc` record header in the client libraries. It merged to `main` through pull request [#15](https://github.com/krabka-io/krabka-broker/pull/15) and ships in release `v0.5.0` and every later release.
 
 No KIP defines clock telemetry, and no KIP bounds clock skew. [KFC-1](KFC-1-deliver-at-time-visibility.md) and [KFC-6](KFC-6-coordination-primitives-api.md) each declare a clock bound as a config value, and neither of them measures it. This document is the specification for the measurement. The Prometheus remote-write specification defines the envelope that the [ingest endpoint](#the-ingest-endpoint) reuses, and it says nothing about a clock reading.
 

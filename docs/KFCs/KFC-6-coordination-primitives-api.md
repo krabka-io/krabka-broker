@@ -4,7 +4,7 @@ Leader election, leases, and fencing epochs as a first-class krabka API, with th
 
 ## Status
 
-**Under discussion.** No implementation exists. This document is the specification for one, and it lands on branch `claude/coordination-primitives-api-f9pk11`.
+**Under discussion.** No implementation exists. This document is the specification for one, and it merged through pull request [#14](https://github.com/krabka-io/krabka-broker/pull/14).
 
 No KIP defines a coordination API. Kafka gives a client three mechanisms that come close to one, and none of them is one. The [Motivation](#motivation) states what each of them misses. The [Compatibility](#compatibility-deprecation-and-migration-plan) section states the one Kafka surface this design reuses, which is transactional-id fencing.
 

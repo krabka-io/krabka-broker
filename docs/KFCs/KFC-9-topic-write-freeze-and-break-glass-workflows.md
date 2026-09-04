@@ -4,7 +4,7 @@ The broker refuses every new client write to a frozen topic, and needs two peopl
 
 ## Status
 
-**Adopted.** The implementation lands on branch `claude/kfc-write-freeze-break-glass-pf6hum`. The metadata records and the five private wire messages land in a companion change on [`krabka-protocol`](https://github.com/krabka-io/krabka-protocol), which this repository pins by revision.
+**Adopted.** The implementation merged to `main` through pull request [#17](https://github.com/krabka-io/krabka-broker/pull/17) and ships in release `v0.5.0` and every later release. The metadata records and the five private wire messages merged in a companion change on [`krabka-protocol`](https://github.com/krabka-io/krabka-protocol), which this repository pins by revision.
 
 No KIP defines a topic write-freeze, and no KIP defines a two-person rule for a broker operation. Kafka's only way to stop a producer is the authorizer that KIP-11 defines. An ACL answers a question about a principal rather than a question about a topic. This document is the specification for both features.
 

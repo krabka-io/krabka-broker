@@ -4,7 +4,7 @@ The broker refuses a record that does not match the schema its topic is bound to
 
 ## Status
 
-**Adopted.** The implementation lands on branch `claude/broker-schema-validation-registry-s451bp`.
+**Adopted.** The implementation merged to `main` through pull request [#16](https://github.com/krabka-io/krabka-broker/pull/16) and ships in release `v0.5.0` and every later release.
 
 The registry the broker reads is [`krabka-schema-registry`](https://github.com/krabka-io/krabka-schema-registry), extracted into its own repository on the same branch. The broker depends on one crate from it, `krabka-schema-serde`, for the wire framing and the REST client.
 
