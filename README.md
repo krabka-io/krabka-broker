@@ -155,10 +155,14 @@ job's `test` step covers the rest: the six suites that filter excludes as
 timing-sensitive, plus `//packaging:image_binaries_test`, which sits outside
 `//crates`. Together they are what `bazel test //...` runs locally.
 
-Formatting and linting are Bazel targets rather than a separate `cargo fmt` /
-`cargo clippy` pass, so they see exactly the files and crates the build sees. A
-file in no target cannot drift unnoticed, and clippy resolves the same features
-the build resolves.
+Formatting and linting are Bazel targets rather than a separate `cargo fmt`
+pass, so they see exactly the files and crates the build sees. A file in a
+target cannot drift unnoticed, and clippy resolves the same features the build
+resolves. The aspect only sees Bazel targets, though, so CI also runs
+`cargo clippy --workspace --all-targets -- -D warnings` in its `cargo` job: the
+benches under `crates/broker/benches` and `crates/log/benches` have no Bazel
+target, `aspect lint` narrows the rest to what a change touched, and
+`krabka-protocol`'s build script only ever runs under Cargo.
 
 Two details worth knowing:
 

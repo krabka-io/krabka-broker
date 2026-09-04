@@ -46,13 +46,14 @@ and a PodDisruptionBudget. It is a starting point to read and adapt, not a
 chart. Before you apply it, set the image tag, the node architecture and the
 storage class and size. Also replace the two placeholder identities:
 `KRABKA_CLUSTER_ID` and the directory ids in `KRABKA_INITIAL_CONTROLLERS`.
+The label the manifests read the pod ordinal from needs Kubernetes 1.29 or
+later.
+
 The StatefulSet pins itself to amd64 nodes with
 `nodeSelector: kubernetes.io/arch: amd64`, because that is the only
 architecture the image is published for. On a mixed-architecture cluster that
-selector is what keeps a pod off a node that cannot run the image; change it
-only when the image you point it at is built for something else.
-The label the manifests read the pod ordinal from needs Kubernetes 1.29 or
-later.
+selector is what keeps a pod off a node it could never exec the image on;
+change it only when the image you point it at is built for something else.
 
 ```
 kubectl apply -f packaging/k8s/
