@@ -5,7 +5,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-rust-version.workspace = true
 description = "Administers krabka topic write freezes and break-glass proposals: freeze a scope, thaw one, and run the two-person rule"
 
 [lints]

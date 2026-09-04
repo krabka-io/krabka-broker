@@ -40,7 +40,7 @@ Every KFC carries these headings, in this order. The order is the Apache Kafka K
 
 | Section | Content |
 | :--- | :--- |
-| Status | The current status value, and the branch or release that carries the implementation. |
+| Status | The current status value, and the pull request or release that carries the implementation. |
 | Motivation | The problem, and why the broker is the right place to solve it. |
 | Public Interfaces | Every config, error code, metric, and wire element that a client or an operator sees. |
 | Proposed Changes | The design and the reasons behind it. This is the longest section. |
@@ -56,7 +56,8 @@ The Rejected Alternatives section is not decoration. Most readers arrive with an
 | :--- | :--- |
 | `Draft` | The author still works on the document. The design can still change. |
 | `Under discussion` | The document is open for comment. No code depends on it yet. |
-| `Adopted` | The project accepted the design. The Status section names the branch or the release that carries the implementation. |
+| `Adopted` | The project accepted the design. The Status section names the pull request or the release that carries the implementation. |
+| `Deferred` | The project neither accepted nor rejected the design, and nobody works on it. No code depends on it, and no part of the tree is held free for it. The Status section states what would have to change for the work to start. |
 | `Rejected` | The project decided against the design. The document stays in the tree with the reason. |
 | `Superseded` | A later KFC replaces this one. The Status section names it. |
 
@@ -69,7 +70,7 @@ The Rejected Alternatives section is not decoration. Most readers arrive with an
 | [KFC-3](KFC-3-point-in-time-restore.md) | Point-in-time restore from a tiered-storage archive | Adopted |
 | [KFC-4](KFC-4-cross-topic-snapshots.md) | Consistent cross-topic snapshots | Adopted |
 | [KFC-5](KFC-5-worm-archive-integrity-manifests.md) | WORM archive mode with integrity manifests | Adopted |
-| [KFC-6](KFC-6-coordination-primitives-api.md) | Coordination primitives as a client API | Under discussion |
+| [KFC-6](KFC-6-coordination-primitives-api.md) | Coordination primitives as a client API | Deferred |
 | [KFC-7](KFC-7-broker-side-schema-validation.md) | Broker-side schema validation | Adopted |
 | [KFC-8](KFC-8-clock-confidence-signal.md) | Clock confidence as a first-class signal | Adopted |
 | [KFC-9](KFC-9-topic-write-freeze-and-break-glass-workflows.md) | Topic write-freeze and break-glass workflows | Adopted |

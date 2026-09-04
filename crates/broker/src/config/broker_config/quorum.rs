@@ -75,7 +75,8 @@ macro_rules! quorum_fields {
             /// Default 30s.
             pub replica_lag_time_max: Time,
 
-            /// Controller election timeout, Kafka's
+            /// Controller election timeout, covering both Kafka's
+            /// `controller.quorum.election.timeout.ms` and its
             /// `controller.quorum.fetch.timeout.ms`. Default 5s.
             ///
             /// One extent drives three deadlines in the `KRaft` engine. It is the
@@ -92,11 +93,17 @@ macro_rules! quorum_fields {
             /// runners.
             pub controller_election_timeout: Time,
 
-            /// Openraft heartbeat interval. Default 500ms. It should be ≤
-            /// `controller_election_timeout / 3` by raft consensus norms.
+            /// Leader heartbeat cadence. Default 500ms. The `KRaft` engine
+            /// re-broadcasts `BeginQuorumEpoch` this often, so a follower that
+            /// missed the original announcement, or an old leader that
+            /// rejoined, re-attaches without waiting for an election.
+            /// Validation rejects a value that is not below
+            /// `controller_election_timeout`.
             pub controller_heartbeat_interval: Time,
-            /// Whether the heartbeat interval was explicitly configured. Omitted
-            /// values preserve the Raft engine's election-timeout-derived cadence.
+            /// Whether the heartbeat interval was explicitly configured. An
+            /// omitted value leaves the engine on its derived cadence of
+            /// `controller_election_timeout / 3`, with a floor of one
+            /// millisecond.
             pub controller_heartbeat_interval_explicit: bool,
             /// Consecutive follower fetch misses tolerated before a new election.
             pub controller_fetch_miss_limit: ControllerFetchMissLimit,

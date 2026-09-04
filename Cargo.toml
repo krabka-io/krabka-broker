@@ -9,7 +9,6 @@ version = "0.5.4"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["The Krabka Authors"]
-rust-version = "1.97.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -137,6 +136,7 @@ testcontainers = "0.28"
 # compatibility update until the next testcontainers-modules release.
 testcontainers-modules = { git = "https://github.com/testcontainers/testcontainers-rs-modules-community", rev = "d69e3a09397532accea9d9e907fecc280b1513a8", features = ["kafka"] }
 thiserror = "2"
+time = { version = "0.3", default-features = false, features = ["formatting"] }
 tokio = { version = "1", default-features = false }
 tokio-metrics = { version = "0.5", default-features = false }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }

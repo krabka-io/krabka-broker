@@ -70,6 +70,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-verified` | Formally verified pure kernels shared by consensus and log. |
 | `krabka-telemetry` | OTLP pipeline, metrics registry, and the debug/pprof routes. |
 | `krabka-logfmt` | logfmt encoder for structured logs. |
+| `krabka-parse-benches` | Parses Criterion benchmark output into structured JSON summaries. |
 
 Rustdoc for every crate is published at
 [krabka-io.github.io/krabka-broker](https://krabka-io.github.io/krabka-broker/)
@@ -126,8 +127,19 @@ bazel run //:broker_bin -- --help
 cargo nextest run --workspace
 ```
 
-Both run the same 3392 tests. Bazel additionally runs the 9 rustdoc examples,
-which `cargo nextest` cannot; `cargo test --workspace --doc` covers those.
+Both run the same workspace test set, and CI runs both -- Bazel in the `ci` and
+`coverage` jobs, Cargo in the `cargo` job. Bazel additionally runs the rustdoc
+examples, which `cargo nextest` cannot; `cargo test --workspace --doc` covers
+those.
+
+Benchmarks are Cargo's alone: there is no `crate_bench` rule, so `cargo bench -p
+krabka-broker` (and `-p krabka-log` for the storage suite) is how you get a
+number on your own machine. The other way is to read one somebody else already
+took: the `bench` job of the `ci` workflow runs every criterion suite on the
+nightly schedule, prints the tables into its job summary, and keeps the samples
+as a `criterion-baseline` artifact that the next run compares against. A
+performance figure quoted in a comment names that job; the latest scheduled `ci`
+run in the Actions tab is where its current value lives.
 
 ### Everything CI does, locally
 
@@ -152,10 +164,14 @@ job's `test` step covers the rest: the six suites that filter excludes as
 timing-sensitive, plus `//packaging:image_binaries_test`, which sits outside
 `//crates`. Together they are what `bazel test //...` runs locally.
 
-Formatting and linting are Bazel targets rather than a separate `cargo fmt` /
-`cargo clippy` pass, so they see exactly the files and crates the build sees. A
-file in no target cannot drift unnoticed, and clippy resolves the same features
-the build resolves.
+Formatting and linting are Bazel targets rather than a separate `cargo fmt`
+pass, so they see exactly the files and crates the build sees. A file in a
+target cannot drift unnoticed, and clippy resolves the same features the build
+resolves. The aspect only sees Bazel targets, though, so CI also runs
+`cargo clippy --workspace --all-targets -- -D warnings` in its `cargo` job: the
+benches under `crates/broker/benches` and `crates/log/benches` have no Bazel
+target, `aspect lint` narrows the rest to what a change touched, and
+`krabka-protocol`'s build script only ever runs under Cargo.
 
 Two details worth knowing:
 
@@ -347,15 +363,60 @@ Mutation sweeps run through
 bazel test //crates/raft:raft_mutants
 ```
 
-They are tagged `manual`, so `bazel test //...` skips them. The on-demand,
-sharded `mutants` workflow runs a requested crate's full sweep. A non-excluded
-survivor fails its shard. Two things to know about the results:
+They are tagged `manual`, so `bazel test //...` skips them. The sharded
+`mutants` workflow runs the sweeps: weekly on a schedule over every swept
+crate, and on demand for a single crate. A non-excluded survivor fails its
+shard, and [`docs/mutants-baseline.md`](docs/mutants-baseline.md) records when
+each crate last swept green. Two things to know about the results:
 
 * The target runs unit tests and ordinary `tests/*.rs` integration tests. It
   excludes manual and Docker-backed suites because the sweep reruns the tests
   for each mutant.
 * The `cargo-mutants` version is pinned by `tools/mutants/Cargo.lock`, not by
   whatever is on `PATH`.
+
+### Skipping a mutant
+
+A skip removes code from the tier that measures the tests, so it needs a reason
+that survives review. Two reasons are accepted for the function-level
+`#[cfg_attr(test, mutants::skip)]` attribute:
+
+* **An I/O-only wrapper with no in-process signal.** The function dials a
+  socket, fsyncs a file, or spawns a task, and nothing it does is observable
+  from inside the test process — so every mutant of it survives no matter how
+  good the tests are.
+* **Orchestration whose every branch is a call into a separately
+  mutation-tested kernel.** The decisions live elsewhere and are measured
+  there; what is left is the loop or the match that dispatches to them.
+
+Whichever it is, write it down. A `// cargo-mutants: <reason>` line goes
+directly above the attribute, naming the reason as it applies to *this*
+function — only other attributes, doc comments and blank lines may sit between
+the two. `aspect check-mutants-skip` fails on a skip with no such line, and CI
+runs it in the `checks` job.
+
+**"Integration-tested" is not an accepted reason.** The sweep runs unit tests
+and ordinary `tests/*.rs` only; it excludes the manual and Docker-backed
+suites. A skip justified by integration coverage therefore removes exactly the
+code the mutation tier never sees, which is the opposite of what it should do.
+Either the behavior can be asserted in process — write that test and drop the
+skip — or the function is one of the two cases above and the reason should say
+so.
+
+Prefer a [`.cargo/mutants.toml`](.cargo/mutants.toml) `exclude_re` entry when
+what survives is an **equivalent mutant of one expression**: a comparison whose
+two branches agree at the boundary the mutation moves, or a field whose written
+value is already its `Default`. The attribute is function-wide and would take
+the function's other, killable mutants out of the sweep with it; the regex
+names just the one. The trade is that a regex keyed to a path or a line number
+rots when the code moves, which `aspect check-mutants-config` catches — so the
+attribute is still the better choice when the equivalent mutant is the *only*
+one the function generates.
+
+The sibling rule is `aspect check-creusot-skip`, which makes the attribute
+mandatory on every `#[cfg(creusot)]` function in `crates/verified`: those are
+never compiled in a normal build, so cargo-mutants would report each as an
+unexplained survivor.
 
 ## Storage formatting
 

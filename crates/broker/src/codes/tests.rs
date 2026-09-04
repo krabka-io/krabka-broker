@@ -81,15 +81,6 @@ fn krabka_private_codes_sit_above_the_whole_kafka_table() {
 }
 
 #[test]
-fn krabka_private_codes_leave_the_kfc6_range_free() {
-    // KFC-6 proposes 1001 to 1005 for the coordination-primitives api, so
-    // no code here takes one of them.
-    for (name, code) in KRABKA_PRIVATE_CODES {
-        assert!(!(1001..=1005).contains(code), "{name}");
-    }
-}
-
-#[test]
 fn from_broker_error_maps_variants_to_wire_codes() {
     let cases = [
         (

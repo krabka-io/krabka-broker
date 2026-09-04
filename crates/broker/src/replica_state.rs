@@ -95,7 +95,7 @@ impl ReplicaState {
         (self.leader, &self.replicas)
     }
 
-    // Deleting the `!` (ISR-vs-non-ISR branch select) is equivalent: both
+    // cargo-mutants: deleting the `!` (ISR-vs-non-ISR branch select) is equivalent: both
     // branch bodies set identical follower stats (leo=min, last_fetch, and
     // last_caught_up under the same `>= leader_leo` guard) and both end by
     // recomputing `self.hw = compute_hw(leader_leo)`. Since `compute_hw` keys
@@ -156,7 +156,7 @@ impl ReplicaState {
         self.hw
     }
 
-    // `< min_leo` vs `<= min_leo` is equivalent: the only effect is `min_leo =
+    // cargo-mutants: `< min_leo` vs `<= min_leo` is equivalent: the only effect is `min_leo =
     // stats.leo`, a no-op when the values are already equal, so both operators
     // compute the same minimum. No test can distinguish them.
     #[cfg_attr(test, mutants::skip)]

@@ -79,6 +79,11 @@ impl ControllerHandle {
         }
     }
 
+    // cargo-mutants: an I/O-only wrapper with no in-process signal. It encodes the
+    // already-validated mutations, dials the leader through
+    // `krabka_client_core::Connection` -- which no test in this process can build --
+    // and returns the leader's reply. The body it sends is produced by
+    // `encode_delegation_token_mutation_body`, which is mutation-tested.
     #[cfg_attr(test, mutants::skip)]
     async fn forward_delegation_token_mutations_to(
         &self,
@@ -198,7 +203,7 @@ struct DialerSubmitTransport<'a> {
 
 #[async_trait::async_trait]
 impl SubmitChangeTransport for DialerSubmitTransport<'_> {
-    // The only un-mockable step: dial + one `API_KEY_SUBMIT_CHANGE` + close, with
+    // cargo-mutants: the only un-mockable step: dial + one `API_KEY_SUBMIT_CHANGE` + close, with
     // no offline signal (a `krabka_client_core::Connection` cannot be built in a
     // test). `#[mutants::skip]` rather than an `exclude_re` because cargo-mutants'
     // name-regex exclusions do not reliably match the struct-field-deletion mutant

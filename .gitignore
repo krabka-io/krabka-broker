@@ -26,3 +26,6 @@ __pycache__/
 # `verif/` when `cargo creusot` runs. It is a local speed-up keyed by prover
 # and goal, not a proof artifact, so it does not belong in the repository.
 /.why3find/
+
+# Local Criterion benchmark output directory
+/bench-results/

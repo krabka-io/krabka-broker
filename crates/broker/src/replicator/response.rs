@@ -189,6 +189,11 @@ pub(super) async fn handle_partition_response(
                     // for 1000 x 100 B. Even that worst shape's ~4% sits
                     // inside the append's own run-to-run spread, so the
                     // re-walk is not separable from noise in production.
+                    // Those three figures are what the `bench` job of the `ci`
+                    // workflow measures on the nightly schedule and prints in
+                    // its job summary; the latest scheduled `ci` run in the
+                    // Actions tab is the reproducible reading, and its
+                    // `criterion-baseline` artifact holds the samples.
                     // Revisit only if the replicator's shape mix moves to very
                     // wide batches of tiny records, where the walk is a
                     // per-record cost and the append is not.

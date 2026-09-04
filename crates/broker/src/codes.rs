@@ -429,9 +429,6 @@ krabka_private_codes! {
     /// never reaches a JVM client.
     BARRIER_INJECTION_IN_PROGRESS = 1000;
 
-    // 1001 to 1005 stay free. KFC-6, the coordination-primitives api, proposes
-    // them and is still under discussion.
-
     /// `BREAK_GLASS_APPROVAL_REQUIRED` (1006): the request names a privileged
     /// transition that needs an approved break-glass proposal, and no such
     /// proposal exists.

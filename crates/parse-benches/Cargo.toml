@@ -1,0 +1,36 @@
+[package]
+name = "krabka-parse-benches"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Parses Criterion benchmark output in bencher format into structured JSON summaries"
+
+[lints]
+workspace = true
+
+# Re-exported as a library so integration tests and CI harnesses can invoke it
+# in-process without spawning a separate binary process.
+# Note: If a shared `krabka-tools` repository is formed in the future, this crate
+# can be migrated there as a common benchmark utility for krabka-broker,
+# krabka-protocol, and krabka-client-rs.
+[lib]
+name = "krabka_parse_benches"
+path = "src/lib.rs"
+
+[[bin]]
+name = "krabka-parse-benches"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+regex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+tempfile = { workspace = true }

@@ -32,6 +32,13 @@ impl ModelLog {
             self.epochs.clone_from(&leader.epochs);
         }
     }
+    /// The leader epoch stamped on `offset`, or `None` when the log is shorter
+    /// than that.
+    pub(super) fn epoch_at(&self, offset: i64) -> Option<Epoch> {
+        usize::try_from(offset)
+            .ok()
+            .and_then(|offset| self.epochs.get(offset).copied())
+    }
     pub(super) fn log_end(&self) -> LogEnd {
         LogEnd {
             last_epoch: self.last_epoch(),

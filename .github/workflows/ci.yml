@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
@@ -114,7 +114,7 @@ jobs:
       # here for the artifact, reusing this runner's Bazel output tree.
       - name: docgen
         run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rustdoc
           path: bazel-bin/crates/**/*.rustdoc
@@ -189,7 +189,7 @@ jobs:
     steps:
       # No `fetch-depth: 0`: nothing here reads the merge base -- the report
       # covers every target under //crates/..., not the impacted ones.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/reclaim-disk
 
@@ -229,7 +229,7 @@ jobs:
           df -h /
           du -sh ~/.cache/bazel ~/.cache/bazel-repo ~/.cache/bazel-disk 2>/dev/null || true
 
-      - uses: codecov/codecov-action@v7
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           use_oidc: true
           files: bazel-out/_coverage/_coverage_report.dat
@@ -242,10 +242,82 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories bans licenses sources
+
+  # The Cargo-side gate. `CONTRIBUTING.md`, `CLAUDE.md` and the pull request
+  # template all ask for `cargo clippy --workspace --all-targets` and
+  # `cargo nextest run --workspace` before a push; this is what makes those two
+  # commands a merge gate rather than an honour system.
+  #
+  # It is not a duplicate of the Bazel Clippy aspect. Three bodies of code are
+  # outside what that aspect can see:
+  #
+  #   * the benches -- `crates/broker/benches/*.rs` and `crates/log/benches/`
+  #     have no Bazel target at all, so nothing else in CI compiles them;
+  #   * the test and binary targets a change did not touch, which `aspect lint`
+  #     narrows away on a pull request and `--all-targets` does not;
+  #   * `krabka-protocol`'s build script, which `MODULE.bazel` pins with
+  #     `gen_build_script = "off"` and which therefore only ever runs under
+  #     Cargo.
+  #
+  # `cargo deny` is a sibling job rather than a step here for the same reason
+  # it always was: it needs neither a toolchain nor a build directory.
+  cargo:
+    name: cargo clippy · nextest
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/reclaim-disk
+
+      # `rust-toolchain.toml` is the single pin, so read the channel out of it
+      # rather than restating it here: a bump there must not leave this job
+      # installing the previous compiler and downloading the new one anyway on
+      # the first `cargo` invocation.
+      - id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -ne 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          test -n "${channel}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # The tarball rather than a fourth pinned action: `get.nexte.st` is the
+      # install path the nextest book documents for CI, and it lands one
+      # prebuilt binary next to `cargo` with no compilation.
+      - name: install cargo-nextest
+        run: |
+          set -euo pipefail
+          curl -LsSf --retry 5 https://get.nexte.st/latest/linux \
+            | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
+
+      # `--all-targets` is also what keeps the criterion benches compiling.
+      # It includes `--benches`, so every `[[bench]]` target in
+      # `crates/broker` and `crates/log` is type-checked on every pull request
+      # and a bench that stops building fails here. The `bench` job below runs
+      # them, and only on a schedule -- so this is the whole of the
+      # pull-request-time guarantee, and a `cargo bench --no-run` step beside
+      # it would buy nothing.
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # `--profile ci` is what excludes the two suites `//crates/broker`'s
+      # `manual` list excludes for the same reasons -- see the `default-filter`
+      # in `.config/nextest.toml`. The container-backed cases are `#[ignore]`d
+      # and nextest does not run those unless asked.
+      - name: nextest
+        run: cargo nextest run --workspace --profile ci
 
   # The repository's cheap checks, in one job.
   #
@@ -268,7 +340,7 @@ jobs:
     # markdown file); the other three wanted 10.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
@@ -339,9 +411,18 @@ jobs:
       # An exclude_re entry pinned to a path that a refactor moved or renamed stops matching anything, and the mutant it used to suppress comes back as an unexplained survivor.
       - name: mutants config
         run: aspect check-mutants-config
+      # A mutants::skip removes a function from the sweep, so an unexplained one silently shrinks the tier that measures the tests. Every skip states which of the README's two accepted reasons it is.
+      - name: justified mutants::skip attributes
+        run: aspect check-mutants-skip
       # Every crate has a README and the root README crate table names it.
       - name: crate READMEs
         run: aspect check-crate-readmes
+      # //bazel/images' IMAGES restates every //MODULE.bazel image pin as the tag the image is loaded under. A digest bump that moves the tag on one side only leaves a suite testing bytes its `const KAFKA_IMAGE` no longer describes.
+      - name: pinned images
+        run: aspect check-images
+      # The workspace version is written by hand in `[workspace.package]`, in every first-party `path` dependency's version requirement, in `module()`, in `WORKSPACE_VERSION` and in each `html_root_url`. `bazel/defs.bzl` stamps `WORKSPACE_VERSION` into every crate's purl, so one left behind by a bump attests an SBOM naming the previous release; the release workflow runs this same check against the tag.
+      - name: version pins
+        run: aspect check-version-pins
       - name: markdown links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
@@ -377,7 +458,7 @@ jobs:
       # Must match `image_push`'s registry and repository in //tools/creusot.
       REGISTRY_IMAGE: ghcr.io/krabka-io/creusot
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The CLI alone, and unconditionally: the tag below is what decides
       # whether this job builds anything, so it has to be resolved before the
@@ -410,7 +491,7 @@ jobs:
         name: resolve the proof image tag
         run: echo "tag=$(aspect creusot-image-tag)" >>"${GITHUB_OUTPUT}"
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -518,7 +599,7 @@ jobs:
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # rdeps needs the merge base, not just the tip.
           fetch-depth: 0
@@ -578,7 +659,7 @@ jobs:
       matrix:
         suite: ${{ fromJSON(needs.select.outputs.suites) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
@@ -668,7 +749,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
@@ -704,6 +785,173 @@ jobs:
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
+  # The external half of the link check.
+  #
+  # `checks` runs lychee with `--offline`, which resolves file-relative links
+  # and nothing else. That is deliberate on a pull request: the merge gate does
+  # not go red because Confluence was slow. It also means the ~180 http links
+  # across `**/*.md` -- KIP pages on cwiki, `kafka.apache.org/<version>/` paths,
+  # docs.rs items -- were checked by nobody, so a renamed Confluence page or a
+  # moved documentation path 404s silently and leaves a citation no reader can
+  # follow. This lane fetches them once a day, where a flake costs a re-run
+  # rather than a merge.
+  #
+  # `token:` is what keeps the ~78 github.com links from spending the
+  # unauthenticated 60-requests-an-hour budget in the first minute.
+  #
+  # The two `--exclude` patterns are compose-internal hostnames written as
+  # example configuration values (`docs/config-reference.md` and
+  # `docs/KFCs/KFC-7-broker-side-schema-validation.md`): they resolve inside a
+  # deployment and nowhere else, and no run of this check can ever reach them.
+  # They live here rather than in `.lycheeignore` so that file stays a record of
+  # links this lane has actually proven unreachable.
+  links:
+    name: external links
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: markdown links (external)
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --no-progress --root-dir "${{ github.workspace }}" --max-retries 3 --exclude '^http://schema-registry:8081' --exclude '^http://opa:8181' './**/*.md'
+
+  # The criterion benches, on the nightly schedule and on demand.
+  #
+  # Seven bench targets exist -- `produce`, `fetch_session`, `fetch_handoff`,
+  # `fetch_drain`, `perf_deferrals` and `metric_labels` in `//crates/broker`,
+  # `log` in `//crates/log` -- and until this job nothing ran them. The numbers
+  # quoted at the `PERF -- measured; decision: KEEP` sites and behind the
+  # `sendfile_min` default came from a developer's laptop and could not be
+  # reproduced from the repository; those comments now name this lane instead.
+  #
+  # Not on pull requests, and deliberately: a shared runner's wall clock moves
+  # by tens of percent between runs, so a per-pull-request number would be a
+  # coin flip dressed as a gate. What a pull request needs is that the benches
+  # still compile, and `cargo`'s `cargo clippy --workspace --all-targets`
+  # already type-checks every `[[bench]]` target -- adding
+  # `cargo bench --no-run` beside it would compile them a second time for the
+  # same answer. Regression *thresholds* on top of this baseline are a
+  # follow-up, not part of this lane.
+  #
+  # CodSpeed is the road not taken. Both manifests pull criterion in as
+  # `codspeed-criterion-compat`, whose comment promised an instrumented-walltime
+  # run that was never wired up, and wiring it needs a CodSpeed account and a
+  # `CODSPEED_TOKEN` secret this repository does not have -- a token reference
+  # that resolves to the empty string fails at the point of use, which is worse
+  # than not claiming it. So the shim runs as what it also is, plain criterion,
+  # and both manifests now say so. The comparison instead comes from criterion's
+  # own baseline: `--save-baseline main` loads the `main` baseline this job
+  # downloads from its last green run, prints the change against it, and writes
+  # the new samples back under the same name for the next run to read.
+  #
+  # `gh` rather than a fourth pinned action to move that directory, for the
+  # reason `nightly-report` gives: it is preinstalled and this is one API call.
+  bench:
+    name: criterion benches
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Seven suites of criterion's default 100 samples, plus the compile.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # `gh run download` reads the Actions API, which `contents: read` does
+      # not cover. Read-only: this job publishes its baseline through
+      # `upload-artifact`, not through the API.
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BASELINE: criterion-baseline
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/reclaim-disk
+
+      # Same three steps as `cargo`, for the same reason: `rust-toolchain.toml`
+      # is the single pin, so read the channel out of it rather than restating
+      # it here.
+      - id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -ne 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          test -n "${channel}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Its own namespace: the bench profile's artifacts are not the ones
+          # `cargo`'s clippy and nextest run leaves behind.
+          key: bench
+
+      # Best-effort, and the first run has nothing to find: with no `main`
+      # baseline on disk criterion reports absolute times and no change
+      # column, which is exactly what a first run can honestly say.
+      - name: restore the previous baseline
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list \
+            --workflow ci.yml --branch main --event schedule --status success \
+            --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -z "${run_id}" ]; then
+            echo "No green scheduled run to take a baseline from; measuring absolute times only."
+            exit 0
+          fi
+          mkdir -p target/criterion
+          if gh run download "${run_id}" --name "${BASELINE}" --dir target/criterion; then
+            echo "Baseline restored from run ${run_id}."
+          else
+            echo "Run ${run_id} carries no ${BASELINE} artifact; measuring absolute times only."
+          fi
+
+      # `--save-baseline main` is both halves of the comparison: criterion
+      # loads the `main` baseline the step above restored, prints each
+      # benchmark's change against it, and then overwrites it with this run's
+      # samples for the next run to compare against.
+      #
+      # `shell: bash` for pipefail, so a bench that fails to build or panics
+      # fails this step instead of being masked by `tee`.
+      - name: bench
+        shell: bash
+        run: |
+          cargo bench -p krabka-broker -p krabka-log -- --save-baseline main \
+            | tee bench.log
+
+      # The `bench_ratio` tables -- the ones the `PERF` comments quote -- are
+      # plain `println!` output interleaved with criterion's own result lines,
+      # and both belong in the summary. Only criterion's per-benchmark progress
+      # chatter is dropped.
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## criterion'
+            echo
+            echo "Baseline \`main\`, refreshed by this run. Artifact: \`${BASELINE}\`."
+            echo
+            echo '```'
+            grep -v '^Benchmarking ' bench.log || true
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # The next run's `main` baseline, and the raw samples behind any number
+      # this lane is cited for. 90 days so a quoted figure outlives the quarter
+      # it was measured in.
+      - name: upload the baseline
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.BASELINE }}
+          path: target/criterion/
+          retention-days: 90
+
   # Push the broker image.
   #
   # Not `aspect delivery`: its "only what changed" tracking needs
@@ -724,7 +972,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
@@ -746,7 +994,7 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -760,8 +1008,9 @@ jobs:
   # Branch protection can only name checks statically, and `docker` is a matrix
   # built from the impacted-suite query, so its jobs are named at run time and
   # can never appear in that list. Before this job the protected set was `build
-  # · test · lint · format`, `coverage` and `docgen`: `cargo deny`, the Creusot
-  # proofs and every container suite could go red without blocking a merge.
+  # · test · lint · format`, `coverage` and `docgen`: `cargo deny`, the Cargo
+  # clippy and nextest lane, the Creusot proofs and every container suite could
+  # go red without blocking a merge.
   # This job depends on all of them, so protection needs only this one name and
   # a job added below is covered by adding it to `needs`.
   #
@@ -787,6 +1036,7 @@ jobs:
       - ci
       - coverage
       - supply-chain
+      - cargo
       - checks
       - proofs
       - select
@@ -815,3 +1065,118 @@ jobs:
             exit 1
           fi
           echo 'Gate passed: every job that gates a merge succeeded.'
+
+  # The scheduled lanes' only reader.
+  #
+  # `docker` (the full JVM/librdkafka container matrix), `gssapi` (both
+  # Kerberos acceptance cases), `links` (every external URL in the markdown
+  # the pull-request lychee run skips under `--offline`) and `bench` (the seven
+  # criterion suites) run once a day, on the 05:00 UTC schedule, and `gate`
+  # deliberately excludes scheduled runs -- they gate no merge. Nothing else consumed their result, so a red nightly was
+  # visible only to whoever opened the Actions tab. This job is what turns it
+  # into an issue, and it is the only reporting path the scheduled lanes have:
+  # a new lane extends `needs` here rather than filing on its own.
+  #
+  # `select` is on `needs` alongside the two lanes it feeds. A `select` failure
+  # leaves `docker` *skipped* rather than failed, and a skip is not a failure
+  # here (see below) -- so without this dependency a nightly whose suite query
+  # died would close the issue and report itself green.
+  #
+  # `gh` rather than `actions/github-script`: every other piece of logic in this
+  # workflow is an inline `run:` script, secrets already reach steps as `env`
+  # (see `delivery`'s registry login), and `gh` is preinstalled on the runner,
+  # so this adds no fourth pinned action for three API calls.
+  #
+  # The label name and the body-building live in one place each so that #403 can
+  # point `mutants.yml`'s schedule at the same mechanism.
+  nightly-report:
+    name: nightly report
+    needs: [select, docker, gssapi, links, bench]
+    # `always()`: the whole point is to run when a dependency failed, and a
+    # plain `needs` would skip this job exactly then.
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The workflow-level block is `contents: read` + `id-token: write`. This is
+    # the only job that writes issues, so the grant stays here rather than
+    # widening every job's token.
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # `gh` resolves the repository from a git remote, and this job has no
+      # checkout -- it needs none. `GH_REPO` is what stands in for one.
+      GH_REPO: ${{ github.repository }}
+      LABEL: nightly-red
+      NEEDS: ${{ toJSON(needs) }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # `gh issue create --label` fails outright when the label does not exist,
+      # which would turn "the nightly is red" into "the reporting job is red"
+      # with nothing filed. Creating it here keeps the workflow self-sufficient:
+      # nobody has to have run a one-off `gh label create` against the
+      # repository first. `--force` makes it idempotent.
+      - name: ensure the label exists
+        run: |
+          set -euo pipefail
+          gh label create "${LABEL}" \
+            --color b60205 \
+            --description 'A scheduled lane failed; a green scheduled run closes this' \
+            --force
+
+      # `contains(needs.*.result, 'failure')` and nothing else. `needs.*.result`
+      # also yields `skipped` and `cancelled`, and neither is a red lane:
+      # `gssapi` is skipped on any event that is not a schedule or a dispatch,
+      # `docker` is skipped when the suite selection is empty, and a cancelled
+      # run means a human or the concurrency group stopped it. (`links` and
+      # `bench` are the two dependencies that cannot be skipped here: both
+      # `if:`s admit the same `schedule` this job's does, so on a scheduled run
+      # each always has a `success`, `failure` or `cancelled` of its own.)
+      - name: report the failure
+        if: contains(needs.*.result, 'failure')
+        run: |
+          set -euo pipefail
+          failed="$(jq -r '
+            to_entries[] | select(.value.result == "failure") | "- `\(.key)`"
+          ' <<<"${NEEDS}")"
+          # A red `links` lane is the one failure whose fix is not in the code,
+          # so the issue says where the two answers live.
+          hint=''
+          if [ "$(jq -r '.links.result' <<<"${NEEDS}")" = failure ]; then
+            hint=$'\nA broken link is either wrong -- fix the markdown -- or correct but permanently unreachable to a checker, Confluence answering 403 to bots being the usual case, and that one goes in `.lycheeignore` with a line saying why.\n'
+          fi
+          # A red `bench` lane leaves no baseline for the next run to compare
+          # against, so the issue says where this run's numbers went.
+          if [ "$(jq -r '.bench.result' <<<"${NEEDS}")" = failure ]; then
+            hint="${hint}"$'\nThe criterion lane failed, so no `main` baseline was published and the next run measures absolute times only. This run\'s partial output is in the job summary; the `criterion-baseline` artifact, if the upload got that far, holds the samples.\n'
+          fi
+          body="$(printf '%s\n\nFailed jobs:\n\n%s\n%s\nRun: %s\n' \
+            "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${hint}" "${RUN_URL}")"
+          number="$(gh issue list \
+            --label "${LABEL}" --state open --limit 1 \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create \
+              --label "${LABEL}" \
+              --title "Nightly ${GITHUB_WORKFLOW} is red" \
+              --body "${body}"
+          fi
+
+      # The complement, minus cancellations: a run somebody stopped part-way
+      # proves nothing green, so it neither files nor closes anything. Every
+      # open issue rather than the first, so a label applied by hand to a second
+      # one does not leave it open forever.
+      - name: close the issue on a green run
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        run: |
+          set -euo pipefail
+          for number in $(gh issue list \
+            --label "${LABEL}" --state open --limit 100 \
+            --json number --jq '.[].number'); do
+            gh issue close "${number}" \
+              --reason completed \
+              --comment "The scheduled \`${GITHUB_WORKFLOW}\` run is green again: ${RUN_URL}"
+          done

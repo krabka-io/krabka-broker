@@ -41,9 +41,6 @@ use crate::{
 /// metadata it just created always satisfies: a producer recovering from
 /// `UNKNOWN_PRODUCER_ID` names its old identity, and the freshly allocated one
 /// is what it gets back.
-// cargo-mutants: live transaction-coordinator orchestration; the response
-// identity and error mapping are exercised by broker transaction integration.
-#[cfg_attr(test, mutants::skip)]
 pub(super) async fn handle_transactional(
     coord: &Arc<TxnCoordinator>,
     tid: &str,

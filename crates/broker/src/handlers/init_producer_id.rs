@@ -42,12 +42,6 @@ use crate::{
     replicator_supervisor::materialize_partition,
 };
 
-// cargo-mutants: the surviving mutant here deletes `error_code: codes::NONE`
-// from the non-transactional `InitProducerIdResponse`; `codes::NONE == 0`, so
-// the field's Default is identical and the mutation is a true equivalent. The
-// rest of `handle` (ACL branches, 2PC gates, coordinator routing) is covered
-// by the live-broker integration suite, not this in-file module.
-#[cfg_attr(test, mutants::skip)]
 #[tracing::instrument(
     name = "handle_init_producer_id",
     level = "info",

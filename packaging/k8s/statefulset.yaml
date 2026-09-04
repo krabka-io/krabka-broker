@@ -32,6 +32,10 @@ spec:
       labels:
         app.kubernetes.io/name: krabka
     spec:
+      # The image manifest declares linux/amd64 and CI publishes no other
+      # architecture, so a pod scheduled elsewhere cannot exec the entrypoint.
+      nodeSelector:
+        kubernetes.io/arch: amd64
       # The controlled-shutdown drain hands this node's partition leadership
       # to its in-sync replicas before the process stops, and defaults to a
       # 20s budget. The grace period has to outlast that, or SIGKILL lands

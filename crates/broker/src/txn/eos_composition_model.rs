@@ -48,6 +48,17 @@ use crate::handlers::fetch::{FetchWatermarks, compute_visibility_window};
 const TARGET_STATE_COUNT: usize = 20_000_000;
 const MAX_UNIQUE_STATES: usize = 2_000_000;
 const MAX_DEPTH: usize = 50;
+
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_BASIC: usize = 1_228;
+const PINNED_UNIQUE_STATES_WIDE: usize = 193_205;
+
 const PID0: i64 = 1000; // base producer id; per-producer pid = PID0 + producer index
 
 fn model_offset(value: usize) -> i64 {
@@ -404,7 +415,7 @@ impl Model for EosModel {
     }
 }
 
-fn run(model: EosModel, label: &str) {
+fn run(model: EosModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -427,6 +438,11 @@ fn run(model: EosModel, label: &str) {
         "[{label}] unique bound exceeded ({})",
         checker.unique_state_count()
     );
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
@@ -440,6 +456,7 @@ fn txn_basic() {
             max_log: 5,
         },
         "txn_basic",
+        PINNED_UNIQUE_STATES_BASIC,
     );
 }
 
@@ -456,5 +473,6 @@ fn txn_wide() {
             max_log: 7,
         },
         "txn_wide",
+        PINNED_UNIQUE_STATES_WIDE,
     );
 }

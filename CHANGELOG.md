@@ -92,6 +92,12 @@ the `krabka-*` names to crates.io.
   instead of at the log start. An observer that is answered but never applies
   anything now says so at warn level, with the log-start offset it was told.
 
+- The KIP-590 row of the compatibility matrix said a Krabka broker-only node
+  forwards admin writes through `Envelope`. It does not, and no such path
+  exists: the controller listener serves `Envelope`, and a broker-only node
+  reaches its controller over the krabka-private `SubmitChange` RPC. The row
+  now claims the served half only, and says why the broker half is not needed.
+
 ## [0.5.4] - 2026-09-02
 
 Milestones 5 and 6: a deployed cluster can now be probed, measured, watched and

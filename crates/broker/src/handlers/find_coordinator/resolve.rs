@@ -61,13 +61,30 @@ pub(super) fn resolve_partition_coordinator(
     };
     Coordinator {
         key,
-        node_id: i32::try_from(leader.0).unwrap_or(-1),
+        node_id: wire_node_id(leader),
         host,
         port,
         error_code: codes::NONE,
         error_message: None,
         ..Default::default()
     }
+}
+
+/// The `nodeId` a coordinator's [`NodeId`](krabka_metadata::NodeId) projects to
+/// on the wire.
+///
+/// `FindCoordinatorResponse.nodeId` is an int32, and so is the `nodeId` every
+/// registration path validates, so the conversion cannot fail for a broker the
+/// controller has registered as a partition leader. `-1` is the sentinel that
+/// pairs with `COORDINATOR_NOT_AVAILABLE` if one ever did.
+// cargo-mutants: an unobservable sentinel. No registration this broker can hold
+// carries a node id above `i32::MAX`, so nothing a test constructs reaches the
+// `-1` arm and no mutation of it changes an observable byte. Only the fallback
+// is skipped: `resolve_partition_coordinator` and the handler above it stay in
+// the sweep, because every other branch they take is wire-visible.
+#[cfg_attr(test, mutants::skip)]
+fn wire_node_id(leader: krabka_metadata::NodeId) -> i32 {
+    i32::try_from(leader.0).unwrap_or(-1)
 }
 
 pub(super) fn unavailable_coordinator(key: String, message: &str) -> Coordinator {
@@ -110,6 +127,13 @@ mod tests {
     use super::*;
 
     const TOPIC_ID: &str = "BQUFBQUFBQUFBQUFBQUFBQ";
+
+    /// `wire_node_id` is the `-1` sentinel fallback the sweep skips: a node id
+    /// the controller can register always projects to itself.
+    #[test]
+    fn a_registered_leader_projects_to_its_own_node_id() {
+        assert!(wire_node_id(krabka_metadata::NodeId(42)) == 42);
+    }
 
     #[test]
     fn share_key_parser_accepts_kafka_uuid_and_colons_in_group() {

@@ -152,6 +152,13 @@ pub(super) fn apply_request_quota(
 //     64 KiB  1557 ns      32 ns    1.5 us   (98%)
 //     1 MiB     31 us      32 ns     31 us   (99.9%)
 //
+// Measured by the `bench` job of the `ci` workflow, which runs this suite on
+// the nightly schedule and prints the same table into its job summary; the
+// samples behind it are the run's `criterion-baseline` artifact. For the
+// current numbers read the latest scheduled `ci` run in the repository's
+// Actions tab rather than this table, which records the decision and not a
+// particular machine.
+//
 // Keep. The saving is proportional to the body, and the one API whose bodies
 // are unbounded does not come through here: Fetch is written by
 // `network::fetch_writer`, which already skips both copies (its module doc has
@@ -199,11 +206,13 @@ pub(super) fn encode_response(
 /// runs: the dispatch entries whose policy is
 /// `RequestQuotaPolicy::ApplyFallbackAccounting` (the `DispatchEntry::plain`
 /// ones) and the unsupported-version reply path, which takes it for every
-/// `api_key`. The `InlineExempt` entries -- every handler that takes a
-/// `RequestContext`, which is most of the admin and ACL surface -- are exempt
-/// from the request quota altogether and so are neither delayed nor throttle-
-/// stamped. Narrowing that exemption is KIP-124 work rather than KIP-219 work;
-/// this table is what a narrowing would land on.
+/// `api_key`. The `SelfAccounted` entries -- `Produce`, `Fetch` and
+/// `ApiVersions` -- charge the quota in their handler and set
+/// `ThrottleTimeMs` on the typed response before encoding, so they never reach
+/// this predicate. The `InlineExempt` entries -- most of the admin and ACL
+/// surface -- are exempt from the request quota altogether and so are neither
+/// delayed nor throttle-stamped. Narrowing that exemption is KIP-124 work
+/// rather than KIP-219 work; this table is what a narrowing would land on.
 ///
 /// `Produce` (0) and `Fetch` (1) never reach this predicate. Both their
 /// bandwidth quota and their share of the request quota are charged by the

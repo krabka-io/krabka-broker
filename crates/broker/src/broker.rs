@@ -68,7 +68,7 @@ const DISKLESS_FLUSHER_READY_TIMEOUT: std::time::Duration = std::time::Duration:
 pub struct Broker {
     pub(crate) config: BrokerConfig,
     /// Metadata authority for this broker. For combined/controller nodes
-    /// this is a live openraft `ControllerHandle`; for broker-only nodes it
+    /// this is a live `KRaft` `ControllerHandle`; for broker-only nodes it
     /// is an observer-backed source that fetches `__cluster_metadata` and
     /// forwards writes to the controller quorum. Handlers reach it through
     /// the `MetadataSource` trait, so the concrete backing is invisible to

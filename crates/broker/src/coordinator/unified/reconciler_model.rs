@@ -48,7 +48,10 @@ mod state;
 
 use krabka_protocol::primitives::uuid::Uuid;
 
-use self::{config::ReconModel, runner::run};
+use self::{
+    config::ReconModel,
+    runner::{PINNED_UNIQUE_STATES_BASIC, PINNED_UNIQUE_STATES_WIDE, run},
+};
 
 const TOPIC: Uuid = Uuid([7; 16]);
 const TOPIC_NAME: &str = "t";
@@ -58,12 +61,16 @@ fn recon_basic() {
     // 2 members, 1 topic, 2 partitions: the minimal handoff scenario. Proves the
     // coordinator's `reconcile_member` withholding keeps ownership disjoint
     // across every interleaving of join / leave / heartbeat / client revoke+add.
-    run(ReconModel::basic(), "recon_basic");
+    run(
+        ReconModel::basic(),
+        "recon_basic",
+        PINNED_UNIQUE_STATES_BASIC,
+    );
 }
 
 #[test]
 fn recon_wide() {
     // 3 members contending for 2 partitions: more handoff interleavings as
     // members join/leave and partitions migrate between live members.
-    run(ReconModel::wide(), "recon_wide");
+    run(ReconModel::wide(), "recon_wide", PINNED_UNIQUE_STATES_WIDE);
 }

@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
   ],
   "automerge": true,
   "automergeType": "pr",
@@ -32,14 +33,14 @@
     },
     {
       "customType": "regex",
-      "description": "The digest-pinned images `oci.pull` fetches, written as (name, image, digest) tuples that no manager parses.",
+      "description": "The digest-pinned images rules_img's `pull` fetches, written as (name, registry, repository, tag, digest) tuples that no manager parses.",
       "managerFilePatterns": [
         "/(^|/)MODULE\\.bazel$/"
       ],
       "matchStrings": [
-        "\\(\"[a-z_0-9]+\", \"(?<depName>[^\"]+)\", \"(?<currentDigest>sha256:[a-f0-9]+)\"\\)"
+        "\\(\"[a-z_0-9]+\", \"(?<registry>[^\"]+)\", \"(?<repository>[^\"]+)\", \"(?<currentValue>[^\"]+)\", \"(?<currentDigest>sha256:[a-f0-9]{64})\"\\)"
       ],
-      "currentValueTemplate": "latest",
+      "depNameTemplate": "{{registry}}/{{repository}}",
       "datasourceTemplate": "docker"
     }
   ],
@@ -78,6 +79,24 @@
       ],
       "matchFileNames": [
         "MODULE.bazel"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "Every `uses:` in .github/workflows/ is pinned to a commit SHA, which is what makes a workflow run the bytes it was reviewed with rather than whatever a moving tag points at today. A digest bump is still a code change to a step that holds repository secrets and, in the delivery jobs, a registry push -- so it gets a pull request that a human reads, not a merge that happens overnight.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "Both carry something a version bump can break quietly. rules_rs is patched by //bazel/patches/rules-rs-target-has-atomic.patch and //bazel/patches/rules_rs_zlib_url.patch, and a patch that still applies with fuzz can land on lines that no longer mean what they did -- a build that succeeds while generating something else. llvm is a registered toolchain, so it is the C++ compiler every cc dependency in the graph is built with. Neither is a merge to wake up to.",
+      "matchManagers": [
+        "bazel-module"
+      ],
+      "matchPackageNames": [
+        "rules_rs",
+        "llvm"
       ],
       "automerge": false
     },

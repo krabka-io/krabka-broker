@@ -31,6 +31,12 @@ package(default_visibility = ["//visibility:public"])
 # then runs. A push supplies its own tags; see `push` below.
 IMAGE_TAG = "docker.io/krabka-io/krabka-broker:dev"
 
+# The one architecture this image is built and published for. `base.apko.yaml`
+# names it too, and `image_binaries_test` holds the layers to it, so a broker
+# built for a different CPU cannot be wrapped in a manifest that claims this
+# one. Multi-architecture images are separate work.
+IMAGE_ARCH = "amd64"
+
 # Owned by `nonroot` in the apko base. The broker needs no privilege: it binds
 # 9092/9093, both above 1024, and writes only its data directory.
 NONROOT = file_metadata(
@@ -49,7 +55,7 @@ apko_image(
 image_manifest_from_oci_layout(
     name = "base",
     src = ":base_oci",
-    architecture = "amd64",
+    architecture = IMAGE_ARCH,
     layers = [GZIP_LAYER],
     os = "linux",
 )
@@ -80,6 +86,12 @@ image_layer(
     include_runfiles = False,
 )
 
+# The layers carry whatever the host toolchain built, with no platform
+# transition, while the manifest says linux/amd64 unconditionally. Off x86_64
+# that pairing is a lie the daemon only discovers when it fails to exec, so say
+# it at analysis time instead: `bazel build //packaging:image` on an aarch64
+# host reports the target as incompatible, and `bazel build //...` skips it
+# along with `image_load`, `push` and the two container tests that depend on it.
 image_manifest(
     name = "image",
     base = ":base",
@@ -87,6 +99,10 @@ image_manifest(
     layers = [
         ":broker_layer",
         ":tools_layer",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
     ],
     user = "65532:65532",
     working_dir = "/var/lib/krabka",
@@ -110,6 +126,7 @@ sh_test(
     size = "small",
     srcs = ["image_binaries_test.sh"],
     args = [
+        IMAGE_ARCH,
         "$(rootpath :image_manifest_blob)",
         "$(rootpath :broker_layer)",
         "$(rootpath :tools_layer)",

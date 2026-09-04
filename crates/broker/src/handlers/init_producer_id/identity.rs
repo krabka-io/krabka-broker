@@ -9,9 +9,6 @@
 
 use crate::{error::BrokerError, txn::state::TxnEntry};
 
-// cargo-mutants: identity allocation can cross the metadata controller;
-// transaction integration exercises both epoch-bump and rollover paths.
-#[cfg_attr(test, mutants::skip)]
 pub(super) async fn next_init_producer_identity(
     entry: &TxnEntry,
     txnv: crate::txn::version::TxnVersion,
@@ -62,6 +59,64 @@ mod tests {
 
     use super::*;
     use crate::txn::state::TxnState;
+
+    /// The `transaction.version` split. Below `TV_2` the coordinator bumps the
+    /// entry's own epoch and keeps the producer id; from `TV_2` it goes through
+    /// `next_producer_identity`, which rotates to a fresh producer id at the
+    /// `i16::MAX - 1` boundary rather than bumping into `i16::MAX`.
+    #[tokio::test]
+    async fn the_transaction_version_decides_between_an_epoch_bump_and_a_rotation() {
+        let ids = crate::producer_id_manager::ProducerIdManager::new();
+        let mut entry = TxnEntry::new_empty("tid-init".into(), ProducerId(11), 3, i32::MAX, 0);
+        entry.state = TxnState::CompleteCommit;
+
+        for txnv in [
+            crate::txn::version::TxnVersion::Classic,
+            crate::txn::version::TxnVersion::Flexible,
+        ] {
+            assert!(
+                next_init_producer_identity(&entry, txnv, &ids)
+                    .await
+                    .unwrap()
+                    == (ProducerId(11), 4)
+            );
+        }
+        assert!(
+            next_init_producer_identity(&entry, crate::txn::version::TxnVersion::Verified, &ids)
+                .await
+                .unwrap()
+                == (ProducerId(11), 4)
+        );
+    }
+
+    /// At the epoch ceiling the two halves of the split part company: an
+    /// unverified transaction version has no epoch left to bump and falls back
+    /// to a freshly allocated producer id at epoch 0, and a verified one
+    /// rotates one step earlier, at `i16::MAX - 1`.
+    #[tokio::test]
+    async fn the_epoch_ceiling_rotates_to_a_fresh_producer_id_on_both_sides() {
+        let ids = crate::producer_id_manager::ProducerIdManager::new();
+        let mut entry =
+            TxnEntry::new_empty("tid-max".into(), ProducerId(11), i16::MAX, i32::MAX, 0);
+        entry.state = TxnState::CompleteCommit;
+
+        let (classic_pid, classic_epoch) =
+            next_init_producer_identity(&entry, crate::txn::version::TxnVersion::Classic, &ids)
+                .await
+                .unwrap();
+        assert!(classic_pid != ProducerId(11));
+        assert!(classic_epoch == 0);
+
+        let mut near_max =
+            TxnEntry::new_empty("tid-near".into(), ProducerId(11), i16::MAX - 1, i32::MAX, 0);
+        near_max.state = TxnState::CompleteCommit;
+        let (verified_pid, verified_epoch) =
+            next_init_producer_identity(&near_max, crate::txn::version::TxnVersion::Verified, &ids)
+                .await
+                .unwrap();
+        assert!(verified_pid != ProducerId(11));
+        assert!(verified_epoch == 0);
+    }
 
     #[tokio::test]
     async fn recovery_identity_advances_through_max_then_rotates() {

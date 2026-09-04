@@ -96,10 +96,12 @@ pub(super) async fn handle_offset_out_of_range(
 /// KIP-101: the follower sends its current `leader_epoch`. The leader replies
 /// with `end_offset`, the first offset of the next epoch, which is the safe
 /// truncation point.
-// The `end_offset >= 0` truncate-vs-reset branch is only reachable after a live
-// leader connection returns an `OffsetForLeaderEpoch` response; the whole
-// function is inter-broker IO (connect, send, then `part.truncate_to` /
-// `part.reset_to`) with no pure seam. Exercised by the live-replication suite.
+// cargo-mutants: an I/O-only wrapper with no in-process signal. Every step is
+// inter-broker IO -- connect, send `OffsetForLeaderEpoch`, then `part.truncate_to`
+// / `part.reset_to` -- and the `end_offset >= 0` truncate-vs-reset branch is only
+// reachable once a live leader connection has answered, so no in-process seam
+// distinguishes a mutant. The truncation point itself is computed by
+// `truncation_offset`, which is mutation-tested.
 #[cfg_attr(test, mutants::skip)]
 #[tracing::instrument(
     name = "replicator_handle_epoch_fence",

@@ -18,7 +18,7 @@ pub(super) const API_KEY_DESCRIBE_CLUSTER: i16 = 60;
 /// quorum. Other endpoint types are rejected with KIP-919's
 /// `MISMATCHED_ENDPOINT_TYPE`. Any configured authentication is terminated by
 /// the controller-listener handshake before the Raft image projection.
-// The broker-id `i32::try_from(node_id).unwrap_or(-1)` overflow fallback is
+// cargo-mutants: the broker-id `i32::try_from(node_id).unwrap_or(-1)` overflow fallback is
 // unreachable: the metadata layer rejects registering a `node_id` exceeding
 // `i32::MAX` (BrokerRegistrationRecord encode validation), so the `-1` sentinel
 // is dead defensive code that no input can reach. The reachable voter/broker

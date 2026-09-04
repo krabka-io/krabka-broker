@@ -4,7 +4,7 @@ A tiered-storage mode that never rewrites and never deletes what it wrote, seals
 
 ## Status
 
-**Adopted.** The implementation is the `worm` module of `krabka-remote-storage`, the `PutRequest` and `PutOutcome` surface of `krabka-object-store`, and the `krabka-worm-verify` binary, merged in [#3](https://github.com/krabka-io/krabka-broker/pull/3). This document lands on branch `claude/worm-archive-integrity-manifests-2bb33t`.
+**Adopted.** The implementation is the `worm` module of `krabka-remote-storage`, the `PutRequest` and `PutOutcome` surface of `krabka-object-store`, and the `krabka-worm-verify` binary. It merged to `main` through pull request [#3](https://github.com/krabka-io/krabka-broker/pull/3) and ships in release `v0.5.0` and every later release.
 
 [KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage) defines the archive that this mode writes into, and the copy path stays the KIP-405 copy path. No KIP defines write-once retention, archive attestation, or a refused remote read, so this document is the specification for those.
 

@@ -1,4 +1,4 @@
-//! The `ConsensusModel` itself and the four bounded configurations the checker
+//! The `ConsensusModel` itself and the five bounded configurations the checker
 //! runs. The bounds are the whole reason a config is a named constructor rather
 //! than a literal, so they are gathered in one file away from the transition
 //! logic they constrain.
@@ -82,6 +82,29 @@ impl ConsensusModel {
             max_crashes: 1,
             enable_append_via: false,
             enable_check_quorum: true,
+        }
+    }
+
+    /// Leader-completeness focus. Three voters and client appends, so a
+    /// committed entry can sit on a bare majority while the third voter is left
+    /// behind; a single crash (the omission model drops that node's traffic) is
+    /// what leaves it behind. The stale voter then stands for election, and only
+    /// the log-recency test in `handle_vote_request` keeps it from winning.
+    ///
+    /// The bounds are tight because the linearizability tester keeps its history
+    /// in the fingerprinted state: one append, epochs through two, and two
+    /// in-flight messages are enough for a stale voter to be refused, and the
+    /// space still exhausts.
+    pub fn three_voters_append(voter_ids: &[NodeId], max_appends: u32) -> Self {
+        Self {
+            voter_ids: voter_ids.to_vec(),
+            max_appends,
+            max_inflight: 2,
+            max_epoch: 2,
+            enable_loss_dup: false,
+            max_crashes: 1,
+            enable_append_via: false,
+            enable_check_quorum: false,
         }
     }
 

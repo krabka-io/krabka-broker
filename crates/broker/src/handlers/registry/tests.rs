@@ -12,14 +12,6 @@ use crate::handlers::{self, ApiKeyCode};
 fn registry_registers_plain_handlers() {
     let registry = build_registry();
 
-    let api_versions = registry
-        .get(ApiKey::ApiVersions as i16)
-        .expect("ApiVersions");
-    assert!(api_versions.is_plain());
-    assert!(api_versions.quota_policy() == RequestQuotaPolicy::ApplyFallbackAccounting);
-    assert!(api_versions.body_flexible(3));
-    assert!(!api_versions.body_flexible(2));
-
     for key in [25, 27, 59, 73, 83, 84, 85, 86, 87] {
         let entry = registry
             .get(key)
@@ -234,15 +226,27 @@ fn registry_body_flexible_matches_selected_schema_boundaries() {
     }
 }
 
+/// `ApiVersions` is the one context dispatch that charges the request quota
+/// itself: its `ThrottleTimeMs` sits behind the `ApiKeys` array, so the
+/// dispatch loop's leading-int32 patch cannot report a delay on it and the
+/// handler fills the field in instead.
 #[test]
-fn plain_handler_pointer_matches_existing_api_versions_handler() {
+fn api_versions_is_a_self_accounted_context_dispatch() {
     let registry = build_registry();
-    let handler = registry
-        .get_plain(ApiKey::ApiVersions as i16)
-        .expect("plain ApiVersions handler");
+    let entry = registry
+        .get(ApiKey::ApiVersions as i16)
+        .expect("ApiVersions");
 
+    assert!(entry.is_context());
+    assert!(entry.quota_policy() == RequestQuotaPolicy::SelfAccounted);
+    assert!(entry.body_flexible(3));
+    assert!(!entry.body_flexible(2));
+
+    let handler = registry
+        .get_context(ApiKey::ApiVersions as i16)
+        .expect("context ApiVersions handler");
     assert!(std::ptr::fn_addr_eq(
         handler,
-        handlers::api_versions::handle as PlainHandler
+        handlers::api_versions::handle as ContextHandler
     ));
 }

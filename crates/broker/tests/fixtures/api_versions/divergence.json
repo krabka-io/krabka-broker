@@ -12,7 +12,8 @@
         "min": 0,
         "max": 13
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 1,
@@ -25,7 +26,8 @@
         "min": 4,
         "max": 18
       },
-      "verdict": "range_differs"
+      "verdict": "range_differs",
+      "intent": "Intended. krabka still serves the pre-v4 Fetch request shapes that Kafka 4.x dropped: `api_catalog::client_facing_apis` takes the key's `min_version` from `krabka_protocol::kafka_3_6_2::owned::fetch_request`, and `handlers::fetch::encode_fetch_response` answers v0-v3 from the same `kafka_3_6_2` flavor, which `throttle_audit`'s split probe also covers. The wider range costs a client nothing -- version negotiation picks the highest both sides know -- and it keeps a long-lived pre-4.0 consumer working against krabka."
     },
     {
       "api_key": 2,
@@ -38,7 +40,8 @@
         "min": 1,
         "max": 11
       },
-      "verdict": "range_differs"
+      "verdict": "range_differs",
+      "intent": "Intended, and the same story as Fetch: krabka advertises ListOffsets from v0, which Kafka 4.x no longer does. `client_facing_apis` sets that `min_version` to 0 explicitly and `handlers::list_offsets` routes v0 to its own hand-rolled `v0` module, because the generated schema starts at v1. A modern client negotiates v11 either way."
     },
     {
       "api_key": 3,
@@ -51,7 +54,8 @@
         "min": 0,
         "max": 13
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 8,
@@ -64,7 +68,8 @@
         "min": 2,
         "max": 10
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 9,
@@ -77,7 +82,8 @@
         "min": 1,
         "max": 10
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 10,
@@ -90,7 +96,8 @@
         "min": 0,
         "max": 6
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 11,
@@ -103,7 +110,8 @@
         "min": 0,
         "max": 9
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 12,
@@ -116,7 +124,8 @@
         "min": 0,
         "max": 4
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 13,
@@ -129,7 +138,8 @@
         "min": 0,
         "max": 5
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 14,
@@ -142,7 +152,8 @@
         "min": 0,
         "max": 5
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 15,
@@ -155,7 +166,8 @@
         "min": 0,
         "max": 6
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 16,
@@ -168,7 +180,8 @@
         "min": 0,
         "max": 5
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 17,
@@ -181,7 +194,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 18,
@@ -194,7 +208,8 @@
         "min": 0,
         "max": 4
       },
-      "verdict": "range_differs"
+      "verdict": "range_differs",
+      "intent": "Intended: krabka advertises KIP-1242 ApiVersions v5, the routing identity and the REBOOTSTRAP_REQUIRED answer, which no released Kafka broker serves yet. The capability is real -- `handlers::api_versions` implements the v5 checks from `ROUTING_IDENTITY_MIN_VERSION` up and `api_versions/tests.rs` drives every one of them -- so clamping `max_version` to the oracle's v4 would make the broker deny a feature it has. The risk taken deliberately: a client built against Kafka trunk schemas can negotiate a version no released broker has validated, so a v5 shape change before Kafka ships it lands here as a wire break."
     },
     {
       "api_key": 19,
@@ -207,7 +222,8 @@
         "min": 2,
         "max": 7
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 20,
@@ -220,7 +236,8 @@
         "min": 1,
         "max": 6
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 21,
@@ -233,7 +250,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 22,
@@ -246,7 +264,8 @@
         "min": 0,
         "max": 5
       },
-      "verdict": "range_differs"
+      "verdict": "range_differs",
+      "intent": "Intended: krabka advertises InitProducerId v6, the KIP-939 two-phase-commit request shape with `enable2Pc` and `keepPreparedTxn`. `handlers::init_producer_id` implements both fields with Kafka's own gates -- a cluster without `transaction.two.phase.commit.enable` gets TRANSACTIONAL_ID_AUTHORIZATION_FAILED, a principal without the TWO_PHASE_COMMIT ACL the same, and a transaction version below 2 gets UNSUPPORTED_VERSION -- and `transactions_2pc.rs` drives them. Kafka's oracle stops at v5 because it clamps the advertised maximum to the finalized `transaction.version` feature, which this stock broker leaves below 2; krabka advertises unconditionally and refuses at call time instead. Same risk as ApiVersions v5: a client can pick v6 against a cluster whose transaction version cannot serve it, and learns that from the error code rather than from negotiation."
     },
     {
       "api_key": 23,
@@ -259,7 +278,8 @@
         "min": 2,
         "max": 4
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 24,
@@ -272,7 +292,8 @@
         "min": 0,
         "max": 5
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 25,
@@ -285,7 +306,8 @@
         "min": 0,
         "max": 4
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 26,
@@ -298,7 +320,8 @@
         "min": 0,
         "max": 5
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 27,
@@ -311,7 +334,8 @@
         "min": 1,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 28,
@@ -324,7 +348,8 @@
         "min": 0,
         "max": 5
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 29,
@@ -337,7 +362,8 @@
         "min": 1,
         "max": 3
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 30,
@@ -350,7 +376,8 @@
         "min": 1,
         "max": 3
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 31,
@@ -363,7 +390,8 @@
         "min": 1,
         "max": 3
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 32,
@@ -376,7 +404,8 @@
         "min": 1,
         "max": 4
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 33,
@@ -389,7 +418,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 34,
@@ -402,7 +432,8 @@
         "min": 1,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 35,
@@ -415,7 +446,8 @@
         "min": 1,
         "max": 5
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 36,
@@ -428,7 +460,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 37,
@@ -441,7 +474,8 @@
         "min": 0,
         "max": 3
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 38,
@@ -454,7 +488,8 @@
         "min": 1,
         "max": 3
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 39,
@@ -467,7 +502,8 @@
         "min": 1,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 40,
@@ -480,7 +516,8 @@
         "min": 1,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 41,
@@ -493,7 +530,8 @@
         "min": 1,
         "max": 3
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 42,
@@ -506,7 +544,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 43,
@@ -519,7 +558,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 44,
@@ -532,7 +572,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 45,
@@ -545,7 +586,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 46,
@@ -558,7 +600,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 47,
@@ -571,7 +614,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 48,
@@ -584,7 +628,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 49,
@@ -597,7 +642,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 50,
@@ -610,7 +656,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 51,
@@ -623,7 +670,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 55,
@@ -636,7 +684,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 56,
@@ -646,7 +695,8 @@
         "max": 3
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 57,
@@ -659,7 +709,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 59,
@@ -669,7 +720,8 @@
         "max": 1
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 60,
@@ -682,7 +734,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 61,
@@ -695,7 +748,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 62,
@@ -705,7 +759,8 @@
         "max": 4
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 63,
@@ -715,7 +770,8 @@
         "max": 2
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 64,
@@ -728,7 +784,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 65,
@@ -741,7 +798,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 66,
@@ -754,7 +812,8 @@
         "min": 0,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 67,
@@ -764,7 +823,8 @@
         "max": 0
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 68,
@@ -777,7 +837,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 69,
@@ -790,7 +851,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 70,
@@ -800,7 +862,8 @@
         "max": 0
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 71,
@@ -810,7 +873,8 @@
         "max": 0
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 72,
@@ -820,7 +884,8 @@
         "max": 0
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 73,
@@ -830,7 +895,8 @@
         "max": 0
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 74,
@@ -843,7 +909,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 75,
@@ -856,7 +923,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 76,
@@ -869,7 +937,8 @@
         "min": 1,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 77,
@@ -882,7 +951,8 @@
         "min": 1,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 78,
@@ -895,7 +965,8 @@
         "min": 1,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 79,
@@ -908,7 +979,8 @@
         "min": 1,
         "max": 2
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 80,
@@ -921,7 +993,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 81,
@@ -934,7 +1007,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 82,
@@ -944,7 +1018,8 @@
         "max": 0
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     },
     {
       "api_key": 83,
@@ -957,7 +1032,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 84,
@@ -970,7 +1046,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 85,
@@ -983,7 +1060,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 86,
@@ -996,7 +1074,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 87,
@@ -1009,7 +1088,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 88,
@@ -1022,7 +1102,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 89,
@@ -1035,7 +1116,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 90,
@@ -1048,7 +1130,8 @@
         "min": 0,
         "max": 1
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 91,
@@ -1061,7 +1144,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 92,
@@ -1074,7 +1158,8 @@
         "min": 0,
         "max": 0
       },
-      "verdict": "same"
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 93,
@@ -1084,7 +1169,8 @@
         "max": 0
       },
       "kafka": null,
-      "verdict": "krabka_only"
+      "verdict": "krabka_only",
+      "intent": null
     }
   ]
 }

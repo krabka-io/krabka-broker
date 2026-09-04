@@ -17,7 +17,18 @@ tools ride beside the broker under `/usr/bin`: `krabka-format`,
 `krabka-restore`. A tool that is not in the image cannot run in a container,
 because there is no shell to fetch one with.
 
-To run the binary directly, build it with Bazel and copy it out:
+The image is **linux/amd64 only**. `packaging/base.apko.yaml` builds the Wolfi
+base for `amd64`, the manifest declares `linux/amd64`, and the tags CI pushes
+to `ghcr.io/krabka-io/krabka-broker` are bare amd64 manifests rather than a
+multi-architecture index. There is no arm64 image. On an aarch64 host
+`bazel run //packaging:image_load` does not produce a runnable image: the
+manifest still says amd64 while the broker binary in it is an aarch64 ELF, so
+the container fails to exec. Bazel refuses to build `//packaging:image` off
+x86_64 for that reason. Multi-architecture images are a separate piece of work.
+
+To run the binary directly on another architecture, build it with Bazel and
+copy it out. That path builds for the host it runs on, so it works anywhere the
+Rust toolchain does:
 
 ```
 bazel build //:broker_bin //:format_bin
@@ -32,11 +43,17 @@ glibc and the CA bundle.
 [`packaging/k8s/`](../../packaging/k8s/) holds a reference deployment of the
 image: a three-node StatefulSet, a headless Service with a bootstrap Service,
 and a PodDisruptionBudget. It is a starting point to read and adapt, not a
-chart. Before you apply it, set the image tag and the storage class and
-size. Also replace the two placeholder identities: `KRABKA_CLUSTER_ID` and
-the directory ids in `KRABKA_INITIAL_CONTROLLERS`.
+chart. Before you apply it, set the image tag, the node architecture and the
+storage class and size. Also replace the two placeholder identities:
+`KRABKA_CLUSTER_ID` and the directory ids in `KRABKA_INITIAL_CONTROLLERS`.
 The label the manifests read the pod ordinal from needs Kubernetes 1.29 or
 later.
+
+The StatefulSet pins itself to amd64 nodes with
+`nodeSelector: kubernetes.io/arch: amd64`, because that is the only
+architecture the image is published for. On a mixed-architecture cluster that
+selector is what keeps a pod off a node it could never exec the image on;
+change it only when the image you point it at is built for something else.
 
 ```
 kubectl apply -f packaging/k8s/

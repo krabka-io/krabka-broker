@@ -86,7 +86,8 @@ enum QuotaReach {
 ///   offset, so it alone could be patched by a second, per-API offset table.
 ///   That is not worth a second patching mode for one API: the fix that
 ///   covers all seven is to set the field on the typed response before
-///   encoding, the way the Produce and Fetch handlers already do.
+///   encoding, the way the Produce, Fetch and `ApiVersions` handlers already
+///   do.
 ///
 /// The `reach` column says what that costs on the wire, which is not the same
 /// for all seven -- see [`QuotaReach`].
@@ -98,7 +99,7 @@ enum QuotaReach {
 /// the page and fails on a diff.
 const THROTTLE_ECHO_DIVERGENCES: &[(ApiKeyCode, ApiVersion, ApiVersion, QuotaReach)] = &[
     (0, 1, 13, QuotaReach::SelfAccounted),          // Produce
-    (18, 1, 5, QuotaReach::FallbackAccounted),      // ApiVersions
+    (18, 1, 5, QuotaReach::SelfAccounted),          // ApiVersions
     (38, 1, 3, QuotaReach::UnsupportedVersionOnly), // CreateDelegationToken
     (39, 1, 2, QuotaReach::UnsupportedVersionOnly), // RenewDelegationToken
     (40, 1, 2, QuotaReach::UnsupportedVersionOnly), // ExpireDelegationToken

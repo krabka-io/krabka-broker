@@ -316,6 +316,16 @@ pub(crate) fn build_registry() -> DispatchRegistry {
 
     register_plain_dispatches(&mut registry);
 
+    // KIP-219: `ApiVersionsResponse` carries `ThrottleTimeMs` behind the
+    // `ApiKeys` array, so the dispatch loop's leading-int32 patch cannot report
+    // a request-quota delay on it. The handler charges the quota and fills the
+    // field in itself, the way Kafka's `handleApiVersionsRequest` answers
+    // through `sendResponseMaybeThrottle`.
+    registry.register(DispatchEntry::self_accounted_context(
+        ApiKey::ApiVersions as i16,
+        krabka_protocol::owned::api_versions_request::FLEXIBLE_MIN,
+        crate::handlers::api_versions::handle,
+    ));
     registry.register(DispatchEntry::produce(
         krabka_protocol::owned::produce_request::FLEXIBLE_MIN,
         produce_adapter,

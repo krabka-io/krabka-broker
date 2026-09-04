@@ -106,6 +106,10 @@ impl Default for BrokerConfig {
             socket_request_max: mebibytes(100),
             queued_max_requests: 500,
             queued_max_request_bytes: None,
+            // The floor of `benches/fetch_drain.rs`'s sweep, not a
+            // measured crossover: nothing below 4 KiB has been benchmarked.
+            // `BrokerConfig::sendfile_min`'s doc comment has the sweep, and
+            // the `bench` job of the `ci` workflow is what re-measures it.
             sendfile_min: kibibytes(4),
             socket_send_buffer: mebibytes(1),
             socket_receive_buffer: mebibytes(1),

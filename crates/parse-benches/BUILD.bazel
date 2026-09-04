@@ -1,0 +1,17 @@
+load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_library(name = "parse-benches")
+
+# `bazel run //crates/parse-benches:krabka-parse-benches -- --results-dir bench-results`
+crate_binary(
+    name = "krabka-parse-benches",
+    crate_root = "src/main.rs",
+    lib = ":parse-benches",
+)
+
+crate_tests(lib = "parse-benches")

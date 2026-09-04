@@ -1,0 +1,396 @@
+"""Unit tests for `check_images.axl`."""
+
+load(
+    "./check_images.axl",
+    "dict_entry",
+    "loaded_images",
+    "mismatches",
+    "pin",
+    "pinned_images",
+    "quoted_fields",
+    "reference",
+    "scan_images_dict",
+    "scan_pins",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+# A digest of the right shape, so a test that is about something else does not
+# have to carry 64 hex digits inline.
+_DIGEST = "sha256:" + ("0123456789abcdef" * 4)
+
+def _pin_line(name, registry, repository, tag, digest = _DIGEST):
+    return "        (\"%s\", \"%s\", \"%s\", \"%s\", \"%s\")," % (
+        name,
+        registry,
+        repository,
+        tag,
+        digest,
+    )
+
+def _module(pin_lines):
+    """A MODULE.bazel fragment: the comprehension the pins sit inside."""
+    return [
+        "pull_image = use_repo_rule(\"@rules_img//img:pull.bzl\", \"pull\")",
+        "",
+        "[",
+        "    pull_image(",
+        "        name = name,",
+        "        digest = digest,",
+        "    )",
+        "    for name, registry, repository, tag, digest in [",
+    ] + pin_lines + [
+        "    ]",
+        "]",
+    ]
+
+def _build(entry_lines):
+    """A bazel/images/BUILD.bazel fragment: the `IMAGES` dict and what surrounds it."""
+    return [
+        "load(\"@rules_img//img:load.bzl\", \"image_load\")",
+        "",
+        "# Keep in step with //MODULE.bazel, which pins the digests.",
+        "IMAGES = {",
+    ] + entry_lines + [
+        "}",
+        "",
+        "[",
+        "    image_load(name = name, tag = tag)",
+        "    for name, tag in IMAGES.items()",
+        "]",
+    ]
+
+def _test_quoted_fields_reads_the_separated_strings(_ctx):
+    check_eq("one", quoted_fields("\"a\""), ["a"])
+    check_eq("three", quoted_fields("\"a\", \"b\", \"c\""), ["a", "b", "c"])
+    check_eq("an empty field", quoted_fields("\"\", \"b\""), ["", "b"])
+
+def _test_quoted_fields_refuses_what_it_cannot_read(_ctx):
+    # Every one of these is a line a looser reader would half-read, which is
+    # the silent short read this check must never do.
+    for text in [
+        "a, \"b\"",
+        "\"a\",\"b\"",
+        "\"a\", \"b\" ",
+        "\"a\" \"b\"",
+        "\"unterminated",
+        "",
+    ]:
+        check_eq("refused: %r" % text, quoted_fields(text), None)
+
+def _test_quoted_fields_stops_before_an_unbounded_run(_ctx):
+    # The sweep is bounded, because Starlark has no `while`. A longer list than
+    # a pin can be is refused rather than truncated.
+    check_eq("seven fields", quoted_fields(", ".join(["\"x\""] * 7)), None)
+
+def _test_a_pin_reads_its_five_fields(_ctx):
+    check_eq(
+        "the tuple MODULE.bazel writes",
+        pin("(\"apache_kafka_4_3_1\", \"mirror.gcr.io\", \"apache/kafka\", \"4.3.1\", \"%s\")," % _DIGEST),
+        struct(
+            name = "apache_kafka_4_3_1",
+            registry = "mirror.gcr.io",
+            repository = "apache/kafka",
+            tag = "4.3.1",
+            digest = _DIGEST,
+        ),
+    )
+
+def _test_a_pin_reads_without_a_trailing_comma(_ctx):
+    check_eq(
+        "the last tuple in the list",
+        pin("(\"minio_mc\", \"mirror.gcr.io\", \"minio/mc\", \"RELEASE.2025-08-13T08-35-41Z\", \"%s\")" % _DIGEST).tag,
+        "RELEASE.2025-08-13T08-35-41Z",
+    )
+
+def _test_a_tag_is_taken_as_written(_ctx):
+    # MinIO's tag is a timestamp with dots, dashes and a `Z`; a tag alphabet
+    # narrower than "whatever a registry accepts" would reject it.
+    check_eq(
+        "a timestamp tag",
+        reference(pin(_pin_line("minio", "mirror.gcr.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z").strip())),
+        "mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
+    )
+
+def _test_a_three_field_tuple_is_not_a_pin(_ctx):
+    # The shape the Renovate manager used to match, and the shape MODULE.bazel
+    # has not written since the registry and tag were split out.
+    check_eq(
+        "three fields",
+        pin("(\"apache_kafka_4_3_1\", \"mirror.gcr.io/apache/kafka\", \"%s\")," % _DIGEST),
+        None,
+    )
+
+def _test_a_bad_name_or_digest_is_not_a_pin(_ctx):
+    for name, digest, label in [
+        ("Apache_Kafka", _DIGEST, "an upper-case name"),
+        ("apache-kafka", _DIGEST, "a dashed name"),
+        ("", _DIGEST, "an empty name"),
+        ("kcat", "sha256:beef", "a short digest"),
+        ("kcat", "sha512:" + ("0123456789abcdef" * 4), "another algorithm"),
+        ("kcat", "sha256:" + ("0123456789abcdeg" * 4), "a non-hex digest"),
+        ("kcat", _DIGEST + "0", "a long digest"),
+    ]:
+        check_eq(
+            "not a pin: %s" % label,
+            pin(_pin_line(name, "mirror.gcr.io", "edenhill/kcat", "1.7.1", digest).strip()),
+            None,
+        )
+
+def _test_the_pins_of_a_module_file_are_read(_ctx):
+    lines = _module([
+        _pin_line("apache_kafka_4_3_1", "mirror.gcr.io", "apache/kafka", "4.3.1"),
+        "        # kcat has had no release since 1.7.1.",
+        _pin_line("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1"),
+    ])
+    check_eq(
+        "both, as references",
+        pinned_images("MODULE.bazel", lines),
+        {
+            "apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1",
+            "kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1",
+        },
+    )
+
+def _test_nothing_but_a_pin_is_read_as_one(_ctx):
+    # Everything else in a MODULE.bazel opens with an identifier or a `for`,
+    # so the `("` opening is what separates a pin from the file around it.
+    found = scan_pins(_module([]) + [
+        "bazel_dep(name = \"rules_rs\", version = \"0.0.107\")",
+        "register_toolchains(\"@llvm//toolchain:all\")",
+        "PLATFORM_TRIPLES = [\"x86_64-unknown-linux-gnu\"]",
+    ])
+    check_eq("no pins", found.images, {})
+    check_eq("and nothing reported", found.malformed, [])
+
+def _test_a_line_that_opens_like_a_pin_and_is_not_one_is_reported(_ctx):
+    # `pinned_images` turns each of these into a `fail`, which a test cannot
+    # catch; `scan_pins` is the seam that lets one assert what the reader saw.
+    found = scan_pins(_module([
+        _pin_line("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1"),
+        "        (\"apache_kafka_4_3_1\", \"mirror.gcr.io/apache/kafka\", \"%s\")," % _DIGEST,
+        "        (\"cp_kafka_7_8_8\", \"mirror.gcr.io\", \"confluentinc/cp-kafka\", \"7.8.8\", \"sha256:short\"),",
+    ]))
+    check_eq("the readable pin", found.images, {"kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1"})
+    check_eq(
+        "the unreadable ones, with their line numbers",
+        found.malformed,
+        [
+            (10, "(\"apache_kafka_4_3_1\", \"mirror.gcr.io/apache/kafka\", \"%s\")," % _DIGEST),
+            (11, "(\"cp_kafka_7_8_8\", \"mirror.gcr.io\", \"confluentinc/cp-kafka\", \"7.8.8\", \"sha256:short\"),"),
+        ],
+    )
+
+def _test_a_name_pinned_twice_is_reported(_ctx):
+    found = scan_pins(_module([
+        _pin_line("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1"),
+        _pin_line("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.2"),
+    ]))
+    check_eq("the first wins", found.images, {"kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1"})
+    check_eq("and the second is reported", found.duplicates, ["kcat_1_7_1"])
+
+def _test_a_dict_entry_is_read(_ctx):
+    check_eq(
+        "name and reference",
+        dict_entry("\"apache_kafka_4_3_1\": \"mirror.gcr.io/apache/kafka:4.3.1\","),
+        struct(name = "apache_kafka_4_3_1", reference = "mirror.gcr.io/apache/kafka:4.3.1"),
+    )
+    check_eq(
+        "without a trailing comma",
+        dict_entry("\"minio\": \"mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z\"").reference,
+        "mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
+    )
+
+def _test_a_dict_line_this_reader_cannot_read_is_not_read(_ctx):
+    for text in [
+        "\"a\": \"b\",  # why",
+        "\"a\":\"b\",",
+        "\"a\" : \"b\",",
+        "a: \"b\",",
+        "\"a\": b,",
+        "\"a\": \"\",",
+        "\"a\": \"b\", \"c\": \"d\",",
+        "\"a\",",
+    ]:
+        check_eq("not an entry: %r" % text, dict_entry(text), None)
+
+def _test_the_images_dict_is_read_past_comments_and_blank_lines(_ctx):
+    check_eq(
+        "the two entries",
+        loaded_images("BUILD.bazel", _build([
+            "    # The one the differential suites default to.",
+            "    \"apache_kafka_4_3_1\": \"mirror.gcr.io/apache/kafka:4.3.1\",",
+            "",
+            "    \"kcat_1_7_1\": \"mirror.gcr.io/edenhill/kcat:1.7.1\",",
+        ])),
+        {
+            "apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1",
+            "kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1",
+        },
+    )
+
+def _test_a_missing_dict_is_seen_as_missing(_ctx):
+    found = scan_images_dict(["TAGS = {", "    \"a\": \"b\",", "}"])
+    check_eq("no opening", found.openings, [])
+    check_eq("no entries", found.images, {})
+
+def _test_a_second_dict_is_seen(_ctx):
+    found = scan_images_dict(["IMAGES = {", "}", "IMAGES = {", "}"])
+    check_eq("both openings", found.openings, [1, 3])
+
+def _test_an_unclosed_dict_is_seen_as_unclosed(_ctx):
+    # Without the `closed` flag, a dict whose `}` went missing would look like
+    # a shorter list of images and every entry past the damage would stop being
+    # compared -- the silent short read this reader must never do.
+    found = scan_images_dict(["IMAGES = {", "    \"a\": \"b\","])
+    check_eq("opened", found.openings, [1])
+    check_eq("not closed", found.closed, False)
+    check_eq("what it did read", found.images, {"a": "b"})
+
+def _test_an_unreadable_dict_line_is_reported_not_skipped(_ctx):
+    found = scan_images_dict([
+        "IMAGES = {",
+        "    \"a\": \"b\",",
+        "    \"c\": \"d\",  # why",
+        "    'e': 'f',",
+        "    \"g\": \"h\",",
+        "}",
+    ])
+    check_eq("the readable entries", found.images, {"a": "b", "g": "h"})
+    check_eq(
+        "the unreadable ones, with their line numbers",
+        found.unparsed,
+        [(3, "\"c\": \"d\",  # why"), (4, "'e': 'f',")],
+    )
+    check_eq("closed", found.closed, True)
+
+def _test_a_name_entered_twice_is_reported(_ctx):
+    found = scan_images_dict([
+        "IMAGES = {",
+        "    \"a\": \"b\",",
+        "    \"a\": \"c\",",
+        "}",
+    ])
+    check_eq("the first wins", found.images, {"a": "b"})
+    check_eq("and the second is reported", found.duplicates, ["a"])
+
+def _test_the_two_files_agreeing_is_no_mismatch(_ctx):
+    pinned = {
+        "apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1",
+        "kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1",
+    }
+    check_eq("agreement", mismatches(pinned, dict(pinned)), [])
+
+def _test_a_tag_that_moved_in_one_file_only_is_reported(_ctx):
+    # The failure this check exists for: a digest bump moves the pin's tag and
+    # leaves IMAGES loading the new bytes under the old name.
+    check_eq(
+        "the moved tag",
+        mismatches(
+            {"apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.4.0"},
+            {"apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1"},
+        ),
+        [(
+            "apache_kafka_4_3_1",
+            "IMAGES loads mirror.gcr.io/apache/kafka:4.3.1, but MODULE.bazel pins mirror.gcr.io/apache/kafka:4.4.0",
+        )],
+    )
+
+def _test_a_registry_or_repository_that_differs_is_reported(_ctx):
+    check_eq(
+        "a different registry",
+        mismatches(
+            {"kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1"},
+            {"kcat_1_7_1": "docker.io/edenhill/kcat:1.7.1"},
+        ),
+        [(
+            "kcat_1_7_1",
+            "IMAGES loads docker.io/edenhill/kcat:1.7.1, but MODULE.bazel pins mirror.gcr.io/edenhill/kcat:1.7.1",
+        )],
+    )
+
+def _test_a_key_one_side_lacks_is_reported_from_either_direction(_ctx):
+    check_eq(
+        "pinned and not loaded, loaded and not pinned, in name order",
+        mismatches(
+            {"only_pinned": "mirror.gcr.io/a:1", "shared": "mirror.gcr.io/b:2"},
+            {"only_loaded": "mirror.gcr.io/c:3", "shared": "mirror.gcr.io/b:2"},
+        ),
+        [
+            ("only_loaded", "IMAGES loads mirror.gcr.io/c:3, and MODULE.bazel pins no such image"),
+            ("only_pinned", "MODULE.bazel pins mirror.gcr.io/a:1, and IMAGES has no entry for it"),
+        ],
+    )
+
+def _test_every_mismatch_is_reported_not_only_the_first(_ctx):
+    check_eq(
+        "one pair per disagreement",
+        mismatches(
+            {"a": "r/a:1", "b": "r/b:1", "c": "r/c:1"},
+            {"a": "r/a:2", "b": "r/b:1", "d": "r/d:1"},
+        ),
+        [
+            ("a", "IMAGES loads r/a:2, but MODULE.bazel pins r/a:1"),
+            ("c", "MODULE.bazel pins r/c:1, and IMAGES has no entry for it"),
+            ("d", "IMAGES loads r/d:1, and MODULE.bazel pins no such image"),
+        ],
+    )
+
+def _test_the_two_readers_meet_on_the_same_names(_ctx):
+    # End to end over the two file shapes: the pins of a module fragment and
+    # the dict of a BUILD fragment that restates them agree, and the same pair
+    # with one tag edited does not.
+    module = _module([
+        _pin_line("apache_kafka_4_3_1", "mirror.gcr.io", "apache/kafka", "4.3.1"),
+        _pin_line("minio", "mirror.gcr.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z"),
+    ])
+    pinned = pinned_images("MODULE.bazel", module)
+    check_eq(
+        "in step",
+        mismatches(pinned, loaded_images("BUILD.bazel", _build([
+            "    \"apache_kafka_4_3_1\": \"mirror.gcr.io/apache/kafka:4.3.1\",",
+            "    \"minio\": \"mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z\",",
+        ]))),
+        [],
+    )
+    check_eq(
+        "one tag left behind",
+        mismatches(pinned, loaded_images("BUILD.bazel", _build([
+            "    \"apache_kafka_4_3_1\": \"mirror.gcr.io/apache/kafka:4.3.0\",",
+            "    \"minio\": \"mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z\",",
+        ]))),
+        [(
+            "apache_kafka_4_3_1",
+            "IMAGES loads mirror.gcr.io/apache/kafka:4.3.0, but MODULE.bazel pins mirror.gcr.io/apache/kafka:4.3.1",
+        )],
+    )
+
+check_images_tests = suite("check-images", [
+    _test_quoted_fields_reads_the_separated_strings,
+    _test_quoted_fields_refuses_what_it_cannot_read,
+    _test_quoted_fields_stops_before_an_unbounded_run,
+    _test_a_pin_reads_its_five_fields,
+    _test_a_pin_reads_without_a_trailing_comma,
+    _test_a_tag_is_taken_as_written,
+    _test_a_three_field_tuple_is_not_a_pin,
+    _test_a_bad_name_or_digest_is_not_a_pin,
+    _test_the_pins_of_a_module_file_are_read,
+    _test_nothing_but_a_pin_is_read_as_one,
+    _test_a_line_that_opens_like_a_pin_and_is_not_one_is_reported,
+    _test_a_name_pinned_twice_is_reported,
+    _test_a_dict_entry_is_read,
+    _test_a_dict_line_this_reader_cannot_read_is_not_read,
+    _test_the_images_dict_is_read_past_comments_and_blank_lines,
+    _test_a_missing_dict_is_seen_as_missing,
+    _test_a_second_dict_is_seen,
+    _test_an_unclosed_dict_is_seen_as_unclosed,
+    _test_an_unreadable_dict_line_is_reported_not_skipped,
+    _test_a_name_entered_twice_is_reported,
+    _test_the_two_files_agreeing_is_no_mismatch,
+    _test_a_tag_that_moved_in_one_file_only_is_reported,
+    _test_a_registry_or_repository_that_differs_is_reported,
+    _test_a_key_one_side_lacks_is_reported_from_either_direction,
+    _test_every_mismatch_is_reported_not_only_the_first,
+    _test_the_two_readers_meet_on_the_same_names,
+])
+
+test_check_images = suite_task(check_images_tests)

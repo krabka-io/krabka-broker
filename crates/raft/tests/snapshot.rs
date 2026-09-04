@@ -5,13 +5,10 @@
 //! and a full process-style restart. That restart rebuilds the image from the
 //! on-disk checkpoint, and not from in-memory state.
 //!
-//! Slice 3c reimplements `trigger_snapshot`, which turns the image into a
-//! KIP-630 checkpoint, and it reimplements restart recovery. Two features that
-//! the openraft controller carried are deferred: the auto-snapshot background
-//! pump, with its byte and interval triggers, waits on the auto-snapshot
-//! heuristics, and the cross-node `InstallSnapshot` learner catch-up waits on
-//! the Slice-4 `FetchSnapshot` catch-up. The tests that exercised them went
-//! away with openraft.
+//! The scope here is the manual `trigger_snapshot` path and the recovery that
+//! follows it. The engine's own byte- and interval-triggered snapshotting is
+//! covered in `krabka_raft::kraft::controller`, and the cross-node catch-up
+//! over KIP-595 `FetchSnapshot` is covered by the engine simulator.
 
 use std::time::Duration;
 
@@ -146,11 +143,9 @@ async fn snapshot_then_restart_recovers_image() {
     }
 }
 
-// NOTE: origin/main's `lagging_learner_catches_up_via_snapshot` test (openraft
-// `add_learner` + InstallSnapshot learner path) is intentionally dropped on this
-// branch: openraft is gone and `add_learner` returns `Unsupported`. The
-// equivalent — a lagging follower catching up via the real KIP-595
-// `FetchSnapshot` — is covered by `kraft_engine_sim::lagging_follower_catches_up_via_snapshot`.
+// A lagging follower catching up through the real KIP-595 `FetchSnapshot` is
+// covered by `kraft_engine_sim::lagging_follower_catches_up_via_snapshot`.
+
 fn has_checkpoint(meta_dir: &std::path::Path) -> bool {
     std::fs::read_dir(meta_dir)
         .into_iter()
