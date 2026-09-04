@@ -98,7 +98,7 @@ enum QuotaReach {
 /// the page and fails on a diff.
 const THROTTLE_ECHO_DIVERGENCES: &[(ApiKeyCode, ApiVersion, ApiVersion, QuotaReach)] = &[
     (0, 1, 13, QuotaReach::SelfAccounted),          // Produce
-    (18, 1, 5, QuotaReach::FallbackAccounted),      // ApiVersions
+    (18, 1, 5, QuotaReach::SelfAccounted),          // ApiVersions
     (38, 1, 3, QuotaReach::UnsupportedVersionOnly), // CreateDelegationToken
     (39, 1, 2, QuotaReach::UnsupportedVersionOnly), // RenewDelegationToken
     (40, 1, 2, QuotaReach::UnsupportedVersionOnly), // ExpireDelegationToken
