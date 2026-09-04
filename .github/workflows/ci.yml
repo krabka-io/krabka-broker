@@ -1194,12 +1194,12 @@ jobs:
       # `contains(needs.*.result, 'failure')` and nothing else. `needs.*.result`
       # also yields `skipped` and `cancelled`, and neither is a red lane:
       # `gssapi` and `soak` are skipped on any event that is not a schedule or a
-    # dispatch,
-      # `docker` is skipped when the suite selection is empty, and a cancelled
-      # run means a human or the concurrency group stopped it. (`links` and
-      # `bench` are the two dependencies that cannot be skipped here: both
-      # `if:`s admit the same `schedule` this job's does, so on a scheduled run
-      # each always has a `success`, `failure` or `cancelled` of its own.)
+      # dispatch, `docker` is skipped when the suite selection is empty, and a
+      # cancelled run means a human or the concurrency group stopped it.
+      # (`links` and `bench` are the two dependencies that cannot be skipped
+      # here: both `if:`s admit the same `schedule` this job's does, so on a
+      # scheduled run each always has a `success`, `failure` or `cancelled` of
+      # its own.)
       - name: report the failure
         if: contains(needs.*.result, 'failure')
         run: |
