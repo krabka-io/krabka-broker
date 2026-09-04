@@ -9,10 +9,10 @@
 //! `ZooKeeper` controller's `leader.imbalance.per.broker.percentage`; the
 //! `KRaft` controller's `maybeBalancePartitionLeaders` has none, and restores every
 //! partition whose preferred replica is back in the ISR. It bounds the work
-//! by count instead: at most [`MAX_ELECTIONS_PER_TICK`] elections in one
-//! pass, so a cluster that restarts a broker holding a hundred thousand
-//! partitions does not put them all into one metadata batch. The remainder is
-//! picked up by the next tick.
+//! by count instead: at most `MAX_ELECTIONS_PER_TICK` elections in one pass,
+//! so a cluster that restarts a broker holding a hundred thousand partitions
+//! does not put them all into one metadata batch. The remainder is picked up
+//! by the next tick.
 
 use std::{collections::HashSet, sync::Arc};
 

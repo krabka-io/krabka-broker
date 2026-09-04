@@ -104,25 +104,17 @@ fn runtime_policy_cli_rejects_invalid_and_accepts_valid_values() {
         assert!(Args::try_parse_from(args).is_ok() == accepted);
     }
 
-    let args = Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=101%"])
-        .expect("parse ratio");
-    assert!(
-        args.apply_runtime_to(&mut BrokerConfig::default(), None)
-            .is_err()
-    );
+    // KIP-460: the cluster-wide imbalance ratio is the ZooKeeper controller's
+    // gate, and the KRaft controller krabka follows has none. The flag is gone
+    // rather than accepted-and-ignored, so a start-up that still passes it
+    // fails loudly instead of quietly rebalancing on every tick.
+    assert!(Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=100%"]).is_err());
 
     let args = Args::try_parse_from(["krabka-broker", "--record-decompression-max-ratio=101"])
         .expect("parse positive ratio");
     assert!(
         args.apply_runtime_to(&mut BrokerConfig::default(), None)
             .is_err()
-    );
-
-    let args = Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=100%"])
-        .expect("parse ratio");
-    assert!(
-        args.apply_runtime_to(&mut BrokerConfig::default(), None)
-            .is_ok()
     );
 
     let args = Args::try_parse_from(["krabka-broker", "--metadata-snapshot-fetch-max=1073741825B"])
