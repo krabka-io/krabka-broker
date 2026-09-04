@@ -44,7 +44,7 @@ jobs:
       # single source of truth and eliminates an unpinned third-party action step.
       # Note: ubuntu-latest's pre-installed stable toolchain still appears in the
       # rust-cache environment inventory alongside the pinned 1.98.0 toolchain.
-      - uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: bench-broker
 
