@@ -245,3 +245,99 @@ async fn out_of_range_truncates_and_recovers() {
         h.shutdown().await;
     }
 }
+
+/// KIP-227 + `num.replica.fetchers`: a follower folds every partition it
+/// follows from one leader into one connection and one in-flight `Fetch`.
+///
+/// Before this, the follower spawned one task, one connection and one
+/// single-partition sessionless `Fetch` per (topic, partition). A follower of
+/// twelve partitions therefore held twelve connections to the leader and
+/// parked twelve requests in its purgatory every round, which is the
+/// reconnect storm and the request amplification #415 describes.
+///
+/// The leader's own KIP-227 session cache is what makes this observable: a
+/// sessionless follower fetch caches nothing, so
+/// `krabka_broker_incremental_fetch_sessions` counted zero however many
+/// partitions were replicating. One session per *follower* -- not per
+/// partition -- is exactly the shape being asserted, and it stays at two while
+/// the partition count grows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {
+    let _g = cluster_lock().lock().await;
+    let cluster = support::start_n_node_with(3, |_, config| {
+        config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    })
+    .await
+    .expect("3-broker cluster");
+    for (h, _, _) in &cluster {
+        h.wait_until_brokers_registered(3).await;
+    }
+
+    // Twelve partitions at rf=3 puts every broker in every replica set, so
+    // each of the other two follows node 1 for the four partitions it leads.
+    let leader_addr = cluster[0].1.listen_addr.to_string();
+    let admin = Client::builder()
+        .bootstrap(leader_addr)
+        .build()
+        .await
+        .unwrap();
+    let resp = admin
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "batched".into(),
+                num_partitions: 12,
+                replication_factor: 3,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(resp.topics[0].error_code == 0);
+    for (h, _, _) in &cluster {
+        for partition in 0..12 {
+            h.wait_until_partition_present("batched", partition).await;
+        }
+    }
+
+    let metrics_addr = cluster[0]
+        .0
+        .metrics_addr()
+        .expect("metrics server should be bound");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut sessions = -1_i64;
+    while std::time::Instant::now() < deadline {
+        sessions = scrape_gauge(metrics_addr, "krabka_broker_incremental_fetch_sessions").await;
+        if sessions == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        sessions == 2,
+        "one incremental fetch session per follower, not per partition; got {sessions}"
+    );
+
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+}
+
+/// Reads one label-free gauge out of a broker's `/metrics` body.
+async fn scrape_gauge(addr: std::net::SocketAddr, name: &str) -> i64 {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let request =
+        format!("GET /metrics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await.unwrap();
+    let body = String::from_utf8(buf).unwrap();
+    body.lines()
+        .find_map(|line| line.strip_prefix(name)?.trim().parse::<i64>().ok())
+        .unwrap_or(-1)
+}

@@ -119,6 +119,12 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub auto_join_voter_request_timeout: Option<Time>,
+    /// How many fetchers this broker runs per leader it follows, Kafka's
+    /// `num.replica.fetchers`. Every partition followed from one leader is
+    /// hashed onto one of that leader's fetchers, and each fetcher holds one
+    /// connection and sends one batched `Fetch` per round.
+    #[schemars(range(min = 1))]
+    pub replica_fetchers: Option<usize>,
     /// Maximum bytes a follower requests from a leader in one replication
     /// fetch. It reaches the leader as the fetch request's `max_bytes`.
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]

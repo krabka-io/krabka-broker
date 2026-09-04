@@ -313,7 +313,7 @@ fn feed(mut command: Command, stdin: Option<&str>) -> Output {
     }
 }
 
-/// A single-node `apache/kafka:4.3.1` broker in KRaft combined mode.
+/// A single-node `apache/kafka:4.3.1` broker in `KRaft` combined mode.
 ///
 /// Dropping it removes the container, so a case that panics leaves nothing
 /// behind for the next run to collide with.

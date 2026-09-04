@@ -15,7 +15,7 @@ use krabka_protocol::owned::{
 use tracing::{info, warn};
 
 use super::{
-    Config, connection::connection_options, replication_target_changed, response::LoopAction,
+    Config, connection::connection_options, replication_target_changed, response::RowAction,
     task_replication_target,
 };
 use crate::codes;
@@ -23,11 +23,11 @@ use crate::codes;
 pub(super) async fn handle_offset_out_of_range(
     partition_response: &PartitionData,
     cfg: &Config,
-) -> LoopAction {
+) -> RowAction {
     if replication_target_changed(cfg) {
         warn!(topic = %cfg.topic, partition = cfg.partition.get(),
             "replicator: skipping out_of_range reset from stale target");
-        return LoopAction::StopNotLeader;
+        return RowAction::Drop;
     }
     let leader_log_start = partition_response.log_start_offset;
     if let Some(partition) = cfg.partitions.get(&cfg.topic, cfg.partition) {
@@ -53,7 +53,7 @@ pub(super) async fn handle_offset_out_of_range(
                 local_log_end = local_log_end.0,
                 "replicator.out_of_range above the leader's log start; retrying without a reset"
             );
-            return LoopAction::Continue;
+            return RowAction::Continue;
         }
         warn!(
             topic = %cfg.topic,
@@ -69,7 +69,7 @@ pub(super) async fn handle_offset_out_of_range(
             Err(error) => {
                 warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
                     "replicator: skipping out_of_range reset from stale local target");
-                return LoopAction::StopNotLeader;
+                return RowAction::Drop;
             }
         };
         match partition.reset_to(Offset(leader_log_start)).await {
@@ -83,7 +83,7 @@ pub(super) async fn handle_offset_out_of_range(
             }
         }
     }
-    LoopAction::Continue
+    RowAction::Continue
 }
 
 /// Aligns the local log with the epoch history of the leader after an epoch

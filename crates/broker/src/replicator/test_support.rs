@@ -15,7 +15,6 @@ use krabka_protocol::{
 };
 use krabka_raft::NodeId;
 use krabka_security::ListenerProtocol;
-use tokio_util::sync::CancellationToken;
 
 use super::Config;
 use crate::{
@@ -96,7 +95,6 @@ pub(super) fn test_config(image: MetadataImage) -> (Config, tempfile::TempDir) {
         log_dirs: vec![log_dir.path().to_path_buf()],
         log_settings: LogConfig::default(),
         client_id: "replica-test".into(),
-        shutdown: CancellationToken::new(),
         inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
         inter_broker_listener_protocol: ListenerProtocol::Plaintext,
         inter_broker_server_name: "localhost".into(),

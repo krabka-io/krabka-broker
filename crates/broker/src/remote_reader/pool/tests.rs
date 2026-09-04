@@ -6,13 +6,20 @@ use assert2::check;
 
 use super::*;
 
+/// The idle percentage is a ratio of two small integers, so every value these
+/// tests expect is exactly representable. `check!` on `f64` equality is a
+/// clippy error even then, so the comparison names its own tolerance.
+fn is_percent(got: f64, want: f64) -> bool {
+    (got - want).abs() < f64::EPSILON
+}
+
 #[tokio::test]
 async fn only_thread_count_reads_hold_a_permit_at_once() {
     let pool = ReaderPool::new(2, 100);
 
     let first = pool.acquire().await.expect("first permit");
     let second = pool.acquire().await.expect("second permit");
-    check!(pool.idle_percent() == 0.0);
+    check!(is_percent(pool.idle_percent(), 0.0));
 
     // A third read has to wait; it is queued, not refused.
     let waiting = pool.acquire();
@@ -27,7 +34,7 @@ async fn only_thread_count_reads_hold_a_permit_at_once() {
     let third = waiting.await.expect("third permit after a slot frees");
     check!(pool.queue_size() == 0);
     drop((second, third));
-    check!(pool.idle_percent() == 100.0);
+    check!(is_percent(pool.idle_percent(), 100.0));
 }
 
 #[tokio::test]
@@ -63,13 +70,13 @@ async fn an_unbounded_pool_never_refuses() {
 #[tokio::test]
 async fn idle_percent_reports_the_share_of_free_slots() {
     let pool = ReaderPool::new(4, 100);
-    check!(pool.idle_percent() == 100.0);
+    check!(is_percent(pool.idle_percent(), 100.0));
     let one = pool.acquire().await.expect("permit");
-    check!(pool.idle_percent() == 75.0);
+    check!(is_percent(pool.idle_percent(), 75.0));
     let two = pool.acquire().await.expect("permit");
-    check!(pool.idle_percent() == 50.0);
+    check!(is_percent(pool.idle_percent(), 50.0));
     drop((one, two));
-    check!(pool.idle_percent() == 100.0);
+    check!(is_percent(pool.idle_percent(), 100.0));
 }
 
 #[tokio::test]

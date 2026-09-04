@@ -7,10 +7,8 @@ use krabka_metadata::MetadataImage;
 use tracing::warn;
 
 use super::{
-    ReplicatorSupervisor, ReplicatorTask, ReplicatorTaskTarget, TopicPartition,
-    desired_follower_set, desired_local_set, desired_wal_placements, push_topic_configs,
+    ReplicatorSupervisor, desired_local_set, desired_wal_placements, push_topic_configs,
 };
-use crate::replicator;
 
 impl ReplicatorSupervisor {
     pub(crate) async fn reconcile(&self, image: &MetadataImage) {
@@ -108,74 +106,7 @@ impl ReplicatorSupervisor {
         // bounded to one reconcile tick.
         push_topic_configs(&local_set, &self.partitions, image, &self.log_config).await;
 
-        let desired = desired_follower_set(self.node_id, image);
-
-        // 1. Cancel removed, retargeted, or exited tasks. Topic identity is
-        // part of the target: a delete/recreate with the same name, leader,
-        // and epoch must not reuse the old topic's task.
-        let current: Vec<TopicPartition> = self.tasks.iter().map(|e| e.key().clone()).collect();
-        for k in current {
-            let desired_target = desired.contains(&k).then(|| {
-                let topic = image.topic(&k.0)?;
-                let partition = image.partition(&k.0, k.1)?;
-                Some(ReplicatorTaskTarget {
-                    topic_id: topic.topic_id,
-                    leader: partition.leader,
-                    leader_epoch: partition.leader_epoch,
-                })
-            });
-            let desired_target = desired_target.flatten();
-            let keep = self.tasks.get(&k).is_some_and(|task| {
-                !task.handle.is_finished() && Some(task.target) == desired_target
-            });
-            if !keep && let Some((_, task)) = self.tasks.remove(&k) {
-                task.shutdown.cancel();
-            }
-        }
-
-        // 2. Spawn new follower replicators.
-        for k in desired {
-            if self.tasks.contains_key(&k) {
-                continue;
-            }
-            let part = image.partition(&k.0, k.1).cloned();
-            let Some(part) = part else { continue };
-            let leader = part.leader;
-            let Some(broker) = image.broker(leader).cloned() else {
-                warn!(
-                    topic = %k.0, partition = k.1, leader = leader.0,
-                    "leader broker not yet registered in MetadataImage; deferring"
-                );
-                continue;
-            };
-            // Resolve the topic's `topic_id` from the same image we're
-            // reconciling against. The replicator needs it for the v13+
-            // Fetch wire format; without it the leader's handler can't
-            // resolve the topic name and returns UNKNOWN_TOPIC_OR_PARTITION.
-            let Some(topic_rec) = image.topic(&k.0).cloned() else {
-                warn!(
-                    topic = %k.0, partition = k.1,
-                    "topic record missing from MetadataImage; deferring"
-                );
-                continue;
-            };
-            let token = self.shutdown.child_token();
-            let target = ReplicatorTaskTarget {
-                topic_id: topic_rec.topic_id,
-                leader,
-                leader_epoch: part.leader_epoch,
-            };
-            let config = self.replicator_config(&k, &topic_rec, &part, &broker, token.clone());
-            let handle = tokio::spawn(replicator::run(config));
-            self.tasks.insert(
-                k,
-                ReplicatorTask {
-                    shutdown: token,
-                    target,
-                    handle,
-                },
-            );
-        }
+        self.reconcile_fetchers(image);
 
         // 3. Refresh the txn coordinator's view of locally-led
         //    __transaction_state partitions. Cheap (Arc clone + lock).

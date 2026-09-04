@@ -8,7 +8,7 @@
 //! comes back from `--list` afterwards -- and a set is only comparable once it
 //! is parsed out of the tool's two-level rendering.
 //!
-//! That rendering nests: a `Current ACLs for resource \`ResourcePattern(…)\`:`
+//! That rendering nests: a "Current ACLs for resource ResourcePattern(…):"
 //! header, then one indented `(principal=…, host=…, operation=…,
 //! permissionType=…)` line per entry under it. [`parse_acls`] flattens the two
 //! levels into one binding per entry, which is the form the two sides are

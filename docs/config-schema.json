@@ -2169,6 +2169,15 @@
             "null"
           ]
         },
+        "replica_fetchers": {
+          "description": "How many fetchers this broker runs per leader it follows, Kafka's\n`num.replica.fetchers`. Every partition followed from one leader is\nhashed onto one of that leader's fetchers, and each fetcher holds one\nconnection and sends one batched `Fetch` per round.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "replica_lag_time_max": {
           "default": null,
           "description": "Maximum follower lag before the leader proposes an ISR shrink. Kafka's\n`replica.lag.time.max.ms`.",

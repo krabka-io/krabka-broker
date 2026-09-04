@@ -7,7 +7,10 @@
 
 use super::{
     FileConfigError, RuntimeFileConfig,
-    validate::{positive_time, voter_request_time, whole_bytes_i32, whole_millis_i32_time},
+    validate::{
+        invalid_runtime_value, positive_time, voter_request_time, whole_bytes_i32,
+        whole_millis_i32_time,
+    },
 };
 
 impl RuntimeFileConfig {
@@ -128,6 +131,15 @@ impl RuntimeFileConfig {
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
+        if let Some(fetchers) = runtime.replica_fetchers {
+            if fetchers == 0 {
+                return Err(invalid_runtime_value(
+                    "replica_fetchers",
+                    "must be at least 1: a leader with no fetcher is never followed",
+                ));
+            }
+            cfg.replication.fetchers = fetchers;
+        }
         set_runtime_size_bytes!(
             runtime,
             replication_fetch_max,

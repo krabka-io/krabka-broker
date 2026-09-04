@@ -55,9 +55,16 @@ pub enum ReplicaFetchMutation {
     Append,
 }
 
-/// Fence one follower Fetch response against its topic, partition, in-flight
-/// request epoch, current metadata target, and any reported leader identity;
-/// then select one exclusive response action.
+/// Fence one follower Fetch response row against its topic, partition,
+/// in-flight request epoch, current metadata target, and any reported leader
+/// identity; then select one exclusive response action.
+///
+/// A follower's request covers every partition it follows on one leader, so
+/// the caller applies this once per row of the answer, with that row's own
+/// partition configuration and the epoch it was asked under. The guarantee is
+/// therefore per partition and does not weaken as a response carries more of
+/// them: a row that fails any of the five facts mutates nothing, whatever the
+/// rows beside it say.
 #[ensures((result == ReplicaFetchMutation::Reject) == (
     !identity.0
         || !identity.1
@@ -120,6 +127,11 @@ pub fn replica_fetch_mutation(
 
 /// Admit one preferred-leader rebalance batch only when the scan is
 /// nonempty, internally consistent, and contains eligible preferred replicas.
+///
+/// There is no imbalance-ratio threshold among the facts. That gate is the
+/// `ZooKeeper` controller's `leader.imbalance.per.broker.percentage`; the
+/// `KRaft` controller krabka follows restores every partition whose preferred
+/// replica is eligible, and bounds the work by a per-tick election count.
 #[ensures(result == (
     total_partitions@ > 0
         && selected_changes@ > 0

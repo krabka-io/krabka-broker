@@ -377,6 +377,8 @@ mod tests {
         assert!(
             config.replication
                 == ReplicationRuntimeConfig {
+                    // Kafka's `num.replica.fetchers` default.
+                    fetchers: 1,
                     fetch_max: mebibytes(1),
                     fetch_max_wait: millis(500),
                     fetch_min: bytes(1),

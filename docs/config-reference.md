@@ -449,6 +449,7 @@ Validated operational policy loaded from `[runtime]`.
 | `record_decompression_output_ceiling` | string | broker default | byte size | Maximum decompressed-output allowance granted to a record batch. |
 | `record_decompression_output_floor` | string | broker default | byte size | Minimum decompressed-output allowance granted to a record batch, whatever the ratio bound computes. |
 | `remote_log_manager_interval` | string | broker default | duration | KIP-405: tick cadence of the `RemoteLogManager` copy and retention task. Kafka's `remote.log.manager.task.interval.ms`. |
+| `replica_fetchers` | integer (uint) | broker default |  | How many fetchers this broker runs per leader it follows, Kafka's `num.replica.fetchers`. Every partition followed from one leader is hashed onto one of that leader's fetchers, and each fetcher holds one connection and sends one batched `Fetch` per round. |
 | `replica_lag_time_max` | string | broker default | duration | Maximum follower lag before the leader proposes an ISR shrink. Kafka's `replica.lag.time.max.ms`. |
 | `replication_epoch_fence_backoff` | string | broker default | duration | Retry delay after a leader-epoch fence. |
 | `replication_fetch_max` | string | broker default | byte size | Maximum bytes a follower requests from a leader in one replication fetch. It reaches the leader as the fetch request's `max_bytes`. |

@@ -13,6 +13,20 @@ use krabka_units::{ByteSize, Time, bytes, mebibytes, millis, secs};
 /// `FetchRequest`'s `max_bytes`, `min_bytes`, and `max_wait_ms`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplicationRuntimeConfig {
+    /// How many fetchers this broker runs per leader it follows.
+    ///
+    /// Kafka's `num.replica.fetchers`. Every partition this broker follows
+    /// from one leader is hashed onto one of that leader's fetchers, and each
+    /// fetcher holds one connection and sends one `Fetch` per round however
+    /// many partitions it carries. Raising it spreads a very large follower
+    /// set across more connections and more concurrent rounds; the default of
+    /// one is Kafka's, and is what keeps a follower of ten thousand
+    /// partitions at three connections rather than ten thousand.
+    ///
+    /// Zero is treated as one: a leader with no fetcher would never be
+    /// followed at all.
+    pub fetchers: usize,
+
     /// Maximum bytes requested from a leader in one replication fetch.
     pub fetch_max: ByteSize,
     /// Maximum leader wait for a replication fetch.
@@ -43,6 +57,7 @@ pub struct ReplicationRuntimeConfig {
 impl Default for ReplicationRuntimeConfig {
     fn default() -> Self {
         Self {
+            fetchers: 1,
             fetch_max: mebibytes(1),
             fetch_max_wait: millis(500),
             fetch_min: bytes(1),
