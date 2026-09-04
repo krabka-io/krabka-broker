@@ -75,6 +75,25 @@ impl DispatchEntry {
         }
     }
 
+    /// A context dispatch whose handler charges the KIP-124 request quota
+    /// itself and reports the KIP-219 window on its own typed response.
+    ///
+    /// `ApiVersions` needs this because its `ThrottleTimeMs` sits behind the
+    /// `ApiKeys` array, where the dispatch loop's leading-int32 patch cannot
+    /// reach it -- see
+    /// [`crate::network::dispatch::throttle_audit`]. Charging in the handler,
+    /// as `Produce` and `Fetch` do, is what lets the field carry the delay.
+    pub(crate) fn self_accounted_context(
+        api_key: ApiKeyCode,
+        flexible_min: ApiVersion,
+        handler: ContextHandler,
+    ) -> Self {
+        Self {
+            quota_policy: RequestQuotaPolicy::SelfAccounted,
+            ..Self::context(api_key, flexible_min, handler)
+        }
+    }
+
     pub(crate) fn produce(flexible_min: ApiVersion, handler: ProduceHandler) -> Self {
         Self {
             api_key: ApiKey::Produce as i16,
@@ -167,6 +186,11 @@ impl DispatchEntry {
     pub(crate) fn is_plain(self) -> bool {
         matches!(self.kind, DispatchKind::Plain(_))
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_context(self) -> bool {
+        matches!(self.kind, DispatchKind::Context(_))
+    }
 }
 
 impl DispatchRegistry {
@@ -194,9 +218,9 @@ impl DispatchRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_plain(&self, api_key: ApiKeyCode) -> Option<PlainHandler> {
+    pub(crate) fn get_context(&self, api_key: ApiKeyCode) -> Option<ContextHandler> {
         match self.get(api_key)?.kind {
-            DispatchKind::Plain(handler) => Some(handler),
+            DispatchKind::Context(handler) => Some(handler),
             _ => None,
         }
     }

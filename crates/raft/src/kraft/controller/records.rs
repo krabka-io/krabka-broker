@@ -101,7 +101,7 @@ pub fn decode_control_record(record: &Record) -> Result<Option<ControlRecord>, R
 /// `LeaderChangeMessage` rather than zero records. Krabka readers skip it via
 /// `is_control_batch()`; it occupies exactly one log offset
 /// (`last_offset_delta = 0`), unchanged from the prior empty batch.
-// The `version: 0` field equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so
+// cargo-mutants: the `version: 0` field equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so
 // deleting it yields byte-identical encoding; it is not the wire schema version
 // (that is the `0` passed to `msg.encode`). Equivalent mutant.
 #[cfg_attr(test, mutants::skip)]

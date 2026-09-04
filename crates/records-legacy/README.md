@@ -47,10 +47,6 @@ Every legacy compression codec is always available: the crate depends on
 `krabka-compression` with `gzip`, `snappy`, `lz4` and `zstd` enabled, and
 exposes no cargo features of its own.
 
-## MSRV
-
-Rust 1.95.0.
-
 ## Documentation
 
 Read the API documentation at [docs.rs/krabka-records-legacy](https://docs.rs/krabka-records-legacy). The repository README contains the project-wide setup, development, and release notes.

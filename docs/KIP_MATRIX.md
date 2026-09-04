@@ -47,7 +47,7 @@ entry names a function the file does not define.
 | KIP-133 | Implemented | An alter-config policy refusing a topic config change with POLICY_VIOLATION | [`broker/src/topic_policy.rs`](../crates/broker/src/topic_policy.rs) | [`broker/src/handlers/alter_configs/topic_configs.rs`](../crates/broker/src/handlers/alter_configs/topic_configs.rs)<br>[`broker/src/handlers/incremental_alter_configs/topic_scope.rs`](../crates/broker/src/handlers/incremental_alter_configs/topic_scope.rs)<br>[`broker/tests/admin_handlers/admin_topic_policy.rs`](../crates/broker/tests/admin_handlers/admin_topic_policy.rs) | in process | none | The same `[topic_policy]` rule set stands in for the class named by `alter.config.policy.class.name`. Both alter paths check the resolved post-change config map, as `AlterConfigPolicy.validate` does; its `RequestMetadata` carries no partition count and no replication factor, so those two rules apply to `CreateTopics` alone. |
 | KIP-207 | Implemented | The high watermark a new leader reports may regress after an election | [`broker/src/data_path_model/model.rs`](../crates/broker/src/data_path_model/model.rs) | [`broker/src/data_path_model/model.rs`](../crates/broker/src/data_path_model/model.rs) | in process | none | The exhaustive data-path model checks durability without a watermark monotonicity assertion, which is what the KIP allows. |
 | KIP-211 | Implemented | Committed-offset retention measured from the group's last activity | [`broker/src/coordinator/retention.rs`](../crates/broker/src/coordinator/retention.rs) | [`broker/tests/offsets_retention.rs`](../crates/broker/tests/offsets_retention.rs) | in process | none |  |
-| KIP-219 | Partial | Respond first, then mute the channel for the throttle time | [`broker/src/network/dispatch/response.rs`](../crates/broker/src/network/dispatch/response.rs) | [`broker/tests/client_quotas/throttling.rs`](../crates/broker/tests/client_quotas/throttling.rs)<br>[`broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones`](../crates/broker/src/network/dispatch/throttle_audit.rs) | in process | none | The dispatch loop echoes a request-quota delay by patching a leading `ThrottleTimeMs`. The throttle-echo section below lists the APIs whose schema puts the field elsewhere. |
+| KIP-219 | Implemented | Respond first, then mute the channel for the throttle time | [`broker/src/network/dispatch/response.rs`](../crates/broker/src/network/dispatch/response.rs) | [`broker/tests/client_quotas/throttling.rs`](../crates/broker/tests/client_quotas/throttling.rs)<br>[`broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones`](../crates/broker/src/network/dispatch/throttle_audit.rs) | in process | none | Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs; the rest are `InlineExempt`, so only a reply outside their advertised version range can be held without an echo. |
 | KIP-226 | Implemented | DescribeConfigs reports the source of every value | [`broker/src/handlers/describe_configs.rs`](../crates/broker/src/handlers/describe_configs.rs) | [`broker/tests/jvm_acceptance_cli/configs.rs`](../crates/broker/tests/jvm_acceptance_cli/configs.rs) | `apache_kafka_4_3_1`, `cp_kafka_6_1_1`, `cp_kafka_7_5_0` | none |  |
 | KIP-227 | Implemented | Incremental fetch sessions | [`broker/src/fetch_session.rs`](../crates/broker/src/fetch_session.rs) | [`broker/tests/fetch_session.rs`](../crates/broker/tests/fetch_session.rs) | in process | none |  |
 | KIP-255 | Implemented | SASL/OAUTHBEARER | [`broker/src/network/auth/oauthbearer.rs`](../crates/broker/src/network/auth/oauthbearer.rs) | [`broker/tests/auth_handlers/oauthbearer.rs`](../crates/broker/tests/auth_handlers/oauthbearer.rs) | in process | none |  |
@@ -79,7 +79,7 @@ entry names a function the file does not define.
 | KIP-554 | Implemented | SCRAM credentials through AlterUserScramCredentials and DescribeUserScramCredentials | [`broker/src/handlers/alter_user_scram_credentials.rs`](../crates/broker/src/handlers/alter_user_scram_credentials.rs) | [`broker/tests/describe_user_scram_credentials.rs`](../crates/broker/tests/describe_user_scram_credentials.rs)<br>[`broker/tests/auth_handlers/alter_scram.rs`](../crates/broker/tests/auth_handlers/alter_scram.rs)<br>[`broker/tests/jvm_acceptance_sasl/scram.rs`](../crates/broker/tests/jvm_acceptance_sasl/scram.rs) | `cp_kafka_6_1_1`, `cp_kafka_7_5_0` | none |  |
 | KIP-559 | Implemented | protocol_type and protocol_name in JoinGroup v7 and SyncGroup v5 | [`broker/src/handlers/sync_group.rs`](../crates/broker/src/handlers/sync_group.rs) | [`broker/tests/kip559_l7_proxy_fields.rs`](../crates/broker/tests/kip559_l7_proxy_fields.rs) | in process | none |  |
 | KIP-584 | Implemented | Feature versioning: UpdateFeatures and the finalized features in ApiVersions | [`broker/src/handlers/update_features.rs`](../crates/broker/src/handlers/update_features.rs) | [`broker/tests/feature_finalization.rs`](../crates/broker/tests/feature_finalization.rs)<br>[`broker/tests/api_versions_features.rs`](../crates/broker/tests/api_versions_features.rs)<br>[`broker/tests/jvm_features.rs`](../crates/broker/tests/jvm_features.rs) | `apache_kafka_4_3_1` | none | The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`. |
-| KIP-590 | Partial | Envelope: a broker forwards admin writes to the active controller | [`broker/src/envelope.rs`](../crates/broker/src/envelope.rs) | [`broker/tests/kip590_envelope.rs`](../crates/broker/tests/kip590_envelope.rs)<br>[`broker/tests/jvm_role_separated_admin.rs`](../crates/broker/tests/jvm_role_separated_admin.rs) | `apache_kafka_4_3_1` | none | The controller listener serves `Envelope`, and a Krabka broker-only node forwards through it. Forwarding into or out of a JVM controller is out of scope: [`crates/raft/src/lib.rs:52`](../crates/raft/src/lib.rs#L52). |
+| KIP-590 | Implemented | Envelope: the controller listener serves a forwarded admin write | [`broker/src/envelope.rs`](../crates/broker/src/envelope.rs) | [`broker/tests/kip590_envelope.rs`](../crates/broker/tests/kip590_envelope.rs)<br>[`broker/tests/jvm_role_separated_admin.rs`](../crates/broker/tests/jvm_role_separated_admin.rs) | `apache_kafka_4_3_1` | none | The broker side of KIP-590 is not needed: a Krabka broker reaches its controller over the krabka-private `SubmitChange` RPC (`crates/broker/src/metadata_source/observer_source.rs`), and a JVM controller is outside the compatibility target ([`crates/raft/src/lib.rs:54`](../crates/raft/src/lib.rs#L54)). |
 | KIP-595 | Implemented | The KRaft controller quorum: Vote, BeginQuorumEpoch, EndQuorumEpoch, Fetch and DescribeQuorum | [`kraft-core/src/core.rs`](../crates/kraft-core/src/core.rs) | [`raft/tests/kraft_sim.rs`](../crates/raft/tests/kraft_sim.rs)<br>[`raft/tests/kraft_engine_sim.rs`](../crates/raft/tests/kraft_engine_sim.rs)<br>[`broker/tests/jvm_static_quorum_spike.rs`](../crates/broker/tests/jvm_static_quorum_spike.rs)<br>[`broker/tests/admin_handlers/admin_describe_quorum.rs`](../crates/broker/tests/admin_handlers/admin_describe_quorum.rs) | `apache_kafka_4_0_0` | none |  |
 | KIP-599 | Implemented | Controller mutation quotas on CreateTopics, CreatePartitions and DeleteTopics | [`broker/src/quota/controller_mutation.rs`](../crates/broker/src/quota/controller_mutation.rs) | [`broker/tests/controller_mutation_quota.rs`](../crates/broker/tests/controller_mutation_quota.rs) | in process | none |  |
 | KIP-612 | Implemented | Per-IP connection creation rate quotas | [`broker/src/broker/accept.rs`](../crates/broker/src/broker/accept.rs) | [`broker/tests/ip_quotas.rs`](../crates/broker/tests/ip_quotas.rs) | in process | none |  |
@@ -116,7 +116,7 @@ entry names a function the file does not define.
 | KIP-1242 | Implemented | ApiVersions v5 routing identity and REBOOTSTRAP_REQUIRED | [`broker/src/handlers/api_versions.rs`](../crates/broker/src/handlers/api_versions.rs) | [`broker/src/handlers/api_versions/tests.rs`](../crates/broker/src/handlers/api_versions/tests.rs) | in process | none |  |
 | KIP-1319 | Implemented | Transactions v2 producer-id rotation and verification on Produce | [`broker/src/txn/coordinator/pid_index.rs`](../crates/broker/src/txn/coordinator/pid_index.rs) | [`broker/tests/transaction_version.rs`](../crates/broker/tests/transaction_version.rs)<br>[`broker/tests/transactions.rs`](../crates/broker/tests/transactions.rs) | in process | none |  |
 | SASL/GSSAPI | Implemented | SASL/Kerberos authentication | [`broker/src/network/auth/gssapi.rs`](../crates/broker/src/network/auth/gssapi.rs) | [`broker/tests/gssapi_e2e.rs`](../crates/broker/tests/gssapi_e2e.rs)<br>[`broker/tests/auth_handlers/gssapi.rs`](../crates/broker/tests/auth_handlers/gssapi.rs) | in process | none | Kerberos predates the KIP process (KAFKA-1686, Kafka 0.9), so no KIP number. Both suites run in the scheduled `container gssapi` CI job: the KDC fixture writes keytabs through a bind mount, so the lane is schedule and workflow_dispatch only. |
-| mixed-quorum | Out of scope | A controller quorum with both JVM and Krabka voters | [`raft/src/lib.rs`](../crates/raft/src/lib.rs) | none | in process | none | Outside the raft crate's compatibility target: [`crates/raft/src/lib.rs:52`](../crates/raft/src/lib.rs#L52). |
+| mixed-quorum | Out of scope | A controller quorum with both JVM and Krabka voters | [`raft/src/lib.rs`](../crates/raft/src/lib.rs) | none | in process | none | Outside the raft crate's compatibility target: [`crates/raft/src/lib.rs:54`](../crates/raft/src/lib.rs#L54). |
 
 ### Kafka images
 
@@ -166,94 +166,102 @@ account for every such row:
   client-telemetry exporter is configured, and this oracle configures none.
   krabka advertises them unconditionally.
 
-| API | Key | krabka | Kafka | Verdict |
-| :--- | ---: | :--- | :--- | :--- |
-| Produce | 0 | 0-13 | 0-13 | match |
-| Fetch | 1 | 0-18 | 4-18 | range differs |
-| ListOffsets | 2 | 0-11 | 1-11 | range differs |
-| Metadata | 3 | 0-13 | 0-13 | match |
-| OffsetCommit | 8 | 2-10 | 2-10 | match |
-| OffsetFetch | 9 | 1-10 | 1-10 | match |
-| FindCoordinator | 10 | 0-6 | 0-6 | match |
-| JoinGroup | 11 | 0-9 | 0-9 | match |
-| Heartbeat | 12 | 0-4 | 0-4 | match |
-| LeaveGroup | 13 | 0-5 | 0-5 | match |
-| SyncGroup | 14 | 0-5 | 0-5 | match |
-| DescribeGroups | 15 | 0-6 | 0-6 | match |
-| ListGroups | 16 | 0-5 | 0-5 | match |
-| SaslHandshake | 17 | 0-1 | 0-1 | match |
-| ApiVersions | 18 | 0-5 | 0-4 | range differs |
-| CreateTopics | 19 | 2-7 | 2-7 | match |
-| DeleteTopics | 20 | 1-6 | 1-6 | match |
-| DeleteRecords | 21 | 0-2 | 0-2 | match |
-| InitProducerId | 22 | 0-6 | 0-5 | range differs |
-| OffsetForLeaderEpoch | 23 | 2-4 | 2-4 | match |
-| AddPartitionsToTxn | 24 | 0-5 | 0-5 | match |
-| AddOffsetsToTxn | 25 | 0-4 | 0-4 | match |
-| EndTxn | 26 | 0-5 | 0-5 | match |
-| WriteTxnMarkers | 27 | 1-2 | 1-2 | match |
-| TxnOffsetCommit | 28 | 0-5 | 0-5 | match |
-| DescribeAcls | 29 | 1-3 | 1-3 | match |
-| CreateAcls | 30 | 1-3 | 1-3 | match |
-| DeleteAcls | 31 | 1-3 | 1-3 | match |
-| DescribeConfigs | 32 | 1-4 | 1-4 | match |
-| AlterConfigs | 33 | 0-2 | 0-2 | match |
-| AlterReplicaLogDirs | 34 | 1-2 | 1-2 | match |
-| DescribeLogDirs | 35 | 1-5 | 1-5 | match |
-| SaslAuthenticate | 36 | 0-2 | 0-2 | match |
-| CreatePartitions | 37 | 0-3 | 0-3 | match |
-| CreateDelegationToken | 38 | 1-3 | 1-3 | match |
-| RenewDelegationToken | 39 | 1-2 | 1-2 | match |
-| ExpireDelegationToken | 40 | 1-2 | 1-2 | match |
-| DescribeDelegationToken | 41 | 1-3 | 1-3 | match |
-| DeleteGroups | 42 | 0-2 | 0-2 | match |
-| ElectLeaders | 43 | 0-2 | 0-2 | match |
-| IncrementalAlterConfigs | 44 | 0-1 | 0-1 | match |
-| AlterPartitionReassignments | 45 | 0-1 | 0-1 | match |
-| ListPartitionReassignments | 46 | 0-0 | 0-0 | match |
-| OffsetDelete | 47 | 0-0 | 0-0 | match |
-| DescribeClientQuotas | 48 | 0-1 | 0-1 | match |
-| AlterClientQuotas | 49 | 0-1 | 0-1 | match |
-| DescribeUserScramCredentials | 50 | 0-0 | 0-0 | match |
-| AlterUserScramCredentials | 51 | 0-0 | 0-0 | match |
-| DescribeQuorum | 55 | 0-2 | 0-2 | match |
-| AlterPartition | 56 | 2-3 | not advertised | krabka only |
-| UpdateFeatures | 57 | 0-2 | 0-2 | match |
-| FetchSnapshot | 59 | 0-1 | not advertised | krabka only |
-| DescribeCluster | 60 | 0-2 | 0-2 | match |
-| DescribeProducers | 61 | 0-0 | 0-0 | match |
-| BrokerRegistration | 62 | 0-4 | not advertised | krabka only |
-| BrokerHeartbeat | 63 | 0-2 | not advertised | krabka only |
-| UnregisterBroker | 64 | 0-0 | 0-0 | match |
-| DescribeTransactions | 65 | 0-0 | 0-0 | match |
-| ListTransactions | 66 | 0-2 | 0-2 | match |
-| AllocateProducerIds | 67 | 0-0 | not advertised | krabka only |
-| ConsumerGroupHeartbeat | 68 | 0-1 | 0-1 | match |
-| ConsumerGroupDescribe | 69 | 0-1 | 0-1 | match |
-| ControllerRegistration | 70 | 0-0 | not advertised | krabka only |
-| GetTelemetrySubscriptions | 71 | 0-0 | not advertised | krabka only |
-| PushTelemetry | 72 | 0-0 | not advertised | krabka only |
-| AssignReplicasToDirs | 73 | 0-0 | not advertised | krabka only |
-| ListConfigResources | 74 | 0-1 | 0-1 | match |
-| DescribeTopicPartitions | 75 | 0-0 | 0-0 | match |
-| ShareGroupHeartbeat | 76 | 1-1 | 1-1 | match |
-| ShareGroupDescribe | 77 | 1-1 | 1-1 | match |
-| ShareFetch | 78 | 1-2 | 1-2 | match |
-| ShareAcknowledge | 79 | 1-2 | 1-2 | match |
-| AddRaftVoter | 80 | 0-1 | 0-1 | match |
-| RemoveRaftVoter | 81 | 0-0 | 0-0 | match |
-| UpdateRaftVoter | 82 | 0-0 | not advertised | krabka only |
-| InitializeShareGroupState | 83 | 0-0 | 0-0 | match |
-| ReadShareGroupState | 84 | 0-0 | 0-0 | match |
-| WriteShareGroupState | 85 | 0-1 | 0-1 | match |
-| DeleteShareGroupState | 86 | 0-0 | 0-0 | match |
-| ReadShareGroupStateSummary | 87 | 0-1 | 0-1 | match |
-| StreamsGroupHeartbeat | 88 | 0-0 | 0-0 | match |
-| StreamsGroupDescribe | 89 | 0-0 | 0-0 | match |
-| DescribeShareGroupOffsets | 90 | 0-1 | 0-1 | match |
-| AlterShareGroupOffsets | 91 | 0-0 | 0-0 | match |
-| DeleteShareGroupOffsets | 92 | 0-0 | 0-0 | match |
-| GetReplicaLogInfo | 93 | 0-0 | not advertised | krabka only |
+A row whose ranges differ carries the reason krabka means to differ, recorded
+beside the ranges themselves in `RANGE_DIVERGENCE_INTENTS`
+([`divergence.rs`](../crates/broker/tests/api_versions_differential/divergence.rs)).
+The suite panics on a range divergence with no entry there, so a range that
+moves cannot reach this page unexplained. Every other verdict leaves the column
+empty: a matching range needs no reason, and the one-sided rows are accounted
+for by the two facts above.
+
+| API | Key | krabka | Kafka | Verdict | Intent |
+| :--- | ---: | :--- | :--- | :--- | :--- |
+| Produce | 0 | 0-13 | 0-13 | match | -- |
+| Fetch | 1 | 0-18 | 4-18 | range differs | Intended. krabka still serves the pre-v4 Fetch request shapes that Kafka 4.x dropped: `api_catalog::client_facing_apis` takes the key's `min_version` from `krabka_protocol::kafka_3_6_2::owned::fetch_request`, and `handlers::fetch::encode_fetch_response` answers v0-v3 from the same `kafka_3_6_2` flavor, which `throttle_audit`'s split probe also covers. The wider range costs a client nothing -- version negotiation picks the highest both sides know -- and it keeps a long-lived pre-4.0 consumer working against krabka. |
+| ListOffsets | 2 | 0-11 | 1-11 | range differs | Intended, and the same story as Fetch: krabka advertises ListOffsets from v0, which Kafka 4.x no longer does. `client_facing_apis` sets that `min_version` to 0 explicitly and `handlers::list_offsets` routes v0 to its own hand-rolled `v0` module, because the generated schema starts at v1. A modern client negotiates v11 either way. |
+| Metadata | 3 | 0-13 | 0-13 | match | -- |
+| OffsetCommit | 8 | 2-10 | 2-10 | match | -- |
+| OffsetFetch | 9 | 1-10 | 1-10 | match | -- |
+| FindCoordinator | 10 | 0-6 | 0-6 | match | -- |
+| JoinGroup | 11 | 0-9 | 0-9 | match | -- |
+| Heartbeat | 12 | 0-4 | 0-4 | match | -- |
+| LeaveGroup | 13 | 0-5 | 0-5 | match | -- |
+| SyncGroup | 14 | 0-5 | 0-5 | match | -- |
+| DescribeGroups | 15 | 0-6 | 0-6 | match | -- |
+| ListGroups | 16 | 0-5 | 0-5 | match | -- |
+| SaslHandshake | 17 | 0-1 | 0-1 | match | -- |
+| ApiVersions | 18 | 0-5 | 0-4 | range differs | Intended: krabka advertises KIP-1242 ApiVersions v5, the routing identity and the REBOOTSTRAP_REQUIRED answer, which no released Kafka broker serves yet. The capability is real -- `handlers::api_versions` implements the v5 checks from `ROUTING_IDENTITY_MIN_VERSION` up and `api_versions/tests.rs` drives every one of them -- so clamping `max_version` to the oracle's v4 would make the broker deny a feature it has. The risk taken deliberately: a client built against Kafka trunk schemas can negotiate a version no released broker has validated, so a v5 shape change before Kafka ships it lands here as a wire break. |
+| CreateTopics | 19 | 2-7 | 2-7 | match | -- |
+| DeleteTopics | 20 | 1-6 | 1-6 | match | -- |
+| DeleteRecords | 21 | 0-2 | 0-2 | match | -- |
+| InitProducerId | 22 | 0-6 | 0-5 | range differs | Intended: krabka advertises InitProducerId v6, the KIP-939 two-phase-commit request shape with `enable2Pc` and `keepPreparedTxn`. `handlers::init_producer_id` implements both fields with Kafka's own gates -- a cluster without `transaction.two.phase.commit.enable` gets TRANSACTIONAL_ID_AUTHORIZATION_FAILED, a principal without the TWO_PHASE_COMMIT ACL the same, and a transaction version below 2 gets UNSUPPORTED_VERSION -- and `transactions_2pc.rs` drives them. Kafka's oracle stops at v5 because it clamps the advertised maximum to the finalized `transaction.version` feature, which this stock broker leaves below 2; krabka advertises unconditionally and refuses at call time instead. Same risk as ApiVersions v5: a client can pick v6 against a cluster whose transaction version cannot serve it, and learns that from the error code rather than from negotiation. |
+| OffsetForLeaderEpoch | 23 | 2-4 | 2-4 | match | -- |
+| AddPartitionsToTxn | 24 | 0-5 | 0-5 | match | -- |
+| AddOffsetsToTxn | 25 | 0-4 | 0-4 | match | -- |
+| EndTxn | 26 | 0-5 | 0-5 | match | -- |
+| WriteTxnMarkers | 27 | 1-2 | 1-2 | match | -- |
+| TxnOffsetCommit | 28 | 0-5 | 0-5 | match | -- |
+| DescribeAcls | 29 | 1-3 | 1-3 | match | -- |
+| CreateAcls | 30 | 1-3 | 1-3 | match | -- |
+| DeleteAcls | 31 | 1-3 | 1-3 | match | -- |
+| DescribeConfigs | 32 | 1-4 | 1-4 | match | -- |
+| AlterConfigs | 33 | 0-2 | 0-2 | match | -- |
+| AlterReplicaLogDirs | 34 | 1-2 | 1-2 | match | -- |
+| DescribeLogDirs | 35 | 1-5 | 1-5 | match | -- |
+| SaslAuthenticate | 36 | 0-2 | 0-2 | match | -- |
+| CreatePartitions | 37 | 0-3 | 0-3 | match | -- |
+| CreateDelegationToken | 38 | 1-3 | 1-3 | match | -- |
+| RenewDelegationToken | 39 | 1-2 | 1-2 | match | -- |
+| ExpireDelegationToken | 40 | 1-2 | 1-2 | match | -- |
+| DescribeDelegationToken | 41 | 1-3 | 1-3 | match | -- |
+| DeleteGroups | 42 | 0-2 | 0-2 | match | -- |
+| ElectLeaders | 43 | 0-2 | 0-2 | match | -- |
+| IncrementalAlterConfigs | 44 | 0-1 | 0-1 | match | -- |
+| AlterPartitionReassignments | 45 | 0-1 | 0-1 | match | -- |
+| ListPartitionReassignments | 46 | 0-0 | 0-0 | match | -- |
+| OffsetDelete | 47 | 0-0 | 0-0 | match | -- |
+| DescribeClientQuotas | 48 | 0-1 | 0-1 | match | -- |
+| AlterClientQuotas | 49 | 0-1 | 0-1 | match | -- |
+| DescribeUserScramCredentials | 50 | 0-0 | 0-0 | match | -- |
+| AlterUserScramCredentials | 51 | 0-0 | 0-0 | match | -- |
+| DescribeQuorum | 55 | 0-2 | 0-2 | match | -- |
+| AlterPartition | 56 | 2-3 | not advertised | krabka only | -- |
+| UpdateFeatures | 57 | 0-2 | 0-2 | match | -- |
+| FetchSnapshot | 59 | 0-1 | not advertised | krabka only | -- |
+| DescribeCluster | 60 | 0-2 | 0-2 | match | -- |
+| DescribeProducers | 61 | 0-0 | 0-0 | match | -- |
+| BrokerRegistration | 62 | 0-4 | not advertised | krabka only | -- |
+| BrokerHeartbeat | 63 | 0-2 | not advertised | krabka only | -- |
+| UnregisterBroker | 64 | 0-0 | 0-0 | match | -- |
+| DescribeTransactions | 65 | 0-0 | 0-0 | match | -- |
+| ListTransactions | 66 | 0-2 | 0-2 | match | -- |
+| AllocateProducerIds | 67 | 0-0 | not advertised | krabka only | -- |
+| ConsumerGroupHeartbeat | 68 | 0-1 | 0-1 | match | -- |
+| ConsumerGroupDescribe | 69 | 0-1 | 0-1 | match | -- |
+| ControllerRegistration | 70 | 0-0 | not advertised | krabka only | -- |
+| GetTelemetrySubscriptions | 71 | 0-0 | not advertised | krabka only | -- |
+| PushTelemetry | 72 | 0-0 | not advertised | krabka only | -- |
+| AssignReplicasToDirs | 73 | 0-0 | not advertised | krabka only | -- |
+| ListConfigResources | 74 | 0-1 | 0-1 | match | -- |
+| DescribeTopicPartitions | 75 | 0-0 | 0-0 | match | -- |
+| ShareGroupHeartbeat | 76 | 1-1 | 1-1 | match | -- |
+| ShareGroupDescribe | 77 | 1-1 | 1-1 | match | -- |
+| ShareFetch | 78 | 1-2 | 1-2 | match | -- |
+| ShareAcknowledge | 79 | 1-2 | 1-2 | match | -- |
+| AddRaftVoter | 80 | 0-1 | 0-1 | match | -- |
+| RemoveRaftVoter | 81 | 0-0 | 0-0 | match | -- |
+| UpdateRaftVoter | 82 | 0-0 | not advertised | krabka only | -- |
+| InitializeShareGroupState | 83 | 0-0 | 0-0 | match | -- |
+| ReadShareGroupState | 84 | 0-0 | 0-0 | match | -- |
+| WriteShareGroupState | 85 | 0-1 | 0-1 | match | -- |
+| DeleteShareGroupState | 86 | 0-0 | 0-0 | match | -- |
+| ReadShareGroupStateSummary | 87 | 0-1 | 0-1 | match | -- |
+| StreamsGroupHeartbeat | 88 | 0-0 | 0-0 | match | -- |
+| StreamsGroupDescribe | 89 | 0-0 | 0-0 | match | -- |
+| DescribeShareGroupOffsets | 90 | 0-1 | 0-1 | match | -- |
+| AlterShareGroupOffsets | 91 | 0-0 | 0-0 | match | -- |
+| DeleteShareGroupOffsets | 92 | 0-0 | 0-0 | match | -- |
+| GetReplicaLogInfo | 93 | 0-0 | not advertised | krabka only | -- |
 
 The Bazel Docker lane supplies each image from a digest-pinned OCI repository.
 CI regenerates this page and fails when the test names, lane, image tag, digest,
@@ -296,7 +304,7 @@ byte patch.
 | API | api_key | Versions | Why the field cannot be patched | Runtime effect |
 | :--- | :--- | :--- | :--- | :--- |
 | Produce | 0 | 1-13 | Sits behind the `Responses` array, at an offset the response header does not fix | None. The handler charges its own quota and sets `ThrottleTimeMs` on the typed response before encoding, so the client does see the delay |
-| ApiVersions | 18 | 1-5 | Sits behind the `ApiKeys` array, at an offset the response header does not fix | An ordinary request can be held by the request quota, and the response it waits behind reports `throttle_time_ms = 0` |
+| ApiVersions | 18 | 1-5 | Sits behind the `ApiKeys` array, at an offset the response header does not fix | None. The handler charges its own quota and sets `ThrottleTimeMs` on the typed response before encoding, so the client does see the delay |
 | CreateDelegationToken | 38 | 1-3 | Last field, behind the principal strings, the token timestamps and the HMAC | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
 | RenewDelegationToken | 39 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
 | ExpireDelegationToken | 40 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |

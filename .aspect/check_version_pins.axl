@@ -1,0 +1,334 @@
+"""Check that every place this repository writes its own version agrees.
+
+Krabka releases the whole workspace as one unit, and that one version is
+written out by hand in five kinds of place:
+
+  * `[workspace.package] version` in the root `Cargo.toml`,
+  * the `version` requirement on every first-party `path` dependency, in the
+    root `[workspace.dependencies]` and in each member manifest -- Cargo
+    refuses a publish when one of those is stale,
+  * `module(version = ...)` in `MODULE.bazel`,
+  * `WORKSPACE_VERSION` in `bazel/defs.bzl`,
+  * each `#![doc(html_root_url = "https://docs.rs/krabka-<name>/<version>")]`.
+
+`docs/releasing.md` used to close that list with `grep -rn '<old version>'`,
+which finds a version that was left behind only if whoever bumped remembers to
+run it against the version they just replaced. This is the same sweep done from
+the other side: read all of them, and fail on any disagreement.
+
+`WORKSPACE_VERSION` is the one worth naming. `bazel/defs.bzl` stamps
+`purl = "pkg:cargo/%s@%s" % (crate, WORKSPACE_VERSION)` onto every library, so
+`aspect sbom` reads it into every component of the SBOM that the release
+workflow signs and attests. A stale `WORKSPACE_VERSION` is therefore not a
+cosmetic mismatch: it publishes an attested bill of materials that names the
+previous release.
+
+With `--expected`, every pin must equal that version rather than merely each
+other. That is what the release workflow's `verify` job runs, passing the tag
+it was pushed for with the leading `v` removed, so a `v0.6.0` tag on a tree
+that still says `0.5.4` everywhere fails before anything is built or signed.
+
+    aspect check-version-pins
+    aspect check-version-pins --expected 0.6.0
+"""
+
+load("./repo.axl", "is_file", "read_lines")
+
+# The characters a bare TOML key is made of. Used to refuse a match in the
+# middle of a longer key: `rust-version = "1.90"` must not be read as the
+# `version` field of anything.
+_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+
+# The root manifest's section that carries the workspace version itself.
+_WORKSPACE_PACKAGE = "workspace.package"
+
+# `MODULE.bazel`'s one call, and what closes it.
+_MODULE_OPEN = "module("
+_MODULE_CLOSE = ")"
+
+# `bazel/defs.bzl`'s constant.
+_WORKSPACE_VERSION = "WORKSPACE_VERSION = "
+
+# The inner attribute a crate root carries, and the host its value names.
+_DOC_ROOT_OPEN = "#![doc(html_root_url = "
+_DOCS_RS = "https://docs.rs/"
+
+# A bound on the sweeps below, which Starlark's lack of `while` makes explicit.
+# No manifest line holds anywhere near this many fields.
+_SCAN_LIMIT = 100
+
+def quoted_value(text):
+    """The double-quoted string `text` opens with, or None."""
+    if not text.startswith("\""):
+        return None
+    end = text.find("\"", 1)
+    if end < 0:
+        return None
+    return text[1:end]
+
+def field_value(body, key):
+    """The value of the `key = "..."` field of `body`, or None.
+
+    `body` is a line, or the inside of a TOML inline table. The match must
+    begin a key -- what precedes it is either nothing or a character no bare
+    key contains -- so `rust-version` is not a `version` and `no_path` is not a
+    `path`.
+    """
+    needle = key + " = \""
+    start = 0
+    for _ in range(_SCAN_LIMIT):
+        at = body.find(needle, start)
+        if at < 0:
+            return None
+        if at == 0 or body[at - 1] not in _KEY_CHARS:
+            return quoted_value(body[at + len(needle) - 1:])
+        start = at + len(needle)
+    return None
+
+def dependency_pin(text):
+    """The `struct(name, path, version)` the dependency line `text` is, or None.
+
+    The line shape read is the one every first-party dependency in this
+    workspace is written as: `name = { ... }` on one line, with a `path` field.
+    `version` is None when the entry carries none -- `crates/broker`'s
+    dev-dependency on itself, `{ path = ".", features = [...] }`, is the entry
+    that legitimately has no version to agree with.
+    """
+    if not text.endswith("}"):
+        return None
+    at = text.find(" = {")
+    if at < 0:
+        return None
+    name = text[:at]
+    if not name:
+        return None
+    for index in range(len(name)):
+        if name[index] not in _KEY_CHARS:
+            return None
+    body = text[at + len(" = {"):-1]
+    path = field_value(body, "path")
+    if path == None:
+        return None
+    return struct(name = name, path = path, version = field_value(body, "version"))
+
+def section_name(text):
+    """The TOML table `text` opens, or None; `[workspace.package]` is `workspace.package`."""
+    if text.startswith("[") and text.endswith("]") and not text.startswith("[["):
+        return text[1:-1]
+    return None
+
+def cargo_pins(source, lines):
+    """Every version pin the Cargo manifest `source` writes, in file order.
+
+    A pin is `struct(source, label, version)`: the file it was read from, what
+    to call it in a failure, and the version it holds. A manifest contributes
+    its `[workspace.package] version` (only the root has one) and the `version`
+    requirement of each of its `path` dependencies.
+    """
+    found = []
+    section = ""
+    for line in lines:
+        text = line.strip()
+        opened = section_name(text)
+        if opened != None:
+            section = opened
+            continue
+        if section == _WORKSPACE_PACKAGE:
+            version = field_value(text, "version")
+            if version != None:
+                found.append(struct(
+                    source = source,
+                    label = "[%s] version" % _WORKSPACE_PACKAGE,
+                    version = version,
+                ))
+            continue
+        pin = dependency_pin(text)
+        if pin == None or pin.version == None:
+            continue
+        found.append(struct(
+            source = source,
+            label = "the version requirement on %s" % pin.name,
+            version = pin.version,
+        ))
+    return found
+
+def module_pins(source, lines):
+    """The version `module(...)` declares in the module file `source`.
+
+    A `MODULE.bazel` has exactly one `module(` call and it opens a line of its
+    own, so the sweep is that block and nothing else: `bazel_dep`'s own
+    `version` arguments pin other people's modules and are not this one.
+    """
+    inside = False
+    for line in lines:
+        text = line.strip()
+        if not inside:
+            if text == _MODULE_OPEN:
+                inside = True
+            continue
+        if text == _MODULE_CLOSE:
+            break
+        version = field_value(text, "version")
+        if version != None:
+            return [struct(source = source, label = "module(version)", version = version)]
+    return []
+
+def defs_pins(source, lines):
+    """The `WORKSPACE_VERSION` the Starlark file `source` defines."""
+    for line in lines:
+        if not line.startswith(_WORKSPACE_VERSION):
+            continue
+        version = quoted_value(line[len(_WORKSPACE_VERSION):])
+        if version != None:
+            return [struct(source = source, label = "WORKSPACE_VERSION", version = version)]
+    return []
+
+def doc_root_version(text):
+    """The version the `html_root_url` attribute `text` names, or None.
+
+    The URL is `https://docs.rs/<crate>/<version>`; anything else -- another
+    host, or a URL with no version segment -- is not read, so that a rewritten
+    attribute is reported by the caller rather than silently contributing
+    nothing.
+    """
+    if not text.startswith(_DOC_ROOT_OPEN):
+        return None
+    url = quoted_value(text[len(_DOC_ROOT_OPEN):])
+    if url == None or not url.startswith(_DOCS_RS):
+        return None
+    tail = url[len(_DOCS_RS):]
+    parts = tail.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    return parts[1]
+
+def lib_pins(source, lines):
+    """Every `html_root_url` version the crate root `source` carries.
+
+    A crate root that carries no such attribute contributes nothing; a line
+    that opens like one and names a URL this reader does not understand fails
+    the task, because a pin read past is a pin never compared.
+    """
+    found = []
+    for index, line in enumerate(lines):
+        text = line.strip()
+        if not text.startswith(_DOC_ROOT_OPEN):
+            continue
+        version = doc_root_version(text)
+        if version == None:
+            fail("%s: line %d does not name a docs.rs URL with a version: %s" % (
+                source,
+                index + 1,
+                text,
+            ))
+        found.append(struct(source = source, label = "html_root_url", version = version))
+    return found
+
+def disagreements(pins, expected = ""):
+    """Every way `pins` fail to name one version, in report order.
+
+    Without `expected`, the first pin is the one the rest are held to -- the
+    root manifest's `[workspace.package] version`, which is where a bump
+    starts. With it, every pin is held to that version instead, which is what
+    the release workflow needs: pins that agree with each other and not with
+    the tag being released are exactly as wrong.
+    """
+    if not pins:
+        return ["no version pins were found, which is not a tree this check can pass"]
+    if expected:
+        return [
+            "%s: %s is %s, and the expected version is %s" % (
+                pin.source,
+                pin.label,
+                pin.version,
+                expected,
+            )
+            for pin in pins
+            if pin.version != expected
+        ]
+    first = pins[0]
+    return [
+        "%s: %s is %s, and %s: %s is %s" % (
+            pin.source,
+            pin.label,
+            pin.version,
+            first.source,
+            first.label,
+            first.version,
+        )
+        for pin in pins[1:]
+        if pin.version != first.version
+    ]
+
+def _crate_directories(fs, root):
+    return sorted([entry.path for entry in fs.read_dir(root + "/crates") if entry.is_dir])
+
+def _read(ctx, root, relative, reader):
+    path = root + "/" + relative
+    if not is_file(ctx.std.fs, path):
+        fail("%s: not a file" % path)
+    return reader(relative, read_lines(ctx.std.fs, path))
+
+def _collect(ctx, root):
+    """Every version pin in the tree at `root`, root manifest first."""
+    pins = _read(ctx, root, "Cargo.toml", cargo_pins)
+    if not pins:
+        fail("Cargo.toml: no [%s] version and no path dependencies" % _WORKSPACE_PACKAGE)
+
+    pins += _read(ctx, root, "MODULE.bazel", module_pins)
+    pins += _read(ctx, root, "bazel/defs.bzl", defs_pins)
+
+    dependencies = 0
+    roots = 0
+    for directory in _crate_directories(ctx.std.fs, root):
+        manifest = "crates/%s/Cargo.toml" % directory
+        if is_file(ctx.std.fs, root + "/" + manifest):
+            found = _read(ctx, root, manifest, cargo_pins)
+            dependencies += len(found)
+            pins += found
+        crate_root = "crates/%s/src/lib.rs" % directory
+        if is_file(ctx.std.fs, root + "/" + crate_root):
+            found = _read(ctx, root, crate_root, lib_pins)
+            roots += len(found)
+            pins += found
+
+    # Each of the three readers below has a shape it does not understand, and
+    # reading nothing is how that would show. A tree with no first-party path
+    # dependency and no `html_root_url` is not this repository.
+    if len(pins) < 4:
+        fail("MODULE.bazel and bazel/defs.bzl declare no version this reader can find")
+    if not dependencies:
+        fail("crates/*/Cargo.toml: no first-party path dependency carries a version")
+    if not roots:
+        fail("crates/*/src/lib.rs: no crate root carries an html_root_url")
+    return pins
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    pins = _collect(ctx, root)
+
+    expected = ctx.args.expected.removeprefix("v")
+    found = disagreements(pins, expected = expected)
+    for problem in found:
+        ctx.std.io.stderr.write(problem + "\n")
+    if found:
+        ctx.std.io.stderr.write(
+            "krabka releases the workspace as one unit; every one of these %d pins names that version\n" % len(pins),
+        )
+        return 1
+
+    ctx.std.io.stdout.write(
+        "check-version-pins: %d pins, all naming %s\n" % (len(pins), expected or pins[0].version),
+    )
+    return 0
+
+check_version_pins = task(
+    summary = "Check that every version pin in the workspace names the same version",
+    implementation = _impl,
+    args = {
+        "expected": args.string(
+            default = "",
+            description = "Hold every pin to this version (a leading `v` is dropped) rather than to each other.",
+        ),
+    },
+)

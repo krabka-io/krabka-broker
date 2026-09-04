@@ -1,0 +1,159 @@
+"""Every `mutants::skip` attribute carries a `// cargo-mutants:` justification.
+
+A skip removes a function from the mutation sweep entirely, so the tier that
+exists to measure the tests stops measuring that code. The README's "Skipping a
+mutant" section names the two reasons that earn one -- an I/O-only wrapper with
+no in-process signal, and orchestration whose every branch is a call into a
+separately mutation-tested kernel -- and requires the reason to be written down
+where the next reader meets the attribute.
+
+This check enforces the writing-down half: a line opening with
+`// cargo-mutants:` directly above the attribute, with only other attributes,
+doc comments and blank lines allowed in between. It does not judge the reason
+-- no check can -- but an unexplained skip cannot survive review unnoticed.
+
+`.aspect/check_creusot_skip.axl` is the neighbouring rule about where a skip is
+mandatory; `.aspect/check_mutants_config.axl` covers `.cargo/mutants.toml`,
+which is where a single equivalent *expression* belongs instead.
+
+    aspect check-mutants-skip
+"""
+
+load("./repo.axl", "walk_suffix")
+
+# The comment that has to sit above a skip, matched as a prefix of a stripped
+# line so the reason itself is free text.
+JUSTIFICATION = "// cargo-mutants:"
+
+# The token that makes an attribute a skip. Matched inside an attribute rather
+# than against a whole line, so `#[mutants::skip]` and the
+# `#[cfg_attr(test, mutants::skip)]` this repository writes are both found and
+# a prose mention of either is not.
+SKIP_TOKEN = "mutants::skip"
+
+# The subtree this check sweeps, relative to the repository root.
+CRATES = "crates"
+
+def is_skip_attribute(stripped):
+    """Whether a stripped line opens an attribute that skips mutation."""
+    return stripped.startswith("#[") and SKIP_TOKEN in stripped
+
+def _is_comment(stripped):
+    return stripped.startswith("//")
+
+def is_justified(lines, index):
+    """Whether the skip attribute at `lines[index]` has its reason above it.
+
+    The walk goes upward from the attribute and steps over the things that
+    legitimately sit between a comment and the item it explains: blank lines,
+    doc comments, and other attributes -- including an attribute whose `[...]`
+    spans several lines, such as a `#[tracing::instrument(...)]` block, which
+    is tracked by bracket depth rather than assumed to be one line. Any other
+    comment line is stepped over too, so a multi-line `// cargo-mutants:`
+    reason is read from its last line up to its first. Anything else -- code,
+    a closing brace, the top of the file -- ends the walk unjustified.
+    """
+    cursor = index - 1
+    depth = 0
+
+    # Each pass moves the cursor up by one, so the lines above the attribute
+    # bound the walk.
+    for _ in range(index + 1):
+        if cursor < 0:
+            return False
+        stripped = lines[cursor].strip()
+        if depth > 0:
+            depth += stripped.count("]") - stripped.count("[")
+            cursor -= 1
+            continue
+        if stripped == "":
+            cursor -= 1
+            continue
+        if stripped.startswith(JUSTIFICATION):
+            return True
+        if _is_comment(stripped):
+            cursor -= 1
+            continue
+        if stripped.endswith("]"):
+            balance = stripped.count("]") - stripped.count("[")
+            if balance > 0:
+                depth = balance
+                cursor -= 1
+                continue
+            if stripped.startswith("#["):
+                cursor -= 1
+                continue
+        return False
+    return False
+
+def unjustified(sources):
+    """`(path, line)` for every skip attribute with no reason written above it.
+
+    A source is `struct(path, text)`. `line` is 1-based, so the report points
+    at the attribute itself.
+    """
+    offenders = []
+    for source in sources:
+        lines = source.text.splitlines()
+        for index in range(len(lines)):
+            if is_skip_attribute(lines[index].strip()) and not is_justified(lines, index):
+                offenders.append((source.path, index + 1))
+    return offenders
+
+def count_skips(sources):
+    """How many skip attributes `sources` holds in total."""
+    total = 0
+    for source in sources:
+        for line in source.text.splitlines():
+            if is_skip_attribute(line.strip()):
+                total += 1
+    return total
+
+def read_sources(fs, root):
+    """Every `.rs` file under `root`'s `crates/`, as the checks above want them.
+
+    Paths are repository-relative whatever `root` is, so the report reads the
+    same from a checkout as from a fixture tree.
+    """
+    directory = root + "/" + CRATES
+    return [
+        struct(
+            path = CRATES + "/" + relative,
+            text = fs.read_to_string(directory + "/" + relative),
+        )
+        for relative in walk_suffix(fs, directory, ".rs")
+    ]
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.args.root if ctx.args.root else ctx.std.env.bazel_root_dir()
+    if not ctx.std.fs.exists(root + "/" + CRATES):
+        ctx.std.io.stderr.write("%s/%s does not exist\n" % (root, CRATES))
+        return 1
+
+    sources = read_sources(ctx.std.fs, root)
+    found = unjustified(sources)
+    if found:
+        ctx.std.io.stderr.write(
+            "Every %s attribute needs a `%s <reason>` line above it, " % (SKIP_TOKEN, JUSTIFICATION) +
+            "naming which of the two accepted reasons it is (README, \"Skipping a mutant\"):\n",
+        )
+        for path, line in found:
+            ctx.std.io.stderr.write("  %s:%d\n" % (path, line))
+        return 1
+
+    ctx.std.io.stdout.write(
+        "check-mutants-skip: %d %s attributes, all of them justified\n" %
+        (count_skips(sources), SKIP_TOKEN),
+    )
+    return 0
+
+check_mutants_skip = task(
+    summary = "Check that every mutants::skip carries a written reason",
+    implementation = _impl,
+    args = {
+        "root": args.string(
+            default = "",
+            description = "The repository to check. Defaults to the workspace root.",
+        ),
+    },
+)

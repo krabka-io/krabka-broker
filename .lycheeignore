@@ -1,2 +1,18 @@
+# Link patterns lychee must not report.
+#
+# This file is for a link that is PERMANENTLY UNREACHABLE to a checker while
+# still being the right link for a reader -- a host that answers 403 to
+# anything without a browser (Confluence does), a page behind a login, a
+# template path that resolves only once a file is copied somewhere else. It is
+# not a place to silence a link that is simply broken: that one gets fixed.
+#
+# Every entry states why, on the line above it, and names the run that proved
+# it. The nightly `links` job in .github/workflows/ci.yml is what proves it:
+# the pull-request lychee run is `--offline` and resolves file-relative links
+# only, so it can never be the reason for an entry here. Hostnames that are not
+# public at all -- compose service names in example configuration -- are
+# `--exclude`d in that job instead, so this file stays a record of what the
+# online check found.
+
 # Template links are relative to the future crate README, not this style guide.
 /docs/style_guides/docs/(?:design|test_coverage_report)\.md$

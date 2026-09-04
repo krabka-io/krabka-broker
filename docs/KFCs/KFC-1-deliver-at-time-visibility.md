@@ -4,7 +4,7 @@ Scheduled delivery for a Kafka topic, with no wire-protocol change and no client
 
 ## Status
 
-**Adopted.** The implementation lands on branch `claude/kafka-deliver-at-time-0415vy`.
+**Adopted.** The implementation merged to `main` through pull request [#9](https://github.com/krabka-io/krabka-broker/pull/9) and ships in release `v0.5.0` and every later release.
 
 No KIP defines scheduled delivery, so this document is the specification for it. Each section below states where the semantics sit next to Kafka's. The [Compatibility](#compatibility-deprecation-and-migration-plan) section names the one place where krabka overloads a Kafka meaning.
 

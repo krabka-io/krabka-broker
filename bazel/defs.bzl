@@ -80,7 +80,13 @@ def docker_test_exec_properties(recycling_key):
 # yet plumb Cargo lint tables into the Bazel build, and this is the one lint
 # in that table whose guarantee must not lapse under a second build system.
 # The clippy tables stay a Cargo-side gate: clippy runs as an aspect here, not
-# as part of a normal build.
+# as part of a normal build, and that aspect sees only Bazel targets. CI's
+# `cargo` job runs `cargo clippy --workspace --all-targets` for what it cannot
+# reach: the benches under `crates/broker/benches` and `crates/log/benches`,
+# which have no target here at all; the test and binary targets `aspect lint`
+# narrows away because a change did not touch them; and `krabka-protocol`'s
+# build script, which //MODULE.bazel pins with `gen_build_script = "off"` and
+# which therefore only runs under Cargo.
 WORKSPACE_RUSTC_FLAGS = ["-Funsafe_code"]
 
 # The root `Cargo.toml`'s `[workspace.package] version`. It reaches the release

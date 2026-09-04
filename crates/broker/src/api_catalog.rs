@@ -63,9 +63,15 @@ pub struct KipAnnotation {
 /// `crates/`.
 pub const MIXED_QUORUM_KEY: &str = "mixed-quorum";
 
+/// The key of the KIP whose forwarding half the same decision rules out. The
+/// controller listener serves `Envelope`; nothing in the tree builds one,
+/// because a Krabka broker reaches its controller over the krabka-private
+/// `SubmitChange` RPC, and a JVM controller is not a peer krabka speaks to.
+pub const FORWARDING_KEY: &str = "KIP-590";
+
 /// Where the out-of-scope decision for mixed quorums and JVM-side forwarding
 /// is written down. The generator checks that this line still says so.
-pub const OUT_OF_SCOPE_CITATION: &str = "crates/raft/src/lib.rs:52";
+pub const OUT_OF_SCOPE_CITATION: &str = "crates/raft/src/lib.rs:54";
 
 /// The per-KIP rows of `docs/KIP_MATRIX.md`, in ascending KIP order, with the
 /// non-KIP scope rows last.
@@ -264,14 +270,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-219",
         claim: "Respond first, then mute the channel for the throttle time",
-        status: KipStatus::Partial,
+        status: KipStatus::Implemented,
         module: "crates/broker/src/network/dispatch/response.rs",
         tests: &[
             "crates/broker/tests/client_quotas/throttling.rs",
             "crates/broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "The dispatch loop echoes a request-quota delay by patching a leading `ThrottleTimeMs`. The throttle-echo section below lists the APIs whose schema puts the field elsewhere.",
+        note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs; the rest are `InlineExempt`, so only a reply outside their advertised version range can be held without an echo.",
     },
     KipAnnotation {
         key: "KIP-226",
@@ -630,15 +636,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-590",
-        claim: "Envelope: a broker forwards admin writes to the active controller",
-        status: KipStatus::Partial,
+        claim: "Envelope: the controller listener serves a forwarded admin write",
+        status: KipStatus::Implemented,
         module: "crates/broker/src/envelope.rs",
         tests: &[
             "crates/broker/tests/kip590_envelope.rs",
             "crates/broker/tests/jvm_role_separated_admin.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "The controller listener serves `Envelope`, and a Krabka broker-only node forwards through it. Forwarding into or out of a JVM controller is out of scope: crates/raft/src/lib.rs:52.",
+        note: "The broker side of KIP-590 is not needed: a Krabka broker reaches its controller over the krabka-private `SubmitChange` RPC (`crates/broker/src/metadata_source/observer_source.rs`), and a JVM controller is outside the compatibility target (crates/raft/src/lib.rs:54).",
     },
     KipAnnotation {
         key: "KIP-595",
@@ -1056,7 +1062,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/raft/src/lib.rs",
         tests: &[],
         clients: ClientEvidence::NotCovered,
-        note: "Outside the raft crate's compatibility target: crates/raft/src/lib.rs:52.",
+        note: "Outside the raft crate's compatibility target: crates/raft/src/lib.rs:54.",
     },
 ];
 // END KIP_ANNOTATIONS
@@ -1376,9 +1382,14 @@ mod tests {
         }
     }
 
+    /// Both rows that rest on the mixed-quorum decision cite it, and each
+    /// carries the status that decision leaves it with: the mixed-quorum row
+    /// is out of scope, and KIP-590 is served-only -- the controller listener
+    /// answers `Envelope`, and a broker-only node needs no forwarding path of
+    /// its own because it writes over the krabka-private `SubmitChange` RPC.
     #[test]
     fn mixed_quorum_and_forwarding_rows_cite_the_raft_decision() {
-        for key in ["KIP-590", MIXED_QUORUM_KEY] {
+        for key in [FORWARDING_KEY, MIXED_QUORUM_KEY] {
             let row = KIP_ANNOTATIONS
                 .iter()
                 .find(|row| row.key == key)
@@ -1393,6 +1404,12 @@ mod tests {
             .find(|row| row.key == MIXED_QUORUM_KEY)
             .expect("mixed-quorum row");
         assert!(mixed.status == KipStatus::OutOfScope);
+
+        let forwarding = KIP_ANNOTATIONS
+            .iter()
+            .find(|row| row.key == FORWARDING_KEY)
+            .expect("KIP-590 row");
+        assert!(forwarding.status == KipStatus::Implemented);
     }
 
     /// Every module and test path an annotation names is a file in the tree.

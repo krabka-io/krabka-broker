@@ -28,8 +28,8 @@ Clippy enforces most of these idioms in practice. Under `-D warnings` with `clip
 
 ## Toolchain and Edition
 
-- The workspace pins an **exact stable toolchain** in [`rust-toolchain.toml`](../../rust-toolchain.toml): `channel = "1.97.1"` with `rustfmt` and `clippy`. Every developer and every CI build then compiles with the same compiler.
-- The workspace [`Cargo.toml`](../../Cargo.toml) defines the edition and the MSRV once, in `[workspace.package]` as `edition = "2024"` and `rust-version`. Each crate inherits them with `edition.workspace = true` / `rust-version.workspace = true`. Never hard-code them in a crate's `Cargo.toml`. Check that file for the current values.
+- The workspace pins an **exact stable toolchain** in [`rust-toolchain.toml`](../../rust-toolchain.toml), with `rustfmt` and `clippy`. That file is the single source of truth for the version; read it for the current channel. Every developer and every CI build then compiles with the same compiler.
+- The workspace [`Cargo.toml`](../../Cargo.toml) defines the edition once, in `[workspace.package]` as `edition = "2024"`. Each crate inherits it with `edition.workspace = true`. Never hard-code it in a crate's `Cargo.toml`.
 - Do not use nightly-only *language* features in crate code. If a feature is not available on the pinned stable toolchain, it is not available here.
 - The **one** sanctioned use of nightly is `cargo +nightly fmt`. See [Formatting](#formatting). It is necessary because `rustfmt.toml` enables a formatting option that is still nightly-gated. That option changes only the layout of the source, never what the compiled crates depend on.
 
@@ -281,7 +281,7 @@ Krabka is built on `tokio`, which `[workspace.dependencies]` pins.
 
 ## Cargo and Dependencies
 
-- Inherit the shared package metadata from the workspace with `.workspace = true`: `edition`, `rust-version`, `license`, and `authors`. Inherit the lint policy with `[lints] workspace = true`.
+- Inherit the shared package metadata from the workspace with `.workspace = true`: `edition`, `license`, and `authors`. Inherit the lint policy with `[lints] workspace = true`.
 - Krabka **does** use a `[workspace.dependencies]` table. Declare a shared dependency once there, with its version and features, and reference it from a crate with `<dep>.workspace = true`. This keeps versions consistent across 50-plus crates, and it holds the cross-crate version pins.
 - Several pins are **lock-stepped** and carry an explanatory comment in the workspace `Cargo.toml`. These are the `datafusion` git revision with `arrow` / `parquet` / `object_store`, and `polars` with `polars-arrow`. Do not bump one of these alone. Read the comment and move the whole set together. Renovate is configured to hold them.
 - Keep dependencies minimal and justified. Every new third-party crate passes through the `cargo deny` gate in `deny.toml` and through the security-audit CI workflow. Check a sibling crate or the lockfile before you introduce a new version of something already in the tree.

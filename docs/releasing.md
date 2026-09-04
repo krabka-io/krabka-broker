@@ -6,11 +6,12 @@ in a bug report, and in a rollback. The [changelog](../CHANGELOG.md) records
 what each tag contains.
 
 The push of the tag starts
-[`release.yml`](../.github/workflows/release.yml). That workflow builds the
-image from the Bazel graph, signs it with cosign, attests the SBOM and the
-provenance, moves the `vX.Y.Z` and `latest` image tags to the signed digest, and
-creates the GitHub release. Nothing else creates a release, and no other branch
-does.
+[`release.yml`](../.github/workflows/release.yml). That workflow first verifies
+that the tag is releasable at all (step 4 below), then signs the image
+`ci.yml`'s `delivery` job already built for that commit, attests the SBOM and
+the provenance, moves the `vX.Y.Z` image tag -- and `latest`, when the tag is
+the newest one -- to the signed digest, and creates the GitHub release. Nothing
+else creates a release, and no other branch does.
 
 Only a maintainer with push access to the repository can do steps 3 and 4.
 
@@ -26,7 +27,21 @@ update `Cargo.lock`:
 - `version` in `MODULE.bazel` and `WORKSPACE_VERSION` in `bazel/defs.bzl`.
 - Each `#![doc(html_root_url = "https://docs.rs/krabka-<name>/<version>")]`.
 
-`grep -rn '<old version>'` over those files finds anything the list misses.
+`aspect check-version-pins` reads every one of those places and fails on any
+disagreement, so run it once the bump is made rather than grepping for the
+version you replaced. It runs in the `checks` job of
+[`ci.yml`](../.github/workflows/ci.yml) on every push, and again in the release
+workflow with the tag as the version each pin must name.
+
+```sh
+aspect check-version-pins
+aspect check-version-pins --expected v0.5.2  # what the release job runs
+```
+
+`WORKSPACE_VERSION` is the entry worth being careful about. `bazel/defs.bzl`
+stamps it into the `purl` of every crate, so `aspect sbom` writes a stale one
+into every component of the bill of materials the release then signs and
+attests.
 
 ## 2. Prepare the changelog
 
@@ -44,6 +59,18 @@ just shipped as unreleased.
 [Unreleased]: https://github.com/krabka-io/krabka-broker/compare/vX.Y.Z...HEAD
 [X.Y.Z]: https://github.com/krabka-io/krabka-broker/releases/tag/vX.Y.Z
 ```
+
+A changelog entry that quotes a performance number takes it from the latest
+scheduled run of the `bench` job in
+[`ci.yml`](../.github/workflows/ci.yml) -- the nightly criterion lane -- and not
+from the tables in the source comments. Those tables record why a decision was
+made and are not re-measured when the code around them changes, so a release
+that repeats one is republishing an undated figure. The job summary of that run
+holds the `bench_ratio` tables, and its `criterion-baseline` artifact holds the
+samples; if the newest scheduled run is red, say no number rather than reaching
+for an older one. The same applies to the `sendfile_min` default and the two
+`PERF -- measured; decision: KEEP` sites: check the run before repeating them in
+release notes.
 
 Open a pull request with the version bump and the changelog entry together, and
 merge it. The tag names that merge commit.
@@ -68,9 +95,35 @@ attestations point at it. Release a new patch version instead.
 
 ## 4. Check the result
 
-Watch the `release` workflow. It fails the release rather than publishing an
-unsigned or unverified image, because it runs `cosign verify` and
-`cosign verify-attestation` against the digest it signed.
+Watch the `release` workflow. Its `verify` job runs before anything is built or
+signed, and it refuses the release unless all three of these hold:
+
+- The tagged commit is an ancestor of `origin/main`. A tag pushed from a
+  feature branch is not a release.
+- `aspect check-version-pins --expected <version>` passes, so the tree the tag
+  names says the version the tag does.
+- `ci.yml` has a `push` run for that commit whose conclusion is `success`.
+  `gate` is the single required context on `main` and depends on every job that
+  gates a merge, so a green run of it is what says the commit was tested. A
+  `pull_request` run does not count: it tested the merge of the pull request,
+  not this commit.
+
+A cosign signature says who built an image, never that the image was tested.
+Those three checks are what stands behind it.
+
+The `release` job then signs the image `delivery` already pushed for that
+commit -- `ghcr.io/krabka-io/krabka-broker:<commit sha>` -- rather than
+building it again, so the digest that is signed is the digest that was tested.
+It falls back to a rebuild only when that tag is absent, and the provenance
+predicate records which of the two happened in `internalParameters.imageSource`.
+
+It fails the release rather than publishing an unsigned or unverified image,
+because it runs `cosign verify` and `cosign verify-attestation` against the
+digest it signed.
+
+`latest` moves onto the release only when the tag is the newest `v*` tag in the
+repository, by `sort -V`. A patch cut after a later minor -- a `v0.5.4` tagged
+after `v0.6.0` -- gets its own `vX.Y.Z` tag and leaves `latest` where it is.
 
 When the workflow is green, confirm the release yourself:
 

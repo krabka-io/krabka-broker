@@ -6,7 +6,6 @@ use krabka_protocol::api_key::ApiKey;
 use super::{DispatchEntry, DispatchRegistry};
 
 plain_dispatches!(register_plain_dispatches;
-    (ApiVersions, api_versions_request, crate::handlers::api_versions::handle),
     (AllocateProducerIds, allocate_producer_ids_request, crate::handlers::allocate_producer_ids::handle),
     (AddOffsetsToTxn, add_offsets_to_txn_request, crate::txn::handlers::add_offset_commits_to_txn::handle),
     (WriteTxnMarkers, write_txn_markers_request, crate::txn::handlers::write_txn_markers::handle),

@@ -1,0 +1,337 @@
+"""Check that `//bazel/images`'s `IMAGES` still restates `//MODULE.bazel`'s pins.
+
+`MODULE.bazel` pins each container image by digest, as a
+`(name, registry, repository, tag, digest)` tuple `rules_img`'s `pull` reads.
+`bazel/images/BUILD.bazel` restates the first four of those fields as the tag
+each image is loaded under -- `"apache_kafka_4_3_1":
+"mirror.gcr.io/apache/kafka:4.3.1"` -- because `image_load` needs a name for
+the local daemon and a `MODULE.bazel` cannot be `load()`ed from. The two lists
+are therefore one decision written twice, joined by nothing but a comment
+saying "Keep in step with //MODULE.bazel".
+
+Drift between them is silent in the direction that matters. A digest bump that
+moves to a new upstream release changes the tuple's tag and leaves `IMAGES`
+loading the new bytes under the old tag, so every suite whose `const
+KAFKA_IMAGE` names that tag keeps passing while testing against an image the
+tag no longer describes. An image added to one file and not the other is
+louder -- an unresolved `@name` or an unused pin -- but it is the same rot,
+and this catches it in the same pass.
+
+This task reads the tuples the way `bazel/images/pinned_digests.sh` reads them
+for the `pinned_digests` genrule (the same five quoted fields, the same
+`[a-z0-9_]` name and 64-hex digest), reads the `IMAGES` dict, and fails when a
+name is in one and not the other or when an entry is not
+`registry/repository:tag` of the same-named tuple.
+
+What this does NOT check: the digest, which is the field `IMAGES` does not
+restate and so cannot disagree about. Whether the pinned digest is still the
+one the registry serves for that tag is Renovate's job, not this one.
+
+    aspect check-images
+"""
+
+load("./repo.axl", "is_file", "read_lines")
+
+# The alphabets the tuple's fields are made of, as `pinned_digests.sh`'s `sed`
+# spells them: `[a-z0-9_]` for the repository name Bazel gets, `[0-9a-f]` for
+# the digest.
+_NAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+_HEX_CHARS = "0123456789abcdef"
+
+_DIGEST_PREFIX = "sha256:"
+_DIGEST_LENGTH = 64
+
+# How many quoted fields a pin is: name, registry, repository, tag, digest.
+_TUPLE_FIELDS = 5
+
+# What opens a line this reader claims: a parenthesis and a quote, which in
+# MODULE.bazel only a pin begins with. The comprehension header above them
+# opens with `for`, and every other construct with a bare identifier.
+_TUPLE_OPEN = "(\""
+
+# The one construct read out of `bazel/images/BUILD.bazel`.
+_DICT_OPEN = "IMAGES = {"
+_DICT_CLOSE = "}"
+
+def _made_of(text, alphabet):
+    """Whether `text` is non-empty and every character of it is in `alphabet`."""
+    if not text:
+        return False
+    for index in range(len(text)):
+        if text[index] not in alphabet:
+            return False
+    return True
+
+def _is_digest(text):
+    """Whether `text` is the `sha256:`-prefixed 64-hex digest a pin carries."""
+    if not text.startswith(_DIGEST_PREFIX):
+        return False
+    if len(text) != len(_DIGEST_PREFIX) + _DIGEST_LENGTH:
+        return False
+    return _made_of(text[len(_DIGEST_PREFIX):], _HEX_CHARS)
+
+def quoted_fields(text):
+    """The `", "`-separated double-quoted strings `text` is, or None.
+
+    None is every shape this reader does not understand -- an unquoted field, a
+    missing separator, anything trailing the last quote -- so that a caller
+    reports the line rather than reading part of it.
+    """
+    fields = []
+    rest = text
+    for _ in range(_TUPLE_FIELDS + 1):
+        if not rest.startswith("\""):
+            return None
+        end = rest.find("\"", 1)
+        if end < 0:
+            return None
+        fields.append(rest[1:end])
+        rest = rest[end + 1:]
+        if not rest:
+            return fields
+        if not rest.startswith(", "):
+            return None
+        rest = rest[2:]
+    return None
+
+def pin(text):
+    """The `(name, registry, repository, tag, digest)` pin the line `text` is, or None.
+
+    `text` is a stripped line. The shape accepted is the one
+    `pinned_digests.sh` accepts: five quoted fields in parentheses, an optional
+    trailing comma, a name of `[a-z0-9_]` and a `sha256:` digest of 64 hex
+    digits. Registry, repository and tag are taken as written -- a tag can be
+    anything a registry accepts, and MinIO's `RELEASE.2025-09-07T16-13-09Z`
+    already spans most of it.
+    """
+    body = text.removesuffix(",")
+    if not body.startswith("(") or not body.endswith(")"):
+        return None
+    fields = quoted_fields(body[1:-1])
+    if fields == None or len(fields) != _TUPLE_FIELDS:
+        return None
+    if not _made_of(fields[0], _NAME_CHARS):
+        return None
+    if not _is_digest(fields[4]):
+        return None
+    return struct(
+        name = fields[0],
+        registry = fields[1],
+        repository = fields[2],
+        tag = fields[3],
+        digest = fields[4],
+    )
+
+def reference(pinned):
+    """The `registry/repository:tag` an `IMAGES` entry restates a pin as."""
+    return "%s/%s:%s" % (pinned.registry, pinned.repository, pinned.tag)
+
+def scan_pins(lines):
+    """What a sweep of `lines` for `MODULE.bazel`'s image pins found.
+
+    `struct(images, malformed, duplicates)`: the name-to-`registry/repository:tag`
+    map the readable pins make, the `(line number, text)` pairs of lines that
+    open like a pin and are not one, and the names pinned more than once.
+    Reporting rather than failing is what lets a test hold the reader to what
+    it saw; `pinned_images` is what turns each into the failure a caller gets.
+    """
+    images = {}
+    malformed = []
+    duplicates = []
+    for index, line in enumerate(lines):
+        text = line.strip()
+        if not text.startswith(_TUPLE_OPEN):
+            continue
+        found = pin(text)
+        if found == None:
+            malformed.append((index + 1, text))
+            continue
+        if found.name in images:
+            duplicates.append(found.name)
+            continue
+        images[found.name] = reference(found)
+    return struct(images = images, malformed = malformed, duplicates = duplicates)
+
+def pinned_images(source, lines):
+    """The name-to-`registry/repository:tag` map `MODULE.bazel`'s pins make.
+
+    Every shape this reader does not understand fails the task rather than
+    being read past: a pin it skipped quietly would be a pin this check never
+    compared, which is the drift it exists to report.
+    """
+    found = scan_pins(lines)
+    if found.malformed:
+        fail("%s: lines that open like an image pin and are not one:\n%s" % (
+            source,
+            "\n".join(["  line %d: %s" % (number, text) for number, text in found.malformed]),
+        ))
+    if found.duplicates:
+        fail("%s: pinned more than once: %s" % (source, ", ".join(sorted(found.duplicates))))
+    if not found.images:
+        fail("%s: holds no image pins, which is the only shape this reader understands" % source)
+    return found.images
+
+def dict_entry(text):
+    """The `struct(name, reference)` the `IMAGES` line `text` holds, or None."""
+    body = text.removesuffix(",")
+    if not body.startswith("\""):
+        return None
+    end = body.find("\"", 1)
+    if end < 0:
+        return None
+    rest = body[end + 1:]
+    if not rest.startswith(": "):
+        return None
+    value = quoted_fields(rest[2:])
+    if value == None or len(value) != 1 or not value[0]:
+        return None
+    return struct(name = body[1:end], reference = value[0])
+
+def scan_images_dict(lines):
+    """What a sweep of `lines` for the `IMAGES` dict found.
+
+    `struct(openings, closed, images, unparsed, duplicates)`, in the shape
+    `scan_pins` returns and for the same reason: the 1-based line numbers that
+    open an `IMAGES` dict, whether a bare `}` closed the first one, the entries
+    it holds, the `(line number, text)` pairs inside it this reader does not
+    understand, and the names entered twice.
+    """
+    openings = [
+        index + 1
+        for index, line in enumerate(lines)
+        if line.strip() == _DICT_OPEN
+    ]
+    if not openings:
+        return struct(openings = [], closed = False, images = {}, unparsed = [], duplicates = [])
+
+    images = {}
+    unparsed = []
+    duplicates = []
+    closed = False
+    for index in range(openings[0], len(lines)):
+        text = lines[index].strip()
+        if text == _DICT_CLOSE:
+            closed = True
+            break
+        if not text or text.startswith("#"):
+            continue
+        entry = dict_entry(text)
+        if entry == None:
+            unparsed.append((index + 1, text))
+            continue
+        if entry.name in images:
+            duplicates.append(entry.name)
+            continue
+        images[entry.name] = entry.reference
+    return struct(
+        openings = openings,
+        closed = closed,
+        images = images,
+        unparsed = unparsed,
+        duplicates = duplicates,
+    )
+
+def loaded_images(source, lines):
+    """The name-to-reference map the `IMAGES` dict of the Starlark file `source` holds.
+
+    AXL cannot `load()` a `BUILD.bazel`, and this is not an evaluator: it reads
+    the single construct this check needs, a dict opened by a bare
+    `IMAGES = {`, closed by a bare `}`, one `"name": "reference",` per line,
+    with `#` comment lines between. Every other shape fails the task.
+    """
+    found = scan_images_dict(lines)
+    if not found.openings:
+        fail("%s: no line reads `%s`, which is the only shape this reader understands" % (source, _DICT_OPEN))
+    if len(found.openings) > 1:
+        fail("%s: `%s` opens on lines %s; this reader understands one dict" % (
+            source,
+            _DICT_OPEN,
+            ", ".join([str(line) for line in found.openings]),
+        ))
+    if not found.closed:
+        fail("%s: the `%s` dict opened on line %d is never closed by a `%s` line" % (
+            source,
+            _DICT_OPEN,
+            found.openings[0],
+            _DICT_CLOSE,
+        ))
+    if found.unparsed:
+        fail("%s: lines in the `%s` dict that this reader cannot read as one entry:\n%s" % (
+            source,
+            _DICT_OPEN,
+            "\n".join(["  line %d: %s" % (number, text) for number, text in found.unparsed]),
+        ))
+    if found.duplicates:
+        fail("%s: entered more than once: %s" % (source, ", ".join(sorted(found.duplicates))))
+    if not found.images:
+        fail("%s: the `%s` dict is empty" % (source, _DICT_OPEN))
+    return found.images
+
+def mismatches(pinned, loaded):
+    """`(name, reason)` pairs for every way `pinned` and `loaded` disagree, by name.
+
+    Both are name-to-`registry/repository:tag` maps: what `MODULE.bazel` pins,
+    and what `IMAGES` loads it under.
+    """
+    names = sorted({name: None for name in pinned.keys() + loaded.keys()})
+    found = []
+    for name in names:
+        if name not in loaded:
+            found.append((name, "MODULE.bazel pins %s, and IMAGES has no entry for it" % pinned[name]))
+        elif name not in pinned:
+            found.append((name, "IMAGES loads %s, and MODULE.bazel pins no such image" % loaded[name]))
+        elif loaded[name] != pinned[name]:
+            found.append((name, "IMAGES loads %s, but MODULE.bazel pins %s" % (loaded[name], pinned[name])))
+    return found
+
+def _resolve(ctx, given, default):
+    """The path a path flag names: its default when unset, the invocation directory when relative."""
+    if not given:
+        return default
+    if not given.startswith("/"):
+        given = ctx.std.env.current_dir() + "/" + given
+    return given
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    module = _resolve(ctx, ctx.args.module, root + "/MODULE.bazel")
+    images = _resolve(ctx, ctx.args.images, root + "/bazel/images/BUILD.bazel")
+
+    for path in [module, images]:
+        if not is_file(ctx.std.fs, path):
+            fail("%s: not a file" % path)
+
+    pinned = pinned_images(module, read_lines(ctx.std.fs, module))
+    loaded = loaded_images(images, read_lines(ctx.std.fs, images))
+
+    found = mismatches(pinned, loaded)
+    for name, reason in found:
+        ctx.std.io.stderr.write("%s: %s\n" % (name, reason))
+    if found:
+        ctx.std.io.stderr.write(
+            "%s restates the pins in %s; the two must name the same images at the same tags\n" % (
+                images,
+                module,
+            ),
+        )
+        return 1
+
+    ctx.std.io.stdout.write(
+        "check-images: %d pinned images, each loaded under the tag its pin names\n" % len(pinned),
+    )
+    return 0
+
+check_images = task(
+    summary = "Check that //bazel/images' IMAGES matches the pins in //MODULE.bazel",
+    implementation = _impl,
+    args = {
+        "images": args.string(
+            default = "",
+            description = "The BUILD file holding IMAGES; the default is bazel/images/BUILD.bazel.",
+        ),
+        "module": args.string(
+            default = "",
+            description = "The module file holding the pins; the default is MODULE.bazel.",
+        ),
+    },
+)

@@ -21,7 +21,6 @@ use crate::{codes, txn::state::TopicPartition};
 /// named in `denied` short-circuits with `TOPIC_AUTHORIZATION_FAILED`, and one
 /// named in `frozen` with `POLICY_VIOLATION`. Every other topic goes through
 /// the state-machine check and the partition registration.
-// cargo-mutants: I/O over live txn state + partition registration
 pub(super) struct TransactionRequest<'a> {
     pub(super) transactional_id: &'a str,
     pub(super) producer_id: krabka_log::ProducerId,
@@ -33,6 +32,11 @@ pub(super) struct TransactionRequest<'a> {
     pub(super) verify_only: bool,
 }
 
+// cargo-mutants: orchestration over live coordinator state. Every branch is a
+// call into a kernel that is mutation-tested on its own -- the ACL/freeze
+// short-circuits, `krabka_verified::transaction`'s state-machine check, and
+// `TxnEntry`'s partition registration -- and what remains here is the loop that
+// walks the request's topics and locks the entry.
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn process_one_txn(
     coord: &crate::txn::coordinator::TxnCoordinator,

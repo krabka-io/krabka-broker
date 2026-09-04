@@ -20,7 +20,23 @@ also run live, digest-pinned Kafka brokers as reference systems.
 The checks do not prove the whole broker. This catalog states the formal
 boundary in detail. The repository README describes the
 [mutation](../README.md#mutation-testing) and
-[container](../README.md#container-suites) tiers.
+[container](../README.md#container-suites) tiers. Mutation testing stands in
+for authorship only while it is actually running, so the sweeps are scheduled
+weekly per crate and the
+[mutation sweep baseline](mutants-baseline.md) records the last run in which
+each swept crate came back with no survivor.
+
+A mutation skip narrows that evidence, so the README's
+[skipping a mutant](../README.md#skipping-a-mutant) rule bounds it. A
+function-level `#[cfg_attr(test, mutants::skip)]` is accepted for an I/O-only
+wrapper with no in-process signal, or for orchestration whose every branch
+calls into a separately mutation-tested kernel, and it must carry a
+`// cargo-mutants: <reason>` line saying which — `aspect check-mutants-skip`
+fails the build otherwise. An equivalent mutant of a single expression belongs
+in `.cargo/mutants.toml`'s `exclude_re` instead, so the function's other
+mutants stay in the sweep. Integration coverage is explicitly not a reason: the
+sweep runs unit tests and ordinary `tests/*.rs` only, so a skip resting on the
+container suites removes precisely the code this tier would otherwise measure.
 
 ## Catalog Boundary
 
@@ -239,26 +255,62 @@ Some models drive a production kernel directly. Other models compose real
 decision functions with a small environment. Read the model's `DRIVEN` and
 `MODELED` notes before you treat its property as a production guarantee.
 
+Every unique-state count cited below is asserted by the model's own runner
+against a `PINNED_UNIQUE_STATES` constant -- one per config where a runner
+drives several -- and not merely recorded here. An exhaustive breadth-first
+search over a fixed model visits a deterministic set of states, so the exact
+count is a checkable fact rather than a bound. The generated-transition count
+is not pinned anywhere: it depends on when the search's worker threads
+deduplicate, and so varies between runs of the same model.
+
+To change a pin, run the model, read the count the runner prints, and write
+that number into the constant. A changed count is a changed model, never a
+retuning knob, so a pull request that moves one must say which transition,
+action, or state field was added or removed to move it. A count that shrinks
+with no such explanation is the failure this pin exists to catch: an action
+generator that dropped a branch, a `next_state` arm that began returning
+`None`, or a derived `Hash` that stopped considering a field, each of which
+leaves a smaller search still passing every upper bound.
+
 The audit spool model drives the production append planner, loss-state update,
 and replay-recovery classifier. It checks two records, two loss events, a
 two-record spool, sync cadence two, at most two crashes, and every reachable
-ordering through depth 25. The pinned run reached 11,184 unique states and
-generated 23,498 transitions, below its depth-48 and 500,000-state truncation
-guards. Properties require every durably admitted record to remain delivered
-or durably pending, at-most-once automatic delivery, nondecreasing loss-marker
-generations, and complete loss accounting. Reachability witnesses cover torn
-append recovery, retry after a definite sink failure, fail-stop poison after an
-uncertain delivery, cleanup after a committed cursor, and loss-marker
-reconciliation after reopen. Filesystem and directory-sync semantics, storage
-hardware, sink durability, explicit operator recovery of poisoned replay, and
-behavior beyond the stated bounds remain outside the model. Adapter tests cover
-malformed, missing, stale, and committed poison plus loss-counter saturation.
+ordering through depth 25. The run reaches exactly 11,184 unique states, pinned
+by `PINNED_UNIQUE_STATES` in
+[`spool_model`](../crates/audit/src/spool_model.rs), below its depth-48 and
+500,000-state truncation guards. Properties require every durably admitted
+record to remain delivered or durably pending, at-most-once automatic delivery,
+nondecreasing loss-marker generations, and complete loss accounting.
+Reachability witnesses cover torn append recovery, retry after a definite sink
+failure, fail-stop poison after an uncertain delivery, cleanup after a
+committed cursor, and loss-marker reconciliation after reopen. Filesystem and
+directory-sync semantics, storage hardware, sink durability, explicit operator
+recovery of poisoned replay, and behavior beyond the stated bounds remain
+outside the model. Adapter tests cover malformed, missing, stale, and committed
+poison plus loss-counter saturation.
 
-The share-group membership model drives the production [`ShareGroupState`](../crates/broker/src/coordinator/unified/share/state.rs) join, leave, and timeout transitions; the production [assignment reconciler](../crates/broker/src/coordinator/unified/share/actor/assignment.rs) and share assignor; the shared member-epoch fence; and the production [snapshot/apply replay adapters](../crates/broker/src/coordinator/unified/share/actor/seed.rs). It exhaustively checks two member IDs, one topic with one or two partitions, four logical timeout ticks, epochs through five, and one crash/replay in every reachable ordering. The pinned run reached 23,084 unique states and generated 164,361 transitions at depth 16, below its depth-64 and one-million-state truncation guards. Properties require unique `(member, topic, partition)` coordinates, bounded assignments for members at the target epoch, nonnegative fenced epochs, and exact durable replay projection; reachability witnesses cover unknown-member, stale, and forward heartbeat rejection, timeout, metadata reassignment, replay, and two-member membership. Cross-member partition overlap remains intentional KIP-932 behavior when members outnumber partitions. Request decoding, actor mailbox delivery, offsets-log append durability, cache publication, wall-clock scheduling, metadata snapshot consistency, and share-state persister I/O remain outside the model. A failed offsets-log append is covered by an adapter test: the actor returns `COORDINATOR_LOAD_IN_PROGRESS`, publishes no partial batch, and relies on durable replay after restart.
+The `KRaft` model runs the production `QuorumStateMachine` for every node over
+an unordered network. Its `three_voters_append` config checks leader
+completeness under a stale majority: three voters, one client append, leader
+epochs through two, at most two in-flight messages, and at most one crashed node
+at a time, whose omission model drops that node's traffic and so leaves it
+behind the committed prefix. The pinned run reached 445,169 unique states,
+asserted by `PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND`, at depth 42, below its
+depth-60 and 6,000,000-state truncation guards. The `leader_completeness`
+property requires every node that believes it leads epoch `e` to hold each entry
+committed in an epoch at or below `e`, stamped with the epoch it committed
+under; the `stale_candidate_refused` witness requires a refused vote response
+actually addressed to a candidate whose log end is behind the voter's, which is
+what would disappear if the config stopped reaching a stale-majority election.
+Removing the log-recency conjunct from `handle_vote_request` makes this config
+fail. Wire encoding, disk durability, wall-clock timing, volatile-state loss on
+restart, and behavior beyond the stated bounds remain outside the model.
 
-The streams-group reconciliation model drives the production [`StreamsGroupState`](../crates/broker/src/coordinator/unified/streams/state.rs) membership, timeout, target-installation, and cooperative active-task transitions; the production [streams assignor](../crates/broker/src/coordinator/unified/streams/actor/reconciliation.rs); the shared member-epoch fence; and the production [snapshot/apply replay adapters](../crates/broker/src/coordinator/unified/streams/actor/records.rs). It exhaustively checks two member IDs, one subtopology with one or two tasks, three logical timeout ticks, topology epochs through two, group epochs through five, and one crash/replay in every reachable ordering. The pinned run reached 43,256 unique states and generated 186,829 transitions at depth 16, below its depth-64 and one-million-state truncation guards. Properties require exclusive current and target active-task ownership, topology-valid assignments, nonnegative fenced epochs, coherent group phases, and exact durable replay projection. Reachability witnesses cover unknown-member, stale, and forward heartbeat rejection; timeout; topology growth; replay; withheld ownership; release; and two-member membership. Request decoding, actor mailbox delivery, offsets-log append durability, cache publication, wall-clock scheduling, metadata-source snapshots, and internal-topic I/O remain outside the model. Adapter tests cover malformed reports, epoch exhaustion, retry, stale and forward epochs, and failed log appends. A failed append returns `COORDINATOR_LOAD_IN_PROGRESS`, publishes no partial batch, and leaves recovery to durable replay after the actor restarts.
+The share-group membership model drives the production [`ShareGroupState`](../crates/broker/src/coordinator/unified/share/state.rs) join, leave, and timeout transitions; the production [assignment reconciler](../crates/broker/src/coordinator/unified/share/actor/assignment.rs) and share assignor; the shared member-epoch fence; and the production [snapshot/apply replay adapters](../crates/broker/src/coordinator/unified/share/actor/seed.rs). It exhaustively checks two member IDs, one topic with one or two partitions, four logical timeout ticks, epochs through five, and one crash/replay in every reachable ordering. The run reaches exactly 23,084 unique states at depth 16, pinned by `PINNED_UNIQUE_STATES` in the model file, below its depth-64 and one-million-state truncation guards. Properties require unique `(member, topic, partition)` coordinates, bounded assignments for members at the target epoch, nonnegative fenced epochs, and exact durable replay projection; reachability witnesses cover unknown-member, stale, and forward heartbeat rejection, timeout, metadata reassignment, replay, and two-member membership. Cross-member partition overlap remains intentional KIP-932 behavior when members outnumber partitions. Request decoding, actor mailbox delivery, offsets-log append durability, cache publication, wall-clock scheduling, metadata snapshot consistency, and share-state persister I/O remain outside the model. A failed offsets-log append is covered by an adapter test: the actor returns `COORDINATOR_LOAD_IN_PROGRESS`, publishes no partial batch, and relies on durable replay after restart.
 
-The coordinator replay model drives the production [`replay_mutation`](../crates/broker/src/coordinator/unified/replay_policy.rs) and [`replay_epoch_is_admissible`](../crates/broker/src/coordinator/unified/replay_policy.rs) decisions used by the [consumer](../crates/broker/src/coordinator/unified/replay_next_gen.rs), [share](../crates/broker/src/coordinator/unified/replay_share.rs), and [streams](../crates/broker/src/coordinator/unified/replay_streams.rs) adapters. It checks one group, two members, every group, member, assignment, topology, partition-metadata, and share-state record class, epochs `-1`, `0`, `1`, and `i32::MAX`, exact retries, mismatched value kinds, and every reachable log ordering through depth 16. The pinned run reached 46,672 unique states and generated 853,377 transitions at depth 15, below its depth-16 and two-million-state truncation guards. Properties require key/value kind agreement, parent-before-child application, nonnegative monotonic epochs, assignment ownership by a present member, and whole-group tombstone dominance until a later group-metadata write. Reachability witnesses cover malformed type binding, orphan suppression, stale-epoch suppression, `i32::MAX`, and member assignment replay. The bootstrap adapter decodes a value before publishing its group-type lock; malformed values return an error without state, and child records cannot create a missing group or member. A member tombstone also removes its target and current assignments. A target-metadata tombstone removes its targets. The outer replay walk supplies record order and bounded cursors through [`replay_batch_cursor_decision`](../crates/verified/src/recovery.rs). Key parsing, schema decoding, transaction-marker interpretation, log reads, compaction, cache allocation, actor seeding, and process-crash atomicity remain host or I/O assumptions.
+The streams-group reconciliation model drives the production [`StreamsGroupState`](../crates/broker/src/coordinator/unified/streams/state.rs) membership, timeout, target-installation, and cooperative active-task transitions; the production [streams assignor](../crates/broker/src/coordinator/unified/streams/actor/reconciliation.rs); the shared member-epoch fence; and the production [snapshot/apply replay adapters](../crates/broker/src/coordinator/unified/streams/actor/records.rs). It exhaustively checks two member IDs, one subtopology with one or two tasks, three logical timeout ticks, topology epochs through two, group epochs through five, and one crash/replay in every reachable ordering. The run reaches exactly 43,256 unique states at depth 16, pinned by `PINNED_UNIQUE_STATES` in the model file, below its depth-64 and one-million-state truncation guards. Properties require exclusive current and target active-task ownership, topology-valid assignments, nonnegative fenced epochs, coherent group phases, and exact durable replay projection. Reachability witnesses cover unknown-member, stale, and forward heartbeat rejection; timeout; topology growth; replay; withheld ownership; release; and two-member membership. Request decoding, actor mailbox delivery, offsets-log append durability, cache publication, wall-clock scheduling, metadata-source snapshots, and internal-topic I/O remain outside the model. Adapter tests cover malformed reports, epoch exhaustion, retry, stale and forward epochs, and failed log appends. A failed append returns `COORDINATOR_LOAD_IN_PROGRESS`, publishes no partial batch, and leaves recovery to durable replay after the actor restarts.
+
+The coordinator replay model drives the production [`replay_mutation`](../crates/broker/src/coordinator/unified/replay_policy.rs) and [`replay_epoch_is_admissible`](../crates/broker/src/coordinator/unified/replay_policy.rs) decisions used by the [consumer](../crates/broker/src/coordinator/unified/replay_next_gen.rs), [share](../crates/broker/src/coordinator/unified/replay_share.rs), and [streams](../crates/broker/src/coordinator/unified/replay_streams.rs) adapters. It checks one group, two members, every group, member, assignment, topology, partition-metadata, and share-state record class, epochs `-1`, `0`, `1`, and `i32::MAX`, exact retries, mismatched value kinds, and every reachable log ordering through depth 16. The run reaches exactly 46,672 unique states at depth 15, pinned by `PINNED_UNIQUE_STATES` in the model file, below its depth-16 and two-million-state truncation guards. Properties require key/value kind agreement, parent-before-child application, nonnegative monotonic epochs, assignment ownership by a present member, and whole-group tombstone dominance until a later group-metadata write. Reachability witnesses cover malformed type binding, orphan suppression, stale-epoch suppression, `i32::MAX`, and member assignment replay. The bootstrap adapter decodes a value before publishing its group-type lock; malformed values return an error without state, and child records cannot create a missing group or member. A member tombstone also removes its target and current assignments. A target-metadata tombstone removes its targets. The outer replay walk supplies record order and bounded cursors through [`replay_batch_cursor_decision`](../crates/verified/src/recovery.rs). Key parsing, schema decoding, transaction-marker interpretation, log reads, compaction, cache allocation, actor seeding, and process-crash atomicity remain host or I/O assumptions.
 
 The quorum WAL model calls the engine's real record-batch append, replica
 sync, acknowledgement, HWM advancement, recovery, truncation, and repair

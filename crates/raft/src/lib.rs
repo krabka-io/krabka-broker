@@ -47,10 +47,12 @@
 //! and fetch RPCs for broker and observer integration.
 //!
 //! KIP-853-style observer bootstrap and auto-join are wired through the broker
-//! and controller configuration. The older handle-level `add_learner` and
-//! `change_membership` compatibility methods still return
-//! [`RaftError::Unsupported`]. Mixed JVM and Krabka controller quorums are
-//! outside this crate's compatibility target.
+//! and controller configuration. [`ControllerHandle::add_learner`] stages a
+//! node identity; [`ControllerHandle::change_membership`] reconciles a
+//! one-voter delta into `add_voter` or `remove_voter`.
+//!
+//! Mixed JVM and Krabka controller quorums are outside this crate's
+//! compatibility target.
 
 #![doc(html_root_url = "https://docs.rs/krabka-raft/0.5.4")]
 

@@ -122,7 +122,7 @@ crate::sendfile_cfg! {
 }
 
 impl RawSegmentRead {
-    // The `last_offset` of an empty read is a never-read sentinel: every
+    // cargo-mutants: the `last_offset` of an empty read is a never-read sentinel: every
     // consumer guards on `is_empty()` (which checks `bytes`) before touching
     // `last_offset`, so `Offset(-1)` vs `Offset(1)` is unobservable.
     #[cfg_attr(test, mutants::skip)]

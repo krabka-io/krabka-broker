@@ -3,11 +3,12 @@
 //! returns. It is separate because it is the only place the model turns
 //! replication progress into an observable acknowledgement.
 
+use krabka_raft::kraft::types::Epoch;
 use stateright::semantics::ConsistencyTester;
 
 use super::{
     spec::LogRet,
-    state::{CommitPoint, ModelState, node_high_watermark},
+    state::{CommitPoint, ModelState, live_authority, node_high_watermark},
 };
 
 pub(super) fn wal_quorum_frontier(state: &ModelState) -> i64 {
@@ -17,11 +18,37 @@ pub(super) fn wal_quorum_frontier(state: &ModelState) -> i64 {
     frontiers.get(majority - 1).copied().unwrap_or(0)
 }
 
+/// Extends [`ModelState::committed_epochs`] over every raft offset the cluster
+/// has newly committed, stamping each with the epoch it was written in.
+///
+/// The offsets are read off the current authority's log, under that leader's
+/// own high watermark. Only a leader advances the high watermark, and it does so
+/// only over entries a majority has taken from its own log, so its prefix is the
+/// one that is genuinely committed. A follower is not a safe source: the model
+/// propagates the leader's watermark to peers clamped by their log length, so a
+/// peer still holding a divergent entry of the same length would report an epoch
+/// that never committed.
+///
+/// The record is append-only: once an offset is committed its epoch is fixed
+/// forever, which is exactly what a later leader must reproduce.
+fn record_committed_epochs(state: &mut ModelState) {
+    let Some(node) = live_authority(state).and_then(|id| state.nodes.get(&id)) else {
+        return;
+    };
+    let high_watermark = node_high_watermark(node);
+    let known = i64::try_from(state.committed_epochs.len()).expect("committed prefix fits in i64");
+    let fresh: Vec<Epoch> = (known..high_watermark)
+        .map_while(|offset| node.log.epoch_at(offset))
+        .collect();
+    state.committed_epochs.extend(fresh);
+}
+
 /// Records `on_return` for the durable pending prefix. `KRaft` appends use the
 /// replicated high watermark; diskless appends use the independent WAL-quorum
 /// frontier. Looking only at the maximum HWM would acknowledge bytes held by a
 /// single node and make minority WAL loss disappear from this model.
 pub(super) fn settle_committed(state: &mut ModelState) {
+    record_committed_epochs(state);
     let max_hwm = state
         .nodes
         .values()

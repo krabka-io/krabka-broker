@@ -50,7 +50,7 @@ impl Log {
         ),
         err,
     )]
-    // The only mutant here is the `segments.len() + 1` in the `span.record`
+    // cargo-mutants: the only mutant here is the `segments.len() + 1` in the `span.record`
     // call, a tracing-span diagnostic field with no behavioral effect. The
     // sibling `seal_at(next_base - 1)` recovery arithmetic is separately pinned
     // by `reopen_seals_recovered_segments_at_next_base_minus_one`.

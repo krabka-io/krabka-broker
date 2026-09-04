@@ -39,6 +39,16 @@ use stateright::{Checker, Model, Property};
 const TARGET_STATE_COUNT: usize = 4_000_000;
 const MAX_DEPTH: usize = 60;
 
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_BASIC: usize = 1_352;
+const PINNED_UNIQUE_STATES_WIDE: usize = 7_635;
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Pc {
     Idle,
@@ -281,7 +291,7 @@ impl Model for BucketModel {
     }
 }
 
-fn green_run(model: BucketModel, label: &str) {
+fn green_run(model: BucketModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -296,6 +306,11 @@ fn green_run(model: BucketModel, label: &str) {
     );
     assert2::assert!(checker.max_depth() < MAX_DEPTH);
     assert2::assert!(checker.state_count() < TARGET_STATE_COUNT);
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
@@ -310,6 +325,7 @@ fn bucket_basic() {
             max_pending: 1,
         },
         "bucket_basic",
+        PINNED_UNIQUE_STATES_BASIC,
     );
 }
 
@@ -324,6 +340,7 @@ fn bucket_wide() {
             max_pending: 2,
         },
         "bucket_wide",
+        PINNED_UNIQUE_STATES_WIDE,
     );
 }
 

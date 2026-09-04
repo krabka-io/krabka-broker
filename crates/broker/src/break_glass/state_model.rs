@@ -56,6 +56,16 @@ const TARGET_STATE_COUNT: usize = 1_000_000;
 const MAX_UNIQUE_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 20;
 
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_TWO_OF_THREE: usize = 36;
+const PINNED_UNIQUE_STATES_THREE_OF_FOUR: usize = 114;
+
 /// One proposal, projected onto the fields a transition reads.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ProposalState {
@@ -275,7 +285,7 @@ fn config(approvers: &[&str], required_approvals: usize) -> BreakGlassConfig {
     }
 }
 
-fn run(model: BreakGlassModel, label: &str) {
+fn run(model: BreakGlassModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -297,6 +307,11 @@ fn run(model: BreakGlassModel, label: &str) {
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique-state bound exceeded"
     );
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
@@ -310,6 +325,7 @@ fn two_approvals_of_three_approvers() {
             principals: vec!["User:alice", "User:bob", "User:carol", "User:mallory"],
         },
         "two_approvals_of_three_approvers",
+        PINNED_UNIQUE_STATES_TWO_OF_THREE,
     );
 }
 
@@ -323,5 +339,6 @@ fn three_approvals_of_four_approvers() {
             principals: vec!["User:alice", "User:bob", "User:carol", "User:dave"],
         },
         "three_approvals_of_four_approvers",
+        PINNED_UNIQUE_STATES_THREE_OF_FOUR,
     );
 }

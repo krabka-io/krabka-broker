@@ -46,19 +46,27 @@ four-line `BUILD.bazel` that calls `crate_library` and `crate_tests`.
 Suites that cannot run hermetically are tagged `manual` at their `crate_tests`
 call, with a comment saying why. Add to that list rather than deleting a test.
 
-Two sibling repositories sit below this one:
+Three sibling repositories sit below this one:
 [`krabka-protocol`](https://github.com/krabka-io/krabka-protocol) for the wire
-layer and [`krabka-client-rs`](https://github.com/krabka-io/krabka-client-rs)
-for the Kafka client. Both are pinned by revision in one place -- the
-`[patch.crates-io]` block at the bottom of the root `Cargo.toml`. Member
-manifests declare those crates as ordinary `krabka-x = "0.4.0"` requirements;
-the patch is what redirects them at the git checkouts. To move to a newer
-sibling, change the revision there, re-run `cargo generate-lockfile`, and commit
-both files.
+layer (`krabka-protocol`, `krabka-compression`, `krabka-ids`,
+`krabka-metadata`, `krabka-security`, `krabka-trace-context`, `krabka-units`
+and `krabka-voters`),
+[`krabka-client-rs`](https://github.com/krabka-io/krabka-client-rs) for the
+Kafka client (`krabka-client-core`, `krabka-client-admin`,
+`krabka-client-consumer` and `krabka-client-producer`), and
+[`krabka-schema-registry`](https://github.com/krabka-io/krabka-schema-registry)
+for schema handling (`krabka-schema-serde`). All three are pinned by revision
+in one place -- the `[patch.crates-io]` block at the bottom of the root
+`Cargo.toml`. Member manifests declare those crates as ordinary
+`krabka-x = "0.4.0"` requirements; the patch is what redirects them at the git
+checkouts. To move to a newer sibling, change the revision there, re-run
+`cargo generate-lockfile`, and commit both files.
+`.github/workflows/sync-siblings.yml` proposes those bumps on a schedule, one
+matrix leg per sibling.
 
 `MODULE.bazel` additionally names each sibling crate's directory. rules_rs finds
 a git crate's path by matching the crate name against the workspace `members`
-list, and both siblings' members is the glob `crates/*`, which it skips.
+list, and every sibling's members is the glob `crates/*`, which it skips.
 
 `krabka format` lives here as the `krabka-format` crate, extracted from
 `krabka-cli` because that crate also drives the gres layer and could not follow

@@ -36,6 +36,17 @@ use super::{
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 60;
+
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_BASIC: usize = 129;
+const PINNED_UNIQUE_STATES_WIDE: usize = 3_636;
+
 const PID: ProducerId = ProducerId(1000); // fixed; epoch is the fencing dimension
 
 struct TxnModel {
@@ -289,7 +300,7 @@ impl Model for TxnModel {
     }
 }
 
-fn run(model: TxnModel, label: &str) {
+fn run(model: TxnModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -310,6 +321,11 @@ fn run(model: TxnModel, label: &str) {
         checker.state_count() < MAX_STATES,
         "[{label}] hit state cap {MAX_STATES}: truncated, not exhaustive"
     );
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
@@ -317,11 +333,19 @@ fn run(model: TxnModel, label: &str) {
 fn txn_basic() {
     // One tid, epoch 0..=3: every interleaving of Init / BeginTxn / EndTxn
     // Phase1 / Phase3, including a fencing Init inside the marker window.
-    run(TxnModel { max_epoch: 3 }, "txn_basic");
+    run(
+        TxnModel { max_epoch: 3 },
+        "txn_basic",
+        PINNED_UNIQUE_STATES_BASIC,
+    );
 }
 
 #[test]
 fn txn_wide() {
     // More producer-epoch generations → deeper commit/abort/fence interleavings.
-    run(TxnModel { max_epoch: 6 }, "txn_wide");
+    run(
+        TxnModel { max_epoch: 6 },
+        "txn_wide",
+        PINNED_UNIQUE_STATES_WIDE,
+    );
 }

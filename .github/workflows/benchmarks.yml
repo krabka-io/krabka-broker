@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Omitting an explicit rust-toolchain action relies on ubuntu-latest's pre-installed
       # rustup, which automatically reads rust-toolchain.toml (channel = "1.98.0") as the
@@ -69,8 +69,13 @@ jobs:
 
       # Benchmark summary JSON and raw logs are archived as build artifacts for
       # historical trend tracking and comparative regression analysis across PRs.
-      # Note: Automated regression threshold gating is deferred to a future CodSpeed
-      # integration because standard shared runner wall-clock times vary by up to ±24%.
+      # Note: automated regression threshold gating is still deferred, and not to
+      # CodSpeed -- that needs an account and a repository secret this project does
+      # not have. The `bench` job in `ci.yml` is what keeps a criterion baseline
+      # across runs (`--save-baseline main`, nightly, over every bench target in
+      # `krabka-broker` and `krabka-log`); a threshold would be built on that
+      # rather than on this per-pull-request lane, whose shared-runner wall-clock
+      # times vary by up to ±24%.
       - name: Upload Benchmark Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

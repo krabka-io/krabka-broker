@@ -4,7 +4,7 @@ A coordinator writes epoch-stamped barrier markers into every partition of a dec
 
 ## Status
 
-**Adopted.** The implementation is the `barrier` module of `krabka-broker`, the `krabka-barrier` crate and its binary, and the barrier control-plane messages in `krabka-protocol`. It merged in [#2](https://github.com/krabka-io/krabka-broker/pull/2). This document lands on branch `claude/kfc-4-cross-topic-snapshots-0pjllz`.
+**Adopted.** The implementation is the `barrier` module of `krabka-broker`, the `krabka-barrier` crate and its binary, and the barrier control-plane messages in `krabka-protocol`. It merged to `main` through pull request [#2](https://github.com/krabka-io/krabka-broker/pull/2) and ships in release `v0.5.0` and every later release.
 
 No KIP defines a cross-topic cut, so this document is the specification for it. The design is the marker half of the Chandy-Lamport snapshot algorithm, which Apache Flink uses for its own checkpoints. The difference is where the marker lives. Flink injects a barrier into a dataflow that Flink controls, and this design injects one into a Kafka log that any client can read.
 

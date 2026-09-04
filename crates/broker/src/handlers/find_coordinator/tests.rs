@@ -369,3 +369,55 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
     );
     broker_handle.shutdown().await;
 }
+
+/// v0-v3 carry the single `key` field and read the answer out of the
+/// top-level `node_id` / `host` / `port`, not out of the `coordinators` array.
+/// The handler fills both from one resolved row, so a legacy client and a v4+
+/// client see the same coordinator.
+#[tokio::test]
+async fn a_legacy_group_lookup_answers_in_the_top_level_fields() {
+    let (broker_handle, _dir) = start_broker_with(|config| {
+        config.audit_enabled = false;
+        config.offsets_topic_replication_factor = 1;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let principal = principal("alice");
+    let peer = peer();
+    let context = crate::test_support::request_context(&principal, &peer, "group-client");
+    let version = 3;
+    let request = FindCoordinatorRequest {
+        key: "legacy-group".into(),
+        key_type: KEY_TYPE_GROUP,
+        ..Default::default()
+    };
+
+    let response = handle(
+        &broker,
+        version,
+        7,
+        &crate::test_support::encode_request(&request, version),
+        &context,
+    )
+    .await
+    .expect("legacy group coordinator lookup");
+    let response: FindCoordinatorResponse =
+        crate::test_support::decode_response(&response, version);
+
+    // v0-v3 has no `coordinators` array on the wire, so the whole answer is
+    // the top-level row.
+    assert!(
+        response
+            == FindCoordinatorResponse {
+                throttle_time_ms: 0,
+                error_code: codes::NONE,
+                error_message: None,
+                node_id: broker.config.broker_id,
+                host: response.host.clone(),
+                port: response.port,
+                coordinators: vec![],
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+            }
+    );
+    broker_handle.shutdown().await;
+}

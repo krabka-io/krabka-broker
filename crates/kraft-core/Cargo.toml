@@ -5,7 +5,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-rust-version.workspace = true
 description = "Deterministic, sans-IO KRaft consensus core (KIP-595/996) for Krabka — wasm-friendly"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"

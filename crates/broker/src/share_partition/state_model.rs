@@ -45,7 +45,14 @@ mod runner;
 #[path = "state_model/state.rs"]
 mod state;
 
-use self::{config::ShareModel, runner::run};
+use self::{
+    config::ShareModel,
+    runner::{
+        PINNED_UNIQUE_STATES_DEFERRAL, PINNED_UNIQUE_STATES_DEFERRAL_WIDE,
+        PINNED_UNIQUE_STATES_FAILOVER, PINNED_UNIQUE_STATES_INFLIGHT_FULL,
+        PINNED_UNIQUE_STATES_INFLIGHT_ONE, run,
+    },
+};
 
 #[test]
 fn share_concurrency_inflight_full() {
@@ -53,6 +60,7 @@ fn share_concurrency_inflight_full() {
     run(
         ShareModel::concurrency(3, 3),
         "share_concurrency_inflight_full",
+        PINNED_UNIQUE_STATES_INFLIGHT_FULL,
     );
 }
 
@@ -62,25 +70,38 @@ fn share_concurrency_inflight_one() {
     run(
         ShareModel::concurrency(3, 1),
         "share_concurrency_inflight_one",
+        PINNED_UNIQUE_STATES_INFLIGHT_ONE,
     );
 }
 
 #[test]
 fn share_failover() {
     // Adds leader-failover Reload; stresses acknowledged-is-terminal durability.
-    run(ShareModel::failover(), "share_failover");
+    run(
+        ShareModel::failover(),
+        "share_failover",
+        PINNED_UNIQUE_STATES_FAILOVER,
+    );
 }
 
 #[test]
 fn share_deferral() {
     // Adds KFC-1 Defer/PromoteDeferred over the failover window, so the
     // deferral invariants are checked across a leader change as well.
-    run(ShareModel::deferral(), "share_deferral");
+    run(
+        ShareModel::deferral(),
+        "share_deferral",
+        PINNED_UNIQUE_STATES_DEFERRAL,
+    );
 }
 
 #[test]
 fn share_deferral_wide() {
     // Three offsets: a deferral can span a range, and a due record can sit two
     // behind a waiting one.
-    run(ShareModel::deferral_wide(), "share_deferral_wide");
+    run(
+        ShareModel::deferral_wide(),
+        "share_deferral_wide",
+        PINNED_UNIQUE_STATES_DEFERRAL_WIDE,
+    );
 }

@@ -114,10 +114,11 @@ impl BrokerHandle {
             .unwrap_or_default()
     }
 
-    /// Manually mutate the openraft voter set on this broker's controller.
-    /// `new_voters` is the complete desired set (not a delta). Callers must
-    /// invoke this on the broker that's currently the openraft leader, or
-    /// the call returns [`BrokerError::Replication`] with the underlying
+    /// Manually mutate the controller voter set on this broker.
+    /// `new_voters` is the complete desired set (not a delta), and it may
+    /// differ from the current set by at most one voter. Callers must invoke
+    /// this on the broker that's currently the controller leader, or the call
+    /// returns [`BrokerError::Replication`] with the underlying
     /// `RaftError::NotLeader` rendered into the message. See
     /// [`krabka_raft::ControllerHandle::change_membership`] for full semantics.
     ///
@@ -135,9 +136,10 @@ impl BrokerHandle {
             .map_err(|e| BrokerError::Replication(format!("change_membership: {e}")))
     }
 
-    /// Register a non-voting openraft learner at `addr`. Blocks until the
-    /// leader has caught the new node up to the current commit index.
-    /// Subsequent [`Self::change_membership`] promotes the learner to a voter.
+    /// Stage the identity of a non-voting observer at `addr`. The call records
+    /// the node locally and returns at once; it starts no catch-up and changes
+    /// no quorum membership. A later [`Self::change_membership`] that names
+    /// `node_id` promotes the staged identity to a voter.
     ///
     /// # Errors
     ///
@@ -147,10 +149,10 @@ impl BrokerHandle {
         node_id: krabka_raft::NodeId,
         addr: std::net::SocketAddr,
     ) -> Result<(), BrokerError> {
-        // KIP-853: openraft membership now keys on the full `Node` identity.
-        // This `SocketAddr`-shaped convenience wrapper (used by integration
-        // tests) synthesizes a single CONTROLLER endpoint and derives the
-        // directory id from the node id, matching the `for_tests` convention.
+        // KIP-853 membership keys on the full `Node` identity. This
+        // `SocketAddr`-shaped convenience wrapper (used by integration tests)
+        // synthesizes a single CONTROLLER endpoint and derives the directory
+        // id from the node id, matching the `for_tests` convention.
         let node = krabka_raft::Node {
             directory_id: uuid::Uuid::from_u128(u128::from(node_id.0)),
             endpoints: vec![krabka_metadata::VoterEndpoint {
@@ -430,7 +432,7 @@ impl BrokerHandle {
         // last moment it is true, so leave it here. A crash never reaches this
         // line, which is exactly why the absence of the file means unclean.
         self.write_clean_shutdown_proof();
-        // Shut down the raft engine so this broker's openraft instance stops
+        // Shut down the raft engine so this broker's controller stops
         // participating in elections after the broker is logically dead.
         // Without this, a killed broker's in-process raft engine keeps ticking
         // and re-elects itself, preventing the surviving nodes from detecting

@@ -13,6 +13,14 @@ most of an hour:
 
 `bazel build|test //...` remains equivalent and is what a developer without the
 CLI runs; nothing here is required to build the repository.
+
+The `lint` task is not the whole Clippy story. Its aspect sees Bazel targets,
+and narrows them to what a change touched, so three things stay outside it: the
+benches under `crates/broker/benches` and `crates/log/benches`, which have no
+Bazel target at all; the test and binary targets a change left alone; and
+`krabka-protocol`'s build script, which `MODULE.bazel` pins with
+`gen_build_script = "off"` and which only runs under Cargo. CI's `cargo` job
+covers those with `cargo clippy --workspace --all-targets`.
 """
 
 def config(ctx: ConfigContext):

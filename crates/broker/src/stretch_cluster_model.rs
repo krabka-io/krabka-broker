@@ -132,7 +132,10 @@ mod state;
 #[path = "stretch_cluster_model/topology.rs"]
 mod topology;
 
-use self::{config::StretchModel, runner::run};
+use self::{
+    config::StretchModel,
+    runner::{PINNED_UNIQUE_STATES_THREE_SITES, run},
+};
 use crate::leader_election::failover_one;
 
 /// Run `future` to completion on a per-thread current-thread tokio runtime.
@@ -155,5 +158,6 @@ fn stretch_three_sites() {
     run(
         StretchModel::three_sites(2, failover_one),
         "stretch_three_sites",
+        PINNED_UNIQUE_STATES_THREE_SITES,
     );
 }

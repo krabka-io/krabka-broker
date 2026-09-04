@@ -73,6 +73,17 @@ const TARGET_STATE_COUNT: usize = 4_000_000;
 const MAX_UNIQUE_STATES: usize = 1_000_000;
 const MAX_DEPTH: usize = 12;
 
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_TWO_TOPICS: usize = 432;
+const PINNED_UNIQUE_STATES_PARTITION_LOOKALIKE: usize = 432;
+const PINNED_UNIQUE_STATES_BOTH_COVER: usize = 432;
+
 fn config(approvers: &[&str], required_approvals: usize) -> BreakGlassConfig {
     BreakGlassConfig {
         approvers: approvers.iter().map(|name| (*name).to_owned()).collect(),
@@ -83,7 +94,7 @@ fn config(approvers: &[&str], required_approvals: usize) -> BreakGlassConfig {
     }
 }
 
-fn run(model: CrossSpendModel, label: &str) {
+fn run(model: CrossSpendModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -104,6 +115,11 @@ fn run(model: CrossSpendModel, label: &str) {
     assert2::assert!(
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique-state bound exceeded"
+    );
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
     );
     checker.assert_properties();
 }
@@ -151,6 +167,7 @@ fn one_action_on_two_topics() {
             principals: APPROVERS.to_vec(),
         },
         "one_action_on_two_topics",
+        PINNED_UNIQUE_STATES_TWO_TOPICS,
     );
 }
 
@@ -194,6 +211,7 @@ fn a_topic_that_looks_like_a_partition_of_another() {
             principals: APPROVERS.to_vec(),
         },
         "a_topic_that_looks_like_a_partition_of_another",
+        PINNED_UNIQUE_STATES_PARTITION_LOOKALIKE,
     );
 }
 
@@ -239,5 +257,6 @@ fn two_proposals_that_both_cover_one_partition() {
             principals: APPROVERS.to_vec(),
         },
         "two_proposals_that_both_cover_one_partition",
+        PINNED_UNIQUE_STATES_BOTH_COVER,
     );
 }

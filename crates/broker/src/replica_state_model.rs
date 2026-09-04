@@ -30,6 +30,17 @@ use super::ReplicaState;
 const MAX_STATES: usize = 200_000;
 /// Depth backstop; must exceed each config's reachable-graph diameter.
 const MAX_DEPTH: usize = 80;
+
+// The exact unique-state count of the exhaustive BFS over each config below.
+// `unique_state_count()` is deterministic for a fixed model, so pinning it
+// turns any change to the reachable set -- a dropped action, a `next_state` arm
+// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
+// considering a field -- into a failure instead of a silently smaller search
+// that still passes the upper bound. The *generated* count is deliberately not
+// pinned: it depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES_SAFETY: usize = 174;
+const PINNED_UNIQUE_STATES_OVERSHOOT: usize = 174;
+
 /// Bounded model config. It is held here, not in the fingerprinted state.
 struct IsrModel {
     /// Constant injected `now`. The model does not model wall-clock time.
@@ -288,7 +299,7 @@ impl Model for IsrModel {
 
 /// Runs one bounded config to completion. Asserts that the run was exhaustive,
 /// that the cap or the depth did not truncate it, and that all properties hold.
-fn run(model: IsrModel, label: &str) {
+fn run(model: IsrModel, label: &str, pinned_unique_states: usize) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
@@ -309,15 +320,28 @@ fn run(model: IsrModel, label: &str) {
         checker.state_count() < MAX_STATES,
         "[{label}] hit state cap {MAX_STATES}: truncated, not exhaustive"
     );
+    // Pin: a changed count is a changed model, not a retuning knob.
+    assert2::assert!(
+        checker.unique_state_count() == pinned_unique_states,
+        "[{label}] unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }
 
 #[test]
 fn isr_safety() {
-    run(IsrModel::safety(3), "isr_safety");
+    run(
+        IsrModel::safety(3),
+        "isr_safety",
+        PINNED_UNIQUE_STATES_SAFETY,
+    );
 }
 
 #[test]
 fn isr_overshoot() {
-    run(IsrModel::overshoot(3), "isr_overshoot");
+    run(
+        IsrModel::overshoot(3),
+        "isr_overshoot",
+        PINNED_UNIQUE_STATES_OVERSHOOT,
+    );
 }
