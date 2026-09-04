@@ -10,11 +10,45 @@ use std::sync::Arc;
 
 use krabka_client_core::ClientDuplex;
 use krabka_security::ListenerProtocol;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _, mebibytes};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
 use crate::config::InterBrokerCredentials;
+
+/// Socket buffer applied to an outbound inter-broker connection when the
+/// caller does not supply the broker's configured value. It matches the
+/// `socket_send_buffer` / `socket_receive_buffer` defaults the accept path
+/// uses, so an untuned dial behaves like an untuned accept.
+const DEFAULT_SOCKET_BUFFER: ByteSize = mebibytes(1);
+
+/// Tune an outbound inter-broker socket before TLS and SASL run on it.
+///
+/// - `TCP_NODELAY`: disable Nagle. Every RPC the broker originates —
+///   replica Fetch, the `KRaft` quorum exchanges, envelope forwarding to the
+///   controller, and the lag poller's high-watermark probes — is a small
+///   request that would otherwise wait for the peer's delayed ACK, adding up
+///   to ~40 ms to a replication round trip. Apache Kafka disables Nagle on
+///   every channel its `Selector` opens, connect and accept alike.
+/// - `SO_SNDBUF`/`SO_RCVBUF`: the same configured buffers the accept path
+///   applies, so a replication stream has in-flight headroom in both
+///   directions.
+///
+/// All failures are non-fatal and logged at debug level, exactly as on the
+/// accept side: an untuned connection still works, just less efficiently.
+fn tune_outbound_socket(stream: &TcpStream, send_buffer: ByteSize, receive_buffer: ByteSize) {
+    if let Err(e) = stream.set_nodelay(true) {
+        tracing::debug!(error = %e, "TCP_NODELAY set failed on outbound socket");
+    }
+    let sock = socket2::SockRef::from(stream);
+    if let Err(e) = sock.set_send_buffer_size(send_buffer.bytes_usize()) {
+        tracing::debug!(error = %e, "SO_SNDBUF set failed on outbound socket");
+    }
+    if let Err(e) = sock.set_recv_buffer_size(receive_buffer.bytes_usize()) {
+        tracing::debug!(error = %e, "SO_RCVBUF set failed on outbound socket");
+    }
+}
 
 /// Map the broker's [`InterBrokerCredentials`] onto the client-core
 /// [`krabka_client_core::SaslCredentials`] understood by the shared
@@ -81,6 +115,8 @@ pub struct InterBrokerClient {
     creds: Option<InterBrokerCredentials>,
     dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
     frame_max: krabka_client_core::ClientFrameMax,
+    socket_send_buffer: ByteSize,
+    socket_receive_buffer: ByteSize,
 }
 
 impl InterBrokerClient {
@@ -96,23 +132,42 @@ impl InterBrokerClient {
             creds,
             krabka_client_core::ConnectionDispatchQueueCapacity::default(),
             krabka_client_core::ClientFrameMax::default(),
+            DEFAULT_SOCKET_BUFFER,
+            DEFAULT_SOCKET_BUFFER,
         )
     }
 
     /// Construct with the broker process's outbound client resource policy.
+    /// `socket_send_buffer` and `socket_receive_buffer` are the same
+    /// configured sizes the accept path applies to sockets it accepts.
     #[must_use]
     pub fn new_with_policy(
         tls_connector: Option<TlsConnector>,
         creds: Option<InterBrokerCredentials>,
         dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
         frame_max: krabka_client_core::ClientFrameMax,
+        socket_send_buffer: ByteSize,
+        socket_receive_buffer: ByteSize,
     ) -> Self {
         Self {
             tls_connector,
             creds,
             dispatch_queue_capacity,
             frame_max,
+            socket_send_buffer,
+            socket_receive_buffer,
         }
+    }
+
+    /// Open the TCP connection every outbound inter-broker RPC rides, tuned
+    /// with this client's socket policy before any TLS or SASL bytes flow.
+    /// Tuning has to happen here: the handshakes are themselves small
+    /// round-trip-bound exchanges that Nagle would stall, and once rustls owns
+    /// the stream the raw socket is no longer reachable.
+    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
+        let tcp = TcpStream::connect((host, port)).await?;
+        tune_outbound_socket(&tcp, self.socket_send_buffer, self.socket_receive_buffer);
+        Ok(tcp)
     }
 
     /// Dial `host:port`, do the protocol-appropriate TLS and SASL
@@ -129,7 +184,7 @@ impl InterBrokerClient {
         server_name: &str,
         options: &krabka_client_core::ConnectionOptions,
     ) -> Result<Box<dyn ClientDuplex>, InterBrokerError> {
-        let tcp = TcpStream::connect((host, port)).await?;
+        let tcp = self.dial_tuned(host, port).await?;
         let mut stream: Box<dyn ClientDuplex> = if listener_protocol.requires_tls() {
             let connector = self.tls_connector.clone().ok_or_else(|| {
                 InterBrokerError::Config("TLS listener without TlsConnector".into())
@@ -267,8 +322,77 @@ impl krabka_raft::OutboundDialer for InterBrokerDialer {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{InterBrokerClient, to_client_creds};
+    use krabka_units::kibibytes;
+
+    use super::{DEFAULT_SOCKET_BUFFER, InterBrokerClient, to_client_creds, tune_outbound_socket};
     use crate::config::InterBrokerCredentials;
+
+    #[tokio::test]
+    async fn outbound_socket_tuning_sets_nodelay_and_large_buffers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let client_task = tokio::spawn(tokio::net::TcpStream::connect(addr));
+        let (server, _) = listener.accept().await.expect("accept loopback client");
+        let client = client_task
+            .await
+            .expect("connect task")
+            .expect("connect loopback client");
+
+        let sock = socket2::SockRef::from(&client);
+        client.set_nodelay(false).expect("clear TCP_NODELAY");
+        sock.set_send_buffer_size(4096).expect("shrink send buffer");
+        sock.set_recv_buffer_size(8192).expect("shrink recv buffer");
+        let send_before = sock.send_buffer_size().expect("read baseline send buffer");
+        let recv_before = sock.recv_buffer_size().expect("read baseline recv buffer");
+
+        tune_outbound_socket(&client, kibibytes(64), kibibytes(128));
+
+        assert2::assert!(client.nodelay().expect("read TCP_NODELAY"));
+        // Kernels clamp and may double requested sizes, so compare the distinct
+        // configured buffers instead of asserting host-dependent exact values.
+        let send_after = sock.send_buffer_size().expect("read send buffer");
+        let recv_after = sock.recv_buffer_size().expect("read recv buffer");
+        assert2::assert!(send_after > send_before);
+        assert2::assert!(recv_after > recv_before);
+        assert2::assert!(recv_after > send_after);
+        drop(server);
+    }
+
+    #[tokio::test]
+    async fn dialed_socket_is_tuned_before_tls_and_sasl() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let accept = tokio::spawn(async move { listener.accept().await });
+
+        let client = InterBrokerClient::new_with_policy(
+            None,
+            None,
+            krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            krabka_client_core::ClientFrameMax::default(),
+            kibibytes(64),
+            kibibytes(256),
+        );
+        let dialed = client
+            .dial_tuned(&addr.ip().to_string(), addr.port())
+            .await
+            .expect("dial loopback peer");
+        let (server, _) = accept.await.expect("accept task").expect("accept dial");
+
+        // Read the options back off the connected socket the dialer produced,
+        // the way the accept path's tuning test does on its side.
+        assert2::assert!(dialed.nodelay().expect("read TCP_NODELAY"));
+        let sock = socket2::SockRef::from(&dialed);
+        let send = sock.send_buffer_size().expect("read send buffer");
+        let recv = sock.recv_buffer_size().expect("read recv buffer");
+        // Kernels clamp and may double requested sizes, so assert the two
+        // distinct configured buffers stayed distinct and ordered.
+        assert2::assert!(recv > send);
+        drop(server);
+    }
 
     #[test]
     fn process_policy_overrides_call_site_defaults() {
@@ -277,11 +401,20 @@ mod tests {
             None,
             krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
             krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
+            kibibytes(64),
+            kibibytes(128),
         );
         let mut options = krabka_client_core::ConnectionOptions::default();
         client.apply_resource_policy(&mut options);
         assert2::assert!(options.dispatch_queue_capacity.get() == 7);
         assert2::assert!(options.frame_max.size() == krabka_units::kibibytes(32));
+    }
+
+    #[test]
+    fn default_construction_uses_socket_tuning_defaults() {
+        let client = InterBrokerClient::new(None, None);
+        assert2::assert!(client.socket_send_buffer == DEFAULT_SOCKET_BUFFER);
+        assert2::assert!(client.socket_receive_buffer == DEFAULT_SOCKET_BUFFER);
     }
 
     #[test]

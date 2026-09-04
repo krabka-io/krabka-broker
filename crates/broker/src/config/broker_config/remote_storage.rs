@@ -27,6 +27,20 @@ macro_rules! remote_storage_fields {
             /// minutes; production deployments leave it at the default.
             pub remote_log_manager_interval: Time,
 
+            /// KIP-405: deadline on one segment copy to the remote tier.
+            /// Defaults to 10 minutes.
+            ///
+            /// The sweep copies a partition's segments one after another, so
+            /// a copy that hangs -- an object store that accepts the
+            /// connection and then answers nothing -- holds up every other
+            /// partition on the broker behind it. Past this deadline the copy
+            /// is abandoned: the segment stays in `CopySegmentStarted`, which
+            /// local retention refuses to delete against, and the next tick
+            /// retries it under a fresh segment id.
+            ///
+            /// TOML: `[remote_storage] copy_timeout = "10m"`
+            pub remote_copy_timeout: Time,
+
             /// KIP-405: which RLMM the broker runs when tiered storage is enabled.
             /// It defaults to [`RlmmKind::TopicBacked`] in production, and to
             /// [`RlmmKind::InMemory`] for in-process tests. The broker ignores it

@@ -1,5 +1,7 @@
 //! Object-store connection config types shared across Krabka.
 
+use std::time::Duration;
+
 /// Default threshold above which a segment upload changes from a single PUT to
 /// a streaming multipart upload. The threshold is 100 MiB, well below AWS's
 /// 5 GiB single-PUT cap.
@@ -9,6 +11,24 @@ pub const DEFAULT_MULTIPART_THRESHOLD: u64 = 100 * 1024 * 1024;
 /// requires >= 5 MiB per non-final part and caps the parts at 10 000, so 16 MiB
 /// scales past any real segment.
 pub const DEFAULT_MULTIPART_CHUNK_SIZE: usize = 16 * 1024 * 1024;
+
+/// Default number of times a single object-store request is retried before the
+/// error reaches the caller. It matches `object_store`'s own default of 10.
+pub const DEFAULT_MAX_RETRIES: usize = 10;
+
+/// Default ceiling on the wall-clock time one request may spend across all of
+/// its retries. It is 3 minutes, `object_store`'s default, which stays under
+/// the 5-minute mark past which a request's credentials may expire mid-retry.
+pub const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_mins(3);
+
+/// Default ceiling on one HTTP request, connect phase included. It is 30
+/// seconds, `object_store`'s default, chosen because an object-store request
+/// may transfer a whole segment.
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default ceiling on the connect phase alone. It is 5 seconds, matching
+/// `object_store`.
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Selects and parameterises the object-store backend to construct.
 #[derive(Clone, Debug)]
@@ -60,6 +80,17 @@ pub struct S3Config {
     /// Send `x-amz-checksum-sha256` so the server verifies each object on
     /// ingest. Defaults to `true`.
     pub checksum_sha256: bool,
+    /// How many times one request is retried before the error surfaces.
+    /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
+    pub max_retries: usize,
+    /// Ceiling on the wall-clock time one request may spend across all of its
+    /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
+    pub retry_timeout: Duration,
+    /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
+    pub request_timeout: Duration,
+    /// Ceiling on the connect phase alone. Defaults to
+    /// [`DEFAULT_CONNECT_TIMEOUT`].
+    pub connect_timeout: Duration,
 }
 
 impl std::fmt::Debug for S3Config {
@@ -79,6 +110,10 @@ impl std::fmt::Debug for S3Config {
             .field("multipart_chunk_size", &self.multipart_chunk_size)
             .field("conditional_put", &self.conditional_put)
             .field("checksum_sha256", &self.checksum_sha256)
+            .field("max_retries", &self.max_retries)
+            .field("retry_timeout", &self.retry_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .finish()
     }
 }
@@ -97,6 +132,10 @@ impl Default for S3Config {
             multipart_chunk_size: DEFAULT_MULTIPART_CHUNK_SIZE,
             conditional_put: true,
             checksum_sha256: true,
+            max_retries: DEFAULT_MAX_RETRIES,
+            retry_timeout: DEFAULT_RETRY_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }
 }
@@ -128,6 +167,17 @@ pub struct GcsConfig {
     pub multipart_threshold: u64,
     /// Per-part size for multipart. Defaults to [`DEFAULT_MULTIPART_CHUNK_SIZE`].
     pub multipart_chunk_size: usize,
+    /// How many times one request is retried before the error surfaces.
+    /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
+    pub max_retries: usize,
+    /// Ceiling on the wall-clock time one request may spend across all of its
+    /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
+    pub retry_timeout: Duration,
+    /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
+    pub request_timeout: Duration,
+    /// Ceiling on the connect phase alone. Defaults to
+    /// [`DEFAULT_CONNECT_TIMEOUT`].
+    pub connect_timeout: Duration,
 }
 
 impl std::fmt::Debug for GcsConfig {
@@ -148,6 +198,10 @@ impl std::fmt::Debug for GcsConfig {
             .field("allow_http", &self.allow_http)
             .field("multipart_threshold", &self.multipart_threshold)
             .field("multipart_chunk_size", &self.multipart_chunk_size)
+            .field("max_retries", &self.max_retries)
+            .field("retry_timeout", &self.retry_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .finish()
     }
 }
@@ -164,13 +218,17 @@ impl Default for GcsConfig {
             allow_http: false,
             multipart_threshold: DEFAULT_MULTIPART_THRESHOLD,
             multipart_chunk_size: DEFAULT_MULTIPART_CHUNK_SIZE,
+            max_retries: DEFAULT_MAX_RETRIES,
+            retry_timeout: DEFAULT_RETRY_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
 
     use super::*;
 
@@ -242,5 +300,55 @@ mod tests {
             ..Default::default()
         });
         assert!(!format!("{cfg:?}").contains("supersecret"));
+    }
+
+    /// The four durability knobs must default to the values documented in
+    /// `docs/config-reference.md`, on both backends: an operator who sets
+    /// none of them gets exactly this.
+    #[test]
+    fn backend_defaults_carry_the_documented_bounds() {
+        let s3 = S3Config::default();
+        let gcs = GcsConfig::default();
+        let cases = [
+            (
+                "s3",
+                s3.max_retries,
+                s3.retry_timeout,
+                s3.request_timeout,
+                s3.connect_timeout,
+            ),
+            (
+                "gcs",
+                gcs.max_retries,
+                gcs.retry_timeout,
+                gcs.request_timeout,
+                gcs.connect_timeout,
+            ),
+        ];
+        for (name, retries, retry, request, connect) in cases {
+            check!(retries == 10, "{name}");
+            check!(retry == Duration::from_secs(180), "{name}");
+            check!(request == Duration::from_secs(30), "{name}");
+            check!(connect == Duration::from_secs(5), "{name}");
+        }
+    }
+
+    /// The bounds are not credential material, so a redacting `Debug` must
+    /// still print them: an operator reading a startup log is looking for the
+    /// value that is timing their store out.
+    #[test]
+    fn debug_prints_the_bounds_on_both_backends() {
+        let s3 = format!("{:?}", S3Config::default());
+        let gcs = format!("{:?}", GcsConfig::default());
+        for dbg in [&s3, &gcs] {
+            for field in [
+                "max_retries: 10",
+                "retry_timeout: 180s",
+                "request_timeout: 30s",
+                "connect_timeout: 5s",
+            ] {
+                check!(dbg.contains(field), "{field} missing from {dbg}");
+            }
+        }
     }
 }

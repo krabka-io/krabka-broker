@@ -50,6 +50,8 @@ One per condition the registry tells operators to alert on.
 | `KrabkaRequestErrors` | [request-errors](runbooks/request-errors.md) |
 | `KrabkaFailedProduceRequests` | [failed-produce-requests](runbooks/failed-produce-requests.md) |
 | `KrabkaIdleConnectionCloses` | [idle-connection-closes](runbooks/idle-connection-closes.md) |
+| `KrabkaRequestLatencyHigh`, `KrabkaQuotaThrottleHigh`, `KrabkaInFlightRequestsClimbing` | [broker-saturation](runbooks/broker-saturation.md) |
+| `KrabkaFetchZeroCopyLost` | [fetch-zero-copy-regression](runbooks/fetch-zero-copy-regression.md) |
 | `KrabkaRlmmBootstrapStuck` | [rlmm-bootstrap-stuck](runbooks/rlmm-bootstrap-stuck.md) |
 | `KrabkaRemoteCopyErrors` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
 | `KrabkaRemoteCopyLagGrowing` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
@@ -63,6 +65,10 @@ One per condition the registry tells operators to alert on.
 | `KrabkaDisklessWalFlushFailures`, `KrabkaDisklessWalColdReadErrors` | [diskless-wal-flush-failures](runbooks/diskless-wal-flush-failures.md) |
 | `KrabkaDisklessWalVoterLag` | [diskless-wal-voter-lag](runbooks/diskless-wal-voter-lag.md) |
 | `KrabkaWormSealFailures` | [worm-seal-failures](runbooks/worm-seal-failures.md) |
+| `KrabkaSchemaRegistryUnavailable` | [schema-registry-unavailable](runbooks/schema-registry-unavailable.md) |
+| `KrabkaDeliveryActivationLate` | [delivery-activation-lateness](runbooks/delivery-activation-lateness.md) |
+| `KrabkaLogCleanerFailures`, `KrabkaUncleanablePartitions` | [log-cleaner-stalled](runbooks/log-cleaner-stalled.md) |
+| `KrabkaOfflineLogDirs` | [offline-log-dir](runbooks/offline-log-dir.md) |
 
 ## Keeping the contract
 

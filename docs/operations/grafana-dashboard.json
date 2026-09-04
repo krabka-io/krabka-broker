@@ -1970,6 +1970,45 @@
       }
     },
     {
+      "id": 89,
+      "type": "timeseries",
+      "title": "Fetch response drain path / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 105
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, path) (rate(krabka_broker_fetch_response_drain_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{path}} {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "One increment per drained Fetch response, labelled with the strongest path its records regions took to the socket. On a plaintext cluster a sendfile rate of zero while the others carry traffic is a zero-copy regression; a TLS listener without kernel TLS (krabka_broker_ktls_enabled = 0) legitimately reports none."
+    },
+    {
       "id": 37,
       "type": "row",
       "title": "Clients and authentication",
@@ -1978,7 +2017,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 105
+        "y": 113
       },
       "panels": []
     },
@@ -1994,7 +2033,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 106
+        "y": 114
       },
       "targets": [
         {
@@ -2041,7 +2080,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 106
+        "y": 114
       },
       "targets": [
         {
@@ -2079,7 +2118,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 106
+        "y": 114
       },
       "targets": [
         {
@@ -2123,7 +2162,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 114
+        "y": 122
       },
       "panels": []
     },
@@ -2139,7 +2178,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 115
+        "y": 123
       },
       "targets": [
         {
@@ -2177,7 +2216,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 115
+        "y": 123
       },
       "targets": [
         {
@@ -2216,7 +2255,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 115
+        "y": 123
       },
       "targets": [
         {
@@ -2263,7 +2302,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 123
+        "y": 131
       },
       "targets": [
         {
@@ -2311,7 +2350,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 123
+        "y": 131
       },
       "targets": [
         {
@@ -2338,6 +2377,93 @@
       }
     },
     {
+      "id": 90,
+      "type": "timeseries",
+      "title": "Log cleaner failures",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 139
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, topic, reason) (rate(krabka_broker_log_cleaner_failures_total{instance=~\"$instance\"}[15m]))",
+          "legendFormat": "{{topic}} {{reason}} {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "krabka_broker_log_cleaner_uncleanable_partitions{instance=~\"$instance\"}",
+          "legendFormat": "uncleanable partitions {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "A failed compaction pass, and the partitions the cleaner has not compacted since one failed. On a compacted topic compaction and local retention stop together, so a failing cleaner is a disk that fills with nothing else to say so."
+    },
+    {
+      "id": 91,
+      "type": "timeseries",
+      "title": "Offline log directories",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 139
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_offline_log_dirs{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Log directories this broker took offline, by the startup writability probe or by a live write or fsync failure. Partitions on an offline dir answer KAFKA_STORAGE_ERROR until the broker restarts."
+    },
+    {
       "id": 47,
       "type": "row",
       "title": "Diskless WAL",
@@ -2346,7 +2472,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 131
+        "y": 147
       },
       "panels": []
     },
@@ -2362,7 +2488,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 132
+        "y": 148
       },
       "targets": [
         {
@@ -2401,7 +2527,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 132
+        "y": 148
       },
       "targets": [
         {
@@ -2440,7 +2566,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 132
+        "y": 148
       },
       "targets": [
         {
@@ -2479,7 +2605,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 140
+        "y": 156
       },
       "targets": [
         {
@@ -2526,7 +2652,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 140
+        "y": 156
       },
       "targets": [
         {
@@ -2564,7 +2690,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 140
+        "y": 156
       },
       "targets": [
         {
@@ -2620,7 +2746,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 148
+        "y": 164
       },
       "targets": [
         {
@@ -2665,7 +2791,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 156
+        "y": 172
       },
       "panels": []
     },
@@ -2681,7 +2807,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 157
+        "y": 173
       },
       "targets": [
         {
@@ -2738,7 +2864,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 157
+        "y": 173
       },
       "targets": [
         {
@@ -2776,7 +2902,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 157
+        "y": 173
       },
       "targets": [
         {
@@ -2832,7 +2958,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 165
+        "y": 181
       },
       "targets": [
         {
@@ -2879,7 +3005,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 165
+        "y": 181
       },
       "targets": [
         {
@@ -2927,7 +3053,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 165
+        "y": 181
       },
       "targets": [
         {
@@ -2965,7 +3091,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 173
+        "y": 189
       },
       "targets": [
         {
@@ -3003,7 +3129,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 173
+        "y": 189
       },
       "targets": [
         {
@@ -3041,7 +3167,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 173
+        "y": 189
       },
       "targets": [
         {
@@ -3088,7 +3214,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 181
+        "y": 197
       },
       "targets": [
         {
@@ -3126,7 +3252,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 181
+        "y": 197
       },
       "targets": [
         {
@@ -3174,7 +3300,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 181
+        "y": 197
       },
       "targets": [
         {
@@ -3263,7 +3389,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 190
+        "y": 206
       },
       "collapsed": false,
       "panels": []
@@ -3280,7 +3406,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 191
+        "y": 207
       },
       "targets": [
         {
@@ -3328,7 +3454,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 191
+        "y": 207
       },
       "targets": [
         {
@@ -3385,7 +3511,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 191
+        "y": 207
       },
       "targets": [
         {
@@ -3442,7 +3568,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 199
+        "y": 215
       },
       "targets": [
         {
@@ -3481,7 +3607,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 199
+        "y": 215
       },
       "targets": [
         {
@@ -3520,7 +3646,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 199
+        "y": 215
       },
       "targets": [
         {
@@ -3577,7 +3703,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 207
+        "y": 223
       },
       "targets": [
         {
@@ -3634,7 +3760,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 207
+        "y": 223
       },
       "targets": [
         {

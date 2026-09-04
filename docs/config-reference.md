@@ -273,6 +273,7 @@ TOML shape of `[remote_storage]`. Maps to [`crate::BrokerConfig::remote_storage_
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `copy_timeout` | string | broker default | duration | Deadline on one segment copy to the remote tier. Defaults to 10 minutes. The sweep copies segments one after another, so a copy that hangs on a stalled object store holds up every other partition on the broker. Past this deadline the copy is abandoned and retried on the next tick; the segment stays in `CopySegmentStarted`, which local retention refuses to delete against. |
 | `gcs` | table | broker default |  | TOML shape of `[remote_storage.gcs]`. Maps to [`krabka_remote_storage::GcsConfig`]. Omitting all credential fields (`service_account_path`, `service_account_key`, `application_credentials_path`) selects GKE Workload Identity / Application Default Credentials (keyless) — the primary production path. See `[remote_storage.gcs]` below. |
 | `index_cache_size` | string | broker default | byte size | Byte budget of the on-disk cache of remote segment indexes under `<log_dir>/remote-log-index-cache`. Kafka's `remote.log.index.file.cache.total.size.bytes`; defaults to 1 GiB. |
 | `kafka_metadata` | table | broker default |  | TOML shape of `[remote_storage.kafka_metadata]`. Maps to [`crate::config::KafkaRlmmConfig`]. See `[remote_storage.kafka_metadata]` below. |
@@ -291,10 +292,14 @@ TOML shape of `[remote_storage.gcs]`. Maps to [`krabka_remote_storage::GcsConfig
 | `allow_http` | boolean | `false` |  | Allow plaintext HTTP (off-by-default; required by emulators running without TLS). |
 | `application_credentials_path` | string | broker default |  | Path to an Application Default Credentials JSON file. Omit (along with the other credential fields) to use Workload Identity / ADC. |
 | `bucket` | string | required |  | GCS bucket name. |
+| `connect_timeout` | string | broker default | duration | Ceiling on the connect phase alone. When `None`, [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies. |
 | `endpoint` | string | broker default |  | Optional custom GCS API base URL (for emulators / fakes). |
+| `max_retries` | integer (uint) | broker default |  | How many times one object-store request is retried before the error reaches the broker. When `None`, [`krabka_object_store::DEFAULT_MAX_RETRIES`] (10) applies; `0` disables retries. Under a store that answers `503 SlowDown` this is what bounds how long one call holds its caller before the failure is counted and the sweep moves on. |
 | `multipart_chunk_size` | integer (uint) | broker default | bytes | Optional override of the per-part multipart chunk size (bytes). When `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`] applies. |
 | `multipart_threshold` | integer (uint64) | broker default | bytes | Optional override of the multipart-upload threshold (bytes). When `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`] applies. Operators typically leave this alone; lower it to force multipart on smaller segments for testing. |
 | `prefix` | string | broker default |  | Optional key prefix inside the bucket (lets multiple clusters share a bucket). |
+| `request_timeout` | string | broker default | duration | Ceiling on one HTTP request, connect phase included. When `None`, [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This is the bound on a store that accepts the connection and then answers nothing. |
+| `retry_timeout` | string | broker default | duration | Ceiling on the wall-clock time one request may spend across all of its retries. When `None`, [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it under 5 minutes: retries reuse the original request's credentials. |
 | `service_account_key` | string | broker default |  | Inline service-account JSON key. Omit (along with the other credential fields) to use Workload Identity / ADC. |
 | `service_account_path` | string | broker default |  | Path to a service-account JSON key file. Omit (along with the other credential fields) to use Workload Identity / ADC. |
 
@@ -326,11 +331,15 @@ TOML shape of `[remote_storage.s3]`. Maps to [`krabka_remote_storage::S3Config`]
 | `bucket` | string | required |  | S3 bucket name. |
 | `checksum_sha256` | boolean | broker default |  | Optional override of the `x-amz-checksum-sha256` header, which has the server verify each object on ingest. When `None`, the [`krabka_remote_storage::S3Config`] default of `true` applies. |
 | `conditional_put` | boolean | broker default |  | Optional override of conditional puts (`If-None-Match`), which make a create-mode write fail on an existing key instead of overwriting it. When `None`, the [`krabka_remote_storage::S3Config`] default of `true` applies. Turn it off only for an S3-compatible store that mishandles the header; WORM archive mode relies on it. |
+| `connect_timeout` | string | broker default | duration | Ceiling on the connect phase alone. When `None`, [`krabka_object_store::DEFAULT_CONNECT_TIMEOUT`] (5s) applies. |
 | `endpoint` | string | broker default |  | Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2). |
+| `max_retries` | integer (uint) | broker default |  | How many times one object-store request is retried before the error reaches the broker. When `None`, [`krabka_object_store::DEFAULT_MAX_RETRIES`] (10) applies; `0` disables retries. Under a store that answers `503 SlowDown` this is what bounds how long one call holds its caller before the failure is counted and the sweep moves on. |
 | `multipart_chunk_size` | integer (uint) | broker default | bytes | Optional override of the per-part multipart chunk size (bytes). When `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`] applies. AWS requires parts ≥ 5 MiB except the last; `MinIO` tolerates smaller values. |
 | `multipart_threshold` | integer (uint64) | broker default | bytes | Optional override of the multipart-upload threshold (bytes). When `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`] applies. Operators typically leave this alone; lower it to force multipart on smaller segments for testing. |
 | `prefix` | string | broker default |  | Optional key prefix inside the bucket (lets multiple clusters share a bucket). |
 | `region` | string | required |  | AWS region. Required even for non-AWS endpoints (use any value). |
+| `request_timeout` | string | broker default | duration | Ceiling on one HTTP request, connect phase included. When `None`, [`krabka_object_store::DEFAULT_REQUEST_TIMEOUT`] (30s) applies. This is the bound on a store that accepts the connection and then answers nothing. |
+| `retry_timeout` | string | broker default | duration | Ceiling on the wall-clock time one request may spend across all of its retries. When `None`, [`krabka_object_store::DEFAULT_RETRY_TIMEOUT`] (3m) applies. Keep it under 5 minutes: retries reuse the original request's credentials. |
 | `secret_access_key` | string | broker default |  | Explicit secret access key. Falls back to the AWS credential chain when omitted. |
 
 #### `[remote_storage.worm]`

@@ -31,6 +31,7 @@ mod fetch_drain;
 mod labels;
 mod lag;
 mod log_cleaner;
+mod log_dirs;
 mod phases;
 mod registration;
 mod remote_reader;
@@ -46,9 +47,10 @@ pub(crate) use self::{
 pub use self::{
     labels::{
         ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
-        BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, ClientSoftwareLabel,
-        ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel,
-        FetchDrainPath, FetchDrainPathLabel, PartitionLabel, QuotaEntityLabel, QuotaType,
+        BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, CleanerFailureLabel,
+        CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel,
+        ConsumerGroupLabel, DirectoryLabel, FetchDrainPath, FetchDrainPathLabel, PartitionLabel,
+        QuotaEntityLabel, QuotaType,
         QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
         ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
@@ -480,14 +482,55 @@ pub struct BrokerMetrics {
     /// KIP-714 client-metric export attempts rejected by the collector or
     /// failed at the transport layer.
     pub client_metrics_otlp_failed_total: Counter,
-    /// Cumulative count of completed log-compaction sweeps run by this
-    /// broker's cleaner — one increment per `tick_all` pass, whether or
-    /// not any partition was eligible. Lets tests (and operators) observe
-    /// that the compaction ticker has completed at least one full pass
-    /// after a segment was sealed, replacing fixed `sleep`s with a poll on
-    /// this counter. Mirrors the intent of Kafka's `LogCleaner` run
-    /// accounting.
+    /// Cumulative count of *clean* log-compaction sweeps run by this
+    /// broker's cleaner — one increment per `tick_all` pass that dispatched
+    /// no compaction which then failed, whether or not any partition was
+    /// eligible. Lets tests (and operators) observe that the compaction
+    /// ticker has completed at least one full pass after a segment was
+    /// sealed, replacing fixed `sleep`s with a poll on this counter. Mirrors
+    /// the intent of Kafka's `LogCleaner` run accounting.
+    ///
+    /// A sweep that failed a partition is accounted in
+    /// [`Self::log_cleaner_failures`] and leaves this counter where it was,
+    /// so a cleaner failing every partition on a dying disk reports a flat
+    /// pass rate rather than a healthy one. `rate()` on this series is
+    /// therefore the rate of passes that did what they were for.
     pub log_cleaner_runs_total: Counter,
+    /// Per-partition, per-reason cumulative count of compaction passes that
+    /// failed. One increment per failed `Partition::compact_log` call.
+    ///
+    /// This is the counter that says the cleaner is not doing its job.
+    /// `log_cleaner_runs_total` cannot: a sweep whose partitions all failed
+    /// is not counted there at all, and a broker with nothing to compact is
+    /// indistinguishable from one that compacts everything. Alert on
+    /// `rate(log_cleaner_failures_total[15m]) > 0`: compaction and local
+    /// retention stop together on a compacted topic, so a failing cleaner is
+    /// a disk that fills with nothing else to say so.
+    ///
+    /// `reason` is [`CleanerFailureReason`]: `io` for a storage failure,
+    /// which the writer arm has already reported to the log-dir registry,
+    /// `writer` for a partition whose actor is gone, and `other` for
+    /// anything else the log layer returned.
+    pub log_cleaner_failures: Family<CleanerFailureLabel, Counter>,
+    /// Partitions this broker leads whose most recent compaction attempt
+    /// failed and which have not compacted since.
+    ///
+    /// Kafka's `LogCleanerManager` publishes `uncleanable-partitions-count`
+    /// for the same reason: a partition drops out of the cleaner's reach and
+    /// nothing else reports it. The gauge is republished at the end of every
+    /// sweep, so a partition returns to zero on the first pass that succeeds
+    /// and is released when the broker stops leading it.
+    pub log_cleaner_uncleanable_partitions: Gauge,
+    /// Log directories this broker has marked offline: the ones that failed
+    /// the startup writability probe, plus the ones a live write or fsync
+    /// failure flipped.
+    ///
+    /// Mirrors Kafka's `kafka.log:type=LogManager,name=OfflineLogDirectoryCount`.
+    /// `DescribeLogDirs` reports the same dirs with `KAFKA_STORAGE_ERROR`,
+    /// but only to a client that asks; this is the series that pages. It is
+    /// sampled by the broker gauge updater, so it appears on a broker with
+    /// no offline dir at zero.
+    pub offline_log_dirs: Gauge,
     /// Per-partition cumulative count of compaction passes
     /// (`Partition::compact_log`) this broker's cleaner completed
     /// successfully. Bumped once per eligible (leader &&

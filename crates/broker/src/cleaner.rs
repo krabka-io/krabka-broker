@@ -22,7 +22,7 @@ use qubit_clock::{StdTimer, Timer};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use self::sweep::tick_all;
+use self::sweep::{UncleanablePartitions, tick_all};
 use crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util};
 
 mod sweep;
@@ -86,6 +86,11 @@ pub(crate) async fn run(
     let Some(mut tick) = time_util::arm(&*timer, Duration::ZERO, TASK) else {
         return;
     };
+    // The partitions a sweep failed outlive that sweep: Kafka's cleaner keeps
+    // the same set, because a partition stays uncleanable until a pass
+    // succeeds on it, and a count rebuilt per sweep would report zero on the
+    // next sweep that finds the partition ineligible.
+    let mut uncleanable = UncleanablePartitions::default();
     loop {
         tokio::select! {
             outcome = &mut tick => {
@@ -96,7 +101,14 @@ pub(crate) async fn run(
                 // whatever the metadata authority holds when the tick starts,
                 // so a freeze applied mid-sweep takes effect on the next one.
                 let image = cfg.metadata.as_ref().map(|source| source.current_image());
-                tick_all(&partitions, image.as_deref(), node_id, &metrics).await;
+                tick_all(
+                    &partitions,
+                    image.as_deref(),
+                    node_id,
+                    &metrics,
+                    &mut uncleanable,
+                )
+                .await;
                 let Some(next) = time_util::arm(&*timer, cfg.interval.to_std(), TASK) else {
                     return;
                 };

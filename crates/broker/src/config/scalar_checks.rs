@@ -127,6 +127,7 @@ impl BrokerConfig {
                 "remote_log_manager_interval",
                 self.remote_log_manager_interval,
             ),
+            ("remote_copy_timeout", self.remote_copy_timeout),
             (
                 "producer_id_expiration_scan_interval",
                 self.producer_id_expiration_scan_interval,

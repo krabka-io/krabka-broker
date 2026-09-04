@@ -5,7 +5,10 @@
 //! `apply_remote_storage` resolves that choice, layers WORM archive mode over
 //! an object store, and builds the remote-log metadata manager's policy.
 
-use krabka_units::{ByteSize, Time, convert::ByteSizeExt as _};
+use krabka_units::{
+    ByteSize, Time,
+    convert::{ByteSizeExt as _, TimeExt},
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -54,6 +57,17 @@ pub struct FileRemoteStorageConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub index_cache_size: Option<ByteSize>,
+    /// Deadline on one segment copy to the remote tier. Defaults to 10
+    /// minutes.
+    ///
+    /// The sweep copies segments one after another, so a copy that hangs on a
+    /// stalled object store holds up every other partition on the broker.
+    /// Past this deadline the copy is abandoned and retried on the next tick;
+    /// the segment stays in `CopySegmentStarted`, which local retention
+    /// refuses to delete against.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub copy_timeout: Option<Time>,
 }
 
 /// TOML shape of `[remote_storage.kafka_metadata]`. Maps to
@@ -102,6 +116,71 @@ pub struct FileKafkaRlmmConfig {
     #[serde(default)]
     pub in_memory: bool,
 }
+/// The `S3Config` `[remote_storage.s3]` describes.
+///
+/// Every key the TOML omits falls back to the value `S3Config::default()`
+/// carries rather than to one restated here, so a changed default cannot
+/// silently disagree with the TOML layer.
+fn s3_config(s3: &FileRemoteStorageS3Config) -> krabka_remote_storage::S3Config {
+    let defaults = krabka_remote_storage::S3Config::default();
+    krabka_remote_storage::S3Config {
+        bucket: s3.bucket.clone(),
+        region: s3.region.clone(),
+        prefix: s3.prefix.clone(),
+        endpoint: s3.endpoint.clone(),
+        access_key_id: s3.access_key_id.clone(),
+        secret_access_key: s3.secret_access_key.clone(),
+        allow_http: s3.allow_http,
+        multipart_threshold: s3
+            .multipart_threshold
+            .unwrap_or(defaults.multipart_threshold),
+        multipart_chunk_size: s3
+            .multipart_chunk_size
+            .unwrap_or(defaults.multipart_chunk_size),
+        conditional_put: s3.conditional_put.unwrap_or(defaults.conditional_put),
+        checksum_sha256: s3.checksum_sha256.unwrap_or(defaults.checksum_sha256),
+        max_retries: s3.max_retries.unwrap_or(defaults.max_retries),
+        retry_timeout: s3.retry_timeout.map_or(defaults.retry_timeout, TimeExt::to_std),
+        request_timeout: s3
+            .request_timeout
+            .map_or(defaults.request_timeout, TimeExt::to_std),
+        connect_timeout: s3
+            .connect_timeout
+            .map_or(defaults.connect_timeout, TimeExt::to_std),
+    }
+}
+
+/// The `GcsConfig` `[remote_storage.gcs]` describes, on the same terms as
+/// [`s3_config`].
+fn gcs_config(gcs: &FileRemoteStorageGcsConfig) -> krabka_remote_storage::GcsConfig {
+    let defaults = krabka_remote_storage::GcsConfig::default();
+    krabka_remote_storage::GcsConfig {
+        bucket: gcs.bucket.clone(),
+        prefix: gcs.prefix.clone(),
+        service_account_path: gcs.service_account_path.clone(),
+        service_account_key: gcs.service_account_key.clone(),
+        application_credentials_path: gcs.application_credentials_path.clone(),
+        endpoint: gcs.endpoint.clone(),
+        allow_http: gcs.allow_http,
+        multipart_threshold: gcs
+            .multipart_threshold
+            .unwrap_or(defaults.multipart_threshold),
+        multipart_chunk_size: gcs
+            .multipart_chunk_size
+            .unwrap_or(defaults.multipart_chunk_size),
+        max_retries: gcs.max_retries.unwrap_or(defaults.max_retries),
+        retry_timeout: gcs
+            .retry_timeout
+            .map_or(defaults.retry_timeout, TimeExt::to_std),
+        request_timeout: gcs
+            .request_timeout
+            .map_or(defaults.request_timeout, TimeExt::to_std),
+        connect_timeout: gcs
+            .connect_timeout
+            .map_or(defaults.connect_timeout, TimeExt::to_std),
+    }
+}
+
 pub(super) fn apply_remote_storage(
     remote: Option<&FileRemoteStorageConfig>,
     cfg: &mut crate::config::BrokerConfig,
@@ -136,6 +215,16 @@ pub(super) fn apply_remote_storage(
         }
         cfg.remote_index_cache_size = size;
     }
+    if let Some(timeout) = rs.copy_timeout {
+        if timeout <= <Time as TimeExt>::ZERO {
+            return Err(invalid_runtime_value(
+                "remote_storage.copy_timeout",
+                "must be positive: a zero deadline would abandon every copy before it started, \
+                 so no segment would ever reach the tier",
+            ));
+        }
+        cfg.remote_copy_timeout = timeout;
+    }
     let set_count = usize::from(rs.storage_dir.is_some())
         + usize::from(rs.s3.is_some())
         + usize::from(rs.gcs.is_some());
@@ -152,47 +241,10 @@ pub(super) fn apply_remote_storage(
             dir: std::path::PathBuf::from(dir),
         });
     } else if let Some(s3) = &rs.s3 {
-        // The two integrity knobs default to on; read them from `S3Config`
-        // rather than restating the values here, so a change there cannot
-        // silently disagree with the TOML layer.
-        let s3_defaults = krabka_remote_storage::S3Config::default();
-        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::S3(
-            krabka_remote_storage::S3Config {
-                bucket: s3.bucket.clone(),
-                region: s3.region.clone(),
-                prefix: s3.prefix.clone(),
-                endpoint: s3.endpoint.clone(),
-                access_key_id: s3.access_key_id.clone(),
-                secret_access_key: s3.secret_access_key.clone(),
-                allow_http: s3.allow_http,
-                multipart_threshold: s3
-                    .multipart_threshold
-                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD),
-                multipart_chunk_size: s3
-                    .multipart_chunk_size
-                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
-                conditional_put: s3.conditional_put.unwrap_or(s3_defaults.conditional_put),
-                checksum_sha256: s3.checksum_sha256.unwrap_or(s3_defaults.checksum_sha256),
-            },
-        ));
+        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::S3(s3_config(s3)));
     } else if let Some(gcs) = &rs.gcs {
-        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Gcs(
-            krabka_remote_storage::GcsConfig {
-                bucket: gcs.bucket.clone(),
-                prefix: gcs.prefix.clone(),
-                service_account_path: gcs.service_account_path.clone(),
-                service_account_key: gcs.service_account_key.clone(),
-                application_credentials_path: gcs.application_credentials_path.clone(),
-                endpoint: gcs.endpoint.clone(),
-                allow_http: gcs.allow_http,
-                multipart_threshold: gcs
-                    .multipart_threshold
-                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD),
-                multipart_chunk_size: gcs
-                    .multipart_chunk_size
-                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
-            },
-        ));
+        cfg.remote_storage_backend =
+            Some(crate::config::RemoteStorageBackend::Gcs(gcs_config(gcs)));
     }
 
     // WORM archive mode layers over whichever object store was just
@@ -541,5 +593,37 @@ in_memory = true
             "in_memory = true must opt out to RlmmKind::InMemory, got {:?}",
             cfg.remote_log_metadata
         );
+    }
+
+    /// The copy deadline reaches `BrokerConfig`, and it defaults to the
+    /// production constant when the TOML omits it.
+    #[test]
+    fn copy_timeout_parses_and_defaults() {
+        let cases = [
+            ("", crate::config::DEFAULT_REMOTE_COPY_TIMEOUT),
+            ("copy_timeout = \"90s\"\n", secs(90)),
+        ];
+        for (line, want) in cases {
+            let toml = format!("[remote_storage]\nstorage_dir = \"/tmp/tier\"\n{line}");
+            let file: FileConfig = toml::from_str(&toml).unwrap();
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).unwrap();
+            check!(cfg.remote_copy_timeout == want, "{line:?}");
+        }
+    }
+
+    /// A zero deadline would abandon every copy before it started, so it is
+    /// refused at load time rather than silently tiering nothing.
+    #[test]
+    fn a_zero_copy_timeout_is_refused() {
+        let toml = r#"
+[remote_storage]
+storage_dir = "/tmp/tier"
+copy_timeout = "0s"
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        let err = file.apply_to(&mut cfg).unwrap_err();
+        check!(err.to_string().contains("remote_storage.copy_timeout"));
     }
 }

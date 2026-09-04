@@ -2,12 +2,41 @@
 
 use std::sync::Arc;
 
-use object_store::{ClientOptions, ObjectStore};
+use object_store::{ClientOptions, ObjectStore, RetryConfig};
 
 use crate::{
     config::{GcsConfig, ObjectStoreConfig, S3Config},
     error::ObjectStoreError,
 };
+
+/// The retry budget `cfg` asks for.
+///
+/// The backoff curve is `object_store`'s: what an operator turns is how many
+/// attempts a request gets and how long the whole sequence may take, not the
+/// shape of the sleeps between them.
+fn retry_config(max_retries: usize, retry_timeout: std::time::Duration) -> RetryConfig {
+    RetryConfig {
+        backoff: object_store::BackoffConfig::default(),
+        max_retries,
+        retry_timeout,
+    }
+}
+
+/// The HTTP-client bounds `cfg` asks for, on top of `base`.
+///
+/// Both timeouts are always set rather than left to the crate's defaults: a
+/// store that stalls has to hit a bound the operator chose, and a value that
+/// only exists inside a dependency is not one they can turn.
+fn client_options(
+    base: ClientOptions,
+    allow_http: bool,
+    request_timeout: std::time::Duration,
+    connect_timeout: std::time::Duration,
+) -> ClientOptions {
+    base.with_allow_http(allow_http)
+        .with_timeout(request_timeout)
+        .with_connect_timeout(connect_timeout)
+}
 
 /// Build an `object_store` handle for `cfg`.
 ///
@@ -39,7 +68,14 @@ pub(crate) fn build_s3_store(
     let mut builder = object_store::aws::AmazonS3Builder::new()
         .with_bucket_name(&cfg.bucket)
         .with_region(&cfg.region)
-        .with_allow_http(cfg.allow_http);
+        .with_allow_http(cfg.allow_http)
+        .with_retry(retry_config(cfg.max_retries, cfg.retry_timeout))
+        .with_client_options(client_options(
+            ClientOptions::new(),
+            cfg.allow_http,
+            cfg.request_timeout,
+            cfg.connect_timeout,
+        ));
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
@@ -78,9 +114,14 @@ pub(crate) fn build_gcs_store(
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_base_url(endpoint);
     }
-    if cfg.allow_http {
-        builder = builder.with_client_options(ClientOptions::new().with_allow_http(true));
-    }
+    builder = builder
+        .with_retry(retry_config(cfg.max_retries, cfg.retry_timeout))
+        .with_client_options(client_options(
+            ClientOptions::new(),
+            cfg.allow_http,
+            cfg.request_timeout,
+            cfg.connect_timeout,
+        ));
     let store = builder
         .build()
         .map_err(|e| ObjectStoreError::InvalidConfig(format!("GCS builder: {e}")))?;
@@ -89,7 +130,7 @@ pub(crate) fn build_gcs_store(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use object_store::ObjectStoreExt;
 
     use super::*;
@@ -181,5 +222,112 @@ mod tests {
             ..Default::default()
         });
         assert!(build_object_store(&cfg).is_ok());
+    }
+
+    /// A store that accepts the connection and then answers nothing must not
+    /// hang the caller: `request_timeout` is the bound, and it is the operator
+    /// who set it.
+    #[tokio::test]
+    async fn s3_request_timeout_bounds_a_stalled_store() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        // Hold the accepted sockets open for the length of the test: dropping
+        // them would answer the request with a reset, which is not a stall.
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    return;
+                };
+                held.push(socket);
+            }
+        });
+
+        let store = build_object_store(&ObjectStoreConfig::S3(S3Config {
+            bucket: "b".into(),
+            region: "us-east-1".into(),
+            endpoint: Some(endpoint),
+            allow_http: true,
+            access_key_id: Some("key".into()),
+            secret_access_key: Some("secret".into()),
+            max_retries: 0,
+            request_timeout: std::time::Duration::from_millis(200),
+            ..Default::default()
+        }))
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let result = store.get(&object_store::path::Path::from("stalled")).await;
+        let elapsed = started.elapsed();
+        server.abort();
+
+        assert!(result.is_err());
+        check!(
+            elapsed < std::time::Duration::from_secs(5),
+            "a 200ms request timeout let a stalled store block for {elapsed:?}"
+        );
+    }
+
+    /// `max_retries` is the attempt budget, not a suggestion: a store that
+    /// answers `503 SlowDown` to everything must be given exactly
+    /// `max_retries + 1` attempts before the error reaches the caller.
+    #[tokio::test]
+    async fn s3_max_retries_bounds_the_attempts_against_a_throttling_store() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&attempts);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut chunk = [0; 1024];
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&chunk[..read]),
+                    }
+                }
+                if request.is_empty() {
+                    continue;
+                }
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let body = "<Error><Code>SlowDown</Code><Message>Please reduce your \
+                            request rate.</Message></Error>";
+                let response = format!(
+                    "HTTP/1.1 503 Slow Down\r\nContent-Length: {}\r\nConnection: \
+                     close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        let store = build_object_store(&ObjectStoreConfig::S3(S3Config {
+            bucket: "b".into(),
+            region: "us-east-1".into(),
+            endpoint: Some(endpoint),
+            allow_http: true,
+            access_key_id: Some("key".into()),
+            secret_access_key: Some("secret".into()),
+            max_retries: 2,
+            retry_timeout: std::time::Duration::from_secs(30),
+            request_timeout: std::time::Duration::from_secs(5),
+            ..Default::default()
+        }))
+        .unwrap();
+
+        let result = store
+            .get(&object_store::path::Path::from("throttled"))
+            .await;
+        server.abort();
+
+        assert!(result.is_err());
+        check!(attempts.load(std::sync::atomic::Ordering::SeqCst) == 3);
     }
 }

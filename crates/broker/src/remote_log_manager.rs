@@ -139,12 +139,15 @@ const NO_BYTES: ByteSize = bytes(0);
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteLogManagerConfig {
     pub interval: Time,
+    /// Deadline on one segment copy. See [`RemoteTier::copy_timeout`].
+    pub copy_timeout: Time,
 }
 
 impl Default for RemoteLogManagerConfig {
     fn default() -> Self {
         Self {
             interval: DEFAULT_TIERING_INTERVAL,
+            copy_timeout: crate::config::DEFAULT_REMOTE_COPY_TIMEOUT,
         }
     }
 }
@@ -179,16 +182,25 @@ pub(crate) struct RemoteTier<'a> {
     pub rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
     pub metrics: &'a BrokerMetrics,
     pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
+    /// How long one segment copy may take before the sweep abandons it.
+    ///
+    /// The copy pass is serial, so an object store that stalls would
+    /// otherwise stop every partition on this broker behind the one it is
+    /// stalling. Past the deadline the copy is left in `CopySegmentStarted`
+    /// -- which local retention refuses to delete against -- and the next
+    /// tick retries the segment under a fresh id.
+    pub copy_timeout: Time,
 }
 
 impl RemoteLogManagerContext {
-    fn tier(&self) -> RemoteTier<'_> {
+    fn tier(&self, copy_timeout: Time) -> RemoteTier<'_> {
         RemoteTier {
             archive: self.archive,
             rsm: &self.rsm,
             rlmm: &self.rlmm,
             metrics: &self.metrics,
             index_cache: &self.index_cache,
+            copy_timeout,
         }
     }
 }
@@ -212,7 +224,7 @@ pub(crate) async fn run(
         tick_all(
             &context.partitions,
             &*context.controller,
-            &context.tier(),
+            &context.tier(cfg.copy_timeout),
             context.node_id,
             context.broker_id,
         )
@@ -395,6 +407,7 @@ mod tests {
     };
 
     mod freeze;
+    mod store_faults;
 
     fn image_with_orders_topic() -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::from_u128(9));
@@ -470,6 +483,7 @@ mod tests {
             },
             RemoteLogManagerConfig {
                 interval: millis(10),
+                ..RemoteLogManagerConfig::default()
             },
             shutdown.clone(),
         ));

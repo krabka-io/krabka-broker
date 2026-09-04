@@ -1,15 +1,21 @@
 //! Log-compaction accounting: the sweep counter the cleaner bumps once per
-//! pass, and the per-partition counter of compactions that pass completed.
+//! clean pass, the per-partition counter of compactions that passed, the
+//! per-partition failure counter, and the uncleanable-partition gauge that
+//! says how many partitions the cleaner has lost.
 
 use std::sync::Arc;
 
-use super::{BrokerMetrics, PartitionLabel};
+use super::{BrokerMetrics, CleanerFailureLabel, CleanerFailureReason, PartitionLabel};
 
 impl BrokerMetrics {
-    /// Account one completed log-compaction sweep (a full `tick_all`
-    /// pass). Called once per cleaner tick, whether or not any partition
-    /// was eligible, so a test can observe that a full pass ran after it
-    /// sealed a segment.
+    /// Account one clean log-compaction sweep (a full `tick_all` pass that
+    /// failed no partition). Called once per cleaner tick, whether or not
+    /// any partition was eligible, so a test can observe that a full pass
+    /// ran after it sealed a segment.
+    ///
+    /// A sweep that failed a partition does not reach this counter: it is
+    /// accounted by [`Self::record_cleaner_failure`] instead, so the pass
+    /// rate never reports success during a compaction outage.
     pub fn record_cleaner_run(&self) {
         self.log_cleaner_runs_total.inc();
     }
@@ -22,5 +28,32 @@ impl BrokerMetrics {
             partition,
         };
         self.log_compactions_total.get_or_create(&lbl).inc();
+    }
+
+    /// Account one failed per-partition compaction pass
+    /// (`Partition::compact_log` returned `Err`), under the reason the
+    /// cleaner classified the error as.
+    pub fn record_cleaner_failure(
+        &self,
+        topic: &str,
+        partition: i32,
+        reason: CleanerFailureReason,
+    ) {
+        let lbl = CleanerFailureLabel {
+            topic: Arc::from(topic),
+            partition,
+            reason,
+        };
+        self.log_cleaner_failures.get_or_create(&lbl).inc();
+    }
+
+    /// Publish the count of partitions whose most recent compaction attempt
+    /// failed and which have not compacted since. The cleaner republishes it
+    /// at the end of every sweep, so the gauge falls on the pass that
+    /// recovers a partition and on the pass after this broker stops leading
+    /// it.
+    pub fn set_uncleanable_partitions(&self, count: usize) {
+        self.log_cleaner_uncleanable_partitions
+            .set(i64::try_from(count).unwrap_or(i64::MAX));
     }
 }

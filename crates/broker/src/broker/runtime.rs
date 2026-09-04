@@ -270,6 +270,7 @@ pub(super) async fn start_broker_runtime(
         Arc::clone(storage.0),
         Arc::clone(controller),
         Arc::clone(&liveness),
+        storage.2.clone(),
         config.node_id,
         (metrics.clone(), health),
         config,

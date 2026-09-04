@@ -45,6 +45,7 @@ pub(super) fn spawn_broker_gauge_updater(
     partitions: Arc<PartitionRegistry>,
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
+    log_dir_status: crate::log_dir_status::LogDirRegistry,
     node_id: krabka_metadata::NodeId,
     observability: (
         crate::metrics::BrokerMetrics,
@@ -81,6 +82,11 @@ pub(super) fn spawn_broker_gauge_updater(
             metrics
                 .partitions_total
                 .set(i64::try_from(partitions.len()).unwrap_or(i64::MAX));
+            // The registry is the one place that knows a dir went offline: a
+            // runtime write or fsync failure flips it there and nothing else
+            // publishes the flip. `DescribeLogDirs` reports the same dirs,
+            // but only to a client that asks.
+            metrics.set_offline_log_dirs(log_dir_status.offline().len());
             let image = controller.current_image();
             let alive = liveness.alive_snapshot().await;
             let minimum_isr: std::collections::HashMap<&str, i32> = image
@@ -305,6 +311,7 @@ mod tests {
             Arc::new(PartitionRegistry::new()),
             Arc::new(fake_source(image, None)),
             Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
+            crate::log_dir_status::LogDirRegistry::default(),
             node_id,
             (metrics.clone(), None),
             &config,
@@ -320,6 +327,53 @@ mod tests {
         .expect("gauge observes configured minimum ISR");
 
         assert!(metrics.under_min_isr_partition_count.get() == 1);
+        shutdown.cancel();
+    }
+
+    /// A dir that goes offline under live traffic has to reach the scrape.
+    /// The registry is the only thing that knows about the flip, and
+    /// `DescribeLogDirs` reports it only to a client that asks.
+    #[tokio::test]
+    async fn broker_gauge_publishes_the_offline_log_dir_count() {
+        let dir = tempfile::tempdir().expect("log root");
+        let log_dirs = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
+        config.gauge_poll_interval = millis(1);
+        let shutdown = CancellationToken::new();
+        spawn_broker_gauge_updater(
+            Arc::new(PartitionRegistry::new()),
+            Arc::new(fake_source(
+                krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
+                None,
+            )),
+            Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
+            log_dirs.clone(),
+            krabka_metadata::NodeId(1),
+            (metrics.clone(), None),
+            &config,
+            shutdown.child_token(),
+        );
+
+        // A healthy dir publishes the series at zero, so an operator can tell
+        // "no dir is offline" apart from "this broker does not report".
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while metrics.partitions_total.get() != 0 || metrics.offline_log_dirs.get() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the sampler ran at least once");
+
+        log_dirs.mark_offline(dir.path(), "partition write/fsync failed: synthetic EIO");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while metrics.offline_log_dirs.get() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the flip reaches the gauge without a restart");
+
         shutdown.cancel();
     }
 

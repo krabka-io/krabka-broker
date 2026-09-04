@@ -10,7 +10,7 @@ use krabka_remote_storage::{
     RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
     WormChainRecord,
 };
-use krabka_units::convert::ByteSizeExt as _;
+use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -171,23 +171,49 @@ async fn copy_one_inner(
     };
 
     // The RSM is a blocking SPI — run the copy on the blocking pool.
+    //
+    // Bounded, because the pass is serial: an object store that accepts the
+    // upload and then answers nothing would otherwise hold this partition,
+    // and every partition queued behind it, for as long as the store cares
+    // to stall. `spawn_blocking` cannot be cancelled, so past the deadline
+    // the upload is abandoned rather than stopped — it keeps running on the
+    // blocking pool against a segment id no metadata will ever finish, and
+    // its objects are what the next tick's fresh id copies again.
     let rsm_copy = rsm.clone();
     let md_copy = metadata.clone();
-    let copy_result =
-        tokio::task::spawn_blocking(move || rsm_copy.copy_log_segment_data(&md_copy, &data)).await;
+    let copy_result = tokio::time::timeout(
+        tier.copy_timeout.to_std(),
+        tokio::task::spawn_blocking(move || rsm_copy.copy_log_segment_data(&md_copy, &data)),
+    )
+    .await;
 
     // Copy failed (or the blocking task panicked): clean up so the segment
     // is retried next tick.
     let returned = match copy_result {
-        Ok(Ok(returned)) => returned,
-        Ok(Err(e)) => {
+        Ok(Ok(Ok(returned))) => returned,
+        // The deadline expired. Nothing is rolled back: the abandoned upload
+        // is still writing under this metadata's segment id, and a delete
+        // racing it could remove an object the upload then re-creates,
+        // leaving the tier holding a partial segment that no metadata
+        // records. The segment stays in `CopySegmentStarted` instead, which
+        // is what makes local retention refuse to drop its local copy and
+        // the next tick re-copy it under a fresh id.
+        Err(_) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  timeout_ms = tier.copy_timeout.millis_i64(),
+                  "remote-log-manager: segment copy exceeded its deadline; abandoning it and \
+                   moving on to the next partition");
+            seal_failed();
+            return CopyOutcome::Failed;
+        }
+        Ok(Ok(Err(e))) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy failed");
             seal_failed();
             rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
             return CopyOutcome::Failed;
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy task panicked");
             seal_failed();
@@ -682,6 +708,7 @@ mod tests {
                 rlmm: &rlmm,
                 metrics: &metrics,
                 index_cache: &index_cache,
+                copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
             };
 
             copy_one(

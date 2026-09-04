@@ -265,9 +265,18 @@ krabka_broker_client_metrics_otlp_dropped_total 0
 # HELP krabka_broker_client_metrics_otlp_failed Cumulative failed KIP-714 client-metric OTLP export attempts.
 # TYPE krabka_broker_client_metrics_otlp_failed counter
 krabka_broker_client_metrics_otlp_failed_total 0
-# HELP krabka_broker_log_cleaner_runs Cumulative count of completed log-compaction sweeps run by this broker's cleaner (one per tick_all pass)..
+# HELP krabka_broker_log_cleaner_runs Cumulative count of clean log-compaction sweeps run by this broker's cleaner (one per tick_all pass that failed no partition)..
 # TYPE krabka_broker_log_cleaner_runs counter
 krabka_broker_log_cleaner_runs_total 0
+# HELP krabka_broker_log_cleaner_failures Per-partition, per-reason cumulative count of compaction passes that failed. Alert on rate(...) > 0: compaction and local retention stop together, so a failing cleaner is a disk that fills with nothing else to say so..
+# TYPE krabka_broker_log_cleaner_failures counter
+krabka_broker_log_cleaner_failures_total{topic="orders",partition="0",reason="io"} 0
+# HELP krabka_broker_log_cleaner_uncleanable_partitions Partitions this broker leads whose most recent compaction attempt failed and which have not compacted since. Mirrors Kafka's LogCleanerManager uncleanable-partitions-count..
+# TYPE krabka_broker_log_cleaner_uncleanable_partitions gauge
+krabka_broker_log_cleaner_uncleanable_partitions 0
+# HELP krabka_broker_offline_log_dirs Log directories this broker has marked offline, whether by the startup writability probe or by a live write/fsync failure. Mirrors kafka.log:type=LogManager,name=OfflineLogDirectoryCount..
+# TYPE krabka_broker_offline_log_dirs gauge
+krabka_broker_offline_log_dirs 0
 # HELP krabka_broker_log_compactions Per-partition cumulative count of compaction passes this broker's cleaner completed successfully..
 # TYPE krabka_broker_log_compactions counter
 krabka_broker_log_compactions_total{topic="orders",partition="0"} 0

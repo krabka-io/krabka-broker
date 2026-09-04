@@ -28,7 +28,8 @@ use crate::{
         DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
-        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_QUOTA_WINDOW, DEFAULT_REMOTE_INDEX_CACHE_SIZE,
+        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_QUOTA_WINDOW, DEFAULT_REMOTE_COPY_TIMEOUT,
+        DEFAULT_REMOTE_INDEX_CACHE_SIZE,
         DEFAULT_REMOTE_LOG_MANAGER_INTERVAL, DEFAULT_REMOTE_READER_MAX_PENDING_TASKS,
         DEFAULT_REMOTE_READER_THREADS, DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL,
         DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION,
@@ -278,6 +279,7 @@ impl Default for BrokerConfig {
             // via `[remote_storage] storage_dir` in `broker.toml`.
             remote_storage_backend: None,
             remote_log_manager_interval: DEFAULT_REMOTE_LOG_MANAGER_INTERVAL,
+            remote_copy_timeout: DEFAULT_REMOTE_COPY_TIMEOUT,
             // Production default: topic-backed RLMM. `bootstrap` and
             // `snapshot_dir` are empty; the broker derives them at startup.
             remote_log_metadata: RlmmKind::TopicBacked(KafkaRlmmConfig::default()),

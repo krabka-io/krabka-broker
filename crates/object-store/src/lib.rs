@@ -11,6 +11,7 @@
 mod build;
 mod config;
 mod error;
+pub mod fault;
 mod multipart;
 mod ops;
 mod read;
@@ -18,8 +19,9 @@ mod worm;
 
 pub use build::build_object_store;
 pub use config::{
-    DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, GcsConfig, ObjectStoreConfig,
-    S3Config,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_RETRIES, DEFAULT_MULTIPART_CHUNK_SIZE,
+    DEFAULT_MULTIPART_THRESHOLD, DEFAULT_REQUEST_TIMEOUT, DEFAULT_RETRY_TIMEOUT, GcsConfig,
+    ObjectStoreConfig, S3Config,
 };
 pub use error::ObjectStoreError;
 pub use multipart::{IncompleteMultipartUpload, list_s3_multipart_uploads};

@@ -75,6 +75,9 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
         // the suite that covers them on.
         conditional_put: true,
         checksum_sha256: true,
+        // The request bounds are not what this suite is about; take the
+        // backend's own defaults rather than restating them here.
+        ..krabka_remote_storage::S3Config::default()
     };
 
     let (broker, _dir) = start_worm_broker(s3.clone(), &key_path).await;

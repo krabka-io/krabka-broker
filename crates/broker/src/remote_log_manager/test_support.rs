@@ -47,11 +47,26 @@ fn shared_test_index_cache() -> &'static Arc<krabka_remote_storage::RemoteIndexC
     CACHE.get_or_init(|| Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()))
 }
 
+/// The copy deadline a unit test sweeps under when it is not the thing being
+/// tested. It is long enough that no in-process fake reaches it.
+pub(crate) const TEST_COPY_TIMEOUT: krabka_units::Time = krabka_units::secs(60);
+
 /// The tier a unit test sweeps, wired to the shared metrics.
 pub(crate) fn tier<'a>(
     archive: ArchiveMode,
     rsm: &'a Arc<dyn RemoteStorageManager>,
     rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+) -> RemoteTier<'a> {
+    tier_with_copy_timeout(archive, rsm, rlmm, TEST_COPY_TIMEOUT)
+}
+
+/// The same tier under a chosen copy deadline, for the suites that drive a
+/// store slow enough to reach it.
+pub(crate) fn tier_with_copy_timeout<'a>(
+    archive: ArchiveMode,
+    rsm: &'a Arc<dyn RemoteStorageManager>,
+    rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+    copy_timeout: krabka_units::Time,
 ) -> RemoteTier<'a> {
     RemoteTier {
         archive,
@@ -59,6 +74,7 @@ pub(crate) fn tier<'a>(
         rlmm,
         metrics: shared_test_metrics(),
         index_cache: shared_test_index_cache(),
+        copy_timeout,
     }
 }
 

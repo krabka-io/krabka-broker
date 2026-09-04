@@ -870,6 +870,7 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
         rlmm: &rlmm,
         metrics: &metrics,
         index_cache: &index_cache,
+        copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
     };
     let cfg = LogConfig {
         retention: Some(millis(1)),

@@ -127,6 +127,14 @@ pub const DEFAULT_QUOTA_WINDOW: Time = secs(11);
 /// Default `RemoteLogManager` copy / retention cadence.
 pub const DEFAULT_REMOTE_LOG_MANAGER_INTERVAL: Time = secs(30);
 
+/// KIP-405: default deadline on one segment copy to the remote tier.
+///
+/// It bounds the whole `copy_log_segment_data` call, retries inside the
+/// object-store client included, so a store that stalls costs one partition
+/// one tick rather than stopping the serial sweep for every partition on the
+/// broker. Kafka has no equivalent: its copy is unbounded.
+pub const DEFAULT_REMOTE_COPY_TIMEOUT: Time = minutes(10);
+
 /// KIP-405: default number of concurrent cold-tier reads. Matches Kafka's
 /// `remote.log.reader.threads`.
 pub const DEFAULT_REMOTE_READER_THREADS: usize = 10;
