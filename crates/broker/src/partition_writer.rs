@@ -221,6 +221,7 @@ pub async fn run_with_sequencer(
                     (&log, &log_dir, &log_dir_status),
                     &producer_state,
                     producer_id_expiration,
+                    &replica_state,
                     ack,
                 )
                 .await;

@@ -158,9 +158,12 @@ pub(super) fn spawn_cluster_data_maintenance(
     // between sites.
     let mut cleaner = cleaner_config(config);
     cleaner.metadata = Some(Arc::clone(controller));
+    // The sweep takes no `node_id`: Kafka's `LogCleanerManager` cleans every
+    // log the broker hosts, so a follower replica of a compacted topic
+    // compacts its own copy instead of accumulating segments until it is
+    // elected.
     tokio::spawn(crate::cleaner::run(
         Arc::clone(partitions),
-        config.node_id,
         cleaner,
         shutdown.child_token(),
         metrics.clone(),

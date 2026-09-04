@@ -71,6 +71,7 @@ fn a_compacted_segment_keeps_the_maximum_of_the_records_it_kept() {
 
     log.compact(&CompactionContext {
         now,
+        high_watermark: Offset(i64::MAX),
         active_producers: HashMap::new(),
     })
     .unwrap();
