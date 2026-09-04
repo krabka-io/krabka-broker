@@ -54,13 +54,12 @@ pub(super) async fn elect_one(
 
     let result = select_new_leader_for_partition(
         env.image,
-        env.liveness,
+        env.alive,
         env.witnesses,
         topic,
         partition,
         env.election,
-    )
-    .await;
+    );
     match result {
         Ok(new_pr) => {
             let proposal_id = batch.spend(consumed);

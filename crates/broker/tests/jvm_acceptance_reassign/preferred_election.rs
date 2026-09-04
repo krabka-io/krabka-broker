@@ -16,19 +16,20 @@ use crate::jvm_acceptance::{
 
 /// JVM acceptance test for `kafka-leader-election --election-type preferred`.
 ///
-/// The test uses a **3-broker** `SASL_PLAINTEXT` cluster so that the raft
-/// quorum (2/3) survives the kill of broker 1, the preferred replica. A
-/// 2-broker cluster would lose quorum (1/2) when broker 1 dies and could not
-/// commit the partition-leader change that the PREFERRED election needs.
+/// The cluster has three brokers because `controllerId` rotates over the
+/// unfenced brokers rather than naming the quorum leader, so the
+/// `AdminClient` inside the tool may send `ElectLeaders` to any of them. A
+/// two-broker cluster would hide an election that only one node answers
+/// correctly, which is the regression this case exists to catch.
 ///
 /// Scenario:
 /// 1. Boot a 3-broker `SASL_PLAINTEXT` cluster and create an rf=2 topic.
 /// 2. Wait for the cluster to assign a leader. Expect broker 1, the
 ///    preferred replica.
-/// 3. Kill broker 1. Broker 2 or broker 3 then leads partition 0 through
-///    automatic failover.
-/// 4. Revive broker 1 with Rejoin. Wait for it to re-enter the ISR in
-///    broker 2's view.
+/// 3. Move leadership to broker 2 by injecting a `PartitionRecord`, keeping
+///    broker 1 in the ISR. The comment at the injection says why the test
+///    does not kill a broker to get there.
+/// 4. Wait until every broker would let an operator elect broker 1.
 /// 5. Run `kafka-leader-election --election-type preferred` from the JVM CLI
 ///    image cp-kafka:7.5.0. Older images do not ship this tool.
 /// 6. Assert Docker exits 0.
@@ -99,11 +100,11 @@ async fn jvm_kafka_leader_election_preferred() {
     // fix. We use metadata injection rather than an organic leader change
     // because:
     //
-    // 1. An organic leader change requires killing broker 1, which causes the
-    //    raft-leader-dependent `ControllerLivenessState` to lose broker 2's
-    //    heartbeat record for the window between raft re-election and broker 2's
-    //    first heartbeat to the new raft leader — making `ElectLeaders` fail
-    //    with `PreferredNotAlive` during that window.
+    // 1. An organic leader change requires killing broker 1, and the raft
+    //    re-election that follows leaves the surviving controller without a
+    //    heartbeat record for broker 2 until broker 2 heartbeats to it. The
+    //    controller publishes that gap as a fencing, so `ElectLeaders` refuses
+    //    with `PreferredNotAlive` for the width of the window.
     //
     // 2. Under WSL2, inter-broker replication flows through the Windows-host IP
     //    (`host.docker.internal` = 192.168.65.254), not back into the WSL VM
@@ -134,8 +135,21 @@ async fn jvm_kafka_leader_election_preferred() {
     // leader=2, ISR contains both 1 and 2.
     wait_jvm_partition_leader(&h2, TOPIC, 0, 2).await;
     wait_jvm_isr_contains(&h2, TOPIC, 0, 1).await;
+
+    // A PREFERRED election refuses with PREFERRED_LEADER_NOT_AVAILABLE until
+    // broker 1 is electable, and neither wait above implies that: the leader
+    // and the ISR are replicated partition state, while a broker becomes
+    // electable only once the controller has seen its heartbeat and published
+    // it unfenced. `controllerId` rotates over the unfenced brokers, so the
+    // `AdminClient` sends this election to any of the three and every one of
+    // them must agree. Settle on all three rather than on whichever the
+    // rotation happens to name.
+    for handle in [&h1, &h2, &h3] {
+        handle.wait_until_broker_electable(1).await;
+    }
     eprintln!(
-        "KRABKA[test] broker 2 is current leader; broker 1 is in ISR — running preferred election"
+        "KRABKA[test] broker 2 is current leader; broker 1 is in ISR and electable \
+         everywhere — running preferred election"
     );
 
     // Run kafka-leader-election via the 7.5 JVM image.

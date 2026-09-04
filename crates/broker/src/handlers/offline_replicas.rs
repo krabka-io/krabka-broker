@@ -53,6 +53,35 @@ pub(crate) async fn unavailable_brokers(broker: &Broker, image: &MetadataImage) 
     unavailable
 }
 
+/// The brokers an election may hand leadership to: registered in `image` and
+/// not reported by [`unavailable_brokers`].
+///
+/// `ElectLeaders` is a controller-bound request, but `controllerId` names a
+/// rotating unfenced broker rather than the quorum leader (see
+/// [`crate::handlers::controller_id`]), so an `AdminClient` sends the election
+/// to whichever broker that rotation last named. Deciding liveness from the
+/// node-local heartbeat registry would answer the same election differently
+/// depending on where it landed, because only the controller leader keeps that
+/// registry. This set is the replicated `broker.fenced` state every node
+/// carries, with the controller's own registry unioned in on the node that
+/// owns it, so every broker refuses and permits the same elections.
+pub(crate) async fn live_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {
+    electable(image, &unavailable_brokers(broker, image).await)
+}
+
+/// The projection behind [`live_brokers`]: the registered brokers of `image`
+/// that `unavailable` does not name.
+///
+/// A broker with no registration is never electable, so an id absent from the
+/// image is absent from the result whether or not `unavailable` mentions it.
+fn electable(image: &MetadataImage, unavailable: &HashSet<u64>) -> HashSet<u64> {
+    image
+        .brokers()
+        .map(|registration| registration.node_id.0)
+        .filter(|node| !unavailable.contains(node))
+        .collect()
+}
+
 /// The offline replicas of `partition`, in replica order.
 ///
 /// `unavailable` comes from [`unavailable_brokers`]. The result is the wire

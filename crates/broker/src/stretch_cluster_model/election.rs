@@ -96,15 +96,15 @@ impl StretchModel {
     /// Run the real KIP-460 preferred election and apply its record.
     pub fn apply_preferred(&self, last: &StretchState) -> Option<StretchState> {
         let image = self.image(last);
-        let liveness = self.liveness(last);
-        let elected = block_on(select_new_leader_for_partition(
+        let alive = block_on(self.liveness(last).alive_snapshot());
+        let elected = select_new_leader_for_partition(
             &image,
-            &liveness,
+            &alive,
             &self.witnesses,
             TOPIC,
             0,
             ElectionType::Preferred,
-        ));
+        );
         let mut state = last.clone();
         if let Ok(record) = elected {
             if last.leader_epoch >= self.max_epoch {

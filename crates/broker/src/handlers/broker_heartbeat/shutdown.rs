@@ -40,6 +40,9 @@ pub(super) async fn drain_leaderships_for_shutdown(
     // Witness nodes serve no client, so leadership never drains to one. Build
     // the set once per tick, not once per partition.
     let witnesses = crate::config_keys::witness_node_ids(&image);
+    // One lock acquisition for the whole drain rather than one per partition;
+    // the set is exactly `is_alive` over every broker the registry knows.
+    let alive = liveness.alive_snapshot().await;
     // Single O(P) walk over every partition — this runs on every heartbeat
     // tick during a controlled shutdown.
     for pr in image.all_partitions() {
@@ -48,14 +51,12 @@ pub(super) async fn drain_leaderships_for_shutdown(
         }
         if let Ok(new_pr) = select_replacement_leader_for_shutdown(
             &image,
-            liveness,
+            &alive,
             &witnesses,
             &pr.topic,
             pr.partition,
             shutting_down,
-        )
-        .await
-        {
+        ) {
             // A live replica can take over: transfer leadership and keep
             // the broker waiting until the new leadership is visible.
             leader_count += 1;

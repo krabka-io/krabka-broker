@@ -72,6 +72,13 @@ pub fn mark_witnesses_in_image(img: &mut MetadataImage, ids: &[u64]) {
     }
 }
 
+/// The alive-broker set the operator elections take, spelled as the ids that
+/// are up. Equivalent to [`liveness_with_alive`] followed by `alive_snapshot`,
+/// without the registry the selectors no longer read.
+pub fn alive_set(alive: &[u64]) -> std::collections::HashSet<u64> {
+    alive.iter().copied().collect()
+}
+
 pub async fn liveness_with_alive(alive: &[u64]) -> Arc<ControllerLivenessState> {
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     for &n in alive {

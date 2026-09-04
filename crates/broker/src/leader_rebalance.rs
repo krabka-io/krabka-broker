@@ -81,6 +81,9 @@ pub(crate) async fn rebalance_tick(
     // Witness nodes never lead. Build the set once per tick, not once per
     // partition, so the tick stays a single walk over the image.
     let witnesses = crate::config_keys::witness_node_ids(&image);
+    // One lock acquisition for the whole tick rather than one per partition;
+    // the set is exactly `is_alive` over every broker the registry knows.
+    let alive = liveness.alive_snapshot().await;
     // Single O(P) walk over every partition.
     for pr in image.all_partitions() {
         let Some(next_total) = total.checked_add(1) else {
@@ -90,14 +93,12 @@ pub(crate) async fn rebalance_tick(
         total = next_total;
         if let Ok(new_pr) = select_new_leader_for_partition(
             &image,
-            liveness,
+            &alive,
             &witnesses,
             &pr.topic,
             pr.partition,
             ElectionType::Preferred,
-        )
-        .await
-        {
+        ) {
             // PreferredAlreadyLeader, PreferredIsWitness and any other Err are
             // silently skipped this tick.
             if !selected_keys.insert((new_pr.topic.clone(), new_pr.partition)) {

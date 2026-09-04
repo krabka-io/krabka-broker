@@ -107,13 +107,18 @@ pub(crate) async fn handle(
     //   Some([{topic, [p, q, ...]}]) → exact set
     let targets = resolve_targets(&image, &req);
 
+    // Which brokers an election may elect. Read from replicated state rather
+    // than this node's heartbeat registry, because `controllerId` rotates and
+    // an `AdminClient` sends the election to whichever broker it last named.
+    let alive = crate::handlers::offline_replicas::live_brokers(broker, &image).await;
+
     // Run the algorithm per target; accumulate new records to submit
     // and per-partition results to ship back.
     let env = ElectionEnv {
         broker,
         image: &image,
         ctx,
-        liveness: &broker.liveness,
+        alive: &alive,
         // Witness nodes never lead a partition. Build the set once for the
         // whole request, not once per target partition.
         witnesses: &crate::config_keys::witness_node_ids(&image),

@@ -101,14 +101,19 @@ pub(crate) fn parse_election(text: &str) -> BTreeMap<TopicPartition, ElectionOut
 }
 
 /// The partitions a `--cancel` said it cancelled.
+///
+/// `ReassignPartitionsCommand` agrees the noun with the count, so cancelling
+/// one partition prints "reassignment for:" and cancelling several prints
+/// "reassignments for:". cp-kafka:7.5.0 emits the singular for a one-partition
+/// plan, which is the shape this suite drives, so the marker stops before the
+/// plural `s` and the ` for: ` that follows either spelling is what the list
+/// is taken after.
 pub(crate) fn parse_cancelled(text: &str) -> Vec<TopicPartition> {
     let mut cancelled: Vec<TopicPartition> = text
         .lines()
         .filter_map(|line| {
-            after(
-                line.trim(),
-                "Successfully cancelled partition reassignments for: ",
-            )
+            let tail = after(line.trim(), "Successfully cancelled partition reassignment")?;
+            after(tail, " for: ")
         })
         .flat_map(|list| {
             list.split(',')
@@ -291,6 +296,18 @@ mod tests {
         );
         check!(
             parse_cancelled("None of the specified partition reassignments exist.\n").is_empty()
+        );
+    }
+
+    /// The tool agrees the noun with the count, and a one-partition cancel --
+    /// which is what the container case drives -- prints the singular.
+    #[test]
+    fn a_one_partition_cancel_is_read_out_of_the_singular_sentence() {
+        check!(
+            parse_cancelled(
+                "Successfully cancelled partition reassignment for: orders-0\n\
+                 None of the specified partition moves are active.\n"
+            ) == vec![TopicPartition::new("orders", 0)]
         );
     }
 

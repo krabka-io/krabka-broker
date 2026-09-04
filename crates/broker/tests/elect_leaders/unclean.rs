@@ -39,21 +39,22 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     let cluster = support::start_n_node_with_retry(3).await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
-    // ElectLeaders is a controller operation. Send it to the current raft
-    // leader, whose liveness registry receives the broker heartbeats.
+    // Send ElectLeaders to the current raft leader. Any broker answers it the
+    // same way now that the election reads replicated state, but the leader is
+    // the node whose view cannot lag, so it is the one this case drives.
     let controller_id = cluster[0].0.wait_until_controller_leader().await;
     let leader_index = cluster
         .iter()
         .position(|(_, cfg, _)| cfg.node_id == controller_id)
         .expect("raft leader must be one of the brokers");
     let addr = cluster[leader_index].1.listen_addr;
-    // The UNCLEAN election promotes "the first alive replica", read out of the
-    // raft leader's liveness registry. A committed registration record does
-    // not put a broker there: the entry appears on the leader's first received
-    // heartbeat and starts fenced until the handler confirms metadata
-    // catch-up. Waiting only on registration would race an
-    // ELIGIBLE_LEADERS_NOT_AVAILABLE answer, so settle on liveness itself.
-    cluster[leader_index].0.wait_until_broker_alive(1).await;
+    // The UNCLEAN election promotes "the first electable replica". A committed
+    // registration record is not enough on its own: a broker starts fenced and
+    // is published unfenced only after the controller has taken its first
+    // heartbeat and confirmed metadata catch-up. Waiting only on registration
+    // would race an ELIGIBLE_LEADERS_NOT_AVAILABLE answer, so settle on the
+    // predicate the election reads.
+    cluster[leader_index].0.wait_until_broker_electable(1).await;
     // Keep named references to avoid chained index+tuple accesses that
     // confuse the Rust 1.95 borrow-checker span computation.
     let h0 = &cluster[0].0;
@@ -69,7 +70,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     eprintln!("partition before injection: {pr_before:?}");
 
     // Inject a PartitionRecord whose leader AND ISR are the dead phantom 99.
-    // Broker 99 never registered/heartbeated, so liveness.is_alive(99)==false.
+    // Broker 99 has no registration in the image, so it is never electable.
     //
     // Crucially, the leader must be a DEAD broker, not a live replica: a live
     // leader runs ISR management and would re-admit itself / caught-up replicas

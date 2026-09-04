@@ -90,16 +90,16 @@ async fn preferred_election_via_wire_returns_success() {
             .iter()
             .position(|(_, cfg, _)| cfg.node_id == leader)
             .expect("raft leader must be one of the surviving brokers");
-        // A PREFERRED election refuses with PREFERRED_NOT_ALIVE unless the
-        // raft leader's own liveness registry has broker 1 as Alive and
-        // unfenced. That state is *not* implied by the ISR wait above: the
-        // ISR expand is a replicated metadata record proposed by the data
-        // leader, while liveness is local heartbeat state on the controller
-        // that lands only once broker 1's first post-revive heartbeat
-        // arrives and the handler unfences it. Settling on the ISR alone
-        // races the heartbeat, which is what made this test flaky under
-        // load. Settle on the predicate the election actually reads.
-        cluster[pos].0.wait_until_broker_alive(1).await;
+        // A PREFERRED election refuses with PREFERRED_NOT_ALIVE until broker 1
+        // is electable, and the ISR wait above does not imply that: the ISR
+        // expand is a replicated record proposed by the data leader, while a
+        // revived broker becomes electable only once its first post-revive
+        // heartbeat reaches the controller and the controller publishes it
+        // unfenced. Settling on the ISR alone races that, which is what made
+        // this test flaky under load. Settle on the predicate the election
+        // actually reads -- the replicated set, which trails the controller's
+        // own registry by up to one liveness tick.
+        cluster[pos].0.wait_until_broker_electable(1).await;
         cluster[pos].1.listen_addr
     };
     eprintln!("sending ElectLeaders Preferred to raft leader at {elect_addr}");
