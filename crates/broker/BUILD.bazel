@@ -57,7 +57,22 @@ crate_tests(
     # its bound only separates a long poll woken by the delivery advance (~2s)
     # from one that waited out its 20s `max.wait.ms`. That wake is timer-driven,
     # so instrumentation does not move it.
+    #
+    # `auth_handlers` and `compaction` join the list for the same reason, on the
+    # same evidence: on the commit that added them here, both passed the
+    # uninstrumented `test` step and repeated local runs, and both failed the
+    # `coverage` run of that commit. `auth_handlers` says outright in
+    # `oauthbearer_sessions.rs` that its expiry cases wait out a real one-second
+    # token rather than jumping a paused clock, "the deadline is a wall-clock
+    # instant the dispatch loop compares each arriving request against"; the
+    # margin between that deadline and the 1.5s the test waits is what
+    # instrumentation eats. `compaction` waits on the cleaner through
+    # `wait_for_metrics`, whose `TEST_AWAITER_TIMEOUT` does not stretch when the
+    # background loop it is waiting for is slowed by the profiler -- the same
+    # shape as `durability`, one bounded wait on a loop instrumentation delays.
     cpu_heavy = [
+        "auth_handlers",
+        "compaction",
         "diskless_e2e",
         "durability",
         "ip_quotas",
