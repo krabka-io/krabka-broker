@@ -532,14 +532,16 @@ pub struct BrokerMetrics {
     /// a partition whose actor is gone, and `other` for anything else the log
     /// layer returned.
     pub log_retention_failures: Family<CleanerFailureLabel, Counter>,
-    /// Partitions this broker leads whose most recent compaction attempt
+    /// Partitions this broker hosts whose most recent compaction attempt
     /// failed and which have not compacted since.
     ///
     /// Kafka's `LogCleanerManager` publishes `uncleanable-partitions-count`
     /// for the same reason: a partition drops out of the cleaner's reach and
-    /// nothing else reports it. The gauge is republished at the end of every
-    /// sweep, so a partition returns to zero on the first pass that succeeds
-    /// and is released when the broker stops leading it.
+    /// nothing else reports it. The cleaner sweeps every hosted replica, as
+    /// Kafka's does, so a follower counts here exactly as a leader does. The
+    /// gauge is republished at the end of every sweep, so a partition returns
+    /// to zero on the first pass that succeeds and is released when the
+    /// broker stops hosting the replica or the topic stops being compacted.
     pub log_cleaner_uncleanable_partitions: Gauge,
     /// Log directories this broker has marked offline: the ones that failed
     /// the startup writability probe, plus the ones a live write or fsync

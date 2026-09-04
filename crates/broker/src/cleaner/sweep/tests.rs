@@ -1,10 +1,13 @@
 //! Tests for one sweep: which partitions it compacts, which it skips for
-//! leadership or cleanup policy, and how a KFC-9 topic write freeze and the
-//! later thaw move a partition out of and back into eligibility.
+//! cleanup policy or for a dirty region too small to be worth a pass, and how
+//! a KFC-9 topic write freeze and the later thaw move a partition out of and
+//! back into eligibility.
+
+use std::sync::atomic::Ordering;
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
-use krabka_metadata::{MetadataRecord, PatternType, TopicFreezeRecord};
+use krabka_metadata::{MetadataRecord, NodeId, PatternType, TopicFreezeRecord};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -17,21 +20,33 @@ use crate::{
     metrics::{CleanerFailureLabel, CleanerFailureReason},
 };
 
+/// The cleanup policy is the only thing that makes a partition the cleaner's
+/// work. Leadership is not: Kafka's `LogCleanerManager` walks every log the
+/// broker holds, so the replica this broker follows (leader 8) is compacted
+/// beside the one it leads. Skipping it left a compacted topic's followers
+/// with no bound on their segment count at all, because `cleanup.policy=
+/// compact` sets no `retention.ms` for the local-retention sweep to act on.
 #[tokio::test]
-async fn tick_all_compacts_only_local_leader_compact_topics() {
+async fn tick_all_compacts_every_hosted_compact_topic_whoever_leads_it() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = PartitionRegistry::new();
-    // (topic, leader, cleanup_policy, expect_compacted): only partitions
-    // led locally (leader 7) with the Compact policy should shrink.
+    // (topic, leader, cleanup_policy, expect_compacted): every partition with
+    // the Compact policy should shrink, led here (7) or not (8).
     let specs = [
         ("local-compact", 7, krabka_log::CleanupPolicy::Compact, true),
         (
             "follower-compact",
             8,
             krabka_log::CleanupPolicy::Compact,
-            false,
+            true,
         ),
         ("local-delete", 7, krabka_log::CleanupPolicy::Delete, false),
+        (
+            "follower-delete",
+            8,
+            krabka_log::CleanupPolicy::Delete,
+            false,
+        ),
         // Kafka derives `compact` from the policy list by membership, so a
         // `compact,delete` topic is the cleaner's work exactly as a `compact`
         // one is. Kafka Streams writes that value on every windowed-store
@@ -43,21 +58,18 @@ async fn tick_all_compacts_only_local_leader_compact_topics() {
             true,
         ),
     ];
-    let cases: Vec<_> = specs
-        .into_iter()
-        .map(|(topic, leader, policy, expect_compacted)| {
-            let partition = compactable_partition(&dir, topic, 0, NodeId(leader), policy);
-            let before = record_count(&partition);
-            registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
-            (topic, partition, before, expect_compacted)
-        })
-        .collect();
+    let mut cases = Vec::new();
+    for (topic, leader, policy, expect_compacted) in specs {
+        let partition = compactable_partition(&dir, topic, 0, NodeId(leader), policy).await;
+        let before = record_count(&partition);
+        registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
+        cases.push((topic, partition, before, expect_compacted));
+    }
 
     let metrics = BrokerMetrics::new();
     tick_all(
         &registry,
         None,
-        NodeId(7),
         &metrics,
         &mut UncleanablePartitions::default(),
     )
@@ -97,7 +109,7 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
         ..Default::default()
     };
     let partition =
-        compactable_partition_with_config(&dir, "too-clean", 0, NodeId(7), base.clone());
+        compactable_partition_with_config(&dir, "too-clean", 0, NodeId(7), base.clone()).await;
     let before = record_count(&partition);
     registry.insert(
         "too-clean".into(),
@@ -109,7 +121,6 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
     tick_all(
         &registry,
         None,
-        NodeId(7),
         &metrics,
         &mut UncleanablePartitions::default(),
     )
@@ -132,7 +143,6 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
     tick_all(
         &registry,
         None,
-        NodeId(7),
         &metrics,
         &mut UncleanablePartitions::default(),
     )
@@ -182,21 +192,21 @@ fn thaw(image: &mut MetadataImage, scope: &str, pattern_type: PatternType) {
 
 /// Register one compactable, locally-led partition per topic and report
 /// each one's pre-sweep record count beside it.
-fn compactable_topics(
+async fn compactable_topics(
     dir: &TempDir,
     registry: &PartitionRegistry,
     topics: &[&'static str],
 ) -> Vec<(&'static str, Arc<Partition>, usize)> {
-    topics
-        .iter()
-        .map(|&topic| {
-            let partition =
-                compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact);
-            let before = record_count(&partition);
-            registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
-            (topic, partition, before)
-        })
-        .collect()
+    let mut built = Vec::new();
+    for &topic in topics {
+        let partition =
+            compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact)
+                .await;
+        let before = record_count(&partition);
+        registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
+        built.push((topic, partition, before));
+    }
+    built
 }
 
 #[tokio::test]
@@ -207,7 +217,8 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
         &dir,
         &registry,
         &["frozen-literal", "tenant-a.orders", "unfrozen"],
-    );
+    )
+    .await;
     // One image, one sweep. The control partition is compactable in
     // exactly the same way as the two frozen ones, so a sweep that
     // compacted nothing at all could not pass this test.
@@ -219,7 +230,6 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
     tick_all(
         &registry,
         Some(&image),
-        NodeId(7),
         &BrokerMetrics::new(),
         &mut UncleanablePartitions::default(),
     )
@@ -244,7 +254,7 @@ async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
 async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = PartitionRegistry::new();
-    let cases = compactable_topics(&dir, &registry, &["orders"]);
+    let cases = compactable_topics(&dir, &registry, &["orders"]).await;
     let (_, partition, before) = &cases[0];
     let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
     let metrics = BrokerMetrics::new();
@@ -252,7 +262,6 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     tick_all(
         &registry,
         Some(&image),
-        NodeId(7),
         &metrics,
         &mut UncleanablePartitions::default(),
     )
@@ -266,7 +275,6 @@ async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
     tick_all(
         &registry,
         Some(&image),
-        NodeId(7),
         &metrics,
         &mut UncleanablePartitions::default(),
     )
@@ -342,7 +350,8 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
     let dir = tempfile::tempdir().expect("log root");
     let status = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
-    let partition = compactable_partition_in_registry(&dir, "orders", NodeId(7), status.clone());
+    let partition =
+        compactable_partition_in_registry(&dir, "orders", NodeId(7), status.clone()).await;
     let before = record_count(&partition);
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     // A directory where the rewrite must create its `.swap` file: the open
@@ -351,7 +360,7 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
 
     let metrics = BrokerMetrics::new();
     let mut uncleanable = UncleanablePartitions::default();
-    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
 
     check!(record_count(&partition) == before, "nothing was compacted");
     check!(failures(&metrics, "orders", CleanerFailureReason::Io) == 1);
@@ -370,7 +379,7 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
     for swap in blocked {
         std::fs::remove_dir(&swap).expect("unblock the swap path");
     }
-    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
 
     check!(record_count(&partition) < before, "the retry compacted");
     check!(failures(&metrics, "orders", CleanerFailureReason::Io) == 1);
@@ -378,29 +387,48 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
     check!(metrics.log_cleaner_uncleanable_partitions.get() == 0);
 }
 
-/// A partition this broker stops leading is not the cleaner's to clean, so it
+/// A partition this broker stops hosting is not the cleaner's to clean, so it
 /// leaves the uncleanable set rather than holding the gauge above zero for as
 /// long as the process lives.
+///
+/// Losing the leadership is no longer one of those exits: the sweep cleans
+/// every hosted replica, so a partition this broker follows is still its
+/// cleaner's problem and stays counted until a pass succeeds on it.
 #[tokio::test]
-async fn a_partition_this_broker_stops_leading_leaves_the_uncleanable_set() {
+async fn a_partition_this_broker_stops_hosting_leaves_the_uncleanable_set() {
     let dir = tempfile::tempdir().expect("log root");
     let status = crate::log_dir_status::LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
-    let partition = compactable_partition_in_registry(&dir, "orders", NodeId(7), status);
+    let partition = compactable_partition_in_registry(&dir, "orders", NodeId(7), status).await;
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     let blocked = block_compaction_swap(&dir, "orders");
 
     let metrics = BrokerMetrics::new();
     let mut uncleanable = UncleanablePartitions::default();
-    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
     check!(metrics.log_cleaner_uncleanable_partitions.get() == 1);
 
+    // Another broker takes the leadership. The replica stays here, so the
+    // cleaner still owes it a pass and the gauge still counts it.
     partition.current_leader.store(8, Ordering::Relaxed);
-    tick_all(&registry, None, NodeId(7), &metrics, &mut uncleanable).await;
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
+    check!(
+        metrics.log_cleaner_uncleanable_partitions.get() == 1,
+        "a follower replica is this cleaner's work too"
+    );
+    check!(
+        metrics.log_cleaner_runs_total.get() == 0,
+        "a sweep that failed the one partition it swept is not a pass"
+    );
+
+    // The replica is reassigned away from this broker, which is what takes
+    // the partition out of the registry the sweep walks.
+    registry.remove("orders", PartitionIndex(0));
+    tick_all(&registry, None, &metrics, &mut uncleanable).await;
 
     check!(
         metrics.log_cleaner_uncleanable_partitions.get() == 0,
-        "the follower replica is another broker's cleaner's problem"
+        "a partition this broker no longer hosts is nobody's here to clean"
     );
     check!(
         metrics.log_cleaner_runs_total.get() == 1,

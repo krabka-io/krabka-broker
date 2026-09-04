@@ -265,12 +265,14 @@ pub fn keyed_batch(base: i64, items: &[(i32, &[u8], &[u8])]) -> RecordBatch {
     }
 }
 
-/// A `CompactionContext` with a fixed, deterministic epoch and no active
-/// producers. The in-crate compaction tests use it where tombstone and
-/// marker age are not under test.
+/// A `CompactionContext` with a fixed, deterministic epoch, no active
+/// producers, and a high watermark past every offset a log can hold. The
+/// in-crate compaction tests use it where tombstone age, marker age and the
+/// watermark bound are not under test.
 pub fn compaction_ctx() -> CompactionContext {
     CompactionContext {
         now: SystemTime::UNIX_EPOCH,
+        high_watermark: krabka_ids::Offset(i64::MAX),
         active_producers: HashMap::new(),
     }
 }

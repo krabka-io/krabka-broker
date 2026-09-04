@@ -5,18 +5,21 @@
 //! every partition where all of these hold:
 //!
 //!   - the topic's `cleanup.policy` is `compact`,
-//!   - this broker is currently the leader, and
+//!   - Kafka's cleanable test says a pass is due, and
 //!   - no KFC-9 write freeze covers the topic.
 //!
-//! The compaction itself runs on the partition's writer actor, so appends and
-//! compaction run in sequence.
+//! Leadership is not among them. Kafka's `LogCleanerManager` cleans every log
+//! the broker hosts, so a follower replica of a compacted topic compacts its
+//! own copy rather than growing without bound until it is elected.
+//!
+//! The compaction itself runs on the partition's writer actor, so appends,
+//! replication and compaction run in sequence.
 //!
 //! This file holds the ticker and the configuration it reads. The sweep that
 //! those three conditions describe lives in [`sweep`].
 
 use std::{sync::Arc, time::Duration};
 
-use krabka_metadata::NodeId;
 use krabka_units::{Time, convert::TimeExt as _};
 use qubit_clock::{StdTimer, Timer};
 use tokio_util::sync::CancellationToken;
@@ -65,7 +68,6 @@ impl CleanerConfig {
 /// Spawned task entry point.
 pub(crate) async fn run(
     partitions: Arc<PartitionRegistry>,
-    node_id: NodeId,
     cfg: CleanerConfig,
     shutdown: CancellationToken,
     metrics: BrokerMetrics,
@@ -101,14 +103,7 @@ pub(crate) async fn run(
                 // whatever the metadata authority holds when the tick starts,
                 // so a freeze applied mid-sweep takes effect on the next one.
                 let image = cfg.metadata.as_ref().map(|source| source.current_image());
-                tick_all(
-                    &partitions,
-                    image.as_deref(),
-                    node_id,
-                    &metrics,
-                    &mut uncleanable,
-                )
-                .await;
+                tick_all(&partitions, image.as_deref(), &metrics, &mut uncleanable).await;
                 let Some(next) = time_util::arm(&*timer, cfg.interval.to_std(), TASK) else {
                     return;
                 };

@@ -277,7 +277,7 @@ krabka_broker_log_retention_runs_total 0
 # HELP krabka_broker_log_retention_failures Per-partition, per-reason cumulative count of local-retention passes that failed. Alert on rate(...) > 0: a broker that never evicts a segment looks like one with nothing to evict until the disk fills..
 # TYPE krabka_broker_log_retention_failures counter
 krabka_broker_log_retention_failures_total{topic="orders",partition="0",reason="io"} 0
-# HELP krabka_broker_log_cleaner_uncleanable_partitions Partitions this broker leads whose most recent compaction attempt failed and which have not compacted since. Mirrors Kafka's LogCleanerManager uncleanable-partitions-count..
+# HELP krabka_broker_log_cleaner_uncleanable_partitions Partitions this broker hosts whose most recent compaction attempt failed and which have not compacted since. Mirrors Kafka's LogCleanerManager uncleanable-partitions-count..
 # TYPE krabka_broker_log_cleaner_uncleanable_partitions gauge
 krabka_broker_log_cleaner_uncleanable_partitions 0
 # HELP krabka_broker_offline_log_dirs Log directories this broker has marked offline, whether by the startup writability probe or by a live write/fsync failure. Mirrors kafka.log:type=LogManager,name=OfflineLogDirectoryCount..
