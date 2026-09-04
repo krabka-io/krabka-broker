@@ -350,21 +350,22 @@ mod tests {
     /// up as noise in the diff that is meant to be the change under review.
     #[test]
     fn the_checked_in_report_is_exactly_what_store_writes() {
-        let checked_in = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("api_versions")
-            .join("divergence.json");
-        let report = DivergenceReport::load(&checked_in);
+        // `include_str!` reads the fixture at compile time, which is what
+        // `compile_data` in //crates/broker:BUILD.bazel makes available.
+        // Keeping `CARGO_MANIFEST_DIR` for a runtime read instead would embed
+        // this checkout's absolute path in the test binary, and the Bazel
+        // build rejects that.
+        const CHECKED_IN: &str = include_str!("../fixtures/api_versions/divergence.json");
 
         let dir = tempfile::tempdir().expect("tempdir");
+        let decoded = dir.path().join("decoded.json");
+        std::fs::write(&decoded, CHECKED_IN).expect("write checked-in");
+        let report = DivergenceReport::load(&decoded);
+
         let rewritten = dir.path().join("divergence.json");
         report.store(&rewritten);
 
-        assert!(
-            std::fs::read_to_string(&rewritten).expect("read rewritten")
-                == std::fs::read_to_string(&checked_in).expect("read checked-in")
-        );
+        assert!(std::fs::read_to_string(&rewritten).expect("read rewritten") == CHECKED_IN);
     }
 
     #[test]

@@ -1,0 +1,337 @@
+"""Unit tests for `check_version_pins.axl`."""
+
+load(
+    "./check_version_pins.axl",
+    "cargo_pins",
+    "defs_pins",
+    "dependency_pin",
+    "disagreements",
+    "doc_root_version",
+    "field_value",
+    "lib_pins",
+    "module_pins",
+    "quoted_value",
+    "section_name",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _pin(source, label, version):
+    return struct(source = source, label = label, version = version)
+
+def _root_manifest(version, dependency_version):
+    """A root `Cargo.toml` fragment: the two sections this reader reads, and noise."""
+    return [
+        "[workspace]",
+        "resolver = \"2\"",
+        "members = [\"crates/*\"]",
+        "",
+        "[workspace.package]",
+        "version = \"%s\"" % version,
+        "edition = \"2024\"",
+        "rust-version = \"1.90\"",
+        "",
+        "[workspace.dependencies]",
+        "arc-swap = \"1\"",
+        "object_store = { version = \"0.14\", features = [\"aws\", \"gcp\"] }",
+        "krabka-audit = { path = \"crates/audit\", version = \"%s\" }" % dependency_version,
+        "",
+        "[patch.crates-io]",
+        "krabka-protocol = { git = \"https://github.com/krabka-io/krabka-protocol\", rev = \"abc\" }",
+    ]
+
+def _member_manifest(version):
+    """A member `Cargo.toml` fragment: a `[[bin]]` path, a self dependency, a first-party one."""
+    return [
+        "[package]",
+        "name = \"krabka-broker\"",
+        "version.workspace = true",
+        "",
+        "[[bin]]",
+        "name = \"broker\"",
+        "path = \"src/bin/broker.rs\"",
+        "",
+        "[dependencies]",
+        "krabka-log = { version = \"%s\", path = \"../log\" }" % version,
+        "",
+        "[dev-dependencies]",
+        "krabka-broker = { path = \".\", features = [\"test-helpers\"] }",
+    ]
+
+def _test_a_quoted_value_is_read(_ctx):
+    check_eq("the string", quoted_value("\"0.5.4\", more"), "0.5.4")
+    check_eq("an unopened value", quoted_value("0.5.4"), None)
+    check_eq("an unterminated value", quoted_value("\"0.5.4"), None)
+
+def _test_a_field_is_read_from_a_line_or_an_inline_table(_ctx):
+    check_eq("a bare line", field_value("version = \"0.5.4\"", "version"), "0.5.4")
+    check_eq(
+        "a field of an inline table",
+        field_value(" path = \"../log\", version = \"0.5.4\" ", "version"),
+        "0.5.4",
+    )
+    check_eq("an absent field", field_value("path = \"../log\"", "version"), None)
+
+def _test_a_field_is_not_read_out_of_a_longer_key(_ctx):
+    # The failure a substring search would make: `rust-version` is not this
+    # workspace's version, and reading it as one would compare 1.90 to 0.5.4.
+    check_eq("rust-version", field_value("rust-version = \"1.90\"", "version"), None)
+    check_eq("a suffixed key", field_value("no_path = \"x\"", "path"), None)
+    check_eq(
+        "the real field after a longer one",
+        field_value("rust-version = \"1.90\", version = \"0.5.4\"", "version"),
+        "0.5.4",
+    )
+
+def _test_a_dependency_line_reads_its_path_and_version(_ctx):
+    check_eq(
+        "path first",
+        dependency_pin("krabka-audit = { path = \"crates/audit\", version = \"0.5.4\" }"),
+        struct(name = "krabka-audit", path = "crates/audit", version = "0.5.4"),
+    )
+    check_eq(
+        "version first",
+        dependency_pin("krabka-log = { version = \"0.5.4\", path = \"../log\" }"),
+        struct(name = "krabka-log", path = "../log", version = "0.5.4"),
+    )
+    check_eq(
+        "with features after both",
+        dependency_pin("krabka-raft = { version = \"0.5.4\", path = \"../raft\", features = [\"scenarios\"] }"),
+        struct(name = "krabka-raft", path = "../raft", version = "0.5.4"),
+    )
+
+def _test_a_path_dependency_without_a_version_carries_none(_ctx):
+    # `crates/broker`'s dev-dependency on itself. It has nothing to disagree
+    # with, so it must be read and then contribute no pin -- not be a failure.
+    check_eq(
+        "the self dependency",
+        dependency_pin("krabka-broker = { path = \".\", features = [\"test-helpers\"] }"),
+        struct(name = "krabka-broker", path = ".", version = None),
+    )
+
+def _test_what_is_not_a_path_dependency_is_not_read_as_one(_ctx):
+    for text in [
+        "object_store = { version = \"0.14\", features = [\"aws\"] }",
+        "krabka-protocol = { git = \"https://example.invalid\", rev = \"abc\" }",
+        "arc-swap = \"1\"",
+        "path = \"src/bin/broker.rs\"",
+        "version = \"0.5.4\"",
+        "[dependencies]",
+        "",
+    ]:
+        check_eq("not a path dependency: %r" % text, dependency_pin(text), None)
+
+def _test_a_table_header_is_recognised(_ctx):
+    check_eq("a table", section_name("[workspace.package]"), "workspace.package")
+    check_eq("an array of tables", section_name("[[bin]]"), None)
+    check_eq("not a header", section_name("version = \"0.5.4\""), None)
+
+def _test_the_root_manifest_yields_its_version_and_its_path_dependencies(_ctx):
+    check_eq(
+        "the workspace version first, then the one path dependency",
+        cargo_pins("Cargo.toml", _root_manifest("0.5.4", "0.5.4")),
+        [
+            _pin("Cargo.toml", "[workspace.package] version", "0.5.4"),
+            _pin("Cargo.toml", "the version requirement on krabka-audit", "0.5.4"),
+        ],
+    )
+
+def _test_a_member_manifest_yields_only_its_first_party_requirements(_ctx):
+    # `version.workspace = true`, the `[[bin]]` path and the self dependency
+    # each name no version, and none of them may become a pin.
+    check_eq(
+        "the one requirement",
+        cargo_pins("crates/broker/Cargo.toml", _member_manifest("0.5.4")),
+        [_pin("crates/broker/Cargo.toml", "the version requirement on krabka-log", "0.5.4")],
+    )
+
+def _test_the_module_version_is_read_and_bazel_dep_versions_are_not(_ctx):
+    # Every `bazel_dep` pins somebody else's module at their version. Reading
+    # one as this module's would compare rules_rs's 0.0.107 to krabka's.
+    check_eq(
+        "only the module call",
+        module_pins("MODULE.bazel", [
+            "bazel_dep(name = \"rules_rs\", version = \"0.0.107\")",
+            "",
+            "module(",
+            "    name = \"krabka_broker\",",
+            "    version = \"0.5.4\",",
+            ")",
+            "",
+            "bazel_dep(name = \"platforms\", version = \"1.0.0\")",
+        ]),
+        [_pin("MODULE.bazel", "module(version)", "0.5.4")],
+    )
+
+def _test_a_module_file_with_no_module_call_yields_nothing(_ctx):
+    check_eq(
+        "nothing to read",
+        module_pins("MODULE.bazel", ["bazel_dep(name = \"platforms\", version = \"1.0.0\")"]),
+        [],
+    )
+
+def _test_the_workspace_version_constant_is_read(_ctx):
+    check_eq(
+        "the constant",
+        defs_pins("bazel/defs.bzl", [
+            "# A release bump has to be made here as well.",
+            "WORKSPACE_VERSION = \"0.5.4\"",
+            "",
+            "OTHER_VERSION = \"9.9.9\"",
+        ]),
+        [_pin("bazel/defs.bzl", "WORKSPACE_VERSION", "0.5.4")],
+    )
+
+def _test_a_defs_file_without_the_constant_yields_nothing(_ctx):
+    check_eq("nothing to read", defs_pins("bazel/defs.bzl", ["def crate_library():", "    pass"]), [])
+
+def _test_a_doc_root_url_yields_its_last_segment(_ctx):
+    check_eq(
+        "the version",
+        doc_root_version("#![doc(html_root_url = \"https://docs.rs/krabka-broker/0.5.4\")]"),
+        "0.5.4",
+    )
+
+def _test_a_doc_root_url_this_reader_does_not_understand_is_not_read(_ctx):
+    for text in [
+        "#![doc(html_root_url = \"https://docs.rs/krabka-broker\")]",
+        "#![doc(html_root_url = \"https://docs.rs/krabka-broker/0.5.4/extra\")]",
+        "#![doc(html_root_url = \"https://example.invalid/krabka-broker/0.5.4\")]",
+        "#![doc(html_root_url = https://docs.rs/krabka-broker/0.5.4)]",
+        "//! #![doc(html_root_url = \"https://docs.rs/krabka-broker/0.5.4\")]",
+    ]:
+        check_eq("not a version: %r" % text, doc_root_version(text), None)
+
+def _test_a_crate_root_yields_its_attribute(_ctx):
+    check_eq(
+        "the one attribute",
+        lib_pins("crates/log/src/lib.rs", [
+            "//! The log crate.",
+            "#![doc(html_root_url = \"https://docs.rs/krabka-log/0.5.4\")]",
+            "pub mod segment;",
+        ]),
+        [_pin("crates/log/src/lib.rs", "html_root_url", "0.5.4")],
+    )
+
+def _test_a_crate_root_without_the_attribute_yields_nothing(_ctx):
+    check_eq("nothing to read", lib_pins("crates/restore/src/lib.rs", ["pub mod plan;"]), [])
+
+def _test_pins_that_agree_are_no_disagreement(_ctx):
+    pins = [
+        _pin("Cargo.toml", "[workspace.package] version", "0.5.4"),
+        _pin("MODULE.bazel", "module(version)", "0.5.4"),
+        _pin("bazel/defs.bzl", "WORKSPACE_VERSION", "0.5.4"),
+    ]
+    check_eq("agreement", disagreements(pins), [])
+    check_eq("and against the tag they name", disagreements(pins, expected = "0.5.4"), [])
+
+def _test_a_stale_workspace_version_is_reported_against_the_root_manifest(_ctx):
+    # The failure this check exists for: `bazel/defs.bzl` stamps
+    # WORKSPACE_VERSION into every component's purl, so a bump that misses it
+    # attests an SBOM naming the previous release.
+    check_eq(
+        "the stale constant",
+        disagreements([
+            _pin("Cargo.toml", "[workspace.package] version", "0.6.0"),
+            _pin("MODULE.bazel", "module(version)", "0.6.0"),
+            _pin("bazel/defs.bzl", "WORKSPACE_VERSION", "0.5.4"),
+        ]),
+        ["bazel/defs.bzl: WORKSPACE_VERSION is 0.5.4, and Cargo.toml: [workspace.package] version is 0.6.0"],
+    )
+
+def _test_every_disagreement_is_reported_not_only_the_first(_ctx):
+    check_eq(
+        "both",
+        disagreements([
+            _pin("Cargo.toml", "[workspace.package] version", "0.6.0"),
+            _pin("bazel/defs.bzl", "WORKSPACE_VERSION", "0.5.4"),
+            _pin("crates/log/src/lib.rs", "html_root_url", "0.5.3"),
+        ]),
+        [
+            "bazel/defs.bzl: WORKSPACE_VERSION is 0.5.4, and Cargo.toml: [workspace.package] version is 0.6.0",
+            "crates/log/src/lib.rs: html_root_url is 0.5.3, and Cargo.toml: [workspace.package] version is 0.6.0",
+        ],
+    )
+
+def _test_pins_that_agree_with_each_other_and_not_the_tag_all_fail(_ctx):
+    # A `v0.6.0` tag pushed at a tree that still says 0.5.4 everywhere: the
+    # tree is self-consistent, and the release is still wrong.
+    check_eq(
+        "every pin, against the tag",
+        disagreements(
+            [
+                _pin("Cargo.toml", "[workspace.package] version", "0.5.4"),
+                _pin("MODULE.bazel", "module(version)", "0.5.4"),
+            ],
+            expected = "0.6.0",
+        ),
+        [
+            "Cargo.toml: [workspace.package] version is 0.5.4, and the expected version is 0.6.0",
+            "MODULE.bazel: module(version) is 0.5.4, and the expected version is 0.6.0",
+        ],
+    )
+
+def _test_no_pins_at_all_is_a_failure_and_not_a_pass(_ctx):
+    # A reader that stopped understanding these files would find nothing, and
+    # finding nothing must never be the same answer as finding agreement.
+    check_eq(
+        "reported",
+        disagreements([]),
+        ["no version pins were found, which is not a tree this check can pass"],
+    )
+    check_eq("with an expected version too", len(disagreements([], expected = "0.6.0")), 1)
+
+def _test_the_readers_meet_on_one_version(_ctx):
+    # End to end over the four file shapes: a tree bumped everywhere agrees
+    # with itself and with the tag, and the same tree with `bazel/defs.bzl`
+    # left behind does not.
+    def _tree(defs_version):
+        return (
+            cargo_pins("Cargo.toml", _root_manifest("0.6.0", "0.6.0")) +
+            cargo_pins("crates/broker/Cargo.toml", _member_manifest("0.6.0")) +
+            module_pins("MODULE.bazel", ["module(", "    version = \"0.6.0\",", ")"]) +
+            defs_pins("bazel/defs.bzl", ["WORKSPACE_VERSION = \"%s\"" % defs_version]) +
+            lib_pins("crates/log/src/lib.rs", [
+                "#![doc(html_root_url = \"https://docs.rs/krabka-log/0.6.0\")]",
+            ])
+        )
+
+    check_eq("a complete bump", disagreements(_tree("0.6.0")), [])
+    check_eq("and against its tag", disagreements(_tree("0.6.0"), expected = "0.6.0"), [])
+    check_eq(
+        "one file left behind",
+        disagreements(_tree("0.5.4")),
+        ["bazel/defs.bzl: WORKSPACE_VERSION is 0.5.4, and Cargo.toml: [workspace.package] version is 0.6.0"],
+    )
+    check_eq(
+        "the wrong tag over a consistent tree",
+        len(disagreements(_tree("0.6.0"), expected = "0.5.4")),
+        6,
+    )
+
+check_version_pins_tests = suite("check-version-pins", [
+    _test_a_quoted_value_is_read,
+    _test_a_field_is_read_from_a_line_or_an_inline_table,
+    _test_a_field_is_not_read_out_of_a_longer_key,
+    _test_a_dependency_line_reads_its_path_and_version,
+    _test_a_path_dependency_without_a_version_carries_none,
+    _test_what_is_not_a_path_dependency_is_not_read_as_one,
+    _test_a_table_header_is_recognised,
+    _test_the_root_manifest_yields_its_version_and_its_path_dependencies,
+    _test_a_member_manifest_yields_only_its_first_party_requirements,
+    _test_the_module_version_is_read_and_bazel_dep_versions_are_not,
+    _test_a_module_file_with_no_module_call_yields_nothing,
+    _test_the_workspace_version_constant_is_read,
+    _test_a_defs_file_without_the_constant_yields_nothing,
+    _test_a_doc_root_url_yields_its_last_segment,
+    _test_a_doc_root_url_this_reader_does_not_understand_is_not_read,
+    _test_a_crate_root_yields_its_attribute,
+    _test_a_crate_root_without_the_attribute_yields_nothing,
+    _test_pins_that_agree_are_no_disagreement,
+    _test_a_stale_workspace_version_is_reported_against_the_root_manifest,
+    _test_every_disagreement_is_reported_not_only_the_first,
+    _test_pins_that_agree_with_each_other_and_not_the_tag_all_fail,
+    _test_no_pins_at_all_is_a_failure_and_not_a_pass,
+    _test_the_readers_meet_on_one_version,
+])
+
+test_check_version_pins = suite_task(check_version_pins_tests)
