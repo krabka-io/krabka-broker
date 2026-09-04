@@ -86,7 +86,7 @@ KFC-1 and KFC-7 each reused an existing Kafka code, and both gave the same reaso
 
 ### The Private Error Codes
 
-These codes ride the five private keys only, so none of them reaches a JVM client. They start at 1006, which leaves KFC-6's proposed 1001 to 1005 alone.
+These codes ride the five private keys only, so none of them reaches a JVM client. They start at 1006, leaving 1001 to 1005 unused above `BARRIER_INJECTION_IN_PROGRESS` (1000).
 
 | Code | Name | Meaning |
 | :--- | :--- | :--- |
