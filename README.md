@@ -453,6 +453,13 @@ points at robot-head/crabka for the history before the extraction.
 from [`robot-head/crabka`](https://github.com/robot-head/crabka). This repository
 publishes no crate; consumers pin it by git revision.
 
+## Roadmap
+
+[docs/roadmap.md](docs/roadmap.md) gives the milestone sequence and the reason
+for it. Each milestone asks one question about a claim the project makes, and
+the [GitHub milestones](https://github.com/krabka-io/krabka-broker/milestones)
+carry the full statement of the gap with the citations behind it.
+
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request. Report
