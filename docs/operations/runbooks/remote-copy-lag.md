@@ -22,9 +22,11 @@ loop breaks.
   `remote_copy_lag_bytes` is the disk they hold. A lag that climbs for half an
   hour will not recover on its own.
 - **Fetch errors.** The tier will not serve a read. A consumer reading records
-  the local log has already evicted is answered `OFFSET_OUT_OF_RANGE` and goes
-  to its `auto.offset.reset`, which for `latest` silently skips the history it
-  asked for.
+  the local log has already evicted is answered `UNKNOWN_SERVER_ERROR` on that
+  partition, which the client retries with its position intact, so the history
+  is stalled rather than lost. The consumer makes no progress for as long as
+  the tier stays broken, and only the partitions whose offsets are cold are
+  affected.
 
 Produce and local reads are unaffected in all three cases until the disk
 fills.
