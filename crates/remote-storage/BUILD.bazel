@@ -17,8 +17,9 @@ crate_binary(
 crate_tests(
     # `worm_verify_cli` runs the binary against an archive it writes.
     data = [":krabka-worm-verify"],
-    # `gcs_emulator` drives the native GCS backend against `fake-gcs-server`,
-    # so it needs the emulator image. //bazel/images pins it by digest and
+    # `gcs_emulator` drives the native GCS backend's read, delete and
+    # WORM-startup paths against `fake-gcs-server`, so it needs the emulator
+    # image. //bazel/images pins it by digest and
     # loads it before the suite runs. `jvm_tiered_storage` drives a real Kafka.
     docker = {
         "gcs_emulator": ["fake_gcs_server"],

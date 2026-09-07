@@ -5,42 +5,58 @@
 //! [`S3RemoteStorage::from_gcs_config`]. Until this suite existed the only GCS
 //! coverage in the tree was builder-constructs-ok unit tests and an
 //! `InMemory`-backed round trip, so no byte of the GCS wire path -- the XML
-//! object API `object_store`'s GCS client actually speaks, the generation
-//! preconditions a conditional create rides on, and the `Buckets.get` control
-//! plane that gates archive startup -- was ever executed against a server.
+//! object API `object_store`'s GCS client actually speaks, and the
+//! `Buckets.get` control plane that gates archive startup -- was ever executed
+//! against a server.
 //!
 //! The container lifecycle follows the pattern `crates/restore/tests/
 //! minio_roundtrip.rs` uses: a `docker run -d` guard that removes the
 //! container on drop, and a per-process published port so two container suites
 //! can run at once.
 //!
-//! ## What this suite cannot reach
+//! ## What this suite cannot reach: the object write
 //!
-//! The multipart branch of a copy. `object_store` 0.14's GCS client implements
-//! `put_multipart` exclusively over the Cloud Storage *XML multipart* API --
-//! `POST ?uploads`, `PUT ?partNumber&uploadId`, `POST ?uploadId` -- and
-//! neither `fsouza/fake-gcs-server` nor Google's own
-//! `googleapis/storage-testbench` implements those routes. A copy whose `.log`
-//! exceeds `multipart_threshold` therefore cannot be served by any GCS
-//! emulator that exists. What this suite does cover is that the threshold
-//! `GcsConfig` carries reaches the engine and that a copy under it round-trips
-//! against a real server; the multipart lane stays covered by the S3 suites
-//! and by `crates/object-store`'s `put_from_path` unit tests.
+//! `object_store` 0.14 writes a GCS object over the Cloud Storage **XML** API.
+//! Its `GoogleCloudStorageClient::put` sends `PUT {endpoint}/{bucket}/{object}`
+//! with the body inline and no query string at all, the object key
+//! percent-encoded into one path segment. `fsouza/fake-gcs-server` does route
+//! that path, but routes it to `insertObject` -- the **JSON** API's upload
+//! handler -- which requires an `uploadType` query parameter and answers
+//! anything else `400 Bad Request: invalid uploadType`. Its one escape hatch
+//! is a signed-URL upload, taken when the query carries `X-Goog-Algorithm`,
+//! which `object_store` never sends; every emulator release from 1.40 to the
+//! current 1.56.1 has the same handler. Google's own
+//! `googleapis/storage-testbench` does serve the XML `PUT`, but serves no XML
+//! `DELETE`, so it would trade this suite's delete coverage for the copy leg
+//! and put the two WORM cases on a server they have never run against.
+//!
+//! Reads and deletes travel the same XML object path and *are* routed:
+//! `GET`/`HEAD` reach the emulator's download handler, which honours `Range`
+//! and returns the `ETag`, `Last-Modified` and generation headers
+//! `object_store` requires of a response, and `DELETE` reaches its delete
+//! handler. So this suite seeds a segment's objects through the emulator's
+//! JSON media upload -- the same control plane it creates buckets with, and
+//! not a `krabka` code path -- and then drives fetch, delete and the WORM
+//! startup gate through the backend, keyed exactly as the engine keys them.
+//!
+//! The copy path -- the single PUT, the multipart threshold, the generation
+//! precondition of a conditional create and the sealed WORM manifest --
+//! therefore stays covered where it can be executed against something: the
+//! `InMemory`-backed suites under `crates/remote-storage/src/s3`,
+//! `crates/object-store`'s `put_from_path` tests, and the MinIO-backed
+//! S3 suites. No GCS emulator can execute it.
 
 use std::{
-    io::Write as _,
-    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
 
 use assert2::{assert, check};
-use bytes::Bytes;
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    GcsConfig, IndexType, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
+    GcsConfig, IndexType, LOG_FILE_SUFFIX, RemoteLogSegmentDetails, RemoteLogSegmentId,
     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError, RemoteStorageManager as _,
-    S3RemoteStorage, TopicIdPartition, WormConfig,
+    S3RemoteStorage, TopicIdPartition, WormConfig, partition_dir_name, segment_file_name,
 };
 use uuid::Uuid;
 
@@ -183,6 +199,71 @@ impl FakeGcs {
         );
         bucket
     }
+
+    /// Write one object through the emulator's JSON media upload, the write
+    /// the emulator serves. The module docs say why the backend's own write
+    /// cannot stand in here.
+    ///
+    /// The key goes into the query string unescaped, which is exact for the
+    /// keys this suite uses and no others: a Kafka archive key is made of the
+    /// prefix, a topic name, digits, `-`, `_`, `.` and the `/` separator, and
+    /// a query component may carry every one of those literally. The
+    /// assertion below is what keeps that true.
+    async fn put_object(&self, bucket: &str, key: &str, body: &'static [u8]) {
+        assert!(
+            key.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._/".contains(&b)),
+            "key {key} needs percent-encoding to survive a query string",
+        );
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/upload/storage/v1/b/{bucket}/o?uploadType=media&name={key}",
+                self.endpoint(),
+            ))
+            .header("content-type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .expect("seed an object");
+        assert!(
+            response.status().is_success(),
+            "seed {key}: {}",
+            response.status(),
+        );
+    }
+
+    /// Seed every artifact of one segment at the keys the engine derives, so
+    /// a backend read has to agree with the engine's own key layout to find
+    /// anything.
+    async fn seed_segment(&self, bucket: &str, metadata: &RemoteLogSegmentMetadata) {
+        for (suffix, body) in segment_artifacts() {
+            self.put_object(bucket, &object_key(metadata, suffix), body)
+                .await;
+        }
+    }
+
+    /// The names of every object currently in `bucket`.
+    async fn object_names(&self, bucket: &str) -> Vec<String> {
+        let body = reqwest::Client::new()
+            .get(format!("{}/storage/v1/b/{bucket}/o", self.endpoint()))
+            .send()
+            .await
+            .expect("list the bucket")
+            .bytes()
+            .await
+            .expect("read the object listing");
+        let listing: serde_json::Value =
+            serde_json::from_slice(&body).expect("parse the object listing");
+        listing["items"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| item["name"].as_str().unwrap_or_default().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for FakeGcs {
@@ -208,6 +289,28 @@ fn gcs_config(server: &FakeGcs, bucket: String) -> GcsConfig {
     }
 }
 
+/// Every artifact a copy of the fixture segment would have written, by key
+/// suffix and body. The transaction index is absent, as it is for a segment
+/// with no aborted transactions.
+fn segment_artifacts() -> [(&'static str, &'static [u8]); 5] {
+    [
+        (LOG_FILE_SUFFIX, LOG_BODY),
+        (IndexType::Offset.suffix(), OFFSET_INDEX_BODY),
+        (IndexType::Timestamp.suffix(), TIME_INDEX_BODY),
+        (IndexType::ProducerSnapshot.suffix(), SNAPSHOT_BODY),
+        (IndexType::LeaderEpoch.suffix(), EPOCH_BODY),
+    ]
+}
+
+/// The object key one artifact of `metadata` lives at, prefix included.
+fn object_key(metadata: &RemoteLogSegmentMetadata, suffix: &str) -> String {
+    format!(
+        "{PREFIX}/{}/{}",
+        partition_dir_name(metadata),
+        segment_file_name(metadata, suffix),
+    )
+}
+
 fn sample_metadata(topic_id: Uuid, partition: i32) -> RemoteLogSegmentMetadata {
     RemoteLogSegmentMetadata::new(
         RemoteLogSegmentId::new(
@@ -228,46 +331,24 @@ fn sample_metadata(topic_id: Uuid, partition: i32) -> RemoteLogSegmentMetadata {
     .expect("valid remote metadata")
 }
 
-fn write_file(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
-    let path = dir.join(name);
-    std::fs::File::create(&path)
-        .expect("create a fixture file")
-        .write_all(contents)
-        .expect("write a fixture file");
-    path
-}
-
-fn sample_data(src: &Path) -> LogSegmentData {
-    LogSegmentData {
-        log_segment: write_file(src, "00.log", LOG_BODY),
-        offset_index: write_file(src, "00.index", OFFSET_INDEX_BODY),
-        time_index: write_file(src, "00.timeindex", TIME_INDEX_BODY),
-        transaction_index: None,
-        producer_snapshot_index: Some(write_file(src, "00.snapshot", SNAPSHOT_BODY)),
-        leader_epoch_index: Bytes::from_static(EPOCH_BODY),
-    }
-}
-
-/// A copy through `from_gcs_config` puts every artifact of a segment into a
-/// real bucket, and each fetch reads back exactly what was written.
+/// Every artifact of a segment in a real bucket reads back byte for byte
+/// through the backend, whole and by range, and each index reads back as
+/// itself rather than as a neighbour.
 ///
 /// Multi-thread on purpose: `S3RemoteStorage`'s sync trait methods bridge to
 /// the async store with `block_in_place`, which a current-thread runtime
 /// cannot do.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn a_segment_copied_into_the_emulator_fetches_back_byte_for_byte() {
+async fn a_segment_seeded_in_the_emulator_fetches_back_byte_for_byte() {
     let server = FakeGcs::start().await;
-    let config = gcs_config(&server, server.create_bucket(false).await);
+    let bucket = server.create_bucket(false).await;
+    let config = gcs_config(&server, bucket.clone());
     let storage = S3RemoteStorage::from_gcs_config(&config).expect("open the emulator bucket");
-    let src = tempfile::tempdir().expect("fixture tempdir");
     let metadata = sample_metadata(Uuid::new_v4(), 0);
+    server.seed_segment(&bucket, &metadata).await;
 
     tokio::task::spawn_blocking(move || {
-        storage
-            .copy_log_segment_data(&metadata, &sample_data(src.path()))
-            .expect("copy the segment into the emulator");
-
         check!(
             storage
                 .fetch_log_segment(&metadata, 0, None)
@@ -299,74 +380,43 @@ async fn a_segment_copied_into_the_emulator_fetches_back_byte_for_byte() {
     .expect("the blocking half of the test");
 }
 
-/// A delete removes every artifact the copy wrote, so a later fetch reports
-/// the segment as absent rather than serving a stale body.
+/// A delete removes every artifact of the segment from the bucket, so a later
+/// fetch reports the segment as absent rather than serving a stale body, and
+/// the bucket itself is left empty.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn a_deleted_segment_is_gone_from_the_bucket() {
     let server = FakeGcs::start().await;
-    let config = gcs_config(&server, server.create_bucket(false).await);
+    let bucket = server.create_bucket(false).await;
+    let config = gcs_config(&server, bucket.clone());
     let storage = S3RemoteStorage::from_gcs_config(&config).expect("open the emulator bucket");
-    let src = tempfile::tempdir().expect("fixture tempdir");
     let metadata = sample_metadata(Uuid::new_v4(), 3);
+    server.seed_segment(&bucket, &metadata).await;
+    let seeded = server.object_names(&bucket).await;
+    check!(seeded.len() == segment_artifacts().len());
 
+    let deleted = metadata.clone();
     tokio::task::spawn_blocking(move || {
         storage
-            .copy_log_segment_data(&metadata, &sample_data(src.path()))
-            .expect("copy the segment into the emulator");
-        storage
-            .delete_log_segment_data(&metadata)
+            .delete_log_segment_data(&deleted)
             .expect("delete the segment from the emulator");
 
-        assert!(let Err(error) = storage.fetch_log_segment(&metadata, 0, None));
+        assert!(let Err(error) = storage.fetch_log_segment(&deleted, 0, None));
         check!(matches!(error, RemoteStorageError::SegmentNotFound(_)));
-        assert!(let Err(error) = storage.fetch_index(&metadata, IndexType::Offset));
+        assert!(let Err(error) = storage.fetch_index(&deleted, IndexType::Offset));
         check!(matches!(error, RemoteStorageError::SegmentNotFound(_)));
 
         // Kafka's SPI requires an idempotent delete: a retried expiry of a
         // segment already gone must not fail the retention pass.
         storage
-            .delete_log_segment_data(&metadata)
+            .delete_log_segment_data(&deleted)
             .expect("a second delete is a no-op");
     })
     .await
     .expect("the blocking half of the test");
-}
 
-/// The multipart threshold `GcsConfig` carries reaches the engine, and a
-/// segment under it round-trips through the real server.
-///
-/// The multipart side of that branch is unreachable against an emulator; the
-/// module docs say why.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Docker"]
-async fn a_copy_under_a_tuned_multipart_threshold_stays_a_single_put() {
-    let server = FakeGcs::start().await;
-    let config = GcsConfig {
-        // One byte above the fixture segment: the largest threshold at which
-        // this copy is still a single PUT, so a regression that moved the
-        // comparison to `<=` would take the multipart branch and fail here.
-        multipart_threshold: u64::try_from(LOG_BODY.len()).expect("fixture body fits u64") + 1,
-        multipart_chunk_size: 5 * 1024 * 1024,
-        ..gcs_config(&server, server.create_bucket(false).await)
-    };
-    let storage = S3RemoteStorage::from_gcs_config(&config).expect("open the emulator bucket");
-    let src = tempfile::tempdir().expect("fixture tempdir");
-    let metadata = sample_metadata(Uuid::new_v4(), 7);
-
-    tokio::task::spawn_blocking(move || {
-        storage
-            .copy_log_segment_data(&metadata, &sample_data(src.path()))
-            .expect("copy the segment into the emulator");
-        check!(
-            storage
-                .fetch_log_segment(&metadata, 0, None)
-                .expect("fetch the whole segment")
-                == LOG_BODY
-        );
-    })
-    .await
-    .expect("the blocking half of the test");
+    let left = server.object_names(&bucket).await;
+    check!(left == Vec::<String>::new());
 }
 
 /// `with_worm` gates archive startup on `Buckets.get`, and a bucket with
