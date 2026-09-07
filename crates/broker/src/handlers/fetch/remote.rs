@@ -142,6 +142,42 @@ fn reject_saturated(p: &mut PendingRead) -> usize {
     fail_partition(p)
 }
 
+/// Answers a follower that fetched into the band the leader keeps only in the
+/// remote tier.
+///
+/// KIP-405 routes a follower and a consumer differently over the same offsets.
+/// A consumer is served out of the archive, one batch per fetch. A follower is
+/// not: serving it would copy every archived byte back down the replication
+/// path onto the new replica's disk, at replication rate, through the leader's
+/// bounded reader pool -- which fills the disk tiering was meant to spare,
+/// starves the consumer cold reads sharing that pool, and leaves every replica
+/// holding the whole archive anyway. So the leader answers
+/// `OFFSET_MOVED_TO_TIERED_STORAGE` (109) and the follower restarts its log at
+/// the leader's local log start, which is what Kafka's
+/// `ReplicaManager.handleOffsetOutOfRangeError` does for
+/// `params.isFromFollower`.
+///
+/// The pointers `do_read` wrote -- the global log start, the high watermark,
+/// the LSO -- stay as they are: they are what tell the follower which band it
+/// asked into, and Kafka's `createLogReadResult` sends the same three beside
+/// this error. The aborted-transaction list is untouched as well, because a
+/// follower fetch is never read-committed.
+///
+/// Returns zero served bytes: the partition carries an error and no records.
+fn moved_to_tiered_storage(p: &mut PendingRead, local_log_start: i64) -> usize {
+    tracing::debug!(
+        topic = %p.topic_name,
+        partition = p.partition_index,
+        offset = p.fetch_offset,
+        local_log_start,
+        "remote-reader: follower fetched below the local log start; \
+         answering OFFSET_MOVED_TO_TIERED_STORAGE"
+    );
+    p.out.error_code = codes::OFFSET_MOVED_TO_TIERED_STORAGE;
+    p.out.records = None;
+    0
+}
+
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
 /// local log returned `OFFSET_OUT_OF_RANGE` and the topic has
 /// `remote.storage.enable=true`.
@@ -153,6 +189,10 @@ fn reject_saturated(p: &mut PendingRead) -> usize {
 /// `OFFSET_OUT_OF_RANGE` the local read set stands. When the tier itself
 /// fails, the partition is answered `UNKNOWN_SERVER_ERROR` instead: see
 /// [`fail_partition`].
+///
+/// A *follower* never reads the tier at all: it is answered
+/// `OFFSET_MOVED_TO_TIERED_STORAGE` and rebuilds its log at the leader's local
+/// log start. See [`moved_to_tiered_storage`].
 ///
 /// A consumer read of a scheduled topic is capped here as well. The remote path
 /// serves whole batches with no offset limit, and it is the one read path the
@@ -170,7 +210,13 @@ pub(super) async fn try_remote_read(
     part: &Partition,
 ) -> Option<usize> {
     let reader = broker.remote_reader.clone()?;
-    let (remote_storage_enable, delivery_policy, delivery_uncertainty_ms, log_start) = {
+    let (
+        remote_storage_enable,
+        delivery_policy,
+        delivery_uncertainty_ms,
+        log_start,
+        local_log_start,
+    ) = {
         let log = part.log.lock().expect("log mutex poisoned");
         let config = log.config_snapshot();
         (
@@ -178,6 +224,7 @@ pub(super) async fn try_remote_read(
             config.delivery_policy,
             config.delivery_clock_uncertainty.millis_i64_trunc(),
             log.established_log_start(),
+            log.local_log_start_offset(),
         )
     };
     if !remote_storage_enable {
@@ -204,6 +251,14 @@ pub(super) async fn try_remote_read(
     // `Log::established_log_start`.
     if matches!(log_start, Some(floor) if p.fetch_offset < floor.0) {
         return None;
+    }
+    // KIP-405: a follower in the remote band is redirected, never served.
+    // Checked after the floor above, because an offset below the global floor
+    // is gone from every tier and stays `OFFSET_OUT_OF_RANGE` for a follower
+    // exactly as it does for a consumer -- Kafka guards the same way, with
+    // `logStartOffset <= offset` before `offset < localLogStartOffset`.
+    if p.is_follower_fetch && p.fetch_offset < local_log_start.0 {
+        return Some(moved_to_tiered_storage(p, local_log_start.0));
     }
     if p.topic_id == WireUuid::ZERO {
         // Without a topic_id we can't build `TopicIdPartition` keyed the
@@ -563,6 +618,77 @@ mod tests {
         let mut at_floor = out_of_range_at(&part, 5);
         let bytes_served = super::try_remote_read(&broker, &mut at_floor, &part).await;
         check!(bytes_served.is_some_and(|n| n > 0), "the floor is readable");
+
+        broker_handle.shutdown().await;
+    }
+
+    /// KIP-405 routes a follower and a consumer differently over the same
+    /// band of offsets, and this is the case that says so.
+    ///
+    /// The consumer is served the archived batch, one fetch at a time. The
+    /// follower is not served at all: it is answered
+    /// `OFFSET_MOVED_TO_TIERED_STORAGE` with no records, so the archive is
+    /// never re-materialised on the new replica's disk. Kafka's
+    /// `ReplicaManager.handleOffsetOutOfRangeError` splits on
+    /// `params.isFromFollower` in exactly the same place.
+    ///
+    /// The two floors still bound the follower the way they bound a consumer.
+    /// An offset a `DeleteRecords` deleted is gone from every tier, so it stays
+    /// `OFFSET_OUT_OF_RANGE` rather than sending the follower to a band that no
+    /// longer exists; and an offset above the leader's log is not in the tier
+    /// either, so it stays `OFFSET_OUT_OF_RANGE` and the follower truncates
+    /// instead of restarting.
+    #[tokio::test]
+    async fn a_follower_below_the_local_log_start_is_redirected_and_a_consumer_is_served() {
+        use krabka_log::Offset;
+
+        use crate::codes;
+
+        let (broker_handle, dir, _remote_dir) = tiered_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        let part = tiered_partition(&broker, dir.path(), false).await;
+
+        let follower_at = |fetch_offset| super::PendingRead {
+            is_follower_fetch: true,
+            ..out_of_range_at(&part, fetch_offset)
+        };
+
+        let mut follower = follower_at(0);
+        let served = super::try_remote_read(&broker, &mut follower, &part).await;
+        check!(
+            served == Some(0),
+            "the follower is served no archived bytes"
+        );
+        check!(follower.out.error_code == codes::OFFSET_MOVED_TO_TIERED_STORAGE);
+        check!(follower.out.records.is_none());
+
+        // A consumer at the very same offset still reads the archive.
+        let mut consumer = out_of_range_at(&part, 0);
+        let served = super::try_remote_read(&broker, &mut consumer, &part).await;
+        check!(
+            served.is_some_and(|n| n > 0),
+            "the tier answers the consumer"
+        );
+        check!(consumer.out.error_code == codes::NONE);
+        check!(consumer.out.records.is_some());
+
+        // Above the leader's log there is no tiered band to redirect into.
+        let mut ahead = follower_at(10_000);
+        let served = super::try_remote_read(&broker, &mut ahead, &part).await;
+        check!(served == None, "no segment holds offset 10_000");
+        check!(ahead.out.error_code == codes::OFFSET_OUT_OF_RANGE);
+
+        // Below the global floor the offset is gone from every tier.
+        part.log
+            .lock()
+            .expect("log mutex poisoned")
+            .set_log_start_offset(Offset(5))
+            .expect("move the log start");
+        let mut deleted = follower_at(0);
+        let served = super::try_remote_read(&broker, &mut deleted, &part).await;
+        check!(served == None, "nothing serves an offset below the floor");
+        check!(deleted.out.error_code == codes::OFFSET_OUT_OF_RANGE);
+        check!(deleted.out.records.is_none());
 
         broker_handle.shutdown().await;
     }

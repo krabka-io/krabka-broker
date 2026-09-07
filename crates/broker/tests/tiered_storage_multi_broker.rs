@@ -72,7 +72,9 @@
 //! [`multi_misaligned`] boots the same three brokers with different
 //! `log.segment.bytes` on each, so the two replicas of one partition roll at
 //! different offsets, and follows the copy pass across a failover onto those
-//! boundaries.
+//! boundaries. [`multi_reassign`] adds a replica to a partition whose local
+//! segments are gone and measures what that replica pulls: KIP-405 bounds it
+//! by the leader's local retention, not by the archive.
 
 mod support;
 
@@ -88,6 +90,8 @@ mod multi_cluster;
 mod multi_failover;
 #[path = "tiered_storage_multi_broker/multi_misaligned.rs"]
 mod multi_misaligned;
+#[path = "tiered_storage_multi_broker/multi_reassign.rs"]
+mod multi_reassign;
 #[path = "tiered_storage_multi_broker/multi_workload.rs"]
 mod multi_workload;
 
