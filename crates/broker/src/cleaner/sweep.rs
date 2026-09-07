@@ -1,11 +1,21 @@
 //! One compaction sweep over the partition registry.
 //!
-//! The sweep tests every partition for local leadership, for a cleanup policy
+//! The sweep tests every partition this broker hosts for a cleanup policy
 //! containing `compact`, for Kafka's cleanable test over the partition's dirty
 //! region, and for a KFC-9 write freeze. It dispatches
-//! [`Partition::compact_log`] for the partitions that pass all four tests,
+//! [`Partition::compact_log`] for the partitions that pass all three tests,
 //! and it accounts each completed compaction, each failed one, and the sweep
 //! itself in the metrics.
+//!
+//! Leadership is not one of the tests. Kafka's `LogCleanerManager` walks
+//! every log the `LogManager` holds, exactly as `LogManager.cleanupLogs`
+//! does, because compaction is a local operation on a replica: it rewrites
+//! sealed segments in place and preserves every surviving record's offset, so
+//! a follower that runs a pass stays byte-comparable with the leader at the
+//! offsets that remain. Skipping followers left a compacted topic's follower
+//! replicas with no bound on their segment count at all, since
+//! `cleanup.policy=compact` sets no `retention.ms` for the local-retention
+//! sweep to act on.
 //!
 //! A failure is accounted rather than logged and forgotten. Compaction and
 //! local retention stop together on a compacted topic, so a cleaner that
@@ -14,12 +24,9 @@
 //! the partitions the cleaner has lost across sweeps, and the sweep counter
 //! is left where it was so a failing pass never reports success.
 
-use std::{
-    collections::BTreeSet,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{collections::BTreeSet, sync::Arc};
 
-use krabka_metadata::{MetadataImage, NodeId};
+use krabka_metadata::MetadataImage;
 use krabka_verified::FreezeMutationKind;
 use tracing::warn;
 
@@ -38,7 +45,7 @@ use crate::{
 /// partition that failed a pass stays uncleanable until one succeeds, and a
 /// per-sweep count would report zero on the next sweep that finds it
 /// ineligible. The set is keyed by the partition's identity rather than by an
-/// `Arc<Partition>` so a partition this broker stops leading leaves it.
+/// `Arc<Partition>` so a partition this broker stops hosting leaves it.
 #[derive(Debug, Default)]
 pub(crate) struct UncleanablePartitions {
     inner: BTreeSet<(String, i32)>,
@@ -51,7 +58,7 @@ impl UncleanablePartitions {
     }
 
     /// Drop every entry that `swept` does not name, which is what releases a
-    /// partition this broker no longer leads or no longer compacts.
+    /// partition this broker no longer hosts or no longer compacts.
     fn retain_swept(&mut self, swept: &BTreeSet<(String, i32)>) {
         self.inner.retain(|key| swept.contains(key));
     }
@@ -95,7 +102,6 @@ fn freeze_stops_compaction(image: Option<&MetadataImage>, topic: &str) -> bool {
 pub(crate) async fn tick_all(
     partitions: &PartitionRegistry,
     image: Option<&MetadataImage>,
-    node_id: NodeId,
     metrics: &BrokerMetrics,
     uncleanable: &mut UncleanablePartitions,
 ) {
@@ -107,10 +113,12 @@ pub(crate) async fn tick_all(
     let mut swept: BTreeSet<(String, i32)> = BTreeSet::new();
     let mut failed = false;
     for partition in snapshot {
-        let leader = partition.current_leader.load(Ordering::Relaxed);
-        if leader != node_id {
-            continue;
-        }
+        // Kafka bounds a pass at the last stable offset, and krabka bounds it
+        // at the high watermark: below it a record is committed, so no leader
+        // election can take away the newer record that a pass drops an older
+        // one in favour of. A follower learns this watermark from the
+        // leader's Fetch response, so the bound is one every replica knows.
+        let high_watermark = partition.high_watermark().await;
         let (compacted, due) = {
             // Recover the guard if the mutex was poisoned by a panic
             // elsewhere rather than killing the (discarded-JoinHandle)
@@ -130,16 +138,16 @@ pub(crate) async fn tick_all(
                 // Kafka's `min.cleanable.dirty.ratio`, `min.compaction.lag.ms`
                 // and `max.compaction.lag.ms`, which say whether this
                 // partition has earned a pass yet.
-                compacted && log.compaction_due(std::time::SystemTime::now()),
+                compacted && log.compaction_due(std::time::SystemTime::now(), high_watermark),
             )
         };
         if !compacted {
             continue;
         }
-        // Leadership and the cleanup policy are what make a partition this
-        // cleaner's work. A partition that is merely not due yet keeps the
-        // uncleanable mark an earlier failure left on it, because the failure
-        // is still there; only a pass that succeeds clears it.
+        // The cleanup policy is what makes a partition this cleaner's work.
+        // A partition that is merely not due yet keeps the uncleanable mark
+        // an earlier failure left on it, because the failure is still there;
+        // only a pass that succeeds clears it.
         let key = (partition.topic.clone(), partition.index.get());
         swept.insert(key.clone());
         if !due {
@@ -173,10 +181,10 @@ pub(crate) async fn tick_all(
             }
         }
     }
-    // A partition the sweep no longer considers its work — this broker lost
-    // the leadership, or the topic stopped being compacted — is no longer
-    // uncleanable, so the gauge falls without waiting for a pass to succeed
-    // on a partition that will never get one.
+    // A partition the sweep no longer considers its work — this broker
+    // stopped hosting the replica, or the topic stopped being compacted — is
+    // no longer uncleanable, so the gauge falls without waiting for a pass to
+    // succeed on a partition that will never get one.
     uncleanable.retain_swept(&swept);
     metrics.set_uncleanable_partitions(uncleanable.len());
     if failed {

@@ -4,6 +4,7 @@
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
+use krabka_metadata::NodeId;
 use krabka_units::secs;
 
 use super::*;
@@ -24,7 +25,8 @@ async fn run_ticks_until_shutdown() {
         0,
         NodeId(7),
         krabka_log::CleanupPolicy::Compact,
-    );
+    )
+    .await;
     let before = record_count(&partition);
     registry.insert(
         "run-compact".into(),
@@ -38,7 +40,6 @@ async fn run_ticks_until_shutdown() {
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(run(
         Arc::clone(&registry),
-        NodeId(7),
         CleanerConfig {
             interval,
             timer: clock.new_timer(),
@@ -97,7 +98,7 @@ async fn run_ticks_until_shutdown() {
 ///
 /// The shutdown token handed to the task is dropped uncancelled, so the only
 /// way the returned task can finish is the timer giving out.
-fn spawn_on(
+async fn spawn_on(
     dir: &tempfile::TempDir,
     topic: &str,
     timer: Arc<dyn Timer>,
@@ -108,12 +109,11 @@ fn spawn_on(
 ) {
     let registry = Arc::new(PartitionRegistry::new());
     let partition =
-        compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact);
+        compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact).await;
     let before = record_count(&partition);
     registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
     let task = tokio::spawn(run(
         registry,
-        NodeId(7),
         CleanerConfig {
             interval: secs(30),
             timer,
@@ -129,7 +129,7 @@ fn spawn_on(
 async fn run_stops_without_sweeping_when_the_first_deadline_is_refused() {
     let dir = tempfile::tempdir().expect("log root");
     let timer = BrokenTimer::dead(TimerFailure::Registration);
-    let (task, partition, before) = spawn_on(&dir, "unarmable", timer.injectable());
+    let (task, partition, before) = spawn_on(&dir, "unarmable", timer.injectable()).await;
 
     // Nobody cancels the token, so the task can only end by giving up on its
     // ticker — and it gives up before the start-up sweep, so the compactable
@@ -143,7 +143,7 @@ async fn run_stops_without_sweeping_when_the_first_deadline_is_refused() {
 async fn run_stops_when_the_first_deadline_is_armed_but_never_completes() {
     let dir = tempfile::tempdir().expect("log root");
     let timer = BrokenTimer::dead(TimerFailure::Completion);
-    let (task, partition, before) = spawn_on(&dir, "unfired", timer.injectable());
+    let (task, partition, before) = spawn_on(&dir, "unfired", timer.injectable()).await;
 
     // The deadline registers, so the loop reaches its select — and then fails,
     // which ends the task on the other of the two timer paths.
@@ -156,7 +156,7 @@ async fn run_stops_when_the_first_deadline_is_armed_but_never_completes() {
 async fn run_sweeps_once_and_stops_when_the_interval_cannot_be_re_armed() {
     let dir = tempfile::tempdir().expect("log root");
     let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
-    let (task, partition, before) = spawn_on(&dir, "unrearmable", timer.injectable());
+    let (task, partition, before) = spawn_on(&dir, "unrearmable", timer.injectable()).await;
 
     // The start-up deadline is honoured, so the first sweep compacts the
     // partition. The interval the loop re-arms afterwards is refused, and the

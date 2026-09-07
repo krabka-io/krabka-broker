@@ -56,8 +56,10 @@
 //!
 //! `soak-compacted` has no `retention.ms`, exactly as a compacted Kafka topic
 //! has none: the cleaner is what bounds it. That makes it the control against
-//! `soak-retention`, and the lane's remaining failure is on it rather than on
-//! the retention topic -- see `tests/KNOWN_ISSUES.md`.
+//! `soak-retention`, and it is what caught the cleaner sweeping only the
+//! partitions this broker led: a follower replica of a compacted topic had
+//! nothing bounding its segment count at all, and its descriptors climbed for
+//! the length of the run while the leader's stayed flat.
 //!
 //! # What fails it
 //!

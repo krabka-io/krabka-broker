@@ -15,7 +15,9 @@ use krabka_log::{Log, Offset};
 use krabka_units::Time;
 
 use super::storage::{flag_storage_failure, lock_log, storage_failure_error};
-use crate::{log_dir_status::LogDirRegistry, producer_state::ProducerState};
+use crate::{
+    log_dir_status::LogDirRegistry, producer_state::ProducerState, replica_state::ReplicaState,
+};
 
 async fn active_producers_for_compaction(
     producer_state: &ProducerState,
@@ -37,10 +39,16 @@ pub(super) async fn handle_compact(
     storage: (&Arc<Mutex<Log>>, &Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
     producer_state: &ProducerState,
     producer_id_expiration: Time,
+    replica_state: &tokio::sync::Mutex<ReplicaState>,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
 ) {
     let (topic, partition) = identity;
     let (log, log_dir, log_dir_status) = storage;
+    // The pass is bounded at the high watermark, so it never rewrites a
+    // record a leader election could still take away. The watermark is read
+    // inside the writer actor, which is the only task that moves the log, so
+    // no append or truncation can land between the read and the rewrite.
+    let high_watermark = replica_state.lock().await.hw;
     let now = std::time::SystemTime::now();
     let now_ms = now
         .duration_since(std::time::UNIX_EPOCH)
@@ -57,6 +65,7 @@ pub(super) async fn handle_compact(
     .await;
     let context = krabka_log::CompactionContext {
         now,
+        high_watermark,
         active_producers,
     };
     let log_for_blocking = Arc::clone(log);

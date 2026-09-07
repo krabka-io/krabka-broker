@@ -92,7 +92,7 @@ impl BrokerMetrics {
 
         registry.register(
             "log_cleaner_uncleanable_partitions",
-            "Partitions this broker leads whose most recent compaction \
+            "Partitions this broker hosts whose most recent compaction \
              attempt failed and which have not compacted since. Mirrors \
              Kafka's LogCleanerManager uncleanable-partitions-count.",
             self.log_cleaner_uncleanable_partitions.clone(),

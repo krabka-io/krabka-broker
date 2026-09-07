@@ -17,7 +17,8 @@ use crate::{error::LogError, retention, segment::Segment, txn_index::TxnIndex};
 /// Inputs to one [`Log::compact`] pass that depend on broker-side state.
 ///
 /// These inputs are the wall clock that computes the KIP-534 delete horizons,
-/// and the set of producers that count as active.
+/// the high watermark that bounds what a pass may rewrite, and the set of
+/// producers that count as active.
 ///
 /// `active_producers` maps `producer_id` to the `base_offset` of that
 /// producer's last batch. When compaction removes every record of that batch,
@@ -27,6 +28,15 @@ use crate::{error::LogError, retention, segment::Segment, txn_index::TxnIndex};
 pub struct CompactionContext {
     /// Wall clock for this pass. It drives delete-horizon stamps and expiry.
     pub now: std::time::SystemTime,
+    /// The replica's high watermark: the first offset this replica does not
+    /// know to be committed.
+    ///
+    /// A pass consumes only sealed segments that end at or below it, which is
+    /// the bound Kafka's `LogCleanerManager.cleanableOffsets` takes from the
+    /// last stable offset. Above the watermark a record can still be
+    /// truncated away by a leader election, and dropping an older record in
+    /// its favour would leave this replica short of one the next leader kept.
+    pub high_watermark: Offset,
     /// `producer_id` → last batch `base_offset` for currently-active
     /// producers.
     pub active_producers: std::collections::HashMap<ProducerId, Offset>,
@@ -54,6 +64,15 @@ pub struct CompactionContext {
 /// means in Kafka: it withholds the young tail from the pass, it does not
 /// postpone the pass. A topic taking writes more often than its min lag still
 /// has its older segments cleaned on schedule.
+///
+/// The high watermark bounds the tail as well, which is the third term of
+/// Kafka's `LogCleanerManager.cleanableOffsets` minimum beside the active
+/// segment's base offset and the min lag. A record above the watermark is not
+/// committed yet: a leader election can still take it away, and the
+/// truncation that removes it would leave this replica missing the older
+/// record that compaction dropped in its favour. Bounding the pass at the
+/// watermark is what makes compaction a safe local operation on every
+/// replica, leader or follower.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct CompactionCandidacy {
     /// Bytes the previous compaction pass already deduplicated.
@@ -147,7 +166,7 @@ impl Log {
     /// # Panics
     /// Panics if the configuration lock is poisoned.
     #[must_use]
-    pub fn compaction_due(&self, now: std::time::SystemTime) -> bool {
+    pub fn compaction_due(&self, now: std::time::SystemTime, high_watermark: Offset) -> bool {
         let (min_lag, max_lag, min_ratio) = {
             let cfg = self.config.read().unwrap();
             (
@@ -158,7 +177,7 @@ impl Log {
         };
         let now_ms = retention::now_ms(now);
         compaction_is_due(
-            self.compaction_candidacy(min_lag.millis_i64_trunc(), now_ms),
+            self.compaction_candidacy(min_lag.millis_i64_trunc(), now_ms, high_watermark),
             CompactionSchedule {
                 min_lag,
                 max_lag,
@@ -170,7 +189,12 @@ impl Log {
 
     /// The clean/cleanable split and dirty-region age [`Self::compaction_due`]
     /// reads. See [`CompactionCandidacy`] for what counts as which and why.
-    fn compaction_candidacy(&self, min_lag_ms: i64, now_ms: i64) -> CompactionCandidacy {
+    fn compaction_candidacy(
+        &self,
+        min_lag_ms: i64,
+        now_ms: i64,
+        high_watermark: Offset,
+    ) -> CompactionCandidacy {
         // Kafka's clean prefix is what a previous pass produced, which it
         // reads from `cleaner-offset-checkpoint`. A log nothing has cleaned
         // has no clean prefix at all: its whole sealed region is dirty, which
@@ -181,7 +205,7 @@ impl Log {
             .fold(ByteSize::ZERO, |total, segment| total + segment.size());
         let dirty: Vec<&Segment> = self.segments[clean_segments..].iter().collect();
         let cleanable = self
-            .cleanable_sealed_count(min_lag_ms, now_ms)
+            .cleanable_sealed_count(min_lag_ms, now_ms, high_watermark)
             .saturating_sub(clean_segments);
         let cleanable_bytes = dirty[..cleanable]
             .iter()
@@ -202,11 +226,17 @@ impl Log {
     }
 
     /// How many sealed segments one pass may consume, counting the clean
-    /// first one: the clean prefix plus the dirty segments Kafka's
-    /// `min.compaction.lag.ms` does not withhold.
+    /// first one: the clean prefix plus the dirty segments neither Kafka's
+    /// `min.compaction.lag.ms` nor the high watermark withholds.
     ///
-    /// Zero for a log with no sealed segment at all.
-    fn cleanable_sealed_count(&self, min_lag_ms: i64, now_ms: i64) -> usize {
+    /// Zero for a log with no sealed segment at all, and zero for one whose
+    /// oldest sealed segment still reaches above `high_watermark`.
+    fn cleanable_sealed_count(
+        &self,
+        min_lag_ms: i64,
+        now_ms: i64,
+        high_watermark: Offset,
+    ) -> usize {
         if self.segments.is_empty() {
             return 0;
         }
@@ -214,21 +244,49 @@ impl Log {
             .iter()
             .map(Segment::max_timestamp)
             .collect();
-        1 + cleanable_prefix(&largest_timestamps, now_ms, min_lag_ms)
+        let by_lag = 1 + cleanable_prefix(&largest_timestamps, now_ms, min_lag_ms);
+        by_lag.min(self.sealed_segments_below(high_watermark))
+    }
+
+    /// How many of the leading sealed segments end at or below `bound`.
+    ///
+    /// A sealed segment ends where the next one begins, and the last one ends
+    /// where the active segment does. Counting whole segments is what the
+    /// rewrite consumes, so a segment straddling the bound is withheld
+    /// entirely rather than split.
+    fn sealed_segments_below(&self, bound: Offset) -> usize {
+        self.segments
+            .iter()
+            .enumerate()
+            .position(|(index, _)| self.sealed_segment_end(index) > bound)
+            .unwrap_or(self.segments.len())
+    }
+
+    /// The first offset past sealed segment `index`.
+    fn sealed_segment_end(&self, index: usize) -> Offset {
+        self.segments.get(index + 1).map_or_else(
+            || {
+                self.active
+                    .as_ref()
+                    .map_or_else(|| self.log_end_offset(), Segment::base_offset)
+            },
+            Segment::base_offset,
+        )
     }
 
     /// Run one compaction pass over the cleanable sealed segments.
     ///
     /// The pass never touches the active segment, and it stops short of the
-    /// sealed segments `min.compaction.lag.ms` withholds -- the same range
-    /// [`Self::compaction_due`] measures, so the decision and the pass agree
-    /// on what one pass would do. The output is a single new sealed segment at
+    /// sealed segments `min.compaction.lag.ms` or `ctx.high_watermark`
+    /// withholds -- the same range [`Self::compaction_due`] measures, so the
+    /// decision and the pass agree on what one pass would do. The output is a single new sealed segment at
     /// the lowest input base offset, and it replaces the sealed segments it
     /// consumed; any withheld sealed segments stay where they are and become
     /// cleanable once their records outlive the lag.
     ///
     /// `ctx` carries the wall clock, which drives the KIP-534 delete-horizon
-    /// computation, and the set of currently-active producers. The cleaner
+    /// computation, the high watermark, and the set of currently-active
+    /// producers. The cleaner
     /// keeps the last batch of each active producer with `RETAIN_EMPTY`, even
     /// when compaction removes all of its records.
     #[instrument(
@@ -259,7 +317,13 @@ impl Log {
         };
 
         let now_ms = retention::now_ms(ctx.now);
-        let consumed = self.cleanable_sealed_count(min_lag.millis_i64_trunc(), now_ms);
+        let consumed =
+            self.cleanable_sealed_count(min_lag.millis_i64_trunc(), now_ms, ctx.high_watermark);
+        if consumed == 0 {
+            // Everything sealed is withheld — by the min lag, by the high
+            // watermark, or by both — so this pass has nothing to rewrite.
+            return Ok(());
+        }
         // Compaction rewrites sealed segments, so any record the last
         // activation walk read may not survive it.
         let compacted_from = self.log_start_offset();
@@ -336,6 +400,11 @@ mod tests {
         log::test_support::{compaction_ctx, keyed_batch},
         name,
     };
+
+    /// A high watermark past every offset these logs hold, for the tests
+    /// whose subject is the ratio, the lag or the rewrite rather than the
+    /// watermark bound.
+    const UNBOUNDED_HW: Offset = Offset(i64::MAX);
 
     /// Kafka's cleanable test, over the shapes a partition can be in. The
     /// clock is fixed at `10_000` ms so a "dirty since" timestamp reads as an
@@ -464,10 +533,10 @@ mod tests {
             let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
             log.append(&mut batch).unwrap();
         }
-        assert2::check!(log.compaction_due(std::time::SystemTime::now()));
+        assert2::check!(log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
 
         log.compact(&compaction_ctx()).unwrap();
-        assert2::check!(!log.compaction_due(std::time::SystemTime::now()));
+        assert2::check!(!log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
     }
 
     /// One sealed segment per batch, each stamped `1_000 * i` milliseconds
@@ -508,7 +577,7 @@ mod tests {
         };
         let log = log_stamped_a_second_apart(dir.path(), cfg, 6);
 
-        assert2::check!(log.compaction_due(at_epoch_millis(6_000)));
+        assert2::check!(log.compaction_due(at_epoch_millis(6_000), UNBOUNDED_HW));
     }
 
     /// A log nothing has cleaned yet has no clean prefix: its one sealed
@@ -534,12 +603,13 @@ mod tests {
 
         assert2::check!(log.segments.len() == 1, "one sealed segment");
         assert2::check!(
-            log.compaction_due(at_epoch_millis(6_000)),
+            log.compaction_due(at_epoch_millis(6_000), UNBOUNDED_HW),
             "a single dirty sealed segment is cleanable"
         );
 
         log.compact(&CompactionContext {
             now: at_epoch_millis(6_000),
+            high_watermark: UNBOUNDED_HW,
             active_producers: std::collections::HashMap::new(),
         })
         .unwrap();
@@ -547,7 +617,7 @@ mod tests {
         // The pass output is now the clean prefix, so the same log is not due
         // again until something else is produced.
         assert2::check!(
-            !log.compaction_due(at_epoch_millis(6_000)),
+            !log.compaction_due(at_epoch_millis(6_000), UNBOUNDED_HW),
             "a log whose only sealed segment is the last pass's output is settled"
         );
     }
@@ -570,6 +640,7 @@ mod tests {
         let mut log = log_stamped_a_second_apart(dir.path(), cfg, 6);
         log.compact(&CompactionContext {
             now: at_epoch_millis(6_000),
+            high_watermark: UNBOUNDED_HW,
             active_producers: std::collections::HashMap::new(),
         })
         .unwrap();
@@ -583,6 +654,111 @@ mod tests {
             .map(|record| record.value.as_deref().unwrap().to_vec())
             .collect();
         assert2::check!(values == vec![b"v3".to_vec(), b"v4".to_vec(), b"v5".to_vec()]);
+    }
+
+    /// Kafka's `cleanableOffsets` bounds a pass at the last stable offset,
+    /// and krabka bounds it at the high watermark for the same reason: an
+    /// uncommitted record can still be truncated away by a leader election,
+    /// and a pass that dropped an older record in its favour would leave this
+    /// replica short of one the leader kept.
+    ///
+    /// Six one-batch segments under one key, so every sealed segment is
+    /// cleanable on the lag and the ratio, and only the watermark holds the
+    /// pass back.
+    #[test]
+    fn the_high_watermark_bounds_the_cleanable_range() {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1),
+            ..Default::default()
+        };
+        let mut log = log_stamped_a_second_apart(dir.path(), cfg, 6);
+        // Five sealed segments (one batch each) and the active sixth.
+        assert2::assert!(log.segments.len() == 5);
+
+        // Nothing is committed: no sealed segment ends at or below zero, so
+        // there is nothing to be due for and a pass rewrites nothing.
+        assert2::check!(!log.compaction_due(at_epoch_millis(6_000), Offset(0)));
+        log.compact(&CompactionContext {
+            now: at_epoch_millis(6_000),
+            high_watermark: Offset(0),
+            active_producers: std::collections::HashMap::new(),
+        })
+        .unwrap();
+        assert2::check!(log.segments.len() == 5, "no segment was consumed");
+
+        // Committing the first three segments makes exactly those cleanable:
+        // the pass collapses them into one and leaves the rest alone.
+        assert2::check!(log.compaction_due(at_epoch_millis(6_000), Offset(3)));
+        log.compact(&CompactionContext {
+            now: at_epoch_millis(6_000),
+            high_watermark: Offset(3),
+            active_producers: std::collections::HashMap::new(),
+        })
+        .unwrap();
+        assert2::check!(log.segments.len() == 3);
+        let out = log.read(Offset(0), mebibytes(1)).unwrap();
+        let values: Vec<Vec<u8>> = out
+            .batches
+            .iter()
+            .flat_map(|batch| batch.records.iter())
+            .map(|record| record.value.as_deref().unwrap().to_vec())
+            .collect();
+        assert2::check!(
+            values
+                == vec![
+                    b"v2".to_vec(),
+                    b"v3".to_vec(),
+                    b"v4".to_vec(),
+                    b"v5".to_vec()
+                ],
+            "only the committed prefix was deduplicated",
+        );
+    }
+
+    /// A watermark inside a sealed segment withholds that whole segment: the
+    /// rewrite consumes segments, not record ranges, so a straddling segment
+    /// cannot be half-cleaned.
+    #[test]
+    fn a_watermark_inside_a_segment_withholds_that_segment() {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            // Two batches per sealed segment.
+            segment_size: bytes(120),
+            ..Default::default()
+        };
+        let mut log = log_stamped_a_second_apart(dir.path(), cfg, 6);
+        let first_end = log.segments[1].base_offset();
+        assert2::assert!(first_end > Offset(1), "the fixture packed a segment");
+
+        // One offset short of the first segment's end: it straddles the
+        // watermark, so nothing is cleanable at all.
+        log.compact(&CompactionContext {
+            now: at_epoch_millis(6_000),
+            high_watermark: first_end - 1,
+            active_producers: std::collections::HashMap::new(),
+        })
+        .unwrap();
+        let sealed_before = log.segments.len();
+        assert2::check!(!log.compaction_due(at_epoch_millis(6_000), first_end - 1));
+
+        // At its end offset the segment is committed in full and cleanable.
+        assert2::check!(log.compaction_due(at_epoch_millis(6_000), first_end));
+        log.compact(&CompactionContext {
+            now: at_epoch_millis(6_000),
+            high_watermark: first_end,
+            active_producers: std::collections::HashMap::new(),
+        })
+        .unwrap();
+        assert2::check!(log.segments.len() == sealed_before);
+        let out = log.read(Offset(0), mebibytes(1)).unwrap();
+        let kept: usize = out.batches.iter().map(|batch| batch.records.len()).sum();
+        assert2::check!(
+            kept == 5,
+            "the first segment's duplicate went, nothing else"
+        );
     }
 
     #[test]
@@ -600,7 +776,7 @@ mod tests {
             let mut batch = keyed_batch(i, &[(0, b"key", value.as_bytes())]);
             log.append(&mut batch).unwrap();
         }
-        assert2::check!(!log.compaction_due(std::time::SystemTime::now()));
+        assert2::check!(!log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
 
         // The batches carry timestamp 0, so any max lag has long elapsed and
         // the pass is owed however clean the ratio says the log is.
@@ -608,7 +784,7 @@ mod tests {
             max_compaction_lag: Some(Time::from_millis(1)),
             ..cfg
         });
-        assert2::check!(log.compaction_due(std::time::SystemTime::now()));
+        assert2::check!(log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
     }
 
     fn assert_corrupt_suffix_preserves_originals(suffix: &[u8]) {

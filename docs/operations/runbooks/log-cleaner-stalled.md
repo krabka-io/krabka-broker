@@ -7,9 +7,14 @@ for 15m) and `KrabkaUncleanablePartitions`
 
 ## What it means
 
-A compaction pass failed on a partition this broker leads, and the partition
+A compaction pass failed on a partition this broker hosts, and the partition
 has not compacted since. The cleaner keeps sweeping; the partition keeps
 failing.
+
+The replica need not be a leader. The cleaner sweeps every log this broker
+holds, as Kafka's `LogCleanerManager` does, so a follower replica of a
+compacted topic appears here on its own account. Moving the leadership away
+does not clear it.
 
 On a compacted topic the cleaner is the only thing that bounds the log.
 `cleanup.policy=compact` has no size or time retention behind it, and even
@@ -63,9 +68,11 @@ partition that climbs on a straight line has no upper bound.
   recovers on its own once writes to the directory succeed again: the next
   sweep compacts the partition, the uncleanable count falls, and the run
   counter resumes.
-- For a corrupt segment, move the partition to another broker with
+- For a corrupt segment, move the replica to another broker with
   `kafka-reassign-partitions` and let the new replica build its log from the
-  leader. Do not delete segment files under a running broker.
+  leader. Moving only the leadership does not help: this broker still holds
+  the replica and still owes it a pass. Do not delete segment files under a
+  running broker.
 - While the cause is being fixed, buy disk headroom by lowering the topic's
   `segment.bytes` — smaller segments seal sooner and the first successful
   pass reclaims more — or by moving the largest partitions off the broker.

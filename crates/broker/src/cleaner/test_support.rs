@@ -25,7 +25,7 @@ fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {
     }
 }
 
-pub(super) fn compactable_partition(
+pub(super) async fn compactable_partition(
     root: &TempDir,
     topic: &str,
     partition_id: i32,
@@ -43,12 +43,13 @@ pub(super) fn compactable_partition(
             ..Default::default()
         },
     )
+    .await
 }
 
 /// The same fixture against a caller-supplied log-dir registry, for the tests
 /// that watch a compaction failure reach it. The default registry every other
 /// fixture builds has nowhere to report a flip to.
-pub(super) fn compactable_partition_in_registry(
+pub(super) async fn compactable_partition_in_registry(
     root: &TempDir,
     topic: &str,
     leader: NodeId,
@@ -66,6 +67,7 @@ pub(super) fn compactable_partition_in_registry(
         },
         log_dir_status,
     )
+    .await
 }
 
 /// Make every compaction pass on `partition`'s log fail with a real
@@ -96,7 +98,7 @@ pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<std::pat
 
 /// The same fixture over a caller-chosen `LogConfig`, for the cleaner's
 /// dirty-ratio and compaction-lag tests.
-pub(super) fn compactable_partition_with_config(
+pub(super) async fn compactable_partition_with_config(
     root: &TempDir,
     topic: &str,
     partition_id: i32,
@@ -111,9 +113,10 @@ pub(super) fn compactable_partition_with_config(
         cfg,
         crate::log_dir_status::LogDirRegistry::default(),
     )
+    .await
 }
 
-fn open_compactable_partition(
+async fn open_compactable_partition(
     root: &TempDir,
     topic: &str,
     partition_id: i32,
@@ -141,6 +144,11 @@ fn open_compactable_partition(
         false,
     );
     part.current_leader.store(leader.0, Ordering::Relaxed);
+    // A replica that has caught up: compaction is bounded at the high
+    // watermark, and `set_follower_hw` clamps to the local log end, so this
+    // leaves the whole log committed. It is also how a real follower learns
+    // the watermark — from the leader's Fetch response.
+    part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
     part
 }
 
