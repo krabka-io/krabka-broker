@@ -201,6 +201,14 @@ crate_tests(
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",
         ],
+        # Kafka's own `__consumer_offsets` formatters, out of the 4.3.1 tools
+        # jar, over the topic krabka writes. The 4.0.0 image is the KIP-848
+        # client that puts the later key versions in front of them, the same
+        # client `jvm_consumer_group_next_gen` uses.
+        "jvm_consumer_offsets_formatter": [
+            "apache_kafka_4_0_0",
+            "apache_kafka_4_3_1",
+        ],
         # The probe compiles a Java helper in-container, so it needs the image
         # that ships a JDK with `javac` alongside the Kafka client jars.
         "jvm_deliver_at_time": ["cp_kafka_7_5_0"],

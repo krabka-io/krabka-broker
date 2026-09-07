@@ -15,6 +15,10 @@ fails the build when the series drift.
   how to size disk, network and voters, and how to read the phase families.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
   name it replaces.
+- [Ecosystem support](ecosystem-support.md): which tool classes work over the
+  Kafka protocol, and which need broker-side JMX or a JVM plugin and therefore
+  do not. Cruise Control is in the second list; the lag monitors that decode
+  `__consumer_offsets` are in the first.
 - [Backup and restore](backup-restore.md): what to copy off each node, how
   often, and how to check that a copy would restore. The archive holds the
   records and nothing else, so the RLMM snapshot, the controller metadata

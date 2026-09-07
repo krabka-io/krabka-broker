@@ -218,6 +218,14 @@ _FEATURE_RULES = [
         "crates/broker/src/handlers/create_topics",
         "crates/broker/src/handlers/create_partitions",
     ], ["jvm_acceptance_cli"]),
+    # The `__consumer_offsets` wire bytes. Burrow and the other lag monitors
+    # decode them with Kafka's internal schemas rather than asking the broker,
+    # so a divergence in this codec is invisible to every other suite: the
+    # broker still answers `OffsetFetch` correctly. Kafka's own formatters run
+    # over the topic in this one, so the codec selects it.
+    ([
+        "crates/broker/src/coordinator/unified/persistence",
+    ], ["jvm_consumer_offsets_formatter"]),
     # Every tool that speaks `--bootstrap-controller` reaches the broker through
     # this router's SUPPORTED_APIS.
     ([
