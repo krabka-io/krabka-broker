@@ -1,0 +1,110 @@
+//! Captures the inputs a point-in-time restore needs, and puts committed
+//! consumer-group offsets back after one.
+//!
+//! `krabka restore` rebuilds a log directory out of a KIP-405 archive, and it
+//! needs three things the archive does not hold. Two are files on a broker's
+//! own disk: `<log.dir>/remote-log-metadata/snapshot`, without which a segment
+//! the old cluster had already released is indistinguishable from a live one,
+//! and the controller's newest `<end-offset>-<epoch>.checkpoint`, which is
+//! where topic configuration, ACLs, client quotas, SCRAM credentials and
+//! finalized feature levels live. The third is not a file at all: the committed
+//! offsets of every consumer group, which sit in the compacted, never-tiered
+//! `__consumer_offsets` topic.
+//!
+//! All three are destroyed by the disaster that makes an operator reach for a
+//! restore, so a copy has to exist before it. This tool makes that copy and
+//! checks it.
+//!
+//! # Why a tool and not a `kubectl exec`
+//!
+//! The krabka container image is built from an apko base and has no shell, no
+//! `cp` and no `tar`, so `kubectl exec` and `kubectl cp` cannot take a file off
+//! a running broker. The supported copy is this binary, run beside the broker
+//! with the same volume mounted read-only — a `CronJob` in the same namespace —
+//! or on the node itself. Both snapshot files are written temp-then-rename, so
+//! a reader that opens one by name always sees a whole file.
+//!
+//! Group offsets need a cluster rather than a volume, so the same run takes
+//! them over the ordinary Kafka wire protocol, with `ListGroups` and
+//! `OffsetFetch`. Nothing here speaks a krabka-private API key, which is what
+//! lets the same capture run against a cluster that is not krabka.
+//!
+//! # The four subcommands
+//!
+//! `capture` copies the inputs into the archive under
+//! `restore-inputs/<capture-id>/`, beside the tiered segments the restore reads,
+//! with a `manifest.json` recording each artifact's size and SHA-256. `list`
+//! names the captures. `verify` re-reads one and checks it against those
+//! digests, which is the check a backup is worth nothing without. `restore-
+//! offsets` commits a capture's offsets into a restored cluster, so a group
+//! resumes where it stopped instead of at `auto.offset.reset`.
+//!
+//! # Exit codes
+//!
+//! `0` success, [`EXIT_BAD_ARGUMENT`], [`EXIT_UNREADABLE`], [`EXIT_INTEGRITY`]
+//! and [`EXIT_CLUSTER`]. They line up with `krabka restore`'s own where the two
+//! tools mean the same thing, because one runbook branches on both.
+//!
+//! The crate is a library as well as a binary, for the same reason
+//! `krabka-guard`, `krabka-barrier` and `krabka-format` are: a test that spawns
+//! the binary needs a Cargo working tree to build it from, and a Bazel test
+//! sandbox has none. Tests call [`run_from_args`] in process instead.
+
+use clap::Parser as _;
+
+pub mod archive;
+pub mod capture;
+pub mod cli;
+pub mod error;
+pub mod manifest;
+pub mod offsets;
+pub mod run;
+
+pub use self::{
+    cli::{Cli, Command},
+    error::{BackupError, EXIT_BAD_ARGUMENT, EXIT_CLUSTER, EXIT_INTEGRITY, EXIT_UNREADABLE},
+};
+
+/// Run the tool from an argv-style iterator, returning its exit code.
+///
+/// # Panics
+///
+/// Panics if `argv` does not parse, which for a caller passing a literal
+/// argument list is a bug in that list rather than a runtime condition.
+pub async fn run_from_args<I, T>(argv: I) -> i32
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    run(Cli::parse_from(argv)).await
+}
+
+/// Run one parsed command line, mapping its error onto an exit code.
+pub async fn run(cli: Cli) -> i32 {
+    let outcome = match &cli.command {
+        Command::Capture {
+            log_dir,
+            bootstrap_server,
+            archive,
+        } => run::capture(log_dir.as_deref(), bootstrap_server.as_deref(), archive)
+            .await
+            .map(|_| ()),
+        Command::List { archive } => run::list(archive).await.map(|_| ()),
+        Command::Verify { capture, archive } => run::verify(capture, archive).await,
+        Command::RestoreOffsets {
+            capture,
+            bootstrap_server,
+            dry_run,
+            archive,
+        } => run::restore_offsets(capture, bootstrap_server, *dry_run, archive)
+            .await
+            .map(|_| ()),
+    };
+    match outcome {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error}");
+            error.exit_code()
+        }
+    }
+}

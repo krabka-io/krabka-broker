@@ -64,6 +64,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-audit` | Audit event model, OCSF serialization, and the `krabka-audit verify` CLI. |
 | `krabka-barrier` | Operator CLI for barrier groups: define a group, trigger and list cuts, verify a cut against the log. |
 | `krabka-guard` | Operator CLI for topic write freezes and break-glass proposals: freeze, thaw, propose, approve. |
+| `krabka-backup` | Operator CLI for restore inputs: capture the RLMM and metadata snapshots and group offsets, verify a capture, put offsets back. |
 | `krabka-format` | Formats a fresh log directory: `meta.properties.json`, bootstrap records, the singleton `VotersRecord`. |
 | `krabka-restore` | Offline point-in-time restore of a bootable log directory from a KIP-405 archive. |
 | `krabka-throttle` | Quota token buckets (Creusot-verified). |
@@ -279,7 +280,8 @@ host package manager. `aspect delivery` skips the push when the image output did
 not change.
 
 A second layer carries the operator tools — `krabka-format`, `krabka-audit`,
-`krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and `krabka-restore` —
+`krabka-barrier`, `krabka-guard`, `krabka-worm-verify`, `krabka-backup` and
+`krabka-restore` —
 beside the broker under `/usr/bin`. The base has no shell, so a tool that is not
 in the image cannot be run in a container at all, and `krabka-format` has to run
 against the log directory before the broker will boot:

@@ -54,7 +54,11 @@ A batch that a predicate filters is re-encoded from the records that survive. It
 
 Without `--rlmm-snapshot` the restore has only the object keys to work from. A segment that the old cluster had marked for deletion is then indistinguishable from a live one, and the restore includes it. Supply the snapshot from a broker's `<log.dir>/remote-log-metadata/snapshot` when the archive holds segments that retention had already released.
 
-Without `--metadata-snapshot`, topic configuration, ACLs, client quotas, SCRAM credentials, and finalized feature levels cannot be recovered. The report warns and names every restored topic whose configuration is unavailable. Supply a controller `<offset>-<epoch>.checkpoint` from `<log.dir>/__cluster_metadata/@metadata-0/` to restore that state.
+Without `--metadata-snapshot`, topic configuration, ACLs, client quotas, SCRAM credentials, and finalized feature levels cannot be recovered. The report warns and names every restored topic whose configuration is unavailable. Supply a controller `<offset>-<epoch>.checkpoint` from `<log.dir>/__cluster_metadata/@metadata-0/` to restore that state. With the flag, the restore seeds those records into the target's bootstrap stream, and the restored broker answers `DescribeConfigs` and `DescribeAcls` with them. A topic config is restored for a topic the archive also holds; ACLs, quotas, credentials and feature levels are restored whole. A snapshot whose topic id disagrees with the archive's stops the restore rather than applying a config to a different topic of the same name.
+
+Committed consumer-group offsets come back through neither flag. `__consumer_offsets` is compacted and internal, so it is never tiered and no archive holds it, and a restored cluster has no committed offset for any group: each one starts from its own `auto.offset.reset`. Capture them from the live cluster with `krabka-backup capture` and commit them into the restored one with `krabka-backup restore-offsets`.
+
+Both snapshot files live only on the disks a disaster destroys, so the copy has to already exist. [`krabka-backup`](../backup-cli/README.md) is what makes it, and [backup and restore](../../docs/operations/backup-restore.md) says what to copy, how often, and how to check a copy.
 
 ## License
 

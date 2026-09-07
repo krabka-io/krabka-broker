@@ -27,6 +27,7 @@ set -euo pipefail
 # the `krabka` operator CLI resolves on PATH, fails against this list.
 expected=(
     krabka-audit
+    krabka-backup
     krabka-barrier
     krabka-broker
     krabka-format

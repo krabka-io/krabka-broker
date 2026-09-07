@@ -15,6 +15,11 @@ fails the build when the series drift.
   how to size disk, network and voters, and how to read the phase families.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
   name it replaces.
+- [Backup and restore](backup-restore.md): what to copy off each node, how
+  often, and how to check that a copy would restore. The archive holds the
+  records and nothing else, so the RLMM snapshot, the controller metadata
+  checkpoint and the committed group offsets have to be captured before the
+  day they are needed.
 - [Audit](../../crates/audit/README.md#which-rpcs-are-audited): which admin
   RPCs write an `AdminOperation` record to `__krabka_audit`, what each record
   names, and what is redacted from it.
@@ -31,7 +36,10 @@ fails the build when the series drift.
 
 ## Runbooks
 
-One per condition the registry tells operators to alert on.
+One per condition the registry tells operators to alert on, and one for the
+data-loss event that no alert fires for:
+[restore-from-archive](runbooks/restore-from-archive.md), the rebuild of a
+cluster out of its tiered-storage archive.
 
 | Alert | Runbook |
 | :--- | :--- |

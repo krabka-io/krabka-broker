@@ -1,0 +1,17 @@
+load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_library(name = "backup-cli")
+
+# `bazel run //crates/backup-cli:krabka-backup -- capture --log-dir /var/lib/krabka --archive-local /mnt/backups`
+crate_binary(
+    name = "krabka-backup",
+    crate_root = "src/main.rs",
+    lib = ":backup-cli",
+)
+
+crate_tests(lib = "backup-cli")

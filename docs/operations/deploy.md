@@ -13,8 +13,8 @@ builds it from locked Wolfi packages and loads it into the local daemon as
 `/usr/bin/krabka-broker` as its entrypoint and `/var/lib/krabka` as its
 working directory. It carries no shell and no package manager. The operator
 tools ride beside the broker under `/usr/bin`: `krabka-format`,
-`krabka-audit`, `krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and
-`krabka-restore`. A tool that is not in the image cannot run in a container,
+`krabka-audit`, `krabka-barrier`, `krabka-guard`, `krabka-worm-verify`,
+`krabka-backup` and `krabka-restore`. A tool that is not in the image cannot run in a container,
 because there is no shell to fetch one with.
 
 The image is **linux/amd64 only**. `packaging/base.apko.yaml` builds the Wolfi
