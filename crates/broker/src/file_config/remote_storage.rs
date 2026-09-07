@@ -42,6 +42,17 @@ pub struct FileRemoteStorageConfig {
     /// Opt-in to the topic-backed `RemoteLogMetadataManager`.
     /// When absent, the broker uses the in-memory fixture.
     pub kafka_metadata: Option<FileKafkaRlmmConfig>,
+    /// How many partitions may be copying segments to the remote tier at
+    /// once. Kafka's `remote.log.manager.copier.thread.pool.size`; defaults
+    /// to 10. Raising it is the remedy for a copy backlog on an object store
+    /// with bandwidth to spare.
+    #[schemars(range(min = 1))]
+    pub copier_threads: Option<usize>,
+    /// How many partitions may be running their local- and remote-retention
+    /// passes at once. Kafka's
+    /// `remote.log.manager.expiration.thread.pool.size`; defaults to 10.
+    #[schemars(range(min = 1))]
+    pub expiration_threads: Option<usize>,
     /// How many cold-tier reads may run at once. Kafka's
     /// `remote.log.reader.threads`; defaults to 10.
     #[schemars(range(min = 1))]
@@ -60,11 +71,12 @@ pub struct FileRemoteStorageConfig {
     /// Deadline on one segment copy to the remote tier. Defaults to 10
     /// minutes.
     ///
-    /// The sweep copies segments one after another, so a copy that hangs on a
-    /// stalled object store holds up every other partition on the broker.
-    /// Past this deadline the copy is abandoned and retried on the next tick;
-    /// the segment stays in `CopySegmentStarted`, which local retention
-    /// refuses to delete against.
+    /// A partition holds one copier slot for the whole of its copy pass, so a
+    /// copy that hangs on a stalled object store spends that slot on a
+    /// partition moving no bytes. Past this deadline the copy is abandoned
+    /// and retried on the next tick; the segment stays in
+    /// `CopySegmentStarted`, which local retention refuses to delete
+    /// against.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub copy_timeout: Option<Time>,
@@ -196,6 +208,26 @@ pub(super) fn apply_remote_storage(
             ));
         }
         cfg.remote_reader_threads = threads;
+    }
+    if let Some(threads) = rs.copier_threads {
+        if threads == 0 {
+            return Err(invalid_runtime_value(
+                "remote_storage.copier_threads",
+                "must be at least 1: a copier bound of zero would let no partition copy a \
+                 segment, so nothing would ever reach the tier",
+            ));
+        }
+        cfg.remote_copier_threads = threads;
+    }
+    if let Some(threads) = rs.expiration_threads {
+        if threads == 0 {
+            return Err(invalid_runtime_value(
+                "remote_storage.expiration_threads",
+                "must be at least 1: an expiration bound of zero would stop every retention \
+                 pass, so no segment would ever be evicted locally or deleted remotely",
+            ));
+        }
+        cfg.remote_expiration_threads = threads;
     }
     if let Some(pending) = rs.reader_max_pending_tasks {
         if pending == 0 {
@@ -504,11 +536,40 @@ index_cache_size = "256MiB"
         check!(cfg.remote_index_cache_size == mebibytes(256));
     }
 
+    /// The two KIP-405 sweep bounds default to Kafka's thread-pool sizes,
+    /// and an operator who names them gets what they named.
     #[test]
-    fn a_zero_reader_bound_or_cache_size_is_rejected() {
+    fn sweep_bounds_default_to_kafkas_thread_pool_sizes_and_are_overridable() {
+        for (case, toml, copier, expiration) in [
+            (
+                "defaults",
+                "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n",
+                10,
+                10,
+            ),
+            (
+                "overridden",
+                "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
+                 copier_threads = 32\nexpiration_threads = 4\n",
+                32,
+                4,
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(toml).unwrap();
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).unwrap();
+            check!(cfg.remote_copier_threads == copier, "{case}");
+            check!(cfg.remote_expiration_threads == expiration, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_zero_reader_bound_sweep_bound_or_cache_size_is_rejected() {
         for (field, value) in [
             ("reader_threads", "0"),
             ("reader_max_pending_tasks", "0"),
+            ("copier_threads", "0"),
+            ("expiration_threads", "0"),
             ("index_cache_size", "\"0B\""),
         ] {
             let source =
@@ -517,7 +578,7 @@ index_cache_size = "256MiB"
             let mut config = crate::config::BrokerConfig::default();
             let error = file
                 .apply_to(&mut config)
-                .expect_err("a zero reader bound must fail");
+                .expect_err("a zero bound must fail");
             assert!(error.to_string().contains(field), "{field}: {error}");
         }
     }

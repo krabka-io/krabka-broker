@@ -793,7 +793,11 @@ mod tests {
             },
         ];
         for case in cases {
-            check!(merged_coverage(case.finished) == case.merged, "{}", case.label);
+            check!(
+                merged_coverage(case.finished) == case.merged,
+                "{}",
+                case.label
+            );
             check!(
                 copy_start_offset(case.finished, case.local_start) == case.copy_start,
                 "{}",
@@ -808,9 +812,15 @@ mod tests {
         check!(tier_holds_whole(&merged, 0, 99));
         check!(tier_holds_whole(&merged, 20, 40));
         check!(tier_holds_whole(&merged, 200, 299));
-        check!(!tier_holds_whole(&merged, 50, 149), "the segment runs past the copy");
+        check!(
+            !tier_holds_whole(&merged, 50, 149),
+            "the segment runs past the copy"
+        );
         check!(!tier_holds_whole(&merged, 100, 199), "the hole itself");
-        check!(!tier_holds_whole(&merged, 90, 210), "two intervals do not join around it");
+        check!(
+            !tier_holds_whole(&merged, 90, 210),
+            "two intervals do not join around it"
+        );
     }
 
     /// The failover case the whole change is for. The previous leader copied

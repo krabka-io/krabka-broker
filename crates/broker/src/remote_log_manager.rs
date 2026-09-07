@@ -25,6 +25,16 @@
 //! remote-storage SPIs are blocking, so each copy and each delete
 //! runs on the `tokio` blocking pool.
 //!
+//! One tick sweeps every partition concurrently, under two bounds that are
+//! Kafka's two `RemoteLogManager` thread pools: a partition's copy holds a
+//! slot of the copier bound (`remote.log.manager.copier.thread.pool.size`),
+//! and its retention passes hold a slot of the expiration bound
+//! (`remote.log.manager.expiration.thread.pool.size`). The bounds are what
+//! keep a broker leading hundreds of tiered partitions from opening hundreds
+//! of concurrent uploads; sweeping concurrently at all is what keeps one
+//! partition whose object store stalls from holding tiering for every other
+//! partition behind it, which a serial sweep did.
+//!
 //! A KFC-9 write freeze splits the sweep in two. The copy runs on a frozen
 //! topic, because it adds a replica and takes nothing away, and tiering a
 //! frozen topic is what a migration wants. Both retention passes stop, on
@@ -35,10 +45,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use futures_util::future::join_all;
 use krabka_metadata::NodeId;
 use krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageManager, TopicIdPartition};
 use krabka_units::{ByteSize, Time, bytes, convert::TimeExt as _, secs};
 use krabka_verified::FreezeMutationKind;
+use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -141,6 +153,8 @@ pub(crate) struct RemoteLogManagerConfig {
     pub interval: Time,
     /// Deadline on one segment copy. See [`RemoteTier::copy_timeout`].
     pub copy_timeout: Time,
+    /// How wide one tick sweeps. See [`SweepConcurrency`].
+    pub concurrency: SweepConcurrency,
 }
 
 impl Default for RemoteLogManagerConfig {
@@ -148,7 +162,67 @@ impl Default for RemoteLogManagerConfig {
         Self {
             interval: DEFAULT_TIERING_INTERVAL,
             copy_timeout: crate::config::DEFAULT_REMOTE_COPY_TIMEOUT,
+            concurrency: SweepConcurrency::default(),
         }
+    }
+}
+
+/// How many partition passes of each kind one tick may have in flight.
+///
+/// These are Kafka's two `RemoteLogManager` thread pools, which is why they
+/// are two numbers and not one: `copier` bounds the partitions whose sealed
+/// segments are being uploaded (`remote.log.manager.copier.thread.pool.size`),
+/// `expiration` the partitions whose retention passes are running
+/// (`remote.log.manager.expiration.thread.pool.size`). A partition takes one
+/// slot for the whole of its pass, so the bound counts partitions in flight
+/// rather than object-store calls in flight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SweepConcurrency {
+    pub copier: usize,
+    pub expiration: usize,
+}
+
+impl Default for SweepConcurrency {
+    fn default() -> Self {
+        Self {
+            copier: crate::config::DEFAULT_REMOTE_COPIER_THREADS,
+            expiration: crate::config::DEFAULT_REMOTE_EXPIRATION_THREADS,
+        }
+    }
+}
+
+/// The two bounds of [`SweepConcurrency`], as the semaphores one tick hands
+/// its partition passes.
+///
+/// A permit is taken around the pass itself and released the moment it ends,
+/// so a partition waiting for a slot costs a parked future and nothing else:
+/// the sweep still reaches every partition on the broker in one tick, however
+/// slow the object store is for one of them.
+struct SweepPermits {
+    copier: Semaphore,
+    expiration: Semaphore,
+}
+
+impl SweepPermits {
+    fn new(concurrency: SweepConcurrency) -> Self {
+        Self {
+            copier: Semaphore::new(concurrency.copier),
+            expiration: Semaphore::new(concurrency.expiration),
+        }
+    }
+
+    async fn copier(&self) -> SemaphorePermit<'_> {
+        self.copier
+            .acquire()
+            .await
+            .expect("the sweep's copier semaphore is never closed")
+    }
+
+    async fn expiration(&self) -> SemaphorePermit<'_> {
+        self.expiration
+            .acquire()
+            .await
+            .expect("the sweep's expiration semaphore is never closed")
     }
 }
 
@@ -184,11 +258,12 @@ pub(crate) struct RemoteTier<'a> {
     pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
     /// How long one segment copy may take before the sweep abandons it.
     ///
-    /// The copy pass is serial, so an object store that stalls would
-    /// otherwise stop every partition on this broker behind the one it is
-    /// stalling. Past the deadline the copy is left in `CopySegmentStarted`
-    /// -- which local retention refuses to delete against -- and the next
-    /// tick retries the segment under a fresh id.
+    /// A partition's copy holds one of the sweep's copier slots for as long
+    /// as it runs, so an object store that stalls would otherwise spend the
+    /// whole copier bound on partitions that are moving no bytes. Past the
+    /// deadline the copy is left in `CopySegmentStarted` -- which local
+    /// retention refuses to delete against -- and the next tick retries the
+    /// segment under a fresh id.
     pub copy_timeout: Time,
 }
 
@@ -227,156 +302,247 @@ pub(crate) async fn run(
             &context.tier(cfg.copy_timeout),
             context.node_id,
             context.broker_id,
+            cfg.concurrency,
         )
         .await;
     }
 }
 
+/// One tick of the sweep: every partition the registry holds, swept
+/// concurrently under `concurrency`'s two bounds.
+///
+/// Each partition's pass is one future and the tick ends when the last of
+/// them does. Nothing is spawned, so the sweep is still the single task
+/// [`run`] owns; what a serial walk cost was head-of-line blocking, where one
+/// partition awaiting a slow object store held every partition behind it --
+/// and, because local retention only evicts what the tier already holds,
+/// filled their disks while it waited.
 async fn tick_all(
     partitions: &PartitionRegistry,
     controller: &dyn crate::metadata_source::MetadataSource,
     tier: &RemoteTier<'_>,
     node_id: NodeId,
     broker_id: i32,
+    concurrency: SweepConcurrency,
 ) {
     // Snapshot first to avoid holding any registry guard across an await.
     let snapshot: Vec<Arc<Partition>> = partitions.arcs();
     let image = controller.current_image();
-    for partition in snapshot {
-        // Leadership decides which halves of the sweep run, not whether it
-        // runs at all: the copy and the remote-retention pass are the
-        // leader's, local retention is every replica's.
-        let is_leader = partition.current_leader.load(Ordering::Relaxed) == node_id;
-        // Read config, both readings of the global log start and the
-        // sealed-segment list under one hold of the log lock, then drop it.
-        // The floors ride along with the config because remote retention
-        // measures a segment against them, and a value read under a second
-        // lock could describe a different `DeleteRecords` than the segment
-        // list does.
-        let (log_config, log_start_offset, deleted_below, exports) = {
-            let log = partition.log.lock().expect("log mutex poisoned");
-            let cfg = log.config_snapshot();
-            (
-                cfg,
-                log.log_start_offset(),
-                log.established_log_start(),
-                log.tierable_segments(),
-            )
-        };
-        if !log_config.remote_storage_enable {
-            // KIP-950: the alter paths refuse this flip unless
-            // `remote.log.delete.on.disable` came with it, so a partition that
-            // arrives here with the flag set is one an operator asked to have
-            // erased. Everything else is an ordinary non-tiered partition.
-            if is_leader && log_config.remote_tier.delete_on_disable {
-                disable_and_delete_remote(
-                    &partition,
-                    &image,
-                    broker_id,
-                    tier.archive,
-                    tier.rsm,
-                    tier.rlmm,
-                    tier.index_cache,
-                )
-                .await;
-            }
-            continue;
-        }
-        // A sealed segment that ends below the global floor is deleted data,
-        // whatever its file is still doing on disk. Kafka's copy task starts
-        // at `max(logStartOffset, lastCopiedOffset)` for the same reason:
-        // without this the log-start breach in `remote_retention_pass` would
-        // delete the remote copy, the next tick would upload it again off the
-        // local file, and the two would cycle for as long as the file sat
-        // there.
-        let exports: Vec<krabka_log::SegmentExport> = exports
-            .into_iter()
-            .filter(|export| export.last_offset >= log_start_offset)
-            .collect();
-        let Some(topic_id) = image.topic(&partition.topic).map(|t| t.topic_id) else {
-            // Topic vanished from the metadata image between snapshots; skip.
-            continue;
-        };
-        let tp = TopicIdPartition::new(topic_id, partition.topic.clone(), partition.index.get());
-        // Only the copy pass has nothing to do without sealed local segments.
-        // The retention passes below still do: a partition whose whole local
-        // log has already been evicted is exactly the one whose remote
-        // segments age out, or fall below a `DeleteRecords` floor, with no
-        // local segment left to notice it.
-        // KIP-950 `remote.log.copy.disable`: the read-only tier. Nothing new
-        // is copied, and every pass below still runs — retention over what the
-        // tier already holds keeps working, which is what makes the state a
-        // freeze of the copy rather than an abandonment of the data.
-        if is_leader && !exports.is_empty() && !log_config.remote_tier.copy_disable {
-            // Atomic stores the raw epoch; wrap for the remote-storage
-            // metadata seam.
-            let leader_epoch =
-                krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
-            copy_eligible(tier, &tp, broker_id, leader_epoch, exports.clone()).await;
-        }
-        // KFC-9: the copy above stays allowed on a frozen topic, and both
-        // retention passes below stop. A freeze refuses every operation that
-        // removes data from the topic's log, and a copy removes none: it adds
-        // a replica, which is exactly what a migration out of a frozen topic
-        // needs.
-        //
-        // This is a different question from `archive`, and it does not
-        // contradict the reason that gate gives below. `archive` says the
-        // remote tier cannot accept a delete, which leaves the local eviction
-        // free precisely because it deletes nothing remote. A freeze says this
-        // topic's log must not lose bytes anywhere, so it stops the local
-        // eviction too.
-        if matches!(
-            resolve_freeze_mutation(
-                &image,
-                &partition.topic,
-                true,
-                FreezeMutationKind::Retention,
-            ),
-            FreezeMutationResolution::Frozen(_)
-        ) {
-            debug!(topic = %partition.topic, partition = tp.partition,
-                   "remote-log-manager: a write freeze holds both retention passes");
-            continue;
-        }
-        // Local retention is deliberately not gated on `archive`: evicting a
-        // local segment that the archive already holds is the whole point of
-        // tiering, and it deletes nothing from the remote tier.
-        local_retention_pass(&tp, &partition, &exports, &log_config, tier.rlmm, now_ms());
-        if is_leader {
-            let outcome = remote_retention_pass(
-                &tp,
+    let permits = SweepPermits::new(concurrency);
+    join_all(snapshot.into_iter().map(|partition| {
+        tick_partition(PartitionSweep {
+            partition,
+            image: &image,
+            tier,
+            node_id,
+            broker_id,
+            permits: &permits,
+        })
+    }))
+    .await;
+}
+
+/// One partition's place in a tick: the partition itself, the metadata image
+/// the tick read once for all of them, the tier it writes through, and the
+/// permits that bound how many such passes run at once.
+struct PartitionSweep<'a> {
+    partition: Arc<Partition>,
+    image: &'a krabka_metadata::MetadataImage,
+    tier: &'a RemoteTier<'a>,
+    node_id: NodeId,
+    broker_id: i32,
+    permits: &'a SweepPermits,
+}
+
+/// Sweep one partition: the copy pass under a copier permit, then the two
+/// retention passes under an expiration permit.
+///
+/// The permits are taken around the passes and not around this whole
+/// function, so the work that waits for a slot is the work that talks to the
+/// remote tier, not the log-lock snapshot that decides whether there is any.
+async fn tick_partition(sweep: PartitionSweep<'_>) {
+    let PartitionSweep {
+        partition,
+        image,
+        tier,
+        node_id,
+        broker_id,
+        permits,
+    } = sweep;
+    // Leadership decides which halves of the sweep run, not whether it
+    // runs at all: the copy and the remote-retention pass are the
+    // leader's, local retention is every replica's.
+    let is_leader = partition.current_leader.load(Ordering::Relaxed) == node_id;
+    // Read config, both readings of the global log start and the
+    // sealed-segment list under one hold of the log lock, then drop it.
+    // The floors ride along with the config because remote retention
+    // measures a segment against them, and a value read under a second
+    // lock could describe a different `DeleteRecords` than the segment
+    // list does.
+    let (log_config, log_start_offset, deleted_below, exports) = {
+        let log = partition.log.lock().expect("log mutex poisoned");
+        let cfg = log.config_snapshot();
+        (
+            cfg,
+            log.log_start_offset(),
+            log.established_log_start(),
+            log.tierable_segments(),
+        )
+    };
+    if !log_config.remote_storage_enable {
+        // KIP-950: the alter paths refuse this flip unless
+        // `remote.log.delete.on.disable` came with it, so a partition that
+        // arrives here with the flag set is one an operator asked to have
+        // erased. Everything else is an ordinary non-tiered partition.
+        if is_leader && log_config.remote_tier.delete_on_disable {
+            let _permit = permits.expiration().await;
+            disable_and_delete_remote(
+                &partition,
+                image,
                 broker_id,
-                RemoteRetentionBounds {
-                    log_config: &log_config,
-                    log_start_offset,
-                    deleted_below,
-                    now_ms: now_ms(),
-                },
-                tier,
+                tier.archive,
+                tier.rsm,
+                tier.rlmm,
+                tier.index_cache,
             )
             .await;
-            // The records the pass deleted are now in no tier at all, so the
-            // partition's global floor follows them (Kafka's
-            // `handleLogStartOffsetUpdate`). `set_log_start_offset` only moves
-            // forward, so a `DeleteRecords` that landed while the pass ran
-            // keeps the higher of the two floors.
-            if let Some(new_start) = outcome.log_start {
-                let mut log = partition.log.lock().expect("log mutex poisoned");
-                if let Err(error) = log.set_log_start_offset(new_start) {
-                    debug!(topic = %partition.topic, partition = tp.partition, %error,
-                           "remote-log-manager: could not advance the log start after a remote delete");
-                }
-                // The local files under the new floor go with it. No reader
-                // may ask for those offsets any more and no tier answers for
-                // them, so leaving the files behind would only hold disk and
-                // keep the copy filter above working around them on every
-                // tick.
-                if let Err(error) = log.delete_local_segments_through(new_start) {
-                    debug!(topic = %partition.topic, partition = tp.partition, %error,
-                           "remote-log-manager: could not drop the local segments under the new floor");
-                }
-            }
+        }
+        return;
+    }
+    // A sealed segment that ends below the global floor is deleted data,
+    // whatever its file is still doing on disk. Kafka's copy task starts
+    // at `max(logStartOffset, lastCopiedOffset)` for the same reason:
+    // without this the log-start breach in `remote_retention_pass` would
+    // delete the remote copy, the next tick would upload it again off the
+    // local file, and the two would cycle for as long as the file sat
+    // there.
+    let exports: Vec<krabka_log::SegmentExport> = exports
+        .into_iter()
+        .filter(|export| export.last_offset >= log_start_offset)
+        .collect();
+    let Some(topic_id) = image.topic(&partition.topic).map(|t| t.topic_id) else {
+        // Topic vanished from the metadata image between snapshots; skip.
+        return;
+    };
+    let tp = TopicIdPartition::new(topic_id, partition.topic.clone(), partition.index.get());
+    // Only the copy pass has nothing to do without sealed local segments.
+    // The retention passes below still do: a partition whose whole local
+    // log has already been evicted is exactly the one whose remote
+    // segments age out, or fall below a `DeleteRecords` floor, with no
+    // local segment left to notice it.
+    // KIP-950 `remote.log.copy.disable`: the read-only tier. Nothing new
+    // is copied, and every pass below still runs — retention over what the
+    // tier already holds keeps working, which is what makes the state a
+    // freeze of the copy rather than an abandonment of the data.
+    if is_leader && !exports.is_empty() && !log_config.remote_tier.copy_disable {
+        // Atomic stores the raw epoch; wrap for the remote-storage
+        // metadata seam.
+        let leader_epoch =
+            krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
+        let _permit = permits.copier().await;
+        copy_eligible(tier, &tp, broker_id, leader_epoch, exports.clone()).await;
+    }
+    // KFC-9: the copy above stays allowed on a frozen topic, and both
+    // retention passes below stop. A freeze refuses every operation that
+    // removes data from the topic's log, and a copy removes none: it adds
+    // a replica, which is exactly what a migration out of a frozen topic
+    // needs.
+    //
+    // This is a different question from `archive`, and it does not
+    // contradict the reason that gate gives below. `archive` says the
+    // remote tier cannot accept a delete, which leaves the local eviction
+    // free precisely because it deletes nothing remote. A freeze says this
+    // topic's log must not lose bytes anywhere, so it stops the local
+    // eviction too.
+    if matches!(
+        resolve_freeze_mutation(image, &partition.topic, true, FreezeMutationKind::Retention,),
+        FreezeMutationResolution::Frozen(_)
+    ) {
+        debug!(topic = %partition.topic, partition = tp.partition,
+               "remote-log-manager: a write freeze holds both retention passes");
+        return;
+    }
+    let _permit = permits.expiration().await;
+    retention_passes(
+        RetentionPasses {
+            partition: &partition,
+            tp: &tp,
+            exports: &exports,
+            log_config: &log_config,
+            log_start_offset,
+            deleted_below,
+            is_leader,
+            broker_id,
+        },
+        tier,
+    )
+    .await;
+}
+
+/// What the two retention passes over one partition measure themselves
+/// against: the segments and floors the tick read under a single log lock,
+/// and whether this replica leads the partition.
+struct RetentionPasses<'a> {
+    partition: &'a Arc<Partition>,
+    tp: &'a TopicIdPartition,
+    exports: &'a [krabka_log::SegmentExport],
+    log_config: &'a krabka_log::LogConfig,
+    log_start_offset: krabka_log::Offset,
+    deleted_below: Option<krabka_log::Offset>,
+    is_leader: bool,
+    broker_id: i32,
+}
+
+/// Local retention on every replica, then remote retention on the leader.
+async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
+    let RetentionPasses {
+        partition,
+        tp,
+        exports,
+        log_config,
+        log_start_offset,
+        deleted_below,
+        is_leader,
+        broker_id,
+    } = pass;
+    // Local retention is deliberately not gated on `archive`: evicting a
+    // local segment that the archive already holds is the whole point of
+    // tiering, and it deletes nothing from the remote tier.
+    local_retention_pass(tp, partition, exports, log_config, tier.rlmm, now_ms());
+    if !is_leader {
+        return;
+    }
+    let outcome = remote_retention_pass(
+        tp,
+        broker_id,
+        RemoteRetentionBounds {
+            log_config,
+            log_start_offset,
+            deleted_below,
+            now_ms: now_ms(),
+        },
+        tier,
+    )
+    .await;
+    // The records the pass deleted are now in no tier at all, so the
+    // partition's global floor follows them (Kafka's
+    // `handleLogStartOffsetUpdate`). `set_log_start_offset` only moves
+    // forward, so a `DeleteRecords` that landed while the pass ran
+    // keeps the higher of the two floors.
+    if let Some(new_start) = outcome.log_start {
+        let mut log = partition.log.lock().expect("log mutex poisoned");
+        if let Err(error) = log.set_log_start_offset(new_start) {
+            debug!(topic = %partition.topic, partition = tp.partition, %error,
+                   "remote-log-manager: could not advance the log start after a remote delete");
+        }
+        // The local files under the new floor go with it. No reader
+        // may ask for those offsets any more and no tier answers for
+        // them, so leaving the files behind would only hold disk and
+        // keep the copy filter above working around them on every
+        // tick.
+        if let Err(error) = log.delete_local_segments_through(new_start) {
+            debug!(topic = %partition.topic, partition = tp.partition, %error,
+                   "remote-log-manager: could not drop the local segments under the new floor");
         }
     }
 }
@@ -406,6 +572,7 @@ mod tests {
         *,
     };
 
+    mod concurrency;
     mod freeze;
     mod store_faults;
 
@@ -528,6 +695,7 @@ mod tests {
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
+            SweepConcurrency::default(),
         )
         .await;
 
@@ -581,6 +749,7 @@ mod tests {
                 &tier(ArchiveMode::Mutable, &rsm, &rlmm),
                 NodeId(1),
                 1,
+                SweepConcurrency::default(),
             )
             .await;
 
@@ -660,6 +829,7 @@ mod tests {
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
+            SweepConcurrency::default(),
         )
         .await;
 
@@ -752,6 +922,7 @@ mod tests {
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
+            SweepConcurrency::default(),
         )
         .await;
 
@@ -797,6 +968,7 @@ mod tests {
                 &tier(ArchiveMode::Mutable, &rsm, &rlmm),
                 NodeId(1),
                 1,
+                SweepConcurrency::default(),
             )
             .await;
 
@@ -832,6 +1004,7 @@ mod tests {
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
+            SweepConcurrency::default(),
         )
         .await;
         assert!(!rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
@@ -852,6 +1025,7 @@ mod tests {
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             NodeId(1),
             1,
+            SweepConcurrency::default(),
         )
         .await;
 

@@ -30,16 +30,42 @@ macro_rules! remote_storage_fields {
             /// KIP-405: deadline on one segment copy to the remote tier.
             /// Defaults to 10 minutes.
             ///
-            /// The sweep copies a partition's segments one after another, so
-            /// a copy that hangs -- an object store that accepts the
-            /// connection and then answers nothing -- holds up every other
-            /// partition on the broker behind it. Past this deadline the copy
-            /// is abandoned: the segment stays in `CopySegmentStarted`, which
+            /// A partition holds one copier slot for the whole of its copy
+            /// pass, so a copy that hangs -- an object store that accepts the
+            /// connection and then answers nothing -- spends that slot on a
+            /// partition moving no bytes. Past this deadline the copy is
+            /// abandoned: the segment stays in `CopySegmentStarted`, which
             /// local retention refuses to delete against, and the next tick
             /// retries it under a fresh segment id.
             ///
             /// TOML: `[remote_storage] copy_timeout = "10m"`
             pub remote_copy_timeout: Time,
+
+            /// KIP-405: how many partitions may be copying segments to the
+            /// remote tier at once (Kafka's
+            /// `remote.log.manager.copier.thread.pool.size`, default 10).
+            ///
+            /// One tick sweeps every partition concurrently and a partition
+            /// holds one copier slot for the whole of its copy pass, so this
+            /// is the number of uploads a broker will have in flight. Raising
+            /// it is the remedy for a copy backlog whose object store has
+            /// bandwidth left; the sweep is not serial, so a slow partition
+            /// costs a slot rather than the whole tick.
+            ///
+            /// TOML: `[remote_storage] copier_threads = 10`
+            pub remote_copier_threads: usize,
+
+            /// KIP-405: how many partitions may be running their retention
+            /// passes at once (Kafka's
+            /// `remote.log.manager.expiration.thread.pool.size`, default 10).
+            ///
+            /// Local eviction and the remote-retention delete travel together
+            /// under one slot, so this bounds the deletes the broker issues
+            /// against the object store the way `copier_threads` bounds the
+            /// uploads.
+            ///
+            /// TOML: `[remote_storage] expiration_threads = 10`
+            pub remote_expiration_threads: usize,
 
             /// KIP-405: which RLMM the broker runs when tiered storage is enabled.
             /// It defaults to [`RlmmKind::TopicBacked`] in production, and to

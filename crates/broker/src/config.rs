@@ -131,9 +131,18 @@ pub const DEFAULT_REMOTE_LOG_MANAGER_INTERVAL: Time = secs(30);
 ///
 /// It bounds the whole `copy_log_segment_data` call, retries inside the
 /// object-store client included, so a store that stalls costs one partition
-/// one tick rather than stopping the serial sweep for every partition on the
-/// broker. Kafka has no equivalent: its copy is unbounded.
+/// one tick rather than holding one of the sweep's copier slots for as long
+/// as the store cares to hold the connection. Kafka has no equivalent: its
+/// copy is unbounded.
 pub const DEFAULT_REMOTE_COPY_TIMEOUT: Time = minutes(10);
+
+/// KIP-405: default number of partitions whose segment copies may run at
+/// once. Matches Kafka's `remote.log.manager.copier.thread.pool.size`.
+pub const DEFAULT_REMOTE_COPIER_THREADS: usize = 10;
+
+/// KIP-405: default number of partitions whose retention passes may run at
+/// once. Matches Kafka's `remote.log.manager.expiration.thread.pool.size`.
+pub const DEFAULT_REMOTE_EXPIRATION_THREADS: usize = 10;
 
 /// KIP-405: default number of concurrent cold-tier reads. Matches Kafka's
 /// `remote.log.reader.threads`.

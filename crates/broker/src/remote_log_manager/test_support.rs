@@ -209,7 +209,20 @@ pub fn rolled_tiered_partition_with_config(
     log_dir: &std::path::Path,
     config: LogConfig,
 ) -> Arc<Partition> {
-    let part_dir = crate::log_dir::partition_dir(log_dir, "orders", 0);
+    rolled_tiered_partition_at(PartitionIndex(0), log_dir, config)
+}
+
+/// The same fixture at a chosen partition index, for the suites that sweep
+/// more than one partition of `orders` in a tick. The index is the
+/// partition's identity everywhere the sweep looks -- the directory it opens,
+/// the `TopicIdPartition` it copies under -- so it cannot be patched in
+/// afterwards.
+pub fn rolled_tiered_partition_at(
+    index: PartitionIndex,
+    log_dir: &std::path::Path,
+    config: LogConfig,
+) -> Arc<Partition> {
+    let part_dir = crate::log_dir::partition_dir(log_dir, "orders", index.get());
     std::fs::create_dir_all(&part_dir).unwrap();
     let mut log = Log::open(&part_dir, config).unwrap();
     for _ in 0..12 {
@@ -218,7 +231,7 @@ pub fn rolled_tiered_partition_with_config(
     }
     let partition = crate::broker::spawn_partition(
         "orders".to_string(),
-        PartitionIndex(0),
+        index,
         log_dir.to_path_buf(),
         log,
         crate::log_dir_status::LogDirRegistry::default(),
