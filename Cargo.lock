@@ -3261,9 +3261,11 @@ name = "krabka-restore"
 version = "0.5.4"
 dependencies = [
  "assert2",
+ "async-trait",
  "bytes",
  "clap",
  "crc32c",
+ "futures-util",
  "krabka-broker",
  "krabka-client-core",
  "krabka-format",

@@ -60,7 +60,10 @@ pub use self::{
     },
     backend::{ArchiveStore, object_store_config, open_archive},
     bound::{BatchDecision, Predicates, RecordDecision},
-    discover::{ArchiveInventory, ArchiveObject, PartitionInventory, SegmentInventory, inventory},
+    discover::{
+        ArchiveInventory, ArchiveObject, PartitionInventory, SegmentInventory,
+        UNRECOGNIZED_SAMPLE_LIMIT, UnrecognizedKeys, inventory,
+    },
     error::{
         EXIT_ARCHIVE_UNREADABLE, EXIT_BAD_ARGUMENTS, EXIT_DIRTY_LOG_DIR, EXIT_INTEGRITY,
         EXIT_MATERIALIZE, EXIT_OK, RestoreError,

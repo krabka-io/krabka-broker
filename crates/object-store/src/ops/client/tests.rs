@@ -77,6 +77,53 @@ async fn head_and_list_and_delete() {
     ));
 }
 
+/// `list` and `list_stream` describe the same prefix: the stream yields every
+/// object the collecting call returns, in the same order, so a caller can move
+/// from one to the other without changing what it sees.
+#[tokio::test]
+async fn list_stream_yields_the_same_objects_as_list() {
+    use futures_util::stream::TryStreamExt as _;
+
+    let c = client();
+    for name in ["p/a", "p/b", "p/c", "q/d"] {
+        c.put(
+            &Path::from(name),
+            bytes::Bytes::from_static(b"1234"),
+            PutRequest::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let collected: Vec<Path> = c
+        .list(Some(Path::from("p")))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|meta| meta.location)
+        .collect();
+    let streamed: Vec<Path> = c
+        .list_stream(Some(Path::from("p")))
+        .map_ok(|meta| meta.location)
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert!(collected == vec![Path::from("p/a"), Path::from("p/b"), Path::from("p/c")]);
+    assert!(streamed == collected);
+}
+
+/// A listing failure surfaces as an [`ObjectStoreError`] item rather than as
+/// a panic or a silently truncated stream.
+#[tokio::test]
+async fn list_stream_surfaces_a_backend_failure_as_an_error_item() {
+    use futures_util::stream::TryStreamExt as _;
+
+    let c = ObjectStoreClient::new(std::sync::Arc::new(FailingList));
+    let err = c.list_stream(None).try_next().await.unwrap_err();
+    assert!(matches!(err, ObjectStoreError::Backend(_)));
+}
+
 /// The default request asks for no digest, and the outcome reports the
 /// payload size plus whatever identifiers the backend returned. `InMemory`
 /// hands out sequential etags from `0`, so the whole outcome is
@@ -355,6 +402,82 @@ impl object_store::ObjectStore for CountingStore {
         options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
         self.inner.copy_opts(from, to, options).await
+    }
+}
+
+/// A store whose listing fails on the first item, so the streaming listing
+/// has an error to surface.
+#[derive(Debug)]
+struct FailingList;
+
+impl std::fmt::Display for FailingList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FailingList")
+    }
+}
+
+#[async_trait::async_trait]
+impl object_store::ObjectStore for FailingList {
+    async fn put_opts(
+        &self,
+        _location: &Path,
+        _payload: object_store::PutPayload,
+        _opts: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        unimplemented!("this store exists only to fail a listing")
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        _location: &Path,
+        _opts: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        unimplemented!("this store exists only to fail a listing")
+    }
+
+    async fn get_opts(
+        &self,
+        _location: &Path,
+        _options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        unimplemented!("this store exists only to fail a listing")
+    }
+
+    fn delete_stream(
+        &self,
+        _locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
+        unimplemented!("this store exists only to fail a listing")
+    }
+
+    fn list(
+        &self,
+        _prefix: Option<&Path>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+        use futures_util::stream::StreamExt as _;
+        futures_util::stream::once(async {
+            Err(object_store::Error::Generic {
+                store: "FailingList",
+                source: "listing is broken".into(),
+            })
+        })
+        .boxed()
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        _prefix: Option<&Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        unimplemented!("this store exists only to fail a listing")
+    }
+
+    async fn copy_opts(
+        &self,
+        _from: &Path,
+        _to: &Path,
+        _options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        unimplemented!("this store exists only to fail a listing")
     }
 }
 

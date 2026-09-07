@@ -56,6 +56,19 @@ impl ArchiveStore {
     pub fn root(&self) -> Option<Path> {
         self.prefix.as_deref().map(Path::from)
     }
+
+    /// A handle onto an already-built object store, under `prefix`.
+    ///
+    /// [`open_archive`] is what the binary calls; this is the seam a test
+    /// drives the scan through a store of its own with, such as one that
+    /// synthesises a listing no fixture could write to disk.
+    #[must_use]
+    pub fn with_store(store: Arc<dyn object_store::ObjectStore>, prefix: Option<&str>) -> Self {
+        Self {
+            client: ObjectStoreClient::new(store),
+            prefix: normalize_prefix(prefix),
+        }
+    }
 }
 
 /// Build the archive handle the `--archive-*` flags describe.

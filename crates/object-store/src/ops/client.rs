@@ -22,7 +22,7 @@ mod tests;
 
 use crate::{
     error::ObjectStoreError,
-    ops::{ObjectOps, PutOutcome, PutRequest},
+    ops::{ObjectOps, ObjectStream, PutOutcome, PutRequest},
 };
 
 /// The single concrete [`ObjectOps`] implementation.
@@ -293,11 +293,18 @@ impl ObjectOps for ObjectStoreClient {
 
     async fn list(&self, prefix: Option<Path>) -> Result<Vec<ObjectMeta>, ObjectStoreError> {
         use futures_util::stream::TryStreamExt as _;
-        Ok(self
-            .inner
+        self.list_stream(prefix).try_collect::<Vec<_>>().await
+    }
+
+    fn list_stream(&self, prefix: Option<Path>) -> ObjectStream {
+        use futures_util::stream::StreamExt as _;
+        // `object_store`'s listing owns its paging state rather than borrowing
+        // the store, so the mapped stream is `'static` without cloning the
+        // handle into it.
+        self.inner
             .list(prefix.as_ref())
-            .try_collect::<Vec<_>>()
-            .await?)
+            .map(|result| result.map_err(ObjectStoreError::from))
+            .boxed()
     }
 
     async fn delete(&self, key: &Path) -> Result<(), ObjectStoreError> {
