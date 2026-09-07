@@ -272,6 +272,40 @@ mod tests {
         check!(store.root() == Some(Path::from("tier")));
     }
 
+    /// The seam a test drives the scan through: a store built elsewhere, with
+    /// the same prefix handling the flags get, and reads that reach it.
+    #[tokio::test]
+    async fn a_handle_on_a_store_built_elsewhere_reads_it_under_the_prefix() {
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let store = ArchiveStore::with_store(inner.clone(), Some("/tier/"));
+
+        check!(store.prefix() == Some("tier"));
+        check!(store.root() == Some(Path::from("tier")));
+        check!(store.key("orders-0-abc/000.log") == Path::from("tier/orders-0-abc/000.log"));
+
+        object_store::ObjectStoreExt::put(
+            inner.as_ref(),
+            &store.key("orders-0-abc/000.log"),
+            object_store::PutPayload::from_static(b"segment bytes"),
+        )
+        .await
+        .expect("write an object");
+        let listed = store.ops().list(store.root()).await.expect("list");
+        check!(
+            listed
+                .iter()
+                .map(|meta| meta.location.clone())
+                .collect::<Vec<_>>()
+                == vec![Path::from("tier/orders-0-abc/000.log")]
+        );
+
+        // And with no prefix the same store is the whole archive.
+        let bare = ArchiveStore::with_store(inner, None);
+        check!(bare.prefix().is_none());
+        check!(bare.root().is_none());
+        check!(bare.key("orders-0-abc/000.log") == Path::from("orders-0-abc/000.log"));
+    }
+
     #[test]
     fn keys_are_bare_without_a_prefix() {
         let archive = tempfile::tempdir().expect("temp dir");

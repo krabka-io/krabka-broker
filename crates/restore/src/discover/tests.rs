@@ -242,6 +242,47 @@ async fn a_key_prefix_does_not_confuse_the_relative_path_split() {
     check!(result.partitions[0].segments.len() == 1);
 }
 
+/// A scan of an archive whose keys are mostly unattributable keeps the
+/// bounded sample and the exact total, and still reports the segments it did
+/// recognize. This is the `--archive-prefix` pointed at the wrong tree, which
+/// is the case the bound exists for.
+#[tokio::test]
+async fn a_scan_past_the_sample_limit_keeps_the_sample_and_the_exact_total() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    write_full_segment(
+        archive.path(),
+        "orders",
+        0,
+        topic_id,
+        0,
+        Uuid::from_u128(10),
+    );
+
+    let junk = UNRECOGNIZED_SAMPLE_LIMIT + 6;
+    let dir = archive.path().join("not-a-partition-dir");
+    std::fs::create_dir_all(&dir).expect("create the junk dir");
+    for index in 0..junk {
+        std::fs::write(dir.join(format!("{index:04}.log")), b"junk").expect("write a junk key");
+    }
+
+    let args = args_from(archive.path(), &[]);
+    let store = open_archive(&args).expect("store");
+    let result = inventory(&store, &args).await.expect("inventory");
+
+    check!(result.partitions.len() == 1);
+    check!(result.unrecognized.sample.len() == UNRECOGNIZED_SAMPLE_LIMIT);
+    check!(result.unrecognized.omitted == 6);
+    check!(result.unrecognized.total() == u64::try_from(junk).expect("the fixture count is small"));
+    check!(
+        result
+            .unrecognized
+            .sample
+            .iter()
+            .all(|key| key.to_string().contains("not-a-partition-dir"))
+    );
+}
+
 #[tokio::test]
 async fn an_archive_with_nothing_in_it_is_an_empty_archive_error() {
     let archive = tempfile::tempdir().expect("temp dir");

@@ -258,7 +258,9 @@ fn normalize_prefix(prefix: Option<&str>) -> Option<String> {
 mod tests {
     use assert2::check;
 
-    use super::{ArchiveArgs, normalize_prefix};
+    use super::{
+        ArchiveArgs, BTreeSet, DEFAULT_S3_REGION, GcsConfig, ObjectStoreConfig, normalize_prefix,
+    };
 
     fn local_args(root: &std::path::Path) -> ArchiveArgs {
         ArchiveArgs {
@@ -317,6 +319,206 @@ mod tests {
             .to_string();
         check!(message.contains("--archive-s3-region"), "got: {message}");
         check!(message.contains("--archive-s3-bucket"), "got: {message}");
+    }
+
+    #[test]
+    fn the_s3_flags_map_onto_the_s3_config_with_a_placeholder_region() {
+        let args = ArchiveArgs {
+            s3_bucket: Some("krabka-tier".to_owned()),
+            s3_endpoint: Some("http://minio:9000".to_owned()),
+            s3_access_key_id: Some("key".to_owned()),
+            s3_secret_access_key: Some("secret".to_owned()),
+            s3_allow_http: true,
+            ..ArchiveArgs::default()
+        };
+        let ObjectStoreConfig::S3(s3) = args.config().expect("an S3 config") else {
+            panic!("the s3 bucket selects the S3 backend")
+        };
+        // `S3Config` carries no `PartialEq`, so the fields the mapping sets
+        // are checked one by one.
+        check!(s3.bucket == "krabka-tier");
+        check!(s3.prefix == None);
+        check!(s3.region == DEFAULT_S3_REGION);
+        check!(s3.endpoint == Some("http://minio:9000".to_owned()));
+        check!(s3.access_key_id == Some("key".to_owned()));
+        check!(s3.secret_access_key == Some("secret".to_owned()));
+        check!(s3.allow_http);
+
+        // The region is the operator's when they gave one, and the prefix
+        // stays on the handle rather than on the store config.
+        let ObjectStoreConfig::S3(s3) = ArchiveArgs {
+            s3_region: Some("eu-west-1".to_owned()),
+            prefix: Some("prod/".to_owned()),
+            ..ArchiveArgs {
+                s3_bucket: Some("krabka-tier".to_owned()),
+                ..ArchiveArgs::default()
+            }
+        }
+        .config()
+        .expect("an S3 config") else {
+            panic!("the s3 bucket selects the S3 backend")
+        };
+        check!(s3.region == "eu-west-1");
+        check!(s3.prefix == None);
+    }
+
+    #[test]
+    fn the_gcs_flags_map_onto_the_gcs_config() {
+        let args = ArchiveArgs {
+            gcs_bucket: Some("krabka-tier".to_owned()),
+            gcs_service_account_path: Some("/etc/sa.json".to_owned()),
+            gcs_endpoint: Some("http://fake-gcs:4443".to_owned()),
+            gcs_allow_http: true,
+            ..ArchiveArgs::default()
+        };
+        let ObjectStoreConfig::Gcs(gcs) = args.config().expect("a GCS config") else {
+            panic!("the gcs bucket selects the GCS backend")
+        };
+        check!(
+            gcs == GcsConfig {
+                bucket: "krabka-tier".to_owned(),
+                prefix: None,
+                service_account_path: Some("/etc/sa.json".to_owned()),
+                endpoint: Some("http://fake-gcs:4443".to_owned()),
+                allow_http: true,
+                ..GcsConfig::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_flag_set_that_selects_no_backend_at_all_names_the_three_that_would() {
+        let Err(error) = ArchiveArgs::default().open() else {
+            panic!("no backend is not a default")
+        };
+        let message = error.to_string();
+        for flag in [
+            "--archive-local",
+            "--archive-s3-bucket",
+            "--archive-gcs-bucket",
+        ] {
+            check!(message.contains(flag), "for {flag}, got: {message}");
+        }
+    }
+
+    #[test]
+    fn every_sub_flag_needs_the_backend_it_belongs_to() {
+        let root = tempfile::tempdir().expect("archive root");
+        let cases: [(&str, &str, ArchiveArgs); 8] = [
+            (
+                "--archive-s3-region",
+                "--archive-s3-bucket",
+                ArchiveArgs {
+                    s3_region: Some("eu-west-1".to_owned()),
+                    ..local_args(root.path())
+                },
+            ),
+            (
+                "--archive-s3-endpoint",
+                "--archive-s3-bucket",
+                ArchiveArgs {
+                    s3_endpoint: Some("http://minio:9000".to_owned()),
+                    ..local_args(root.path())
+                },
+            ),
+            (
+                "--archive-s3-access-key-id",
+                "--archive-s3-bucket",
+                ArchiveArgs {
+                    s3_access_key_id: Some("key".to_owned()),
+                    ..local_args(root.path())
+                },
+            ),
+            (
+                "--archive-s3-secret-access-key",
+                "--archive-s3-bucket",
+                ArchiveArgs {
+                    s3_secret_access_key: Some("secret".to_owned()),
+                    ..local_args(root.path())
+                },
+            ),
+            (
+                "--archive-s3-allow-http",
+                "--archive-s3-bucket",
+                ArchiveArgs {
+                    s3_allow_http: true,
+                    ..local_args(root.path())
+                },
+            ),
+            (
+                "--archive-gcs-service-account-path",
+                "--archive-gcs-bucket",
+                ArchiveArgs {
+                    gcs_service_account_path: Some("/etc/sa.json".to_owned()),
+                    ..local_args(root.path())
+                },
+            ),
+            (
+                "--archive-gcs-endpoint",
+                "--archive-gcs-bucket",
+                ArchiveArgs {
+                    gcs_endpoint: Some("http://fake-gcs:4443".to_owned()),
+                    ..local_args(root.path())
+                },
+            ),
+            (
+                "--archive-gcs-allow-http",
+                "--archive-gcs-bucket",
+                ArchiveArgs {
+                    gcs_allow_http: true,
+                    ..local_args(root.path())
+                },
+            ),
+        ];
+        for (flag, backend, args) in cases {
+            let message = args
+                .validate()
+                .expect_err("a sub-flag without its backend is rejected")
+                .to_string();
+            check!(message.contains(flag), "for {flag}, got: {message}");
+            check!(message.contains(backend), "for {flag}, got: {message}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_archive_lists_the_directories_one_level_below_a_prefix() {
+        let root = tempfile::tempdir().expect("archive root");
+        let archive = local_args(root.path()).open().expect("open the archive");
+        check!(
+            archive
+                .child_directories("restore-inputs")
+                .await
+                .expect("list an archive that has never been captured into")
+                .is_empty()
+        );
+
+        for key in [
+            "restore-inputs/0000000000000001/manifest.json",
+            "restore-inputs/0000000000000001/rlmm-snapshot",
+            "restore-inputs/0000000000000002/manifest.json",
+            // A key directly under the root names no capture directory.
+            "restore-inputs/stray",
+        ] {
+            archive
+                .put(key, b"bytes".to_vec())
+                .await
+                .expect("write an object");
+        }
+
+        check!(
+            archive
+                .child_directories("restore-inputs")
+                .await
+                .expect("list the captures")
+                == BTreeSet::from(["0000000000000001".to_owned(), "0000000000000002".to_owned()])
+        );
+        check!(
+            archive
+                .get("restore-inputs/stray")
+                .await
+                .expect("read an object back")
+                == b"bytes".to_vec()
+        );
     }
 
     #[test]

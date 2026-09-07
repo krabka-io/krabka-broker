@@ -32,14 +32,32 @@ const GATE_WAIT: Duration = Duration::from_secs(2);
 /// The partition whose copies park.
 const BLOCKED_PARTITION: i32 = 0;
 
-/// An RSM that parks every copy of [`BLOCKED_PARTITION`] until some *other*
-/// partition's copy has finished, and answers every other partition at once.
-///
-/// The park is a blocking wait inside `copy_log_segment_data`, which is
-/// exactly where a stalled object store blocks: the copy path hands the SPI to
-/// the blocking pool, so nothing in the sweep can make progress on that
-/// partition until the call returns.
-struct GatedRsm {
+/// What a [`TestRsm`] does when a copy arrives.
+enum CopyBehaviour {
+    /// Park every copy of [`BLOCKED_PARTITION`] until some *other*
+    /// partition's copy has finished, and answer every other partition at
+    /// once.
+    ///
+    /// The park is a blocking wait inside `copy_log_segment_data`, which is
+    /// exactly where a stalled object store blocks: the copy path hands the
+    /// SPI to the blocking pool, so nothing in the sweep can make progress on
+    /// that partition until the call returns.
+    Gate,
+    /// Accept every copy after [`COPY_DWELL`], so copies the sweep starts
+    /// together are in the store together.
+    Dwell,
+}
+
+/// How long a dwelling copy is held. Long enough that two copies the sweep
+/// starts together overlap on any machine, short enough that a tick over four
+/// partitions is still quick.
+const COPY_DWELL: Duration = Duration::from_millis(100);
+
+/// The remote store both cases run against: one implementation, because the
+/// three SPI methods a copy pass never calls are the same however a copy
+/// behaves.
+struct TestRsm {
+    behaviour: CopyBehaviour,
     /// Set once a copy for a partition other than [`BLOCKED_PARTITION`] has
     /// finished.
     gate: Mutex<bool>,
@@ -49,49 +67,67 @@ struct GatedRsm {
     gave_up: AtomicBool,
     /// Copies the store completed for partitions that were never parked.
     unblocked_copies: AtomicUsize,
+    in_flight: AtomicUsize,
+    /// The most copies the store ever held at one time.
+    peak_in_flight: AtomicUsize,
 }
 
-impl GatedRsm {
-    fn new() -> Self {
+impl TestRsm {
+    fn new(behaviour: CopyBehaviour) -> Self {
         Self {
+            behaviour,
             gate: Mutex::new(false),
             opened: Condvar::new(),
             gave_up: AtomicBool::new(false),
             unblocked_copies: AtomicUsize::new(0),
+            in_flight: AtomicUsize::new(0),
+            peak_in_flight: AtomicUsize::new(0),
         }
     }
 }
 
-impl RemoteStorageManager for GatedRsm {
+impl RemoteStorageManager for TestRsm {
     fn copy_log_segment_data(
         &self,
         metadata: &RemoteLogSegmentMetadata,
         _data: &LogSegmentData,
     ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
-        if metadata
-            .remote_log_segment_id()
-            .topic_id_partition
-            .partition
-            == BLOCKED_PARTITION
-        {
-            let open = self.gate.lock().expect("gate mutex poisoned");
-            let (_open, wait) = self
-                .opened
-                .wait_timeout_while(open, GATE_WAIT, |open| !*open)
-                .expect("gate mutex poisoned");
-            if wait.timed_out() {
-                self.gave_up.store(true, Ordering::Relaxed);
-                return Err(RemoteStorageError::Io(std::io::Error::other(
-                    "no other partition copied while this one was parked",
-                )));
+        match self.behaviour {
+            CopyBehaviour::Gate => {
+                if metadata
+                    .remote_log_segment_id()
+                    .topic_id_partition
+                    .partition
+                    == BLOCKED_PARTITION
+                {
+                    let open = self.gate.lock().expect("gate mutex poisoned");
+                    let (_open, wait) = self
+                        .opened
+                        .wait_timeout_while(open, GATE_WAIT, |open| !*open)
+                        .expect("gate mutex poisoned");
+                    if wait.timed_out() {
+                        self.gave_up.store(true, Ordering::Relaxed);
+                        return Err(RemoteStorageError::Io(std::io::Error::other(
+                            "no other partition copied while this one was parked",
+                        )));
+                    }
+                    return Ok(None);
+                }
+                self.unblocked_copies.fetch_add(1, Ordering::Relaxed);
+                *self.gate.lock().expect("gate mutex poisoned") = true;
+                self.opened.notify_all();
+                Ok(None)
             }
-            return Ok(None);
+            CopyBehaviour::Dwell => {
+                let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak_in_flight.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(COPY_DWELL);
+                self.in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok(None)
+            }
         }
-        self.unblocked_copies.fetch_add(1, Ordering::Relaxed);
-        *self.gate.lock().expect("gate mutex poisoned") = true;
-        self.opened.notify_all();
-        Ok(None)
     }
+
     fn fetch_log_segment(
         &self,
         metadata: &RemoteLogSegmentMetadata,
@@ -102,6 +138,7 @@ impl RemoteStorageManager for GatedRsm {
             metadata.remote_log_segment_id().clone(),
         ))
     }
+
     fn fetch_index(
         &self,
         metadata: &RemoteLogSegmentMetadata,
@@ -111,6 +148,7 @@ impl RemoteStorageManager for GatedRsm {
             metadata.remote_log_segment_id().clone(),
         ))
     }
+
     fn delete_log_segment_data(
         &self,
         _metadata: &RemoteLogSegmentMetadata,
@@ -171,7 +209,7 @@ async fn a_parked_copy_does_not_hold_the_next_partitions_copy() {
         tiered_partition_at(1, second_dir.path()),
     );
 
-    let gated = Arc::new(GatedRsm::new());
+    let gated = Arc::new(TestRsm::new(CopyBehaviour::Gate));
     let rsm: Arc<dyn RemoteStorageManager> = gated.clone();
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
     let controller = fixed_source(image_with_orders_partitions(2));
@@ -232,7 +270,7 @@ async fn the_copier_bound_caps_the_copies_in_flight() {
         );
     }
 
-    let counting = Arc::new(CountingRsm::default());
+    let counting = Arc::new(TestRsm::new(CopyBehaviour::Dwell));
     let rsm: Arc<dyn RemoteStorageManager> = counting.clone();
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
     let controller = fixed_source(image_with_orders_partitions(4));
@@ -269,57 +307,5 @@ async fn the_copier_bound_caps_the_copies_in_flight() {
                 .any(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished),
             "partition {index} finished no copy"
         );
-    }
-}
-
-/// How long [`CountingRsm`] holds a copy. Long enough that two copies the
-/// sweep starts together overlap on any machine, short enough that a tick
-/// over four partitions is still quick.
-const COPY_DWELL: Duration = Duration::from_millis(100);
-
-/// An RSM that accepts every copy after [`COPY_DWELL`] and remembers the most
-/// copies it ever held at one time.
-#[derive(Default)]
-struct CountingRsm {
-    in_flight: AtomicUsize,
-    peak_in_flight: AtomicUsize,
-}
-
-impl RemoteStorageManager for CountingRsm {
-    fn copy_log_segment_data(
-        &self,
-        _metadata: &RemoteLogSegmentMetadata,
-        _data: &LogSegmentData,
-    ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
-        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-        self.peak_in_flight.fetch_max(now, Ordering::SeqCst);
-        std::thread::sleep(COPY_DWELL);
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        Ok(None)
-    }
-    fn fetch_log_segment(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _start: u32,
-        _end: Option<u32>,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
-    fn fetch_index(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _index_type: IndexType,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
-    fn delete_log_segment_data(
-        &self,
-        _metadata: &RemoteLogSegmentMetadata,
-    ) -> Result<(), RemoteStorageError> {
-        Ok(())
     }
 }

@@ -107,7 +107,18 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         # Cloud Storage APIs `object_store`'s GCS client speaks, so the native
         # `[remote_storage.gcs]` backend runs against a server rather than
         # against `InMemory`.
-        ("fake_gcs_server", "mirror.gcr.io", "fsouza/fake-gcs-server", "1.56.1", "sha256:797ce226d62f947c009dc40246b30cfb456b8473d8241407f9d6f2c04e4d69ef"),
+        #
+        # The linux/amd64 manifest, not the index above it, and it is the only
+        # pin here that has to be. fake-gcs-server is published by buildx with
+        # provenance attestations, so its index carries two extra manifests
+        # whose platform is `unknown/unknown` and whose config has an empty
+        # `rootfs.diff_ids`. `image_import` builds *every* manifest an index
+        # holds, so one of those aborts analysis of anything that loads the
+        # image -- "layer index out of range for config: 0" -- before a
+        # container starts. Pinning the platform manifest gives `pull` a
+        # single-platform image and no attestation to trip over. The index is
+        # sha256:797ce226d62f947c009dc40246b30cfb456b8473d8241407f9d6f2c04e4d69ef.
+        ("fake_gcs_server", "mirror.gcr.io", "fsouza/fake-gcs-server", "1.56.1", "sha256:af5fcc12a29db42953c9659dc44b478c164b78f6303390cf25fc93037d78522b"),
         ("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
         # kcat has had no release since 1.7.1, so the librdkafka 2.x half of
         # librdkafka_conformance runs the same program out of Confluent's image.

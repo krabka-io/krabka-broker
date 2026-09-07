@@ -119,7 +119,7 @@ async fn list_stream_yields_the_same_objects_as_list() {
 async fn list_stream_surfaces_a_backend_failure_as_an_error_item() {
     use futures_util::stream::TryStreamExt as _;
 
-    let c = ObjectStoreClient::new(std::sync::Arc::new(FailingList));
+    let c = ObjectStoreClient::new(Arc::new(CountingStore::failing_list()));
     let err = c.list_stream(None).try_next().await.unwrap_err();
     assert!(matches!(err, ObjectStoreError::Backend(_)));
 }
@@ -306,6 +306,8 @@ struct CountingStore {
     puts: std::sync::atomic::AtomicUsize,
     multiparts: std::sync::atomic::AtomicUsize,
     failure_pending: Option<bool>,
+    /// Whether a listing fails on its first item instead of reading `inner`.
+    failing_list: bool,
     parts: Arc<std::sync::atomic::AtomicUsize>,
     aborts: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -317,6 +319,7 @@ impl CountingStore {
             puts: std::sync::atomic::AtomicUsize::new(0),
             multiparts: std::sync::atomic::AtomicUsize::new(0),
             failure_pending: None,
+            failing_list: false,
             parts: Arc::default(),
             aborts: Arc::default(),
         }
@@ -325,6 +328,15 @@ impl CountingStore {
     fn failing(pending: bool) -> Self {
         Self {
             failure_pending: Some(pending),
+            ..Self::new()
+        }
+    }
+
+    /// A store whose listing fails on its first item, so the streaming
+    /// listing has an error to surface.
+    fn failing_list() -> Self {
+        Self {
+            failing_list: true,
             ..Self::new()
         }
     }
@@ -385,6 +397,16 @@ impl object_store::ObjectStore for CountingStore {
         &self,
         prefix: Option<&Path>,
     ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+        if self.failing_list {
+            use futures_util::stream::StreamExt as _;
+            return futures_util::stream::once(async {
+                Err(object_store::Error::Generic {
+                    store: "CountingStore",
+                    source: "listing is broken".into(),
+                })
+            })
+            .boxed();
+        }
         self.inner.list(prefix)
     }
 
@@ -402,82 +424,6 @@ impl object_store::ObjectStore for CountingStore {
         options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
         self.inner.copy_opts(from, to, options).await
-    }
-}
-
-/// A store whose listing fails on the first item, so the streaming listing
-/// has an error to surface.
-#[derive(Debug)]
-struct FailingList;
-
-impl std::fmt::Display for FailingList {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FailingList")
-    }
-}
-
-#[async_trait::async_trait]
-impl object_store::ObjectStore for FailingList {
-    async fn put_opts(
-        &self,
-        _location: &Path,
-        _payload: object_store::PutPayload,
-        _opts: object_store::PutOptions,
-    ) -> object_store::Result<object_store::PutResult> {
-        unimplemented!("this store exists only to fail a listing")
-    }
-
-    async fn put_multipart_opts(
-        &self,
-        _location: &Path,
-        _opts: object_store::PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
-        unimplemented!("this store exists only to fail a listing")
-    }
-
-    async fn get_opts(
-        &self,
-        _location: &Path,
-        _options: object_store::GetOptions,
-    ) -> object_store::Result<object_store::GetResult> {
-        unimplemented!("this store exists only to fail a listing")
-    }
-
-    fn delete_stream(
-        &self,
-        _locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>,
-    ) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
-        unimplemented!("this store exists only to fail a listing")
-    }
-
-    fn list(
-        &self,
-        _prefix: Option<&Path>,
-    ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
-        use futures_util::stream::StreamExt as _;
-        futures_util::stream::once(async {
-            Err(object_store::Error::Generic {
-                store: "FailingList",
-                source: "listing is broken".into(),
-            })
-        })
-        .boxed()
-    }
-
-    async fn list_with_delimiter(
-        &self,
-        _prefix: Option<&Path>,
-    ) -> object_store::Result<object_store::ListResult> {
-        unimplemented!("this store exists only to fail a listing")
-    }
-
-    async fn copy_opts(
-        &self,
-        _from: &Path,
-        _to: &Path,
-        _options: object_store::CopyOptions,
-    ) -> object_store::Result<()> {
-        unimplemented!("this store exists only to fail a listing")
     }
 }
 

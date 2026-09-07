@@ -108,3 +108,150 @@ pub async fn run(cli: Cli) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use clap::Parser as _;
+
+    use super::{
+        Cli, Command, EXIT_BAD_ARGUMENT, EXIT_INTEGRITY, EXIT_UNREADABLE, run, run_from_args,
+    };
+    use crate::{
+        capture::capture_key,
+        manifest::{MANIFEST, RLMM_SNAPSHOT},
+    };
+
+    /// A log directory holding the RLMM snapshot a capture takes off a node.
+    fn node() -> tempfile::TempDir {
+        let log_dir = tempfile::tempdir().expect("log dir");
+        let rlmm = log_dir.path().join("remote-log-metadata");
+        std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
+        std::fs::write(rlmm.join("snapshot"), b"rlmm snapshot bytes")
+            .expect("write the rlmm snapshot");
+        log_dir
+    }
+
+    /// The one capture id the archive holds, which `latest` also resolves to.
+    fn only_capture(archive_root: &std::path::Path) -> String {
+        let mut ids: Vec<String> = std::fs::read_dir(archive_root.join("restore-inputs"))
+            .expect("read the capture root")
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str().map(ToOwned::to_owned))
+            .collect();
+        ids.sort();
+        ids.pop().expect("the archive holds a capture")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_and_the_checks_that_read_it_back_all_exit_zero() {
+        let node = node();
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let log_dir = node.path().display().to_string();
+        let archive = archive_root.path().display().to_string();
+
+        check!(
+            run_from_args([
+                "krabka-backup",
+                "capture",
+                "--log-dir",
+                &log_dir,
+                "--archive-local",
+                &archive,
+            ])
+            .await
+                == 0
+        );
+        check!(run_from_args(["krabka-backup", "list", "--archive-local", &archive]).await == 0);
+        check!(run_from_args(["krabka-backup", "verify", "--archive-local", &archive]).await == 0);
+        check!(
+            run_from_args([
+                "krabka-backup",
+                "restore-offsets",
+                "--dry-run",
+                "-b",
+                "127.0.0.1:9092",
+                "--capture",
+                &only_capture(archive_root.path()),
+                "--archive-local",
+                &archive,
+            ])
+            .await
+                == EXIT_UNREADABLE,
+            "a capture of the on-disk inputs alone holds no offsets to restore",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_damaged_capture_exits_with_the_integrity_code_a_runbook_branches_on() {
+        let node = node();
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let archive = archive_root.path().display().to_string();
+        check!(
+            run_from_args([
+                "krabka-backup",
+                "capture",
+                "--log-dir",
+                &node.path().display().to_string(),
+                "--archive-local",
+                &archive,
+            ])
+            .await
+                == 0
+        );
+
+        let id = only_capture(archive_root.path());
+        std::fs::write(
+            archive_root.path().join(capture_key(&id, RLMM_SNAPSHOT)),
+            b"truncated",
+        )
+        .expect("truncate the captured snapshot");
+
+        check!(
+            run_from_args(["krabka-backup", "verify", "--archive-local", &archive]).await
+                == EXIT_INTEGRITY
+        );
+
+        // And an archive whose manifest is gone is unreadable rather than
+        // corrupt: the two codes send a runbook down different branches.
+        std::fs::remove_file(archive_root.path().join(capture_key(&id, MANIFEST)))
+            .expect("remove the manifest");
+        check!(
+            run_from_args(["krabka-backup", "verify", "--archive-local", &archive]).await
+                == EXIT_UNREADABLE
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_that_finds_nothing_exits_unreadable() {
+        let empty = tempfile::tempdir().expect("an empty log dir");
+        let archive_root = tempfile::tempdir().expect("archive root");
+        check!(
+            run_from_args([
+                "krabka-backup",
+                "capture",
+                "--log-dir",
+                &empty.path().display().to_string(),
+                "--archive-local",
+                &archive_root.path().display().to_string(),
+            ])
+            .await
+                == EXIT_UNREADABLE
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_flag_that_names_a_backend_that_was_not_selected_exits_bad_argument() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let cli = Cli::parse_from([
+            "krabka-backup",
+            "list",
+            "--archive-local",
+            &archive_root.path().display().to_string(),
+            "--archive-s3-region",
+            "eu-west-1",
+        ]);
+        check!(let Command::List { .. } = &cli.command);
+        check!(run(cli).await == EXIT_BAD_ARGUMENT);
+    }
+}

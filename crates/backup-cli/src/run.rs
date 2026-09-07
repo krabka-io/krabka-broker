@@ -1,6 +1,6 @@
 //! What each subcommand does, and the one place that talks to a cluster.
 //!
-//! Every function here returns a [`BackupError`], and only [`crate::run`] turns
+//! Every function here returns a [`BackupError`], and only [`crate::run()`] turns
 //! one into an exit code. A runbook that wraps the tool gets the code; a test
 //! that drives the library keeps the error.
 
@@ -394,4 +394,413 @@ async fn read_manifest(store: &Archive, id: &str) -> Result<Manifest, BackupErro
         context: key,
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::{assert, check};
+
+    use super::{
+        BackupError, GROUP_OFFSETS, MANIFEST, METADATA_CHECKPOINT, RLMM_SNAPSHOT, capture, list,
+        restore_offsets, verify,
+    };
+    use crate::{
+        archive::{Archive, ArchiveArgs},
+        capture::capture_key,
+        manifest::{Artifact, Manifest, sha256_hex},
+        offsets::{CommittedOffset, GroupOffsets, GroupOffsetsFile},
+    };
+
+    /// The RLMM snapshot bytes a fixture node holds. The capture copies bytes
+    /// and decodes nothing, so any content proves the same thing.
+    const RLMM_BYTES: &[u8] = b"rlmm snapshot bytes";
+
+    /// The newest checkpoint's bytes.
+    const CHECKPOINT_BYTES: &[u8] = b"the newest controller checkpoint";
+
+    fn archive_args(root: &std::path::Path) -> ArchiveArgs {
+        ArchiveArgs {
+            local: Some(root.to_path_buf()),
+            ..ArchiveArgs::default()
+        }
+    }
+
+    /// A log directory holding both of the files a capture takes off a node.
+    fn node_with_both_inputs() -> tempfile::TempDir {
+        let log_dir = tempfile::tempdir().expect("log dir");
+        let rlmm = log_dir.path().join("remote-log-metadata");
+        std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
+        std::fs::write(rlmm.join("snapshot"), RLMM_BYTES).expect("write the rlmm snapshot");
+        write_checkpoint(log_dir.path());
+        log_dir
+    }
+
+    /// The newest controller checkpoint, in the directory a controller writes.
+    fn write_checkpoint(log_dir: &std::path::Path) {
+        let metadata = log_dir.join("__cluster_metadata/@metadata-0");
+        std::fs::create_dir_all(&metadata).expect("create the metadata dir");
+        std::fs::write(
+            metadata.join("00000000000000000042-0000000001.checkpoint"),
+            CHECKPOINT_BYTES,
+        )
+        .expect("write the newest checkpoint");
+    }
+
+    /// An address on the loopback interface that nothing is listening on, so
+    /// a connection attempt is refused rather than timing out.
+    fn closed_address() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a probe listener");
+        let port = listener.local_addr().expect("the probe's address").port();
+        drop(listener);
+        format!("127.0.0.1:{port}")
+    }
+
+    /// Write a capture that no [`capture`] call produced: a manifest naming one
+    /// group-offsets artifact, and whatever bytes the caller wants under it.
+    /// It is how the read paths are driven over inputs a healthy capture cannot
+    /// leave behind.
+    async fn write_offsets_capture(store: &Archive, id: &str, bytes: &[u8], recorded: &[u8]) {
+        let manifest = Manifest {
+            capture_id: id.to_owned(),
+            captured_at_ms: 1_700_000_000_000,
+            log_dir: None,
+            bootstrap_server: Some("broker-1:9092".to_owned()),
+            artifacts: vec![Artifact {
+                name: GROUP_OFFSETS.to_owned(),
+                source: "broker-1:9092".to_owned(),
+                size_bytes: recorded.len() as u64,
+                sha256: sha256_hex(recorded),
+            }],
+        };
+        store
+            .put(
+                &capture_key(id, MANIFEST),
+                serde_json::to_vec(&manifest).expect("encode the manifest"),
+            )
+            .await
+            .expect("write the manifest");
+        store
+            .put(&capture_key(id, GROUP_OFFSETS), bytes.to_vec())
+            .await
+            .expect("write the offsets");
+    }
+
+    /// One group with one committed offset, as JSON bytes.
+    fn offsets_json() -> Vec<u8> {
+        serde_json::to_vec(&GroupOffsetsFile {
+            groups: vec![GroupOffsets {
+                group: "analytics".to_owned(),
+                offsets: vec![CommittedOffset {
+                    topic: "orders".to_owned(),
+                    partition: 0,
+                    offset: 42,
+                }],
+            }],
+        })
+        .expect("encode the offsets")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_records_both_snapshots_with_their_digests() {
+        let node = node_with_both_inputs();
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+
+        let id = capture(Some(node.path()), None, &args)
+            .await
+            .expect("capture the node");
+
+        let store = args.open().expect("open the archive");
+        let manifest: Manifest = serde_json::from_slice(
+            &store
+                .get(&capture_key(&id, MANIFEST))
+                .await
+                .expect("read the manifest"),
+        )
+        .expect("decode the manifest");
+        check!(manifest.capture_id == id);
+        check!(manifest.bootstrap_server == None);
+        check!(
+            manifest.artifact(RLMM_SNAPSHOT).map(|a| a.sha256.clone())
+                == Some(sha256_hex(RLMM_BYTES))
+        );
+        check!(
+            manifest
+                .artifact(METADATA_CHECKPOINT)
+                .map(|a| a.sha256.clone())
+                == Some(sha256_hex(CHECKPOINT_BYTES))
+        );
+        check!(manifest.artifact(GROUP_OFFSETS) == None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_reports_each_input_it_did_not_find_and_takes_the_other() {
+        let log_dir = tempfile::tempdir().expect("log dir");
+        write_checkpoint(log_dir.path());
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+
+        let id = capture(Some(log_dir.path()), None, &args)
+            .await
+            .expect("a capture that found one input succeeds");
+
+        let store = args.open().expect("open the archive");
+        let manifest: Manifest = serde_json::from_slice(
+            &store
+                .get(&capture_key(&id, MANIFEST))
+                .await
+                .expect("read the manifest"),
+        )
+        .expect("decode the manifest");
+        check!(manifest.artifact(RLMM_SNAPSHOT) == None);
+        check!(manifest.artifact(METADATA_CHECKPOINT).is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_that_finds_nothing_names_the_flags_that_would_have_helped() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+
+        let message = capture(None, None, &args)
+            .await
+            .expect_err("a capture with no source fails")
+            .to_string();
+        check!(message.contains("pass --log-dir"), "got: {message}");
+
+        let empty = tempfile::tempdir().expect("an empty log dir");
+        let message = capture(Some(empty.path()), None, &args)
+            .await
+            .expect_err("a capture that found nothing fails")
+            .to_string();
+        check!(message.contains("is absent"), "got: {message}");
+        check!(message.contains("checkpoint"), "got: {message}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreadable_snapshot_is_reported_rather_than_treated_as_absent() {
+        let log_dir = tempfile::tempdir().expect("log dir");
+        // A directory where the snapshot file belongs: the read fails with
+        // something other than `NotFound`, which is not "the node has none".
+        std::fs::create_dir_all(log_dir.path().join("remote-log-metadata/snapshot"))
+            .expect("create a directory in the snapshot's place");
+        let archive_root = tempfile::tempdir().expect("archive root");
+
+        let error = capture(
+            Some(log_dir.path()),
+            None,
+            &archive_args(archive_root.path()),
+        )
+        .await
+        .expect_err("an unreadable snapshot fails the capture");
+        assert!(let BackupError::Io(_) = &error, "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_of_group_offsets_reports_the_cluster_it_could_not_reach() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let address = closed_address();
+
+        let error = capture(None, Some(&address), &archive_args(archive_root.path()))
+            .await
+            .expect_err("a capture cannot read offsets from a cluster that is not there");
+        assert!(let BackupError::Cluster(_) = &error, "got: {error}");
+        check!(error.to_string().contains(&address), "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_names_every_capture_and_says_so_when_there_are_none() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        check!(list(&args).await.expect("list an empty archive").is_empty());
+
+        let node = node_with_both_inputs();
+        let first = capture(Some(node.path()), None, &args)
+            .await
+            .expect("capture the node");
+        // A second capture id that sorts after the first, written by hand so
+        // the two do not depend on the clock ticking between them.
+        let store = args.open().expect("open the archive");
+        let second = "9999999999999999";
+        write_offsets_capture(&store, second, &offsets_json(), &offsets_json()).await;
+
+        check!(list(&args).await.expect("list the captures") == vec![first, second.to_owned()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_reports_a_capture_whose_manifest_cannot_be_read_and_keeps_going() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let store = args.open().expect("open the archive");
+        store
+            .put(&capture_key("0000000000000001", MANIFEST), b"{".to_vec())
+            .await
+            .expect("write a truncated manifest");
+
+        check!(
+            list(&args)
+                .await
+                .expect("an unreadable manifest is listed, not fatal")
+                == vec!["0000000000000001".to_owned()]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_accepts_a_capture_it_just_wrote_under_either_selector() {
+        let node = node_with_both_inputs();
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let id = capture(Some(node.path()), None, &args)
+            .await
+            .expect("capture the node");
+
+        check!(verify("latest", &args).await.is_ok());
+        check!(verify(&id, &args).await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn verify_reports_an_artifact_the_archive_no_longer_holds_whole() {
+        let node = node_with_both_inputs();
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let id = capture(Some(node.path()), None, &args)
+            .await
+            .expect("capture the node");
+
+        // What a half-finished upload leaves behind, and exactly what a
+        // restore must not be handed.
+        std::fs::write(
+            archive_root.path().join(capture_key(&id, RLMM_SNAPSHOT)),
+            b"rlmm snapshot byt",
+        )
+        .expect("truncate the captured snapshot");
+
+        let error = verify("latest", &args)
+            .await
+            .expect_err("a truncated artifact fails verification");
+        assert!(let BackupError::Integrity(_) = &error, "got: {error}");
+        check!(error.to_string().contains(RLMM_SNAPSHOT), "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_that_is_not_in_the_archive_is_named_rather_than_guessed_at() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+
+        let error = verify("latest", &args)
+            .await
+            .expect_err("an empty archive has no newest capture");
+        assert!(let BackupError::NoSuchCapture(_) = &error, "got: {error}");
+
+        let node = node_with_both_inputs();
+        capture(Some(node.path()), None, &args)
+            .await
+            .expect("capture the node");
+        let error = verify("0000000000000007", &args)
+            .await
+            .expect_err("a capture the archive does not hold");
+        assert!(let BackupError::NoSuchCapture(_) = &error, "got: {error}");
+        check!(
+            error.to_string().contains("0000000000000007"),
+            "got: {error}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dry_run_reports_every_offset_and_commits_nothing() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let store = args.open().expect("open the archive");
+        let offsets = offsets_json();
+        write_offsets_capture(&store, "0000000000000001", &offsets, &offsets).await;
+
+        // The cluster address is one nothing is listening on: a dry run must
+        // not reach for it at all.
+        check!(
+            restore_offsets("latest", &closed_address(), true, &args)
+                .await
+                .expect("a dry run reads the capture alone")
+                == 1
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_without_offsets_cannot_restore_them() {
+        let node = node_with_both_inputs();
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        capture(Some(node.path()), None, &args)
+            .await
+            .expect("capture the node");
+
+        let error = restore_offsets("latest", &closed_address(), true, &args)
+            .await
+            .expect_err("a capture of the two files holds no offsets");
+        assert!(let BackupError::NoSuchCapture(_) = &error, "got: {error}");
+        check!(error.to_string().contains(GROUP_OFFSETS), "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn offsets_that_do_not_match_their_digest_are_never_committed() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let store = args.open().expect("open the archive");
+        write_offsets_capture(&store, "0000000000000001", b"{}", &offsets_json()).await;
+
+        let error = restore_offsets("latest", &closed_address(), true, &args)
+            .await
+            .expect_err("offsets that do not match the manifest are an integrity failure");
+        assert!(let BackupError::Integrity(_) = &error, "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn offsets_that_are_not_the_captured_shape_name_the_object_that_holds_them() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let store = args.open().expect("open the archive");
+        let bytes = b"[]";
+        write_offsets_capture(&store, "0000000000000001", bytes, bytes).await;
+
+        let error = restore_offsets("latest", &closed_address(), true, &args)
+            .await
+            .expect_err("a JSON array is not the captured shape");
+        assert!(let BackupError::Json { .. } = &error, "got: {error}");
+        check!(error.to_string().contains(GROUP_OFFSETS), "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_commit_reports_the_cluster_it_could_not_reach() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let store = args.open().expect("open the archive");
+        let offsets = offsets_json();
+        write_offsets_capture(&store, "0000000000000001", &offsets, &offsets).await;
+        let address = closed_address();
+
+        // The topic ids come first, so this is the Metadata lookup failing.
+        let error = restore_offsets("latest", &address, false, &args)
+            .await
+            .expect_err("a commit cannot reach a cluster that is not there");
+        assert!(let BackupError::Cluster(_) = &error, "got: {error}");
+        check!(error.to_string().contains(&address), "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_that_holds_no_offsets_commits_nothing_and_asks_the_cluster_nothing() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let store = args.open().expect("open the archive");
+        let empty = serde_json::to_vec(&GroupOffsetsFile::default()).expect("encode the offsets");
+        write_offsets_capture(&store, "0000000000000001", &empty, &empty).await;
+
+        // A capture taken while no group had committed anything names no
+        // topic, so there is no metadata to look up and no commit to send:
+        // the restore succeeds having asked the cluster for nothing, which is
+        // why the address below is one nothing is listening on.
+        check!(
+            restore_offsets("latest", &closed_address(), false, &args)
+                .await
+                .expect("an empty capture restores nothing")
+                == 0
+        );
+    }
 }
