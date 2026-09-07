@@ -69,6 +69,10 @@
 //! the eviction that follows on both replicas' disks,
 //! [`multi_client`] reads back over the wire from a broker the test holds no
 //! handle for, and [`multi_failover`] is the test that orders them.
+//! [`multi_misaligned`] boots the same three brokers with different
+//! `log.segment.bytes` on each, so the two replicas of one partition roll at
+//! different offsets, and follows the copy pass across a failover onto those
+//! boundaries.
 
 mod support;
 
@@ -82,6 +86,8 @@ mod multi_client;
 mod multi_cluster;
 #[path = "tiered_storage_multi_broker/multi_failover.rs"]
 mod multi_failover;
+#[path = "tiered_storage_multi_broker/multi_misaligned.rs"]
+mod multi_misaligned;
 #[path = "tiered_storage_multi_broker/multi_workload.rs"]
 mod multi_workload;
 
