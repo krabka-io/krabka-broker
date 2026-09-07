@@ -1,9 +1,9 @@
 //! Segment deletion: the idempotent sweep of every key a copy could have
 //! written, and the archive backstop that refuses to issue a delete at all.
 //!
-//! The sweep covers both key layouts, so a segment an older Krabka wrote
-//! leaves nothing behind. A WORM archive never reaches the sweep, because a
-//! store that is never asked cannot be talked into obliging.
+//! The sweep issues one delete per artifact a copy could have written, and
+//! nothing else. A WORM archive never reaches the sweep, because a store that
+//! is never asked cannot be talked into obliging.
 
 use krabka_object_store::{ObjectOps, ObjectStoreError};
 
@@ -14,7 +14,7 @@ use crate::{
 };
 
 impl S3RemoteStorage {
-    /// Deletes every object of one segment, in both key layouts.
+    /// Deletes every object of one segment: one request per artifact.
     pub(super) fn delete_segment_objects(
         &self,
         metadata: &RemoteLogSegmentMetadata,
@@ -35,12 +35,6 @@ impl S3RemoteStorage {
             self.index_key(metadata, IndexType::ProducerSnapshot),
             self.index_key(metadata, IndexType::LeaderEpoch),
             self.index_key(metadata, IndexType::Transaction),
-            self.legacy_log_key(metadata),
-            self.legacy_index_key(metadata, IndexType::Offset),
-            self.legacy_index_key(metadata, IndexType::Timestamp),
-            self.legacy_index_key(metadata, IndexType::ProducerSnapshot),
-            self.legacy_index_key(metadata, IndexType::LeaderEpoch),
-            self.legacy_index_key(metadata, IndexType::Transaction),
         ] {
             match Self::block_os(self.ops.delete(&key)) {
                 // Idempotent: deleting an absent object succeeds.
@@ -57,12 +51,15 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
+    use krabka_object_store::fault::StoreOp;
     use object_store::memory::InMemory;
     use tempfile::TempDir;
 
-    use super::{ObjectOps, RemoteStorageError, S3RemoteStorage, WormError};
+    use super::{IndexType, ObjectOps, RemoteStorageError, S3RemoteStorage, WormError};
     use crate::{
-        s3::test_support::{rsm, sample_data, sample_metadata, stamped_metadata, worm_rsm},
+        s3::test_support::{
+            counting_rsm, rsm, sample_data, sample_metadata, stamped_metadata, worm_rsm,
+        },
         storage_manager::RemoteStorageManager,
         worm::ChainHead,
     };
@@ -76,6 +73,42 @@ mod tests {
             .collect();
         keys.sort();
         keys
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_issues_one_request_per_current_key() {
+        let (store, counter) = counting_rsm();
+        let src = TempDir::new().unwrap();
+        let md = sample_metadata(14);
+        tokio::task::spawn_blocking(move || {
+            store
+                .copy_log_segment_data(&md, &sample_data(src.path(), true))
+                .unwrap();
+            let expected = {
+                let mut keys = vec![
+                    store.log_key(&md).to_string(),
+                    store.index_key(&md, IndexType::Offset).to_string(),
+                    store.index_key(&md, IndexType::Timestamp).to_string(),
+                    store
+                        .index_key(&md, IndexType::ProducerSnapshot)
+                        .to_string(),
+                    store.index_key(&md, IndexType::LeaderEpoch).to_string(),
+                    store.index_key(&md, IndexType::Transaction).to_string(),
+                ];
+                keys.sort();
+                keys
+            };
+            check!(all_keys(&store) == expected);
+
+            let before = counter.attempts(StoreOp::Delete);
+            store.delete_log_segment_data(&md).unwrap();
+
+            // Six requests, one per artifact: no second layout to sweep.
+            check!(counter.attempts(StoreOp::Delete) - before == 6);
+            check!(all_keys(&store) == Vec::<String>::new());
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -136,8 +169,7 @@ mod tests {
                     if *key == store.log_key(&md).to_string())
             );
 
-            // Not one object left the archive, including the legacy-layout
-            // keys the non-WORM path would also have swept.
+            // Not one object left the archive.
             check!(all_keys(&store) == before);
             check!(before.len() == 7, "six objects plus the manifest");
         })
