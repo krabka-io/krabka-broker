@@ -98,7 +98,7 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
                 dir: remote_dir.path().to_path_buf(),
             });
             cfg.remote_log_manager_interval = krabka_units::secs(1);
-            // RLMM: all 3 brokers bootstrap into the cluster's loopback ports.
+            // RLMM: all 3 brokers bootstrap into broker 1's loopback.
             // num_partitions=1 keeps all metadata on a single partition.
             // replication=3 prevents the topic from being created before all
             // brokers are registered; sorted placement makes broker 1 leader.
@@ -106,18 +106,7 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
             // before broker 1 dies; the cached metadata is then used for remote
             // reads from the survivor.
             cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-                // Every broker, not just broker 1. The RLMM is a Kafka client:
-                // it re-resolves the metadata topic's leader through whichever
-                // bootstrap address answers, and a suite that kills a broker
-                // has to leave it one that does. With broker 1 alone here, a
-                // survivor elected after broker 1 died could not write a
-                // `CopySegmentStarted` record, so its copy pass failed before
-                // it uploaded anything and the tier stopped growing for good.
-                bootstrap: client_addrs
-                    .iter()
-                    .map(|addr| format!("127.0.0.1:{}", addr.port()))
-                    .collect::<Vec<String>>()
-                    .join(","),
+                bootstrap: format!("127.0.0.1:{}", client_addrs[0].port()),
                 num_partitions: 1,
                 replication: 3,
                 snapshot_interval: krabka_units::hours(1),

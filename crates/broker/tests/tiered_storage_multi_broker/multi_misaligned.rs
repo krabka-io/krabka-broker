@@ -27,7 +27,9 @@ use krabka_broker::{BrokerHandle, NodeId, metrics::TopicLabel};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+        create_topics_request::{
+            CreatableReplicaAssignment, CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
+        },
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     primitives::uuid::Uuid as WireUuid,
@@ -179,13 +181,26 @@ async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, coun
 
 /// Creates the tiered topic, deliberately without a `segment.bytes` override,
 /// and waits until both replicas hold the tiered configuration.
+///
+/// The replicas are assigned by hand as `[2, 1]`, so broker 2 is the preferred
+/// leader and broker 1 the follower. That is not cosmetic: broker 1 is the
+/// address every broker's RLMM client bootstraps against, and this suite kills
+/// the partition leader. Killing broker 1 would take the metadata manager's
+/// only entry point down with it, and the survivor's copy pass would fail at
+/// its `CopySegmentStarted` write before it uploaded anything. Kafka reads a
+/// manual assignment as `num_partitions = -1, replication_factor = -1`.
 async fn create_misaligned_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
     let response = admin
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
                 name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 2,
+                num_partitions: -1,
+                replication_factor: -1,
+                assignments: vec![CreatableReplicaAssignment {
+                    partition_index: 0,
+                    broker_ids: vec![2, 1],
+                    ..Default::default()
+                }],
                 configs: vec![
                     CreatableTopicConfig {
                         name: "remote.storage.enable".into(),
@@ -329,9 +344,27 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     })
     .await;
     let leader_is_b1 = b1.partition_leader_for_test(TOPIC, 0) == Some(b1_id);
+    assert!(
+        !leader_is_b1,
+        "the manual assignment makes broker 2 the preferred leader; broker 1 has to survive \
+         the kill because every broker's RLMM bootstraps against its address"
+    );
     let (leader_index, survivor_index) = if leader_is_b1 { (0, 1) } else { (1, 0) };
 
     let topic_id = topic_id_for(&admin, TOPIC).await;
+    // Produce through the leader's own listener. `admin` bootstraps against
+    // broker 1, which the manual assignment makes the follower.
+    let leader_addr = if leader_is_b1 {
+        format!("127.0.0.1:{}", b1.listen_addr().port())
+    } else {
+        format!("127.0.0.1:{}", b2.listen_addr().port())
+    };
+    let producer = Client::builder()
+        .bootstrap(&leader_addr)
+        .client_id("tiered-misaligned-producer")
+        .build()
+        .await
+        .expect("producer client");
     let leader_dir = log_dirs[leader_index].path().join(format!("{TOPIC}-0"));
     let survivor_dir = log_dirs[survivor_index].path().join(format!("{TOPIC}-0"));
 
@@ -340,7 +373,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     // future change made the two replicas roll at the same offsets the
     // failover below would prove nothing. The sample is taken mid-produce,
     // while both replicas still hold sealed segments to compare.
-    produce_records(&admin, topic_id, "before", RECORDS / 2).await;
+    produce_records(&producer, topic_id, "before", RECORDS / 2).await;
     let leader_bases = local_segment_bases(&leader_dir);
     let survivor_bases = local_segment_bases(&survivor_dir);
     assert!(
@@ -348,7 +381,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
         "the replicas rolled at the same offsets ({leader_bases:?} vs {survivor_bases:?}); \
          this test needs misaligned segment boundaries"
     );
-    produce_records(&admin, topic_id, "before-more", RECORDS - RECORDS / 2).await;
+    produce_records(&producer, topic_id, "before-more", RECORDS - RECORDS / 2).await;
 
     let before = await_remote_segments(remote_dir.path(), 2, "the first leader's copy").await;
     eprintln!("ITEST: the first leader tiered {before:?}");
@@ -376,6 +409,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     }
 
     drop(admin);
+    drop(producer);
     let mut opt_b1 = Some(b1);
     let mut opt_b2 = Some(b2);
     let (leader, leader_id) = if leader_is_b1 {
@@ -403,8 +437,29 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     produce_records(&survivor_client, topic_id, "after", RECORDS).await;
 
     // The new leader's copy pass has to reach past what the old one tiered.
-    let after = await_remote_segments(remote_dir.path(), before.len() + 1, "the new leader's copy")
-        .await;
+    let deadline = Instant::now() + Duration::from_mins(4);
+    let after = loop {
+        let segments = remote_segments(remote_dir.path());
+        if segments.len() > before.len() {
+            break segments;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the new leader copied nothing past the resume point: the store still holds \
+             {segments:?} while the new leader's local segments start at {:?}",
+            local_segment_bases(&survivor_dir)
+        );
+        eprintln!(
+            "ITEST: waiting for the new leader's copy: remote={} local={:?} leader={:?} \
+             log_start={:?}",
+            segments.len(),
+            local_segment_bases(&survivor_dir),
+            survivor.partition_leader_for_test(TOPIC, 0),
+            survivor.partition_log_start_for_test(TOPIC, 0),
+        );
+        // intentional: the copy task runs on the broker's own 1s interval.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    };
     eprintln!("ITEST: the tier after the failover holds {after:?}");
 
     // KIP-405's copy-lag gauge on the new leader. It counts the sealed local
@@ -416,9 +471,10 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
         topic: std::sync::Arc::from(TOPIC),
     };
     survivor
-        .wait_for_metrics("the survivor counts its uncopied segments as lag", move |m| {
-            m.remote_copy_lag_segments.get_or_create(&lag_label).get() >= 1
-        })
+        .wait_for_metrics(
+            "the survivor counts its uncopied segments as lag",
+            move |m| m.remote_copy_lag_segments.get_or_create(&lag_label).get() >= 1,
+        )
         .await;
 
     // Local retention still evicts on the new leader: the same RLMM coverage
