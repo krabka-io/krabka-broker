@@ -9,7 +9,10 @@ the repository cache carry the images between CI runs.
 each one it is handed before executing the test binary.
 """
 
+load("@rules_apko//apko:defs.bzl", "apko_image")
+load("@rules_img//img:convert.bzl", "image_manifest_from_oci_layout")
 load("@rules_img//img:load.bzl", "image_load")
+load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -49,6 +52,70 @@ IMAGES = {
         tags = ["docker"],
     )
     for name in IMAGES
+]
+
+# The client images built here rather than pulled, as `name: tag` the way
+# `IMAGES` above is, and consumed by the suites the same way.
+#
+# Nothing published carries either client. `kcat` has had no release since
+# 1.7.1 and every published build of it -- Confluent's 2026 `cp-kcat` included
+# -- links the librdkafka 1.8.2 that release's bootstrap pins, so a client on
+# the 2.x line that the whole confluent-kafka-{python,go,dotnet} family sits on
+# has to be assembled. Wolfi packages `kcat` against its own librdkafka, which
+# is 2.15.0, so the assembly is a package list. `kaf` is there for the same
+# reason and a different one: it is a Kafka client that is neither librdkafka
+# nor the JVM -- Go and sarama, an independent decoder of the protocol.
+#
+# The bytes are pinned by the apko lock beside each config rather than by a
+# registry digest, which is why these are not in `IMAGES`: there is no
+# //MODULE.bazel pull tuple for `aspect check-images` to hold them against, and
+# the lock pins every package by version and checksum instead.
+BUILT_IMAGES = {
+    "kaf_sarama": "docker.io/krabka-io/kaf:0.2.14",
+    "kcat_librdkafka_2x": "docker.io/krabka-io/kcat:librdkafka-2.15.0",
+}
+
+[
+    apko_image(
+        name = name + "_oci",
+        config = name + ".apko.yaml",
+        contents = "@" + name + "_lock//:contents",
+        tag = name + ":locked",
+        tags = ["docker"],
+    )
+    for name in BUILT_IMAGES
+]
+
+[
+    image_manifest_from_oci_layout(
+        name = name + "_manifest",
+        src = ":" + name + "_oci",
+        architecture = "amd64",
+        layers = [GZIP_LAYER],
+        os = "linux",
+        tags = ["docker"],
+    )
+    for name in BUILT_IMAGES
+]
+
+[
+    image_load(
+        name = name,
+        image = ":" + name + "_manifest",
+        tag = tag,
+        tags = ["docker"],
+    )
+    for name, tag in BUILT_IMAGES.items()
+]
+
+[
+    filegroup(
+        name = name + "_tar",
+        srcs = [":" + name],
+        output_group = "tarball",
+        tags = ["docker"],
+    )
+    for name in BUILT_IMAGES
 ]
 
 # The digests //MODULE.bazel pins, as a `rustc_env_files` file: one
