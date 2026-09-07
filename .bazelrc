@@ -47,6 +47,26 @@ test --@aspect_rules_lint//lint:fail_on_violation
 # instrumenting the whole dependency closure is most of the run.
 coverage --combined_report=lcov
 coverage --instrumentation_filter=^//crates[:/]
+# Without this, every `tests/*.rs` suite reports zero coverage and the report
+# describes the in-file `#[cfg(test)]` modules alone.
+#
+# Bazel does not instrument a test target unless it is told to, and rules_rust
+# only works around that for `rust_test(crate = ...)`: it falls back to asking
+# whether the *library under test* is instrumented (rust/private/rustc.bzl,
+# `is_coverage_instrumented`). A `crate_tests` integration suite has no `crate`
+# attribute -- it names its own file as the crate root and takes the library
+# through `deps` -- so the fallback never fires, Bazel collects nothing, and the
+# run logs `WARNING: There was no coverage found.` for the suite.
+#
+# The mappings were being built either way: the instrumented library is linked
+# into those binaries regardless, and the flag grows `kip590_envelope_test` by
+# 0.13% (153,991,024 -> 154,185,552 bytes). What it changes is whether Bazel
+# collects the profile the run already produces.
+#
+# The suites' own sources enter the report too, so codecov.yml ignores
+# `crates/*/tests/**`: a test file is covered by construction, and counting it
+# would inflate the project number rather than describe it.
+coverage --instrument_test_targets
 # Profiling instrumentation slows every test enough to trip the wall-clock
 # assertions in the consensus and replication suites -- they pass in the test
 # run and fail here, which is a statement about the instrumentation rather than
