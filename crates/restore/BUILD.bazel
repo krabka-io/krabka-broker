@@ -20,6 +20,14 @@ crate_binary(
 crate_tests(
     # `cli_surface` runs the binary to check the flags it accepts.
     data = [":krabka-restore"],
+    # `minio_roundtrip` archives through the production S3 backend into a real
+    # `MinIO` and restores out of the bucket, so it needs the server image and
+    # the `mc` client that creates the bucket. //bazel/images pins both by
+    # digest and loads them before the suite runs.
+    docker = {"minio_roundtrip": [
+        "minio",
+        "minio_mc",
+    ]},
     env = {"CARGO_BIN_EXE_krabka-restore": "$(rootpath :krabka-restore)"},
     lib = "restore",
 )

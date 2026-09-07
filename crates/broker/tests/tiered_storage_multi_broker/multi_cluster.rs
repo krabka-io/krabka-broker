@@ -32,6 +32,31 @@ pub(crate) async fn start_three_tiered_brokers() -> (
     Vec<TempDir>,
     TempDir,
 ) {
+    let default_segment_size = krabka_broker::BrokerConfig::for_tests(std::path::PathBuf::from(
+        "/nonexistent-log-dir-for-defaults",
+    ))
+    .log_config
+    .segment_size;
+    start_three_tiered_brokers_with_segment_sizes([default_segment_size; 3]).await
+}
+
+/// The same three brokers, each with its own `log.segment.bytes`.
+///
+/// A replica rolls its own segments, so two replicas of one partition need not
+/// agree on where a segment ends. Real clusters reach that state through a
+/// config change, a restart or a reassignment; a test reaches it by giving the
+/// brokers different broker-level defaults and creating a topic that overrides
+/// neither. The offsets are the same on every replica; only the boundaries
+/// differ, which is exactly the condition a base-offset skip set mishandles.
+pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
+    segment_sizes: [krabka_units::ByteSize; 3],
+) -> (
+    BrokerHandle,
+    BrokerHandle,
+    BrokerHandle,
+    Vec<TempDir>,
+    TempDir,
+) {
     support::init_tracing();
 
     // Pre-bind concrete client + controller ports for all 3 brokers.
@@ -55,6 +80,7 @@ pub(crate) async fn start_three_tiered_brokers() -> (
     let mut broker_configs: Vec<BrokerConfig> = (0..3)
         .map(|i| {
             let mut cfg = BrokerConfig::for_tests(log_dirs[i].path().to_path_buf());
+            cfg.log_config.segment_size = segment_sizes[i];
             cfg.broker_id = i32::try_from(i + 1).unwrap();
             cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
             cfg.directory_id = uuid::Uuid::from_u128(u128::try_from(i + 1).unwrap());

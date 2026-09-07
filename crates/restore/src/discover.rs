@@ -1,12 +1,17 @@
 //! The archive inventory: what the archive holds, before anything is read.
 //!
-//! This module owns the scan. It lists the archive under the operator's
-//! prefix, decodes every key with the KIP-405 archive key codec
+//! This module owns the scan. It streams the archive listing under the
+//! operator's prefix, decodes every key with the KIP-405 archive key codec
 //! (`parse_partition_dir_name` and `parse_segment_file_name`), and groups
 //! the result into one [`SegmentInventory`] per archived segment, with the
-//! object key and size of each artifact that is present. It keeps every key it
-//! cannot attribute rather than discarding it, because an unrecognized key is
-//! the first sign that `--archive-prefix` points at the wrong tree. When
+//! object key and size of each artifact that is present. The listing is
+//! consumed as it arrives, so the scan holds one entry per archived segment
+//! rather than one per object: an archive of tens of millions of keys is
+//! exactly the archive a restore runs against. It keeps the keys it cannot
+//! attribute rather than discarding them, because an unrecognized key is the
+//! first sign that `--archive-prefix` points at the wrong tree, and it keeps a
+//! bounded sample with a count of the rest, because a wrong prefix makes every
+//! key in the bucket unrecognized. When
 //! `--rlmm-snapshot` is given, this module reconciles the scan against it and
 //! reports a disagreement instead of choosing a winner; without the snapshot a
 //! segment the old cluster had marked for deletion looks exactly like a live
@@ -19,11 +24,12 @@
 
 use std::collections::HashMap;
 
+use futures_util::stream::TryStreamExt as _;
 use krabka_ids::Offset;
 use krabka_remote_storage::{
     IndexType, LOG_FILE_SUFFIX, TopicIdPartition, parse_partition_dir_name, parse_segment_file_name,
 };
-use object_store::path::Path;
+use object_store::{ObjectMeta, path::Path};
 use uuid::Uuid;
 
 mod reconcile;
@@ -81,13 +87,54 @@ pub struct PartitionInventory {
     pub segments: Vec<SegmentInventory>,
 }
 
+/// How many unattributable keys the scan keeps. Past this many the scan
+/// counts and drops, because the sample is diagnostic: an operator who
+/// pointed `--archive-prefix` at the wrong tree learns it from the first
+/// handful of keys and from the total, not from the millionth key.
+pub const UNRECOGNIZED_SAMPLE_LIMIT: usize = 64;
+
+/// The keys the scan could not attribute to a segment.
+///
+/// Bounded on purpose: the count is the whole truth, and the sample is the
+/// part worth printing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnrecognizedKeys {
+    /// The first [`UNRECOGNIZED_SAMPLE_LIMIT`] such keys, in listing order.
+    pub sample: Vec<Path>,
+    /// Keys past the sample, counted but not kept.
+    pub omitted: u64,
+}
+
+impl UnrecognizedKeys {
+    /// Whether the scan attributed every key it saw.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sample.is_empty() && self.omitted == 0
+    }
+
+    /// Every unattributable key the scan saw, sample and omitted together.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.sample.len() as u64 + self.omitted
+    }
+
+    /// Record one key, keeping it only while the sample has room.
+    fn record(&mut self, key: Path) {
+        if self.sample.len() < UNRECOGNIZED_SAMPLE_LIMIT {
+            self.sample.push(key);
+        } else {
+            self.omitted += 1;
+        }
+    }
+}
+
 /// Everything the scan found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArchiveInventory {
     /// The selected partitions, ordered by topic then partition index.
     pub partitions: Vec<PartitionInventory>,
     /// Keys the codec could not attribute to a segment.
-    pub unrecognized: Vec<Path>,
+    pub unrecognized: UnrecognizedKeys,
 }
 
 impl ArchiveInventory {
@@ -152,7 +199,94 @@ fn empty_segment(segment_id: Uuid, base_offset: Offset) -> SegmentInventory {
     }
 }
 
+/// Fold one listed object into the accumulator, or record its key as
+/// unattributable.
+///
+/// This is the whole per-object step of [`inventory`]. It is a function rather
+/// than a loop body so the scan's state is exactly its arguments: everything
+/// that survives one object is either partition-shaped or a bounded sample.
+fn absorb(
+    object: ObjectMeta,
+    root: &Path,
+    args: &RestoreArgs,
+    accum: &mut HashMap<(Uuid, i32), PartitionAccum>,
+    unrecognized: &mut UnrecognizedKeys,
+) {
+    // Collected to owned `String`s immediately, so the parsed pieces
+    // below never borrow `object.location` and it stays free to move
+    // into `unrecognized` or clone into an `ArchiveObject` right after.
+    let Some(relative) = object.location.prefix_match(root) else {
+        unrecognized.record(object.location);
+        return;
+    };
+    let relative: Vec<String> = relative.map(|part| part.as_ref().to_owned()).collect();
+    let [partition_dir, segment_file] = relative.as_slice() else {
+        unrecognized.record(object.location);
+        return;
+    };
+
+    let Some(dir) = parse_partition_dir_name(partition_dir) else {
+        unrecognized.record(object.location);
+        return;
+    };
+    let Some(file) = parse_segment_file_name(segment_file) else {
+        unrecognized.record(object.location);
+        return;
+    };
+
+    if !args.selects_topic(&dir.topic) {
+        unrecognized.record(object.location);
+        return;
+    }
+
+    let artifact = if file.suffix == LOG_FILE_SUFFIX {
+        Artifact::Log
+    } else if let Some(index_type) = IndexType::from_suffix(file.suffix) {
+        Artifact::Index(index_type)
+    } else {
+        unrecognized.record(object.location);
+        return;
+    };
+
+    let archive_object = ArchiveObject {
+        key: object.location.clone(),
+        size: object.size,
+    };
+
+    let partition_accum = accum
+        .entry((dir.topic_id, dir.partition))
+        .or_insert_with(|| PartitionAccum {
+            topic: dir.topic.clone(),
+            segments: HashMap::new(),
+        });
+    let segment_accum = partition_accum
+        .segments
+        .entry(file.segment_id)
+        .or_insert_with(|| empty_segment(file.segment_id, Offset(file.base_offset)));
+
+    match artifact {
+        Artifact::Log => segment_accum.log = Some(archive_object),
+        Artifact::Index(IndexType::Offset) => segment_accum.offset_index = Some(archive_object),
+        Artifact::Index(IndexType::Timestamp) => {
+            segment_accum.time_index = Some(archive_object);
+        }
+        Artifact::Index(IndexType::ProducerSnapshot) => {
+            segment_accum.producer_snapshot = Some(archive_object);
+        }
+        Artifact::Index(IndexType::LeaderEpoch) => {
+            segment_accum.leader_epoch = Some(archive_object);
+        }
+        Artifact::Index(IndexType::Transaction) => {
+            segment_accum.transaction_index = Some(archive_object);
+        }
+    }
+}
+
 /// Scan `store` and build the inventory of the partitions `args` selects.
+///
+/// The listing is consumed as it arrives, so what the scan holds is the
+/// archive's segments and a bounded sample of its unattributable keys, never
+/// its objects.
 ///
 /// # Errors
 ///
@@ -166,81 +300,21 @@ pub async fn inventory(
     store: &ArchiveStore,
     args: &RestoreArgs,
 ) -> Result<ArchiveInventory, RestoreError> {
-    let listed = store.ops().list(store.root()).await?;
     let root = store.root().unwrap_or(Path::ROOT);
 
-    let mut unrecognized = Vec::new();
+    let mut unrecognized = UnrecognizedKeys::default();
     let mut accum: HashMap<(Uuid, i32), PartitionAccum> = HashMap::new();
 
-    for object in listed {
-        // Collected to owned `String`s immediately, so the parsed pieces
-        // below never borrow `object.location` and it stays free to move
-        // into `unrecognized` or clone into an `ArchiveObject` right after.
-        let Some(relative) = object.location.prefix_match(&root) else {
-            unrecognized.push(object.location);
-            continue;
-        };
-        let relative: Vec<String> = relative.map(|part| part.as_ref().to_owned()).collect();
-        let [partition_dir, segment_file] = relative.as_slice() else {
-            unrecognized.push(object.location);
-            continue;
-        };
-
-        let Some(dir) = parse_partition_dir_name(partition_dir) else {
-            unrecognized.push(object.location);
-            continue;
-        };
-        let Some(file) = parse_segment_file_name(segment_file) else {
-            unrecognized.push(object.location);
-            continue;
-        };
-
-        if !args.selects_topic(&dir.topic) {
-            unrecognized.push(object.location);
-            continue;
-        }
-
-        let artifact = if file.suffix == LOG_FILE_SUFFIX {
-            Artifact::Log
-        } else if let Some(index_type) = IndexType::from_suffix(file.suffix) {
-            Artifact::Index(index_type)
-        } else {
-            unrecognized.push(object.location);
-            continue;
-        };
-
-        let archive_object = ArchiveObject {
-            key: object.location.clone(),
-            size: object.size,
-        };
-
-        let partition_accum = accum
-            .entry((dir.topic_id, dir.partition))
-            .or_insert_with(|| PartitionAccum {
-                topic: dir.topic.clone(),
-                segments: HashMap::new(),
-            });
-        let segment_accum = partition_accum
-            .segments
-            .entry(file.segment_id)
-            .or_insert_with(|| empty_segment(file.segment_id, Offset(file.base_offset)));
-
-        match artifact {
-            Artifact::Log => segment_accum.log = Some(archive_object),
-            Artifact::Index(IndexType::Offset) => segment_accum.offset_index = Some(archive_object),
-            Artifact::Index(IndexType::Timestamp) => {
-                segment_accum.time_index = Some(archive_object);
-            }
-            Artifact::Index(IndexType::ProducerSnapshot) => {
-                segment_accum.producer_snapshot = Some(archive_object);
-            }
-            Artifact::Index(IndexType::LeaderEpoch) => {
-                segment_accum.leader_epoch = Some(archive_object);
-            }
-            Artifact::Index(IndexType::Transaction) => {
-                segment_accum.transaction_index = Some(archive_object);
-            }
-        }
+    let mut listing = store.ops().list_stream(store.root());
+    while let Some(object) = listing.try_next().await? {
+        absorb(object, &root, args, &mut accum, &mut unrecognized);
+    }
+    if unrecognized.omitted > 0 {
+        tracing::warn!(
+            total = unrecognized.total(),
+            kept = unrecognized.sample.len(),
+            "the archive holds keys this restore cannot attribute to a segment"
+        );
     }
 
     let mut partitions: Vec<PartitionInventory> = accum

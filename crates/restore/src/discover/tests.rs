@@ -62,7 +62,7 @@ async fn a_clean_archive_groups_and_sorts_by_topic_partition_and_base_offset() {
                 )],
             },
         ],
-        unrecognized: vec![],
+        unrecognized: UnrecognizedKeys::default(),
     };
     check!(result == expected);
 
@@ -94,11 +94,16 @@ async fn a_topic_filter_narrows_the_selection_and_the_rest_lands_in_unrecognized
     check!(result.partitions.len() == 1);
     check!(result.partitions[0].partition.topic == "orders");
     // Every key of the topic `--topic` excluded is kept, not dropped.
-    check!(result.unrecognized.len() == FULL_SEGMENT_SUFFIXES.len());
+    check!(
+        result.unrecognized.total()
+            == u64::try_from(FULL_SEGMENT_SUFFIXES.len()).expect("a handful of suffixes")
+    );
+    check!(result.unrecognized.omitted == 0);
     let payments_dir = format!("payments-0-{}", kafka_uuid(payments_id));
     check!(
         result
             .unrecognized
+            .sample
             .iter()
             .all(|key| key.to_string().contains(&payments_dir))
     );
@@ -134,19 +139,55 @@ async fn malformed_keys_land_in_unrecognized_not_dropped_and_not_an_error() {
     let result = inventory(&store, &args).await.expect("inventory");
 
     check!(result.partitions.len() == 1);
-    check!(result.unrecognized.len() == 2);
+    check!(result.unrecognized.total() == 2);
     check!(
         result
             .unrecognized
+            .sample
             .iter()
             .any(|key| key.to_string().contains("not-a-valid-key.log"))
     );
     check!(
         result
             .unrecognized
+            .sample
             .iter()
             .any(|key| key.to_string().contains("weird-dir"))
     );
+}
+
+/// The sample is capped and the rest counted, so a `--archive-prefix` that
+/// points at the wrong tree costs a bounded amount of memory however many
+/// keys the bucket holds. The total is still exact.
+#[test]
+fn unrecognized_keys_keep_a_bounded_sample_and_count_the_rest() {
+    for seen in [
+        0,
+        1,
+        UNRECOGNIZED_SAMPLE_LIMIT - 1,
+        UNRECOGNIZED_SAMPLE_LIMIT,
+        UNRECOGNIZED_SAMPLE_LIMIT + 1,
+        UNRECOGNIZED_SAMPLE_LIMIT * 10,
+    ] {
+        let mut keys = UnrecognizedKeys::default();
+        for index in 0..seen {
+            keys.record(Path::from(format!("junk/{index}")));
+        }
+
+        let kept = seen.min(UNRECOGNIZED_SAMPLE_LIMIT);
+        check!(
+            keys == UnrecognizedKeys {
+                sample: (0..kept).map(|i| Path::from(format!("junk/{i}"))).collect(),
+                omitted: u64::try_from(seen - kept).expect("the fixture counts are small"),
+            },
+            "after {seen} keys",
+        );
+        check!(
+            keys.total() == u64::try_from(seen).expect("the fixture counts are small"),
+            "after {seen} keys",
+        );
+        check!(keys.is_empty() == (seen == 0), "after {seen} keys");
+    }
 }
 
 #[tokio::test]
@@ -199,6 +240,47 @@ async fn a_key_prefix_does_not_confuse_the_relative_path_split() {
     check!(result.unrecognized.is_empty());
     check!(result.partitions.len() == 1);
     check!(result.partitions[0].segments.len() == 1);
+}
+
+/// A scan of an archive whose keys are mostly unattributable keeps the
+/// bounded sample and the exact total, and still reports the segments it did
+/// recognize. This is the `--archive-prefix` pointed at the wrong tree, which
+/// is the case the bound exists for.
+#[tokio::test]
+async fn a_scan_past_the_sample_limit_keeps_the_sample_and_the_exact_total() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    write_full_segment(
+        archive.path(),
+        "orders",
+        0,
+        topic_id,
+        0,
+        Uuid::from_u128(10),
+    );
+
+    let junk = UNRECOGNIZED_SAMPLE_LIMIT + 6;
+    let dir = archive.path().join("not-a-partition-dir");
+    std::fs::create_dir_all(&dir).expect("create the junk dir");
+    for index in 0..junk {
+        std::fs::write(dir.join(format!("{index:04}.log")), b"junk").expect("write a junk key");
+    }
+
+    let args = args_from(archive.path(), &[]);
+    let store = open_archive(&args).expect("store");
+    let result = inventory(&store, &args).await.expect("inventory");
+
+    check!(result.partitions.len() == 1);
+    check!(result.unrecognized.sample.len() == UNRECOGNIZED_SAMPLE_LIMIT);
+    check!(result.unrecognized.omitted == 6);
+    check!(result.unrecognized.total() == u64::try_from(junk).expect("the fixture count is small"));
+    check!(
+        result
+            .unrecognized
+            .sample
+            .iter()
+            .all(|key| key.to_string().contains("not-a-partition-dir"))
+    );
 }
 
 #[tokio::test]

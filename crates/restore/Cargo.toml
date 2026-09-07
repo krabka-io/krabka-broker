@@ -50,6 +50,9 @@ clap = { workspace = true, features = ["derive"] }
 # `pub(crate)`, so the archive-side verifier reimplements the documented
 # format rather than reaching into the log crate's internals.
 crc32c = { workspace = true }
+# The archive listing is consumed as a stream, so the scan never holds the
+# whole bucket in memory.
+futures-util = { workspace = true }
 object_store = { workspace = true }
 # RE2 semantics: `--exclude-key` and `--exclude-header` run over millions of
 # archived records, so an operator-supplied pattern must stay linear in the
@@ -66,7 +69,15 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+# `large_archive` implements `object_store::ObjectStore` to synthesise a
+# listing far larger than any fixture could write to disk.
+async-trait = { workspace = true }
+# `dr_roundtrip` drives the operator's own backup tool: the capture it asserts
+# on is the one an operator runs, not a re-implementation of it.
+krabka-backup = { version = "0.5.4", path = "../backup-cli" }
 krabka-broker = { version = "0.5.4", path = "../broker", features = ["test-helpers"] }
+# `dr_roundtrip` reads a group's committed offsets back with `OffsetFetch`.
+krabka-client-admin = { version = "0.4.0" }
 krabka-client-core = { version = "0.4.0" }
 krabka-security = { workspace = true }
 tempfile = { workspace = true }

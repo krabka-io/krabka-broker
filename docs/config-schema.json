@@ -31,7 +31,7 @@
     },
     "FileAuditCheckpointConfig": {
       "additionalProperties": false,
-      "description": "`[audit.checkpoint]` — checkpoint cadence.",
+      "description": "`[audit.checkpoint]` \u2014 checkpoint cadence.",
       "properties": {
         "every_n": {
           "default": 1000,
@@ -63,7 +63,7 @@
               "type": "null"
             }
           ],
-          "description": "Checkpoint emission cadence. `None` → use defaults."
+          "description": "Checkpoint emission cadence. `None` \u2192 use defaults."
         },
         "enabled": {
           "default": true,
@@ -83,7 +83,7 @@
               "type": "null"
             }
           ],
-          "description": "Ed25519 checkpoint signing key. `None` → chaining only, no checkpoints."
+          "description": "Ed25519 checkpoint signing key. `None` \u2192 chaining only, no checkpoints."
         },
         "spool": {
           "anyOf": [
@@ -94,7 +94,7 @@
               "type": "null"
             }
           ],
-          "description": "Durable spool for the AU-5 degraded path. `None` → use defaults."
+          "description": "Durable spool for the AU-5 degraded path. `None` \u2192 use defaults."
         },
         "topic": {
           "default": "__krabka_audit",
@@ -106,7 +106,7 @@
     },
     "FileAuditSigningConfig": {
       "additionalProperties": false,
-      "description": "`[audit.signing]` — Ed25519 checkpoint signing key.",
+      "description": "`[audit.signing]` \u2014 Ed25519 checkpoint signing key.",
       "properties": {
         "key_id": {
           "description": "Key id recorded on each checkpoint, so a verifier can follow a key\nrotation.",
@@ -125,7 +125,7 @@
     },
     "FileAuditSpoolConfig": {
       "additionalProperties": false,
-      "description": "`[audit.spool]` — durable spool for the AU-5 degraded path.",
+      "description": "`[audit.spool]` \u2014 durable spool for the AU-5 degraded path.",
       "properties": {
         "dir": {
           "default": "audit-spool",
@@ -248,7 +248,7 @@
       "description": "TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`\nfields on [`crate::BrokerConfig`].",
       "properties": {
         "default_renew_period_ms": {
-          "description": "Default renew period — the initial `expiry_timestamp_ms` offset\nat create time and the implicit renew period when\n`RenewDelegationToken.renew_period_ms == -1`. Distinct from\n`max_lifetime_ms` (the absolute ceiling). Default 24 hours.",
+          "description": "Default renew period \u2014 the initial `expiry_timestamp_ms` offset\nat create time and the implicit renew period when\n`RenewDelegationToken.renew_period_ms == -1`. Distinct from\n`max_lifetime_ms` (the absolute ceiling). Default 24 hours.",
           "format": "int64",
           "type": [
             "integer",
@@ -649,7 +649,7 @@
           ]
         },
         "idp_tls_trust": {
-          "description": "PEM file containing the CA\ncertificate(s) used to verify the `IdP`'s TLS certificate on ALL\noutbound HTTPS to the `IdP` — JWKS endpoint, introspection\nendpoint, and userinfo endpoint. When set, these are\nthe *only* trust roots used for the outbound HTTPS (replaces the\ndefault webpki-roots — Strimzi-shaped). When unset, the broker\nuses reqwest's default rustls webpki-roots.",
+          "description": "PEM file containing the CA\ncertificate(s) used to verify the `IdP`'s TLS certificate on ALL\noutbound HTTPS to the `IdP` \u2014 JWKS endpoint, introspection\nendpoint, and userinfo endpoint. When set, these are\nthe *only* trust roots used for the outbound HTTPS (replaces the\ndefault webpki-roots \u2014 Strimzi-shaped). When unset, the broker\nuses reqwest's default rustls webpki-roots.",
           "type": [
             "string",
             "null"
@@ -763,7 +763,7 @@
       "properties": {
         "allow_on_error": {
           "default": false,
-          "description": "**Security-sensitive.** Permit the operation when the OPA call\nfails (timeout, 5xx, parse error). When `true`, an OPA outage\nauthorizes *every* request (fail-open). Default `false`\n(fail-closed) — omitting this field denies on error, matching the\nupstream Open Policy Agent Kafka plugin's `allow.on.error = false`.",
+          "description": "**Security-sensitive.** Permit the operation when the OPA call\nfails (timeout, 5xx, parse error). When `true`, an OPA outage\nauthorizes *every* request (fail-open). Default `false`\n(fail-closed) \u2014 omitting this field denies on error, matching the\nupstream Open Policy Agent Kafka plugin's `allow.on.error = false`.",
           "type": "boolean"
         },
         "expire_after_ms": {
@@ -780,7 +780,7 @@
           "type": "integer"
         },
         "url": {
-          "description": "OPA decision endpoint URL — must include the data-API path,\ne.g. `http://opa:8181/v1/data/kafka/authz/allow`.",
+          "description": "OPA decision endpoint URL \u2014 must include the data-API path,\ne.g. `http://opa:8181/v1/data/kafka/authz/allow`.",
           "type": "string"
         }
       },
@@ -815,7 +815,7 @@
     },
     "FileProcessConfig": {
       "additionalProperties": false,
-      "description": "`[process]` TOML section — `KRaft` `process.roles`.",
+      "description": "`[process]` TOML section \u2014 `KRaft` `process.roles`.",
       "properties": {
         "roles": {
           "default": [],
@@ -832,12 +832,30 @@
       "additionalProperties": false,
       "description": "TOML shape of `[remote_storage]`. Maps to\n[`crate::BrokerConfig::remote_storage_backend`].\n\nExactly one of `storage_dir` (local filesystem), `[remote_storage.s3]`\n(S3-compatible object store), or `[remote_storage.gcs]` (native Google\nCloud Storage) should be set. Setting more than one errors at load time.",
       "properties": {
+        "copier_threads": {
+          "description": "How many partitions may be copying segments to the remote tier at\nonce. Kafka's `remote.log.manager.copier.thread.pool.size`; defaults\nto 10. Raising it is the remedy for a copy backlog on an object store\nwith bandwidth to spare.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "copy_timeout": {
           "default": null,
-          "description": "Deadline on one segment copy to the remote tier. Defaults to 10\nminutes.\n\nThe sweep copies segments one after another, so a copy that hangs on a\nstalled object store holds up every other partition on the broker.\nPast this deadline the copy is abandoned and retried on the next tick;\nthe segment stays in `CopySegmentStarted`, which local retention\nrefuses to delete against.",
+          "description": "Deadline on one segment copy to the remote tier. Defaults to 10\nminutes.\n\nA partition holds one copier slot for the whole of its copy pass, so a\ncopy that hangs on a stalled object store spends that slot on a\npartition moving no bytes. Past this deadline the copy is abandoned\nand retried on the next tick; the segment stays in\n`CopySegmentStarted`, which local retention refuses to delete\nagainst.",
           "format": "duration",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "expiration_threads": {
+          "description": "How many partitions may be running their local- and remote-retention\npasses at once. Kafka's\n`remote.log.manager.expiration.thread.pool.size`; defaults to 10.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -917,14 +935,14 @@
               "type": "null"
             }
           ],
-          "description": "WORM archive mode for whichever object-store backend is selected.\nPresence of the table turns it on; omit it (the default) for\nordinary mutable tiered storage. Requires `[remote_storage.s3]` or\n`[remote_storage.gcs]` — `storage_dir` cannot enforce write-once."
+          "description": "WORM archive mode for whichever object-store backend is selected.\nPresence of the table turns it on; omit it (the default) for\nordinary mutable tiered storage. Requires `[remote_storage.s3]` or\n`[remote_storage.gcs]` \u2014 `storage_dir` cannot enforce write-once."
         }
       },
       "type": "object"
     },
     "FileRemoteStorageGcsConfig": {
       "additionalProperties": false,
-      "description": "TOML shape of `[remote_storage.gcs]`. Maps to\n[`krabka_remote_storage::GcsConfig`].\n\nOmitting all credential fields (`service_account_path`,\n`service_account_key`, `application_credentials_path`) selects GKE\nWorkload Identity / Application Default Credentials (keyless) — the\nprimary production path.",
+      "description": "TOML shape of `[remote_storage.gcs]`. Maps to\n[`krabka_remote_storage::GcsConfig`].\n\nOmitting all credential fields (`service_account_path`,\n`service_account_key`, `application_credentials_path`) selects GKE\nWorkload Identity / Application Default Credentials (keyless) \u2014 the\nprimary production path.",
       "properties": {
         "allow_http": {
           "default": false,
@@ -1035,7 +1053,7 @@
       "description": "TOML shape of `[remote_storage.s3]`. Maps to\n[`krabka_remote_storage::S3Config`].",
       "properties": {
         "access_key_id": {
-          "description": "Explicit access key id. Falls back to the AWS credential chain\n(env vars, instance profile, …) when omitted.",
+          "description": "Explicit access key id. Falls back to the AWS credential chain\n(env vars, instance profile, \u2026) when omitted.",
           "type": [
             "string",
             "null"
@@ -1092,7 +1110,7 @@
           ]
         },
         "multipart_chunk_size": {
-          "description": "Optional override of the per-part multipart chunk size (bytes).\nWhen `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]\napplies. AWS requires parts ≥ 5 MiB except the last; `MinIO`\ntolerates smaller values.",
+          "description": "Optional override of the per-part multipart chunk size (bytes).\nWhen `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]\napplies. AWS requires parts \u2265 5 MiB except the last; `MinIO`\ntolerates smaller values.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1200,7 +1218,7 @@
     },
     "FileStretchConfig": {
       "additionalProperties": false,
-      "description": "`[stretch]` TOML section — the three-site stretch deployment.\n\nThe table is all-or-nothing. When it is present, all three fields must\nbe, because a half-built profile would let the broker start with a site\nlayout that no node agrees on.",
+      "description": "`[stretch]` TOML section \u2014 the three-site stretch deployment.\n\nThe table is all-or-nothing. When it is present, all three fields must\nbe, because a half-built profile would let the broker start with a site\nlayout that no node agrees on.",
       "properties": {
         "preferred_leader_site": {
           "description": "The site that partition leadership prefers while both data sites are\nup. It must not be the witness site.",
@@ -2821,7 +2839,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Top-level shape of `broker.toml`. `serde(deny_unknown_fields)` is\noff — new fields may be added and old binaries should warn rather\nthan refuse to start.",
+  "description": "Top-level shape of `broker.toml`. `serde(deny_unknown_fields)` is\noff \u2014 new fields may be added and old binaries should warn rather\nthan refuse to start.",
   "properties": {
     "audit": {
       "anyOf": [
@@ -2832,7 +2850,7 @@
           "type": "null"
         }
       ],
-      "description": "`FedRAMP` 20x MLA audit subsystem configuration.\nAbsent → secure default (enabled, standard internal topic name)."
+      "description": "`FedRAMP` 20x MLA audit subsystem configuration.\nAbsent \u2192 secure default (enabled, standard internal topic name)."
     },
     "authorization": {
       "anyOf": [
@@ -2843,7 +2861,7 @@
           "type": "null"
         }
       ],
-      "description": "Pluggable cluster authorizer + super-user list.\n`None` ⇒ [`crate::authorizer::AllowAllAuthorizer`] with empty\nsuper-users (default-on-no-config behavior). When `Some`, the\n`type` field selects the authorizer implementation; for\n`type = \"opa\"`, the `[authorization.opa]` subtable is required."
+      "description": "Pluggable cluster authorizer + super-user list.\n`None` \u21d2 [`crate::authorizer::AllowAllAuthorizer`] with empty\nsuper-users (default-on-no-config behavior). When `Some`, the\n`type` field selects the authorizer implementation; for\n`type = \"opa\"`, the `[authorization.opa]` subtable is required."
     },
     "auto_join": {
       "description": "Enable automatic dynamic controller enrollment.",
@@ -2869,7 +2887,7 @@
           "type": "null"
         }
       ],
-      "description": "`[break_glass]` section — the two-person rule over the privileged\ntransitions. Absent leaves the `BrokerConfig` defaults, which run no\nbreak-glass workflow."
+      "description": "`[break_glass]` section \u2014 the two-person rule over the privileged\ntransitions. Absent leaves the `BrokerConfig` defaults, which run no\nbreak-glass workflow."
     },
     "broker_id": {
       "description": "This node's id, Kafka's `node.id` / `broker.id`. It is the id the\nbroker registers with the controller and reports in `Metadata`\nresponses. Absent leaves the `BrokerConfig` default intact.",
@@ -2924,14 +2942,14 @@
     },
     "controller_quorum_voters": {
       "default": [],
-      "description": "KIP-595 static controller quorum voter set. Each entry is\n`<node_id>@<host>:<port>` pointing at a broker's controller listener\n(port 9093). At apply time each entry is parsed (NOT DNS-resolved) and\nits `<host>:<port>` is carried verbatim into\n`BrokerConfig::controller_quorum_voters`. The inter-broker dialer\nre-resolves the host on every (re)connect (`TcpStream::connect`), so a\npeer that restarts on a new pod IP (a `StatefulSet` pod keeps its stable\nDNS name but gets a fresh A record) is reached again without restarting\nthis broker — pre-resolving here would freeze the peer's boot-time IP\nand strand a rejoining voter. Empty leaves the single self-voter the\nbinary seeds (standalone).",
+      "description": "KIP-595 static controller quorum voter set. Each entry is\n`<node_id>@<host>:<port>` pointing at a broker's controller listener\n(port 9093). At apply time each entry is parsed (NOT DNS-resolved) and\nits `<host>:<port>` is carried verbatim into\n`BrokerConfig::controller_quorum_voters`. The inter-broker dialer\nre-resolves the host on every (re)connect (`TcpStream::connect`), so a\npeer that restarts on a new pod IP (a `StatefulSet` pod keeps its stable\nDNS name but gets a fresh A record) is reached again without restarting\nthis broker \u2014 pre-resolving here would freeze the peer's boot-time IP\nand strand a rejoining voter. Empty leaves the single self-voter the\nbinary seeds (standalone).",
       "items": {
         "type": "string"
       },
       "type": "array"
     },
     "controller_server_name": {
-      "description": "TLS server name (SNI) presented when dialing a PEER's controller\nlistener for the KIP-595 quorum. The operator renders the shared\nheadless-Service FQDN here — a SAN on every broker's serving cert —\nso mTLS validation succeeds no matter which peer (resolved to a pod\nIP) is dialed. Absent falls back to `\"localhost\"`. Maps to\n[`crate::BrokerConfig::controller_server_name`].",
+      "description": "TLS server name (SNI) presented when dialing a PEER's controller\nlistener for the KIP-595 quorum. The operator renders the shared\nheadless-Service FQDN here \u2014 a SAN on every broker's serving cert \u2014\nso mTLS validation succeeds no matter which peer (resolved to a pod\nIP) is dialed. Absent falls back to `\"localhost\"`. Maps to\n[`crate::BrokerConfig::controller_server_name`].",
       "type": [
         "string",
         "null"
@@ -2965,7 +2983,7 @@
           "type": "null"
         }
       ],
-      "description": "`[freeze]` section — the topic write-freeze registry's bounds and its\nsignature requirement. Absent leaves the `BrokerConfig` defaults."
+      "description": "`[freeze]` section \u2014 the topic write-freeze registry's bounds and its\nsignature requirement. Absent leaves the `BrokerConfig` defaults."
     },
     "gssapi": {
       "anyOf": [
@@ -2976,7 +2994,7 @@
           "type": "null"
         }
       ],
-      "description": "SASL/GSSAPI (Kerberos) accept-path config. Broker-global —\nthere is one `[gssapi]` block per broker. Relevant when a listener\nenables the `GSSAPI` mechanism."
+      "description": "SASL/GSSAPI (Kerberos) accept-path config. Broker-global \u2014\nthere is one `[gssapi]` block per broker. Relevant when a listener\nenables the `GSSAPI` mechanism."
     },
     "heartbeat_interval": {
       "default": null,
@@ -3008,7 +3026,7 @@
       "description": "Credentials this broker uses to authenticate *to* peer brokers and\ncontroller listeners (inter-broker initiate path)."
     },
     "inter_broker_listener_name": {
-      "description": "Name of the listener that carries inter-broker traffic — raft,\nreplication, and heartbeats. Kafka's `inter.broker.listener.name`. It\nmust match a `name` in [`listeners`][Self::listeners] when that list is\nnon-empty. Absent leaves the `BrokerConfig` default `\"PLAINTEXT\"`.",
+      "description": "Name of the listener that carries inter-broker traffic \u2014 raft,\nreplication, and heartbeats. Kafka's `inter.broker.listener.name`. It\nmust match a `name` in [`listeners`][Self::listeners] when that list is\nnon-empty. Absent leaves the `BrokerConfig` default `\"PLAINTEXT\"`.",
       "type": [
         "string",
         "null"
@@ -3069,7 +3087,7 @@
       "description": "SASL/OAUTHBEARER validator tuning. Only relevant when a\nlistener enables the `OAUTHBEARER` mechanism."
     },
     "operator_keys": {
-      "description": "`[[operator_keys]]` — the shared operator key trust set.\n\nTop-level rather than nested under `[break_glass]`, because two\nsubsystems verify against it: a freeze record's detached signature and\na break-glass approval's. One provisioning step covers both. Empty is\nthe default and means no operator key is configured.",
+      "description": "`[[operator_keys]]` \u2014 the shared operator key trust set.\n\nTop-level rather than nested under `[break_glass]`, because two\nsubsystems verify against it: a freeze record's detached signature and\na break-glass approval's. One provisioning step covers both. Empty is\nthe default and means no operator key is configured.",
       "items": {
         "$ref": "#/$defs/FileOperatorKey"
       },
@@ -3084,7 +3102,7 @@
           "type": "null"
         }
       ],
-      "description": "`[process]` section — `KRaft` `process.roles`. Absent / empty leaves\nthe `BrokerConfig` default `[Controller, Broker]`."
+      "description": "`[process]` section \u2014 `KRaft` `process.roles`. Absent / empty leaves\nthe `BrokerConfig` default `[Controller, Broker]`."
     },
     "rack": {
       "description": "KIP-392: this broker's rack id. Maps to `BrokerConfig::rack`.",
@@ -3140,7 +3158,7 @@
           "type": "null"
         }
       ],
-      "description": "`[sasl_plain]` section — where the broker's static SASL/PLAIN\ncredential table is read from. Absent leaves the table empty, which\n`BrokerConfig::validate` refuses once a listener offers PLAIN."
+      "description": "`[sasl_plain]` section \u2014 where the broker's static SASL/PLAIN\ncredential table is read from. Absent leaves the table empty, which\n`BrokerConfig::validate` refuses once a listener offers PLAIN."
     },
     "schema_registry": {
       "anyOf": [
@@ -3151,7 +3169,7 @@
           "type": "null"
         }
       ],
-      "description": "`[schema_registry]` section — the Confluent-compatible registry that\nsupplies the schemas for KFC-7 broker-side validation. `None` means no\ntopic can turn schema validation on."
+      "description": "`[schema_registry]` section \u2014 the Confluent-compatible registry that\nsupplies the schemas for KFC-7 broker-side validation. `None` means no\ntopic can turn schema validation on."
     },
     "server_properties": {
       "additionalProperties": {
@@ -3170,10 +3188,10 @@
           "type": "null"
         }
       ],
-      "description": "`[stretch]` section — the three-site stretch deployment this node\nbelongs to. Maps to `BrokerConfig::stretch`. Absent leaves the\n`BrokerConfig` default `None`, an ordinary non-stretched cluster."
+      "description": "`[stretch]` section \u2014 the three-site stretch deployment this node\nbelongs to. Maps to `BrokerConfig::stretch`. Absent leaves the\n`BrokerConfig` default `None`, an ordinary non-stretched cluster."
     },
     "super_users": {
-      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`.\n\nSuper-user status does not substitute for authentication. The\ndelegation-token RPCs (`CreateDelegationToken`,\n`RenewDelegationToken`, `ExpireDelegationToken`) require a principal\nthat authenticated with SASL or mTLS, and answer\n`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or\none-way-TLS connection whatever this list holds. Listing\n`\"ANONYMOUS\"` is therefore rejected by `BrokerConfig::validate`: it\ncannot enable token issuance, and it would make every unauthenticated\nclient a super-user for all operations. Give the token-minting client\na SASL credential or a client certificate and list that principal\nhere.\n\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
+      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`.\n\nSuper-user status does not substitute for authentication. The\ndelegation-token RPCs (`CreateDelegationToken`,\n`RenewDelegationToken`, `ExpireDelegationToken`) require a principal\nthat authenticated with SASL or mTLS, and answer\n`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or\none-way-TLS connection whatever this list holds. Listing\n`\"ANONYMOUS\"` is therefore rejected by `BrokerConfig::validate`: it\ncannot enable token issuance, and it would make every unauthenticated\nclient a super-user for all operations. Give the token-minting client\na SASL credential or a client certificate and list that principal\nhere.\n\n`None` and `Some(empty)` are equivalent \u2014 both leave\n`BrokerConfig.super_users` empty.",
       "items": {
         "type": "string"
       },
@@ -3202,7 +3220,7 @@
           "type": "null"
         }
       ],
-      "description": "`[topic_policy]` section — the KIP-108 / KIP-133 rule set a topic must\nsatisfy before the controller commits its creation or its config\nchange. Absent declares no rule, which is Kafka's default of no policy\nclass."
+      "description": "`[topic_policy]` section \u2014 the KIP-108 / KIP-133 rule set a topic must\nsatisfy before the controller commits its creation or its config\nchange. Absent declares no rule, which is Kafka's default of no policy\nclass."
     }
   },
   "title": "FileConfig",

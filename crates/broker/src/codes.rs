@@ -315,6 +315,20 @@ kafka_codes! {
     /// partition's ISR does not change.
     INELIGIBLE_REPLICA = 107;
 
+    /// `OFFSET_MOVED_TO_TIERED_STORAGE` (109, KIP-405): a *follower* asked its
+    /// leader for an offset that the leader's local log no longer holds but
+    /// the remote tier does. Kafka's
+    /// `ReplicaManager.handleOffsetOutOfRangeError` answers a follower fetch
+    /// in `[logStartOffset, localLogStartOffset)` with this code instead of
+    /// streaming the whole archive back down the replication path. The
+    /// follower reads the leader's local log start with
+    /// `ListOffsets(EARLIEST_LOCAL_TIMESTAMP)` and restarts its log there.
+    ///
+    /// A consumer never sees it: the same band is served to a consumer out of
+    /// the tier, so only a fetch that carries a replica id is answered this
+    /// way.
+    OFFSET_MOVED_TO_TIERED_STORAGE = 109;
+
     // Leader election codes.
     PREFERRED_LEADER_NOT_AVAILABLE = 80;
     ELIGIBLE_LEADERS_NOT_AVAILABLE = 83;

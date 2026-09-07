@@ -97,6 +97,7 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         NodeId(1),
         1,
+        SweepConcurrency::default(),
     )
     .await;
 

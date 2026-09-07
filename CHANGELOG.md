@@ -18,6 +18,23 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+### Added
+
+- `krabka-backup`, the operator tool for the restore inputs a KIP-405 archive
+  does not hold. `capture` copies a node's RLMM snapshot and its newest
+  controller metadata checkpoint, and every consumer group's committed offsets,
+  into the archive under `restore-inputs/<capture-id>/` with a manifest of
+  sizes and SHA-256 digests. `verify` re-reads a capture and checks it against
+  those digests, `list` names the captures, and `restore-offsets` commits a
+  capture's offsets into a restored cluster so a group resumes where it stopped
+  rather than at `auto.offset.reset`. The image has no shell, so `kubectl cp`
+  cannot take those files off a broker; this binary ships beside the broker and
+  runs from a `CronJob` with the volume mounted read-only.
+  [Backup and restore](docs/operations/backup-restore.md) and the
+  [restore-from-archive](docs/operations/runbooks/restore-from-archive.md)
+  runbook say what to copy, how often, how to check a copy, and what to do on
+  the day. `crates/restore/tests/dr_roundtrip.rs` runs the whole sequence.
+
 ### Fixed
 
 - `DeleteRecords` on a tiered topic (KIP-405) now takes the deleted prefix out

@@ -367,10 +367,13 @@ async fn reread_woken(
 /// is what `RequestMetrics.RemoteTimeMs` measures.
 ///
 /// Returns the bytes the cold tier served, and zero when the local log already
-/// answered or when no tier holds the offset. A read the local log answered
-/// charges nothing at all: the clock is only read once the fallback is
-/// entered, so a cluster with no tiered or diskless topic sees an unchanged
-/// remote phase.
+/// answered, when no tier holds the offset, or when the tier failed the read
+/// -- a failure the remote path has already answered with
+/// `UNKNOWN_SERVER_ERROR`, so the `OFFSET_OUT_OF_RANGE` gate above is what
+/// keeps the failed partition from being handed to a second tier. A read the
+/// local log answered charges nothing at all: the clock is only read once the
+/// fallback is entered, so a cluster with no tiered or diskless topic sees an
+/// unchanged remote phase.
 async fn serve_from_cold_tier(
     broker: &Broker,
     read: &mut PendingRead,

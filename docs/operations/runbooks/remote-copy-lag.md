@@ -22,9 +22,11 @@ loop breaks.
   `remote_copy_lag_bytes` is the disk they hold. A lag that climbs for half an
   hour will not recover on its own.
 - **Fetch errors.** The tier will not serve a read. A consumer reading records
-  the local log has already evicted is answered `OFFSET_OUT_OF_RANGE` and goes
-  to its `auto.offset.reset`, which for `latest` silently skips the history it
-  asked for.
+  the local log has already evicted is answered `UNKNOWN_SERVER_ERROR` on that
+  partition, which the client retries with its position intact, so the history
+  is stalled rather than lost. The consumer makes no progress for as long as
+  the tier stays broken, and only the partitions whose offsets are cold are
+  affected.
 
 Produce and local reads are unaffected in all three cases until the disk
 fills.
@@ -60,7 +62,10 @@ backend's own error on each failed copy.
    `rate(krabka_broker_remote_copy_bytes_total[5m])` against
    `rate(krabka_broker_topic_bytes_in_total[5m])` for the same topic. The copy
    task runs one pass per `remote_log_manager_interval` (30 s by default), so a
-   partition rolling segments faster than that cannot catch up.
+   partition rolling segments faster than that cannot catch up. A pass copies
+   `remote_storage.copier_threads` partitions at a time (10 by default), so a
+   broker leading far more tiered partitions than that is uploading a tenth of
+   them at any moment however much bandwidth the store has left.
 4. **Fetch errors alone.** Read `krabka_broker_remote_log_reader_rejected_total`
    first: a nonzero rate there is the reader pool refusing cold reads because
    its pending queue is full, which is a saturation problem rather than a
@@ -77,9 +82,17 @@ backend's own error on each failed copy.
   create can succeed, or let the segment be re-copied under a fresh segment id;
   the copy task already does the latter for a segment stuck in
   `CopySegmentStarted`.
-- For a throughput shortfall, lower `remote_log_manager_interval` so copy passes
-  run more often, or raise the topic's `segment.bytes` so it rolls fewer, larger
-  segments.
+- For a throughput shortfall, raise `remote_storage.copier_threads`
+  (Kafka's `remote.log.manager.copier.thread.pool.size`) so more partitions
+  upload at once. That is the knob to reach for when the object store has
+  bandwidth to spare and the broker leads many tiered partitions. Lowering
+  `remote_log_manager_interval` so copy passes run more often, or raising the
+  topic's `segment.bytes` so it rolls fewer, larger segments, help a single
+  partition that cannot keep up on its own.
+- If the deletes are what lags — remote retention falling behind rather than
+  the copy — raise `remote_storage.expiration_threads` (Kafka's
+  `remote.log.manager.expiration.thread.pool.size`), which bounds the
+  partitions running their retention passes at once the same way.
 - For rejected cold reads, raise `remote_storage.reader_threads` and
   `remote_storage.reader_max_pending_tasks`. For a low index-cache hit ratio,
   raise `remote_storage.index_cache_size`.

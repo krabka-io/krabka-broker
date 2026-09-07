@@ -417,12 +417,13 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/jvm_acceptance_tiered.rs",
             "crates/broker/tests/tiered_storage_multi_broker.rs",
+            "crates/remote-storage/tests/gcs_emulator.rs",
             "crates/remote-storage/tests/jvm_tiered_storage.rs",
             "crates/restore/tests/roundtrip.rs",
             "crates/restore/tests/roundtrip/consume.rs",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "The tier's traffic and lag are published per topic under the `krabka_broker_remote_*` names, which stand for Kafka's `BrokerTopicMetrics` `RemoteCopyBytesPerSec`, `RemoteFetchBytesPerSec`, the three `Remote*RequestsPerSec` and `Remote*ErrorsPerSec` meters, and the four `Remote*Lag*` gauges. The bounded reader pool and the on-disk index cache report `krabka_broker_remote_log_reader_task_queue_size`, `_avg_idle_percent` and `_fetch_duration_seconds` for Kafka's `RemoteLogManager` gauges, plus rejection and cache hit / miss counters Kafka has no counterpart for.",
+        note: "The tier's traffic and lag are published per topic under the `krabka_broker_remote_*` names, which stand for Kafka's `BrokerTopicMetrics` `RemoteCopyBytesPerSec`, `RemoteFetchBytesPerSec`, the three `Remote*RequestsPerSec` and `Remote*ErrorsPerSec` meters, and the four `Remote*Lag*` gauges. The bounded reader pool and the on-disk index cache report `krabka_broker_remote_log_reader_task_queue_size`, `_avg_idle_percent` and `_fetch_duration_seconds` for Kafka's `RemoteLogManager` gauges, plus rejection and cache hit / miss counters Kafka has no counterpart for. The GCS lane of the evidence, `gcs_emulator.rs`, covers the native `[remote_storage.gcs]` backend's reads, deletes and WORM startup gate against an emulator; it does not cover a GCS copy, because `object_store` writes an object with the Cloud Storage XML API and no GCS emulator serves that PUT. The copy path is covered against MinIO and `InMemory` instead.",
     },
     KipAnnotation {
         key: "KIP-412",

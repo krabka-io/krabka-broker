@@ -40,6 +40,7 @@ broker-jvm-acceptance = { max-threads = 1 }
 broker-share-state = { max-threads = 1 }
 broker-transactions = { max-threads = 1 }
 broker-tiered-storage-rlmm = { max-threads = 1 }
+broker-tiered-multi-broker = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(krabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
@@ -61,6 +62,16 @@ filter = 'package(krabka-broker) & binary(tiered_storage_topic_rlmm)'
 test-group = 'broker-tiered-storage-rlmm'
 threads-required = 'num-test-threads'
 
+# `tiered_storage_multi_broker` boots three brokers per test and now holds
+# three of them: the KIP-405 failover case, the misaligned-boundary copy case
+# and the reassignment case. Run concurrently that is nine in-process brokers,
+# each with its own log dirs, RLMM and archive, alongside the rest of the
+# workspace. The suite is here for the same reason the four above are.
+[[profile.default.overrides]]
+filter = 'package(krabka-broker) & binary(tiered_storage_multi_broker)'
+test-group = 'broker-tiered-multi-broker'
+threads-required = 'num-test-threads'
+
 [[profile.ci.overrides]]
 filter = 'package(krabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
 test-group = 'broker-jvm-acceptance'
@@ -79,4 +90,9 @@ threads-required = 'num-test-threads'
 [[profile.ci.overrides]]
 filter = 'package(krabka-broker) & binary(tiered_storage_topic_rlmm)'
 test-group = 'broker-tiered-storage-rlmm'
+threads-required = 'num-test-threads'
+
+[[profile.ci.overrides]]
+filter = 'package(krabka-broker) & binary(tiered_storage_multi_broker)'
+test-group = 'broker-tiered-multi-broker'
 threads-required = 'num-test-threads'

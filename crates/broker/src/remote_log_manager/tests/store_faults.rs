@@ -272,10 +272,10 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
     check!(listed[0].state() == RemoteLogSegmentState::CopySegmentStarted);
 }
 
-/// The copy pass is serial, so a partition whose copy stalls must not stop
-/// the sweep from reaching the partitions behind it. Two tiered partitions,
-/// one stalled store, one tick: the tick has to return, and the second
-/// partition has to have been offered to the store.
+/// A partition whose copy stalls must not stop the sweep from reaching the
+/// partitions behind it, deadline or no deadline. Two tiered partitions, one
+/// stalled store, one tick: the tick has to return, and the second partition
+/// has to have been offered to the store.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
     let log_dir = tempfile::tempdir().unwrap();
@@ -302,6 +302,7 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
         &faulty_tier(&rsm, &rlmm, &metrics, &index_cache, SHORT_COPY_DEADLINE),
         NodeId(1),
         1,
+        SweepConcurrency::default(),
     )
     .await;
     let elapsed = started.elapsed();

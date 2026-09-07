@@ -26,6 +26,11 @@ use crate::batches::{text_batch, tiny_segment_config};
 pub(crate) struct SegmentFixture {
     pub(crate) segment_id: Uuid,
     pub(crate) batch: RecordBatch,
+    /// The remote metadata this segment was archived under. It is what a
+    /// broker's RLMM would hold for the segment, so a test that needs a
+    /// consistent `--rlmm-snapshot` builds one out of these.
+    #[allow(dead_code)] // only `dr_roundtrip` builds a snapshot out of these
+    pub(crate) metadata: RemoteLogSegmentMetadata,
 }
 
 /// One archived partition: its identity, and every segment archived for it,
@@ -167,6 +172,7 @@ fn build_partition(storage: &LocalTieredStorage, spec: PartitionSpec<'_>) -> Par
             SegmentFixture {
                 segment_id,
                 batch: batch.clone(),
+                metadata,
             }
         })
         .collect();

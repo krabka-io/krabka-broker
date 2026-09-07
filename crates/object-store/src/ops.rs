@@ -8,6 +8,7 @@
 //! [`ObjectStoreError`] mapping.
 
 use bytes::Bytes;
+use futures_util::stream::BoxStream;
 /// Precondition for a write, re-exported so callers need not depend on
 /// `object_store` directly.
 pub use object_store::PutMode;
@@ -20,6 +21,13 @@ mod tests;
 
 pub use self::client::ObjectStoreClient;
 use crate::error::ObjectStoreError;
+
+/// A listing delivered one object at a time.
+///
+/// The stream is `'static` because the backend's own listing is: it owns the
+/// paging state rather than borrowing the store, so a caller can hold the
+/// stream past the borrow it was created from.
+pub type ObjectStream = BoxStream<'static, Result<ObjectMeta, ObjectStoreError>>;
 
 /// How one put should behave.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -89,8 +97,16 @@ pub trait ObjectOps: Send + Sync {
     /// Fetch object metadata, such as the size and the etag.
     async fn head(&self, key: &Path) -> Result<ObjectMeta, ObjectStoreError>;
 
-    /// List objects under an optional prefix.
+    /// List objects under an optional prefix, collecting the whole listing.
+    ///
+    /// A prefix holding millions of keys costs that much memory here. Prefer
+    /// [`ObjectOps::list_stream`] whenever the caller can consume the listing
+    /// as it arrives.
     async fn list(&self, prefix: Option<Path>) -> Result<Vec<ObjectMeta>, ObjectStoreError>;
+
+    /// List objects under an optional prefix as a stream, one object at a
+    /// time, so a caller never holds the whole listing at once.
+    fn list_stream(&self, prefix: Option<Path>) -> ObjectStream;
 
     /// Delete an object.
     async fn delete(&self, key: &Path) -> Result<(), ObjectStoreError>;

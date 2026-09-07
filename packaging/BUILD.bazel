@@ -79,6 +79,7 @@ image_layer(
     name = "tools_layer",
     srcs = {
         "/usr/bin/krabka-audit": "//crates/audit:krabka-audit",
+        "/usr/bin/krabka-backup": "//crates/backup-cli:krabka-backup",
         "/usr/bin/krabka-barrier": "//crates/barrier-cli:krabka-barrier",
         "/usr/bin/krabka-format": "//crates/format:krabka-format",
         "/usr/bin/krabka-guard": "//crates/guard-cli:krabka-guard",

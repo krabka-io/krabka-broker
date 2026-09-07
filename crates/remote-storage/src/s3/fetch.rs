@@ -1,9 +1,9 @@
 //! Remote reads: a byte range of a segment body, and a whole index object.
 //!
-//! Both reads fall back to the pre-0.3.9 key when the current key is absent,
-//! so an upgraded cluster still serves segments an older Krabka wrote. Both
-//! also pass the write-only archive guard first, which refuses the read
-//! before a key is derived or a request leaves the process.
+//! Each read derives one key and issues one request: an absent object is a
+//! miss, with no second key to try. Both pass the write-only archive guard
+//! first, which refuses the read before a key is derived or a request leaves
+//! the process.
 
 use krabka_object_store::{ObjectOps, ObjectStoreError};
 use object_store::GetRange;
@@ -44,7 +44,7 @@ impl S3RemoteStorage {
                 "end_position {end} < start_position {start_position}"
             )));
         }
-        let range = || match end_position {
+        let range = match end_position {
             Some(end) => {
                 // GetRange::Bounded is half-open [start, end); the trait
                 // contract is inclusive end, so add 1 and saturate.
@@ -52,13 +52,7 @@ impl S3RemoteStorage {
             }
             None => GetRange::Offset(u64::from(start_position)),
         };
-        let result = match Self::block_os(self.ops.get_range(&key, range())) {
-            Err(ObjectStoreError::NotFound(_)) => {
-                Self::block_os(self.ops.get_range(&self.legacy_log_key(metadata), range()))
-            }
-            result => result,
-        };
-        match result {
+        match Self::block_os(self.ops.get_range(&key, range)) {
             Ok(bytes) => Ok(bytes.to_vec()),
             Err(ObjectStoreError::NotFound(_)) => Err(RemoteStorageError::SegmentNotFound(
                 metadata.remote_log_segment_id().clone(),
@@ -75,13 +69,7 @@ impl S3RemoteStorage {
     ) -> Result<Vec<u8>, RemoteStorageError> {
         self.refuse_read_when_write_only()?;
         let key = self.index_key(metadata, index_type);
-        let result = match Self::block_os(self.ops.get(&key)) {
-            Err(ObjectStoreError::NotFound(_)) => {
-                Self::block_os(self.ops.get(&self.legacy_index_key(metadata, index_type)))
-            }
-            result => result,
-        };
-        match result {
+        match Self::block_os(self.ops.get(&key)) {
             Ok(bytes) => Ok(bytes.to_vec()),
             Err(ObjectStoreError::NotFound(_)) => Err(RemoteStorageError::SegmentNotFound(
                 metadata.remote_log_segment_id().clone(),
@@ -96,15 +84,42 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
+    use krabka_object_store::fault::StoreOp;
     use object_store::{ObjectStore, memory::InMemory};
     use tempfile::TempDir;
 
     use super::{IndexType, RemoteStorageError, WormError};
     use crate::{
-        s3::test_support::{rsm, sample_data, sample_metadata, stamped_metadata, worm_rsm},
+        s3::test_support::{
+            counting_rsm, rsm, sample_data, sample_metadata, stamped_metadata, worm_rsm,
+        },
         storage_manager::RemoteStorageManager,
         worm::ChainHead,
     };
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_object_is_one_request() {
+        let (store, counter) = counting_rsm();
+        let md = sample_metadata(11);
+        tokio::task::spawn_blocking(move || {
+            let before = counter.attempts(StoreOp::Get);
+            check!(matches!(
+                store.fetch_log_segment(&md, 0, None),
+                Err(RemoteStorageError::SegmentNotFound(_))
+            ));
+            // One key, one request: a miss is a miss, not a second attempt.
+            check!(counter.attempts(StoreOp::Get) - before == 1);
+
+            let before = counter.attempts(StoreOp::Get);
+            check!(matches!(
+                store.fetch_index(&md, IndexType::Offset),
+                Err(RemoteStorageError::SegmentNotFound(_))
+            ));
+            check!(counter.attempts(StoreOp::Get) - before == 1);
+        })
+        .await
+        .unwrap();
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_partial_byte_ranges() {

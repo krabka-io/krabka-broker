@@ -286,7 +286,10 @@ mod tests {
     use krabka_security::SaslMechanism;
 
     use super::*;
-    use crate::materialize::test_support::{args_from, partition_inventory};
+    use crate::{
+        discover::UnrecognizedKeys,
+        materialize::test_support::{args_from, partition_inventory},
+    };
 
     #[test]
     fn seed_metadata_records_emits_every_topic_before_any_partition() {
@@ -298,7 +301,7 @@ mod tests {
                 partition_inventory("orders", orders_id, 1),
                 partition_inventory("payments", payments_id, 0),
             ],
-            unrecognized: Vec::new(),
+            unrecognized: UnrecognizedKeys::default(),
         };
 
         let (records, metadata) =
@@ -347,7 +350,7 @@ mod tests {
         let topic_id = Uuid::new_v4();
         let inventory = ArchiveInventory {
             partitions: vec![partition_inventory("orders", topic_id, 0)],
-            unrecognized: Vec::new(),
+            unrecognized: UnrecognizedKeys::default(),
         };
         let feature = MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
             name: "metadata.version".to_owned(),
@@ -476,7 +479,7 @@ mod tests {
         let snapshot_topic_id = Uuid::new_v4();
         let inventory = ArchiveInventory {
             partitions: vec![partition_inventory("orders", archive_topic_id, 0)],
-            unrecognized: Vec::new(),
+            unrecognized: UnrecognizedKeys::default(),
         };
         let snapshot_records = vec![
             MetadataRecord::V1Topic(TopicRecord {
@@ -564,7 +567,7 @@ mod tests {
         let args = args_from(&[], target.path());
         let inventory = ArchiveInventory {
             partitions: vec![partition_inventory("orders", Uuid::new_v4(), 0)],
-            unrecognized: Vec::new(),
+            unrecognized: UnrecognizedKeys::default(),
         };
 
         let result = format_target(&args, &inventory).await;
@@ -590,7 +593,7 @@ mod tests {
                 partition_inventory("orders", topic_id, 0),
                 partition_inventory("orders", topic_id, 1),
             ],
-            unrecognized: Vec::new(),
+            unrecognized: UnrecognizedKeys::default(),
         };
 
         let outcome = format_target(&args, &inventory)
@@ -621,7 +624,7 @@ mod tests {
         );
         let inventory = ArchiveInventory {
             partitions: vec![partition_inventory("orders", Uuid::new_v4(), 0)],
-            unrecognized: Vec::new(),
+            unrecognized: UnrecognizedKeys::default(),
         };
 
         let outcome = format_target(&args, &inventory)

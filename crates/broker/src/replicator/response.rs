@@ -24,7 +24,9 @@ use tracing::{info, warn};
 
 use super::{
     Config, replication_target_changed, task_replication_target,
-    truncation::{handle_epoch_fence, handle_offset_out_of_range},
+    truncation::{
+        handle_epoch_fence, handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
+    },
 };
 use crate::codes;
 
@@ -222,6 +224,13 @@ pub(super) async fn handle_partition_response(
 
         ReplicaFetchMutation::Retry => match part_resp.error_code {
             codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(part_resp, cfg).await,
+            // KIP-405: the leader still holds this offset, but only in the
+            // remote tier, and it will not stream the archive down the
+            // replication path. The follower starts again at the leader's
+            // local log start instead.
+            codes::OFFSET_MOVED_TO_TIERED_STORAGE => {
+                handle_offset_moved_to_tiered_storage(cfg).await
+            }
             codes::UNKNOWN_TOPIC_OR_PARTITION => {
                 // Leader hasn't materialized its side yet
                 // (CreateTopics-vs-replicator race).

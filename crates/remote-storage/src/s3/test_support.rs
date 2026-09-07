@@ -6,6 +6,7 @@ use std::{io::Write, path::PathBuf, sync::Arc};
 
 use bytes::Bytes;
 use krabka_ids::LeaderEpoch;
+use krabka_object_store::fault::{FaultInjectingStore, FaultPolicy};
 use object_store::{ObjectStore, memory::InMemory};
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use tempfile::TempDir;
@@ -24,6 +25,17 @@ pub(super) const WORM_KEY_ID: &str = "s3-worm-key";
 
 pub(super) fn rsm(prefix: Option<&str>) -> S3RemoteStorage {
     S3RemoteStorage::with_store(Arc::new(InMemory::new()), prefix.map(str::to_string))
+}
+
+/// [`rsm`] over a store that counts the requests reaching it, so a test can
+/// assert how many an operation issues rather than only what it leaves behind.
+/// The policy injects no faults; only the counters are of interest.
+pub(super) fn counting_rsm() -> (S3RemoteStorage, Arc<FaultInjectingStore>) {
+    let counter = Arc::new(FaultInjectingStore::new(
+        Arc::new(InMemory::new()),
+        FaultPolicy::none(),
+    ));
+    (S3RemoteStorage::with_store(counter.clone(), None), counter)
 }
 
 pub(super) fn sample_metadata(id: u128) -> RemoteLogSegmentMetadata {

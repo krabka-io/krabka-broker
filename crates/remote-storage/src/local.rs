@@ -64,37 +64,6 @@ impl LocalTieredStorage {
     fn index_path(&self, metadata: &RemoteLogSegmentMetadata, index_type: IndexType) -> PathBuf {
         self.segment_path(metadata, index_type.suffix())
     }
-
-    /// Krabka 0.3.8 and earlier stored one directory per segment. Keep reads
-    /// and deletes compatible while all new copies use Kafka's flat layout.
-    fn legacy_segment_dir(&self, metadata: &RemoteLogSegmentMetadata) -> PathBuf {
-        let id = metadata.remote_log_segment_id();
-        self.root
-            .join(format!(
-                "{}_{}",
-                id.topic_id_partition.topic_id, id.topic_id_partition.partition
-            ))
-            .join(id.id.to_string())
-    }
-
-    fn legacy_log_path(&self, metadata: &RemoteLogSegmentMetadata) -> PathBuf {
-        self.legacy_segment_dir(metadata).join("log")
-    }
-
-    fn legacy_index_path(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        index_type: IndexType,
-    ) -> PathBuf {
-        let name = match index_type {
-            IndexType::Offset => "offset_index",
-            IndexType::Timestamp => "time_index",
-            IndexType::ProducerSnapshot => "producer_snapshot",
-            IndexType::LeaderEpoch => "leader_epoch",
-            IndexType::Transaction => "txn_index",
-        };
-        self.legacy_segment_dir(metadata).join(name)
-    }
 }
 
 impl RemoteStorageManager for LocalTieredStorage {
@@ -162,11 +131,6 @@ impl RemoteStorageManager for LocalTieredStorage {
         end_position: Option<u32>,
     ) -> Result<Vec<u8>, RemoteStorageError> {
         let path = self.log_path(metadata);
-        let path = if path.exists() {
-            path
-        } else {
-            self.legacy_log_path(metadata)
-        };
         if !path.exists() {
             return Err(RemoteStorageError::SegmentNotFound(
                 metadata.remote_log_segment_id().clone(),
@@ -213,11 +177,6 @@ impl RemoteStorageManager for LocalTieredStorage {
         index_type: IndexType,
     ) -> Result<Vec<u8>, RemoteStorageError> {
         let path = self.index_path(metadata, index_type);
-        let path = if path.exists() {
-            path
-        } else {
-            self.legacy_index_path(metadata, index_type)
-        };
         if !path.exists() {
             return Err(RemoteStorageError::SegmentNotFound(
                 metadata.remote_log_segment_id().clone(),
@@ -252,11 +211,6 @@ impl RemoteStorageManager for LocalTieredStorage {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(RemoteStorageError::Io(error)),
             }
-        }
-        match fs::remove_dir_all(self.legacy_segment_dir(metadata)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(RemoteStorageError::Io(error)),
         }
         Ok(())
     }
@@ -415,22 +369,6 @@ mod tests {
                 "missing Kafka layout artifact {suffix}"
             );
         }
-    }
-
-    #[test]
-    fn reads_and_deletes_pre_kafka_layout_segments() {
-        let remote = tempfile::tempdir().unwrap();
-        let rsm = LocalTieredStorage::new(remote.path());
-        let md = metadata(10);
-        let legacy = rsm.legacy_segment_dir(&md);
-        fs::create_dir_all(&legacy).unwrap();
-        fs::write(legacy.join("log"), b"legacy-log").unwrap();
-        fs::write(legacy.join("producer_snapshot"), b"legacy-snapshot").unwrap();
-
-        check!(rsm.fetch_log_segment(&md, 0, None).unwrap() == b"legacy-log");
-        check!(rsm.fetch_index(&md, IndexType::ProducerSnapshot).unwrap() == b"legacy-snapshot");
-        rsm.delete_log_segment_data(&md).unwrap();
-        check!(!legacy.exists());
     }
 
     #[test]

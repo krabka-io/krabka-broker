@@ -2747,6 +2747,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "krabka-backup"
+version = "0.5.4"
+dependencies = [
+ "assert2",
+ "clap",
+ "futures-util",
+ "hex",
+ "krabka-client-admin",
+ "krabka-client-core",
+ "krabka-object-store",
+ "krabka-protocol",
+ "object_store",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "krabka-barrier"
 version = "0.5.4"
 dependencies = [
@@ -3215,6 +3238,7 @@ dependencies = [
  "maplit",
  "object_store",
  "proptest",
+ "reqwest 0.13.4",
  "ring",
  "serde",
  "serde_json",
@@ -3261,10 +3285,14 @@ name = "krabka-restore"
 version = "0.5.4"
 dependencies = [
  "assert2",
+ "async-trait",
  "bytes",
  "clap",
  "crc32c",
+ "futures-util",
+ "krabka-backup",
  "krabka-broker",
+ "krabka-client-admin",
  "krabka-client-core",
  "krabka-format",
  "krabka-ids",

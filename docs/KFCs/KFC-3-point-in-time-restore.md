@@ -28,13 +28,15 @@ A restore needs a KFC by the test in the [README](README.md): a stock Kafka clie
 
 ## Public Interfaces
 
-The feature adds one command. It adds no API key, no error code, no broker config, no topic config, and no metric, because it does not run inside a broker.
+The feature adds two commands, one to restore and one to capture what a restore needs. It adds no API key, no error code, no broker config, no topic config, and no metric, because neither of them runs inside a broker.
 
 ### The Command
 
 `krabka restore` is the operator's spelling. The binary is named `krabka-restore`, because the `krabka` CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves `git foo` to `git-foo`. That spelling deliberately breaks the `krabka-` prefix the rest of the workspace uses, and it is the whole dispatch mechanism.
 
 The crate is a library as well as a binary. `krabka_restore::restore` returns the structured report and the structured error, and only `run` and the binary turn an error into an exit code. A runbook that wraps the restore gets an exit code. A tool that embeds it keeps the error.
+
+One command restores; a second one supplies what the archive cannot. `krabka backup` (the `krabka-backup` binary) captures the two snapshot files and the committed group offsets from a running cluster, checks a capture against its own digests, and commits captured offsets into a restored cluster. It speaks no krabka-private API key: `ListGroups`, `OffsetFetch` and `OffsetCommit` are the whole of its cluster surface, and the two files it copies are read through a read-only mount of the broker's volume. It is a separate binary for the reason the restore is: the recovery path must not depend on the thing it recovers, and the copy has to be possible on a node whose image carries no shell.
 
 ### Where the Archive Is
 
@@ -45,6 +47,7 @@ The crate is a library as well as a binary. `krabka_restore::restore` returns th
 | `--archive-gcs-bucket BUCKET` | Read from Google Cloud Storage. `--archive-gcs-service-account-path`, `--archive-gcs-endpoint`, and `--archive-gcs-allow-http` refine it. |
 | `--archive-prefix PREFIX` | Key prefix inside the archive, for a bucket that holds more than the tiered tree. It applies to every backend. |
 | `--rlmm-snapshot PATH` | A broker's `<log.dir>/remote-log-metadata/snapshot`. |
+| `--metadata-snapshot PATH` | A controller `<offset>-<epoch>.checkpoint` from `<log.dir>/__cluster_metadata/@metadata-0/`. Topic configuration, ACLs, client quotas, SCRAM credentials and finalized feature levels are restored from it. |
 
 Exactly one backend is selected. A sub-flag of a backend the operator did not select is an error rather than a value the tool ignores, and the message names both flags. Credentials are optional on both cloud backends, so an operator can restore under an instance role or under Workload Identity and never put a secret on a command line.
 
@@ -219,7 +222,7 @@ A restore cannot return what was never copied.
 
 Tiering is per topic, gated by `remote.storage.enable`, so a topic that was never enabled has nothing in the archive. Tiering is also per closed segment, so the active segment and any segment the broker had not yet copied are not there. The restore's reachable point in time is the end of the last archived segment, and not the moment the incident started. An operator who wants a tighter bound tunes the copy path, and not the restore.
 
-Internal topics follow the same rule. `__consumer_offsets` and `__transaction_state` are compacted and are not normally tiered, so committed group offsets and in-flight transaction state do not come back. The [Compatibility](#compatibility-deprecation-and-migration-plan) section lists what an operator has to restore by other means.
+Internal topics follow the same rule. `__consumer_offsets` and `__transaction_state` are compacted and are not normally tiered, so no archive holds them and the restore rebuilds neither. In-flight transaction state ends there: a restore is a point in time, and a transaction that had not committed at that point has no outcome to restore. Committed group offsets do not end there, because they are readable from a live cluster over `OffsetFetch` and writable into a restored one over `OffsetCommit`. `krabka-backup` is the tool that does both, and the [Compatibility](#compatibility-deprecation-and-migration-plan) section states the split.
 
 Diskless topics are out of reach as well. A diskless partition holds its records in WAL objects under `diskless-wal/<broker-id>/<uuid>.ckwl`, and those are not archived segments. The archive scan in `discover::inventory` recognizes one key shape only: a partition directory named `<topic>-<partition>-<topic-uuid>`, with one segment artifact inside it. A diskless WAL key has one path part too many and no partition directory, so the scan puts it in `unrecognized` and the restore reads nothing from it. A restore of a diskless topic needs a reader for the WAL object format, which this design does not have.
 
@@ -238,7 +241,13 @@ What a stock client observes on a restored cluster is the contract this document
 - **Transaction markers survive.** A `read_committed` consumer resolves a restored partition, because no predicate can remove a control batch.
 - **A timestamp-bounded partition ends past its last surviving record.** Seek-to-end lands after the bound.
 
-What does not come back, and has to be restored by other means: committed consumer group offsets, ACLs, quotas, dynamic broker and topic configs, and any topic property beyond the topic id and the partition count. The cluster id is new unless the operator supplies one, and the node identity is new in every case. This is a materialization of the log, and not a clone of a cluster.
+What the archive alone carries is the log: every restored topic's id, its partition count, and its records at their own offsets. Everything else is an input the operator has to have captured before the incident, and each one has exactly one way back.
+
+- **Topic configuration, ACLs, client quotas, SCRAM credentials and finalized feature levels** come back from `--metadata-snapshot`, and from nothing else. The restore seeds each of those records into the target's bootstrap stream, so the restored broker answers `DescribeConfigs` and `DescribeAcls` with them. A topic config is restored for a topic the archive also holds, and a config whose topic id disagrees with the archive's stops the restore rather than being applied to a different topic of the same name. Without the flag none of it is recovered, and the report names every restored topic whose configuration is unavailable.
+- **Committed consumer group offsets** come back from `krabka-backup restore-offsets`, and from nothing else. `__consumer_offsets` is compacted and never tiered, so the archive cannot hold them; `krabka-backup capture` reads them from the live cluster with `ListGroups` and `OffsetFetch`, and writes them back into the restored one with a simple-consumer `OffsetCommit`. Without that capture every group starts from its own `auto.offset.reset`.
+- **The cluster id** is new unless the operator supplies one, and **the node identity and the replica assignment** are new in every case: the restore names the target node as leader and sole replica of every partition.
+
+This is a materialization of the log, plus whatever the operator captured beside it. It is not a clone of a cluster. [Backup and restore](../operations/backup-restore.md) is what an operator has to have running for the list above to be available on the day.
 
 krabka is greenfield and undeployed, so there is no migration. The tool reads the KIP-405 layout that this repository already writes, and it changes nothing about how the broker archives a segment.
 
@@ -257,6 +266,8 @@ Every claim this document makes about a bound is a claim about bytes in a restor
 **Command line.** `tests/cli_surface.rs` runs the binary as a subprocess, which is what covers the flag surface and the exit codes a runbook branches on.
 
 **Client-visible contract.** `tests/roundtrip/consume.rs` boots a broker on a restore output and asks it the questions a consumer asks. `a_restored_broker_serves_the_archived_offsets_batches_and_epoch` checks `ListOffsets` at both sentinels against the archive's own first and last offsets, fetches from the earliest and compares whole `RecordBatch` values, and reads the leader-epoch answer back through `OffsetForLeaderEpoch`. One fixture partition has its oldest segments missing from the archive, so its restored log starts above offset 0 and an `EARLIEST` that answered zero would fail. `a_restored_broker_restarts_and_appends_at_the_archived_end_offset` then shuts that broker down, boots another on the same directory, fetches the same history again, and produces one record, which must land at the archived end offset.
+
+**The whole disaster.** `crates/restore/tests/dr_roundtrip.rs` runs the sequence the runbook prescribes, end to end and in process: a cluster with a consumer group that has committed offsets, a `krabka-backup capture` of its two snapshot files and its group offsets, a `krabka-backup verify` of that capture, the destruction of the cluster and its directory, a restore from the archive with both captured snapshots, and a broker booted on the result. It then asserts the split this document states. The restored topic config is back, from the metadata snapshot. The group's committed offset is NOT back, and `OffsetFetch` answers `-1`, which is the answer that makes a consumer fall back to `auto.offset.reset`. `krabka-backup restore-offsets` then puts the position back, and `OffsetFetch` answers with it. The middle assertion is the one that keeps the claim honest: it fails if committed offsets ever start arriving with the log.
 
 **A stock JVM consumer.** `crates/broker/tests/jvm_acceptance_tiered.rs`'s `restored_cluster_serves_the_jvm_console_consumer` archives a topic into `MinIO` through the broker's own KIP-405 copy path, discards that cluster, restores the bucket into a fresh directory, boots a broker on it, and reads it with `kafka-console-consumer --from-beginning`. The records come back in order from the archive's first offset, which is the contract above stated in a client krabka did not write.
 

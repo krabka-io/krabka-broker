@@ -275,15 +275,15 @@ mod tests {
                         .contains("authorization: aws4-hmac-sha256")
                 );
                 socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                        .as_bytes(),
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
                     )
-                    .await
-                    .unwrap();
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
             }
         });
         let cfg = S3Config {
@@ -385,8 +385,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn confirms_gcs_versioning_and_locked_retention() {
+    /// Serves one canned `Buckets.get` body to one client, checking on the
+    /// way past that the request is the control-plane call this module claims
+    /// to make. Returns the endpoint to point a `GcsConfig` at, and the task
+    /// to join once the check has run.
+    async fn serve_bucket_policy(body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -399,7 +402,6 @@ mod tests {
             }
             let request = String::from_utf8(request).unwrap();
             check!(request.starts_with("GET /storage/v1/b/bucket?fields="));
-            let body = r#"{"versioning":{"enabled":true},"retentionPolicy":{"retentionPeriod":"86400","isLocked":true}}"#;
             socket
                 .write_all(
                     format!(
@@ -411,15 +413,57 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let cfg = GcsConfig {
+        (endpoint, server)
+    }
+
+    fn gcs_cfg(endpoint: String) -> GcsConfig {
+        GcsConfig {
             bucket: "bucket".into(),
             endpoint: Some(endpoint),
             service_account_key: Some(GCS_TEST_KEY.into()),
             allow_http: true,
             ..Default::default()
-        };
+        }
+    }
 
-        verify_gcs_worm_bucket(&cfg).await.unwrap();
+    #[tokio::test]
+    async fn confirms_gcs_versioning_and_locked_retention() {
+        let (endpoint, server) = serve_bucket_policy(
+            r#"{"versioning":{"enabled":true},"retentionPolicy":{"retentionPeriod":"86400","isLocked":true}}"#,
+        )
+        .await;
+
+        verify_gcs_worm_bucket(&gcs_cfg(endpoint)).await.unwrap();
         server.await.unwrap();
+    }
+
+    /// The refusal half of the same control-plane call. `validate_gcs_policy`
+    /// covers the decision; this covers the whole `Buckets.get` round trip, so
+    /// a policy a real bucket reports as non-compliant fails archive startup
+    /// rather than being lost between the request and the check.
+    #[tokio::test]
+    async fn refuses_a_gcs_bucket_whose_policy_is_not_worm() {
+        for (body, reason) in [
+            (
+                r#"{"versioning":{"enabled":false},"retentionPolicy":{"retentionPeriod":"86400","isLocked":true}}"#,
+                "versioning enabled",
+            ),
+            (
+                r#"{"versioning":{"enabled":true}}"#,
+                "no GCS retention policy",
+            ),
+            (
+                r#"{"versioning":{"enabled":true},"retentionPolicy":{"retentionPeriod":"86400","isLocked":false}}"#,
+                "locked GCS retention policy",
+            ),
+        ] {
+            let (endpoint, server) = serve_bucket_policy(body).await;
+
+            let error = verify_gcs_worm_bucket(&gcs_cfg(endpoint))
+                .await
+                .unwrap_err();
+            check!(error.to_string().contains(reason), "{reason}: {error}");
+            server.await.unwrap();
+        }
     }
 }

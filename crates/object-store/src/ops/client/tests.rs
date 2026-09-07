@@ -77,6 +77,53 @@ async fn head_and_list_and_delete() {
     ));
 }
 
+/// `list` and `list_stream` describe the same prefix: the stream yields every
+/// object the collecting call returns, in the same order, so a caller can move
+/// from one to the other without changing what it sees.
+#[tokio::test]
+async fn list_stream_yields_the_same_objects_as_list() {
+    use futures_util::stream::TryStreamExt as _;
+
+    let c = client();
+    for name in ["p/a", "p/b", "p/c", "q/d"] {
+        c.put(
+            &Path::from(name),
+            bytes::Bytes::from_static(b"1234"),
+            PutRequest::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let collected: Vec<Path> = c
+        .list(Some(Path::from("p")))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|meta| meta.location)
+        .collect();
+    let streamed: Vec<Path> = c
+        .list_stream(Some(Path::from("p")))
+        .map_ok(|meta| meta.location)
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert!(collected == vec![Path::from("p/a"), Path::from("p/b"), Path::from("p/c")]);
+    assert!(streamed == collected);
+}
+
+/// A listing failure surfaces as an [`ObjectStoreError`] item rather than as
+/// a panic or a silently truncated stream.
+#[tokio::test]
+async fn list_stream_surfaces_a_backend_failure_as_an_error_item() {
+    use futures_util::stream::TryStreamExt as _;
+
+    let c = ObjectStoreClient::new(Arc::new(CountingStore::failing_list()));
+    let err = c.list_stream(None).try_next().await.unwrap_err();
+    assert!(matches!(err, ObjectStoreError::Backend(_)));
+}
+
 /// The default request asks for no digest, and the outcome reports the
 /// payload size plus whatever identifiers the backend returned. `InMemory`
 /// hands out sequential etags from `0`, so the whole outcome is
@@ -259,6 +306,8 @@ struct CountingStore {
     puts: std::sync::atomic::AtomicUsize,
     multiparts: std::sync::atomic::AtomicUsize,
     failure_pending: Option<bool>,
+    /// Whether a listing fails on its first item instead of reading `inner`.
+    failing_list: bool,
     parts: Arc<std::sync::atomic::AtomicUsize>,
     aborts: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -270,6 +319,7 @@ impl CountingStore {
             puts: std::sync::atomic::AtomicUsize::new(0),
             multiparts: std::sync::atomic::AtomicUsize::new(0),
             failure_pending: None,
+            failing_list: false,
             parts: Arc::default(),
             aborts: Arc::default(),
         }
@@ -278,6 +328,15 @@ impl CountingStore {
     fn failing(pending: bool) -> Self {
         Self {
             failure_pending: Some(pending),
+            ..Self::new()
+        }
+    }
+
+    /// A store whose listing fails on its first item, so the streaming
+    /// listing has an error to surface.
+    fn failing_list() -> Self {
+        Self {
+            failing_list: true,
             ..Self::new()
         }
     }
@@ -338,6 +397,16 @@ impl object_store::ObjectStore for CountingStore {
         &self,
         prefix: Option<&Path>,
     ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+        if self.failing_list {
+            use futures_util::stream::StreamExt as _;
+            return futures_util::stream::once(async {
+                Err(object_store::Error::Generic {
+                    store: "CountingStore",
+                    source: "listing is broken".into(),
+                })
+            })
+            .boxed();
+        }
         self.inner.list(prefix)
     }
 

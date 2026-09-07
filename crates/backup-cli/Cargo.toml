@@ -1,0 +1,58 @@
+[package]
+name = "krabka-backup"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Captures the inputs a point-in-time restore needs -- the RLMM snapshot, the controller metadata checkpoint, and committed group offsets -- and puts the offsets back after a restore"
+
+[lints]
+workspace = true
+
+# A library as well as a binary, for the same reason `krabka-guard`,
+# `krabka-barrier` and `krabka-format` are: a test that spawns the binary needs
+# a Cargo working tree to build it from, and a Bazel test sandbox has none.
+# Tests call `run_from_args` in process instead.
+[lib]
+name = "krabka_backup"
+path = "src/lib.rs"
+
+# `krabka-backup`, so `krabka backup` reaches it: the `krabka` operator CLI
+# resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git
+# resolves `git foo` to `git-foo`.
+[[bin]]
+name = "krabka-backup"
+path = "src/main.rs"
+
+[dependencies]
+# `ListGroups` and `OffsetFetch` for the offsets capture. The tool speaks only
+# stock Kafka APIs, so it also runs against a cluster that is not krabka.
+krabka-client-admin = { version = "0.4.0" }
+# The connection, the `FindCoordinator` helpers, and the request trait the
+# `OffsetCommit` that puts offsets back is sent over.
+krabka-client-core = { version = "0.4.0" }
+krabka-protocol = { version = "0.4.0", default-features = false }
+# The archive the capture is written to is the archive `krabka restore` reads,
+# so the backend mapping is the object-store layer the restore uses, not the
+# broker's TOML config: a backup runs beside a broker, and a restore runs when
+# there is none.
+krabka-object-store = { version = "0.5.4", path = "../object-store" }
+
+clap = { workspace = true, features = ["env"] }
+futures-util = { workspace = true }
+hex = { workspace = true }
+object_store = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# Every captured artifact carries a SHA-256, which is what `verify` re-reads
+# the archive to check.
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+tempfile = { workspace = true }

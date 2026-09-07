@@ -76,6 +76,35 @@ crate_tests(
     # and the broker rejected the token, which is a racy test rather than a
     # slow one. The tokens now carry enough life for the open and the tests
     # wait out whatever remains, so the suite belongs in the ordinary set.
+    #
+    # `tiered_storage_multi_broker` is the shape this list already describes,
+    # and it joins on that rather than on a failure message. It boots three
+    # brokers per case, kills the leader, and then gates on state the survivors
+    # must commit through the quorum inside a bounded deadline -- a minute for
+    # the copy and the follower catch-up, thirty seconds for the reassignment.
+    # That is `diskless_e2e`'s three-broker watermark and `durability`'s
+    # post-kill wait in one suite, and the profiler stretches the same second
+    # half of it.
+    #
+    # The evidence is weaker than the entries above and is recorded as such.
+    # Two `coverage` runs on the pull request that added this suite each failed
+    # one suite out of 208, and a different one each time -- `break_glass`, then
+    # `transaction_version` -- while `coverage` was green on `main`. Both pass
+    # locally, both pass run concurrently with this suite, and both pass with
+    # that trio running under eight spinners on the same four cores the runner
+    # has. Neither per-test log could be read: BuildBuddy wants a login and the
+    # job uploads no test-log artifact. So the mechanism here is the one
+    # `stretch_cluster` records -- ~140 suites in parallel on four cores -- read
+    # off this suite's cost and its 69.6s wall clock rather than off a message,
+    # and the two casualties are left untagged because nothing yet says they
+    # are anything but starved. If either fails again once this suite is out of
+    # the lane, that reading was wrong: read its log before tagging it.
+    #
+    # Leaving the lane costs no coverage. Of the 118 `//crates/broker` targets
+    # in that run only four emit a `coverage.dat` -- `broker_test`,
+    # `cli_smoke_test`, `config_reference_test` and `krabka-broker_test` -- and
+    # this suite, like the other 114, contributes none. It still runs on every
+    # pull request, in the `test` step that exists for this tag.
     cpu_heavy = [
         "compaction",
         "diskless_e2e",
@@ -84,6 +113,7 @@ crate_tests(
         "leader_election",
         "sharegroup_backlog",
         "stretch_cluster",
+        "tiered_storage_multi_broker",
     ],
     # The generated config schema and reference, and the example configs, are
     # checked in under //docs. `config_reference`, `docgen_contract` and
