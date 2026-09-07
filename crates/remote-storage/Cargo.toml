@@ -52,12 +52,16 @@ async-trait = { workspace = true }
 krabka-log = { version = "0.5.4", path = "../log" }
 krabka-protocol = { version = "0.4.0", default-features = false }
 proptest = { workspace = true }
+# `gcs_emulator` creates its buckets through the emulator's JSON control
+# plane, which no `object_store` API reaches. Same pin as `krabka-object-store`,
+# whose WORM bucket check is the other reqwest caller.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
 # Generates a throwaway Ed25519 key pair for the WORM manifest signing tests.
 # `krabka-audit` exposes no key generator, only `FileEd25519Signer`, which
 # needs a PKCS#8 key that already exists.
 ring = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [[bin]]
 name = "krabka-worm-verify"

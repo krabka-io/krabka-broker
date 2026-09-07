@@ -3238,6 +3238,7 @@ dependencies = [
  "maplit",
  "object_store",
  "proptest",
+ "reqwest 0.13.4",
  "ring",
  "serde",
  "serde_json",

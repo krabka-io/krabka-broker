@@ -417,6 +417,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/jvm_acceptance_tiered.rs",
             "crates/broker/tests/tiered_storage_multi_broker.rs",
+            "crates/remote-storage/tests/gcs_emulator.rs",
             "crates/remote-storage/tests/jvm_tiered_storage.rs",
             "crates/restore/tests/roundtrip.rs",
             "crates/restore/tests/roundtrip/consume.rs",
