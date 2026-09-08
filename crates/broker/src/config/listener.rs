@@ -179,26 +179,33 @@ impl BrokerConfig {
     ///
     /// A Kafka broker advertises `ListenerType.BROKER` on every listener it
     /// binds, client-facing or inter-broker alike, so the control-plane keys
-    /// tagged `controller` reach neither. krabka has to widen one of them: its
-    /// brokers dial a peer's *inter-broker* endpoint for the RPCs in
-    /// [`INTER_BROKER_ONLY_APIS`][crate::api_catalog::INTER_BROKER_ONLY_APIS],
-    /// and the caller negotiates the version off the table that endpoint
-    /// advertises.
+    /// tagged `controller` reach neither. krabka has to widen one of them,
+    /// because a krabka broker reaches a peer over the peer's *inter-broker*
+    /// endpoint for the RPCs in
+    /// [`INTER_BROKER_ONLY_APIS`][crate::api_catalog::INTER_BROKER_ONLY_APIS] --
+    /// `isr_maintenance` sends `AlterPartition` there on every ISR shrink and
+    /// expand -- and the caller negotiates the version off the table that
+    /// endpoint advertised. Withhold a key there and the RPC is negotiated
+    /// away, not merely undocumented.
     ///
-    /// The widening is confined to a listener no client is expected on. It
-    /// applies when the operator declared more than one listener and pointed
-    /// [`inter_broker_listener_name`][Self::inter_broker_listener_name] at one
-    /// of them, which is how Kafka's own `inter.broker.listener.name` marks the
-    /// internal listener. A single-listener broker -- the default, where one
-    /// `PLAINTEXT` listener carries client and inter-broker traffic together --
-    /// has no such separation, so it advertises the client table and
-    /// `kafka-broker-api-versions.sh` reads back what it reads back from Kafka.
+    /// The widened listener is the one
+    /// [`inter_broker_listener_name`][Self::inter_broker_listener_name] names,
+    /// the way Kafka's `inter.broker.listener.name` marks the internal
+    /// listener. That is a property of the listener, not of how many listeners
+    /// there are: on the default single-listener broker the one `PLAINTEXT`
+    /// listener *is* the inter-broker listener, it really does serve those
+    /// RPCs to peers, and it says so.
+    ///
+    /// An operator who wants the client-facing table a Kafka broker prints
+    /// separates the two, which is what a Kafka deployment does anyway -- the
+    /// `apache/kafka` image ships `PLAINTEXT` for clients and `BROKER` for
+    /// inter-broker traffic. Every listener that is not the inter-broker one
+    /// then advertises exactly what Kafka advertises.
     #[must_use]
     pub fn listener_kind(&self, listener_name: &str) -> crate::api_catalog::ListenerKind {
         use crate::api_catalog::ListenerKind;
 
-        let separated = self.effective_listeners().len() > 1;
-        if separated && listener_name.eq_ignore_ascii_case(&self.inter_broker_listener_name) {
+        if listener_name.eq_ignore_ascii_case(&self.inter_broker_listener_name) {
             ListenerKind::InterBroker
         } else {
             ListenerKind::Client
@@ -316,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn a_separated_inter_broker_listener_is_the_only_one_that_widens_the_api_table() {
+    fn the_inter_broker_listener_is_the_only_one_that_widens_the_api_table() {
         use crate::api_catalog::ListenerKind;
 
         let c = base();
@@ -329,16 +336,18 @@ mod tests {
     }
 
     #[test]
-    fn a_single_listener_broker_advertises_the_client_table() {
+    fn a_single_listener_broker_advertises_the_inter_broker_table_on_it() {
         use crate::api_catalog::ListenerKind;
 
         // The default: no declared listeners, so `effective_listeners` builds
-        // one `PLAINTEXT` spec and `inter_broker_listener_name` names it. No
-        // client and inter-broker traffic are separated, so nothing widens.
+        // one `PLAINTEXT` spec and `inter_broker_listener_name` names it. That
+        // listener carries client and inter-broker traffic together, and
+        // `isr_maintenance` negotiates `AlterPartition` against the table it
+        // advertises, so it has to advertise the control-plane keys.
         let c = BrokerConfig::default();
         assert!(c.inter_broker_listener_name == "PLAINTEXT");
         assert!(c.effective_listeners().len() == 1);
-        assert!(c.listener_kind("PLAINTEXT") == ListenerKind::Client);
+        assert!(c.listener_kind("PLAINTEXT") == ListenerKind::InterBroker);
     }
 
     #[test]

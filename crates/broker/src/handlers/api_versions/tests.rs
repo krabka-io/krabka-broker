@@ -209,13 +209,23 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     let resp = decode_response(API_VERSIONS_V3, &bytes);
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
+    // `request_context` arrives on `PLAINTEXT`, and a test broker leaves
+    // `inter_broker_listener_name` at its `PLAINTEXT` default, so this is the
+    // single-listener shape: the one listener is the inter-broker listener and
+    // advertises the control-plane keys peers negotiate against.
     check!(
         resp.api_keys
             == crate::api_catalog::supported_apis(
-                crate::api_catalog::ListenerKind::Client,
+                crate::api_catalog::ListenerKind::InterBroker,
                 crate::api_catalog::ClientMetricsReceiver::Absent,
             ),
         "{resp:?}"
+    );
+    check!(
+        resp.api_keys
+            .iter()
+            .any(|api| api.api_key == krabka_protocol::owned::alter_partition_request::API_KEY),
+        "isr_maintenance negotiates AlterPartition against this table: {resp:?}"
     );
     check!(!resp.supported_features.is_empty(), "{resp:?}");
     let mv = resp

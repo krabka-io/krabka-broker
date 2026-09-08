@@ -258,11 +258,14 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
                 .expect("max+1 ApiVersions uses the v0 body");
             check!(decoded.error_code == codes::UNSUPPORTED_VERSION);
             // The `PLAINTEXT` listener above is the only one this broker
-            // binds, so it advertises the client table.
+            // binds, so it is also the one `inter_broker_listener_name` names
+            // and it advertises the inter-broker table. The point here is that
+            // the rejected-version path is scoped to the same listener the
+            // accepted path is, not which table that turns out to be.
             check!(
                 decoded.api_keys
                     == crate::api_catalog::supported_apis(
-                        crate::api_catalog::ListenerKind::Client,
+                        crate::api_catalog::ListenerKind::InterBroker,
                         crate::api_catalog::ClientMetricsReceiver::Absent,
                     )
             );
