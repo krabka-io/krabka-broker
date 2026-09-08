@@ -87,7 +87,7 @@ entry names a function the file does not define.
 | KIP-631 | Implemented | The KRaft metadata records and broker registration | [`broker/src/handlers/broker_registration.rs`](../crates/broker/src/handlers/broker_registration.rs) | [`raft/tests/kraft_checkpoint_jvm.rs`](../crates/raft/tests/kraft_checkpoint_jvm.rs)<br>[`broker/tests/unregister_broker.rs`](../crates/broker/tests/unregister_broker.rs) | `apache_kafka_4_0_0` | none |  |
 | KIP-642 | Out of scope | Multi-node quorum reassignment in one operation | [`raft/src/controller/membership.rs`](../crates/raft/src/controller/membership.rs) | none | in process | none | Voter changes go one node at a time through KIP-853. `change_membership` rejects a batch that adds or removes more than one voter. |
 | KIP-664 | Implemented | DescribeProducers, DescribeTransactions and ListTransactions | [`broker/src/handlers/describe_producers.rs`](../crates/broker/src/handlers/describe_producers.rs) | [`broker/tests/describe_producers.rs`](../crates/broker/tests/describe_producers.rs)<br>[`broker/tests/list_describe_transactions.rs`](../crates/broker/tests/list_describe_transactions.rs) | in process | none |  |
-| KIP-714 | Implemented | Client metrics push: GetTelemetrySubscriptions and PushTelemetry | [`broker/src/client_metrics/mod.rs`](../crates/broker/src/client_metrics/mod.rs) | [`broker/tests/client_telemetry.rs`](../crates/broker/tests/client_telemetry.rs)<br>[`broker/tests/client_metrics_config.rs`](../crates/broker/tests/client_metrics_config.rs) | in process | none |  |
+| KIP-714 | Implemented | Client metrics push: GetTelemetrySubscriptions and PushTelemetry | [`broker/src/client_metrics/mod.rs`](../crates/broker/src/client_metrics/mod.rs) | [`broker/tests/client_telemetry.rs`](../crates/broker/tests/client_telemetry.rs)<br>[`broker/tests/client_metrics_config.rs`](../crates/broker/tests/client_metrics_config.rs) | in process | none | GetTelemetrySubscriptions (71) and PushTelemetry (72) are advertised only when the broker has a client-metrics receiver: the `[runtime]` key `client_metrics_enable`, or a configured `client_metrics_otlp_endpoint`, which implies it. The default is off, which is what a stock Kafka broker advertises when `metric.reporters` holds no `ClientTelemetry` implementation, so a modern Java or librdkafka client opens no telemetry handshake it has nowhere to push to. `api_catalog::ClientMetricsReceiver` names the gate and `BrokerConfig::client_metrics_receiver` reads it. Both handlers stay registered either way and answer a client that sends one anyway. |
 | KIP-734 | Implemented | ListOffsets MAX_TIMESTAMP | [`broker/src/handlers/list_offsets/timestamp.rs`](../crates/broker/src/handlers/list_offsets/timestamp.rs) | [`broker/tests/list_offsets_isolation/timestamp_sentinels.rs`](../crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs) | in process | none |  |
 | KIP-778 | Implemented | metadata.version as a finalized feature that `krabka format` bootstraps | [`format/src/format/features.rs`](../crates/format/src/format/features.rs) | [`format/tests/format_smoke.rs`](../crates/format/tests/format_smoke.rs)<br>[`broker/tests/format_features.rs`](../crates/broker/tests/format_features.rs) | in process | none |  |
 | KIP-827 | Implemented | DescribeLogDirs v4 reports total and usable bytes per directory | [`broker/src/handlers/describe_log_dirs/dirs.rs`](../crates/broker/src/handlers/describe_log_dirs/dirs.rs) | [`broker/tests/jvm_acceptance_quotas/log_dirs.rs`](../crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs) | `cp_kafka_6_1_1`, `cp_kafka_7_5_0` | none |  |
@@ -225,23 +225,14 @@ for by the two facts above.
 | DescribeUserScramCredentials | 50 | 0-0 | 0-0 | match | -- |
 | AlterUserScramCredentials | 51 | 0-0 | 0-0 | match | -- |
 | DescribeQuorum | 55 | 0-2 | 0-2 | match | -- |
-| AlterPartition | 56 | 2-3 | not advertised | krabka only | -- |
 | UpdateFeatures | 57 | 0-2 | 0-2 | match | -- |
-| FetchSnapshot | 59 | 0-1 | not advertised | krabka only | -- |
 | DescribeCluster | 60 | 0-2 | 0-2 | match | -- |
 | DescribeProducers | 61 | 0-0 | 0-0 | match | -- |
-| BrokerRegistration | 62 | 0-4 | not advertised | krabka only | -- |
-| BrokerHeartbeat | 63 | 0-2 | not advertised | krabka only | -- |
 | UnregisterBroker | 64 | 0-0 | 0-0 | match | -- |
 | DescribeTransactions | 65 | 0-0 | 0-0 | match | -- |
 | ListTransactions | 66 | 0-2 | 0-2 | match | -- |
-| AllocateProducerIds | 67 | 0-0 | not advertised | krabka only | -- |
 | ConsumerGroupHeartbeat | 68 | 0-1 | 0-1 | match | -- |
 | ConsumerGroupDescribe | 69 | 0-1 | 0-1 | match | -- |
-| ControllerRegistration | 70 | 0-0 | not advertised | krabka only | -- |
-| GetTelemetrySubscriptions | 71 | 0-0 | not advertised | krabka only | -- |
-| PushTelemetry | 72 | 0-0 | not advertised | krabka only | -- |
-| AssignReplicasToDirs | 73 | 0-0 | not advertised | krabka only | -- |
 | ListConfigResources | 74 | 0-1 | 0-1 | match | -- |
 | DescribeTopicPartitions | 75 | 0-0 | 0-0 | match | -- |
 | ShareGroupHeartbeat | 76 | 1-1 | 1-1 | match | -- |
@@ -250,7 +241,6 @@ for by the two facts above.
 | ShareAcknowledge | 79 | 1-2 | 1-2 | match | -- |
 | AddRaftVoter | 80 | 0-1 | 0-1 | match | -- |
 | RemoveRaftVoter | 81 | 0-0 | 0-0 | match | -- |
-| UpdateRaftVoter | 82 | 0-0 | not advertised | krabka only | -- |
 | InitializeShareGroupState | 83 | 0-0 | 0-0 | match | -- |
 | ReadShareGroupState | 84 | 0-0 | 0-0 | match | -- |
 | WriteShareGroupState | 85 | 0-1 | 0-1 | match | -- |
@@ -261,7 +251,6 @@ for by the two facts above.
 | DescribeShareGroupOffsets | 90 | 0-1 | 0-1 | match | -- |
 | AlterShareGroupOffsets | 91 | 0-0 | 0-0 | match | -- |
 | DeleteShareGroupOffsets | 92 | 0-0 | 0-0 | match | -- |
-| GetReplicaLogInfo | 93 | 0-0 | not advertised | krabka only | -- |
 
 The Bazel Docker lane supplies each image from a digest-pinned OCI repository.
 CI regenerates this page and fails when the test names, lane, image tag, digest,
