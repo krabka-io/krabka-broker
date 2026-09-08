@@ -16,6 +16,7 @@ use crate::jvm_acceptance::{
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
+#[allow(clippy::too_many_lines)] // Keeps the external CLI lifecycle in one end-to-end test.
 async fn jvm_kafka_reassign_partitions_end_to_end() {
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
