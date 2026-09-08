@@ -131,7 +131,19 @@ pub struct Args {
         value_delimiter = ',',
         num_args = 0..
     )]
-    pub controller_bootstrap_servers: Vec<SocketAddr>,
+    #[arg(value_parser = krabka_broker::file_config::parse_bootstrap_server)]
+    pub controller_bootstrap_servers: Vec<String>,
+
+    /// KIP-595 static controller voters, comma-separated
+    /// `<node_id>@<host>:<port>`. Hosts are resolved on each connection.
+    #[arg(
+        long,
+        env = "KRABKA_CONTROLLER_QUORUM_VOTERS",
+        value_delimiter = ',',
+        num_args = 0..,
+        value_parser = krabka_broker::file_config::parse_quorum_voter
+    )]
+    pub controller_quorum_voters: Vec<(krabka_raft::NodeId, String)>,
 
     /// KIP-853: auto-join the quorum as a voter after the node catches up as
     /// an observer. This maps to Kafka's
@@ -477,5 +489,25 @@ mod tests {
         let args = Args::try_parse_from(["krabka-broker", "--config-file=/tmp/a.toml"]).unwrap();
         assert!(args.config_file.as_deref() == Some(std::path::Path::new("/tmp/a.toml")));
         assert!(args.advertised_listener.is_none());
+    }
+
+    #[test]
+    fn controller_bootstrap_server_keeps_unresolved_dns_name() {
+        let _guard = env_guard();
+        let endpoint = "broker-0.headless.default.svc.cluster.local:9093";
+        let args =
+            Args::try_parse_from(["krabka-broker", "--controller-bootstrap-servers", endpoint])
+                .unwrap();
+        assert!(args.controller_bootstrap_servers == [endpoint]);
+    }
+
+    #[test]
+    fn controller_quorum_voter_keeps_unresolved_dns_name() {
+        let _guard = env_guard();
+        let endpoint = "2@broker-2.headless.default.svc.cluster.local:9093";
+        let args = Args::try_parse_from(["krabka-broker", "--controller-quorum-voters", endpoint])
+            .unwrap();
+        assert!(args.controller_quorum_voters[0].0 == krabka_raft::NodeId(2));
+        assert!(args.controller_quorum_voters[0].1 == &endpoint[2..]);
     }
 }

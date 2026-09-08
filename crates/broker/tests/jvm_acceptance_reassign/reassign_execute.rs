@@ -1,11 +1,11 @@
 //! The plain `kafka-reassign-partitions --execute` and `--verify` round-trip
 //! against a three-broker SASL cluster.
 //!
-//! The test injects the post-move ISR rather than waiting for inter-broker
-//! replication, which does not route back into the VM under WSL2; the throttled
-//! variant of the same flow lives in the sibling `reassign_throttle` module.
+//! The move completes only after the added replica fetches the real log and
+//! joins the ISR; no metadata record is injected by the test.
 
 use assert2::assert;
+use std::{io::Write as _, process::Stdio, time::Duration};
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
@@ -20,7 +20,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     const ADMIN_PASS: &str = "admin-secret";
     const TOPIC: &str = "krabka-reassign-itest";
 
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
+    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, d1, d2, d3) =
         start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
     nc_check_connectivity();
 
@@ -58,6 +58,35 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     // Wait for broker 1 to see the partition in the committed metadata image.
     h1.wait_until_partition_present(TOPIC, 0).await;
 
+    let mut producer = std::process::Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-i",
+            "-v",
+            &admin_mount,
+            "--add-host=host.docker.internal:host-gateway",
+            KAFKA_IMAGE_TXN,
+            "kafka-console-producer",
+            "--topic",
+            TOPIC,
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--producer.config",
+            "/client.properties",
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn kafka-console-producer");
+    producer
+        .stdin
+        .as_mut()
+        .expect("producer stdin")
+        .write_all(b"before-reassignment\n")
+        .expect("write record");
+    drop(producer.stdin.take());
+    assert!(producer.wait().expect("producer exit").success());
+
     // Determine initial replicas and pick the third broker as the new target.
     // Broker node IDs are i32 on the wire but stored as u64 in PartitionRecord.
     let pr = h1
@@ -68,7 +97,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     let new_node: u64 = (1u64..=3)
         .find(|n| !initial.contains(&krabka_metadata::NodeId(*n)))
         .expect("free broker");
-    let staying: u64 = initial.first().unwrap().0;
+    let staying = pr.leader.0;
     eprintln!("KRABKA[test] initial replicas={initial:?} staying={staying} new_node={new_node}");
 
     // Write reassignment JSON: move partition 0 to [staying, new_node].
@@ -112,10 +141,6 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Inject ISR including new_node so the background reassignment-completion
-    // task can see the new broker in ISR without relying on inter-broker
-    // replication (which is broken under WSL2 due to host-gateway routing;
-    // the reassignment tests use the same technique).
     let pr_after = h1
         .partition_record_for_test(TOPIC, 0)
         .expect("partition record after alter");
@@ -129,25 +154,43 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
                 .copied()
                 .unwrap_or(krabka_metadata::NodeId(0))
         });
-    let injected = krabka_metadata::PartitionRecord {
-        isr: vec![
-            krabka_metadata::NodeId(staying),
-            krabka_metadata::NodeId(new_node),
-            removing_replica,
-        ],
-        ..pr_after.clone()
-    };
-    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(injected))
-        .await
-        .expect("inject ISR for reassignment completion");
+    let handles = [&h1, &h2, &h3];
+    let leader_leo = handles[usize::try_from(staying - 1).unwrap()]
+        .local_log_end_offset(TOPIC, 0)
+        .expect("leader log");
+    assert!(leader_leo > 0, "the reassignment must move real records");
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if handles[usize::try_from(new_node - 1).unwrap()].local_log_end_offset(TOPIC, 0)
+                == Some(leader_leo)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("added replica reaches the leader LEO");
 
     // Wait until adding_replicas and removing_replicas are both drained from
     // the committed metadata image.
-    h1.wait_for_image(|img| {
-        img.partition(TOPIC, 0)
-            .is_some_and(|pr| pr.adding_replicas.is_empty() && pr.removing_replicas.is_empty())
+    let completed = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if h1
+                .partition_record_for_test(TOPIC, 0)
+                .is_some_and(|pr| pr.adding_replicas.is_empty() && pr.removing_replicas.is_empty())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     })
     .await;
+    assert!(
+        completed.is_ok(),
+        "reassignment did not complete: {:?}",
+        h1.partition_record_for_test(TOPIC, 0)
+    );
     // After completion the replica set must match [staying, new_node].
     let pr = h1
         .partition_record_for_test(TOPIC, 0)
@@ -158,6 +201,16 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         got == want,
         "reassignment completed but replicas mismatch: got={got:?} want={want:?}"
     );
+    let dirs = [d1.path(), d2.path(), d3.path()];
+    let removed_dir =
+        dirs[usize::try_from(removing_replica.0 - 1).unwrap()].join(format!("{TOPIC}-0"));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while removed_dir.exists() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("removed replica directory is pruned");
     eprintln!("KRABKA[test] reassignment completed; running --verify");
 
     // --verify should report completion.
@@ -194,6 +247,13 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         verify_out.status.success(),
         "kafka-reassign-partitions --verify failed: stderr={}",
         String::from_utf8_lossy(&verify_out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&verify_out.stdout)
+            .to_ascii_lowercase()
+            .contains("complete"),
+        "verify did not report completion: {}",
+        String::from_utf8_lossy(&verify_out.stdout)
     );
 
     h1.shutdown().await;

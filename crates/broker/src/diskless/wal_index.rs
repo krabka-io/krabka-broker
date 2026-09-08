@@ -148,13 +148,41 @@ pub struct WalFlushRecord {
     pub entries: Vec<WalIndexEntry>,
 }
 
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct PreviousWalFlushRecord {
+    object_key: String,
+    format_version: u16,
+    entries: Vec<PreviousWalIndexEntry>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct PreviousWalIndexEntry {
+    topic_id: Uuid,
+    partition: i32,
+    first_offset: i64,
+    last_offset: i64,
+    byte_start: u64,
+    byte_len: u32,
+}
+
 impl WalFlushRecord {
+    pub const FORMAT_VERSION: u16 = 2;
+
     /// Serialize this record with the workspace `serde-wincode` codec.
     ///
     /// # Errors
     ///
     /// Returns an error if wincode cannot encode the record.
     pub fn to_bytes(&self) -> Result<Bytes, String> {
+        if self.format_version != Self::FORMAT_VERSION {
+            return Err(format!(
+                "unsupported diskless WAL index format version {}; this build writes {}",
+                self.format_version,
+                Self::FORMAT_VERSION
+            ));
+        }
         <serde_wincode::SerdeCompat<Self> as wincode::Serialize>::serialize(self)
             .map(Bytes::from)
             .map_err(|error| error.to_string())
@@ -166,8 +194,24 @@ impl WalFlushRecord {
     ///
     /// Returns an error if `bytes` is not a valid encoded `WalFlushRecord`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        <serde_wincode::SerdeCompat<Self> as wincode::Deserialize>::deserialize(bytes)
-            .map_err(|error| error.to_string())
+        match <serde_wincode::SerdeCompat<Self> as wincode::Deserialize>::deserialize(bytes) {
+            Ok(record) if record.format_version == Self::FORMAT_VERSION => Ok(record),
+            Ok(record) => Err(format!(
+                "unsupported diskless WAL index format version {}; this build requires {}",
+                record.format_version,
+                Self::FORMAT_VERSION
+            )),
+            Err(error) => {
+                if let Ok(previous) = <serde_wincode::SerdeCompat<PreviousWalFlushRecord> as wincode::Deserialize>::deserialize(bytes) {
+                    return Err(format!(
+                        "unsupported diskless WAL index format version {}; this build requires {}",
+                        previous.format_version,
+                        Self::FORMAT_VERSION
+                    ));
+                }
+                Err(error.to_string())
+            }
+        }
     }
 }
 
@@ -511,9 +555,48 @@ impl WalIndexCache {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use serde::Serialize;
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn previous_layout_is_rejected_as_an_unsupported_format() {
+        #[derive(Serialize)]
+        struct PreviousEntry {
+            topic_id: Uuid,
+            partition: i32,
+            first_offset: i64,
+            last_offset: i64,
+            byte_start: u64,
+            byte_len: u32,
+        }
+        #[derive(Serialize)]
+        struct PreviousRecord {
+            object_key: String,
+            format_version: u16,
+            entries: Vec<PreviousEntry>,
+        }
+
+        let bytes = <serde_wincode::SerdeCompat<PreviousRecord> as wincode::Serialize>::serialize(
+            &PreviousRecord {
+                object_key: "wal/old".into(),
+                format_version: WalFlushRecord::FORMAT_VERSION - 1,
+                entries: vec![PreviousEntry {
+                    topic_id: Uuid::nil(),
+                    partition: 0,
+                    first_offset: 0,
+                    last_offset: 0,
+                    byte_start: 0,
+                    byte_len: 1,
+                }],
+            },
+        )
+        .unwrap();
+
+        let error = WalFlushRecord::from_bytes(&bytes).unwrap_err();
+        assert!(error.contains("unsupported diskless WAL index format version 1"));
+    }
 
     fn entry(p: i32, f: i64, l: i64) -> WalIndexEntry {
         WalIndexEntry {
@@ -532,12 +615,12 @@ mod tests {
         let mut c = WalIndexCache::default();
         c.apply(&WalFlushRecord {
             object_key: "o1".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 0, 4)],
         });
         c.apply(&WalFlushRecord {
             object_key: "o2".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 5, 9)],
         });
         let t = Uuid::from_u128(1);
@@ -557,7 +640,7 @@ mod tests {
         }
         c.apply(&WalFlushRecord {
             object_key: "o".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries,
         });
         let t = Uuid::from_u128(1);
@@ -576,7 +659,7 @@ mod tests {
         next.byte_len = 10;
         c.apply(&WalFlushRecord {
             object_key: "o".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![first, next],
         });
 
@@ -588,7 +671,7 @@ mod tests {
         let mut c = WalIndexCache::default();
         c.apply(&WalFlushRecord {
             object_key: "o".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 5, 5)],
         });
 
@@ -602,7 +685,7 @@ mod tests {
         first.byte_len = 10;
         c.apply(&WalFlushRecord {
             object_key: "first".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![first],
         });
         let mut next = entry(0, 1, 1);
@@ -610,7 +693,7 @@ mod tests {
         next.byte_len = 10;
         c.apply(&WalFlushRecord {
             object_key: "next".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![next],
         });
 
@@ -624,7 +707,7 @@ mod tests {
         let mut c = WalIndexCache::default();
         c.apply(&WalFlushRecord {
             object_key: "o".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 4, 3)],
         });
         assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 4, 10).is_none());
@@ -632,7 +715,7 @@ mod tests {
         let mut c = WalIndexCache::default();
         c.apply(&WalFlushRecord {
             object_key: "o".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 0, 5), entry(0, 4, 6)],
         });
         assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 4, 10).is_none());
@@ -643,7 +726,7 @@ mod tests {
         let mut c = WalIndexCache::default();
         let rec = WalFlushRecord {
             object_key: "o1".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 0, 4)],
         };
         c.apply(&rec);
@@ -657,7 +740,7 @@ mod tests {
         let mut cache = WalIndexCache::default();
         let record = WalFlushRecord {
             object_key: "o1".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 0, 4)],
         };
         assert!(!cache.contains_record(&record));
@@ -678,7 +761,7 @@ mod tests {
     fn wincode_round_trips() {
         let rec = WalFlushRecord {
             object_key: "o".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(3, 1, 2)],
         };
         let bytes = rec.to_bytes().unwrap();
@@ -690,12 +773,12 @@ mod tests {
         let mut c = WalIndexCache::default();
         c.apply(&WalFlushRecord {
             object_key: "o2".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 5, 9)],
         });
         c.apply(&WalFlushRecord {
             object_key: "o1".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, 0, 4)],
         });
 
@@ -715,7 +798,7 @@ mod tests {
             entry.max_timestamp_ms = timestamp;
             cache.apply(&WalFlushRecord {
                 object_key: format!("o{index}"),
-                format_version: 1,
+                format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![entry],
             });
         }
@@ -802,13 +885,13 @@ mod tests {
         let mut shared = entry(0, 0, 4);
         cache.apply(&WalFlushRecord {
             object_key: "old".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![shared.clone(), entry(1, 0, 4)],
         });
         shared.byte_len = 2;
         cache.apply(&WalFlushRecord {
             object_key: "new".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![shared],
         });
         assert!(cache.referenced_objects() == ["new".into(), "old".into()].into());
@@ -830,13 +913,13 @@ mod tests {
             key,
             &WalFlushRecord {
                 object_key: "new".into(),
-                format_version: 1,
+                format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![entry.clone()],
             },
         );
         cache.apply(&WalFlushRecord {
             object_key: "legacy".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry],
         });
 
@@ -851,7 +934,7 @@ mod tests {
         cache.remove(key);
         cache.apply(&WalFlushRecord {
             object_key: "legacy".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry],
         });
 
@@ -864,7 +947,7 @@ mod tests {
         let key = WalIndexKey::from(&entry);
         let legacy = WalFlushRecord {
             object_key: "legacy".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry],
         };
 
@@ -890,7 +973,7 @@ mod tests {
 
         cache.apply(&WalFlushRecord {
             object_key: "legacy".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![expected.clone()],
         });
 
@@ -898,13 +981,13 @@ mod tests {
             key,
             &WalFlushRecord {
                 object_key: "wrong".into(),
-                format_version: 1,
+                format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![wrong],
             },
         );
         cache.apply(&WalFlushRecord {
             object_key: "late-legacy".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![expected],
         });
 
@@ -916,7 +999,7 @@ mod tests {
         let mut cache = WalIndexCache::default();
         cache.apply(&WalFlushRecord {
             object_key: "overflow".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry(0, i64::MAX, i64::MAX)],
         });
 

@@ -534,7 +534,7 @@ mod tests {
             index
                 .publish_flush(&WalFlushRecord {
                     object_key: key.into(),
-                    format_version: 1,
+                    format_version: WalFlushRecord::FORMAT_VERSION,
                     entries: vec![crate::diskless::wal_index::WalIndexEntry {
                         topic_id,
                         partition: 0,
@@ -607,7 +607,7 @@ mod tests {
         index
             .publish_flush(&WalFlushRecord {
                 object_key: object_key.into(),
-                format_version: 1,
+                format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![crate::diskless::wal_index::WalIndexEntry {
                     topic_id,
                     partition: 0,
@@ -677,7 +677,7 @@ mod tests {
                 .unwrap();
             let record = WalFlushRecord {
                 object_key: object_key.into(),
-                format_version: 1,
+                format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![crate::diskless::wal_index::WalIndexEntry {
                     topic_id,
                     partition: 0,
@@ -1064,7 +1064,7 @@ mod tests {
             .unwrap();
         seed.publish_flush(&WalFlushRecord {
             object_key: "diskless-wal/7/seed.ckwl".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![crate::diskless::wal_index::WalIndexEntry {
                 topic_id,
                 partition: 0,

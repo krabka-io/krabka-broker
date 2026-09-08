@@ -309,7 +309,9 @@ async fn isr_expand_on_catchup() {
     reborn_cfg.bootstrap_mode = krabka_broker::BootstrapMode::Join;
     reborn_cfg.controller_quorum_voters =
         vec![(bootstrap_node_id, bootstrap_controller.to_string())];
-    reborn_cfg.bootstrap_servers = vec![bootstrap_controller.to_string()];
+    // Exercise the unresolved-hostname path used by a Kubernetes Service,
+    // rather than passing the already-bound IP address back to the joiner.
+    reborn_cfg.bootstrap_servers = vec![format!("localhost:{}", bootstrap_controller.port())];
     reborn_cfg.auto_join = true;
     let reborn = support::start_reusing_addrs(&reborn_cfg, "reborn follower").await;
     eprintln!("KRABKA[test] reborn follower {victim_node_id} started");

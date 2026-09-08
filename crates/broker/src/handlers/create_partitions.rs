@@ -155,7 +155,13 @@ pub(crate) async fn handle(
             continue;
         }
 
-        let brokers = site_broker_views(&image, broker.config.is_broker().then_some(node_id));
+        let unavailable =
+            crate::handlers::offline_replicas::unavailable_brokers(&broker, &image).await;
+        let brokers = site_broker_views(
+            &image,
+            broker.config.is_broker().then_some(node_id),
+            &unavailable,
+        );
         let rf = topic_rec.replication_factor;
         let new_count = t.count;
         let new_partition_indices: Vec<i32> = (existing..new_count).collect();

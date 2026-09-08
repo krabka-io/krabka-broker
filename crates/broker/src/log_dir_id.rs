@@ -82,7 +82,8 @@ fn read_or_mint(dir: &Path) -> Uuid {
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
     obj.insert("directory_id".into(), serde_json::json!(id.to_string()));
-    obj.entry("version").or_insert(serde_json::json!(1));
+    obj.entry("version")
+        .or_insert(serde_json::json!(crate::bootstrap::META_PROPERTIES_VERSION));
     if let Ok(serialized) = serde_json::to_vec_pretty(&serde_json::Value::Object(obj)) {
         let _ = std::fs::create_dir_all(dir);
         let _ = std::fs::write(&path, serialized);

@@ -13,6 +13,15 @@ use wincode::Deserialize;
 
 use crate::error::BrokerError;
 
+pub const META_PROPERTIES_VERSION: u64 = 2;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct MetaProperties {
+    pub cluster_id: uuid::Uuid,
+    pub directory_id: uuid::Uuid,
+    pub version: u64,
+}
+
 /// Selects a configured internal-topic replication factor, bounded by the
 /// number of registered brokers.
 pub(crate) fn internal_topic_replication_factor(desired: i16, broker_count: usize) -> usize {
@@ -29,23 +38,52 @@ pub(crate) fn internal_topic_replication_factor(desired: i16, broker_count: usiz
 /// Returns an error when log I/O fails, when a record or index is corrupt, or
 /// when the requested offset violates the segment state.
 pub fn read_directory_id(log_dir: &Path) -> Result<uuid::Uuid, BrokerError> {
+    read_meta_properties(log_dir).map(|meta| meta.directory_id)
+}
+
+/// Read and validate the identity and format stamp written by `krabka format`.
+pub fn read_meta_properties(log_dir: &Path) -> Result<MetaProperties, BrokerError> {
     let path = log_dir.join("meta.properties.json");
     let bytes = std::fs::read(&path).map_err(|e| BrokerError::BootstrapFile {
         path: path.clone(),
         source: Box::new(e),
     })?;
-    let v: serde_json::Value =
+    let meta: MetaProperties =
         serde_json::from_slice(&bytes).map_err(|e| BrokerError::BootstrapFile {
             path: path.clone(),
             source: Box::new(e),
         })?;
-    v["directory_id"]
-        .as_str()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| BrokerError::BootstrapFile {
+    if meta.version != META_PROPERTIES_VERSION {
+        return Err(BrokerError::BootstrapFile {
             path,
-            source: "missing or invalid directory_id".into(),
-        })
+            source: format!(
+                "unsupported meta.properties version {}; this build requires version {}; run krabka-format on a fresh directory and restore the topic data",
+                meta.version, META_PROPERTIES_VERSION
+            )
+            .into(),
+        });
+    }
+    Ok(meta)
+}
+
+/// Read the format stamp and reject a configured identity for another cluster.
+pub fn read_and_validate_meta_properties(
+    log_dir: &Path,
+    configured_cluster_id: Option<uuid::Uuid>,
+) -> Result<MetaProperties, BrokerError> {
+    let meta = read_meta_properties(log_dir)?;
+    if configured_cluster_id.is_some_and(|configured| configured != meta.cluster_id) {
+        return Err(BrokerError::BootstrapFile {
+            path: log_dir.join("meta.properties.json"),
+            source: format!(
+                "INCONSISTENT_CLUSTER_ID: configured cluster id {} does not match {}",
+                configured_cluster_id.expect("checked as some"),
+                meta.cluster_id
+            )
+            .into(),
+        });
+    }
+    Ok(meta)
 }
 
 /// Extracts the initial voter set from the bootstrap records.
@@ -212,7 +250,7 @@ mod tests {
         let meta = serde_json::json!({
             "cluster_id": uuid::Uuid::new_v4().to_string(),
             "directory_id": id.to_string(),
-            "version": 1,
+            "version": META_PROPERTIES_VERSION,
         });
         std::fs::write(
             dir.path().join("meta.properties.json"),
@@ -229,6 +267,48 @@ mod tests {
             read_directory_id(dir.path()),
             Err(BrokerError::BootstrapFile { .. })
         ));
+    }
+
+    #[test]
+    fn rejects_unknown_meta_properties_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = serde_json::json!({
+            "cluster_id": uuid::Uuid::new_v4(),
+            "directory_id": uuid::Uuid::new_v4(),
+            "version": META_PROPERTIES_VERSION - 1,
+        });
+        std::fs::write(
+            dir.path().join("meta.properties.json"),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+        let error = read_meta_properties(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("unsupported meta.properties version"));
+        assert!(error.contains("krabka-format"));
+    }
+
+    #[test]
+    fn rejects_configured_cluster_id_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let on_disk = uuid::Uuid::new_v4();
+        let configured = uuid::Uuid::new_v4();
+        let meta = serde_json::json!({
+            "cluster_id": on_disk,
+            "directory_id": uuid::Uuid::new_v4(),
+            "version": META_PROPERTIES_VERSION,
+        });
+        std::fs::write(
+            dir.path().join("meta.properties.json"),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+
+        let error = read_and_validate_meta_properties(dir.path(), Some(configured))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("INCONSISTENT_CLUSTER_ID"));
+        assert!(error.contains(&configured.to_string()));
+        assert!(error.contains(&on_disk.to_string()));
     }
 
     #[test]

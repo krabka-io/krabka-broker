@@ -58,14 +58,15 @@ impl Args {
             log_config: LogConfig::default(),
             node_id: krabka_broker::NodeId(node_id),
             controller_listen_addr,
-            controller_quorum_voters: vec![(
-                krabka_broker::NodeId(node_id),
-                controller_listen_addr.to_string(),
-            )],
-            bootstrap_servers: std::mem::take(&mut self.controller_bootstrap_servers)
-                .into_iter()
-                .map(|endpoint| endpoint.to_string())
-                .collect(),
+            controller_quorum_voters: if self.controller_quorum_voters.is_empty() {
+                vec![(
+                    krabka_broker::NodeId(node_id),
+                    controller_listen_addr.to_string(),
+                )]
+            } else {
+                std::mem::take(&mut self.controller_quorum_voters)
+            },
+            bootstrap_servers: std::mem::take(&mut self.controller_bootstrap_servers),
             directory_id: uuid::Uuid::nil(),
             auto_join: self.controller_auto_join,
             bootstrap_mode: BootstrapMode::Bootstrap,

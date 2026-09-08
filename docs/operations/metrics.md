@@ -183,6 +183,7 @@ any of these.
 | `krabka_broker_diskless_wal_flush_attempts_total` | counter | - | - | Non-empty WAL objects submitted to the object store. |
 | `krabka_broker_diskless_wal_flush_bytes_total` | counter | - | - | Bytes written as WAL objects. |
 | `krabka_broker_diskless_wal_flush_failures_total` | counter | - | - | Flushes that failed after an attempt began. [Runbook](runbooks/diskless-wal-flush-failures.md). |
+| `krabka_broker_diskless_wal_index_decode_failures_total` | counter | - | - | Index records rejected because the payload or format version is invalid. Refuse reads until replay is rebuilt. |
 | `krabka_broker_diskless_wal_index_projection_lag` | gauge | `topic_id`, `partition` | - | Durable offsets the committed object index does not cover yet. |
 | `krabka_broker_diskless_wal_trim_frontier` | gauge | `topic_id`, `partition` | - | Local log-start offset after trimming. The gap to the durable watermark is the hot tail. |
 | `krabka_broker_diskless_wal_expired_ranges_total` | counter | - | - | Committed index ranges tombstoned by `retention.ms`, `retention.bytes`, or a `DeleteRecords` floor. |

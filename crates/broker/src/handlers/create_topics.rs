@@ -227,7 +227,12 @@ pub(crate) async fn handle(
         // site and the witness role of each broker. `site_broker_views` sorts
         // by node id for determinism, and it covers the race in which the
         // self-registration record has not reached the local image yet.
-        let brokers = site_broker_views(&image, broker.config.is_broker().then_some(node_id));
+        let unavailable = super::offline_replicas::unavailable_brokers(&broker, &image).await;
+        let brokers = site_broker_views(
+            &image,
+            broker.config.is_broker().then_some(node_id),
+            &unavailable,
+        );
 
         let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
             Ok(assignments) => assignments,

@@ -15,7 +15,7 @@ uses, because the data path has the same shape.
 | Network out | Consumer bytes plus bytes served to followers. | `rate(krabka_broker_topic_bytes_out_total[5m])`, which includes both; `replication_bytes_out` is the follower share. |
 | CPU | Request handling per partition. | `sum(rate(krabka_broker_partition_cpu_micros_total[5m])) / 1000000` is cores busy in handlers. |
 | File descriptors | One per client connection plus the segment files of every replica. | `krabka_broker_active_connections`. |
-| Memory | Fetch-session cache, in-flight request buffers, the diskless hot tail. | `krabka_broker_incremental_fetch_partitions_cached`, `krabka_broker_in_flight_requests`. |
+| Memory | Partition state, fetch-session cache, in-flight request buffers, the diskless hot tail. | Request `512 MiB + 64 KiB × local replica count + 2 KiB × krabka_broker_incremental_fetch_partitions_cached + diskless_wal_hot_tail_max_size`; set the limit to twice the request. The reference 1 GiB request represents 2,048 replicas, 65,536 cached fetch partitions and a 256 MiB hot tail. |
 
 ## Sizing rules
 

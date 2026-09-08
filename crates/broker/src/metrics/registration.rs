@@ -174,6 +174,7 @@ impl BrokerMetrics {
             diskless_wal_flush_attempts_total: Counter::default(),
             diskless_wal_flush_bytes_total: Counter::default(),
             diskless_wal_flush_failures_total: Counter::default(),
+            diskless_wal_index_decode_failures_total: Counter::default(),
             diskless_wal_index_projection_lag: Family::default(),
             diskless_wal_trim_frontier: Family::default(),
             diskless_wal_expired_ranges_total: Counter::default(),

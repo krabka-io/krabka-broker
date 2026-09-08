@@ -32,6 +32,15 @@ spec:
       labels:
         app.kubernetes.io/name: krabka
     spec:
+      # A three-voter quorum on one node is still one failure domain. Refuse
+      # that placement instead of letting a node loss take the majority.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: krabka
       # The image manifest declares linux/amd64 and CI publishes no other
       # architecture, so a pod scheduled elsewhere cannot exec the entrypoint.
       nodeSelector:
@@ -99,6 +108,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
           volumeMounts:
             - name: data
               mountPath: /var/lib/krabka
@@ -141,14 +157,13 @@ spec:
             # cluster rather than the nil UUID the broker falls back to.
             - name: KRABKA_CLUSTER_ID
               value: "b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10"
-            # There is deliberately no KRABKA_CONTROLLER_BOOTSTRAP_SERVERS here.
-            # These three nodes are seeded voters: `--initial-controllers` put
-            # the voter set in the offset-0 checkpoint, so there is no quorum to
-            # discover at cold start. It would also not parse -- the flag takes
-            # `SocketAddr`s, which accept an IP literal and not a Service DNS
-            # name. A node formatted with `--no-initial-controllers` that joins
-            # an existing quorum is the case that needs it, and it needs pod IPs
-            # or a resolved address to express it.
+            # Seed voters do not need discovery, but a node formatted with
+            # `--no-initial-controllers` does. The headless Service stays
+            # unresolved until each reconnect, so a restarted voter may move.
+            - name: KRABKA_CONTROLLER_BOOTSTRAP_SERVERS
+              value: "krabka.$(POD_NAMESPACE).svc.cluster.local:9093"
+            - name: KRABKA_CONTROLLER_QUORUM_VOTERS
+              value: "0@krabka-0.krabka.$(POD_NAMESPACE).svc.cluster.local:9093,1@krabka-1.krabka.$(POD_NAMESPACE).svc.cluster.local:9093,2@krabka-2.krabka.$(POD_NAMESPACE).svc.cluster.local:9093"
             - name: KRABKA_METRICS_LISTEN_ADDR
               value: 0.0.0.0:9404
             - name: KRABKA_HEALTH_LISTEN_ADDR
@@ -184,6 +199,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           volumeMounts:
             - name: data
               mountPath: /var/lib/krabka

@@ -13,6 +13,8 @@ fails the build when the series drift.
   start, stop and roll a cluster. Wire the `/healthz` and `/readyz` probes.
 - [Capacity](capacity.md): what a broker spends per partition and per byte,
   how to size disk, network and voters, and how to read the phase families.
+- [Scale a cluster](scaling.md): add capacity, move replicas with a throttle,
+  and drain and unregister a broker, including the operator-managed path.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
   name it replaces.
 - [Ecosystem support](ecosystem-support.md): which tool classes work over the
@@ -85,6 +87,7 @@ cluster out of its tiered-storage archive.
 | `KrabkaDeliveryActivationLate` | [delivery-activation-lateness](runbooks/delivery-activation-lateness.md) |
 | `KrabkaLogCleanerFailures`, `KrabkaUncleanablePartitions` | [log-cleaner-stalled](runbooks/log-cleaner-stalled.md) |
 | `KrabkaOfflineLogDirs` | [offline-log-dir](runbooks/offline-log-dir.md) |
+| Reassignment gauge flat with zero throttled bytes | [reassignment-stalled](runbooks/reassignment-stalled.md) |
 
 ## Keeping the contract
 
