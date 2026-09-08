@@ -80,7 +80,7 @@ async fn abort_then_read_committed_skips_records() {
     {
         assert!(
             std::time::Instant::now() < deadline,
-            "segment.bytes did not reach the transaction log"
+            "internal.segment.bytes did not reach the transaction log"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }

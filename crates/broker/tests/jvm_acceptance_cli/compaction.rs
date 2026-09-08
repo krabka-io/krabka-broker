@@ -23,7 +23,7 @@ use crate::jvm_acceptance::{
 ///
 /// 1. Spin up a single-broker cluster with a fast cleaner interval (3s).
 /// 2. `kafka-topics --create --topic compacted-jvm --config cleanup.policy=compact
-///    --config segment.bytes=256 --partitions 1 --replication-factor 1`
+///    --config internal.segment.bytes=256 --partitions 1 --replication-factor 1`
 /// 3. `kafka-console-producer --property parse.key=true --property key.separator=:`
 ///    with this stdin:
 ///      k1:v1
@@ -78,7 +78,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     );
     nc_check_connectivity();
 
-    // 1. Create the topic with cleanup.policy=compact and tiny segment.bytes
+    // 1. Create the topic with cleanup.policy=compact and a tiny internal.segment.bytes
     //    so records are sealed into a second segment before the cleaner runs.
     docker_run_kafka_tool(&[
         "kafka-topics",
@@ -93,7 +93,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         "--config",
         "cleanup.policy=compact",
         "--config",
-        "segment.bytes=256",
+        "internal.segment.bytes=256",
         // Kafka's default `min.cleanable.dirty.ratio` is 0.5, so a partition
         // whose dirty region is a small share of the log earns no pass. This
         // test produces a handful of records and then waits for a pass, so it
@@ -105,7 +105,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         broker0_advertised(),
     ]);
 
-    // 1b. Wait for cleanup.policy=compact + segment.bytes=256 to propagate
+    // 1b. Wait for cleanup.policy=compact + internal.segment.bytes=256 to propagate
     //     from the metadata image into the partition's LogConfig via the
     //     ReplicatorSupervisor reconcile loop. Without this wait, produces
     //     can land in a default-config Log (1GiB segments, Delete policy) →
@@ -121,7 +121,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         }
         assert!(
             std::time::Instant::now() <= cfg_deadline,
-            "cleanup.policy/segment.bytes/min.cleanable.dirty.ratio never propagated within 10s"
+            "cleanup.policy/internal.segment.bytes/min.cleanable.dirty.ratio never propagated within 10s"
         );
         // intentional: bounded poll of the local reconciled LogConfig override;
         // `partition_log_config_for_test` is not surfaced by any awaiter/metric.
@@ -151,7 +151,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
             // multiple in-flight records bundled when they're submitted
             // back-to-back. Setting batch.size=1 and max-in-flight=1 makes
             // each line a separate batch, which is what we need so
-            // segment.bytes=256 actually rolls segments mid-workload.
+            // internal.segment.bytes=256 actually rolls segments mid-workload.
             "--producer-property",
             "batch.size=1",
             "--producer-property",
@@ -166,7 +166,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         .expect("spawn producer");
     // First 5 records: the actual workload. After that, a burst of "pad"
     // records under a sentinel key forces the active segment past
-    // `segment.bytes=256` so v5 ends up sealed (otherwise the compactor
+    // `internal.segment.bytes=256` so v5 ends up sealed (otherwise the compactor
     // can't see it; it never touches the active segment) and the test's
     // "no stale v1" assertion can actually hold for k1.
     child

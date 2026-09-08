@@ -32,7 +32,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
     remote_dir: &std::path::Path,
     topic: &str,
 ) {
-    // Tiny `segment.bytes` so a modest produce seals several segments;
+    // Tiny `internal.segment.bytes` so a modest produce seals several segments;
     // `local.retention.bytes=1` evicts every copied segment from local
     // disk so the read-back must consult the remote tier.
     let resp = client
@@ -48,7 +48,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
                         ..Default::default()
                     },
                     CreatableTopicConfig {
-                        name: "segment.bytes".into(),
+                        name: "internal.segment.bytes".into(),
                         value: Some("1024".into()),
                         ..Default::default()
                     },

@@ -21,7 +21,7 @@ use super::{
 /// Create a KIP-405 tiered topic and wait for the config overrides to propagate
 /// into the partition's `LogConfig`.
 ///
-/// This function uses `segment.bytes=2048` and `local.retention.bytes=1`, so
+/// This function uses `internal.segment.bytes=2048` and `local.retention.bytes=1`, so
 /// a small produce batch seals several segments and the broker evicts every
 /// copied segment from local disk at once. Later reads must then go through
 /// the remote tier.
@@ -50,7 +50,7 @@ pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, to
             "--config",
             "remote.storage.enable=true",
             "--config",
-            "segment.bytes=2048",
+            "internal.segment.bytes=2048",
             "--config",
             "local.retention.bytes=1",
             "--config",
@@ -86,7 +86,7 @@ pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, to
 /// JVM console producer.
 ///
 /// This function forces per-record batches with `batch.size=1` and
-/// `linger.ms=0`, so the broker rolls segments at `segment.bytes=2048`.
+/// `linger.ms=0`, so the broker rolls segments at `internal.segment.bytes=2048`.
 /// Without that, the JVM producer collects everything into one large batch
 /// and writes it into a single segment. Nothing then triggers a segment
 /// roll, and the tier-copy path gets no work.

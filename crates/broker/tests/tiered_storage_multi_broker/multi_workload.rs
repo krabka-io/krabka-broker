@@ -137,7 +137,7 @@ pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &
                         ..Default::default()
                     },
                     CreatableTopicConfig {
-                        name: "segment.bytes".into(),
+                        name: "internal.segment.bytes".into(),
                         value: Some("1024".into()),
                         ..Default::default()
                     },
@@ -181,7 +181,7 @@ pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &
                 })
         };
         // Both replicas, not either: the follower needs the tiny
-        // `segment.bytes` before the produce below, or it holds every
+        // `internal.segment.bytes` before the produce below, or it holds every
         // acknowledged record in one default-sized active segment and never
         // rolls anything for local retention to evict.
         if ready(b1) && ready(b2) {

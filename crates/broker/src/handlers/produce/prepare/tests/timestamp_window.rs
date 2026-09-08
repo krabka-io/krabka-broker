@@ -21,7 +21,8 @@ use krabka_protocol::records::{Record, RecordBatch};
 use crate::{
     codes,
     config_keys::{
-        MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE,
+        DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
+        MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE,
     },
     handlers::produce::{
         framing::PartitionPayload,
@@ -152,10 +153,12 @@ fn the_window_refuses_the_same_batch_on_both_append_paths() {
     }
 }
 
-/// A topic that configured neither window admits a timestamp from any era,
-/// which is Kafka's default and every topic that did not ask for the check.
+/// The policy that bounds nothing admits a timestamp from any era. It is what
+/// a KFC-1 scheduled topic and the benchmark seam resolve to, and it is not
+/// what a stock topic resolves to -- see
+/// [`a_stock_topic_carries_kafkas_one_hour_future_window`].
 #[test]
-fn the_default_policy_admits_every_timestamp() {
+fn the_unbounded_policy_admits_every_timestamp() {
     let unbounded = TimestampPolicy::default();
     let ancient = batch(1_000, 2_000, CompressionType::None);
     let distant = batch(i64::MAX / 2, i64::MAX / 2, CompressionType::None);
@@ -163,6 +166,64 @@ fn the_default_policy_admits_every_timestamp() {
     check!(prepare(&ancient, unbounded, None) == Ok(()));
     check!(prepare(&distant, unbounded, None) == Ok(()));
     check!(prepare(&ancient, unbounded, Some(CompressionType::Zstd)) == Ok(()));
+}
+
+/// Kafka 4.3.1 defaults `message.timestamp.after.max.ms` to one hour and
+/// `message.timestamp.before.max.ms` to `Long.MAX_VALUE`, so a topic that
+/// configured nothing refuses a record stamped more than an hour ahead of the
+/// broker's clock and accepts one from any point in the past. A topic that did
+/// not opt into KFC-1 has to behave exactly that way.
+#[test]
+fn a_stock_topic_carries_kafkas_one_hour_future_window() {
+    let now = now_ms();
+    let stock = policy(&[]);
+    let cases = [
+        (
+            "a record from the distant past is admitted",
+            [1_000, 2_000],
+            Ok(()),
+        ),
+        (
+            "a record at the future bound is admitted",
+            [now, now + WINDOW_MS],
+            Ok(()),
+        ),
+        (
+            "a record past the future bound is refused",
+            [now, now + WINDOW_MS + 60_000],
+            Err(codes::INVALID_TIMESTAMP),
+        ),
+    ];
+    for (label, [first, second], want) in cases {
+        let produced = batch(first, second, CompressionType::None);
+        check!(prepare(&produced, stock, None) == want, "verbatim: {label}");
+        check!(
+            prepare(&produced, stock, Some(CompressionType::Zstd)) == want,
+            "owned: {label}"
+        );
+    }
+}
+
+/// KFC-1: a scheduled topic's timestamps are delivery times, and the default
+/// `delivery.max.delay.ms` is seven days. Kafka's one-hour future window would
+/// refuse such a topic's own writes, so a scheduled topic carries no window at
+/// all and `delivery.max.delay.ms` is the bound on how far ahead a batch may
+/// be scheduled.
+#[test]
+fn a_scheduled_topic_admits_a_delivery_time_days_ahead() {
+    let now = now_ms();
+    let scheduled = policy(&[(DELIVERY_MODE, DELIVERY_MODE_SCHEDULED)]);
+    let due_in_three_days = batch(
+        now + 3 * 24 * 3_600_000,
+        now + 3 * 24 * 3_600_000,
+        CompressionType::None,
+    );
+
+    check!(prepare(&due_in_three_days, scheduled, None) == Ok(()));
+    check!(prepare(&due_in_three_days, scheduled, Some(CompressionType::Zstd)) == Ok(()));
+
+    // The same batch on a topic that did not opt in is Kafka's refusal.
+    check!(prepare(&due_in_three_days, policy(&[]), None) == Err(codes::INVALID_TIMESTAMP));
 }
 
 /// A `LogAppendTime` topic ignores the window, because the append overwrites
@@ -173,6 +234,7 @@ fn log_append_time_ignores_the_window() {
     let stamping = policy(&[
         (MESSAGE_TIMESTAMP_TYPE, "LogAppendTime"),
         (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, &WINDOW_MS.to_string()),
+        (MESSAGE_TIMESTAMP_AFTER_MAX_MS, &WINDOW_MS.to_string()),
     ]);
     let ancient = batch(1_000, 2_000, CompressionType::None);
 

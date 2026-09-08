@@ -222,7 +222,7 @@ async fn transactional_console_producer_eos() {
         "--replication-factor",
         "1",
         "--config",
-        "segment.bytes=14",
+        "internal.segment.bytes=14",
         "--bootstrap-server",
         &bootstrap_1,
     ]);
@@ -234,7 +234,7 @@ async fn transactional_console_producer_eos() {
     }) {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "segment.bytes did not reach the transaction log"
+            "internal.segment.bytes did not reach the transaction log"
         );
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }

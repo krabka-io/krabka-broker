@@ -31,7 +31,7 @@ const KEY_ID: &str = "worm-itest-key";
 
 const TOPIC: &str = "krabka-worm-lock-itest";
 
-/// 200 records of about 30 bytes each, so `segment.bytes=2048` rolls several
+/// 200 records of about 30 bytes each, so `internal.segment.bytes=2048` rolls several
 /// sealed segments and the copy path runs more than once. The same fixture the
 /// `jvm_acceptance_tiered` suites use.
 const RECORDS: usize = 200;

@@ -14,10 +14,11 @@ use krabka_units::{
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, INDEX_INTERVAL_BYTES,
-    LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES,
-    MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO,
-    MIN_COMPACTION_LAG_MS, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
-    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES, SEGMENT_MS,
+    INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
+    MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
+    MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS, REMOTE_LOG_COPY_DISABLE,
+    REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
+    SEGMENT_BYTES, SEGMENT_MS,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
     validation::{parse_cleanup_policy, parse_compression_type},
 };
@@ -160,6 +161,17 @@ pub(crate) fn apply_to_log_config(
             // wired to them yet (see module docs).
             _ => {}
         }
+    }
+    // Kafka's `LogConfig.segmentSize()`: `internal.segment.bytes ?? segment.bytes`.
+    // The internal key carries no floor, which is how Kafka's own coordinators
+    // get a sub-mebibyte segment on the topics they create, so it is resolved
+    // last and wins over whatever `segment.bytes` left behind.
+    if let Some(b) = overrides
+        .get(INTERNAL_SEGMENT_BYTES)
+        .and_then(|v| v.parse::<i32>().ok())
+        .and_then(|b| u64::try_from(b).ok())
+    {
+        out.segment_size = ByteSize::from_bytes(b);
     }
     out
 }
@@ -449,5 +461,52 @@ mod tests {
         o.insert(DELETE_RETENTION_MS.into(), "12345".into());
         let out = apply_to_log_config(&o, &LogConfig::default());
         assert!(out.delete_retention == millis(12_345));
+    }
+
+    /// Kafka's `LogConfig.segmentSize()` returns `internal.segment.bytes` when
+    /// it is set, whatever `segment.bytes` says.
+    #[test]
+    fn apply_internal_segment_bytes_wins_over_segment_bytes() {
+        let mut o = BTreeMap::new();
+        o.insert(SEGMENT_BYTES.into(), "2097152".into());
+        o.insert(INTERNAL_SEGMENT_BYTES.into(), "4096".into());
+        let out = apply_to_log_config(&o, &LogConfig::default());
+        assert!(out.segment_size == bytes(4096));
+    }
+
+    /// With the internal key unset, the public key is the segment size.
+    #[test]
+    fn apply_segment_bytes_wins_when_internal_is_unset() {
+        let mut o = BTreeMap::new();
+        o.insert(SEGMENT_BYTES.into(), "2097152".into());
+        let out = apply_to_log_config(&o, &LogConfig::default());
+        assert!(out.segment_size == mebibytes(2));
+    }
+
+    /// The one-mebibyte floor belongs to `segment.bytes` alone;
+    /// `defineInternal` gives the internal key no validator, and a coordinator
+    /// setting it below the floor gets the small segment it asked for.
+    #[test]
+    fn apply_internal_segment_bytes_below_the_public_floor_is_effective() {
+        let mut o = BTreeMap::new();
+        o.insert(INTERNAL_SEGMENT_BYTES.into(), "1".into());
+        let out = apply_to_log_config(&o, &LogConfig::default());
+        assert!(out.segment_size == bytes(1));
+    }
+
+    /// A corrupt or negative internal value leaves the base segment size
+    /// alone rather than wrapping into an enormous one.
+    #[test]
+    fn apply_internal_segment_bytes_leaves_base_alone_on_a_corrupt_value() {
+        let base = LogConfig {
+            segment_size: bytes(4096),
+            ..LogConfig::default()
+        };
+        for corrupt in ["-1", "not-a-number", "2147483648"] {
+            let mut o = BTreeMap::new();
+            o.insert(INTERNAL_SEGMENT_BYTES.into(), corrupt.into());
+            let out = apply_to_log_config(&o, &base);
+            assert!(out.segment_size == bytes(4096), "corrupt {corrupt}");
+        }
     }
 }

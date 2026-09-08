@@ -16,11 +16,11 @@
 //! `compact,delete`, which both compacts the log and applies retention to it.
 //! Kafka Streams writes the pair on every windowed-store changelog topic.
 //!
-//! Ten keys are accepted and stored with no krabka behaviour behind them:
+//! Nine keys are accepted and stored with no krabka behaviour behind them:
 //! `segment.index.bytes`, `segment.jitter.ms`, `file.delete.delay.ms`,
-//! `flush.messages`, `flush.ms`, `preallocate`, the three codec levels
+//! `flush.messages`, `flush.ms`, `preallocate`, and the three codec levels
 //! `compression.gzip.level`, `compression.lz4.level` and
-//! `compression.zstd.level`, and Kafka's internal `internal.segment.bytes`.
+//! `compression.zstd.level`.
 //! Kafka accepts them, so a topic manifest that carries one creates the topic
 //! here too, and `DescribeConfigs` reports back what was set. Each one says so
 //! in its own `doc` string, which is what `DescribeConfigs
@@ -216,7 +216,8 @@ pub(crate) const COMPRESSION_ZSTD_LEVEL: &str = "compression.zstd.level";
 /// coordinators set on the internal topics they create. `ConfigDef` marks it
 /// internal, which hides it from `kafka-configs --help` but not from the
 /// broker's own topic-config validation, so an alter that carries it is
-/// accepted. Stored and reported only.
+/// accepted. It carries no floor, and `LogConfig.segmentSize()` prefers it
+/// over `segment.bytes` whenever it is set.
 pub(crate) const INTERNAL_SEGMENT_BYTES: &str = "internal.segment.bytes";
 /// `message.timestamp.type=CreateTime`: the producer's own timestamps.
 pub(crate) const MESSAGE_TIMESTAMP_TYPE_CREATE: &str = "CreateTime";
