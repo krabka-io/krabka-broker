@@ -9,7 +9,7 @@
 //! some other field overwritten.
 //!
 //! This module pins the table against the generated encoders. For every
-//! `(api_key, version)` pair [`crate::api_catalog::supported_apis`] advertises
+//! `(api_key, version)` pair [`crate::api_catalog::dispatched_apis`] serves
 //! it encodes that API's response with a sentinel in `throttle_time_ms` and
 //! looks at where the sentinel lands, which is the byte layout the pinned
 //! `krabka-protocol` response schemas produce rather than a restatement of the
@@ -24,7 +24,7 @@ use krabka_protocol::Encode;
 
 use super::response::throttle_is_leading_field;
 use crate::{
-    api_catalog::supported_apis,
+    api_catalog::dispatched_apis,
     handlers::{ApiKeyCode, ApiVersion},
 };
 
@@ -374,9 +374,9 @@ fn probes() -> BTreeMap<ApiKeyCode, Probe> {
     .collect()
 }
 
-/// Every `(api_key, version)` pair the broker advertises, in ascending order.
+/// Every `(api_key, version)` pair the broker dispatches, in ascending order.
 fn advertised_pairs() -> Vec<(ApiKeyCode, ApiVersion)> {
-    let mut pairs: Vec<(ApiKeyCode, ApiVersion)> = supported_apis()
+    let mut pairs: Vec<(ApiKeyCode, ApiVersion)> = dispatched_apis()
         .iter()
         .flat_map(|api| {
             let key = api.api_key;

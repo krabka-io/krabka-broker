@@ -282,6 +282,13 @@ kafka_codes! {
     /// `GROUP_AUTHORIZATION_FAILED` (30): principal lacks permission on the
     /// group.
     GROUP_AUTHORIZATION_FAILED = 30;
+    /// `SECURITY_DISABLED` (54): the cluster runs without an authorizer, so
+    /// the ACL administration RPCs -- `DescribeAcls`, `CreateAcls` and
+    /// `DeleteAcls` -- have nothing to read or write. Kafka's `KafkaApis`
+    /// answers all three with this code whenever `authorizer.class.name` is
+    /// unset, rather than with an empty listing or a durable binding no
+    /// decision point will ever consult.
+    SECURITY_DISABLED = 54;
 
     // Bulletproof EOS / acks=all codes.
     /// `NOT_ENOUGH_REPLICAS` (19): per-partition error that `acks=all` Produce

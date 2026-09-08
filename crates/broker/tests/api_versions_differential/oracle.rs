@@ -14,10 +14,14 @@
 //! controller-plane APIs answer elsewhere and never reach this table, and it
 //! withholds `GetTelemetrySubscriptions` and `PushTelemetry` unless a
 //! client-telemetry exporter is configured, which a stock broker has none of.
-//! krabka runs both roles behind one listener and advertises the union, so
-//! those are the rows the expectation records as `krabka_only`.
-//! `docs/KIP_MATRIX.md` repeats this beside the table a reader sees, because
-//! `krabka_only` otherwise reads as "Kafka does not have the API".
+//!
+//! krabka scopes its own table the same way. `start_krabka` binds one
+//! `PLAINTEXT` listener with no client-metrics receiver, so it answers with
+//! `api_catalog::ListenerKind::Client` and
+//! `api_catalog::ClientMetricsReceiver::Absent`, and the keys Kafka withholds
+//! here are the keys krabka withholds here. The expectation therefore records
+//! no `krabka_only` row: the join is `same` wherever both sides agree and
+//! `range_differs` for the four ranges krabka means to widen.
 
 use std::{
     process::{Command, Stdio},
@@ -25,8 +29,9 @@ use std::{
 };
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
 use krabka_log::LogConfig;
+use krabka_security::ListenerProtocol;
 
 use crate::{
     probe::{retry_until, wait_bounded},
@@ -51,15 +56,54 @@ const ORACLE_BOOT_GAP: Duration = Duration::from_secs(1);
 
 /// Boot an in-process krabka broker on `listeners`, advertised under the name
 /// the tool containers resolve through `--add-host`.
+///
+/// The broker gets a separated inter-broker listener, because the oracle it is
+/// compared against has one: the `apache/kafka` image ships `PLAINTEXT` for
+/// clients and `BROKER` for inter-broker traffic, and it is the client
+/// listener the tool dials on both sides. krabka widens the table on the
+/// listener `inter.broker.listener.name` names -- peers negotiate
+/// `AlterPartition` and the rest of
+/// [`INTER_BROKER_ONLY_APIS`][krabka_broker::api_catalog::INTER_BROKER_ONLY_APIS]
+/// against what that endpoint advertises -- so comparing a *client* listener
+/// against Kafka's is comparing like with like. Point the tool at a
+/// single-listener krabka instead and it would read back the eleven extra keys
+/// this suite exists to have removed, because there the one listener carries
+/// both kinds of traffic.
 pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tempfile::TempDir) {
     crate::support::init_tracing();
     let dir = tempfile::tempdir().expect("tempdir");
     let controller_addr: std::net::SocketAddr =
         listeners.controller.parse().expect("allocated addr");
+    let client_addr: std::net::SocketAddr = listeners.listen.parse().expect("allocated addr");
+    let inter_broker_addr: std::net::SocketAddr =
+        format!("127.0.0.1:{}", crate::support::free_port())
+            .parse()
+            .expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
-        listen_addr: listeners.listen.parse().expect("allocated addr"),
+        listen_addr: client_addr,
         advertised_listener: listeners.advertised.clone(),
+        listeners: vec![
+            ListenerSpec {
+                name: "PLAINTEXT".to_string(),
+                bind_addr: client_addr,
+                advertised: listeners.advertised.clone(),
+                protocol: ListenerProtocol::Plaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+            },
+            ListenerSpec {
+                name: "BROKER".to_string(),
+                bind_addr: inter_broker_addr,
+                advertised: inter_broker_addr.to_string(),
+                protocol: ListenerProtocol::Plaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+            },
+        ],
+        inter_broker_listener_name: "BROKER".to_string(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: krabka_broker::NodeId(1),
@@ -75,8 +119,8 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
     };
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!(
-        "KRABKA[test] broker started listen={} advertised={}",
-        listeners.listen, listeners.advertised
+        "KRABKA[test] broker started listen={} advertised={} inter_broker={}",
+        listeners.listen, listeners.advertised, inter_broker_addr
     );
     (handle, dir)
 }

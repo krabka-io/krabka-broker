@@ -89,8 +89,7 @@ fn streams_group_seed(member_id: &str) -> crate::coordinator::unified::StreamsGr
         crate::coordinator::unified::streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
-            state: crate::coordinator::unified::streams::state::StreamsMemberAssignmentState::Stable
-                .as_i8(),
+            state: crate::coordinator::unified::streams::persistence::StreamsMemberWireState::Stable,
             active,
             standby: std::collections::BTreeMap::new(),
             warmup: std::collections::BTreeMap::new(),

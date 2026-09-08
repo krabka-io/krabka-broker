@@ -6,13 +6,17 @@ use std::collections::BTreeMap;
 use krabka_log::CleanupPolicy;
 
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE, MAX_COMPACTION_LAG_MS, MESSAGE_TIMESTAMP_TYPE,
-    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
-    REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE,
+    CLEANUP_POLICY, COMPRESSION_GZIP_LEVEL, COMPRESSION_TYPE, MAX_COMPACTION_LAG_MS,
+    MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO,
+    MIN_COMPACTION_LAG_MS, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
+    REMOTE_STORAGE_ENABLE,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
     diskless::validate_diskless_combination,
     qos::{QOS_TIER, validate_qos_tier},
-    registry::{self, BOOLEAN_VALUES, CLEANUP_POLICY_VALUES, ConfigScope, ValueCheck},
+    registry::{
+        self, BOOLEAN_VALUES, CLEANUP_POLICY_VALUES, ConfigScope, GZIP_DEFAULT_LEVEL,
+        GZIP_MAX_LEVEL, GZIP_MIN_LEVEL, ValueCheck,
+    },
 };
 
 /// Kafka's refusal when a topic asks for tiered storage and compaction at
@@ -41,9 +45,11 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
         ValueCheck::OneOf(accepted) => expect_one_of(key, value, accepted),
         ValueCheck::I64AtLeast(min) => parse_i64_at_least(min, value).map(|_| ()),
         ValueCheck::I32AtLeast(min) => parse_i32_at_least(min, value).map(|_| ()),
+        ValueCheck::I32Between(min, max) => parse_i32_between(key, min, max, value).map(|_| ()),
         ValueCheck::Parsed => match key {
             CLEANUP_POLICY => parse_cleanup_policy(value).map(|_| ()),
             COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
+            COMPRESSION_GZIP_LEVEL => parse_gzip_level(value).map(|_| ()),
             MIN_CLEANABLE_DIRTY_RATIO => parse_dirty_ratio(value).map(|_| ()),
             QOS_TIER => validate_qos_tier(value),
             crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
@@ -305,6 +311,38 @@ pub(crate) fn parse_compression_type(
              producer, uncompressed, gzip, snappy, lz4, zstd"
         )),
     }
+}
+
+/// The check a `between(min, max)` row carries: Kafka's own `ConfigDef`
+/// range validator, over the `i32` its `INT` type holds.
+fn parse_i32_between(key: &str, min: i32, max: i32, value: &str) -> Result<i32, String> {
+    let parsed: i32 = value
+        .parse()
+        .map_err(|_| format!("expected a 32-bit integer, got `{value}`"))?;
+    if parsed < min || parsed > max {
+        return Err(format!(
+            "{key}={value} not supported; expected a value between {min} and {max}"
+        ));
+    }
+    Ok(parsed)
+}
+
+/// `compression.gzip.level`. Kafka's validator for the key is neither a floor
+/// nor a plain range: `apache/kafka:4.3.1` answers `Invalid value 0 for
+/// configuration compression.gzip.level: Value must be between 1 and 9 or
+/// equal to -1`, so `0` is refused while `-1`, the
+/// `Deflater.DEFAULT_COMPRESSION` this key defaults to, is not.
+fn parse_gzip_level(value: &str) -> Result<i32, String> {
+    let parsed: i32 = value
+        .parse()
+        .map_err(|_| format!("expected a 32-bit integer, got `{value}`"))?;
+    if parsed == GZIP_DEFAULT_LEVEL || (GZIP_MIN_LEVEL..=GZIP_MAX_LEVEL).contains(&parsed) {
+        return Ok(parsed);
+    }
+    Err(format!(
+        "{COMPRESSION_GZIP_LEVEL}={value} not supported; expected a value between \
+         {GZIP_MIN_LEVEL} and {GZIP_MAX_LEVEL}, or {GZIP_DEFAULT_LEVEL}"
+    ))
 }
 
 fn parse_i64_at_least(min: i64, value: &str) -> Result<i64, String> {

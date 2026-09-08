@@ -1,10 +1,23 @@
 //! The record keys of the KIP-848 next-gen consumer-group records, and their
 //! codec.
 //!
-//! Every key starts with an `i16` key-version discriminator drawn from 3, 5, 6,
-//! 7, and 8, followed by the group id and, for the per-member records, the
-//! member id. [`NextGenKey`] is the parsed form that the `__consumer_offsets`
-//! replay path dispatches on.
+//! Every key starts with an `i16` key-version discriminator, the `apiKey` of
+//! the matching Apache Kafka schema at tag `4.3.1`: 3 for
+//! `ConsumerGroupMetadataKey`, 5 for `ConsumerGroupMemberMetadataKey`, 6 for
+//! `ConsumerGroupTargetAssignmentMetadataKey`, 7 for
+//! `ConsumerGroupTargetAssignmentMemberKey` and 8 for
+//! `ConsumerGroupCurrentMemberAssignmentKey`. The group id follows, and then
+//! the member id for the per-member records. [`NextGenKey`] is the parsed form
+//! that the `__consumer_offsets` replay path dispatches on.
+//!
+//! Every `coordinator-key` schema declares `"flexibleVersions": "none"`, so a
+//! key string keeps the legacy `i16` length prefix and a key carries no
+//! tagged-field trailer. Only the values are flexible; see
+//! [`persistence::flex`](crate::coordinator::unified::persistence::flex).
+//!
+//! `apiKey` 4 is Kafka's `ConsumerGroupPartitionMetadata` and 16 is its
+//! `ConsumerGroupRegularExpression`. The broker writes neither, and neither
+//! number is reused.
 
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::ProtocolError;

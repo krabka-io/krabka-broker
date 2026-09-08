@@ -175,6 +175,63 @@ impl BrokerConfig {
         (configured.millis_i64() > 0).then(|| configured.to_std())
     }
 
+    /// Which API set the listener named `listener_name` advertises.
+    ///
+    /// A Kafka broker advertises `ListenerType.BROKER` on every listener it
+    /// binds, client-facing or inter-broker alike, so the control-plane keys
+    /// tagged `controller` reach neither. krabka has to widen one of them,
+    /// because a krabka broker reaches a peer over the peer's *inter-broker*
+    /// endpoint for the RPCs in
+    /// [`INTER_BROKER_ONLY_APIS`][crate::api_catalog::INTER_BROKER_ONLY_APIS] --
+    /// `isr_maintenance` sends `AlterPartition` there on every ISR shrink and
+    /// expand -- and the caller negotiates the version off the table that
+    /// endpoint advertised. Withhold a key there and the RPC is negotiated
+    /// away, not merely undocumented.
+    ///
+    /// The widened listener is the one
+    /// [`inter_broker_listener_name`][Self::inter_broker_listener_name] names,
+    /// the way Kafka's `inter.broker.listener.name` marks the internal
+    /// listener. That is a property of the listener, not of how many listeners
+    /// there are: on the default single-listener broker the one `PLAINTEXT`
+    /// listener *is* the inter-broker listener, it really does serve those
+    /// RPCs to peers, and it says so.
+    ///
+    /// An operator who wants the client-facing table a Kafka broker prints
+    /// separates the two, which is what a Kafka deployment does anyway -- the
+    /// `apache/kafka` image ships `PLAINTEXT` for clients and `BROKER` for
+    /// inter-broker traffic. Every listener that is not the inter-broker one
+    /// then advertises exactly what Kafka advertises.
+    #[must_use]
+    pub fn listener_kind(&self, listener_name: &str) -> crate::api_catalog::ListenerKind {
+        use crate::api_catalog::ListenerKind;
+
+        if listener_name.eq_ignore_ascii_case(&self.inter_broker_listener_name) {
+            ListenerKind::InterBroker
+        } else {
+            ListenerKind::Client
+        }
+    }
+
+    /// Whether this broker has somewhere to send KIP-714 client metrics, and
+    /// so whether it advertises the two RPCs that invite a client to push.
+    ///
+    /// Either the explicit
+    /// [`client_metrics_enable`][Self::client_metrics_enable] key or a
+    /// configured
+    /// [`client_metrics_otlp_endpoint`][Self::client_metrics_otlp_endpoint]
+    /// counts as a receiver. Both are off by default, which is what a Kafka
+    /// broker with no `ClientTelemetry` metric reporter advertises.
+    #[must_use]
+    pub fn client_metrics_receiver(&self) -> crate::api_catalog::ClientMetricsReceiver {
+        use crate::api_catalog::ClientMetricsReceiver;
+
+        if self.client_metrics_enable || self.client_metrics_otlp_endpoint.is_some() {
+            ClientMetricsReceiver::Configured
+        } else {
+            ClientMetricsReceiver::Absent
+        }
+    }
+
     /// The KIP-368 re-authentication window a SASL session on `listener_name`
     /// is held to, or `None` when that listener expires no session.
     ///
@@ -263,6 +320,49 @@ mod tests {
             c.validate(),
             Err(BrokerStartError::ListenerConflict { .. })
         ));
+    }
+
+    #[test]
+    fn the_inter_broker_listener_is_the_only_one_that_widens_the_api_table() {
+        use crate::api_catalog::ListenerKind;
+
+        let c = base();
+        assert!(c.listener_kind("INTERNAL") == ListenerKind::InterBroker);
+        // Kafka spells the override key with a lowercased listener name, so
+        // the match ignores ASCII case here as elsewhere.
+        assert!(c.listener_kind("internal") == ListenerKind::InterBroker);
+        assert!(c.listener_kind("EXTERNAL") == ListenerKind::Client);
+        assert!(c.listener_kind("NONESUCH") == ListenerKind::Client);
+    }
+
+    #[test]
+    fn a_single_listener_broker_advertises_the_inter_broker_table_on_it() {
+        use crate::api_catalog::ListenerKind;
+
+        // The default: no declared listeners, so `effective_listeners` builds
+        // one `PLAINTEXT` spec and `inter_broker_listener_name` names it. That
+        // listener carries client and inter-broker traffic together, and
+        // `isr_maintenance` negotiates `AlterPartition` against the table it
+        // advertises, so it has to advertise the control-plane keys.
+        let c = BrokerConfig::default();
+        assert!(c.inter_broker_listener_name == "PLAINTEXT");
+        assert!(c.effective_listeners().len() == 1);
+        assert!(c.listener_kind("PLAINTEXT") == ListenerKind::InterBroker);
+    }
+
+    #[test]
+    fn a_client_metrics_receiver_comes_from_either_the_key_or_the_otlp_endpoint() {
+        use crate::api_catalog::ClientMetricsReceiver;
+
+        let mut c = base();
+        assert!(c.client_metrics_receiver() == ClientMetricsReceiver::Absent);
+
+        c.client_metrics_enable = true;
+        assert!(c.client_metrics_receiver() == ClientMetricsReceiver::Configured);
+
+        c.client_metrics_enable = false;
+        c.client_metrics_otlp_endpoint = Some("http://collector:4317".to_string());
+        assert!(c.client_metrics_receiver() == ClientMetricsReceiver::Configured);
     }
 
     #[test]

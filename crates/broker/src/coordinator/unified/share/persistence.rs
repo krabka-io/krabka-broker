@@ -1,14 +1,18 @@
 //! KIP-932 share-group record types persisted in `__consumer_offsets`.
 //!
-//! The wire encoding mirrors `persistence_next_gen`, the KIP-848 consumer
-//! next-gen codecs. Keys carry a leading `i16` key-version discriminator, and
-//! values carry an `i16(0)` version preamble. Share-group records reuse the same
-//! length-prefixed array and nullable-string leaf encoders. They drop the
-//! consumer-only fields: `instance_id`, `server_assignor`,
-//! `subscribed_topic_regex`, `rebalance_timeout_ms`, and the revocation and
-//! pending-assignment machinery.
+//! The wire encoding follows the Apache Kafka schemas at tag `4.3.1`, under
+//! `group-coordinator/src/main/resources/common/message/`. A key is
+//! non-flexible and starts with the schema's `apiKey` as an `i16`: 10 for the
+//! member metadata, 11 for the group metadata, 12 and 13 for the target
+//! assignment, 14 for the current member assignment and 15 for the share-state
+//! partition metadata. A value starts with an `i16` schema version, 0 for all
+//! six records, and is flexible: compact strings, compact arrays and a
+//! tagged-field trailer on the message and on every nested struct. The leaf
+//! helpers are the shared `persistence::flex` ones.
 //!
-//! Key versions 9-13 are free. The consumer next-gen keys use 3, 5, 6, 7, 8.
+//! Share-group records drop the consumer-only fields: `instance_id`,
+//! `server_assignor`, `subscribed_topic_regex`, `rebalance_timeout_ms`, and the
+//! revocation and pending-assignment machinery.
 //!
 //! This file is the module root. The key discriminator and its codec live in
 //! `keys`, the two single-epoch records in `epochs`, the member metadata record

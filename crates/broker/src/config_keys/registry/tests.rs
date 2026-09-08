@@ -310,7 +310,10 @@ fn a_numeric_check_is_as_wide_as_the_type_the_row_advertises() {
             matches!(
                 (row.config_type, row.check),
                 (ConfigType::Int, ValueCheck::I64AtLeast(_))
-                    | (ConfigType::Long, ValueCheck::I32AtLeast(_))
+                    | (
+                        ConfigType::Long,
+                        ValueCheck::I32AtLeast(_) | ValueCheck::I32Between(..)
+                    )
             )
         })
         .map(|row| row.name)

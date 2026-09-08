@@ -60,7 +60,15 @@ pub(crate) fn handle_join(
                 None => format!("{instance_id}-{}", Uuid::new_v4()),
             }
         } else {
-            format!("krabka-{}", Uuid::new_v4())
+            // Kafka's `ClassicGroup.generateMemberId`: the client's own id, a
+            // hyphen, and a fresh unique suffix. The prefix is not decoration.
+            // It is the only place a classic group's member records say which
+            // client the member is -- `kafka-consumer-groups --describe` prints
+            // it as CONSUMER-ID, and everything that reads `__consumer_offsets`
+            // with Kafka's `GroupMetadataValue` schema reads the same string.
+            // A constant there identifies every member of every group as the
+            // same thing, which is to say it identifies none of them.
+            format!("{client_id}-{}", Uuid::new_v4())
         };
         if require_known_member_id {
             return JoinAction::Immediate(JoinResult {
@@ -255,7 +263,7 @@ mod tests {
         match action {
             JoinAction::Immediate(r) => {
                 assert!(r.error_code == codes::MEMBER_ID_REQUIRED);
-                assert!(r.member_id.starts_with("krabka-"));
+                assert!(r.member_id.starts_with("client-a-"));
             }
             _ => panic!("expected Immediate MEMBER_ID_REQUIRED"),
         }
@@ -287,11 +295,11 @@ mod tests {
             Duration::from_secs(3),
         );
         assert!(matches!(action, JoinAction::Park));
-        assert!(request.member_id.starts_with("krabka-"));
+        assert!(request.member_id.starts_with("client-a-"));
         assert!(
             g.members
                 .keys()
-                .any(|member_id| member_id.starts_with("krabka-"))
+                .any(|member_id| member_id.starts_with("client-a-"))
         );
     }
 

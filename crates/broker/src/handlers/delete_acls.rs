@@ -5,6 +5,9 @@
 //! deletion record to the controller. It returns one filter result per
 //! request filter.
 //!
+//! On a cluster with no authorizer configured every filter is refused with
+//! `SECURITY_DISABLED`, the same answer its `DescribeAcls` counterpart gives.
+//!
 //! This file keeps the whole-request cluster gate and the per-filter loop.
 //! Filter decoding lives in `filter`, the response rows and the encoder in
 //! `response`, and the audit trail in `audit`.
@@ -32,7 +35,7 @@ use self::{
         matching_acl_result,
     },
 };
-use super::acl_wire::CLUSTER_RESOURCE_NAME;
+use super::acl_wire::{CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE};
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
@@ -73,6 +76,25 @@ pub(crate) async fn handle(
                 filter_result(
                     codes::CLUSTER_AUTHORIZATION_FAILED,
                     Some("delete-acls denied".into()),
+                    Vec::new(),
+                )
+            })
+            .collect();
+        return encode_response(&delete_acls_response(filter_results), api_version);
+    }
+
+    // No authorizer: there is nothing to delete. Kafka builds this response
+    // from `DeleteAclsRequest.getErrorResponse` with a
+    // `SecurityDisabledException`, which stamps the same code and message on
+    // one filter result per filter and leaves every matching-ACL list empty.
+    if !broker.config.authorizer.is_configured() {
+        let filter_results = req
+            .filters
+            .iter()
+            .map(|_| {
+                filter_result(
+                    codes::SECURITY_DISABLED,
+                    Some(NO_AUTHORIZER_MESSAGE.into()),
                     Vec::new(),
                 )
             })

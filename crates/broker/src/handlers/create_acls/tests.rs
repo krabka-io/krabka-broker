@@ -19,8 +19,8 @@ use super::{handle, validate::USER_PRINCIPAL_PREFIX};
 use crate::{
     codes,
     handlers::create_acls::test_support::{
-        OPERATION_READ, OPERATION_WRITE, VERSION, all_acls, creation, decode_response, request,
-        test_context,
+        OPERATION_READ, OPERATION_WRITE, VERSION, all_acls, configured_authorizer, creation,
+        decode_response, request, test_context,
     },
     test_support::{
         DenyAll, peer, principal, start_broker_with,
@@ -41,6 +41,7 @@ async fn handle_honors_configured_acl_input_limits() {
         config.acl_max_principal = limit(PRINCIPAL_LIMIT);
         config.acl_max_resource_name = limit(RESOURCE_NAME_LIMIT);
         config.audit_enabled = false;
+        config.authorizer = configured_authorizer();
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
@@ -132,7 +133,7 @@ async fn handle_denies_cluster_alter_for_each_creation() {
 
 #[tokio::test]
 async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
     let p = principal("admin");
     let peer = peer();
@@ -176,5 +177,39 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
         permission_type: PermissionType::Allow,
     }];
     assert!(acls == expected_acls);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka's `KafkaApis.handleCreateAcls` refuses every creation with
+/// `SECURITY_DISABLED` when no authorizer is configured, rather than storing
+/// bindings that nothing will consult. The default `AllowAllAuthorizer` is
+/// that state.
+#[tokio::test]
+async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_is_configured() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let req = request(vec![
+        creation("topic-a", "User:alice", OPERATION_READ),
+        creation("topic-b", "User:bob", OPERATION_WRITE),
+    ]);
+
+    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
+    let resp = decode_response(&resp);
+
+    let disabled = AclCreationResult {
+        error_code: codes::SECURITY_DISABLED,
+        error_message: Some("No Authorizer is configured on the broker".into()),
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![disabled.clone(), disabled],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
 }

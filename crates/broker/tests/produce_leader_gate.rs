@@ -40,6 +40,7 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_response::NodeEndpoint,
     },
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
@@ -52,6 +53,11 @@ mod support;
 /// loopback cluster, and running them concurrently exhausts ephemeral ports
 /// and starves openraft election timing. The reason is the same as for the
 /// `cluster_lock` in `producer_leader_routing.rs`.
+/// The listener the test clients connect on. A KIP-951 `NodeEndpoints` entry
+/// advertises the address of the listener the request arrived on, so this is
+/// the endpoint name the refusal must answer with.
+const PLAINTEXT_LISTENER: &str = "PLAINTEXT";
+
 fn cluster_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -73,14 +79,16 @@ fn one_record_batch(v: &str) -> RecordBatch {
 /// Send a single one-record Produce (`acks=1`) for `(topic, partition)` over
 /// `client`'s bootstrap connection. That is, send it directly at whichever
 /// broker the client was built against, and bypass any leader routing. Returns
-/// `(error_code, current_leader_id)`.
+/// `(error_code, current_leader_id, node_endpoints)`. The last is the KIP-951
+/// companion to the hint: without it a Java producer cannot resolve the node id
+/// the hint names and falls back to the full `Metadata` round-trip.
 async fn produce_one(
     client: &Client,
     topic: &str,
     topic_id: WireUuid,
     partition: i32,
     value: &str,
-) -> (i16, i32) {
+) -> (i16, i32, Vec<NodeEndpoint>) {
     let resp = client
         .send(ProduceRequest {
             acks: 1,
@@ -100,7 +108,11 @@ async fn produce_one(
         .await
         .expect("produce round-trip");
     let pr = &resp.responses[0].partition_responses[0];
-    (pr.error_code, pr.current_leader.leader_id)
+    (
+        pr.error_code,
+        pr.current_leader.leader_id,
+        resp.node_endpoints.clone(),
+    )
 }
 
 /// Block until `broker` has materialized its LOCAL replica for
@@ -129,6 +141,94 @@ async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partition: i
         // materialization, so an event-driven signal isn't available here.
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Case A of [`produce_to_non_leader_is_rejected`]: a Produce sent to a
+/// non-leader that *does* hold a follower replica.
+///
+/// It is the case that can fail silently. A broker that appends to its own
+/// follower replica answers as if it had led the write, and only the local log
+/// end offset says otherwise -- which is why this asserts the follower's log
+/// did not grow, alongside the refusal, the leader hint and the KIP-951
+/// endpoint that makes the hint usable.
+async fn rf3_produce_to_a_follower_is_refused(
+    cluster: &[(BrokerHandle, krabka_broker::BrokerConfig, tempfile::TempDir)],
+    rf3_id: WireUuid,
+) -> u64 {
+    let rf3_leader = cluster[0]
+        .0
+        .partition_leader_for_test("gate-rf3", 0)
+        .unwrap();
+    let follower_idx = cluster
+        .iter()
+        .position(|(h, _, _)| h.node_id() != rf3_leader)
+        .expect("a non-leader broker exists at rf=3");
+    let follower_node = cluster[follower_idx].0.node_id();
+    let follower_addr = cluster[follower_idx].1.listen_addr.to_string();
+
+    // Wait for the follower to materialize its LOCAL replica (supervisor
+    // reconcile lags the controller image). Without a local replica the rf=3
+    // case would degenerate into the rf=1 case and not prove the
+    // "don't append to a follower" property.
+    wait_for_local_replica(&cluster[follower_idx].0, "gate-rf3", 0).await;
+    let follower_leo_before = cluster[follower_idx]
+        .0
+        .local_log_end_offset("gate-rf3", 0)
+        .expect("follower hosts gate-rf3");
+
+    let follower_client = Client::builder()
+        .bootstrap(follower_addr)
+        .build()
+        .await
+        .unwrap();
+    let (code, leader_hint, node_endpoints) =
+        produce_one(&follower_client, "gate-rf3", rf3_id, 0, "rf3-to-follower").await;
+    assert!(
+        code == 6,
+        "rf=3 Produce to follower node{follower_node} (leader=node{rf3_leader}) must be \
+         NOT_LEADER_OR_FOLLOWER (6); got {code}"
+    );
+    assert!(
+        leader_hint == i32::try_from(rf3_leader).unwrap(),
+        "current_leader hint must name the real leader node{rf3_leader}; got {leader_hint}"
+    );
+    // KIP-951's second half: the hint is a node id, and the producer can only
+    // re-target if the same response tells it that node's address. The
+    // endpoint must be the one the refusing broker's own image advertises for
+    // the listener the request arrived on.
+    let image = cluster[follower_idx].0.controller_image_for_test();
+    let registration = image
+        .broker(krabka_metadata::NodeId(rf3_leader))
+        .expect("the leader is registered in the follower's image");
+    let advertised = registration
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == PLAINTEXT_LISTENER)
+        .expect("the leader advertises a PLAINTEXT endpoint");
+    assert!(
+        node_endpoints
+            == vec![NodeEndpoint {
+                node_id: leader_hint,
+                host: advertised.host.clone(),
+                port: i32::from(advertised.port),
+                rack: registration.rack.clone(),
+                ..Default::default()
+            }],
+        "the refused Produce must carry the leader's endpoint; got {node_endpoints:?}"
+    );
+    // The load-bearing anti-silent-append assertion: the follower's local log
+    // MUST NOT have grown. Pre-fix it advanced by one (silent follower append).
+    let follower_leo_after = cluster[follower_idx]
+        .0
+        .local_log_end_offset("gate-rf3", 0)
+        .expect("follower hosts gate-rf3");
+    assert!(
+        follower_leo_after == follower_leo_before,
+        "rejected Produce must NOT append to the follower's local log: \
+         before={follower_leo_before} after={follower_leo_after}"
+    );
+
+    rf3_leader
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -200,57 +300,7 @@ async fn produce_to_non_leader_is_rejected() {
         })
         .await;
 
-    // ───────────────────────────────────────────────────────────────────
-    // Case A: rf=3 — Produce to a NON-leader that DOES hold a follower replica.
-    // ───────────────────────────────────────────────────────────────────
-    let rf3_leader = cluster[0]
-        .0
-        .partition_leader_for_test("gate-rf3", 0)
-        .unwrap();
-    let follower_idx = cluster
-        .iter()
-        .position(|(h, _, _)| h.node_id() != rf3_leader)
-        .expect("a non-leader broker exists at rf=3");
-    let follower_node = cluster[follower_idx].0.node_id();
-    let follower_addr = cluster[follower_idx].1.listen_addr.to_string();
-
-    // Wait for the follower to materialize its LOCAL replica (supervisor
-    // reconcile lags the controller image). Without a local replica the rf=3
-    // case would degenerate into the rf=1 case and not prove the
-    // "don't append to a follower" property.
-    wait_for_local_replica(&cluster[follower_idx].0, "gate-rf3", 0).await;
-    let follower_leo_before = cluster[follower_idx]
-        .0
-        .local_log_end_offset("gate-rf3", 0)
-        .expect("follower hosts gate-rf3");
-
-    let follower_client = Client::builder()
-        .bootstrap(follower_addr)
-        .build()
-        .await
-        .unwrap();
-    let (code, leader_hint) =
-        produce_one(&follower_client, "gate-rf3", rf3_id, 0, "rf3-to-follower").await;
-    assert!(
-        code == 6,
-        "rf=3 Produce to follower node{follower_node} (leader=node{rf3_leader}) must be \
-         NOT_LEADER_OR_FOLLOWER (6); got {code}"
-    );
-    assert!(
-        leader_hint == i32::try_from(rf3_leader).unwrap(),
-        "current_leader hint must name the real leader node{rf3_leader}; got {leader_hint}"
-    );
-    // The load-bearing anti-silent-append assertion: the follower's local log
-    // MUST NOT have grown. Pre-fix it advanced by one (silent follower append).
-    let follower_leo_after = cluster[follower_idx]
-        .0
-        .local_log_end_offset("gate-rf3", 0)
-        .expect("follower hosts gate-rf3");
-    assert!(
-        follower_leo_after == follower_leo_before,
-        "rejected Produce must NOT append to the follower's local log: \
-         before={follower_leo_before} after={follower_leo_after}"
-    );
+    let rf3_leader = rf3_produce_to_a_follower_is_refused(&cluster, rf3_id).await;
 
     // ───────────────────────────────────────────────────────────────────
     // Case B: rf=1 — Produce to a NON-leader that holds NO replica.
@@ -276,7 +326,7 @@ async fn produce_to_non_leader_is_rejected() {
             .is_none(),
         "test premise: node1 must NOT host gate-rf1/{off_node_part} (rf=1)"
     );
-    let (code, leader_hint) = produce_one(
+    let (code, leader_hint, _) = produce_one(
         &admin,
         "gate-rf1",
         rf1_id,
@@ -315,7 +365,7 @@ async fn produce_to_non_leader_is_rejected() {
         .0
         .local_log_end_offset("gate-rf3", 0)
         .expect("leader hosts gate-rf3");
-    let (code, _) = produce_one(&leader3_client, "gate-rf3", rf3_id, 0, "rf3-to-leader").await;
+    let (code, _, _) = produce_one(&leader3_client, "gate-rf3", rf3_id, 0, "rf3-to-leader").await;
     assert!(
         code == 0,
         "rf=3 Produce to the leader must succeed; got {code}"
@@ -345,7 +395,7 @@ async fn produce_to_non_leader_is_rejected() {
     // the required success. The rf=1 partition has no replica elsewhere, so
     // nothing else forces this broker's image/replica to be warm by now.
     wait_for_local_replica(&cluster[rf1_leader_idx].0, "gate-rf1", off_node_part).await;
-    let (code, _) = produce_one(
+    let (code, _, _) = produce_one(
         &leader1_client,
         "gate-rf1",
         rf1_id,

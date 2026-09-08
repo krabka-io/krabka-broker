@@ -92,7 +92,7 @@ fn current_assignment_value(m: &StreamsMemberState) -> StreamsGroupCurrentMember
     StreamsGroupCurrentMemberAssignmentValue {
         member_epoch: m.member_epoch,
         previous_member_epoch: m.previous_member_epoch,
-        state: m.assignment_state.as_i8(),
+        state: m.assignment_state.into(),
         active: m.active.clone(),
         standby: m.standby.clone(),
         warmup: m.warmup.clone(),
@@ -189,8 +189,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
         if let Some(m) = state.members.get_mut(&mid) {
             m.member_epoch = cur.member_epoch;
             m.previous_member_epoch = cur.previous_member_epoch;
-            m.assignment_state =
-                StreamsMemberAssignmentState::from_i8(cur.state).unwrap_or_default();
+            m.assignment_state = cur.state.into();
             m.active = cur.active;
             m.standby = cur.standby;
             m.warmup = cur.warmup;
@@ -231,7 +230,9 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::StreamsGroupTopologyValue;
+    use crate::coordinator::unified::streams::persistence::{
+        StreamsGroupTopologyValue, StreamsMemberWireState,
+    };
 
     #[test]
     fn seed_hydrates_state() {
@@ -260,7 +261,7 @@ mod tests {
             StreamsGroupCurrentMemberAssignmentValue {
                 member_epoch: 4,
                 previous_member_epoch: 3,
-                state: 0,
+                state: StreamsMemberWireState::Stable,
                 active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),

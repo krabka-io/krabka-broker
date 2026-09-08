@@ -56,11 +56,11 @@ pub(crate) fn classic_group_metadata_tombstone_batch(group_id: &str, now_ms: i64
 
 /// Build the batch that tombstones every streams record for `group_id`, for the
 /// streams→classic downgrade and the type-aware streams delete. This function
-/// tombstones the group-level keys unconditionally: k15 `GroupMetadata`, k17
-/// `Topology`, k18 `PartitionMetadata`, and k19 `TargetAssignmentMetadata`. A
-/// tombstone for a never-written key is a harmless replay no-op. The k15
-/// tombstone is load-bearing, because a surviving k15 would resurrect the group
-/// as streams. Each id in `member_ids` also tombstones its k16/k20/k21. A
+/// tombstones the group-level keys unconditionally: k17 `GroupMetadata`, k23
+/// `Topology`, k18 `PartitionMetadata`, and k20 `TargetAssignmentMetadata`. A
+/// tombstone for a never-written key is a harmless replay no-op. The k17
+/// tombstone is load-bearing, because a surviving k17 would resurrect the group
+/// as streams. Each id in `member_ids` also tombstones its k19/k21/k22. A
 /// drained group has no members, because members tombstone their own per-member
 /// records on leave, so `member_ids` is typically empty.
 ///
@@ -113,7 +113,8 @@ mod tests {
     #[test]
     fn streams_tombstone_batch_group_level_only() {
         let batch = streams_records_tombstone_batch("g", &[], 123);
-        // k15 GroupMetadata, k17 Topology, k18 PartitionMetadata, k19 TargetAssignmentMetadata.
+        // k17 GroupMetadata, k23 Topology, k18 PartitionMetadata, k20
+        // TargetAssignmentMetadata.
         assert2::assert!((batch.records.len()) == (4), "four group-level tombstones");
         assert2::assert!((batch.max_timestamp) == (123));
         assert2::assert!((batch.last_offset_delta) == (3));
@@ -124,18 +125,18 @@ mod tests {
                 "every record is a tombstone (null value)"
             );
         }
-        // The first record is the load-bearing k15 GroupMetadata tombstone.
-        let k15 = batch.records[0].key.as_ref().unwrap();
+        // The first record is the load-bearing k17 GroupMetadata tombstone.
+        let group_metadata_key = batch.records[0].key.as_ref().unwrap();
         assert2::assert!(
-            (&k15[..2]) == (&15i16.to_be_bytes()),
-            "k15 GroupMetadata key version"
+            (&group_metadata_key[..2]) == (&17i16.to_be_bytes()),
+            "k17 GroupMetadata key version"
         );
     }
 
     #[test]
     fn streams_tombstone_batch_includes_per_member_records() {
         let batch = streams_records_tombstone_batch("g", &["m1".to_string()], 1);
-        // 4 group-level + k16/k20/k21 for m1 = 7.
+        // 4 group-level + k19/k21/k22 for m1 = 7.
         assert2::assert!(
             (batch.records.len()) == (7),
             "group-level + 3 per-member tombstones"

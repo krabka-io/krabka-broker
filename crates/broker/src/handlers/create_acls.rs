@@ -4,6 +4,10 @@
 //! validates the resource shape and submits a `V1AccessControlEntry` to the
 //! controller. It returns one result per binding.
 //!
+//! On a cluster with no authorizer configured every binding is refused with
+//! `SECURITY_DISABLED`, so nothing is stored that no decision point would
+//! read.
+//!
 //! This file keeps the whole-request cluster gate and the per-binding loop.
 //! Binding validation lives in `validate`, the result rows and the encoder in
 //! `response`, and the audit trail in `audit`.
@@ -29,7 +33,7 @@ use self::{
     response::{acl_error_result, apply_submit_error, create_acls_response, encode_response},
     validate::validate,
 };
-use super::acl_wire::CLUSTER_RESOURCE_NAME;
+use super::acl_wire::{CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE};
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
@@ -67,6 +71,20 @@ pub(crate) async fn handle(
             .creations
             .iter()
             .map(|_| acl_error_result(codes::CLUSTER_AUTHORIZATION_FAILED, "create-acls denied"))
+            .collect();
+        return encode_response(&create_acls_response(results), api_version);
+    }
+
+    // No authorizer: refuse every creation rather than durably storing
+    // bindings that no decision point will ever read. Kafka builds this
+    // response from `CreateAclsRequest.getErrorResponse` with a
+    // `SecurityDisabledException`, which stamps the same code and message on
+    // one result per creation.
+    if !broker.config.authorizer.is_configured() {
+        let results = req
+            .creations
+            .iter()
+            .map(|_| acl_error_result(codes::SECURITY_DISABLED, NO_AUTHORIZER_MESSAGE))
             .collect();
         return encode_response(&create_acls_response(results), api_version);
     }

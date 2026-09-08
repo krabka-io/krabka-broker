@@ -68,6 +68,13 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub future_log_move_retry_backoff: Option<Time>,
+    /// Whether the broker advertises the KIP-714 client-metrics RPCs,
+    /// `GetTelemetrySubscriptions` (71) and `PushTelemetry` (72). Kafka
+    /// advertises them only when `metric.reporters` holds a `ClientTelemetry`
+    /// implementation, so the default here is `false` as well and a client
+    /// starts no telemetry handshake the broker has nowhere to forward. A
+    /// configured `[telemetry]` OTLP endpoint turns them on without this key.
+    pub client_metrics_enable: Option<bool>,
     /// Cadence at which the KIP-714 client-metrics cache evicts entries.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]

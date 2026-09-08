@@ -66,7 +66,7 @@ pub struct ShareGroupState {
     pub dirty: bool,
     /// KIP-932: `(topic_id, partition)` share-states this
     /// group has already Initialized in the share-state persister. Seeded from
-    /// the replayed `ShareGroupStatePartitionMetadata` (key v14) so a
+    /// the replayed `ShareGroupStatePartitionMetadata` (key v15) so a
     /// post-restart heartbeat does not re-Initialize. The lifecycle hook adds
     /// to this on each successful `SharePersister::initialize`.
     pub initialized: HashSet<(Uuid, i32)>,

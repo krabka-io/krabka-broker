@@ -9,7 +9,9 @@
 //! children cover authorization on top of an authenticated broker:
 //! [`acl_cli`] for the `kafka-acls` administration round-trip,
 //! [`acl_authorized`] and [`acl_denied`] for what a literal binding permits and
-//! refuses, and [`acl_prefixed`] for the `PREFIXED` pattern.
+//! refuses, [`acl_prefixed`] for the `PREFIXED` pattern, and
+//! [`acl_security_disabled`] for what the ACL RPCs answer on a broker that has
+//! no authorizer at all.
 //!
 //! Cargo compiles this file as its own test binary, so a `mod` declaration in
 //! it resolves against `tests/` rather than against a directory named for the
@@ -27,6 +29,8 @@ mod acl_denied;
 mod acl_output;
 #[path = "jvm_acceptance_sasl/acl_prefixed.rs"]
 mod acl_prefixed;
+#[path = "jvm_acceptance_sasl/acl_security_disabled.rs"]
+mod acl_security_disabled;
 mod jvm_acceptance;
 #[path = "jvm_acceptance_sasl/oauthbearer.rs"]
 mod oauthbearer;

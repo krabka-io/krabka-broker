@@ -4,6 +4,7 @@ load(
     "./generate_kip_matrix.axl",
     "annotation_bodies",
     "api_versions_rows",
+    "built_image_keys",
     "catalog_outside_annotations",
     "citations",
     "const_str_value",
@@ -16,6 +17,7 @@ load(
     "image_legend",
     "intent_cell",
     "intent_problem",
+    "inventory_problem",
     "is_word_char",
     "kafka_image_keys",
     "kcat_evidence",
@@ -25,9 +27,11 @@ load(
     "kip_row",
     "librdkafka_clients",
     "link_citations",
+    "lock_for",
     "log_contract_rows",
     "parse_annotations",
     "parse_divergences",
+    "parse_inventory",
     "render_page",
     "suite_stem",
     "test_cell",
@@ -454,6 +458,83 @@ def _test_decision_row_problem_rejects(_ctx):
         "KIP-590 serves Envelope and needs no broker half; it is Partial, not Implemented",
     )
 
+_INVENTORY = "\n".join([
+    "# Kafka KIP inventory",
+    "",
+    "Prose the roster carries before its markers.",
+    "",
+    "<!-- BEGIN KIP_INVENTORY -->",
+    "- KIP-13",
+    "",
+    "  - KIP-704 ",
+    "- KIP-768",
+    "<!-- END KIP_INVENTORY -->",
+    "",
+    "Prose after them.",
+])
+
+def _test_parse_inventory(_ctx):
+    check_eq(
+        "the roster between the markers, indentation and blank lines and all",
+        parse_inventory(_INVENTORY, "kip_inventory.md"),
+        ["KIP-13", "KIP-704", "KIP-768"],
+    )
+
+def _roster(listed, claimed, rows):
+    """The complaint `inventory_problem` makes about one roster and its rows."""
+    return inventory_problem(
+        listed,
+        {key: True for key in claimed},
+        [struct(key = key, status = status) for key, status in rows],
+        "catalog.rs",
+        "kip_inventory.md",
+    )
+
+def _test_inventory_problem(_ctx):
+    check_eq(
+        "a KIP the roster lists, the sources mention and a row covers",
+        _roster(["KIP-13"], ["KIP-13"], [("KIP-13", "Implemented")]),
+        "",
+    )
+    check_eq(
+        "a KIP only the roster lists: the row is what the roster asks for",
+        _roster(["KIP-768"], [], [("KIP-768", "Implemented")]),
+        "",
+    )
+    check_eq(
+        "a KIP only the sources mention",
+        _roster([], ["KIP-13"], [("KIP-13", "Partial")]),
+        "",
+    )
+    check_eq(
+        "a scope-only row, which is neither listed nor mentioned",
+        _roster([], [], [("mixed-quorum", "OutOfScope")]),
+        "",
+    )
+
+def _test_inventory_problem_rejects(_ctx):
+    check_eq(
+        "a KIP named under crates/ with no row",
+        _roster([], ["KIP-704", "KIP-13"], [("KIP-13", "Implemented")]),
+        "KIPs named under crates/ without a KIP_ANNOTATIONS row in catalog.rs: KIP-704",
+    )
+    check_eq(
+        "a KIP the roster lists with no row: code with no claim",
+        _roster(["KIP-13", "KIP-768"], [], [("KIP-13", "Implemented")]),
+        "KIPs kip_inventory.md lists without a KIP_ANNOTATIONS row in catalog.rs: KIP-768",
+    )
+    check_eq(
+        "a row neither the roster nor the sources stands behind",
+        _roster(["KIP-13"], ["KIP-13"], [("KIP-13", "Implemented"), ("KIP-704", "Partial")]),
+        "KIP_ANNOTATIONS rows for KIPs neither kip_inventory.md nor anything " +
+        "under crates/ names: KIP-704",
+    )
+    check_eq(
+        "a listed KIP whose row carries a status the matrix cannot render",
+        _roster(["KIP-768"], [], [("KIP-768", "Planned")]),
+        "KIPs kip_inventory.md lists whose row has no matrix status: KIP-768",
+    )
+
 def _test_librdkafka_clients(_ctx):
     suite = "\n".join([
         "const CLIENTS: [ClientCase; 2] = [",
@@ -647,6 +728,64 @@ def _test_render_page(_ctx):
     check(page.find("It ran against\n`log-image`.") >= 0, "the log image is named")
     check(page.find("The oracle is `api-image`.") >= 0, "the oracle is named")
 
+_BUILT_IMAGES = "\n".join([
+    "IMAGES = {",
+    '    "apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1",',
+    "}",
+    "",
+    "# Assembled here rather than pulled: nothing published carries them.",
+    "BUILT_IMAGES = {",
+    "    # A Go CLI on sarama, so neither librdkafka nor the JVM.",
+    '    "kaf_sarama": "docker.io/krabka-io/kaf:0.2.14",',
+    '    # "retired_image": "docker.io/krabka-io/gone:1",',
+    '    "kcat_librdkafka_2x": "docker.io/krabka-io/kcat:librdkafka-2.15.0",',
+    "}",
+])
+
+_LOCKS = "\n".join([
+    "apk.translate_lock(",
+    '    name = "broker_base_lock",',
+    '    lock = "//packaging:base.apko.lock.json",',
+    ")",
+    "apk.translate_lock(",
+    '    name = "kcat_librdkafka_2x_lock",',
+    '    lock = "//bazel/images:kcat_librdkafka_2x.apko.lock.json",',
+    ")",
+])
+
+def _test_built_image_keys(_ctx):
+    check_eq(
+        "the built images, and not the pulled ones beside them",
+        built_image_keys(_BUILT_IMAGES),
+        ["kaf_sarama", "kcat_librdkafka_2x"],
+    )
+
+def _test_built_image_keys_ignores_commented_entries(_ctx):
+    check_eq(
+        "a commented-out key is not a built image",
+        "retired_image" in built_image_keys(_BUILT_IMAGES),
+        False,
+    )
+
+def _test_built_image_keys_without_the_map(_ctx):
+    check_eq(
+        "a tree with no built images has none",
+        built_image_keys('IMAGES = {\n    "a": "b",\n}'),
+        [],
+    )
+
+def _test_lock_for(_ctx):
+    check_eq(
+        "the lock label a built image's translate_lock names",
+        lock_for(_LOCKS, "kcat_librdkafka_2x"),
+        "//bazel/images:kcat_librdkafka_2x.apko.lock.json",
+    )
+    check_eq(
+        "an image with no translate_lock has no lock",
+        lock_for(_LOCKS, "kaf_sarama"),
+        "",
+    )
+
 generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_word_characters,
     _test_const_str_value,
@@ -665,7 +804,11 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_kip_mentions,
     _test_kip_mentions_needs_whole_words,
     _test_kip_order,
+    _test_built_image_keys,
+    _test_built_image_keys_ignores_commented_entries,
+    _test_built_image_keys_without_the_map,
     _test_docker_map,
+    _test_lock_for,
     _test_docker_map_ignores_commented_entries,
     _test_suite_stem,
     _test_kafka_image_keys,
@@ -674,6 +817,9 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_link_citations,
     _test_decision_row_problem,
     _test_decision_row_problem_rejects,
+    _test_parse_inventory,
+    _test_inventory_problem,
+    _test_inventory_problem_rejects,
     _test_librdkafka_clients,
     _test_log_contract_rows,
     _test_api_versions_rows,

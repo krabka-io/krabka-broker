@@ -45,6 +45,7 @@ mod framing;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod hot_path;
 mod leadership;
+mod node_endpoints;
 mod owned_decode;
 mod pipeline;
 mod prepare;

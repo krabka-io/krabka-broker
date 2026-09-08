@@ -68,3 +68,15 @@ pub(super) fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> 
 pub(super) fn validate(c: &AclCreation) -> Result<AclEntry, (i16, &'static str)> {
     super::validate::validate(c, usize::MAX, usize::MAX)
 }
+
+/// An authorizer an operator actually configured, which lets the `admin` test
+/// principal through as a super user.
+///
+/// The ACL RPCs answer `SECURITY_DISABLED` under the default
+/// `AllowAllAuthorizer`, so every case about the creating path needs a broker
+/// that has an authorizer at all.
+pub(super) fn configured_authorizer() -> std::sync::Arc<dyn crate::authorizer::Authorizer> {
+    std::sync::Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+        std::iter::once("admin".to_owned()).collect(),
+    ))
+}

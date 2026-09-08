@@ -201,6 +201,14 @@ crate_tests(
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",
         ],
+        # Kafka's own `__consumer_offsets` formatters, out of the 4.3.1 tools
+        # jar, over the topic krabka writes. The 4.0.0 image is the KIP-848
+        # client that puts the later key versions in front of them, the same
+        # client `jvm_consumer_group_next_gen` uses.
+        "jvm_consumer_offsets_formatter": [
+            "apache_kafka_4_0_0",
+            "apache_kafka_4_3_1",
+        ],
         # The probe compiles a Java helper in-container, so it needs the image
         # that ships a JDK with `javac` alongside the Kafka client jars.
         "jvm_deliver_at_time": ["cp_kafka_7_5_0"],
@@ -223,7 +231,24 @@ crate_tests(
         ],
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
         "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
-        "librdkafka_conformance": ["kcat_1_7_1"],
+        # Two kcats: the 2021 published one, whose librdkafka predates KIP-848
+        # and KIP-714, and the one assembled here against librdkafka 2.15.0,
+        # which reaches both. Neither is a substitute for the other -- the row
+        # the older one holds is that a client from before those KIPs still
+        # talks to krabka.
+        "librdkafka_conformance": [
+            "kcat_1_7_1",
+            "kcat_librdkafka_2x",
+        ],
+        # MirrorMaker 2 out of the same image, mirroring a source cluster of
+        # that release onto krabka: `connect-mirror-maker.sh` and the stock
+        # broker it replicates from are both in it, so the migration path is
+        # one image.
+        "mirror_maker2": ["apache_kafka_4_3_1"],
+        # `kaf`, a Go CLI on sarama: the one client in this tree that is
+        # neither librdkafka nor the JVM, so its decoder agrees with neither
+        # by construction.
+        "sarama_conformance": ["kaf_sarama"],
         # One image, used twice: as the `kafka-topics` client that reads
         # krabka's answer and as the Kafka broker the same command is run
         # against for the differential.

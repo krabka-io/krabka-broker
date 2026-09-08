@@ -1,6 +1,6 @@
 //! The one scenario that produces no records at all: a transaction marker,
 //! which has no representation in the v0 or v1 `MessageSet` format and must be
-//! dropped from a down-converted Fetch response.
+//! dropped from a down-converted Fetch response, leaving an empty record set.
 //!
 //! The marker is created by committing a real transaction with the Rust
 //! producer, because Kafka forbids a client from producing a control batch
@@ -22,7 +22,8 @@ use crate::{
 /// v1 `MessageSet` format, so a down-converted Fetch response must drop them.
 ///
 /// The test commits a real transaction, fetches from its marker offset at v3,
-/// and confirms that the partition comes back with no records and no error.
+/// and confirms that the partition comes back with an empty record set and no
+/// error.
 /// This drives the `Ok(None)` arm of the Fetch handler's down-conversion loop
 /// without violating Kafka's rule that clients cannot produce control batches.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -66,9 +67,17 @@ async fn fetch_v3_drops_control_batch() {
         "fetch partition error: {}",
         part.error_code
     );
+    // An empty record set, not a null one. Kafka's schema types the field as
+    // nullable and Kafka's broker never uses that, so krabka does not either:
+    // a client that drops the connection on a negative length -- sarama does --
+    // must still be able to read a response whose only batch was dropped.
     assert!(
-        part.records.is_none(),
-        "control batch must be dropped, leaving no records on the wire"
+        part.records
+            .as_ref()
+            .is_some_and(|records| records.payload_len() == 0),
+        "control batch must be dropped, leaving an empty record set on the \
+         wire, but the partition carried {:?}",
+        part.records
     );
 
     producer.close().await.unwrap();

@@ -1,4 +1,4 @@
-//! The two differential cases.
+//! The three differential cases.
 
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -31,12 +31,26 @@ fn regenerating() -> bool {
     std::env::var("KRABKA_UPDATE_API_VERSIONS_EXPECTATION").is_ok_and(|v| v == "1")
 }
 
-/// [`krabka_broker::api_catalog::supported_apis`] in the order the JVM tool
-/// prints, which is ascending API key.
+/// What the client listener advertises, in the order the JVM tool prints,
+/// which is ascending API key.
+///
+/// `start_krabka` binds one `PLAINTEXT` listener and configures no
+/// client-metrics receiver, so this is the pair the broker answers that
+/// listener with: the KIP-714 keys are withheld the way a stock Kafka broker
+/// withholds them, and so is every key in
+/// `api_catalog::INTER_BROKER_ONLY_APIS`.
 fn catalog_sorted_by_key() -> Vec<ApiVersion> {
-    let mut apis = krabka_broker::api_catalog::supported_apis();
+    let mut apis = krabka_broker::api_catalog::supported_apis(
+        krabka_broker::api_catalog::ListenerKind::Client,
+        krabka_broker::api_catalog::ClientMetricsReceiver::Absent,
+    );
     apis.sort_by_key(|api| api.api_key);
     apis
+}
+
+/// The API keys one advertised table names.
+fn key_set(apis: &[ApiVersion]) -> BTreeSet<i16> {
+    apis.iter().map(|api| api.api_key).collect()
 }
 
 /// Read krabka's advertised table the way a client does: through the JVM tool.
@@ -114,8 +128,40 @@ async fn divergence_from_real_kafka_matches_the_expectation() {
     );
 }
 
+/// The set of API keys the tool prints for krabka's client listener is the set
+/// it prints for a stock Kafka broker.
+///
+/// The divergence case above records the whole join, ranges included, so it
+/// moves whenever a range moves. This one asks the narrower question the issue
+/// behind the split is about: `kafka-broker-api-versions.sh` against krabka
+/// names neither more nor fewer APIs than the same command against Kafka, so a
+/// tool or an audit that reads the advertised set to infer a node's role reads
+/// krabka as the broker it is. Both tables are read with the tool from the same
+/// pinned image, so nothing about the reader differs between the two halves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker"]
+async fn the_client_listener_prints_the_same_api_key_set_as_kafka() {
+    let krabka = krabka_advertised_table().await;
+
+    let oracle = OracleBroker::start();
+    let output = oracle.api_versions();
+    eprintln!("KRABKA[test] {ORACLE_IMAGE} api-versions:\n{output}");
+    let kafka =
+        advertised(&parse_single_broker(&output).unwrap_or_else(|e| panic!("{e}\n{output}")));
+
+    let ours = key_set(&krabka);
+    let theirs = key_set(&kafka);
+    let krabka_only: Vec<i16> = ours.difference(&theirs).copied().collect();
+    let kafka_only: Vec<i16> = theirs.difference(&ours).copied().collect();
+    assert!(
+        ours == theirs,
+        "krabka advertises {krabka_only:?} that {ORACLE_IMAGE} does not, and misses \
+         {kafka_only:?} that it does"
+    );
+}
+
 /// The API keys whose recorded row changed, for the failure message. The
-/// assertion above compares the reports whole, and whole is 86 rows: naming the
+/// assertion above compares the reports whole, and whole is 75 rows: naming the
 /// handful that moved is what a reader needs before reading that dump.
 fn moved_rows(observed: &DivergenceReport, expected: &DivergenceReport) -> String {
     let keys = |report: &DivergenceReport| -> BTreeSet<i16> {

@@ -21,10 +21,12 @@
 //!   - Answers a valid push with `error_code 0`.
 //!
 //! The tests that call `IncrementalAlterConfigs` to set up subscriptions need
-//! a controller-backed single-node cluster, `start_n_node(1)`, because that
-//! RPC goes through Raft. The simple handshake tests use `support::start()`, a
-//! simpler single-broker helper that also boots in Bootstrap mode and is its
-//! own controller.
+//! a controller-backed single-node cluster, `start_n_node_with(1, ..)`, because
+//! that RPC goes through Raft. The simple handshake tests use a single-broker
+//! helper that also boots in Bootstrap mode and is its own controller. Both
+//! turn `client_metrics_enable` on, because the broker advertises the two
+//! KIP-714 RPCs only behind a configured receiver and the client negotiates
+//! every request against what the broker advertised.
 
 use assert2::{assert, check};
 mod support;
@@ -43,7 +45,7 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid as WireUuid,
 };
-use support::start_n_node;
+use support::start_n_node_with;
 
 /// Kafka resource type id for `CLIENT_METRICS` (KIP-714).
 const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
@@ -52,6 +54,40 @@ const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
 const CONFIG_OP_SET: i8 = 0;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/// A single broker that advertises the KIP-714 RPCs, plus a client on it.
+///
+/// `client_metrics_enable` is off by default, the way a Kafka broker with no
+/// `ClientTelemetry` metric reporter advertises no telemetry handshake, and
+/// `krabka_client_core` negotiates every request against the table the broker
+/// advertised. So a suite that drives the handshake configures a receiver
+/// first; `api_versions_withholds_telemetry_apis_without_a_receiver` covers
+/// the other setting.
+async fn start_with_client_metrics() -> support::InProcess {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let mut config = krabka_broker::BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    config.client_metrics_enable = true;
+    let broker = krabka_broker::Broker::start(config)
+        .await
+        .expect("broker start");
+    let client = build_client(broker.listen_addr()).await;
+    support::InProcess {
+        broker,
+        client,
+        _tempdir: tempdir,
+    }
+}
+
+/// One controller-backed broker that advertises the KIP-714 RPCs.
+async fn start_one_node_with_client_metrics() -> Vec<(
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerConfig,
+    tempfile::TempDir,
+)> {
+    start_n_node_with(1, |_, cfg| cfg.client_metrics_enable = true)
+        .await
+        .expect("start_n_node_with")
+}
 
 async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
     krabka_client_core::Client::builder()
@@ -147,7 +183,7 @@ fn sample_otlp_metrics() -> bytes::Bytes {
 
 #[tokio::test]
 async fn api_versions_advertises_telemetry_apis() {
-    let p = support::start().await;
+    let p = start_with_client_metrics().await;
     let resp = p
         .client
         .send(ApiVersionsRequest {
@@ -172,12 +208,43 @@ async fn api_versions_advertises_telemetry_apis() {
     p.broker.shutdown().await;
 }
 
+/// With no client-metrics receiver -- the default, and what a stock Kafka
+/// broker answers when `metric.reporters` holds no `ClientTelemetry`
+/// implementation -- neither KIP-714 key is advertised, so a modern Java or
+/// librdkafka client opens no telemetry handshake.
+#[tokio::test]
+async fn api_versions_withholds_telemetry_apis_without_a_receiver() {
+    let p = support::start().await;
+    let resp = p
+        .client
+        .send(ApiVersionsRequest {
+            client_software_name: "krabka-test".into(),
+            client_software_version: "0.0.0".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("ApiVersions");
+
+    let advertised: std::collections::HashSet<i16> =
+        resp.api_keys.iter().map(|k| k.api_key).collect();
+    check!(
+        !advertised.contains(&71),
+        "GetTelemetrySubscriptions (71) must stay unadvertised, got {advertised:?}",
+    );
+    check!(
+        !advertised.contains(&72),
+        "PushTelemetry (72) must stay unadvertised, got {advertised:?}",
+    );
+
+    p.broker.shutdown().await;
+}
+
 /// With no subscriptions configured, the broker assigns a fresh id, returns an
 /// empty `requested_metrics`, and advertises the standard compression types
 /// and limits.
 #[tokio::test]
 async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subscription() {
-    let p = support::start().await;
+    let p = start_with_client_metrics().await;
 
     let resp = p
         .client
@@ -226,7 +293,7 @@ async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subs
 /// else 0."
 #[tokio::test]
 async fn get_telemetry_subscriptions_with_set_id_echoes_nil() {
-    let p = support::start().await;
+    let p = start_with_client_metrics().await;
 
     let prior_id = WireUuid([0x11; 16]);
     let resp = p
@@ -252,7 +319,7 @@ async fn get_telemetry_subscriptions_with_set_id_echoes_nil() {
 /// first.
 #[tokio::test]
 async fn push_telemetry_unknown_instance_rejected() {
-    let p = support::start().await;
+    let p = start_with_client_metrics().await;
 
     let resp: PushTelemetryResponse = p
         .client
@@ -282,7 +349,7 @@ async fn push_telemetry_unknown_instance_rejected() {
 /// handshake, then push a valid OTLP payload. All three must succeed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn push_telemetry_happy_path_after_subscription() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
+    let cluster = start_one_node_with_client_metrics().await;
     let (_, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
 
@@ -357,7 +424,7 @@ async fn push_telemetry_happy_path_after_subscription() {
 /// stale `subscription_id`, with `UNKNOWN_SUBSCRIPTION_ID` (117).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn push_telemetry_stale_subscription_id_rejected() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
+    let cluster = start_one_node_with_client_metrics().await;
     let (_, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
 
@@ -402,7 +469,7 @@ async fn push_telemetry_stale_subscription_id_rejected() {
 /// request reaches the codec check.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn push_telemetry_unsupported_compression_rejected() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
+    let cluster = start_one_node_with_client_metrics().await;
     let (_, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
 

@@ -1,102 +1,89 @@
 //! The leaf encoders and decoders that the streams record values share.
 //!
-//! A task map, a string list, and an `i16` list each encode as an `i32`
-//! element count followed by that many elements. `get_i8` and `get_u32` are
-//! the two fixed-width readers that the shared
-//! `crate::coordinator::unified::persistence` helpers do not provide.
+//! Every streams value is flexible (`"flexibleVersions": "0+"` in the Apache
+//! Kafka schemas at tag `4.3.1`), so an array is a compact array and a string
+//! is a compact string, and every nested struct ends with its own tagged-field
+//! count. The general leaves live in
+//! [`persistence::flex`](crate::coordinator::unified::persistence::flex); what
+//! is here is the two shapes that only streams records use.
 
 use std::collections::BTreeMap;
 
-use bytes::{Buf, BufMut, BytesMut};
-use krabka_protocol::ProtocolError;
+use bytes::BytesMut;
 
 use crate::{
-    coordinator::unified::persistence::{get_i16, get_i32, get_string, put_string},
+    coordinator::unified::persistence::flex::{
+        get_compact_array_len, get_compact_string, get_i32_array, put_compact_array_len,
+        put_compact_string, put_empty_tagged_fields, put_i32_array, skip_tagged_fields,
+    },
     error::BrokerError,
 };
 
-/// Encodes a role's task assignment: an `i32` count of subtopologies, then for
-/// each entry a `string subtopology_id`, an `i32` partition count, and that
-/// many `i32` partitions. [`decode_task_map`] decodes the same layout.
+/// Encodes a role's task assignment as Kafka's `[]TaskIds`: a compact count,
+/// then per entry the compact `SubtopologyId`, the compact `Partitions`
+/// (`[]int32`) and the struct's tagged-field count. The `TaskIds` of
+/// `StreamsGroupCurrentMemberAssignmentValue` also declares a tagged
+/// `AssignmentEpochs` (tag 0, nullable, default null), which the broker does
+/// not set and therefore omits. [`decode_task_map`] reads the same layout.
 pub(super) fn encode_task_map(buf: &mut BytesMut, map: &BTreeMap<String, Vec<i32>>) {
-    let n = i32::try_from(map.len()).expect("fits");
-    buf.put_i32(n);
+    put_compact_array_len(buf, map.len());
     for (subtopology_id, partitions) in map {
-        put_string(buf, subtopology_id);
-        let pn = i32::try_from(partitions.len()).expect("fits");
-        buf.put_i32(pn);
-        for p in partitions {
-            buf.put_i32(*p);
-        }
+        put_compact_string(buf, subtopology_id);
+        put_i32_array(buf, partitions);
+        put_empty_tagged_fields(buf);
     }
 }
 
 pub(super) fn decode_task_map(buf: &mut &[u8]) -> Result<BTreeMap<String, Vec<i32>>, BrokerError> {
-    let n = get_i32(buf)?;
+    let n = get_compact_array_len(buf)?;
     let mut map = BTreeMap::new();
-    for _ in 0..n.max(0) {
-        let subtopology_id = get_string(buf)?;
-        let pn = get_i32(buf)?;
-        let pcap = usize::try_from(pn.max(0)).expect("non-negative");
-        let mut partitions = Vec::with_capacity(pcap);
-        for _ in 0..pn.max(0) {
-            partitions.push(get_i32(buf)?);
-        }
+    for _ in 0..n {
+        let subtopology_id = get_compact_string(buf)?;
+        let partitions = get_i32_array(buf)?;
+        skip_tagged_fields(buf)?;
         map.insert(subtopology_id, partitions);
     }
     Ok(map)
 }
 
-pub(super) fn encode_string_list(buf: &mut BytesMut, items: &[String]) {
-    let n = i32::try_from(items.len()).expect("fits");
-    buf.put_i32(n);
-    for s in items {
-        put_string(buf, s);
+/// Encodes a `[]KeyValue`-shaped list: a compact count, then per entry two
+/// compact strings and the struct's tagged-field count. Kafka's `ClientTags`
+/// and `TopicConfigs` both have this shape.
+pub(super) fn encode_key_value_list(buf: &mut BytesMut, items: &[(String, String)]) {
+    put_compact_array_len(buf, items.len());
+    for (k, v) in items {
+        put_compact_string(buf, k);
+        put_compact_string(buf, v);
+        put_empty_tagged_fields(buf);
     }
 }
 
-pub(super) fn decode_string_list(buf: &mut &[u8]) -> Result<Vec<String>, BrokerError> {
-    let n = get_i32(buf)?;
-    let cap = usize::try_from(n.max(0)).expect("non-negative");
-    let mut out = Vec::with_capacity(cap);
-    for _ in 0..n.max(0) {
-        out.push(get_string(buf)?);
+pub(super) fn decode_key_value_list(buf: &mut &[u8]) -> Result<Vec<(String, String)>, BrokerError> {
+    let n = get_compact_array_len(buf)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let k = get_compact_string(buf)?;
+        let v = get_compact_string(buf)?;
+        skip_tagged_fields(buf)?;
+        out.push((k, v));
     }
     Ok(out)
 }
 
+/// Encodes an `[]int16`, which the copartition groups of the topology record
+/// use for their indices into the subtopology's own topic lists.
 pub(super) fn encode_i16_list(buf: &mut BytesMut, items: &[i16]) {
-    let n = i32::try_from(items.len()).expect("fits");
-    buf.put_i32(n);
+    put_compact_array_len(buf, items.len());
     for v in items {
-        buf.put_i16(*v);
+        bytes::BufMut::put_i16(buf, *v);
     }
 }
 
 pub(super) fn decode_i16_list(buf: &mut &[u8]) -> Result<Vec<i16>, BrokerError> {
-    let n = get_i32(buf)?;
-    let cap = usize::try_from(n.max(0)).expect("non-negative");
-    let mut out = Vec::with_capacity(cap);
-    for _ in 0..n.max(0) {
-        out.push(get_i16(buf)?);
+    let n = get_compact_array_len(buf)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        out.push(crate::coordinator::unified::persistence::get_i16(buf)?);
     }
     Ok(out)
-}
-
-pub(super) fn get_i8(buf: &mut &[u8]) -> Result<i8, BrokerError> {
-    if buf.remaining() < 1 {
-        return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-            "missing i8",
-        )));
-    }
-    Ok(buf.get_i8())
-}
-
-pub(super) fn get_u32(buf: &mut &[u8]) -> Result<u32, BrokerError> {
-    if buf.remaining() < 4 {
-        return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-            "missing u32",
-        )));
-    }
-    Ok(buf.get_u32())
 }

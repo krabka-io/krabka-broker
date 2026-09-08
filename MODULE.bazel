@@ -124,8 +124,9 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         # sha256:797ce226d62f947c009dc40246b30cfb456b8473d8241407f9d6f2c04e4d69ef.
         ("fake_gcs_server", "mirror.gcr.io", "fsouza/fake-gcs-server", "1.56.1", "sha256:af5fcc12a29db42953c9659dc44b478c164b78f6303390cf25fc93037d78522b"),
         ("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
-        # kcat has had no release since 1.7.1, so the librdkafka 2.x half of
-        # librdkafka_conformance runs the same program out of Confluent's image.
+        # The 1.x half of librdkafka_conformance. The 2.x half is
+        # //bazel/images:kcat_librdkafka_2x, built here from an apko lock,
+        # because no published image carries a CLI on that line.
         # jvm_acceptance_tiered's cases back the remote tier with MinIO.
         ("minio", "mirror.gcr.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z", "sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"),
         ("minio_mc", "mirror.gcr.io", "minio/mc", "RELEASE.2025-08-13T08-35-41Z", "sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780"),
@@ -148,10 +149,18 @@ apk.translate_lock(
     lock = "//tools/creusot:image.apko.lock.json",
 )
 apk.translate_lock(
+    name = "kaf_sarama_lock",
+    lock = "//bazel/images:kaf_sarama.apko.lock.json",
+)
+apk.translate_lock(
+    name = "kcat_librdkafka_2x_lock",
+    lock = "//bazel/images:kcat_librdkafka_2x.apko.lock.json",
+)
+apk.translate_lock(
     name = "kdc_base_lock",
     lock = "//crates/broker/tests/fixtures/security/kdc:image.apko.lock.json",
 )
-use_repo(apk, "broker_base_lock", "creusot_base_lock", "kdc_base_lock")
+use_repo(apk, "broker_base_lock", "creusot_base_lock", "kaf_sarama_lock", "kcat_librdkafka_2x_lock", "kdc_base_lock")
 
 # ---------------------------------------------------------------------------
 # Format and lint. See //tools/format and //tools/lint.

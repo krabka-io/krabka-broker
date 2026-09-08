@@ -16,11 +16,23 @@
 //! `compact,delete`, which both compacts the log and applies retention to it.
 //! Kafka Streams writes the pair on every windowed-store changelog topic.
 //!
-//! Six keys are accepted and stored with no krabka behaviour behind them:
+//! Ten keys are accepted and stored with no krabka behaviour behind them:
 //! `segment.index.bytes`, `segment.jitter.ms`, `file.delete.delay.ms`,
-//! `flush.messages`, `flush.ms` and `preallocate`. Kafka accepts them, so a
-//! topic manifest that carries one creates the topic here too, and
-//! `DescribeConfigs` reports back what was set.
+//! `flush.messages`, `flush.ms`, `preallocate`, the three codec levels
+//! `compression.gzip.level`, `compression.lz4.level` and
+//! `compression.zstd.level`, and Kafka's internal `internal.segment.bytes`.
+//! Kafka accepts them, so a topic manifest that carries one creates the topic
+//! here too, and `DescribeConfigs` reports back what was set. Each one says so
+//! in its own `doc` string, which is what `DescribeConfigs
+//! --include-documentation` and the generated reference page print, so an
+//! operator who sets one is told there that krabka stores it and no more.
+//!
+//! The three codec levels are inert because `krabka_compression::compress`
+//! takes a codec and no level: broker-side re-encoding always runs at the
+//! codec's own default, which is Kafka's default level for gzip and zstd.
+//! Recognising them is still what Kafka does, and it is what lets
+//! `MirrorMaker` 2 replay a source topic's whole config set in the single
+//! `IncrementalAlterConfigs` call it sends.
 //!
 //! One key bounds a single write: `max.message.bytes`. The produce path reads
 //! it per topic, falls back to the broker's `message.max.bytes` when the topic
@@ -92,6 +104,8 @@ mod broker_scope;
 mod delivery;
 mod diskless;
 mod docs;
+#[cfg(test)]
+mod kafka_parity;
 mod log_config;
 mod lookup;
 mod message_size;
@@ -189,6 +203,21 @@ pub(crate) const MESSAGE_TIMESTAMP_AFTER_MAX_MS: &str = "message.timestamp.after
 /// Kafka's `message.timestamp.before.max.ms`: how far into the past a
 /// producer timestamp may sit.
 pub(crate) const MESSAGE_TIMESTAMP_BEFORE_MAX_MS: &str = "message.timestamp.before.max.ms";
+/// Kafka's `compression.gzip.level`: the level a broker-side gzip re-encode
+/// runs at. Stored and reported only.
+pub(crate) const COMPRESSION_GZIP_LEVEL: &str = "compression.gzip.level";
+/// Kafka's `compression.lz4.level`: the level a broker-side lz4 re-encode runs
+/// at. Stored and reported only.
+pub(crate) const COMPRESSION_LZ4_LEVEL: &str = "compression.lz4.level";
+/// Kafka's `compression.zstd.level`: the level a broker-side zstd re-encode
+/// runs at. Stored and reported only.
+pub(crate) const COMPRESSION_ZSTD_LEVEL: &str = "compression.zstd.level";
+/// Kafka's `internal.segment.bytes`: the segment-size override Kafka's own
+/// coordinators set on the internal topics they create. `ConfigDef` marks it
+/// internal, which hides it from `kafka-configs --help` but not from the
+/// broker's own topic-config validation, so an alter that carries it is
+/// accepted. Stored and reported only.
+pub(crate) const INTERNAL_SEGMENT_BYTES: &str = "internal.segment.bytes";
 /// `message.timestamp.type=CreateTime`: the producer's own timestamps.
 pub(crate) const MESSAGE_TIMESTAMP_TYPE_CREATE: &str = "CreateTime";
 /// `message.timestamp.type=LogAppendTime`: the broker's clock at append time.

@@ -688,17 +688,6 @@
       "intent": null
     },
     {
-      "api_key": 56,
-      "name": "AlterPartition",
-      "krabka": {
-        "min": 2,
-        "max": 3
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
-      "intent": null
-    },
-    {
       "api_key": 57,
       "name": "UpdateFeatures",
       "krabka": {
@@ -710,17 +699,6 @@
         "max": 2
       },
       "verdict": "same",
-      "intent": null
-    },
-    {
-      "api_key": 59,
-      "name": "FetchSnapshot",
-      "krabka": {
-        "min": 0,
-        "max": 1
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
       "intent": null
     },
     {
@@ -749,28 +727,6 @@
         "max": 0
       },
       "verdict": "same",
-      "intent": null
-    },
-    {
-      "api_key": 62,
-      "name": "BrokerRegistration",
-      "krabka": {
-        "min": 0,
-        "max": 4
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
-      "intent": null
-    },
-    {
-      "api_key": 63,
-      "name": "BrokerHeartbeat",
-      "krabka": {
-        "min": 0,
-        "max": 2
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
       "intent": null
     },
     {
@@ -816,17 +772,6 @@
       "intent": null
     },
     {
-      "api_key": 67,
-      "name": "AllocateProducerIds",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
-      "intent": null
-    },
-    {
       "api_key": 68,
       "name": "ConsumerGroupHeartbeat",
       "krabka": {
@@ -852,50 +797,6 @@
         "max": 1
       },
       "verdict": "same",
-      "intent": null
-    },
-    {
-      "api_key": 70,
-      "name": "ControllerRegistration",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
-      "intent": null
-    },
-    {
-      "api_key": 71,
-      "name": "GetTelemetrySubscriptions",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
-      "intent": null
-    },
-    {
-      "api_key": 72,
-      "name": "PushTelemetry",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
-      "intent": null
-    },
-    {
-      "api_key": 73,
-      "name": "AssignReplicasToDirs",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
       "intent": null
     },
     {
@@ -1008,17 +909,6 @@
         "max": 0
       },
       "verdict": "same",
-      "intent": null
-    },
-    {
-      "api_key": 82,
-      "name": "UpdateRaftVoter",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
       "intent": null
     },
     {
@@ -1159,17 +1049,6 @@
         "max": 0
       },
       "verdict": "same",
-      "intent": null
-    },
-    {
-      "api_key": 93,
-      "name": "GetReplicaLogInfo",
-      "krabka": {
-        "min": 0,
-        "max": 0
-      },
-      "kafka": null,
-      "verdict": "krabka_only",
       "intent": null
     }
   ]

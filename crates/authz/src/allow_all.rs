@@ -22,6 +22,13 @@ impl Authorizer for AllowAllAuthorizer {
     ) -> AuthorizationResult {
         AuthorizationResult::Allow
     }
+
+    /// `false`: this is the value a deployment holds when it configured no
+    /// authorizer, which is what the ACL administration RPCs report as
+    /// `SECURITY_DISABLED`.
+    fn is_configured(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -51,5 +58,10 @@ mod tests {
             operation: AclOperation::Write,
         };
         assert2::assert!(AllowAllAuthorizer.authorize(&img, &req) == AuthorizationResult::Allow);
+    }
+
+    #[test]
+    fn allow_all_is_not_a_configured_authorizer() {
+        assert2::assert!(!AllowAllAuthorizer.is_configured());
     }
 }

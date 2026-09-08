@@ -3,8 +3,13 @@
 //! columns that have to agree with it.
 //!
 //! `kafka-topics --describe --unavailable-partitions` and
-//! `--under-replicated-partitions`, Cruise Control, Burrow and every dashboard
-//! built on the `AdminClient` read this list. Kafka computes it in
+//! `--under-replicated-partitions` read this list, and so does every dashboard
+//! built on the `AdminClient`. Two tools that are often named here do not.
+//! Cruise Control needs a broker-side JVM metrics reporter and JMX, and krabka
+//! has neither, so it does not run against krabka at all. Burrow is a
+//! consumer-lag monitor: it decodes `__consumer_offsets` and never asks for
+//! replica state. `docs/operations/ecosystem-support.md` holds the whole list.
+//! Kafka computes the offline set in
 //! `KRaftMetadataCache.getOfflineReplicas`: a replica is offline when its
 //! broker has no registration in the metadata image, when that broker is
 //! fenced, or when the log directory that holds the replica is not among the

@@ -18,6 +18,7 @@ use krabka_protocol::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
@@ -81,13 +82,23 @@ fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {
     }
 }
 
-/// The partition-level error code of an `acks=all` produce of `n` records.
-pub(crate) async fn produce_error(client: &Client, topic_id: WireUuid, n: i32) -> i16 {
-    let resp = client
+/// The whole response to an `acks=all` produce of `n` records. The KIP-951
+/// assertions read `node_endpoints` off it, which the partition-level
+/// [`produce_error`] cannot carry.
+pub(crate) async fn produce_response(
+    client: &Client,
+    topic_id: WireUuid,
+    n: i32,
+) -> ProduceResponse {
+    client
         .send(produce_request(topic_id, n))
         .await
-        .expect("Produce round-trip");
-    resp.responses[0].partition_responses[0].error_code
+        .expect("Produce round-trip")
+}
+
+/// The partition-level error code of an `acks=all` produce of `n` records.
+pub(crate) async fn produce_error(client: &Client, topic_id: WireUuid, n: i32) -> i16 {
+    produce_response(client, topic_id, n).await.responses[0].partition_responses[0].error_code
 }
 
 /// A consumer `Fetch` (`replica_id` = -1) carrying `rack`.

@@ -1,4 +1,4 @@
-//! The streams topology record at key version 17.
+//! The streams topology record at key version 23.
 //!
 //! The value holds the topology epoch and one [`StoredSubtopology`] per
 //! subtopology. A subtopology names its source topics, both exact and regex,
@@ -6,12 +6,36 @@
 //! topics the coordinator must materialize, each described by a
 //! [`StoredTopicInfo`]. A [`StoredCopartitionGroup`] records which of those
 //! topics must be copartitioned, by index into the subtopology's own lists.
+//!
+//! # Layout
+//!
+//! From `StreamsGroupTopologyValue.json` at Apache Kafka tag `4.3.1`, which
+//! declares `"flexibleVersions": "0+"`. `Epoch` (int32), then `Subtopologies`
+//! (`[]Subtopology`), whose fields are in this order: `SubtopologyId` (string),
+//! `SourceTopics` (`[]string`), `SourceTopicRegex` (`[]string`),
+//! `StateChangelogTopics` (`[]TopicInfo`), `RepartitionSinkTopics`
+//! (`[]string`), `RepartitionSourceTopics` (`[]TopicInfo`) and
+//! `CopartitionGroups` (`[]CopartitionGroup`).
+//!
+//! `TopicInfo` is `{Name string, Partitions int32, ReplicationFactor int16,
+//! TopicConfigs []TopicConfig{key string, value string}}`, and
+//! `CopartitionGroup` is three `[]int16` of indices. Every string and array is
+//! compact, and every struct as well as the message ends with a tagged-field
+//! count.
 
 use bytes::{BufMut, Bytes, BytesMut};
 
-use super::codec::{decode_i16_list, decode_string_list, encode_i16_list, encode_string_list};
+use super::codec::{
+    decode_i16_list, decode_key_value_list, encode_i16_list, encode_key_value_list,
+};
 use crate::{
-    coordinator::unified::persistence::{get_i16, get_i32, get_string, put_string},
+    coordinator::unified::persistence::{
+        flex::{
+            get_compact_array_len, get_compact_string, get_string_array, put_compact_array_len,
+            put_compact_string, put_empty_tagged_fields, put_string_array, skip_tagged_fields,
+        },
+        get_i16, get_i32,
+    },
     error::BrokerError,
 };
 
@@ -28,28 +52,18 @@ pub struct StoredTopicInfo {
 
 impl StoredTopicInfo {
     fn encode_into(&self, buf: &mut BytesMut) {
-        put_string(buf, &self.name);
+        put_compact_string(buf, &self.name);
         buf.put_i32(self.partitions);
         buf.put_i16(self.replication_factor);
-        let n = i32::try_from(self.topic_configs.len()).expect("fits");
-        buf.put_i32(n);
-        for (k, v) in &self.topic_configs {
-            put_string(buf, k);
-            put_string(buf, v);
-        }
+        encode_key_value_list(buf, &self.topic_configs);
+        put_empty_tagged_fields(buf);
     }
     fn decode_from(buf: &mut &[u8]) -> Result<Self, BrokerError> {
-        let name = get_string(buf)?;
+        let name = get_compact_string(buf)?;
         let partitions = get_i32(buf)?;
         let replication_factor = get_i16(buf)?;
-        let n = get_i32(buf)?;
-        let cap = usize::try_from(n.max(0)).expect("non-negative");
-        let mut topic_configs = Vec::with_capacity(cap);
-        for _ in 0..n.max(0) {
-            let k = get_string(buf)?;
-            let v = get_string(buf)?;
-            topic_configs.push((k, v));
-        }
+        let topic_configs = decode_key_value_list(buf)?;
+        skip_tagged_fields(buf)?;
         Ok(Self {
             name,
             partitions,
@@ -73,13 +87,16 @@ impl StoredCopartitionGroup {
         encode_i16_list(buf, &self.source_topics);
         encode_i16_list(buf, &self.source_topic_regex);
         encode_i16_list(buf, &self.repartition_source_topics);
+        put_empty_tagged_fields(buf);
     }
     fn decode_from(buf: &mut &[u8]) -> Result<Self, BrokerError> {
-        Ok(Self {
+        let group = Self {
             source_topics: decode_i16_list(buf)?,
             source_topic_regex: decode_i16_list(buf)?,
             repartition_source_topics: decode_i16_list(buf)?,
-        })
+        };
+        skip_tagged_fields(buf)?;
+        Ok(group)
     }
 }
 
@@ -100,47 +117,45 @@ pub struct StoredSubtopology {
 
 impl StoredSubtopology {
     fn encode_into(&self, buf: &mut BytesMut) {
-        put_string(buf, &self.subtopology_id);
-        encode_string_list(buf, &self.source_topics);
-        encode_string_list(buf, &self.source_topic_regex);
-        encode_string_list(buf, &self.repartition_sink_topics);
-        let scn = i32::try_from(self.state_changelog_topics.len()).expect("fits");
-        buf.put_i32(scn);
+        put_compact_string(buf, &self.subtopology_id);
+        put_string_array(buf, &self.source_topics);
+        put_string_array(buf, &self.source_topic_regex);
+        put_compact_array_len(buf, self.state_changelog_topics.len());
         for t in &self.state_changelog_topics {
             t.encode_into(buf);
         }
-        let rsn = i32::try_from(self.repartition_source_topics.len()).expect("fits");
-        buf.put_i32(rsn);
+        put_string_array(buf, &self.repartition_sink_topics);
+        put_compact_array_len(buf, self.repartition_source_topics.len());
         for t in &self.repartition_source_topics {
             t.encode_into(buf);
         }
-        let cgn = i32::try_from(self.copartition_groups.len()).expect("fits");
-        buf.put_i32(cgn);
+        put_compact_array_len(buf, self.copartition_groups.len());
         for cg in &self.copartition_groups {
             cg.encode_into(buf);
         }
+        put_empty_tagged_fields(buf);
     }
     fn decode_from(buf: &mut &[u8]) -> Result<Self, BrokerError> {
-        let subtopology_id = get_string(buf)?;
-        let source_topics = decode_string_list(buf)?;
-        let source_topic_regex = decode_string_list(buf)?;
-        let repartition_sink_topics = decode_string_list(buf)?;
-        let scn = get_i32(buf)?;
-        let mut state_changelog_topics = Vec::with_capacity(usize::try_from(scn.max(0)).unwrap());
-        for _ in 0..scn.max(0) {
+        let subtopology_id = get_compact_string(buf)?;
+        let source_topics = get_string_array(buf)?;
+        let source_topic_regex = get_string_array(buf)?;
+        let scn = get_compact_array_len(buf)?;
+        let mut state_changelog_topics = Vec::with_capacity(scn);
+        for _ in 0..scn {
             state_changelog_topics.push(StoredTopicInfo::decode_from(buf)?);
         }
-        let rsn = get_i32(buf)?;
-        let mut repartition_source_topics =
-            Vec::with_capacity(usize::try_from(rsn.max(0)).unwrap());
-        for _ in 0..rsn.max(0) {
+        let repartition_sink_topics = get_string_array(buf)?;
+        let rsn = get_compact_array_len(buf)?;
+        let mut repartition_source_topics = Vec::with_capacity(rsn);
+        for _ in 0..rsn {
             repartition_source_topics.push(StoredTopicInfo::decode_from(buf)?);
         }
-        let cgn = get_i32(buf)?;
-        let mut copartition_groups = Vec::with_capacity(usize::try_from(cgn.max(0)).unwrap());
-        for _ in 0..cgn.max(0) {
+        let cgn = get_compact_array_len(buf)?;
+        let mut copartition_groups = Vec::with_capacity(cgn);
+        for _ in 0..cgn {
             copartition_groups.push(StoredCopartitionGroup::decode_from(buf)?);
         }
+        skip_tagged_fields(buf)?;
         Ok(Self {
             subtopology_id,
             source_topics,
@@ -153,7 +168,7 @@ impl StoredSubtopology {
     }
 }
 
-/// Key v17 value: the group's resolved topology, that is the epoch and the
+/// Key v23 value: the group's resolved topology, that is the epoch and the
 /// subtopologies.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StreamsGroupTopologyValue {
@@ -163,32 +178,28 @@ pub struct StreamsGroupTopologyValue {
 
 impl StreamsGroupTopologyValue {
     #[must_use]
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         buf.put_i32(self.epoch);
-        let n = i32::try_from(self.subtopologies.len()).expect("fits");
-        buf.put_i32(n);
+        put_compact_array_len(&mut buf, self.subtopologies.len());
         for s in &self.subtopologies {
             s.encode_into(&mut buf);
         }
+        put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
         let epoch = get_i32(&mut buf)?;
-        let n = get_i32(&mut buf)?;
-        let cap = usize::try_from(n.max(0)).expect("non-negative");
-        let mut subtopologies = Vec::with_capacity(cap);
-        for _ in 0..n.max(0) {
+        let n = get_compact_array_len(&mut buf)?;
+        let mut subtopologies = Vec::with_capacity(n);
+        for _ in 0..n {
             subtopologies.push(StoredSubtopology::decode_from(&mut buf)?);
         }
+        skip_tagged_fields(&mut buf)?;
         Ok(Self {
             epoch,
             subtopologies,
@@ -256,6 +267,51 @@ mod tests {
             ],
         };
         assert!(StreamsGroupTopologyValue::decode(&v.encode()).unwrap() == v);
+    }
+
+    #[test]
+    fn topology_bytes_match_kafka_schema() {
+        let v = StreamsGroupTopologyValue {
+            epoch: 1,
+            subtopologies: vec![StoredSubtopology {
+                subtopology_id: "0".into(),
+                source_topics: vec!["s".into()],
+                source_topic_regex: vec![],
+                repartition_sink_topics: vec![],
+                state_changelog_topics: vec![StoredTopicInfo {
+                    name: "c".into(),
+                    partitions: 0,
+                    replication_factor: 3,
+                    topic_configs: vec![],
+                }],
+                repartition_source_topics: vec![],
+                copartition_groups: vec![],
+            }],
+        };
+        let mut want: Vec<u8> = vec![0x00, 0x00];
+        want.extend_from_slice(&1i32.to_be_bytes()); // Epoch
+        want.push(0x02); // one Subtopology
+        want.extend_from_slice(b"\x020"); // SubtopologyId
+        want.extend_from_slice(b"\x02\x02s"); // SourceTopics
+        want.push(0x01); // empty SourceTopicRegex
+        want.push(0x02); // one StateChangelogTopics entry
+        want.extend_from_slice(b"\x02c"); // Name
+        want.extend_from_slice(&0i32.to_be_bytes()); // Partitions
+        want.extend_from_slice(&3i16.to_be_bytes()); // ReplicationFactor
+        want.push(0x01); // empty TopicConfigs
+        want.push(0x00); // TopicInfo tagged fields
+        want.push(0x01); // empty RepartitionSinkTopics
+        want.push(0x01); // empty RepartitionSourceTopics
+        want.push(0x01); // empty CopartitionGroups
+        want.push(0x00); // Subtopology tagged fields
+        want.push(0x00); // message tagged fields
+        assert!(&v.encode()[..] == &want[..]);
+    }
+
+    #[test]
+    fn topology_rejects_a_missing_tagged_trailer() {
+        let full = StreamsGroupTopologyValue::default().encode();
+        assert!(StreamsGroupTopologyValue::decode(&full[..full.len() - 1]).is_err());
     }
 
     #[test]

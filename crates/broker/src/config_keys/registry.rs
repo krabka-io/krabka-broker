@@ -20,8 +20,9 @@
 //! cluster-default broker config, and the two rows differ.
 
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES,
-    FLUSH_MS, INDEX_INTERVAL_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_INHERIT,
+    CLEANUP_POLICY, COMPRESSION_GZIP_LEVEL, COMPRESSION_LZ4_LEVEL, COMPRESSION_TYPE,
+    COMPRESSION_ZSTD_LEVEL, DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES, FLUSH_MS,
+    INDEX_INTERVAL_BYTES, INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_INHERIT,
     LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
     MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_CREATE,
     MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
@@ -138,6 +139,10 @@ pub(crate) enum ValueCheck {
     /// An `i32` no smaller than the bound, which is the width Kafka's `INT`
     /// carries on the wire.
     I32AtLeast(i32),
+    /// An `i32` inside a closed range, which is what Kafka's `between(min,
+    /// max)` validator enforces. `compression.lz4.level` and
+    /// `compression.zstd.level` are the rows that carry one.
+    I32Between(i32, i32),
     /// Checked by a parser the key's own module owns.
     Parsed,
     /// Never accepted by an alter path: the broker synthesises the key, or
@@ -250,6 +255,25 @@ const fn key(
     }
 }
 
+/// `compression.lz4.level` bounds. Kafka validates the key with
+/// `between(1, 17)`, from `CompressionType.LZ4`'s own `minLevel()` and
+/// `maxLevel()`.
+const LZ4_MIN_LEVEL: i32 = 1;
+const LZ4_MAX_LEVEL: i32 = 17;
+/// `compression.zstd.level` bounds. Kafka validates the key with
+/// `between(-131072, 22)`, the `ZSTD_minCLevel` and `ZSTD_MAX_CLEVEL` of the
+/// zstd library that `CompressionType.ZSTD` copies rather than links.
+const ZSTD_MIN_LEVEL: i32 = -131_072;
+const ZSTD_MAX_LEVEL: i32 = 22;
+/// `compression.gzip.level` bounds. Kafka validates the key with a validator
+/// of its own: a level inside `[1, 9]` -- `Deflater.BEST_SPEED` through
+/// `Deflater.BEST_COMPRESSION` -- or exactly `-1`, which is
+/// `Deflater.DEFAULT_COMPRESSION` and the key's default. `0` is refused,
+/// which is why the row cannot carry a plain range check.
+pub(super) const GZIP_MIN_LEVEL: i32 = 1;
+pub(super) const GZIP_MAX_LEVEL: i32 = 9;
+pub(super) const GZIP_DEFAULT_LEVEL: i32 = -1;
+
 /// The two values every boolean key accepts, in the order a refusal names
 /// them.
 pub(super) const BOOLEAN_VALUES: &[&str] = &["true", "false"];
@@ -319,6 +343,39 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         "Broker-side compression codec for the topic.",
         ValueCheck::Parsed,
     ),
+    ConfigKey {
+        type_note: Some("1..9, or -1 for the codec default"),
+        ..key(
+            COMPRESSION_GZIP_LEVEL,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("-1"),
+            "Level a broker-side gzip re-encode runs at. Stored and reported only: krabka's gzip encoder takes no level and always runs at the codec default, which is what -1 selects.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("1..17"),
+        ..key(
+            COMPRESSION_LZ4_LEVEL,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("9"),
+            "Level a broker-side lz4 re-encode runs at. Stored and reported only: krabka's lz4 encoder takes no level.",
+            ValueCheck::I32Between(LZ4_MIN_LEVEL, LZ4_MAX_LEVEL),
+        )
+    },
+    ConfigKey {
+        type_note: Some("-131072..22"),
+        ..key(
+            COMPRESSION_ZSTD_LEVEL,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("3"),
+            "Level a broker-side zstd re-encode runs at. Stored and reported only: krabka's zstd encoder takes no level and always runs at 3, which is this key's default.",
+            ValueCheck::I32Between(ZSTD_MIN_LEVEL, ZSTD_MAX_LEVEL),
+        )
+    },
     ConfigKey {
         type_note: Some(">=1"),
         ..key(
@@ -529,6 +586,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             Some("604800000"),
             "Roll the active segment once its first record is older than this, even when it has not reached segment.bytes.",
             ValueCheck::I64AtLeast(1),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes"),
+        ..key(
+            INTERNAL_SEGMENT_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            None,
+            "Kafka's internal segment-size override, which its own coordinators set on the internal topics they create. Kafka's ConfigDef marks it internal, which hides it from the CLI's help but not from topic-config validation, so an alter carrying it is accepted. Stored and reported only: krabka rolls on segment.bytes.",
+            ValueCheck::I32AtLeast(i32::MIN),
         )
     },
     ConfigKey {

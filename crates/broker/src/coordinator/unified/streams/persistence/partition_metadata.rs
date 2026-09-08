@@ -2,15 +2,30 @@
 //!
 //! The value is the snapshot of every topic the group consumes or produces,
 //! each with the uuid and the partition count that the metadata image held
-//! when the broker computed the assignment. The uuid encodes as a
-//! length-prefixed 16-byte value.
+//! when the broker computed the assignment.
+//!
+//! # Layout
+//!
+//! This is the one record here with no Apache Kafka schema at tag `4.3.1`:
+//! KIP-1101 replaced Kafka's streams partition-metadata record with a metadata
+//! hash, and its `apiKey` 18 is now unassigned. Kafka's
+//! `GroupCoordinatorRecordSerde` therefore does not know the type at all, and
+//! its tools skip the record instead of mis-decoding it.
+//!
+//! The layout still follows the flexible conventions of the records around it,
+//! so that one set of leaf helpers serves every value the broker writes: a
+//! compact array of `{TopicName string, TopicId uuid, NumPartitions int32}`,
+//! each entry and the message ending with a tagged-field count.
 
 use bytes::{BufMut, Bytes, BytesMut};
-use krabka_protocol::ProtocolError;
 
 use crate::{
     coordinator::unified::persistence::{
-        get_bytes, get_i16, get_i32, get_string, put_bytes, put_string,
+        flex::{
+            get_compact_array_len, get_compact_string, get_uuid, put_compact_array_len,
+            put_compact_string, put_empty_tagged_fields, put_uuid, skip_tagged_fields,
+        },
+        get_i16, get_i32,
     },
     error::BrokerError,
 };
@@ -33,47 +48,37 @@ pub struct StreamsGroupPartitionMetadataValue {
 
 impl StreamsGroupPartitionMetadataValue {
     #[must_use]
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        let n = i32::try_from(self.topics.len()).expect("fits");
-        buf.put_i32(n);
+        put_compact_array_len(&mut buf, self.topics.len());
         for t in &self.topics {
-            put_string(&mut buf, &t.topic_name);
-            put_bytes(&mut buf, &Bytes::copy_from_slice(t.topic_id.as_bytes()));
+            put_compact_string(&mut buf, &t.topic_name);
+            put_uuid(&mut buf, *t.topic_id.as_bytes());
             buf.put_i32(t.num_partitions);
+            put_empty_tagged_fields(&mut buf);
         }
+        put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
-        let n = get_i32(&mut buf)?;
-        let cap = usize::try_from(n.max(0)).expect("non-negative");
-        let mut topics = Vec::with_capacity(cap);
-        for _ in 0..n.max(0) {
-            let topic_name = get_string(&mut buf)?;
-            let id_bytes = get_bytes(&mut buf)?;
-            if id_bytes.len() != 16 {
-                return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                    "topic_id not 16 bytes",
-                )));
-            }
-            let mut arr = [0u8; 16];
-            arr.copy_from_slice(&id_bytes);
-            let topic_id = uuid::Uuid::from_bytes(arr);
+        let n = get_compact_array_len(&mut buf)?;
+        let mut topics = Vec::with_capacity(n);
+        for _ in 0..n {
+            let topic_name = get_compact_string(&mut buf)?;
+            let topic_id = uuid::Uuid::from_bytes(get_uuid(&mut buf)?);
             let num_partitions = get_i32(&mut buf)?;
+            skip_tagged_fields(&mut buf)?;
             topics.push(StreamsTopicMeta {
                 topic_name,
                 topic_id,
                 num_partitions,
             });
         }
+        skip_tagged_fields(&mut buf)?;
         Ok(Self { topics })
     }
 }
@@ -115,5 +120,29 @@ mod tests {
             ],
         };
         assert!(StreamsGroupPartitionMetadataValue::decode(&v.encode()).unwrap() == v);
+    }
+
+    #[test]
+    fn partition_metadata_bytes_are_flexible() {
+        let v = StreamsGroupPartitionMetadataValue {
+            topics: vec![StreamsTopicMeta {
+                topic_name: "t".into(),
+                topic_id: uuid::Uuid::from_bytes([1; 16]),
+                num_partitions: 6,
+            }],
+        };
+        let mut want: Vec<u8> = vec![0x00, 0x00, 0x02];
+        want.extend_from_slice(b"\x02t");
+        want.extend_from_slice(&[1u8; 16]);
+        want.extend_from_slice(&6i32.to_be_bytes());
+        want.push(0x00); // entry tagged fields
+        want.push(0x00); // message tagged fields
+        assert!(&v.encode()[..] == &want[..]);
+    }
+
+    #[test]
+    fn partition_metadata_rejects_a_missing_tagged_trailer() {
+        let full = StreamsGroupPartitionMetadataValue::default().encode();
+        assert!(StreamsGroupPartitionMetadataValue::decode(&full[..full.len() - 1]).is_err());
     }
 }

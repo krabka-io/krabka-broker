@@ -26,6 +26,7 @@ use krabka_protocol::{
     owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
 };
 
+mod node_endpoints;
 mod plan;
 mod read;
 mod read_loop;
@@ -37,6 +38,7 @@ mod throttle;
 
 pub(crate) use self::plan::PendingRead;
 use self::{
+    node_endpoints::fetch_node_endpoints,
     plan::{PendingPlanContext, build_pending_reads},
     read_loop::execute_pending_reads,
     request::{FetchPreparation, prepare_fetch},
@@ -53,6 +55,10 @@ use crate::{
 /// and throttle histograms carry. The dispatcher labels the total latency from
 /// the frame it parsed; the handler labels its phases from the same number.
 const FETCH_API_KEY: crate::handlers::ApiKeyCode = krabka_protocol::api_key::ApiKey::Fetch as i16;
+
+/// First `Fetch` response version that carries the KIP-951 `CurrentLeader`
+/// hint and its `NodeEndpoints` companion. Both are tagged fields at v16+.
+const KIP_951_FETCH_VERSION: i16 = 16;
 
 /// Handle a `Fetch` request and return the not-yet-encoded response
 /// **struct** with the negotiated `version`.
@@ -213,11 +219,26 @@ pub(crate) async fn handle(
         &ctx.principal.name,
     );
 
+    // KIP-951: a partition row that names a new leader is only actionable if
+    // the client can resolve that node id to an address. Both halves of the
+    // KIP encode at v16+, so a client that cannot read the hint is also not
+    // offered the endpoints.
+    let node_endpoints = if version >= KIP_951_FETCH_VERSION {
+        fetch_node_endpoints(
+            &image,
+            ctx.connection_listener_name,
+            &broker.config.inter_broker_listener_name,
+            &responses,
+        )
+    } else {
+        Vec::new()
+    };
     let resp = FetchResponse {
         throttle_time_ms: throttle_time_ms_val,
         error_code: 0,
         session_id: response_session_id,
         responses,
+        node_endpoints,
         ..Default::default()
     };
     Ok((resp, version))
@@ -335,9 +356,10 @@ pub(crate) fn compute_visibility_window(
 /// current canonical codec for v4+. This version boundary matches the
 /// request-decode boundary.
 pub(crate) fn encode_fetch_response(
-    resp: FetchResponse,
+    mut resp: FetchResponse,
     version: i16,
 ) -> Result<BytesMut, crate::error::BrokerError> {
+    serve_empty_rather_than_null_records(&mut resp);
     if version < 4 {
         let legacy: krabka_protocol::kafka_3_6_2::owned::fetch_response::FetchResponse =
             resp.into();
@@ -348,6 +370,37 @@ pub(crate) fn encode_fetch_response(
         let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
         resp.encode(&mut buf, version)?;
         Ok(buf)
+    }
+}
+
+/// Replace every absent record set with an empty one.
+///
+/// The broker spells "this partition has nothing to serve" as `None` -- a
+/// throttled partition, a partition whose read came back empty, a tiered read
+/// that missed, a partition that only carries an error code. Kafka's schema
+/// does type the field as nullable, but Kafka's broker never uses that: it
+/// writes `MemoryRecords.EMPTY`, so no client has ever had to decode a null
+/// record set and clients are written accordingly. sarama, for one, passes the
+/// length straight to `getSubset`, which refuses a negative length as
+/// `invalid byteslice length` and drops the connection -- taking the fetches
+/// for every other partition in the same response down with it.
+///
+/// The codegen encoders below are faithful to the schema, so the null has to
+/// go before they see it. The v4+ write plan in `network::fetch_writer` makes
+/// the same guarantee at its own boundary.
+fn serve_empty_rather_than_null_records(resp: &mut FetchResponse) {
+    for topic in &mut resp.responses {
+        for partition in &mut topic.partitions {
+            if partition
+                .records
+                .as_ref()
+                .is_none_or(|records| records.payload_len() == 0)
+            {
+                partition.records = Some(krabka_protocol::records::RecordsPayload::Raw(
+                    bytes::Bytes::new(),
+                ));
+            }
+        }
     }
 }
 
@@ -365,6 +418,41 @@ mod tests {
         records::{Record, RecordBatch, RecordsPayload},
     };
     use krabka_security::{AuthMethod, Principal};
+
+    /// A partition with nothing to serve reaches the wire as an empty record
+    /// set at every version the handler encodes, the legacy Fetch v0-3 codec
+    /// included. The trailing bytes of the body are the records field, so a
+    /// null one would end the body `ff ff ff ff` rather than `00 00 00 00`.
+    #[test]
+    fn no_version_puts_a_null_record_set_on_the_wire() {
+        use krabka_protocol::owned::fetch_response::{
+            FetchResponse, FetchableTopicResponse, PartitionData,
+        };
+
+        for version in [0i16, 1, 2, 3, 4, 7, 11] {
+            for records in [None, Some(RecordsPayload::Raw(Bytes::new()))] {
+                let resp = FetchResponse {
+                    responses: vec![FetchableTopicResponse {
+                        topic: "t".to_string(),
+                        partitions: vec![PartitionData {
+                            partition_index: 0,
+                            records,
+                            ..PartitionData::default()
+                        }],
+                        ..FetchableTopicResponse::default()
+                    }],
+                    ..FetchResponse::default()
+                };
+                let body = super::encode_fetch_response(resp, version)
+                    .expect("the handler encodes its own response");
+                let tail = &body[body.len() - 4..];
+                assert!(
+                    tail == b"\x00\x00\x00\x00",
+                    "version {version} ended the body with {tail:?}, not an empty record set"
+                );
+            }
+        }
+    }
 
     use crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},

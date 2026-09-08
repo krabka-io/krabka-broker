@@ -300,7 +300,7 @@ mod tests {
         let current = streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 7,
             previous_member_epoch: 6,
-            state: 1,
+            state: streams::persistence::StreamsMemberWireState::UnrevokedTasks,
             active,
             ..Default::default()
         };

@@ -65,6 +65,13 @@ impl Authorizer for AuditingAuthorizer {
         }
         result
     }
+
+    /// Forward the wrapped authorizer's answer: the decorator adds auditing,
+    /// not a decision point, so a broker with no authorizer configured must
+    /// still report itself as having none.
+    fn is_configured(&self) -> bool {
+        self.inner.is_configured()
+    }
 }
 
 #[cfg(test)]
@@ -168,5 +175,25 @@ mod tests {
             .get_or_create(&denied_label())
             .get();
         check!(denied == 1);
+    }
+
+    /// The decorator is installed over whatever the operator configured, so
+    /// the ACL RPCs must still see a broker with no authorizer as one.
+    #[test]
+    fn is_configured_follows_the_wrapped_authorizer() {
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let over_allow_all = AuditingAuthorizer::new(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            krabka_audit::AuditLog::disabled(),
+            metrics.clone(),
+        );
+        let over_deny_all = AuditingAuthorizer::new(
+            Arc::new(DenyAll),
+            krabka_audit::AuditLog::disabled(),
+            metrics,
+        );
+
+        check!(!over_allow_all.is_configured());
+        check!(over_deny_all.is_configured());
     }
 }

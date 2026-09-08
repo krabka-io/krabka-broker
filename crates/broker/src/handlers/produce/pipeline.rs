@@ -322,7 +322,10 @@ pub(super) async fn process_partition(
     // doesn't, or the topic is unknown) maps to UNKNOWN_TOPIC_OR_PARTITION
     // (3); presence-but-not-leader maps to NOT_LEADER_OR_FOLLOWER (6) with
     // a `current_leader` hint (encodes at Produce v10+, KIP-951) so the
-    // client re-routes without a full Metadata round-trip.
+    // client re-routes without a full Metadata round-trip. The hint names a
+    // node id, and the response's `NodeEndpoints` carries that node's
+    // advertised address: `node_endpoints::produce_node_endpoints` fills it
+    // from these rows once every partition has been decided.
     let (part, _) = match validate_partition_gate(
         topic_name,
         idx,

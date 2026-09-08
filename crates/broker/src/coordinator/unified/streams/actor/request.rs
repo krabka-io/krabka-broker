@@ -62,7 +62,7 @@ pub(super) fn build_member(
     m.user_endpoint = req
         .user_endpoint
         .as_ref()
-        .map(|ep| (ep.host.clone(), u32::from(ep.port)));
+        .map(|ep| (ep.host.clone(), ep.port));
     if let Some(tags) = &req.client_tags {
         m.client_tags = tags
             .iter()

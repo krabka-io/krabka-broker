@@ -2,6 +2,9 @@
 //!
 //! Authorizes `Describe` on `Cluster`, then projects every ACL in
 //! the metadata image that matches the request's filter axes.
+//!
+//! A cluster with no authorizer configured has no ACLs to project, and says
+//! so with `SECURITY_DISABLED` rather than an empty listing.
 
 use bytes::Bytes;
 use krabka_metadata::{AclEntry, AclEntryFilter};
@@ -14,9 +17,9 @@ use krabka_protocol::{
 };
 
 use super::acl_wire::{
-    CLUSTER_RESOURCE_NAME, PatternTypeCode, ResourceTypeCode, operation_filter, operation_to_wire,
-    pattern_type_filter, pattern_type_to_wire, permission_filter, permission_to_wire,
-    resource_type_filter, resource_type_to_wire,
+    CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE, PatternTypeCode, ResourceTypeCode,
+    operation_filter, operation_to_wire, pattern_type_filter, pattern_type_to_wire,
+    permission_filter, permission_to_wire, resource_type_filter, resource_type_to_wire,
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -99,6 +102,15 @@ pub(crate) fn handle(
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "describe-acls denied",
         );
+        return encode_response(&resp, api_version);
+    }
+
+    // No authorizer: there is nothing to describe, and Kafka says so rather
+    // than answering an empty listing a tool would read as "no ACLs exist".
+    // `KafkaApis.handleDescribeAcls` runs the cluster-describe check first
+    // and only then matches on `authorizer.isEmpty`, which is the order here.
+    if !broker.config.authorizer.is_configured() {
+        let resp = describe_acls_error_response(codes::SECURITY_DISABLED, NO_AUTHORIZER_MESSAGE);
         return encode_response(&resp, api_version);
     }
 
@@ -234,6 +246,18 @@ mod tests {
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
+    /// An authorizer an operator actually configured, which lets the `admin`
+    /// test principal through as a super user.
+    ///
+    /// The ACL RPCs answer `SECURITY_DISABLED` under the default
+    /// `AllowAllAuthorizer`, so every case about the describing path needs a
+    /// broker that has an authorizer at all.
+    fn configured_authorizer() -> Arc<dyn crate::authorizer::Authorizer> {
+        Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+            std::iter::once("admin".to_owned()).collect(),
+        ))
+    }
+
     async fn seed_acls(handle: &BrokerHandle, entries: Vec<AclEntry>) {
         handle
             .broker_arc_for_test()
@@ -367,9 +391,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_rejects_malformed_filter() {
+    async fn handle_answers_security_disabled_when_no_authorizer_is_configured() {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_acls(
+            &broker_handle,
+            vec![acl("orders", "User:alice", AclOperation::Read)],
+        )
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let resp = handle(
+            &broker,
+            request(Some("orders"), Some("User:alice"), OPERATION_READ),
+            &ctx,
+            VERSION,
+        )
+        .expect("handle");
+        let resp = decode_response(&resp);
+
+        let expected = DescribeAclsResponse {
+            throttle_time_ms: 0,
+            error_code: codes::SECURITY_DISABLED,
+            error_message: Some("No Authorizer is configured on the broker".into()),
+            resources: Vec::new(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn handle_rejects_malformed_filter() {
+        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("admin");
         let peer = peer();
@@ -393,8 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_returns_only_matching_acl_fields() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
         seed_acls(
             &broker_handle,
             vec![

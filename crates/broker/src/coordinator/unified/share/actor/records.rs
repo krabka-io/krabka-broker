@@ -32,7 +32,7 @@ pub(crate) struct PendingShareRecords {
     pub target_metadata: Option<ShareGroupTargetAssignmentMetadataValue>,
     pub target_per_member: Vec<(String, Option<ShareGroupTargetAssignmentMemberValue>)>,
     pub current_per_member: Vec<(String, Option<ShareGroupCurrentMemberAssignmentValue>)>,
-    /// KIP-932 `ShareGroupStatePartitionMetadata` (key v14). `Some` writes the
+    /// KIP-932 `ShareGroupStatePartitionMetadata` (key v15). `Some` writes the
     /// updated Initialized/deleting record after a lifecycle Initialize/Delete.
     pub state_partition_metadata: Option<ShareGroupStatePartitionMetadataValue>,
 }
@@ -162,7 +162,7 @@ pub(super) fn snapshot_pending_after_change(
     pending
 }
 
-/// Build the `ShareGroupStatePartitionMetadata` (key v14) value from the live
+/// Build the `ShareGroupStatePartitionMetadata` (key v15) value from the live
 /// Initialized set. There is one `(topic_id, partitions)` row per topic, and
 /// the partitions are sorted for a stable encoding.
 pub(super) fn state_partition_metadata_from(

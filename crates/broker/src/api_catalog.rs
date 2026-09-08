@@ -2,8 +2,12 @@
 //!
 //! This is the single source of truth for both the live `ApiVersions`
 //! (`api_key` 18) response and the generated protocol-API reference page. The
-//! handler in `handlers::api_versions` calls [`supported_apis`]. `crabka-docgen`
-//! reads the same list and does not spawn the broker binary.
+//! handler in `handlers::api_versions` calls [`supported_apis`] with the kind
+//! of listener the request arrived on and the broker's KIP-714 setting, so a
+//! listener a client reaches advertises what a Kafka broker advertises. The
+//! dispatch registry calls [`dispatched_apis`] instead, because what the broker
+//! serves is wider than what any one listener names. `crabka-docgen` reads the
+//! same list and does not spawn the broker binary.
 //!
 //! It is also the source of truth for the per-KIP rows of the generated
 //! `docs/KIP_MATRIX.md`. [`KIP_ANNOTATIONS`] holds one [`KipAnnotation`] per
@@ -145,6 +149,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transactions/txn_fencing.rs",
             "crates/broker/tests/jvm_streams_app.rs",
             "crates/broker/tests/jvm_connect_distributed.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
         clients: ClientEvidence::NotCovered,
         note: "",
@@ -392,6 +397,17 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`.",
     },
     KipAnnotation {
+        key: "KIP-382",
+        claim: "MirrorMaker 2 replicates a Kafka cluster onto krabka",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_commit.rs",
+        tests: &[
+            "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure.",
+    },
+    KipAnnotation {
         key: "KIP-392",
         claim: "Fetch from the closest replica",
         status: KipStatus::Implemented,
@@ -563,6 +579,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/kip516_fetch.rs",
             "crates/broker/tests/kip516_offsets.rs",
             "crates/broker/tests/kip516_delete_topics.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
         clients: ClientEvidence::NotCovered,
         note: "",
@@ -727,6 +744,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-704",
+        claim: "AlterPartition's leader recovery state after an unclean election",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/alter_partition/isr_update.rs",
+        tests: &[
+            "crates/broker/src/handlers/alter_partition/isr_update.rs::error_response_preserves_non_default_partition_fields",
+            "crates/broker/src/handlers/alter_partition/tests.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The wire half only. `leader_recovery_state` is a literal 0 -- `RECOVERED` -- at every site that writes it, on the leader side at crates/broker/src/isr_maintenance/request_builder.rs:67 and crates/broker/src/isr_maintenance/request_builder.rs:120 and on the controller side at crates/broker/src/handlers/alter_partition/isr_update.rs:160 and crates/broker/src/handlers/alter_partition/isr_update.rs:179, and nothing under `crates/` reads the field. So the RECOVERING state does not exist here: a partition that comes back from an unclean leader election is advertised as fully recovered from its first AlterPartition onward, no leader is held in recovery, and the controller ignores the state a leader reports rather than answering it. The row is Partial because the field is carried and negotiated, not because any part of the recovery protocol runs.",
+    },
+    KipAnnotation {
         key: "KIP-714",
         claim: "Client metrics push: GetTelemetrySubscriptions and PushTelemetry",
         status: KipStatus::Implemented,
@@ -734,9 +763,10 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/client_telemetry.rs",
             "crates/broker/tests/client_metrics_config.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
         clients: ClientEvidence::NotCovered,
-        note: "",
+        note: "GetTelemetrySubscriptions (71) and PushTelemetry (72) are advertised only when the broker has a client-metrics receiver: the `[runtime]` key `client_metrics_enable`, or a configured `client_metrics_otlp_endpoint`, which implies it. The default is off, which is what a stock Kafka broker advertises when `metric.reporters` holds no `ClientTelemetry` implementation, so a modern Java or librdkafka client opens no telemetry handshake it has nowhere to push to. `api_catalog::ClientMetricsReceiver` names the gate and `BrokerConfig::client_metrics_receiver` reads it. Both handlers stay registered either way and answer a client that sends one anyway.",
     },
     KipAnnotation {
         key: "KIP-734",
@@ -746,6 +776,20 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
         clients: ClientEvidence::NotCovered,
         note: "",
+    },
+    KipAnnotation {
+        key: "KIP-768",
+        claim: "SASL/OAUTHBEARER against an OIDC provider's JWKS endpoint",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/oauth_jwks.rs",
+        tests: &[
+            "crates/broker/tests/auth_handlers/oauthbearer_tokens.rs::sasl_oauthbearer_signed_token_happy_path",
+            "crates/broker/src/oauth_jwks/refresher/tests.rs",
+            "crates/broker/src/oauth_jwks/fetch.rs::fetch_jwks_parses_served_keyset",
+            "crates/verified/src/jwks.rs::cache_requires_one_fresh_stable_generation",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The broker half of the KIP: `crates/broker/src/oauth_jwks/` GETs the provider's JWKS document over HTTP or HTTPS, parses it, and swaps the key set into the shared `JwksHandle` a `SignedJwsValidator` reads, so rotated keys are picked up with no restart. It refreshes on a cadence and on a validator's unknown-kid signal, rate-limits the on-demand path, keeps the previous key set when a fetch fails, and fences readers with the even/odd generation counter that crates/verified/src/jwks.rs:42 proves admission against; the same file's crates/verified/src/jwks.rs:84 keeps the on-demand limiter monotonic across a wall-clock rollback. Cache expiry, issuer and audience checks, the principal and groups claims, the `typ` check, clock skew, an operator-supplied `IdP` TLS trust bundle and the `use=enc` filter are configured from the `[oauthbearer]` TOML table rather than Kafka's `sasl.oauthbearer.*` JAAS options. The KIP's client half -- the login callback that retrieves a token with an OAuth `client_credentials` grant -- is a client concern and lives in `krabka-client-rs`, not in this repository.",
     },
     KipAnnotation {
         key: "KIP-778",
@@ -790,6 +834,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_consumer_group_next_gen.rs",
             "crates/broker/tests/group_version.rs",
             "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
         clients: ClientEvidence::NotCovered,
         note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker.",
@@ -996,6 +1041,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1101",
+        claim: "The MetadataHash tagged field on the group-metadata records, and the streams partition-metadata record it retires",
+        status: KipStatus::OutOfScope,
+        module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
+        tests: &[],
+        clients: ClientEvidence::NotCovered,
+        note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape; krabka decides that from the metadata image instead, so it keeps no such hash. The field is tagged and its default is 0, so the record krabka writes is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
+    },
+    KipAnnotation {
         key: "KIP-1142",
         claim: "ListConfigResources",
         status: KipStatus::Implemented,
@@ -1033,6 +1087,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
         clients: ClientEvidence::NotCovered,
         note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1263",
+        claim: "The AssignmentTimestamp tagged field on the target-assignment metadata records",
+        status: KipStatus::OutOfScope,
+        module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
+        tests: &[],
+        clients: ClientEvidence::NotCovered,
+        note: "Kafka stamps each target assignment with the time it was computed, for its own assignment metrics. krabka does not measure assignment latency from the log, so it writes the tagged field's default of 0, which is what Kafka writes when it has no timestamp to record.",
     },
     KipAnnotation {
         key: "KIP-1319",
@@ -1081,13 +1144,138 @@ macro_rules! v {
     };
 }
 
-/// The full advertised API set, mirrored from each API's generated
+/// Which of the broker's listeners an `ApiVersions` response goes out on.
+///
+/// Apache Kafka tags every request schema with the listener types that accept
+/// it, and `ApiVersionsResponse.filterApis` drops every row whose tag does not
+/// hold for the listener the request arrived on. A Kafka broker answers with
+/// `ListenerType.BROKER`, so a key tagged `controller` only -- `AlterPartition`,
+/// `BrokerRegistration`, and the rest of [`INTER_BROKER_ONLY_APIS`] -- never
+/// reaches a client. krabka's controller listener does the same through
+/// `krabka_raft`'s own `CONTROLLER_LISTENER_APIS`; this enum is the broker
+/// side of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListenerKind {
+    /// A listener a Kafka client reaches. It advertises what a Kafka broker
+    /// advertises, which is every key except [`INTER_BROKER_ONLY_APIS`].
+    Client,
+    /// The listener `inter.broker.listener.name` names, which
+    /// [`crate::config::BrokerConfig::listener_kind`] recognises by name. On
+    /// the default single-listener broker that is the same listener clients
+    /// reach.
+    ///
+    /// It adds [`INTER_BROKER_ONLY_APIS`], because a krabka broker reaches a
+    /// peer over the peer's inter-broker endpoint rather than over a
+    /// controller listener, and the peer has to say which versions of those
+    /// RPCs it speaks before the caller can send one.
+    InterBroker,
+}
+
+/// Whether the broker has somewhere to send KIP-714 client metrics.
+///
+/// Kafka advertises `GetTelemetrySubscriptions` and `PushTelemetry` only when
+/// `metric.reporters` holds a `ClientTelemetry` implementation; a stock broker
+/// has none and answers `ApiVersions` without those two rows, which is what
+/// keeps a modern Java or librdkafka client from opening a telemetry handshake
+/// it has nowhere to push to. krabka's equivalent is
+/// `client_metrics_enable`, and
+/// [`crate::config::BrokerConfig::client_metrics_receiver`] reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClientMetricsReceiver {
+    /// A receiver is configured, so the two KIP-714 keys are advertised.
+    Configured,
+    /// No receiver is configured. The handlers stay registered and answer a
+    /// client that sends one anyway, exactly as they do today; nothing invites
+    /// a client to start.
+    Absent,
+}
+
+/// The api keys a listener a Kafka client reaches does not advertise.
+///
+/// Eight of them are tagged `controller` only by their request schema in
+/// `krabka-protocol`, so no Kafka broker listener has ever advertised them:
+/// `AlterPartition` (56), `FetchSnapshot` (59), `BrokerRegistration` (62),
+/// `BrokerHeartbeat` (63), `AllocateProducerIds` (67),
+/// `ControllerRegistration` (70), `AssignReplicasToDirs` (73) and
+/// `UpdateRaftVoter` (82). krabka serves all eight from the broker's dispatch
+/// registry, because its controller listener routes several of them back into
+/// broker handlers, and every one of those handlers gates on `ClusterAction`.
+/// Serving them is not a reason to advertise them: a tool or an audit that
+/// reads the advertised set to infer a node's role would read a krabka broker
+/// as a controller.
+///
+/// `GetReplicaLogInfo` (93) is the ninth. Its schema is tagged `broker`, but no
+/// released Kafka advertises it -- `mirror.gcr.io/apache/kafka:4.3.1` stops at
+/// api key 92 -- and the only caller in this tree is the KIP-966 unclean
+/// recovery manager, which dials a replica's inter-broker endpoint. It
+/// therefore belongs on the same side of the split as the other eight.
+///
+/// Dispatch is unaffected. [`dispatched_apis`] still carries every key here at
+/// its full version range, so a peer that sends one is answered whichever
+/// listener it arrived on. Withholding a key is not free, though: krabka's own
+/// intra-cluster senders go through `krabka_client_core`, which negotiates
+/// against the advertised table, so an endpoint peers dial has to advertise
+/// what they send it. That is why the widened side of the split is the
+/// listener `inter.broker.listener.name` names rather than a listener that
+/// happens to be separate -- see
+/// [`crate::config::BrokerConfig::listener_kind`].
+pub const INTER_BROKER_ONLY_APIS: &[i16] = {
+    use krabka_protocol::owned;
+    &[
+        owned::alter_partition_request::API_KEY,
+        owned::fetch_snapshot_request::API_KEY,
+        owned::broker_registration_request::API_KEY,
+        owned::broker_heartbeat_request::API_KEY,
+        owned::allocate_producer_ids_request::API_KEY,
+        owned::controller_registration_request::API_KEY,
+        owned::assign_replicas_to_dirs_request::API_KEY,
+        owned::update_raft_voter_request::API_KEY,
+        owned::get_replica_log_info_request::API_KEY,
+    ]
+};
+
+/// The KIP-714 client-metrics keys, advertised only behind
+/// [`ClientMetricsReceiver::Configured`].
+pub const CLIENT_METRICS_APIS: &[i16] = {
+    use krabka_protocol::owned;
+    &[
+        owned::get_telemetry_subscriptions_request::API_KEY,
+        owned::push_telemetry_request::API_KEY,
+    ]
+};
+
+/// Every API the broker dispatches, mirrored from each API's generated
 /// `MIN_VERSION` and `MAX_VERSION` constants. Update it when you add a handler.
+///
+/// This is the union across both listener kinds and both telemetry settings,
+/// so it is what the dispatch registry takes its per-key version bounds from.
+/// It is not what any listener advertises; that is [`supported_apis`].
 #[must_use]
-pub fn supported_apis() -> Vec<ApiVersion> {
+pub fn dispatched_apis() -> Vec<ApiVersion> {
     let mut apis = client_facing_apis();
     apis.extend(admin_apis());
     apis
+}
+
+/// The API set `listener` advertises, in [`dispatched_apis`] order.
+///
+/// `client_metrics` gates the two KIP-714 keys on both listener kinds, the way
+/// Kafka gates them on a configured `ClientTelemetry` reporter.
+#[must_use]
+pub fn supported_apis(
+    listener: ListenerKind,
+    client_metrics: ClientMetricsReceiver,
+) -> Vec<ApiVersion> {
+    dispatched_apis()
+        .into_iter()
+        .filter(|api| {
+            let withheld_control_plane =
+                listener == ListenerKind::Client && INTER_BROKER_ONLY_APIS.contains(&api.api_key);
+            let withheld_telemetry = client_metrics == ClientMetricsReceiver::Absent
+                && CLIENT_METRICS_APIS.contains(&api.api_key);
+            !withheld_control_plane && !withheld_telemetry
+        })
+        .collect()
 }
 
 fn client_facing_apis() -> Vec<ApiVersion> {
@@ -1194,12 +1382,10 @@ fn admin_apis() -> Vec<ApiVersion> {
         // used by JVM admin clients 3.7+ in place of fanned-out Metadata
         // calls for `kafka-topics --describe`.
         v!(describe_topic_partitions_request),
-        // KIP-714 client-metrics push handshake. Krabka exposes its own
-        // broker-side observability — these handlers return "no metrics
-        // subscribed" so clients skip the push entirely. Advertising is
-        // still important: clients query `ApiVersions` to learn the
-        // broker supports the API at all, and absence flips them into
-        // legacy-fallback paths we don't need.
+        // KIP-714 client-metrics push handshake, advertised only behind
+        // `ClientMetricsReceiver::Configured`. Kafka advertises the pair only
+        // when `metric.reporters` holds a `ClientTelemetry` implementation, so
+        // a client that sees the rows has somewhere to push to.
         v!(get_telemetry_subscriptions_request),
         v!(push_telemetry_request),
         // ListConfigResources (KIP-1142) — typed enumeration of every
@@ -1256,9 +1442,14 @@ mod tests {
 
     use super::*;
 
+    /// The client listener's table, which is what a Kafka client reads.
+    fn client_apis() -> Vec<ApiVersion> {
+        supported_apis(ListenerKind::Client, ClientMetricsReceiver::Absent)
+    }
+
     #[test]
     fn share_group_apis_are_advertised() {
-        let apis = supported_apis();
+        let apis = client_apis();
         let keys: Vec<i16> = apis.iter().map(|a| a.api_key).collect();
         assert!(keys.contains(&76));
         assert!(keys.contains(&77));
@@ -1268,7 +1459,7 @@ mod tests {
 
     #[test]
     fn streams_group_apis_are_advertised() {
-        let apis = supported_apis();
+        let apis = client_apis();
         let keys: Vec<i16> = apis.iter().map(|a| a.api_key).collect();
         // StreamsGroupHeartbeat(88), StreamsGroupDescribe(89).
         assert!(keys.contains(&88));
@@ -1279,7 +1470,7 @@ mod tests {
 
     #[test]
     fn share_coordinator_persister_apis_are_advertised() {
-        let apis = supported_apis();
+        let apis = client_apis();
         let keys: Vec<i16> = apis.iter().map(|a| a.api_key).collect();
         // InitializeShareGroupState(83), ReadShareGroupState(84),
         // WriteShareGroupState(85), DeleteShareGroupState(86),
@@ -1294,12 +1485,81 @@ mod tests {
 
     #[test]
     fn supported_apis_is_nonempty_and_sane() {
-        let apis = supported_apis();
-        assert!(!apis.is_empty(), "advertised API table must not be empty");
-        // ApiVersions itself (api_key 18) is always advertised.
-        assert!(apis.iter().any(|a| a.api_key == 18));
-        for a in &apis {
-            assert!(a.min_version <= a.max_version, "api {} min>max", a.api_key);
+        for apis in [client_apis(), dispatched_apis()] {
+            assert!(!apis.is_empty(), "advertised API table must not be empty");
+            // ApiVersions itself (api_key 18) is always advertised.
+            assert!(apis.iter().any(|a| a.api_key == 18));
+            for a in &apis {
+                assert!(a.min_version <= a.max_version, "api {} min>max", a.api_key);
+            }
+        }
+    }
+
+    /// The keys one advertised table names, in ascending order.
+    fn keys_of(apis: &[ApiVersion]) -> BTreeSet<i16> {
+        apis.iter().map(|api| api.api_key).collect()
+    }
+
+    /// A client listener advertises what a Kafka broker advertises: every
+    /// dispatched key except the control-plane set and, with no receiver
+    /// configured, the two KIP-714 keys.
+    #[test]
+    fn the_client_listener_withholds_the_control_plane_and_telemetry_keys() {
+        let withheld: BTreeSet<i16> = INTER_BROKER_ONLY_APIS
+            .iter()
+            .chain(CLIENT_METRICS_APIS)
+            .copied()
+            .collect();
+        let dispatched = keys_of(&dispatched_apis());
+        assert!(withheld.is_subset(&dispatched));
+        assert!(keys_of(&client_apis()) == dispatched.difference(&withheld).copied().collect());
+    }
+
+    /// The inter-broker listener keeps the control-plane keys, because a
+    /// krabka broker negotiates them against a peer's inter-broker endpoint.
+    #[test]
+    fn the_inter_broker_listener_keeps_the_control_plane_keys() {
+        let apis = supported_apis(ListenerKind::InterBroker, ClientMetricsReceiver::Absent);
+        let keys = keys_of(&apis);
+        for api_key in INTER_BROKER_ONLY_APIS {
+            assert!(keys.contains(api_key), "api_key {api_key}");
+        }
+        for api_key in CLIENT_METRICS_APIS {
+            assert!(!keys.contains(api_key), "api_key {api_key}");
+        }
+    }
+
+    /// A configured receiver adds the KIP-714 pair, and nothing else, to
+    /// either listener.
+    #[test]
+    fn a_configured_client_metrics_receiver_adds_only_the_two_telemetry_keys() {
+        for listener in [ListenerKind::Client, ListenerKind::InterBroker] {
+            let absent = keys_of(&supported_apis(listener, ClientMetricsReceiver::Absent));
+            let configured = keys_of(&supported_apis(listener, ClientMetricsReceiver::Configured));
+            assert!(
+                configured
+                    .difference(&absent)
+                    .copied()
+                    .collect::<BTreeSet<i16>>()
+                    == CLIENT_METRICS_APIS.iter().copied().collect()
+            );
+        }
+    }
+
+    /// Every advertised row keeps the version range the dispatch table serves
+    /// it at, so filtering never narrows a range.
+    #[test]
+    fn filtering_by_listener_does_not_move_a_version_range() {
+        let dispatched = dispatched_apis();
+        for listener in [ListenerKind::Client, ListenerKind::InterBroker] {
+            for metrics in [
+                ClientMetricsReceiver::Absent,
+                ClientMetricsReceiver::Configured,
+            ] {
+                for api in supported_apis(listener, metrics) {
+                    assert!(dispatched.contains(&api), "api_key {}", api.api_key);
+                }
+            }
         }
     }
 

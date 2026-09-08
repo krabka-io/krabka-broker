@@ -104,7 +104,10 @@ macro_rules! security_fields {
             /// Pluggable cluster authorizer. There is one boxed instance for each
             /// broker, configured through `[authorization]` in `broker.toml`. The
             /// default is [`crate::authorizer::AllowAllAuthorizer`], an explicit
-            /// "allow everything" policy.
+            /// "allow everything" policy. That default reports itself as no
+            /// authorizer at all through
+            /// [`crate::authorizer::Authorizer::is_configured`], which is what
+            /// makes the ACL administration RPCs answer `SECURITY_DISABLED`.
             pub authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
 
             /// KFC-7 schema validator: the registry client and its cache, shared by

@@ -96,13 +96,13 @@ fn registry_dispatches_every_krabka_private_key_to_its_own_handler() {
 
 #[test]
 fn no_krabka_private_key_reaches_api_versions() {
-    let advertised: BTreeSet<ApiKeyCode> = crate::api_catalog::supported_apis()
+    let dispatched: BTreeSet<ApiKeyCode> = crate::api_catalog::dispatched_apis()
         .into_iter()
         .map(|api| api.api_key)
         .collect();
 
     for (label, api_key, _) in krabka_private_dispatches() {
         check!(api_key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR, "{label}");
-        check!(!advertised.contains(&api_key), "{label}");
+        check!(!dispatched.contains(&api_key), "{label}");
     }
 }

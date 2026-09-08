@@ -7,21 +7,26 @@
 //! the JVM harness only ever proved that a client could complete the exchange,
 //! never what the exchange said.
 //!
-//! Two cases close that:
+//! Three cases close that:
 //!
 //! 1. [`cases::krabka_advertises_exactly_the_api_catalog`] reads krabka's table
 //!    back with the official `kafka-broker-api-versions` tool and compares the
-//!    whole parsed table against the whole catalog.
+//!    whole parsed table against the whole catalog the client listener serves.
 //! 2. [`cases::divergence_from_real_kafka_matches_the_expectation`] reads the
 //!    same table from a pinned Apache Kafka broker and compares the outer join
 //!    of the two against `tests/fixtures/api_versions/divergence.json`. A range
 //!    krabka advertises that Kafka does not -- or one that has moved away from
 //!    Kafka's -- then arrives as a diff on that file.
+//! 3. [`cases::the_client_listener_prints_the_same_api_key_set_as_kafka`] reads
+//!    both tables with the same tool and compares the printed key sets alone.
+//!    That is the claim an operator checks by hand: the command names the same
+//!    APIs against krabka as it does against Kafka, so nothing reads a krabka
+//!    broker as a controller.
 //!
 //! That file is also what `aspect generate-kip-matrix` reads for the version
 //! columns of `docs/KIP_MATRIX.md`, so the matrix and the tests cannot disagree.
 //!
-//! Both cases are `#[ignore]`d because they need Docker, and the Bazel lane
+//! All three cases are `#[ignore]`d because they need Docker, and the Bazel lane
 //! that owns this suite runs it with `--ignored`. The unit tests over the output
 //! reader in [`parse`], the join in [`divergence`] and the readiness deadlines
 //! in [`probe`] therefore live under a second root,

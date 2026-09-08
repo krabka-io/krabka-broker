@@ -13,6 +13,14 @@ use serde::Deserialize;
 /// `AllowAll`; `super_users` is the principal bypass list consulted by
 /// every concrete authorizer impl.
 ///
+/// Omitting the whole block leaves the cluster with no authorizer, which is
+/// what Kafka has when `authorizer.class.name` is unset: every principal is
+/// allowed everything, and the ACL administration RPCs -- `DescribeAcls`,
+/// `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with
+/// "No Authorizer is configured on the broker" rather than an empty listing
+/// or a stored binding nothing would consult. `kafka-acls` reports that
+/// refusal.
+///
 /// `deny_unknown_fields` so a misspelled `super_user` typo at the top
 /// of the `[authorization]` block is rejected at parse time rather
 /// than silently producing the wrong authorizer.
@@ -36,6 +44,13 @@ pub struct FileAuthorizationConfig {
 /// Which [`crate::authorizer::Authorizer`] impl to instantiate.
 /// `snake_case` to match the spec's `type = "allow_all" | "simple" |
 /// "opa"` wire shape.
+///
+/// `allow_all` is the default and is not an authorizer: it allows every
+/// principal every operation, and the ACL administration RPCs answer
+/// `SECURITY_DISABLED` (54) with "No Authorizer is configured on the broker",
+/// as Kafka does with no `authorizer.class.name`. `simple` and `opa` are
+/// decision
+/// points, and under either the ACL RPCs serve requests normally.
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthzType {
