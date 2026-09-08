@@ -705,9 +705,10 @@ async fn await_committed_offsets(
             progress.finish("timed out");
             return Err(format!(
                 "no committed offset for {GROUP} within {COMMIT_TIMEOUT:?}, though the client \
-                 is a member of it: sarama marks each message it hands ConsumeClaim and \
-                 auto-commits every second at OffsetCommit v3, so what failed is the commit, \
-                 not the join."
+                 is a member of it, so the join is not what failed. sarama auto-commits every \
+                 second, but only offsets for messages it has already handed ConsumeClaim, so \
+                 nothing to commit means nothing was consumed. Read the kaf[stderr] lines \
+                 above for the fetch that did not decode; the commit is downstream of it."
             ));
         }
         tokio::time::sleep(Duration::from_millis(500)).await;

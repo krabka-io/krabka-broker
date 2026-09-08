@@ -194,11 +194,20 @@ fn encode_records_prefix(
     records: Option<&RecordsPayload>,
     flex: bool,
 ) -> Result<(), ProtocolError> {
-    let Some(payload) = records else {
+    // A partition with nothing to serve gets an empty record set, never a null
+    // one. Kafka's `FetchResponse` types the field as nullable, but the broker
+    // always writes `MemoryRecords.EMPTY`, so no null ever reaches a client and
+    // clients are written to that. sarama decodes the field with
+    // `getSubset(int(recordsSize))`, which rejects a negative length outright
+    // (`invalid byteslice length`) and tears down the whole connection -- one
+    // empty partition in a multi-partition fetch takes the fetches for its
+    // siblings with it. librdkafka and the Java client happen to tolerate the
+    // null, which is why only a third client found this.
+    let Some(payload) = records.filter(|payload| payload.payload_len() > 0) else {
         if flex {
-            krabka_protocol::primitives::varint::put_uvarint(buf, 0);
+            krabka_protocol::primitives::varint::put_uvarint(buf, 1);
         } else {
-            put_i32(buf, -1);
+            put_i32(buf, 0);
         }
         return Ok(());
     };

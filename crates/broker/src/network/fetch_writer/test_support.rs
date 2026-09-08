@@ -108,3 +108,42 @@ crate::sendfile_cfg! {
         (tf, payload)
     }
 }
+
+/// A one-topic, one-partition response whose partition serves `records`.
+///
+/// The counterpart to [`sample_response`], which gives every partition a
+/// batch: this one exists so a test can say what a partition with *nothing*
+/// to serve puts on the wire.
+pub(super) fn one_partition_response(
+    version: i16,
+    records: Option<RecordsPayload>,
+) -> FetchResponse {
+    FetchResponse {
+        throttle_time_ms: 0,
+        session_id: 7,
+        responses: vec![FetchableTopicResponse {
+            topic: if version <= 12 {
+                "t".to_string()
+            } else {
+                String::new()
+            },
+            topic_id: if version >= 13 {
+                krabka_protocol::primitives::uuid::Uuid([5u8; 16])
+            } else {
+                krabka_protocol::primitives::uuid::Uuid([0u8; 16])
+            },
+            partitions: vec![PartitionData {
+                partition_index: 0,
+                error_code: 0,
+                high_watermark: 5,
+                last_stable_offset: 5,
+                log_start_offset: 0,
+                preferred_read_replica: -1,
+                records,
+                ..PartitionData::default()
+            }],
+            ..FetchableTopicResponse::default()
+        }],
+        ..FetchResponse::default()
+    }
+}
