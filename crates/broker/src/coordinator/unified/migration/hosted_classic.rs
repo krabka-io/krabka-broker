@@ -28,7 +28,8 @@ use crate::{
 /// a re-sync while the member's current target differs from what it last
 /// synced. `REBALANCE_IN_PROGRESS` tells a classic client to send `JoinGroup`
 /// and `SyncGroup` again to pick up the changed assignment. The code is `NONE`
-/// once the member is in sync.
+/// once the member is in sync, and `UNKNOWN_MEMBER_ID` for a member that is
+/// not hosted classic at all, which is what Kafka answers.
 pub(crate) fn serve_classic_heartbeat(
     state: &mut ConsumerState,
     member_id: &str,
@@ -37,6 +38,15 @@ pub(crate) fn serve_classic_heartbeat(
     let Some(m) = state.members.get(member_id) else {
         return codes::UNKNOWN_MEMBER_ID;
     };
+    // A native KIP-848 member has no business on the classic path. Kafka's
+    // `classicGroupHeartbeatToConsumerGroup` calls
+    // `throwIfMemberDoesNotUseClassicProtocol` before anything else, which
+    // throws `UnknownMemberIdException`; answering REBALANCE_IN_PROGRESS
+    // instead would invite a native client to rejoin through an RPC that
+    // cannot serve it.
+    if !m.is_classic() {
+        return codes::UNKNOWN_MEMBER_ID;
+    }
     let current = member_target_assignment(state, member_id, image);
     let owes = m
         .classic
@@ -272,6 +282,60 @@ mod tests {
         check!(member.assigned_partitions == assigned);
         check!(member.partitions_pending_revocation == pending);
         check!(member.assignment_state == MemberAssignmentState::UnrevokedPartitions);
+    }
+
+    /// A native KIP-848 member is refused on the classic *heartbeat* path
+    /// too. Kafka's `classicGroupHeartbeatToConsumerGroup` calls the same
+    /// `throwIfMemberDoesNotUseClassicProtocol` its sync path does, so both
+    /// answer `UNKNOWN_MEMBER_ID`. `REBALANCE_IN_PROGRESS` would tell a native
+    /// client to rejoin through `JoinGroup`/`SyncGroup`, which is exactly the
+    /// path that cannot serve it.
+    #[test]
+    fn classic_heartbeat_by_a_native_member_is_an_unknown_member() {
+        let mut state = ConsumerState::new("g");
+        state.add_or_update_member(native_member("m-native"));
+        state
+            .target
+            .per_member
+            .insert("m-native".into(), [(TOPIC, vec![0, 1])].into());
+
+        check!(
+            serve_classic_heartbeat(&mut state, "m-native", &image()) == codes::UNKNOWN_MEMBER_ID
+        );
+    }
+
+    /// The refusal above is about the member kind, not the assignment
+    /// comparison: a hosted classic member whose synced blob matches its
+    /// target still reports `NONE`.
+    #[test]
+    fn classic_heartbeat_by_a_synced_hosted_member_is_none() {
+        let mut state = ConsumerState::new("g");
+        let mut member = native_member("m-classic");
+        member.assignment_state = MemberAssignmentState::Stable;
+        member.assigned_partitions = [(TOPIC, vec![0, 1])].into();
+        member.partitions_pending_revocation = HashMap::new();
+        member.classic = Some(ClassicMemberFacade {
+            generation_id: 3,
+            supported_protocols: vec![],
+            session_timeout: Duration::from_secs(45),
+            last_synced_assignment: Bytes::new(),
+            awaiting_sync: false,
+        });
+        state.add_or_update_member(member);
+        state
+            .target
+            .per_member
+            .insert("m-classic".into(), [(TOPIC, vec![0, 1])].into());
+        let synced = member_target_assignment(&state, "m-classic", &image());
+        if let Some(facade) = state
+            .members
+            .get_mut("m-classic")
+            .and_then(|m| m.classic.as_mut())
+        {
+            facade.last_synced_assignment = synced;
+        }
+
+        check!(serve_classic_heartbeat(&mut state, "m-classic", &image()) == codes::NONE);
     }
 
     #[test]
