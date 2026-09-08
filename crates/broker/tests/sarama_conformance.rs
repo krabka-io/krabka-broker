@@ -40,8 +40,11 @@ mod support;
 
 use std::{
     collections::BTreeMap,
-    io::Write,
-    process::{Child, Command, Output, Stdio},
+    fmt::Debug,
+    io::{Read, Write},
+    process::{Child, Command, ExitStatus, Stdio},
+    sync::{Arc, Mutex},
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
@@ -51,6 +54,8 @@ use krabka_client_core::Client;
 use krabka_protocol::owned::{
     describe_cluster_request::DescribeClusterRequest,
     describe_cluster_response::DescribeClusterResponse,
+    describe_groups_request::DescribeGroupsRequest,
+    describe_groups_response::DescribeGroupsResponse,
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponsePartition,
@@ -73,9 +78,21 @@ const PARTITIONS: i32 = 3;
 /// The one record, produced to partition 0 with sarama's manual partitioner.
 const PAYLOAD: &str = "hello-from-sarama";
 
-/// How long the group consumer may take to join, read and commit. Generous:
-/// a cold container plus a join and a rebalance sit under it.
-const COMMIT_TIMEOUT: Duration = Duration::from_secs(90);
+/// sarama's own default `ClientID`, which `kaf` never overrides -- `getConfig`
+/// in `kaf.go` sets `Version` and `Producer.Return.Successes` and leaves
+/// `ClientID` alone. It is what identifies the group member below as this
+/// client rather than the suite's own.
+const SARAMA_CLIENT_ID: &str = "sarama";
+
+/// How long the group consumer may take to appear as a member of [`GROUP`].
+/// Covers a cold container, an `ApiVersions` exchange, `FindCoordinator` and
+/// the join itself.
+const JOIN_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How long a joined member may then take to read the record and commit.
+/// sarama auto-commits marked offsets every second, so this is slack, not a
+/// budget.
+const COMMIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// `docker run` for one `kaf` invocation, with the persistent `--brokers` flag
 /// already pointed at the broker's advertised listener.
@@ -99,6 +116,45 @@ fn kaf_command(container_name: Option<&str>, args: &[&str]) -> Command {
     cmd
 }
 
+/// Print one container invocation and everything it produced, in the format
+/// the other container suites in this tree use. Without it a CI log says
+/// nothing about what `kaf` was asked or what it answered, and every failure
+/// below has to be diagnosed from the broker side alone.
+fn log_run<A: Debug>(args: &A, status: &str, stdout: &str, stderr: &str) {
+    eprintln!(
+        "KRABKA[test] docker run {IMAGE} {args:?} status={status}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// Drain a child pipe on its own thread into a buffer the test can read at any
+/// time. A pipe left unread fills at 64 KiB and blocks the writer, which for
+/// the long-lived consumer below would stall the client mid-session; draining
+/// also means a container that is killed still yields what it printed first.
+fn drain<R: Read + Send + 'static>(mut source: R) -> (Arc<Mutex<Vec<u8>>>, JoinHandle<()>) {
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let pump = {
+        let sink = Arc::clone(&sink);
+        thread::spawn(move || {
+            let mut buf = [0_u8; 4096];
+            loop {
+                match source.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => sink
+                        .lock()
+                        .expect("kaf output sink")
+                        .extend_from_slice(&buf[..read]),
+                }
+            }
+        })
+    };
+    (sink, pump)
+}
+
+/// The failure text of a wait, or the empty string when it succeeded.
+fn reason<T>(outcome: &Result<T, String>) -> &str {
+    outcome.as_ref().err().map_or("", String::as_str)
+}
+
 /// Run one `kaf` subcommand that terminates on its own, and return its stdout.
 fn run_kaf(args: &[&str], input: Option<&str>) -> String {
     let mut child = kaf_command(None, args).spawn().expect("spawn kaf");
@@ -112,6 +168,12 @@ fn run_kaf(args: &[&str], input: Option<&str>) -> String {
     }
     drop(child.stdin.take());
     let out = child.wait_with_output().expect("wait for kaf");
+    log_run(
+        &args,
+        &out.status.to_string(),
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    );
     assert!(
         out.status.success(),
         "kaf {args:?} failed: stdout={}, stderr={}",
@@ -197,53 +259,218 @@ fn produce_lands() {
     );
 }
 
-/// Start `kaf consume -g ... --commit` in a named container.
+/// `kaf consume` running as a consumer group in its own container, with both
+/// of its pipes drained while it runs.
 ///
-/// It never returns on its own: `kaf` hands the group session a context that
-/// is only cancelled by the process ending, so the caller stops the container
-/// once the commit it is waiting for has landed.
-fn spawn_group_consumer(container: &str) -> Child {
-    let mut child = kaf_command(
-        Some(container),
-        &[
-            "consume", TOPIC, "--group", GROUP, "--commit", "--offset", "oldest", "--output", "raw",
-        ],
-    )
-    .spawn()
-    .expect("spawn kaf consume");
-    drop(child.stdin.take());
-    child
+/// It never returns on its own: `withConsumerGroup` in `consume.go` hands the
+/// session a context that only the process ending cancels, and `ConsumeClaim`
+/// blocks on the claim's channel. The test stops the container once it has
+/// seen what it is waiting for.
+struct GroupConsumer {
+    /// The `docker run --name` of the container, for `docker kill`.
+    container: String,
+    /// The argument vector, kept so the log line can name what was run.
+    args: Vec<String>,
+    child: Child,
+    stdout: Arc<Mutex<Vec<u8>>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    pumps: Vec<JoinHandle<()>>,
+}
+
+impl GroupConsumer {
+    /// Start `kaf consume` on [`TOPIC`] as a member of [`GROUP`].
+    ///
+    /// `--group`/`-g` and `--commit` are `consumeCmd`'s own flags:
+    ///
+    /// ```text
+    /// consumeCmd.Flags().StringVarP(&groupFlag, "group", "g", "", "Consumer Group to use for consume")
+    /// consumeCmd.Flags().BoolVar(&groupCommitFlag, "commit", false, "Commit Group offset after receiving messages. Works only if consuming as Consumer Group")
+    /// ```
+    ///
+    /// `groupFlag` is what picks the code path -- `withConsumerGroup` when it
+    /// is set, `withoutConsumerGroup`, which fetches the partitions directly
+    /// and never joins or commits, when it is not -- and `groupCommitFlag`
+    /// only ever reaches `s.MarkMessage` inside `ConsumeClaim`, which is on
+    /// the group path alone. `--commit` without `--group` is therefore silent
+    /// and inert, and a `--group` that fails to bind degrades to a consumer
+    /// that looks alive and commits nothing.
+    ///
+    /// So every flag here sits *before* the positional topic. cobra parses
+    /// flags interspersed with arguments and `kaf` sets neither
+    /// `TraverseChildren` nor `DisableFlagParsing`, so a trailing flag does
+    /// bind -- but a flag that lands where it does not bind is ignored in
+    /// silence, and the ordering that cannot be misread costs nothing.
+    ///
+    /// `--offset oldest` is `offsetFlag`'s own default, and restates it
+    /// because it is load-bearing for a *new* group: it is the only thing that
+    /// sets `Consumer.Offsets.Initial`, which sarama leaves at `OffsetNewest`,
+    /// and a member that starts at the newest offset never sees the record
+    /// this suite produced before it joined.
+    ///
+    /// `--verbose` turns on sarama's own logger (`kaf.go` points it at
+    /// stderr). Nothing else narrates a join, an assignment or a commit, and
+    /// stdout stays clean because the log goes to stderr.
+    fn spawn(container: &str) -> Self {
+        let args: Vec<String> = [
+            "consume",
+            "--group",
+            GROUP,
+            "--commit",
+            "--offset",
+            "oldest",
+            "--output",
+            "raw",
+            "--verbose",
+            TOPIC,
+        ]
+        .iter()
+        .map(|arg| (*arg).to_owned())
+        .collect();
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut child = kaf_command(Some(container), &borrowed)
+            .spawn()
+            .expect("spawn kaf consume");
+        drop(child.stdin.take());
+        eprintln!("KRABKA[test] docker run {IMAGE} {borrowed:?} container={container} started");
+        let (stdout, out_pump) = drain(child.stdout.take().expect("kaf consume stdout"));
+        let (stderr, err_pump) = drain(child.stderr.take().expect("kaf consume stderr"));
+        Self {
+            container: container.to_owned(),
+            args,
+            child,
+            stdout,
+            stderr,
+            pumps: vec![out_pump, err_pump],
+        }
+    }
+
+    /// The exit status, once the client has stopped on its own. A `kaf
+    /// consume` that ends before the test kills it has failed: `errorExit` is
+    /// how every unhandled error in `kaf` leaves, and the group path has no
+    /// other exit.
+    fn exited(&mut self) -> Option<ExitStatus> {
+        self.child.try_wait().expect("poll kaf consume")
+    }
+
+    /// Stop the container, join the drains, log everything it wrote and hand
+    /// back its stdout.
+    fn stop(mut self) -> String {
+        // The container may already be gone if `kaf` exited on an error, so a
+        // failed `docker kill` is not itself a failure -- the assertions on
+        // the client's own output are what decide the case.
+        let _ = Command::new("docker")
+            .args(["kill", &self.container])
+            .output()
+            .expect("run docker kill");
+        let status = self.child.wait().expect("wait for kaf consume");
+        for pump in self.pumps {
+            pump.join().expect("join kaf output drain");
+        }
+        let stdout =
+            String::from_utf8_lossy(&self.stdout.lock().expect("kaf consume stdout")).into_owned();
+        let stderr =
+            String::from_utf8_lossy(&self.stderr.lock().expect("kaf consume stderr")).into_owned();
+        log_run(&self.args, &status.to_string(), &stdout, &stderr);
+        stdout
+    }
+}
+
+/// krabka's `DescribeGroups` answer for [`GROUP`], read on the host.
+async fn describe_group(client: &Client) -> DescribeGroupsResponse {
+    client
+        .send(DescribeGroupsRequest {
+            groups: vec![GROUP.to_string()],
+            ..Default::default()
+        })
+        .await
+        .expect("DescribeGroups")
+}
+
+/// Wait until `kaf` is a member of [`GROUP`], and return the member's
+/// `client_id`.
+///
+/// This is the assertion that a group was used at all. Without it the only
+/// symptom of a `kaf` that fell back to `withoutConsumerGroup` is an offset
+/// that never arrives, which looks like a slow broker for as long as the
+/// commit wait lasts and then blames the wrong thing.
+async fn await_group_member(
+    client: &Client,
+    consumer: &mut GroupConsumer,
+) -> Result<String, String> {
+    let deadline = tokio::time::Instant::now() + JOIN_TIMEOUT;
+    let mut state = "absent".to_string();
+    loop {
+        if let Some(status) = consumer.exited() {
+            return Err(format!(
+                "kaf consume exited on its own with {status} before joining {GROUP}"
+            ));
+        }
+        let described = describe_group(client).await;
+        if let Some(group) = described
+            .groups
+            .iter()
+            .find(|group| group.group_id == GROUP)
+        {
+            if let Some(member) = group.members.first() {
+                return Ok(member.client_id.clone());
+            }
+            state.clone_from(&group.group_state);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "kaf consume never joined {GROUP} within {JOIN_TIMEOUT:?}: DescribeGroups \
+                 reports state={state} with no members. A kaf whose --group did not bind \
+                 takes withoutConsumerGroup, fetches the partitions directly, and never \
+                 joins or commits."
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 /// Poll krabka for the group's committed offsets until one appears.
-async fn committed_offsets(admin: &mut AdminClient) -> BTreeMap<(String, i32), i64> {
+async fn await_committed_offsets(
+    admin: &mut AdminClient,
+    consumer: &mut GroupConsumer,
+) -> Result<BTreeMap<(String, i32), i64>, String> {
     let deadline = tokio::time::Instant::now() + COMMIT_TIMEOUT;
     loop {
+        if let Some(status) = consumer.exited() {
+            return Err(format!(
+                "kaf consume exited on its own with {status} before committing an offset \
+                 for {GROUP}"
+            ));
+        }
         let offsets = admin
             .list_consumer_group_offsets(GROUP)
             .await
             .expect("list consumer group offsets");
         if !offsets.is_empty() {
-            return offsets;
+            return Ok(offsets);
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no committed offset for {GROUP} within {COMMIT_TIMEOUT:?}"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "no committed offset for {GROUP} within {COMMIT_TIMEOUT:?}, though the client \
+                 is a member of it: sarama marks each message it hands ConsumeClaim and \
+                 auto-commits every second, so what failed is the commit, not the join."
+            ));
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
-/// Stop the consumer container and collect what it printed.
-fn stop_consumer(container: &str, child: Child) -> Output {
-    // The container may already be gone if `kaf` exited on an error, so a
-    // failed `docker kill` is not itself a failure -- the assertions on the
-    // client's own output are what decide the case.
-    let _ = Command::new("docker")
-        .args(["kill", container])
-        .output()
-        .expect("run docker kill");
-    child.wait_with_output().expect("wait for kaf consume")
+/// Watch the group consumer through both things that have to happen: it joins
+/// [`GROUP`], and the group's committed offset appears. Returns the member's
+/// `client_id` with those offsets, or the reason the wait ended, so that the
+/// caller can stop the container and print what it said before asserting.
+async fn observe_group_consumer(
+    client: &Client,
+    admin: &mut AdminClient,
+    consumer: &mut GroupConsumer,
+) -> Result<(String, BTreeMap<(String, i32), i64>), String> {
+    let member = await_group_member(client, consumer).await?;
+    let offsets = await_committed_offsets(admin, consumer).await?;
+    Ok((member, offsets))
 }
 
 /// `kaf nodes`: `DescribeCluster` in sarama's sense, which is a `Metadata`
@@ -363,14 +590,23 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
     produce_lands();
 
     let container = format!("krabka-sarama-consumer-{}", std::process::id());
-    let child = spawn_group_consumer(&container);
-    let offsets = committed_offsets(&mut admin).await;
-    let consumed = stop_consumer(&container, child);
-    let consumed_stdout = String::from_utf8(consumed.stdout).expect("kaf stdout is utf-8");
+    let mut consumer = GroupConsumer::spawn(&container);
+    let outcome = observe_group_consumer(&client, &mut admin, &mut consumer).await;
+    // Stop and log the container before asserting, so the client's own account
+    // of the run -- sarama's log included -- is in the output of a failure.
+    let consumed_stdout = consumer.stop();
+    assert!(outcome.is_ok(), "{}", reason(&outcome));
+    let (member, offsets) = outcome.unwrap_or_default();
+    // The group was joined by *this* client and not by some other member the
+    // broker had lying around.
+    assert!(
+        member == SARAMA_CLIENT_ID,
+        "{GROUP} was joined by client_id={member}, not sarama's default \
+         {SARAMA_CLIENT_ID}"
+    );
     assert!(
         consumed_stdout == format!("{PAYLOAD}\n"),
-        "kaf consume did not return the produced payload: stdout={consumed_stdout}, stderr={}",
-        String::from_utf8_lossy(&consumed.stderr)
+        "kaf consume did not return the produced payload: stdout={consumed_stdout}"
     );
     // The record is offset 0, so the group's committed position is 1, on the
     // one partition it was produced to and on no other.
