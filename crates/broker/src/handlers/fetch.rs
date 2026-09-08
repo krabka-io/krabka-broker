@@ -26,6 +26,7 @@ use krabka_protocol::{
     owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
 };
 
+mod node_endpoints;
 mod plan;
 mod read;
 mod read_loop;
@@ -37,6 +38,7 @@ mod throttle;
 
 pub(crate) use self::plan::PendingRead;
 use self::{
+    node_endpoints::fetch_node_endpoints,
     plan::{PendingPlanContext, build_pending_reads},
     read_loop::execute_pending_reads,
     request::{FetchPreparation, prepare_fetch},
@@ -53,6 +55,10 @@ use crate::{
 /// and throttle histograms carry. The dispatcher labels the total latency from
 /// the frame it parsed; the handler labels its phases from the same number.
 const FETCH_API_KEY: crate::handlers::ApiKeyCode = krabka_protocol::api_key::ApiKey::Fetch as i16;
+
+/// First `Fetch` response version that carries the KIP-951 `CurrentLeader`
+/// hint and its `NodeEndpoints` companion. Both are tagged fields at v16+.
+const KIP_951_FETCH_VERSION: i16 = 16;
 
 /// Handle a `Fetch` request and return the not-yet-encoded response
 /// **struct** with the negotiated `version`.
@@ -213,11 +219,26 @@ pub(crate) async fn handle(
         &ctx.principal.name,
     );
 
+    // KIP-951: a partition row that names a new leader is only actionable if
+    // the client can resolve that node id to an address. Both halves of the
+    // KIP encode at v16+, so a client that cannot read the hint is also not
+    // offered the endpoints.
+    let node_endpoints = if version >= KIP_951_FETCH_VERSION {
+        fetch_node_endpoints(
+            &image,
+            ctx.connection_listener_name,
+            &broker.config.inter_broker_listener_name,
+            &responses,
+        )
+    } else {
+        Vec::new()
+    };
     let resp = FetchResponse {
         throttle_time_ms: throttle_time_ms_val,
         error_code: 0,
         session_id: response_session_id,
         responses,
+        node_endpoints,
         ..Default::default()
     };
     Ok((resp, version))

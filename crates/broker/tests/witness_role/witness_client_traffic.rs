@@ -6,6 +6,11 @@
 //! everything would be no ISR member at all, and it is the ISR seat that keeps
 //! `acks=all` writable after a site loss, so the test checks the local log and
 //! the ISR right after the refusals.
+//!
+//! Both refusals also carry the KIP-951 redirect, and this is the one place
+//! where the whole of it is observable on a live cluster: the refusing node is
+//! never the leader, so the `NodeEndpoints` entry has to come out of the
+//! metadata image rather than out of the answering broker's own config.
 
 use std::collections::BTreeSet;
 
@@ -15,8 +20,13 @@ use krabka_broker::codes;
 use crate::{
     N_RECORDS, SITE_C, TOPIC, cluster_lock, within,
     witness_cluster::{client_at, shutdown, start_stretch_cluster},
-    witness_wire::{consumer_fetch, create_topic, produce_error},
+    witness_wire::{consumer_fetch, create_topic, produce_error, produce_response},
 };
+
+/// The listener every client in this suite connects on. A KIP-951
+/// `NodeEndpoints` entry advertises the address of the listener the request
+/// arrived on, so this is the endpoint name the refusals must answer with.
+const PLAINTEXT_LISTENER: &str = "PLAINTEXT";
 
 /// A client `Produce` and a consumer `Fetch` that reach the witness are
 /// refused, while replication to that same witness keeps advancing: its local
@@ -57,10 +67,41 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
     .await;
 
     let witness = client_at(&cluster[2].1.listen_addr.to_string()).await;
+
+    // The address both refusals must advertise for the leader, read out of the
+    // image of the broker that answers them. That broker is the witness, which
+    // never leads, so nothing here can come from its own listener config.
+    let image = cluster[2].0.controller_image_for_test();
+    let leader = image
+        .partition(TOPIC, 0)
+        .expect("the witness image knows the partition")
+        .leader;
+    let registration = image.broker(leader).expect("the leader is registered");
+    let advertised = registration
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == PLAINTEXT_LISTENER)
+        .expect("the leader advertises a PLAINTEXT endpoint");
+    let leader_id = i32::try_from(leader.0).expect("broker ids fit an i32");
+
+    let produced = produce_response(&witness, topic_id, N_RECORDS).await;
     check!(
-        produce_error(&witness, topic_id, N_RECORDS).await == codes::NOT_LEADER_OR_FOLLOWER,
+        produced.responses[0].partition_responses[0].error_code == codes::NOT_LEADER_OR_FOLLOWER,
         "a client Produce to the witness is refused"
     );
+    check!(
+        produced.node_endpoints
+            == vec![krabka_protocol::owned::produce_response::NodeEndpoint {
+                node_id: leader_id,
+                host: advertised.host.clone(),
+                port: i32::from(advertised.port),
+                rack: registration.rack.clone(),
+                ..Default::default()
+            }],
+        "the refused Produce carries the leader's endpoint (KIP-951): {:?}",
+        produced.node_endpoints
+    );
+
     let fetched = witness
         .send(consumer_fetch(topic_id, SITE_C))
         .await
@@ -68,6 +109,23 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
     check!(
         fetched.responses[0].partitions[0].error_code == codes::NOT_LEADER_OR_FOLLOWER,
         "a client Fetch to the witness is refused"
+    );
+    check!(
+        fetched.responses[0].partitions[0].current_leader.leader_id == leader_id,
+        "the refused Fetch names the leader (KIP-951): {:?}",
+        fetched.responses[0].partitions[0].current_leader
+    );
+    check!(
+        fetched.node_endpoints
+            == vec![krabka_protocol::owned::fetch_response::NodeEndpoint {
+                node_id: leader_id,
+                host: advertised.host.clone(),
+                port: i32::from(advertised.port),
+                rack: registration.rack.clone(),
+                ..Default::default()
+            }],
+        "the refused Fetch carries the leader's endpoint (KIP-951): {:?}",
+        fetched.node_endpoints
     );
 
     // The refusals are client-facing only. The witness is still a full ISR

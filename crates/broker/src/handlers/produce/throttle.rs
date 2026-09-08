@@ -7,8 +7,12 @@ use krabka_protocol::{
     owned::produce_response::{ProduceResponse, TopicProduceResponse},
 };
 
-use super::framing::FramedTopic;
+use super::{framing::FramedTopic, node_endpoints::produce_node_endpoints};
 use crate::{broker::Broker, error::BrokerError};
+
+/// First `Produce` response version that carries the KIP-951 `CurrentLeader`
+/// hint and its `NodeEndpoints` companion. Both are tagged fields at v10+.
+const KIP_951_PRODUCE_VERSION: i16 = 10;
 
 pub(super) fn produce_bytes_by_qos_tier(
     image: &krabka_metadata::MetadataImage,
@@ -82,9 +86,24 @@ pub(super) fn finish_produce_response(
             (crate::metrics::QuotaType::Request, request_delay).into(),
         ],
     );
+    // KIP-951: the `CurrentLeader` hints the partition rows carry are node ids,
+    // and the producer can only act on one whose address it knows. Both halves
+    // of the KIP encode at v10+, so a client that cannot read the hint is also
+    // not offered the endpoints.
+    let node_endpoints = if version >= KIP_951_PRODUCE_VERSION {
+        produce_node_endpoints(
+            image,
+            context.connection_listener_name,
+            &broker.config.inter_broker_listener_name,
+            &topic_results,
+        )
+    } else {
+        Vec::new()
+    };
     let response = ProduceResponse {
         responses: topic_results,
         throttle_time_ms: crate::quota::throttle_time_ms(delay),
+        node_endpoints,
         ..Default::default()
     };
     // KIP-219: report the window in the response and hand it to the connection

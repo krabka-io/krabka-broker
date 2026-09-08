@@ -209,6 +209,19 @@ pub(super) async fn plan_partition_read(
     // hosts the partition.
     if !context.mode.1 && context.broker.config.is_witness() {
         output.error_code = codes::NOT_LEADER_OR_FOLLOWER;
+        // KIP-951: name the leader the consumer should go to instead. Kafka
+        // fills `CurrentLeader` on every NOT_LEADER_OR_FOLLOWER row of a v16+
+        // Fetch response, and the response's `NodeEndpoints` then carries that
+        // node's address, so the consumer re-targets without a full Metadata
+        // round-trip. A witness never leads, so the image's leader is always
+        // some other node.
+        if let Some(record) = context.image.partition(topic_name, request.partition) {
+            output.current_leader = LeaderIdAndEpoch {
+                leader_id: i32::try_from(record.leader.0).unwrap_or(-1),
+                leader_epoch: record.leader_epoch.0,
+                ..Default::default()
+            };
+        }
         return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
     }
     let partition = context
