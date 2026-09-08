@@ -32,6 +32,17 @@ _IMAGE_PATH_PREFIXES = ["packaging/"]
 # a broker source file any better than it can from `packaging/`.
 _IMAGE_SUITES = ["process_kill_durability"]
 
+# Suites that are not `jvm_acceptance_*` but are built out of that harness --
+# they `mod jvm_acceptance` for `start_host_broker` and `broker0_advertised` --
+# so a change under `crates/broker/tests/jvm_acceptance/` reaches them too. The
+# path rule below cannot see that: it maps a touched path to the suite of the
+# same name, and these suites' names are not the harness's.
+_HARNESS_BORROWERS = [
+    "librdkafka_conformance",
+    "sarama_conformance",
+    "worm_object_lock",
+]
+
 # Container suites that must never enter this matrix, whatever a change
 # touches. `soak` runs a three-broker cluster under continuous load for four
 # hours: no pull request can wait for it, and putting it in the nightly's
@@ -296,7 +307,7 @@ def _select(paths, available_targets):
 
     acceptance_suites = {}
     for suite in broker_suites.keys():
-        if suite.startswith("jvm_acceptance_") or suite in ["librdkafka_conformance", "worm_object_lock"]:
+        if suite.startswith("jvm_acceptance_") or suite in _HARNESS_BORROWERS:
             acceptance_suites[suite] = True
 
     suites = {}
