@@ -145,8 +145,8 @@ pub(crate) async fn handle(
                     value
                         .initialized
                         .iter()
-                        .find(|(candidate, _)| *candidate == topic_id)
-                        .map(|(_, partitions)| partitions.as_slice())
+                        .find(|candidate| candidate.topic_id == topic_id)
+                        .map(|candidate| candidate.partitions.as_slice())
                 })
                 .unwrap_or_default();
             for partition in part_indices {
@@ -204,7 +204,8 @@ mod tests {
         coordinator::unified::{
             ShareGroupSeed,
             share::{
-                actor::ShareGroupActorMessage, persistence::ShareGroupStatePartitionMetadataValue,
+                actor::ShareGroupActorMessage,
+                persistence::{InitializedTopic, ShareGroupStatePartitionMetadataValue},
             },
         },
         test_support::DenyAll,
@@ -435,7 +436,18 @@ mod tests {
             .tx
             .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
                 state_partition_metadata: ShareGroupStatePartitionMetadataValue {
-                    initialized: vec![(deleted_id, vec![0]), (kept_id, vec![0])],
+                    initialized: vec![
+                        InitializedTopic {
+                            topic_id: deleted_id,
+                            topic_name: "deleted".into(),
+                            partitions: vec![0],
+                        },
+                        InitializedTopic {
+                            topic_id: kept_id,
+                            topic_name: "kept".into(),
+                            partitions: vec![0],
+                        },
+                    ],
                     ..Default::default()
                 },
                 ..Default::default()

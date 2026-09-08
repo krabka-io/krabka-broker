@@ -3,14 +3,15 @@
 //! it stands apart from the membership state machine because it is
 //! best-effort work that runs after reconciliation rather than inside it.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::records::{PendingShareRecords, flush_pending, state_partition_metadata_from};
 use crate::{
     coordinator::unified::{
-        GroupCoordinator, offsets_log::OffsetsLog, share::state::ShareGroupState,
+        GroupCoordinator, actor::MetadataProvider, offsets_log::OffsetsLog,
+        share::state::ShareGroupState,
     },
     share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
 };
@@ -19,8 +20,10 @@ use crate::{
 /// sync state machine. It gathers the group's full assigned `(topic_id,
 /// partition)` set and drives [`SharePersister::initialize`] for each entry
 /// that is not already Initialized. On success it records the partition in
-/// `state.initialized` and persists an updated
-/// `ShareGroupStatePartitionMetadata` (key v15) through the offsets log.
+/// `state.initialized`, records the topic's name from the metadata image in
+/// `state.topic_names` because the record names every topic it lists, and
+/// persists an updated `ShareGroupStatePartitionMetadata` (key v15) through
+/// the offsets log.
 ///
 /// The hook is best-effort. A persister error leaves the partition
 /// un-recorded, so the next heartbeat retries it, and the error never fails
@@ -66,6 +69,17 @@ pub(super) async fn reconcile_share_state(
         return;
     }
 
+    // KIP-932 names every topic the ShareGroupStatePartitionMetadata record
+    // lists, and the metadata image is the authority on the name behind an id,
+    // the same source Kafka's `GroupMetadataManager.attachInitValue` reads. The
+    // snapshot is taken once per lifecycle pass, and only when the pass has a
+    // partition to initialize.
+    let topic_names = if to_init.is_empty() {
+        HashMap::new()
+    } else {
+        topic_names_by_id(coordinator.metadata.as_ref())
+    };
+
     let state_epoch = state.group_epoch;
     let mut changed = false;
     for (tid, partition) in to_init {
@@ -82,6 +96,9 @@ pub(super) async fn reconcile_share_state(
         {
             Ok(()) => {
                 state.initialized.insert((tid, partition));
+                if let Some(name) = topic_names.get(&tid) {
+                    state.topic_names.insert(tid, name.clone());
+                }
                 changed = true;
             }
             Err(e) => {
@@ -118,6 +135,7 @@ pub(super) async fn reconcile_share_state(
     }
 
     if changed {
+        state.forget_unused_topic_names();
         let pending = PendingShareRecords {
             state_partition_metadata: Some(state_partition_metadata_from(state)),
             ..Default::default()
@@ -130,6 +148,18 @@ pub(super) async fn reconcile_share_state(
             );
         }
     }
+}
+
+/// Invert the metadata snapshot's `name → id` map into the `id → name` lookup
+/// the share-state record needs. A topic the image does not hold has no entry,
+/// and the record writer falls back to Kafka's `<UNKNOWN>`.
+fn topic_names_by_id(metadata: &dyn MetadataProvider) -> HashMap<Uuid, String> {
+    metadata
+        .snapshot()
+        .topic_id_by_name
+        .into_iter()
+        .map(|(name, topic_id)| (topic_id, name))
+        .collect()
 }
 
 fn share_states_to_delete(
@@ -152,7 +182,36 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::share::state::ShareMemberState;
+    use crate::coordinator::unified::{reconciler::ReconcileInput, share::state::ShareMemberState};
+
+    #[derive(Debug)]
+    struct Metadata(Vec<(&'static str, Uuid)>);
+
+    impl MetadataProvider for Metadata {
+        fn snapshot(&self) -> ReconcileInput {
+            ReconcileInput {
+                topic_id_by_name: self
+                    .0
+                    .iter()
+                    .map(|(name, id)| ((*name).to_owned(), *id))
+                    .collect(),
+                partitions_per_topic: HashMap::new(),
+                partition_racks: HashMap::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn topic_names_come_from_the_metadata_snapshot() {
+        let orders = Uuid([1; 16]);
+        let carts = Uuid([2; 16]);
+        let metadata = Metadata(vec![("orders", orders), ("carts", carts)]);
+
+        assert!(
+            topic_names_by_id(&metadata)
+                == HashMap::from([(orders, "orders".to_owned()), (carts, "carts".to_owned()),])
+        );
+    }
 
     #[test]
     fn empty_group_preserves_initialized_share_state() {

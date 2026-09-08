@@ -104,7 +104,9 @@ impl BacklogPoller {
                 initialized_topics = state.initialized.len(),
                 "sampling initialized share-group partitions",
             );
-            for (topic_id, partitions) in state.initialized {
+            for initialized in state.initialized {
+                let topic_id = initialized.topic_id;
+                let partitions = initialized.partitions;
                 let Some(topic) = image.topic_name_by_id(&topic_id).map(str::to_owned) else {
                     tracing::debug!(%group_id, %topic_id, "skipping deleted share-group topic");
                     continue;

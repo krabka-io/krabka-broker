@@ -276,7 +276,11 @@ mod tests {
 
         let tid = uuid::Uuid::from_u128(1);
         let v = share::persistence::ShareGroupStatePartitionMetadataValue {
-            initialized: vec![(tid, vec![0, 1])],
+            initialized: vec![share::persistence::InitializedTopic {
+                topic_id: tid,
+                topic_name: "orders".into(),
+                partitions: vec![0, 1],
+            }],
             deleting: vec![],
         };
         coord.replay_share_group_metadata(
