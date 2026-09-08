@@ -48,7 +48,7 @@ use self::{
 };
 use crate::{
     broker::Broker, error::BrokerError, fetch_session::INVALID_SESSION_ID,
-    handlers::cluster_action_denied,
+    handlers::cluster_action_denied, network::fetch_writer::records_to_serve,
 };
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
@@ -373,29 +373,30 @@ pub(crate) fn encode_fetch_response(
     }
 }
 
-/// Replace every absent record set with an empty one.
+/// Rewrite every partition that has nothing to serve to carry an *empty*
+/// record set rather than an absent one.
 ///
 /// The broker spells "this partition has nothing to serve" as `None` -- a
 /// throttled partition, a partition whose read came back empty, a tiered read
-/// that missed, a partition that only carries an error code. Kafka's schema
-/// does type the field as nullable, but Kafka's broker never uses that: it
-/// writes `MemoryRecords.EMPTY`, so no client has ever had to decode a null
-/// record set and clients are written accordingly. sarama, for one, passes the
-/// length straight to `getSubset`, which refuses a negative length as
-/// `invalid byteslice length` and drops the connection -- taking the fetches
-/// for every other partition in the same response down with it.
+/// that missed, a partition that only carries an error code.
+/// [`records_to_serve`] is what decides that, and its rustdoc carries the
+/// reasoning: a null record set on the wire drops sarama connections, so
+/// "nothing" must encode as `MemoryRecords.EMPTY`.
 ///
-/// The codegen encoders below are faithful to the schema, so the null has to
-/// go before they see it. The v4+ write plan in `network::fetch_writer` makes
-/// the same guarantee at its own boundary.
+/// This is the *struct* half of that guarantee, and it exists because the
+/// encoders below cannot be given the other half. Fetch v0-3 down-converts
+/// through the codegen'd `kafka_3_6_2` encoder, which lives in a pinned
+/// sibling crate, is faithful to the nullable schema, and takes no hook; the
+/// v4+ arm here is the plain `FetchResponse::encode`, which is equally
+/// faithful. So the null has to be gone before either sees the response. Real
+/// v4+ traffic does not come through here at all -- it goes through
+/// `network::fetch_writer::build_fetch_plan`, whose write plan enforces the
+/// same invariant at its own boundary, where it can additionally drop the
+/// records op entirely instead of emitting a zero-length one.
 fn serve_empty_rather_than_null_records(resp: &mut FetchResponse) {
     for topic in &mut resp.responses {
         for partition in &mut topic.partitions {
-            if partition
-                .records
-                .as_ref()
-                .is_none_or(|records| records.payload_len() == 0)
-            {
+            if records_to_serve(partition.records.as_ref()).is_none() {
                 partition.records = Some(krabka_protocol::records::RecordsPayload::Raw(
                     bytes::Bytes::new(),
                 ));

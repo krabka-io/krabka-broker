@@ -516,7 +516,12 @@ mod tests {
         assert2::assert!((partition.error_code) == (OFFSET_OUT_OF_RANGE));
         assert2::assert!((partition.log_start_offset) == (5));
         assert2::assert!((partition.last_stable_offset) == (6));
-        assert2::assert!(partition.records.is_none());
+        assert2::assert!(
+            partition
+                .records
+                .as_ref()
+                .is_some_and(|records| records.payload_len() == 0)
+        );
 
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
@@ -538,7 +543,12 @@ mod tests {
         assert2::assert!((partition.error_code) == (OFFSET_OUT_OF_RANGE));
         assert2::assert!((partition.log_start_offset) == (5));
         assert2::assert!((partition.last_stable_offset) == (6));
-        assert2::assert!(partition.records.is_none());
+        assert2::assert!(
+            partition
+                .records
+                .as_ref()
+                .is_some_and(|records| records.payload_len() == 0)
+        );
     }
 
     #[tokio::test]
@@ -584,7 +594,12 @@ mod tests {
         let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
         let partition = &decoded.responses[0].partitions[0];
         assert2::assert!((partition.error_code) == (3));
-        assert2::assert!(partition.records.is_none());
+        assert2::assert!(
+            partition
+                .records
+                .as_ref()
+                .is_some_and(|records| records.payload_len() == 0)
+        );
     }
 
     #[test]

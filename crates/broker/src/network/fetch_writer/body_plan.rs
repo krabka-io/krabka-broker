@@ -188,22 +188,51 @@ fn encode_fetch_partition(
     Ok(())
 }
 
+/// The record set a partition actually puts on the wire, or `None` when the
+/// partition has nothing to serve.
+///
+/// The broker spells "nothing to serve" two ways -- an absent record set and a
+/// zero-byte one -- and neither may reach a client as a *null* record set.
+/// Kafka's `FetchResponse` schema types the field as nullable and then never
+/// uses that: its broker always writes `MemoryRecords.EMPTY`, so no null has
+/// ever reached a client and clients are written to what Kafka does rather
+/// than to what the schema permits. sarama decodes the field with
+/// `getSubset(int(recordsSize))`, which rejects a negative length outright
+/// (`invalid byteslice length`) and tears down the whole connection -- one
+/// empty partition in a multi-partition fetch takes the fetches for its
+/// siblings with it. librdkafka and the Java client happen to tolerate the
+/// null, which is why only a third client found this.
+///
+/// Two encoders reach the Fetch wire and each has to honour that at its own
+/// boundary, so this is the one place that decides which record sets are
+/// nothing:
+///
+/// * [`encode_records_prefix`] below, the canonical v4+ write plan, which
+///   answers `None` with a zero-length prefix *and no `Records` op at all*.
+///   It cannot normalise `None` into an empty payload up front instead: an
+///   empty payload would still become a `FetchWriteOp::Records`, and the
+///   caller's resolver would turn that into a pointless zero-length inline
+///   segment -- or, for a file-backed payload, a zero-length `sendfile`
+///   region -- in every otherwise-empty partition of a fetch response.
+/// * `handlers::fetch::serve_empty_rather_than_null_records`, which rewrites
+///   the response *struct* before the codegen'd `kafka_3_6_2` encoder sees it,
+///   because that encoder lives in a pinned sibling crate, is faithful to the
+///   nullable schema, and takes no such hook.
+///
+/// A third path that encodes a `FetchResponse` owes the wire the same
+/// guarantee, and `network::fetch_writer::tests` holds the cross-path
+/// equivalence test that says so.
+pub(crate) fn records_to_serve(records: Option<&RecordsPayload>) -> Option<&RecordsPayload> {
+    records.filter(|payload| payload.payload_len() > 0)
+}
+
 fn encode_records_prefix(
     buf: &mut BytesMut,
     ops: &mut Vec<FetchWriteOp>,
     records: Option<&RecordsPayload>,
     flex: bool,
 ) -> Result<(), ProtocolError> {
-    // A partition with nothing to serve gets an empty record set, never a null
-    // one. Kafka's `FetchResponse` types the field as nullable, but the broker
-    // always writes `MemoryRecords.EMPTY`, so no null ever reaches a client and
-    // clients are written to that. sarama decodes the field with
-    // `getSubset(int(recordsSize))`, which rejects a negative length outright
-    // (`invalid byteslice length`) and tears down the whole connection -- one
-    // empty partition in a multi-partition fetch takes the fetches for its
-    // siblings with it. librdkafka and the Java client happen to tolerate the
-    // null, which is why only a third client found this.
-    let Some(payload) = records.filter(|payload| payload.payload_len() > 0) else {
+    let Some(payload) = records_to_serve(records) else {
         if flex {
             krabka_protocol::primitives::varint::put_uvarint(buf, 1);
         } else {

@@ -60,6 +60,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::body_plan::records_to_serve;
 pub use self::{drain::write_fetch_plan, resolve::resolve_records_inline, sink::SendfileSink};
 
 crate::sendfile_cfg! {

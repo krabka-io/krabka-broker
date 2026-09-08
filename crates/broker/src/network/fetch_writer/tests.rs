@@ -219,3 +219,77 @@ fn an_empty_record_set_and_an_absent_one_encode_alike() {
         );
     }
 }
+
+/// The seam guard. Two encoders reach the Fetch wire -- the v4+ write plan
+/// here, and `handlers::fetch::encode_fetch_response`, which serves the
+/// legacy v0-3 codec through a codegen'd encoder in a pinned sibling crate
+/// that cannot be hooked. Neither may put a null record set on the wire, and
+/// the only way to keep two encoders honest is to make them answer the same
+/// question with the same bytes.
+///
+/// So: for every shape of "nothing to serve" the broker produces, and for a
+/// partition that does serve a batch, the body the plan emits must equal the
+/// body the struct encoder emits. A third encoder added later has this test
+/// to answer to as soon as it is compared here; a change to either of the two
+/// that exist fails it immediately.
+#[test]
+fn both_fetch_encoders_agree_on_the_body_bytes() {
+    for version in [4i16, 7, 11, 12, 13, 16, 18] {
+        for records in [
+            None,
+            Some(RecordsPayload::Raw(Bytes::new())),
+            Some(RecordsPayload::Raw(test_support::raw_batch(0))),
+        ] {
+            let response = test_support::one_partition_response(version, records.clone());
+
+            let mut plan_body = BytesMut::new();
+            for op in fetch_response_write_plan(&response, version).unwrap() {
+                match op {
+                    FetchWriteOp::Inline(b) => plan_body.extend_from_slice(&b),
+                    FetchWriteOp::Records(payload) => {
+                        let mut buf = BytesMut::new();
+                        payload.encode_to(&mut buf).unwrap();
+                        plan_body.extend_from_slice(&buf);
+                    }
+                }
+            }
+
+            let struct_body =
+                crate::handlers::fetch::encode_fetch_response(response, version).unwrap();
+
+            assert2::assert!(
+                (&plan_body[..]) == (&struct_body[..]),
+                "the two fetch encoders disagree at version {version} for {records:?}"
+            );
+        }
+    }
+}
+
+/// The reason the write plan does not simply normalise `None` into an empty
+/// payload and let the ordinary records op carry it: an empty payload would
+/// still reach the caller's resolver, which would answer it with a
+/// zero-length segment -- a wasted `iovec` entry on the vectored path and a
+/// zero-length `sendfile` region on the zero-copy one -- once per otherwise
+/// empty partition. A fetch response full of idle partitions is the common
+/// case, so the plan must carry no empty ops at all.
+#[test]
+fn a_plan_for_idle_partitions_carries_no_empty_ops() {
+    for version in [4i16, 12, 18] {
+        for records in [None, Some(RecordsPayload::Raw(Bytes::new()))] {
+            let response = test_support::one_partition_response(version, records);
+            let ops = build_fetch_plan(
+                &response,
+                version,
+                1,
+                version >= 12,
+                DEFAULT_MAX_FRAME_BYTES,
+                resolve_records_inline,
+            )
+            .unwrap();
+            assert2::assert!(
+                ops.iter().all(|op| op.body_len() > 0),
+                "the plan carries an empty op at version {version}"
+            );
+        }
+    }
+}
