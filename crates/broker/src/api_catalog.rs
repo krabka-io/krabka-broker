@@ -1000,6 +1000,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1101",
+        claim: "The MetadataHash tagged field on the group-metadata records, and the streams partition-metadata record it retires",
+        status: KipStatus::OutOfScope,
+        module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
+        tests: &[],
+        clients: ClientEvidence::NotCovered,
+        note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape; krabka decides that from the metadata image instead, so it keeps no such hash. The field is tagged and its default is 0, so the record krabka writes is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
+    },
+    KipAnnotation {
         key: "KIP-1142",
         claim: "ListConfigResources",
         status: KipStatus::Implemented,
@@ -1037,6 +1046,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
         clients: ClientEvidence::NotCovered,
         note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1263",
+        claim: "The AssignmentTimestamp tagged field on the target-assignment metadata records",
+        status: KipStatus::OutOfScope,
+        module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
+        tests: &[],
+        clients: ClientEvidence::NotCovered,
+        note: "Kafka stamps each target assignment with the time it was computed, for its own assignment metrics. krabka does not measure assignment latency from the log, so it writes the tagged field's default of 0, which is what Kafka writes when it has no timestamp to record.",
     },
     KipAnnotation {
         key: "KIP-1319",
@@ -1100,9 +1118,10 @@ pub enum ListenerKind {
     /// A listener a Kafka client reaches. It advertises what a Kafka broker
     /// advertises, which is every key except [`INTER_BROKER_ONLY_APIS`].
     Client,
-    /// A listener carrying inter-broker traffic only, which
-    /// [`crate::config::BrokerConfig::listener_kind`] recognises when the
-    /// operator has separated one from the listeners clients reach.
+    /// The listener `inter.broker.listener.name` names, which
+    /// [`crate::config::BrokerConfig::listener_kind`] recognises by name. On
+    /// the default single-listener broker that is the same listener clients
+    /// reach.
     ///
     /// It adds [`INTER_BROKER_ONLY_APIS`], because a krabka broker reaches a
     /// peer over the peer's inter-broker endpoint rather than over a
@@ -1152,11 +1171,13 @@ pub enum ClientMetricsReceiver {
 ///
 /// Dispatch is unaffected. [`dispatched_apis`] still carries every key here at
 /// its full version range, so a peer that sends one is answered whichever
-/// listener it arrived on. Eight of the nine also start at version 0, and a
-/// client that finds no row negotiates `(0, 0)`, so the unclean-recovery query
-/// reaches `GetReplicaLogInfo` on a single-listener broker as well.
-/// `AlterPartition` is the one that starts above 0, and nothing in this tree
-/// sends it.
+/// listener it arrived on. Withholding a key is not free, though: krabka's own
+/// intra-cluster senders go through `krabka_client_core`, which negotiates
+/// against the advertised table, so an endpoint peers dial has to advertise
+/// what they send it. That is why the widened side of the split is the
+/// listener `inter.broker.listener.name` names rather than a listener that
+/// happens to be separate -- see
+/// [`crate::config::BrokerConfig::listener_kind`].
 pub const INTER_BROKER_ONLY_APIS: &[i16] = {
     use krabka_protocol::owned;
     &[
