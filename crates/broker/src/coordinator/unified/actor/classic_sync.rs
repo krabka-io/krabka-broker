@@ -447,4 +447,47 @@ mod tests {
         check!(resync.error_code == codes::NONE);
         check!(resync.assignment == sync.assignment);
     }
+
+    /// A failed append must leave the member exactly as it was. The blob it
+    /// would have received is its whole target, so recording that grant while
+    /// the k8 record proving it never reached the log would tell the next
+    /// coordinator the member had synced when it had not — and free a
+    /// partition the member never took ownership of for its next owner.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hosted_classic_sync_append_failure_rolls_back_and_can_retry() {
+        let (coord, log) = make_coordinator_with_topic_policy(
+            "t",
+            2,
+            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
+        );
+        let handle = seed_and_upgrade(&coord, "t").await;
+        let join = rpc::classic_join(&handle, "m-classic", "t").await;
+        let before = describe_member(&handle, "m-classic").await;
+        let batches_before = log.batches().await.len();
+
+        log.fail_next
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let failed = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;
+
+        check!(failed.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
+        let after = describe_member(&handle, "m-classic").await;
+        check!(after.assigned_partitions == before.assigned_partitions);
+        check!(log.batches().await.len() == batches_before);
+        check!(
+            rpc::classic_heartbeat(&handle, "m-classic").await == codes::REBALANCE_IN_PROGRESS,
+            "a member whose sync never reached the log still owes one"
+        );
+
+        // The retry finds the group as the failed attempt found it, so it
+        // grants the same target and this time the member is in sync.
+        let retry = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;
+        check!(retry.error_code == codes::NONE);
+        check!(
+            !decode_assignment(&retry.assignment)
+                .assigned_partitions
+                .is_empty()
+        );
+        check!(log.batches().await.len() > batches_before);
+        check!(rpc::classic_heartbeat(&handle, "m-classic").await == codes::NONE);
+    }
 }
