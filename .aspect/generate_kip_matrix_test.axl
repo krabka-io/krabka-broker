@@ -17,6 +17,7 @@ load(
     "image_legend",
     "intent_cell",
     "intent_problem",
+    "inventory_problem",
     "is_word_char",
     "kafka_image_keys",
     "kcat_evidence",
@@ -30,6 +31,7 @@ load(
     "log_contract_rows",
     "parse_annotations",
     "parse_divergences",
+    "parse_inventory",
     "render_page",
     "suite_stem",
     "test_cell",
@@ -456,6 +458,83 @@ def _test_decision_row_problem_rejects(_ctx):
         "KIP-590 serves Envelope and needs no broker half; it is Partial, not Implemented",
     )
 
+_INVENTORY = "\n".join([
+    "# Kafka KIP inventory",
+    "",
+    "Prose the roster carries before its markers.",
+    "",
+    "<!-- BEGIN KIP_INVENTORY -->",
+    "- KIP-13",
+    "",
+    "  - KIP-704 ",
+    "- KIP-768",
+    "<!-- END KIP_INVENTORY -->",
+    "",
+    "Prose after them.",
+])
+
+def _test_parse_inventory(_ctx):
+    check_eq(
+        "the roster between the markers, indentation and blank lines and all",
+        parse_inventory(_INVENTORY, "kip_inventory.md"),
+        ["KIP-13", "KIP-704", "KIP-768"],
+    )
+
+def _roster(listed, claimed, rows):
+    """The complaint `inventory_problem` makes about one roster and its rows."""
+    return inventory_problem(
+        listed,
+        {key: True for key in claimed},
+        [struct(key = key, status = status) for key, status in rows],
+        "catalog.rs",
+        "kip_inventory.md",
+    )
+
+def _test_inventory_problem(_ctx):
+    check_eq(
+        "a KIP the roster lists, the sources mention and a row covers",
+        _roster(["KIP-13"], ["KIP-13"], [("KIP-13", "Implemented")]),
+        "",
+    )
+    check_eq(
+        "a KIP only the roster lists: the row is what the roster asks for",
+        _roster(["KIP-768"], [], [("KIP-768", "Implemented")]),
+        "",
+    )
+    check_eq(
+        "a KIP only the sources mention",
+        _roster([], ["KIP-13"], [("KIP-13", "Partial")]),
+        "",
+    )
+    check_eq(
+        "a scope-only row, which is neither listed nor mentioned",
+        _roster([], [], [("mixed-quorum", "OutOfScope")]),
+        "",
+    )
+
+def _test_inventory_problem_rejects(_ctx):
+    check_eq(
+        "a KIP named under crates/ with no row",
+        _roster([], ["KIP-704", "KIP-13"], [("KIP-13", "Implemented")]),
+        "KIPs named under crates/ without a KIP_ANNOTATIONS row in catalog.rs: KIP-704",
+    )
+    check_eq(
+        "a KIP the roster lists with no row: code with no claim",
+        _roster(["KIP-13", "KIP-768"], [], [("KIP-13", "Implemented")]),
+        "KIPs kip_inventory.md lists without a KIP_ANNOTATIONS row in catalog.rs: KIP-768",
+    )
+    check_eq(
+        "a row neither the roster nor the sources stands behind",
+        _roster(["KIP-13"], ["KIP-13"], [("KIP-13", "Implemented"), ("KIP-704", "Partial")]),
+        "KIP_ANNOTATIONS rows for KIPs neither kip_inventory.md nor anything " +
+        "under crates/ names: KIP-704",
+    )
+    check_eq(
+        "a listed KIP whose row carries a status the matrix cannot render",
+        _roster(["KIP-768"], [], [("KIP-768", "Planned")]),
+        "KIPs kip_inventory.md lists whose row has no matrix status: KIP-768",
+    )
+
 def _test_librdkafka_clients(_ctx):
     suite = "\n".join([
         "const CLIENTS: [ClientCase; 2] = [",
@@ -738,6 +817,9 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_link_citations,
     _test_decision_row_problem,
     _test_decision_row_problem_rejects,
+    _test_parse_inventory,
+    _test_inventory_problem,
+    _test_inventory_problem_rejects,
     _test_librdkafka_clients,
     _test_log_contract_rows,
     _test_api_versions_rows,

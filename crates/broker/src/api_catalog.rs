@@ -744,6 +744,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-704",
+        claim: "AlterPartition's leader recovery state after an unclean election",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/alter_partition/isr_update.rs",
+        tests: &[
+            "crates/broker/src/handlers/alter_partition/isr_update.rs::error_response_preserves_non_default_partition_fields",
+            "crates/broker/src/handlers/alter_partition/tests.rs",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The wire half only. `leader_recovery_state` is a literal 0 -- `RECOVERED` -- at every site that writes it, on the leader side at crates/broker/src/isr_maintenance/request_builder.rs:67 and crates/broker/src/isr_maintenance/request_builder.rs:120 and on the controller side at crates/broker/src/handlers/alter_partition/isr_update.rs:160 and crates/broker/src/handlers/alter_partition/isr_update.rs:179, and nothing under `crates/` reads the field. So the RECOVERING state does not exist here: a partition that comes back from an unclean leader election is advertised as fully recovered from its first AlterPartition onward, no leader is held in recovery, and the controller ignores the state a leader reports rather than answering it. The row is Partial because the field is carried and negotiated, not because any part of the recovery protocol runs.",
+    },
+    KipAnnotation {
         key: "KIP-714",
         claim: "Client metrics push: GetTelemetrySubscriptions and PushTelemetry",
         status: KipStatus::Implemented,
@@ -764,6 +776,20 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
         clients: ClientEvidence::NotCovered,
         note: "",
+    },
+    KipAnnotation {
+        key: "KIP-768",
+        claim: "SASL/OAUTHBEARER against an OIDC provider's JWKS endpoint",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/oauth_jwks.rs",
+        tests: &[
+            "crates/broker/tests/auth_handlers/oauthbearer_tokens.rs::sasl_oauthbearer_signed_token_happy_path",
+            "crates/broker/src/oauth_jwks/refresher/tests.rs",
+            "crates/broker/src/oauth_jwks/fetch.rs::fetch_jwks_parses_served_keyset",
+            "crates/verified/src/jwks.rs::cache_requires_one_fresh_stable_generation",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The broker half of the KIP: `crates/broker/src/oauth_jwks/` GETs the provider's JWKS document over HTTP or HTTPS, parses it, and swaps the key set into the shared `JwksHandle` a `SignedJwsValidator` reads, so rotated keys are picked up with no restart. It refreshes on a cadence and on a validator's unknown-kid signal, rate-limits the on-demand path, keeps the previous key set when a fetch fails, and fences readers with the even/odd generation counter that crates/verified/src/jwks.rs:42 proves admission against; the same file's crates/verified/src/jwks.rs:84 keeps the on-demand limiter monotonic across a wall-clock rollback. Cache expiry, issuer and audience checks, the principal and groups claims, the `typ` check, clock skew, an operator-supplied `IdP` TLS trust bundle and the `use=enc` filter are configured from the `[oauthbearer]` TOML table rather than Kafka's `sasl.oauthbearer.*` JAAS options. The KIP's client half -- the login callback that retrieves a token with an OAuth `client_credentials` grant -- is a client concern and lives in `krabka-client-rs`, not in this repository.",
     },
     KipAnnotation {
         key: "KIP-778",
