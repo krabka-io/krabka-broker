@@ -212,9 +212,11 @@ struct MemberIdentity {
 /// separator between them, so the stream is concatenated JSON rather than one
 /// document or one object per line.
 fn decode_stream(stdout: &str) -> Vec<serde_json::Value> {
-    // The tool writes its own notices to stdout ahead of the records -- a
-    // deprecation warning for a flag, for instance -- and those are not the
-    // formatter's output. The stream starts at the first object.
+    // The tool writes its own notices to stdout ahead of the records, and they
+    // are not the formatter's output: 4.3.1 deprecates `--consumer-property`
+    // and says so on stdout before the first record. The flag stays, because
+    // the KIP-848 run drives `apache/kafka:4.0.0`, which has no replacement
+    // for it; the stream simply starts at the first object.
     let stdout = stdout.find('{').map_or("", |start| &stdout[start..]);
     serde_json::Deserializer::from_str(stdout)
         .into_iter::<serde_json::Value>()
@@ -516,17 +518,17 @@ impl Cluster {
                 &RECORDS.to_string(),
                 "--timeout-ms",
                 CONSUME_TIMEOUT_MS,
-                "--command-property",
+                "--consumer-property",
                 "group.protocol=classic",
-                "--command-property",
+                "--consumer-property",
                 &format!("client.id={CLIENT_ID}"),
-                "--command-property",
+                "--consumer-property",
                 "enable.auto.commit=true",
-                "--command-property",
+                "--consumer-property",
                 &format!("session.timeout.ms={SESSION_TIMEOUT_MS}"),
-                "--command-property",
+                "--consumer-property",
                 &format!("max.poll.interval.ms={REBALANCE_TIMEOUT_MS}"),
-                "--command-property",
+                "--consumer-property",
                 &format!("partition.assignment.strategy={ASSIGNOR}"),
             ],
         );
@@ -555,13 +557,13 @@ impl Cluster {
                 &RECORDS.to_string(),
                 "--timeout-ms",
                 CONSUME_TIMEOUT_MS,
-                "--command-property",
+                "--consumer-property",
                 "group.protocol=consumer",
-                "--command-property",
+                "--consumer-property",
                 &format!("client.id={CLIENT_ID}"),
-                "--command-property",
+                "--consumer-property",
                 "enable.auto.commit=true",
-                "--command-property",
+                "--consumer-property",
                 &format!("max.poll.interval.ms={REBALANCE_TIMEOUT_MS}"),
             ],
         );
@@ -589,7 +591,7 @@ impl Cluster {
                 DRAIN_TIMEOUT_MS,
                 "--formatter",
                 formatter,
-                "--command-property",
+                "--consumer-property",
                 "exclude.internal.topics=false",
             ],
         );
