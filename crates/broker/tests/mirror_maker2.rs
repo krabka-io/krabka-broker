@@ -77,6 +77,21 @@
 //! migration guide says what an operator whose source cluster *does* have an
 //! authorizer sees.
 //!
+//! # What a failure here prints
+//!
+//! Every wait announces itself and its result as `KRABKA[test]`, so the log
+//! says which of them the case reached without anyone waiting for it to fail,
+//! and each one names itself again in its own failure. A wait also ends the
+//! moment MM2's container stops, because every one of them is a wait on MM2
+//! doing something.
+//!
+//! No container's log is inlined whole into a message. `log_excerpt` carries
+//! the `ERROR`/`WARN` lines and the tail, a few KB, and `save_log` writes the
+//! rest to `TEST_UNDECLARED_OUTPUTS_DIR`. The first run of this suite inlined
+//! MM2's whole log instead: GitHub's job-log API keeps roughly the last 470 KB
+//! of a job, one dump filled it, and the suites sharded beside this one lost
+//! their diagnostics along with this one's.
+//!
 //! The container-driven case is gated `#[ignore = "requires Docker"]`; the
 //! Bazel `docker` lane runs it. The parsing this suite reads the JVM tools
 //! with is covered by ordinary tests that need no daemon.
@@ -86,6 +101,7 @@ mod support;
 
 use std::{
     io::Write as _,
+    path::PathBuf,
     process::{Command, Output, Stdio},
     time::Duration,
 };
@@ -140,6 +156,25 @@ const EFFECT_BUDGET: Duration = Duration::from_secs(180);
 
 /// The pause between one poll and the next.
 const POLL_GAP: Duration = Duration::from_secs(2);
+
+/// How many of a container's last log lines a failure message may carry.
+///
+/// A JVM container's log is tens of thousands of lines. Inlining one whole
+/// into an assertion message cost more than this suite's own diagnosis: the
+/// GitHub job-log API hands back roughly the last 470 KB of a job, and one
+/// dump filled all of it, taking the `sarama_conformance` evidence in the same
+/// Bazel shard with it. Nothing here inlines a container's output unbounded
+/// again; [`log_excerpt`] is a few KB and [`save_log`] keeps the rest.
+const LOG_TAIL_LINES: usize = 40;
+
+/// How many of a log's `ERROR`, `WARN` and exception lines the excerpt carries.
+///
+/// The tail alone does not explain a JVM that stopped on purpose. MM2's
+/// shutdown writes several hundred INFO lines -- one per connector, task,
+/// producer, consumer, metrics reporter and `KafkaBasedLog` it closes -- after
+/// whatever made it stop, so the cause is pushed out of any tail short enough
+/// to print. These lines are where it survives.
+const LOG_PROBLEM_LINES: usize = 40;
 
 // ------------------------------------------------------------------ records
 
@@ -217,6 +252,10 @@ enum Role {
     /// pairs translation is computed from.
     OffsetSyncs,
 }
+
+/// Every role, in the order [`Role`]'s own `Ord` puts them, which is the order
+/// a sorted reading of the target's topics comes back in.
+const ROLES: [Role; 3] = [Role::Checkpoints, Role::Heartbeats, Role::OffsetSyncs];
 
 /// Which of MM2's internal topics `name` is, if it is one of them.
 ///
@@ -364,12 +403,115 @@ fn both_streams(out: &Output) -> String {
 }
 
 /// Everything a container has printed.
+///
+/// Only two callers want this whole: [`container_excerpt`], which bounds it
+/// before anything prints it, and the ACL assertion, which searches it for a
+/// line and prints nothing.
 fn container_logs(name: &str) -> String {
     let out = Command::new("docker")
         .args(["logs", name])
         .output()
         .expect("spawn docker logs");
     both_streams(&out)
+}
+
+/// What a container has printed, cut down to something a failure message can
+/// carry, with the whole log written out and named.
+fn container_excerpt(name: &str) -> String {
+    let full = container_logs(name);
+    format!(
+        "{name} log ({}):\n{}",
+        save_log(name, &full),
+        log_excerpt(&full)
+    )
+}
+
+/// Write one container's whole log where a CI run can pick it up, and say
+/// where it went.
+///
+/// Bazel stages `TEST_UNDECLARED_OUTPUTS_DIR` into the test's outputs, which is
+/// where a log too big to print belongs. Under Cargo there is no such
+/// directory; the temporary one still beats losing it.
+fn save_log(name: &str, text: &str) -> String {
+    let dir = std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR")
+        .map_or_else(std::env::temp_dir, PathBuf::from);
+    let path = dir.join(format!("{name}.log"));
+    match std::fs::write(&path, text) {
+        Ok(()) => format!("whole log at {}", path.display()),
+        Err(error) => format!("whole log not written to {}: {error}", path.display()),
+    }
+}
+
+/// The two parts of a log a failure is explained by: the lines that reported a
+/// problem, and the last lines before it stopped.
+fn log_excerpt(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let problems: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| is_problem_line(line))
+        .collect();
+    let kept = last_lines(&problems, LOG_PROBLEM_LINES);
+    let tail = last_lines(&lines, LOG_TAIL_LINES);
+    format!(
+        "{} lines, of which {} reported a problem; the last {} of those:\n{}\nthe last {} lines:\n{}",
+        lines.len(),
+        problems.len(),
+        kept.len(),
+        kept.join("\n"),
+        tail.len(),
+        tail.join("\n"),
+    )
+}
+
+/// Whether one log line is worth keeping whatever else is dropped.
+///
+/// The JVM's log4j layout puts the level between the timestamp and the
+/// message, and a stack trace's first line ends in the exception's own name,
+/// so a substring of each is what selects them.
+fn is_problem_line(line: &str) -> bool {
+    line.contains("ERROR") || line.contains("WARN") || line.contains("Exception")
+}
+
+/// The last `keep` of `lines`, or all of them when there are fewer.
+fn last_lines<'a>(lines: &[&'a str], keep: usize) -> Vec<&'a str> {
+    lines[lines.len().saturating_sub(keep)..].to_vec()
+}
+
+/// Whether a container is still running, and what it exited with if not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContainerState {
+    running: bool,
+    exit_code: i64,
+}
+
+/// Ask the daemon whether `name` is still running.
+fn container_state(name: &str) -> ContainerState {
+    let out = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Running}}|{{.State.ExitCode}}",
+            name,
+        ])
+        .output()
+        .expect("spawn docker inspect");
+    let rendered = String::from_utf8_lossy(&out.stdout).into_owned();
+    parse_container_state(&rendered).unwrap_or_else(|| {
+        panic!(
+            "no state for {name} in {rendered:?}:\n{}",
+            both_streams(&out)
+        )
+    })
+}
+
+/// The state out of the `Running|ExitCode` pair `docker inspect` renders.
+fn parse_container_state(rendered: &str) -> Option<ContainerState> {
+    let (running, exit_code) = rendered.trim().split_once('|')?;
+    Some(ContainerState {
+        running: running.parse().ok()?,
+        exit_code: exit_code.parse().ok()?,
+    })
 }
 
 // ------------------------------------------------------------- source cluster
@@ -440,19 +582,28 @@ impl SourceKafka {
 
     /// Poll `kafka-topics --list` until the source broker answers it.
     async fn wait_ready(&self) {
-        let deadline = tokio::time::Instant::now() + SOURCE_BUDGET;
+        let start = tokio::time::Instant::now();
+        let deadline = start + SOURCE_BUDGET;
+        eprintln!(
+            "KRABKA[test] waiting for: the source Kafka answers on {} (up to {SOURCE_BUDGET:?})",
+            self.bootstrap,
+        );
         loop {
             let out = tool_allowing_failure(
                 "kafka-topics",
                 &["--bootstrap-server", &self.bootstrap, "--list"],
             );
             if out.status.success() {
+                eprintln!(
+                    "KRABKA[test] reached: the source Kafka answers, after {:.1}s",
+                    start.elapsed().as_secs_f64(),
+                );
                 return;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "the source Kafka did not answer within {SOURCE_BUDGET:?}:\n{}",
-                container_logs(&self.container),
+                "the source Kafka did not answer within {SOURCE_BUDGET:?}; {}",
+                container_excerpt(&self.container),
             );
             // intentional: a JVM broker's readiness is its own internal state,
             // and asking its tools is the only observation there is.
@@ -480,6 +631,15 @@ impl MirrorMaker {
     /// Start MM2 against the two clusters. It returns once `docker run` has
     /// accepted the container; the JVM inside is still booting.
     ///
+    /// `target->source.emit.heartbeats.enabled=false` is what keeps the run to
+    /// the one flow this suite is about. `enabled=false` alone does not:
+    /// `MirrorMakerConfig.clusterPairs` keeps a pair whose flow is disabled as
+    /// long as heartbeats are on for it, which they are by default, so the
+    /// first run of this suite carried a second Connect worker
+    /// (`clientId=target->source, groupId=target-mm2`) with its own three
+    /// `KafkaBasedLog` stores and its own heartbeat connector, all of them
+    /// against the source cluster. Nothing asserted below reads any of it.
+    ///
     /// The properties are written by the container's own entrypoint rather
     /// than bind-mounted: the image runs as a non-root user, and a file under
     /// a `tempfile` directory is `0700` on the host and unreadable inside.
@@ -493,6 +653,7 @@ impl MirrorMaker {
              {TARGET_ALIAS}.bootstrap.servers={target}\n\
              {SOURCE_ALIAS}->{TARGET_ALIAS}.enabled=true\n\
              {TARGET_ALIAS}->{SOURCE_ALIAS}.enabled=false\n\
+             {TARGET_ALIAS}->{SOURCE_ALIAS}.emit.heartbeats.enabled=false\n\
              {SOURCE_ALIAS}->{TARGET_ALIAS}.topics=krabka-mm2-.*\n\
              {SOURCE_ALIAS}->{TARGET_ALIAS}.groups=krabka-mm2-.*\n\
              replication.factor=1\n\
@@ -535,36 +696,76 @@ impl MirrorMaker {
             "starting MM2 failed: {}",
             String::from_utf8_lossy(&out.stderr),
         );
+        eprintln!("KRABKA[test] MM2 started in {container}, mirroring {source} onto {target}");
         Self { container }
     }
 
-    /// Everything MM2 has printed. Every wait below ends with this, because
-    /// MM2's own log is where a refused topic creation, a failed
-    /// `alterConsumerGroupOffsets` or an ACL sync that could not run is
-    /// written down.
+    /// Everything MM2 has printed, for the one assertion that searches it
+    /// rather than printing it.
     fn logs(&self) -> String {
         container_logs(&self.container)
+    }
+
+    /// MM2's log, cut to what explains a failure. Every wait below ends with
+    /// this, because MM2's own log is where a refused topic creation, a failed
+    /// `alterConsumerGroupOffsets` or an ACL sync that could not run is
+    /// written down.
+    fn diagnostics(&self) -> String {
+        container_excerpt(&self.container)
+    }
+
+    /// How MM2 stopped, or `None` while it is still running.
+    ///
+    /// Every wait below is a wait on MM2 doing something, so a stopped MM2
+    /// makes all of them hopeless. The first real run of this suite spent
+    /// three further minutes polling a JVM that had already written
+    /// `Kafka MirrorMaker stopped.`, and then reported a timeout rather than
+    /// the exit.
+    fn stopped(&self) -> Option<String> {
+        let state = container_state(&self.container);
+        (!state.running).then(|| format!("exited with status {}", state.exit_code))
     }
 }
 
 // ----------------------------------------------------------------- polling
 
 /// Poll `probe` until it answers, or fail the case with MM2's log.
+///
+/// Each wait says what it is waiting for when it starts and how long it took
+/// when it ends, in the `KRABKA[test]` format the other container suites use,
+/// so a reader sees how far the case got without waiting for it to die. A
+/// wait that ends any other way names itself in the failure too: the first
+/// real run of this suite failed inside here and the message said only
+/// `mirror_maker2.rs:564`, because nothing above had announced which of the
+/// four waits was running.
 async fn poll_until<T>(
     budget: Duration,
     what: &str,
     mm2: &MirrorMaker,
     mut probe: impl FnMut() -> Option<T>,
 ) -> T {
-    let deadline = tokio::time::Instant::now() + budget;
+    let start = tokio::time::Instant::now();
+    let deadline = start + budget;
+    eprintln!("KRABKA[test] waiting for: {what} (up to {budget:?})");
     loop {
         if let Some(found) = probe() {
+            eprintln!(
+                "KRABKA[test] reached: {what}, after {:.1}s",
+                start.elapsed().as_secs_f64(),
+            );
             return found;
         }
+        let stopped = mm2.stopped();
+        assert!(
+            stopped.is_none(),
+            "MM2 {} while the case waited for {what}; {}",
+            stopped.unwrap_or_default(),
+            mm2.diagnostics(),
+        );
         assert!(
             tokio::time::Instant::now() < deadline,
-            "{what} did not happen within {budget:?}; MM2 logs:\n{}",
-            mm2.logs(),
+            "{what} did not happen within {budget:?}; {}",
+            mm2.diagnostics(),
         );
         // intentional: every effect below is an MM2 interval expiring inside a
         // JVM, which krabka cannot be awaited on.
@@ -861,13 +1062,20 @@ async fn mirror_maker2_migrates_a_kafka_cluster_onto_krabka() {
     .await;
     assert!(
         replicated == records,
-        "the mirrored records differ from the source records; MM2 logs:\n{}",
-        mm2.logs(),
+        "the mirrored records differ from the source records; {}",
+        mm2.diagnostics(),
     );
+
+    // The config change goes in here, as soon as the mirror is established,
+    // rather than beside the wait that reads it back. It is still a change
+    // made after mirroring is live, which is what the assertion is about, and
+    // asking for it now leaves it with the whole of the two waits below to
+    // arrive in rather than with `EFFECT_BUDGET` alone.
+    alter_source_retention(&source.bootstrap);
 
     assert_internal_topics(&target, &mm2).await;
     assert_translated_offsets(&target, &mirrored, &records, &mm2).await;
-    assert_topic_config_sync(&source.bootstrap, &target, &mirrored, &mm2).await;
+    assert_topic_config_sync(&target, &mirrored, &mm2).await;
     assert_acl_sync(&target, &mm2);
 
     drop(mm2);
@@ -888,7 +1096,14 @@ async fn assert_internal_topics(target: &str, mm2: &MirrorMaker) {
                 .filter_map(|name| role_of(&name).map(|role| (role, name)))
                 .collect();
             topics.sort();
-            (topics.len() == 3).then_some(topics)
+            // Every role present, rather than a count of three. The two are
+            // the same when the target holds what it should, and different
+            // when it holds a fourth topic of one of these shapes: a count
+            // waits out the whole budget and reports a timeout, where this
+            // hands the extra topic to the comparison below and the failure
+            // says what was found.
+            let covered = |role: Role| topics.iter().any(|(found, _)| *found == role);
+            ROLES.into_iter().all(covered).then_some(topics)
         },
     )
     .await;
@@ -901,7 +1116,7 @@ async fn assert_internal_topics(target: &str, mm2: &MirrorMaker) {
             cleanup_policy: topic_config(target, name, "cleanup.policy").unwrap_or_default(),
         })
         .collect();
-    let expected: Vec<InternalTopic> = [Role::Checkpoints, Role::Heartbeats, Role::OffsetSyncs]
+    let expected: Vec<InternalTopic> = ROLES
         .into_iter()
         .map(|role| InternalTopic {
             role,
@@ -912,8 +1127,8 @@ async fn assert_internal_topics(target: &str, mm2: &MirrorMaker) {
     assert!(
         described == expected,
         "MM2's internal topics on krabka are {described:?}, not {expected:?}; the topics \
-         found were {found:?} and MM2 logs:\n{}",
-        mm2.logs(),
+         found were {found:?} and {}",
+        mm2.diagnostics(),
     );
 }
 
@@ -940,24 +1155,22 @@ async fn assert_translated_offsets(
     .await;
     assert!(
         translated == expected_offset,
-        "the group resumes on krabka at {translated}, not at the source's {COMMITTED}; \
-         MM2 logs:\n{}",
-        mm2.logs(),
+        "the group resumes on krabka at {translated}, not at the source's {COMMITTED}; {}",
+        mm2.diagnostics(),
     );
 
     let resumed = consume(target, mirrored, Some(GROUP), RECORDS - COMMITTED, false);
     let expected: Vec<Record> = records[COMMITTED..].to_vec();
     assert!(
         resumed == expected,
-        "the cut-over group read {resumed:?} rather than resuming at {expected:?}; \
-         MM2 logs:\n{}",
-        mm2.logs(),
+        "the cut-over group read {resumed:?} rather than resuming at {expected:?}; {}",
+        mm2.diagnostics(),
     );
 }
 
-/// A `retention.ms` set on the source topic after mirroring is established
-/// reaches the target copy through `sync.topic.configs`.
-async fn assert_topic_config_sync(source: &str, target: &str, mirrored: &str, mm2: &MirrorMaker) {
+/// Set [`RETENTION_MS`] on the source topic, which mirroring is by now live
+/// over, so `sync.topic.configs` has a change to carry.
+fn alter_source_retention(source: &str) {
     tool(
         "kafka-configs",
         &[
@@ -972,6 +1185,11 @@ async fn assert_topic_config_sync(source: &str, target: &str, mirrored: &str, mm
             &format!("retention.ms={RETENTION_MS}"),
         ],
     );
+}
+
+/// The `retention.ms` [`alter_source_retention`] set on the source topic
+/// reaches the target copy through `sync.topic.configs`.
+async fn assert_topic_config_sync(target: &str, mirrored: &str, mm2: &MirrorMaker) {
     let synced = poll_until(
         EFFECT_BUDGET,
         "MM2 synced retention.ms onto krabka",
@@ -981,8 +1199,8 @@ async fn assert_topic_config_sync(source: &str, target: &str, mirrored: &str, mm
     .await;
     assert!(
         synced == RETENTION_MS,
-        "krabka holds retention.ms={synced} on {mirrored}, not {RETENTION_MS}; MM2 logs:\n{}",
-        mm2.logs(),
+        "krabka holds retention.ms={synced} on {mirrored}, not {RETENTION_MS}; {}",
+        mm2.diagnostics(),
     );
 }
 
@@ -995,10 +1213,10 @@ async fn assert_topic_config_sync(source: &str, target: &str, mirrored: &str, mm
 /// second half makes the call MM2 would have made and reads krabka's answer
 /// directly, which is the `SECURITY_DISABLED` (54) this milestone landed.
 fn assert_acl_sync(target: &str, mm2: &MirrorMaker) {
-    let logs = mm2.logs();
     assert!(
-        !logs.contains("Could not sync ACL"),
-        "MM2 reported an ACL sync failure:\n{logs}",
+        !mm2.logs().contains("Could not sync ACL"),
+        "MM2 reported an ACL sync failure; {}",
+        mm2.diagnostics(),
     );
 
     let out = tool_allowing_failure(
@@ -1034,8 +1252,9 @@ mod tests {
     use assert2::assert;
 
     use super::{
-        Record, Role, bridge_gateway, described_config, described_offset, described_partitions,
-        role_of, seeded_records,
+        ContainerState, LOG_PROBLEM_LINES, LOG_TAIL_LINES, Record, Role, bridge_gateway,
+        described_config, described_offset, described_partitions, log_excerpt,
+        parse_container_state, role_of, seeded_records,
     };
 
     #[test]
@@ -1121,6 +1340,78 @@ mod tests {
     fn an_uncommitted_group_reads_as_no_offset_rather_than_zero() {
         let text = "krabka-mm2-riders source.krabka-mm2-orders 0 - 10 - - - -\n";
         assert!(described_offset(text, "krabka-mm2-riders", "source.krabka-mm2-orders") == None);
+    }
+
+    /// The shape of the failure this bound exists for: an MM2 that stopped on
+    /// purpose writes hundreds of INFO lines closing itself down after the
+    /// error that made it stop, so a tail alone loses the cause.
+    #[test]
+    fn a_log_excerpt_keeps_the_cause_a_long_shutdown_pushed_out_of_the_tail() {
+        let mut log = vec![
+            "[2026-09-08 03:39:20,001] ERROR Uncaught exception in herder work thread, exiting"
+                .to_owned(),
+        ];
+        for index in 0..500 {
+            log.push(format!(
+                "[2026-09-08 03:39:21,{index:03}] INFO Metrics reporters closed"
+            ));
+        }
+        log.push("[2026-09-08 03:40:08,761] INFO Kafka MirrorMaker stopped.".to_owned());
+        let excerpt = log_excerpt(&log.join("\n"));
+
+        assert!(excerpt.contains("Uncaught exception in herder work thread"));
+        assert!(excerpt.contains("Kafka MirrorMaker stopped."));
+        assert!(excerpt.contains("502 lines, of which 1 reported a problem"));
+        assert!(excerpt.lines().count() <= LOG_PROBLEM_LINES + LOG_TAIL_LINES + 2);
+    }
+
+    /// Neither half of the excerpt grows with the log, whichever half the log
+    /// is made of.
+    #[test]
+    fn a_log_excerpt_is_bounded_however_long_the_log_is() {
+        let problems: Vec<String> = (0..500)
+            .map(|index| format!("[ts] WARN something went wrong: {index}"))
+            .collect();
+        let excerpt = log_excerpt(&problems.join("\n"));
+
+        assert!(excerpt.lines().count() <= LOG_PROBLEM_LINES + LOG_TAIL_LINES + 2);
+        // The last of each half is kept, and the first of the log is not.
+        assert!(excerpt.contains("something went wrong: 499"));
+        assert!(!excerpt.contains("something went wrong: 0\n"));
+    }
+
+    /// An empty log has no halves to take, and must still render.
+    #[test]
+    fn an_empty_log_excerpts_to_a_count_of_none() {
+        let expected = [
+            "0 lines, of which 0 reported a problem; the last 0 of those:",
+            "",
+            "the last 0 lines:",
+            "",
+        ]
+        .join("\n");
+        assert!(log_excerpt("") == expected);
+    }
+
+    #[test]
+    fn a_container_state_is_read_out_of_the_inspect_rendering() {
+        assert!(
+            parse_container_state("true|0\n")
+                == Some(ContainerState {
+                    running: true,
+                    exit_code: 0,
+                })
+        );
+        assert!(
+            parse_container_state("false|143\n")
+                == Some(ContainerState {
+                    running: false,
+                    exit_code: 143,
+                })
+        );
+        // What `docker inspect` prints for a container that is not there: an
+        // error on stderr and nothing at all on stdout.
+        assert!(parse_container_state("") == None);
     }
 
     #[test]
