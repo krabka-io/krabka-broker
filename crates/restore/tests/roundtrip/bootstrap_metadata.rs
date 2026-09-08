@@ -186,9 +186,7 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         std::iter::once("ANONYMOUS".to_owned()).collect(),
     ));
-    let broker = Broker::start(config)
-        .await
-        .expect("restored broker starts");
+    let broker = Broker::start(config).await.expect("restored broker starts");
     let client = krabka_client_core::Client::builder()
         .bootstrap(broker.listen_addr().to_string())
         .client_id("restore-metadata-test")
