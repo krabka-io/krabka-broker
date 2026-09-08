@@ -55,12 +55,26 @@ pub(crate) fn serve_classic_heartbeat(
 /// Classic `SyncGroup` for a hosted member. It returns the member's current
 /// target, translated to a `ConsumerProtocolAssignment` blob, and records that
 /// blob as `last_synced_assignment`, so later heartbeats report `NONE`.
+///
+/// Only a member with a classic facade may be served this way. A native
+/// KIP-848 member of the same group reconciles through
+/// `ConsumerGroupHeartbeat`, where it acknowledges each target itself, so
+/// answering its `SyncGroup` would hand it — and record for it — an assignment
+/// it never acknowledged, and could free a partition it still owns to another
+/// member. Kafka refuses the same request: `classicGroupSyncToConsumerGroup`
+/// calls `throwIfMemberDoesNotUseClassicProtocol`, which raises
+/// `UnknownMemberIdException` for a member that does not use the classic
+/// protocol.
 pub(crate) fn serve_classic_sync(
     state: &mut ConsumerState,
     member_id: &str,
     image: &ReconcileInput,
 ) -> SyncResult {
-    if !state.members.contains_key(member_id) {
+    if !state
+        .members
+        .get(member_id)
+        .is_some_and(MemberState::is_classic)
+    {
         return SyncResult {
             error_code: codes::UNKNOWN_MEMBER_ID,
             ..Default::default()
@@ -186,5 +200,86 @@ pub(crate) fn build_hosted_classic_join_result(
                 .and_then(|m| m.instance_id.clone()),
             metadata: Bytes::new(),
         }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    };
+
+    use assert2::check;
+    use krabka_protocol::primitives::uuid::Uuid;
+
+    use super::*;
+    use crate::coordinator::unified::consumer_state::CompiledRegex;
+
+    const TOPIC: Uuid = Uuid([7; 16]);
+
+    fn native_member(id: &str) -> MemberState {
+        MemberState {
+            member_id: id.into(),
+            instance_id: None,
+            rack_id: None,
+            client_id: "c".into(),
+            client_host: "/127.0.0.1".into(),
+            subscribed_topic_names: ["t".to_string()].into(),
+            subscribed_topic_regex: None,
+            compiled_regex: CompiledRegex::Absent,
+            server_assignor: None,
+            rebalance_timeout: Duration::from_secs(60),
+            member_epoch: 3,
+            previous_member_epoch: 2,
+            assignment_state: MemberAssignmentState::UnrevokedPartitions,
+            assigned_partitions: [(TOPIC, vec![0])].into(),
+            partitions_pending_revocation: [(TOPIC, vec![1])].into(),
+            last_seen: Instant::now(),
+            classic: None,
+        }
+    }
+
+    fn image() -> ReconcileInput {
+        ReconcileInput {
+            topic_id_by_name: [("t".to_string(), TOPIC)].into(),
+            partitions_per_topic: [(TOPIC, 2)].into(),
+            ..ReconcileInput::default()
+        }
+    }
+
+    /// A native KIP-848 member reconciles through `ConsumerGroupHeartbeat`,
+    /// never through `SyncGroup`. Kafka's `classicGroupSyncToConsumerGroup`
+    /// answers `UNKNOWN_MEMBER_ID` for a member of a consumer group that does
+    /// not use the classic protocol, and so does this path: serving it would
+    /// hand the member an assignment it never acknowledged.
+    #[test]
+    fn classic_sync_by_a_native_member_is_an_unknown_member() {
+        let mut state = ConsumerState::new("g");
+        state.add_or_update_member(native_member("m-native"));
+        state
+            .target
+            .per_member
+            .insert("m-native".into(), [(TOPIC, vec![0, 1])].into());
+
+        let result = serve_classic_sync(&mut state, "m-native", &image());
+
+        check!(result.error_code == codes::UNKNOWN_MEMBER_ID);
+        check!(result.assignment.is_empty());
+        let member = &state.members["m-native"];
+        let assigned: HashMap<Uuid, Vec<i32>> = [(TOPIC, vec![0])].into();
+        let pending: HashMap<Uuid, Vec<i32>> = [(TOPIC, vec![1])].into();
+        check!(member.assigned_partitions == assigned);
+        check!(member.partitions_pending_revocation == pending);
+        check!(member.assignment_state == MemberAssignmentState::UnrevokedPartitions);
+    }
+
+    #[test]
+    fn classic_sync_for_an_absent_member_is_an_unknown_member() {
+        let mut state = ConsumerState::new("g");
+
+        let result = serve_classic_sync(&mut state, "nobody", &image());
+
+        check!(result.error_code == codes::UNKNOWN_MEMBER_ID);
     }
 }

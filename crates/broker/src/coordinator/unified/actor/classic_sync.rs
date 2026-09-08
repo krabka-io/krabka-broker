@@ -35,6 +35,11 @@ use crate::{
 ///
 /// A failed append leaves the member as it was and answers
 /// `COORDINATOR_LOAD_IN_PROGRESS`, so the client retries the sync.
+///
+/// Only a hosted classic member gets this far: `migration::serve_classic_sync`
+/// answers `UNKNOWN_MEMBER_ID` for a native KIP-848 member, which returns
+/// above, so none of the bookkeeping below can overwrite a native member's
+/// assignment out from under its own reconciliation.
 async fn hosted_classic_sync(
     state: &mut ConsumerState,
     services: ActorServices<'_>,
@@ -166,7 +171,7 @@ mod tests {
     use super::*;
     use crate::coordinator::unified::{
         actor::{
-            GroupActorMessage,
+            DescribeMember, GroupActorHandle, GroupActorMessage,
             test_support::{
                 completing_classic_group, decode_assignment, last_classic_metadata,
                 make_coordinator, make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
@@ -174,6 +179,22 @@ mod tests {
         },
         classic_state::GroupState as ClassicGroupState,
     };
+
+    /// The live `Describe` view of one member.
+    async fn describe_member(handle: &GroupActorHandle, member_id: &str) -> DescribeMember {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Describe { reply: tx })
+            .await
+            .unwrap();
+        rx.await
+            .unwrap()
+            .members
+            .into_iter()
+            .find(|m| m.member_id == member_id)
+            .expect("member in the describe view")
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_leader_sync_persists_complete_stable_snapshot() {
@@ -338,6 +359,49 @@ mod tests {
             rpc::classic_heartbeat(&handle, "m-classic").await == codes::NONE,
             "after sync the member is in sync → NONE"
         );
+    }
+
+    /// A native KIP-848 member of an upgraded group must not be served the
+    /// classic `SyncGroup` path. It reconciles through
+    /// `ConsumerGroupHeartbeat`, acknowledging each target itself, so granting
+    /// it its whole target here would advertise a partition its previous owner
+    /// still holds — the KIP-848 safety property `reconcile_member` documents.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_member_sync_group_is_rejected_and_changes_no_assignment() {
+        let (coord, _log) = make_coordinator_with_topic_policy(
+            "t",
+            2,
+            crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
+        );
+        let handle = seed_and_upgrade(&coord, "t").await;
+        // The hosted classic member syncs, so it holds both partitions of "t".
+        let join = rpc::classic_join(&handle, "m-classic", "t").await;
+        assert!(
+            rpc::classic_sync(&handle, "m-classic", join.generation_id)
+                .await
+                .error_code
+                == codes::NONE
+        );
+
+        // A native member joins. Its target gains a partition that m-classic
+        // still holds, so the reconciler withholds it: the native member's
+        // assignment lags its target until it acknowledges.
+        let native = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
+        assert!(native.error_code == codes::NONE);
+        let native_id = native.member_id.expect("native member id");
+        let before = describe_member(&handle, &native_id).await;
+        let classic_before = describe_member(&handle, "m-classic").await;
+
+        let sync = rpc::classic_sync(&handle, &native_id, join.generation_id).await;
+
+        check!(sync.error_code == codes::UNKNOWN_MEMBER_ID);
+        check!(sync.assignment.is_empty());
+        let after = describe_member(&handle, &native_id).await;
+        check!(after.assigned_partitions == before.assigned_partitions);
+        check!(!after.is_classic);
+        // Nor did the rejected sync move anything between the two members.
+        let classic_after = describe_member(&handle, "m-classic").await;
+        check!(classic_after.assigned_partitions == classic_before.assigned_partitions);
     }
 
     /// A coordinator failover must not turn a synced hosted classic member

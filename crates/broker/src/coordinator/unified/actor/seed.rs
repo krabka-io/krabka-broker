@@ -9,10 +9,11 @@
 //!
 //! A hosted classic member's `last_synced_assignment` is not a persisted field.
 //! Nothing in Kafka's schema holds it, so it is rebuilt here from the member's
-//! k8 current assignment, which is what `SyncGroup` handed the member, in the
-//! same translation the live path uses. A member whose current assignment no
-//! longer matches its k7 target therefore still owes a re-sync after the
-//! failover, exactly as it did before it.
+//! k8 record — everything the member still holds, which is its current
+//! assignment together with the partitions it has yet to revoke — in the same
+//! translation the live path uses. A member whose held partitions no longer
+//! match its k7 target therefore still owes a re-sync after the failover,
+//! exactly as it did before it.
 
 use std::{
     collections::HashMap,
@@ -31,22 +32,49 @@ use crate::coordinator::unified::{
     reconciler::ReconcileInput,
 };
 
+/// Everything a member still holds: the partitions it is assigned plus the
+/// ones a later target change asked it to revoke but that it has not given up
+/// yet.
+///
+/// `reconcile_member` splits what a member owns across those two maps —
+/// `assigned_partitions` carries only the partitions that are also in the
+/// member's current target — so neither map alone describes what the member
+/// was last handed. Their union does, and it is disjoint by construction, so
+/// merging per topic is enough.
+fn held_partitions(member: &MemberState) -> HashMap<Uuid, Vec<i32>> {
+    let mut held = member.assigned_partitions.clone();
+    for (topic_id, partitions) in &member.partitions_pending_revocation {
+        held.entry(*topic_id)
+            .or_default()
+            .extend(partitions.iter().copied());
+    }
+    held
+}
+
 /// Rebuilds every hosted classic member's `last_synced_assignment` from the
 /// records Kafka's own schema defines.
 ///
-/// `SyncGroup` hands a hosted classic member the blob for its target and
-/// records that target as the member's current assignment, so the member's k8
-/// record IS what it last synced. Translating it back with the metadata image
-/// reproduces the blob byte for byte, which is what
-/// `migration::serve_classic_heartbeat` compares against the member's current
-/// target. `awaiting_sync` follows the same comparison.
+/// `SyncGroup` hands a hosted classic member the blob for its whole target and
+/// records that target as the member's current assignment, so what the member
+/// last synced is what its k8 record says it holds: `assigned_partitions`
+/// united with `partitions_pending_revocation`. A target change that only
+/// revokes partitions leaves `assigned_partitions` already equal to the new
+/// target, and reading that map alone would claim the member had synced a blob
+/// it never received — the heartbeat would answer `NONE` forever and the
+/// revoked partition would never reach its next owner.
+///
+/// Translating the union back with the metadata image reproduces the blob byte
+/// for byte, because `target_to_consumer_assignment` sorts topics and
+/// partitions, which is what `migration::serve_classic_heartbeat` compares
+/// against the member's current target. `awaiting_sync` follows the same
+/// comparison.
 fn restore_classic_sync_state(state: &mut GroupState, image: &ReconcileInput) {
     let restored: Vec<(String, Bytes, bool)> = state
         .members
         .iter()
         .filter(|(_, member)| member.is_classic())
         .map(|(member_id, member)| {
-            let synced = target_to_consumer_assignment(&member.assigned_partitions, image);
+            let synced = target_to_consumer_assignment(&held_partitions(member), image);
             let target = state
                 .target
                 .per_member
@@ -178,9 +206,10 @@ mod tests {
     }
 
     /// The records a coordinator failover replays for a group that hosts one
-    /// classic member: a k5 with the classic sub-state, a k7 target of both
-    /// partitions of `t`, and a k8 current assignment of `assigned`.
-    fn hosted_classic_seed(assigned: Vec<i32>) -> GroupSeed {
+    /// classic member: a k5 with the classic sub-state, a k7 target of
+    /// `target`, and a k8 current assignment of `assigned` with `pending`
+    /// awaiting revocation.
+    fn hosted_classic_seed(target: Vec<i32>, assigned: Vec<i32>, pending: Vec<i32>) -> GroupSeed {
         GroupSeed {
             group_epoch: 5,
             target_epoch: 5,
@@ -210,7 +239,7 @@ mod tests {
                 TargetAssignmentMemberValue {
                     topic_partitions: vec![AssignedTopicPartitions {
                         topic_id: TOPIC,
-                        partitions: vec![0, 1],
+                        partitions: target,
                     }],
                 },
             )]
@@ -225,7 +254,10 @@ mod tests {
                         topic_id: TOPIC,
                         partitions: assigned,
                     }],
-                    partitions_pending_revocation: vec![],
+                    partitions_pending_revocation: vec![AssignedTopicPartitions {
+                        topic_id: TOPIC,
+                        partitions: pending,
+                    }],
                 },
             )]
             .into(),
@@ -235,7 +267,11 @@ mod tests {
     #[test]
     fn seed_restores_the_per_member_target() {
         let mut state = GroupState::new("g");
-        apply_seed(&mut state, hosted_classic_seed(vec![0, 1]), &image());
+        apply_seed(
+            &mut state,
+            hosted_classic_seed(vec![0, 1], vec![0, 1], vec![]),
+            &image(),
+        );
 
         let restored: HashMap<Uuid, Vec<i32>> = [(TOPIC, vec![0, 1])].into();
         check!(state.target.epoch == 5);
@@ -249,15 +285,50 @@ mod tests {
     /// records alone.
     #[test]
     fn seeded_hosted_classic_heartbeat_signals_a_resync_only_when_the_assignment_lags() {
-        for (assigned, want) in [
-            (vec![0, 1], codes::NONE),
-            (vec![0], codes::REBALANCE_IN_PROGRESS),
-            (vec![], codes::REBALANCE_IN_PROGRESS),
+        // (k7 target, k8 assigned, k8 pending revocation, heartbeat answer).
+        //
+        // What the member last synced is everything it holds — assigned plus
+        // pending — so a revocation-only target change, where `assigned` has
+        // already shrunk to the new target and the revoked partition sits in
+        // `pending`, still owes a re-sync: the member was handed the wider
+        // blob and nothing has told it to drop the partition yet.
+        for (target, assigned, pending, want) in [
+            (vec![0, 1], vec![0, 1], vec![], codes::NONE),
+            (vec![0, 1], vec![0], vec![], codes::REBALANCE_IN_PROGRESS),
+            (vec![0, 1], vec![], vec![], codes::REBALANCE_IN_PROGRESS),
+            (vec![0], vec![0], vec![1], codes::REBALANCE_IN_PROGRESS),
+            (vec![], vec![], vec![0, 1], codes::REBALANCE_IN_PROGRESS),
         ] {
             let mut state = GroupState::new("g");
-            apply_seed(&mut state, hosted_classic_seed(assigned.clone()), &image());
+            apply_seed(
+                &mut state,
+                hosted_classic_seed(target.clone(), assigned.clone(), pending.clone()),
+                &image(),
+            );
             let got = serve_classic_heartbeat(&mut state, "m", &image());
-            assert!(got == want, "assigned = {assigned:?}");
+            assert!(
+                got == want,
+                "target = {target:?}, assigned = {assigned:?}, pending = {pending:?}"
+            );
         }
+    }
+
+    /// The rebuilt blob is the one a live `SyncGroup` would have produced for
+    /// the partitions the member holds, byte for byte: the two maps are merged
+    /// per topic, and the translation sorts, so the halves may arrive in any
+    /// order.
+    #[test]
+    fn seed_rebuilds_the_blob_a_sync_would_have_sent_for_the_held_partitions() {
+        let mut state = GroupState::new("g");
+        apply_seed(
+            &mut state,
+            hosted_classic_seed(vec![1], vec![1], vec![0]),
+            &image(),
+        );
+
+        let held: HashMap<Uuid, Vec<i32>> = [(TOPIC, vec![0, 1])].into();
+        let facade = state.members["m"].classic.as_ref().expect("classic facade");
+        check!(facade.last_synced_assignment == target_to_consumer_assignment(&held, &image()));
+        check!(facade.awaiting_sync);
     }
 }
