@@ -156,7 +156,7 @@ pub(crate) async fn handle(
         }
 
         let unavailable =
-            crate::handlers::offline_replicas::unavailable_brokers(&broker, &image).await;
+            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),

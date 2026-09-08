@@ -19,6 +19,7 @@ use super::request_builder::build_alter_partition_request;
     fields(topic = %topic, partition, leader_epoch, new_isr_len = new_isr.len()),
     err,
 )]
+#[allow(clippy::too_many_arguments)] // Keeps controller identity and transport inputs explicit.
 pub(super) async fn send_alter_partition(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     broker_id: i32,

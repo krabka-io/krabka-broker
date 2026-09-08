@@ -4,8 +4,9 @@
 //! The move completes only after the added replica fetches the real log and
 //! joins the ISR; no metadata record is injected by the test.
 
-use assert2::assert;
 use std::{io::Write as _, process::Stdio, time::Duration};
+
+use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,

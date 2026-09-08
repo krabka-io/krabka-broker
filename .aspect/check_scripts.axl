@@ -39,6 +39,8 @@ ALLOWED = {
     "crates/broker/tests/fixtures/security/kdc/bootstrap.sh": "the KDC fixture image's entrypoint; it runs inside that container",
     "packaging/image_binaries_test.sh": "the sh_test body of //packaging:image_binaries_test; it runs inside a Bazel test sandbox",
     "packaging/image_docker_test.sh": "the sh_test body of //packaging:image_docker_test; it runs inside a Bazel test sandbox",
+    "packaging/k8s/kind-smoke.sh": "the standalone Kind smoke test; it runs inside GitHub runner and local Kind environments without Aspect",
+    "packaging/upgrade-smoke.sh": "the standalone upgrade smoke test; it runs inside GitHub runner and local Docker environments without Aspect",
     "tools/creusot/build-layer.sh": "the cmd of the //tools/creusot:installed_toolchain_tar genrule; it runs inside a Bazel action",
     "tools/creusot/install-creusot.sh": "the proof builder image's entrypoint; it runs inside that container",
     "tools/creusot/prove.sh": "the proof image's entrypoint; it runs inside that container",

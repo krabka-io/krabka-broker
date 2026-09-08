@@ -8,11 +8,19 @@
 use super::{FileConfig, FileConfigError};
 
 /// Validate an unresolved KIP-853 `host:port` endpoint.
+///
+/// # Errors
+/// Returns [`FileConfigError::InvalidQuorumVoter`] when the endpoint is not a
+/// valid `host:port` pair.
 pub fn parse_bootstrap_server(entry: &str) -> Result<String, FileConfigError> {
     parse_quorum_voter(&format!("0@{entry}")).map(|(_, endpoint)| endpoint)
 }
 
 /// Parse a KIP-595 `<node_id>@<host>:<port>` voter without resolving DNS.
+///
+/// # Errors
+/// Returns [`FileConfigError::InvalidQuorumVoter`] when the voter id or
+/// endpoint is malformed.
 pub fn parse_quorum_voter(entry: &str) -> Result<(krabka_raft::NodeId, String), FileConfigError> {
     let (id_str, host_port) = entry.split_once('@').ok_or_else(|| {
         FileConfigError::InvalidQuorumVoter(format!(

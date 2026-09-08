@@ -42,6 +42,10 @@ pub fn read_directory_id(log_dir: &Path) -> Result<uuid::Uuid, BrokerError> {
 }
 
 /// Read and validate the identity and format stamp written by `krabka format`.
+///
+/// # Errors
+/// Returns an error when `meta.properties.json` cannot be read or decoded, or
+/// when its format version is unsupported.
 pub fn read_meta_properties(log_dir: &Path) -> Result<MetaProperties, BrokerError> {
     let path = log_dir.join("meta.properties.json");
     let bytes = std::fs::read(&path).map_err(|e| BrokerError::BootstrapFile {
@@ -67,18 +71,23 @@ pub fn read_meta_properties(log_dir: &Path) -> Result<MetaProperties, BrokerErro
 }
 
 /// Read the format stamp and reject a configured identity for another cluster.
+///
+/// # Errors
+/// Returns an error from [`read_meta_properties`] or when the configured
+/// cluster id differs from the formatted cluster id.
 pub fn read_and_validate_meta_properties(
     log_dir: &Path,
     configured_cluster_id: Option<uuid::Uuid>,
 ) -> Result<MetaProperties, BrokerError> {
     let meta = read_meta_properties(log_dir)?;
-    if configured_cluster_id.is_some_and(|configured| configured != meta.cluster_id) {
+    if let Some(configured) = configured_cluster_id
+        && configured != meta.cluster_id
+    {
         return Err(BrokerError::BootstrapFile {
             path: log_dir.join("meta.properties.json"),
             source: format!(
                 "INCONSISTENT_CLUSTER_ID: configured cluster id {} does not match {}",
-                configured_cluster_id.expect("checked as some"),
-                meta.cluster_id
+                configured, meta.cluster_id
             )
             .into(),
         });
