@@ -163,7 +163,7 @@ impl GroupCoordinator {
         }
     }
 
-    /// Replay a KIP-932 `ShareGroupStatePartitionMetadata` record, key v14.
+    /// Replay a KIP-932 `ShareGroupStatePartitionMetadata` record, key v15.
     ///
     /// The method records which `(topic_id, partition)` share-states the group
     /// has initialized. The lifecycle hook can then skip a re-initialization

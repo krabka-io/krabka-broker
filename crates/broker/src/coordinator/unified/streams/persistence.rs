@@ -1,19 +1,22 @@
 //! KIP-1071 streams-group record types persisted in `__consumer_offsets`.
 //!
-//! The wire encoding mirrors
-//! [`persistence_next_gen`](crate::coordinator::unified::persistence_next_gen),
-//! the KIP-848 consumer next-gen codecs, and the KIP-932 share equivalent
-//! ([`super::super::share::persistence`]). Keys carry a leading `i16`
-//! key-version discriminator, and values carry an `i16(0)` version preamble.
+//! The wire encoding follows the Apache Kafka schemas at tag `4.3.1`, under
+//! `group-coordinator/src/main/resources/common/message/`, as the KIP-848
+//! ([`persistence_next_gen`](crate::coordinator::unified::persistence_next_gen))
+//! and KIP-932 ([`super::super::share::persistence`]) families do. A key is
+//! non-flexible and starts with the schema's `apiKey` as an `i16`; a value
+//! starts with an `i16` schema version, 0 for every record here, and is
+//! flexible: compact strings, compact arrays and a tagged-field trailer on the
+//! message and on every nested struct.
 //!
-//! Streams records reuse the same length-prefixed array, nullable-string, and
-//! uuid leaf encoders. They model *tasks* rather than topic partitions. A task
-//! is a `(subtopology, partition)` pair, grouped by the active, standby, or
-//! warmup role.
+//! Streams records model *tasks* rather than topic partitions. A task is a
+//! `(subtopology, partition)` pair, grouped by the active, standby, or warmup
+//! role.
 //!
-//! Key versions 15 to 21 belong to streams. The earlier ranges are taken: 0
-//! and 1 for offset-commit, 2 for the classic group, 3, 5, 6, 7, and 8 for
-//! consumer next-gen, and 9 to 14 for share.
+//! Key versions 17 and 19 to 23 belong to streams, and 18 to the one record
+//! Kafka no longer defines; see [`keys`] for the full mapping. The earlier
+//! numbers are Kafka's: 0 and 1 for offset-commit, 2 for the classic group, 3
+//! to 8 for the consumer next-gen family, and 10 to 15 for share.
 //!
 //! This module is deliberately self-contained. It defines its own value
 //! structs, and it represents the assignment by role as
@@ -35,6 +38,7 @@ mod test_support;
 pub use self::{
     assignment::{
         StreamsGroupCurrentMemberAssignmentValue, StreamsGroupTargetAssignmentMemberValue,
+        StreamsMemberWireState,
     },
     epochs::{StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMetadataValue},
     keys::{

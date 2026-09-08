@@ -8,15 +8,25 @@
 //! - **`GroupMetadata`**, key version `2`: one record for each group state
 //!   snapshot. The broker writes it at the end of every successful rebalance.
 //!
-//! Field layouts mirror Apache Kafka's
-//! `clients/src/main/resources/common/message/OffsetCommitValue.json` and
-//! `GroupMetadataValue.json`. They use the legacy non-flexible encoding.
-//! `__consumer_offsets` records are NOT flexible.
+//! Field layouts mirror Apache Kafka's schemas at tag `4.3.1`. The two classic
+//! families here, `OffsetCommitValue` and `GroupMetadataValue`, declare
+//! `"flexibleVersions": "4+"`, and the broker writes value versions 1 and 3 of
+//! the first and version 3 of the second, so both stay on the legacy
+//! non-flexible encoding that this module's leaf helpers implement.
+//!
+//! The later families do not. Every `coordinator-value` of the KIP-848,
+//! KIP-932 and KIP-1071 record types declares `"flexibleVersions": "0+"`, so
+//! their values are compact-encoded and carry a tagged-field trailer. Their
+//! leaf helpers live in [`flex`]. Every `coordinator-key` in the group
+//! coordinator, of every family, declares `"flexibleVersions": "none"`, so
+//! keys use the helpers here.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use krabka_log::Offset;
 
 use crate::error::BrokerError;
+
+pub(crate) mod flex;
 
 /// Discriminator that [`parse_key`] returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,9 +41,9 @@ pub enum Key {
     GroupMetadata { group_id: String },
     /// KIP-848 next-gen consumer group record types, versions 3, 5–8.
     NextGen(crate::coordinator::unified::persistence_next_gen::NextGenKey),
-    /// KIP-932 share-group record types, versions 9–13.
+    /// KIP-932 share-group record types, versions 10–15.
     Share(crate::coordinator::unified::share::persistence::ShareGroupKey),
-    /// KIP-1071 streams-group record types, versions 15–21.
+    /// KIP-1071 streams-group record types, versions 17–23.
     Streams(crate::coordinator::unified::streams::persistence::StreamsGroupKey),
 }
 
@@ -62,10 +72,10 @@ pub fn parse_key(mut buf: &[u8]) -> Result<Key, BrokerError> {
         3 | 5 | 6 | 7 | 8 => Ok(Key::NextGen(
             crate::coordinator::unified::persistence_next_gen::parse_key(version, buf)?,
         )),
-        9..=14 => Ok(Key::Share(
+        10..=15 => Ok(Key::Share(
             crate::coordinator::unified::share::persistence::parse_share_key(version, buf)?,
         )),
-        15..=21 => Ok(Key::Streams(
+        17..=23 => Ok(Key::Streams(
             crate::coordinator::unified::streams::persistence::parse_streams_key(version, buf)?,
         )),
         _ => Err(BrokerError::Protocol(

@@ -1,6 +1,12 @@
-//! KIP-848 record types persisted in `__consumer_offsets`. The wire encoding
-//! matches the Apache Kafka reference implementation. Values carry a
-//! version preamble.
+//! KIP-848 record types persisted in `__consumer_offsets`.
+//!
+//! The wire encoding matches the Apache Kafka schemas at tag `4.3.1`, under
+//! `group-coordinator/src/main/resources/common/message/`. A key is
+//! non-flexible (`"flexibleVersions": "none"`) and starts with the schema's
+//! `apiKey` as an `i16`. A value starts with an `i16` schema version, which is
+//! 0 for all five records here, and is flexible (`"flexibleVersions": "0+"`):
+//! compact strings, compact arrays, and a tagged-field trailer on the message
+//! and on every nested struct.
 //!
 //! This file is the module root. The key discriminator and its codec live in
 //! `keys`, the two single-epoch records in `epochs`, the member metadata record

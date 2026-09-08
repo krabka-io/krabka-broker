@@ -6,12 +6,35 @@
 //! version 8 holds what that member has converged on, its
 //! [`MemberAssignmentState`], and the partitions it still owes back.
 //! [`AssignedTopicPartitions`] is the leaf record that both value types repeat.
+//!
+//! # Layout
+//!
+//! From `ConsumerGroupTargetAssignmentMemberValue.json` and
+//! `ConsumerGroupCurrentMemberAssignmentValue.json` at Apache Kafka tag
+//! `4.3.1`. Both declare `"flexibleVersions": "0+"`.
+//!
+//! - Target: `TopicPartitions` (`[]TopicPartition{TopicId uuid, Partitions
+//!   []int32}`).
+//! - Current: `MemberEpoch` (int32), `PreviousMemberEpoch` (int32), `State`
+//!   (int8), `AssignedPartitions` and `PartitionsPendingRevocation`, both
+//!   `[]TopicPartitions{TopicId uuid, Partitions []int32}` with a tagged
+//!   `AssignmentEpochs` (tag 0, nullable, default null) the broker does not
+//!   set.
+//!
+//! A `uuid` is sixteen raw bytes with no length prefix, arrays are compact, and
+//! each element struct as well as the message carries a tagged-field trailer.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use krabka_protocol::{ProtocolError, primitives::uuid::Uuid};
 
 use crate::{
-    coordinator::unified::persistence::{get_bytes, get_i16, get_i32, put_bytes},
+    coordinator::unified::persistence::{
+        flex::{
+            get_compact_array_len, get_i32_array, get_uuid, put_compact_array_len,
+            put_empty_tagged_fields, put_i32_array, put_uuid, skip_tagged_fields,
+        },
+        get_i16, get_i32,
+    },
     error::BrokerError,
 };
 
@@ -28,62 +51,31 @@ pub struct TargetAssignmentMemberValue {
 
 impl TargetAssignmentMemberValue {
     #[must_use]
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        let n = i32::try_from(self.topic_partitions.len()).expect("fits");
-        buf.put_i32(n);
-        for tp in &self.topic_partitions {
-            put_bytes(&mut buf, &Bytes::copy_from_slice(&tp.topic_id.0));
-            let pn = i32::try_from(tp.partitions.len()).expect("fits");
-            buf.put_i32(pn);
-            for p in &tp.partitions {
-                buf.put_i32(*p);
-            }
-        }
+        encode_topic_partitions(&mut buf, &self.topic_partitions);
+        put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
-        let n = get_i32(&mut buf)?;
-        let cap = usize::try_from(n.max(0)).expect("non-negative");
-        let mut topic_partitions = Vec::with_capacity(cap);
-        for _ in 0..n.max(0) {
-            let id_bytes = get_bytes(&mut buf)?;
-            if id_bytes.len() != 16 {
-                return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                    "topic_id not 16 bytes",
-                )));
-            }
-            let mut arr = [0u8; 16];
-            arr.copy_from_slice(&id_bytes);
-            let topic_id = Uuid(arr);
-            let pn = get_i32(&mut buf)?;
-            let pcap = usize::try_from(pn.max(0)).expect("non-negative");
-            let mut partitions = Vec::with_capacity(pcap);
-            for _ in 0..pn.max(0) {
-                partitions.push(get_i32(&mut buf)?);
-            }
-            topic_partitions.push(AssignedTopicPartitions {
-                topic_id,
-                partitions,
-            });
-        }
+        let topic_partitions = decode_topic_partitions(&mut buf)?;
+        skip_tagged_fields(&mut buf)?;
         Ok(Self { topic_partitions })
     }
 }
 
+/// The member's reconciliation state, with Kafka's discriminants from
+/// `org.apache.kafka.coordinator.group.modern.MemberState`: `STABLE` is 0,
+/// `UNREVOKED_PARTITIONS` is 1, and `UNRELEASED_PARTITIONS` is 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MemberAssignmentState {
     Stable = 0,
-    UnreleasedPartitions = 1,
-    UnrevokedPartitions = 2,
+    UnrevokedPartitions = 1,
+    UnreleasedPartitions = 2,
 }
 
 impl MemberAssignmentState {
@@ -92,8 +84,8 @@ impl MemberAssignmentState {
     pub fn from_i8(v: i8) -> Result<Self, BrokerError> {
         match v {
             0 => Ok(Self::Stable),
-            1 => Ok(Self::UnreleasedPartitions),
-            2 => Ok(Self::UnrevokedPartitions),
+            1 => Ok(Self::UnrevokedPartitions),
+            2 => Ok(Self::UnreleasedPartitions),
             _ => Err(BrokerError::Protocol(ProtocolError::InvalidValue(
                 "unknown MemberAssignmentState",
             ))),
@@ -120,6 +112,7 @@ impl CurrentMemberAssignmentValue {
         buf.put_i8(self.state as i8);
         encode_topic_partitions(&mut buf, &self.assigned_partitions);
         encode_topic_partitions(&mut buf, &self.partitions_pending_revocation);
+        put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
     /// # Errors
@@ -136,6 +129,7 @@ impl CurrentMemberAssignmentValue {
         let state = MemberAssignmentState::from_i8(buf.get_i8())?;
         let assigned_partitions = decode_topic_partitions(&mut buf)?;
         let partitions_pending_revocation = decode_topic_partitions(&mut buf)?;
+        skip_tagged_fields(&mut buf)?;
         Ok(Self {
             member_epoch,
             previous_member_epoch,
@@ -147,38 +141,21 @@ impl CurrentMemberAssignmentValue {
 }
 
 fn encode_topic_partitions(buf: &mut BytesMut, items: &[AssignedTopicPartitions]) {
-    let n = i32::try_from(items.len()).expect("fits");
-    buf.put_i32(n);
+    put_compact_array_len(buf, items.len());
     for tp in items {
-        put_bytes(buf, &Bytes::copy_from_slice(&tp.topic_id.0));
-        let pn = i32::try_from(tp.partitions.len()).expect("fits");
-        buf.put_i32(pn);
-        for p in &tp.partitions {
-            buf.put_i32(*p);
-        }
+        put_uuid(buf, tp.topic_id.0);
+        put_i32_array(buf, &tp.partitions);
+        put_empty_tagged_fields(buf);
     }
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<AssignedTopicPartitions>, BrokerError> {
-    let n = get_i32(buf)?;
-    let cap = usize::try_from(n.max(0)).expect("non-negative");
-    let mut out = Vec::with_capacity(cap);
-    for _ in 0..n.max(0) {
-        let id_bytes = get_bytes(buf)?;
-        if id_bytes.len() != 16 {
-            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                "topic_id not 16 bytes",
-            )));
-        }
-        let mut arr = [0u8; 16];
-        arr.copy_from_slice(&id_bytes);
-        let topic_id = Uuid(arr);
-        let pn = get_i32(buf)?;
-        let pcap = usize::try_from(pn.max(0)).expect("non-negative");
-        let mut partitions = Vec::with_capacity(pcap);
-        for _ in 0..pn.max(0) {
-            partitions.push(get_i32(buf)?);
-        }
+    let n = get_compact_array_len(buf)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let topic_id = Uuid(get_uuid(buf)?);
+        let partitions = get_i32_array(buf)?;
+        skip_tagged_fields(buf)?;
         out.push(AssignedTopicPartitions {
             topic_id,
             partitions,
@@ -194,6 +171,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn target_assignment_member_bytes_match_kafka_schema() {
+        let v = TargetAssignmentMemberValue {
+            topic_partitions: vec![AssignedTopicPartitions {
+                topic_id: Uuid([1; 16]),
+                partitions: vec![0, 1],
+            }],
+        };
+        let mut want: Vec<u8> = Vec::new();
+        want.extend_from_slice(b"\x00\x00"); // value version 0
+        want.push(0x02); // one TopicPartition
+        want.extend_from_slice(&[1u8; 16]); // TopicId, sixteen raw bytes
+        want.push(0x03); // two partitions
+        want.extend_from_slice(&0i32.to_be_bytes());
+        want.extend_from_slice(&1i32.to_be_bytes());
+        want.push(0x00); // TopicPartition tagged fields
+        want.push(0x00); // message tagged fields
+        assert!(&v.encode()[..] == &want[..]);
+    }
+
+    #[test]
     fn target_assignment_member_roundtrip() {
         let v = TargetAssignmentMemberValue {
             topic_partitions: vec![AssignedTopicPartitions {
@@ -202,6 +199,33 @@ mod tests {
             }],
         };
         assert!(TargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
+    }
+
+    #[test]
+    fn current_member_assignment_bytes_match_kafka_schema() {
+        let v = CurrentMemberAssignmentValue {
+            member_epoch: 5,
+            previous_member_epoch: 4,
+            state: MemberAssignmentState::UnrevokedPartitions,
+            assigned_partitions: vec![AssignedTopicPartitions {
+                topic_id: Uuid([2; 16]),
+                partitions: vec![7],
+            }],
+            partitions_pending_revocation: vec![],
+        };
+        let mut want: Vec<u8> = Vec::new();
+        want.extend_from_slice(b"\x00\x00");
+        want.extend_from_slice(&5i32.to_be_bytes());
+        want.extend_from_slice(&4i32.to_be_bytes());
+        want.push(0x01); // MemberState.UNREVOKED_PARTITIONS
+        want.push(0x02); // one assigned TopicPartitions
+        want.extend_from_slice(&[2u8; 16]);
+        want.push(0x02); // one partition
+        want.extend_from_slice(&7i32.to_be_bytes());
+        want.push(0x00); // TopicPartitions tagged fields
+        want.push(0x01); // empty PartitionsPendingRevocation
+        want.push(0x00); // message tagged fields
+        assert!(&v.encode()[..] == &want[..]);
     }
 
     #[test]
@@ -217,5 +241,24 @@ mod tests {
             partitions_pending_revocation: vec![],
         };
         assert!(CurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
+    }
+
+    #[test]
+    fn member_state_discriminants_match_kafka() {
+        // org.apache.kafka.coordinator.group.modern.MemberState.
+        assert!(MemberAssignmentState::Stable as i8 == 0);
+        assert!(MemberAssignmentState::UnrevokedPartitions as i8 == 1);
+        assert!(MemberAssignmentState::UnreleasedPartitions as i8 == 2);
+        assert!(
+            MemberAssignmentState::from_i8(1).unwrap()
+                == MemberAssignmentState::UnrevokedPartitions
+        );
+        assert!(MemberAssignmentState::from_i8(3).is_err());
+    }
+
+    #[test]
+    fn assignment_records_reject_a_missing_tagged_trailer() {
+        let t = TargetAssignmentMemberValue::default().encode();
+        assert!(TargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
     }
 }

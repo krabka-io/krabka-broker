@@ -43,7 +43,7 @@ pub struct ShareGroupSeed {
         String,
         share::persistence::ShareGroupCurrentMemberAssignmentValue,
     >,
-    /// KIP-932 `ShareGroupStatePartitionMetadata`, key v14. It holds the
+    /// KIP-932 `ShareGroupStatePartitionMetadata`, key v15. It holds the
     /// `(topic_id, partition)` share-states this group has already
     /// initialized, and the topic ids whose share-state the broker deletes.
     /// The lifecycle hook can then skip a re-initialization of those

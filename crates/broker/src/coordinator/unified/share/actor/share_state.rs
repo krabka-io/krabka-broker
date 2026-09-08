@@ -20,7 +20,7 @@ use crate::{
 /// partition)` set and drives [`SharePersister::initialize`] for each entry
 /// that is not already Initialized. On success it records the partition in
 /// `state.initialized` and persists an updated
-/// `ShareGroupStatePartitionMetadata` (key v14) through the offsets log.
+/// `ShareGroupStatePartitionMetadata` (key v15) through the offsets log.
 ///
 /// The hook is best-effort. A persister error leaves the partition
 /// un-recorded, so the next heartbeat retries it, and the error never fails

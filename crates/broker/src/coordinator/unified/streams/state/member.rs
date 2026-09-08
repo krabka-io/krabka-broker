@@ -14,9 +14,12 @@ use krabka_log::Offset;
 /// It mirrors KIP-848's `MemberAssignmentState`. Standby and warmup tasks take
 /// no part in it.
 ///
-/// Persistence stores this as a raw `i8`. [`as_i8`](Self::as_i8) and
-/// [`from_i8`](Self::from_i8) convert it without coupling this module to the
-/// persistence layer.
+/// This is the broker's own numbering, which counts from zero. Kafka's
+/// `org.apache.kafka.coordinator.group.streams.MemberState` counts from one, so
+/// the persistence layer converts through its own `StreamsMemberWireState`
+/// rather than storing these discriminants. [`as_i8`](Self::as_i8) and
+/// [`from_i8`](Self::from_i8) expose the discriminant for the model checks that
+/// compare states as numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamsMemberAssignmentState {
     /// The member's active tasks match its target, and nothing is pending.
@@ -71,7 +74,7 @@ pub struct StreamsMemberState {
     pub process_id: String,
     /// Optional `(host, port)` the member advertises for interactive-query
     /// routing.
-    pub user_endpoint: Option<(String, u32)>,
+    pub user_endpoint: Option<(String, u16)>,
     /// Arbitrary `(key, value)` client tags for rack-aware and custom
     /// assignment.
     pub client_tags: Vec<(String, String)>,

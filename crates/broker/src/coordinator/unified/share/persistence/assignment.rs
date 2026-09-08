@@ -1,19 +1,45 @@
 //! The KIP-932 target and current assignment records, and the topic-partition
 //! list codec they share.
 //!
-//! [`ShareGroupTargetAssignmentMemberValue`] at key version 12 holds the
+//! [`ShareGroupTargetAssignmentMemberValue`] at key version 13 holds the
 //! assignment the coordinator computed for one member, and
-//! [`ShareGroupCurrentMemberAssignmentValue`] at key version 13 holds what that
+//! [`ShareGroupCurrentMemberAssignmentValue`] at key version 14 holds what that
 //! member has converged on at its member epoch. Share groups never revoke, so
-//! neither record carries a pending-revocation list or an assignment state.
+//! the broker keeps no revocation list and no reconciliation state of its own.
+//!
+//! # Layout
+//!
+//! From `ShareGroupTargetAssignmentMemberValue.json` and
+//! `ShareGroupCurrentMemberAssignmentValue.json` at Apache Kafka tag `4.3.1`.
+//! Both declare `"flexibleVersions": "0+"`.
+//!
+//! - Target: `TopicPartitions` (`[]TopicPartition{TopicId uuid, Partitions
+//!   []int32}`).
+//! - Current: `MemberEpoch` (int32), `PreviousMemberEpoch` (int32), `State`
+//!   (int8), `AssignedPartitions` (`[]TopicPartitions{TopicId uuid, Partitions
+//!   []int32}`).
+//!
+//! Both of the current record's fields that the broker keeps no state for are
+//! plain, not tagged, so they are always on the wire. A share member that never
+//! revokes is at `MemberState.STABLE`, whose discriminant is 0, and its
+//! previous epoch is its current one; the decoder drops both again.
 
 use bytes::{BufMut, Bytes, BytesMut};
-use krabka_protocol::{ProtocolError, primitives::uuid::Uuid};
+use krabka_protocol::primitives::uuid::Uuid;
 
 use crate::{
-    coordinator::unified::persistence::{get_bytes, get_i16, get_i32, put_bytes},
+    coordinator::unified::persistence::{
+        flex::{
+            get_compact_array_len, get_i8, get_i32_array, get_uuid, put_compact_array_len,
+            put_empty_tagged_fields, put_i32_array, put_uuid, skip_tagged_fields,
+        },
+        get_i16, get_i32,
+    },
     error::BrokerError,
 };
+
+/// `org.apache.kafka.coordinator.group.modern.MemberState.STABLE`.
+const MEMBER_STATE_STABLE: i8 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShareGroupTargetAssignmentMemberValue {
@@ -26,6 +52,7 @@ impl ShareGroupTargetAssignmentMemberValue {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         encode_topic_partitions(&mut buf, &self.topic_partitions);
+        put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
     /// # Errors
@@ -33,6 +60,7 @@ impl ShareGroupTargetAssignmentMemberValue {
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
         let topic_partitions = decode_topic_partitions(&mut buf)?;
+        skip_tagged_fields(&mut buf)?;
         Ok(Self { topic_partitions })
     }
 }
@@ -49,7 +77,10 @@ impl ShareGroupCurrentMemberAssignmentValue {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         buf.put_i32(self.member_epoch);
+        buf.put_i32(self.member_epoch);
+        buf.put_i8(MEMBER_STATE_STABLE);
         encode_topic_partitions(&mut buf, &self.assigned_partitions);
+        put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
     /// # Errors
@@ -57,7 +88,10 @@ impl ShareGroupCurrentMemberAssignmentValue {
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
         let member_epoch = get_i32(&mut buf)?;
+        let _previous_member_epoch = get_i32(&mut buf)?;
+        let _state = get_i8(&mut buf)?;
         let assigned_partitions = decode_topic_partitions(&mut buf)?;
+        skip_tagged_fields(&mut buf)?;
         Ok(Self {
             member_epoch,
             assigned_partitions,
@@ -66,38 +100,21 @@ impl ShareGroupCurrentMemberAssignmentValue {
 }
 
 fn encode_topic_partitions(buf: &mut BytesMut, items: &[(Uuid, Vec<i32>)]) {
-    let n = i32::try_from(items.len()).expect("fits");
-    buf.put_i32(n);
+    put_compact_array_len(buf, items.len());
     for (topic_id, partitions) in items {
-        put_bytes(buf, &Bytes::copy_from_slice(&topic_id.0));
-        let pn = i32::try_from(partitions.len()).expect("fits");
-        buf.put_i32(pn);
-        for p in partitions {
-            buf.put_i32(*p);
-        }
+        put_uuid(buf, topic_id.0);
+        put_i32_array(buf, partitions);
+        put_empty_tagged_fields(buf);
     }
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<(Uuid, Vec<i32>)>, BrokerError> {
-    let n = get_i32(buf)?;
-    let cap = usize::try_from(n.max(0)).expect("non-negative");
-    let mut out = Vec::with_capacity(cap);
-    for _ in 0..n.max(0) {
-        let id_bytes = get_bytes(buf)?;
-        if id_bytes.len() != 16 {
-            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                "topic_id not 16 bytes",
-            )));
-        }
-        let mut arr = [0u8; 16];
-        arr.copy_from_slice(&id_bytes);
-        let topic_id = Uuid(arr);
-        let pn = get_i32(buf)?;
-        let pcap = usize::try_from(pn.max(0)).expect("non-negative");
-        let mut partitions = Vec::with_capacity(pcap);
-        for _ in 0..pn.max(0) {
-            partitions.push(get_i32(buf)?);
-        }
+    let n = get_compact_array_len(buf)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let topic_id = Uuid(get_uuid(buf)?);
+        let partitions = get_i32_array(buf)?;
+        skip_tagged_fields(buf)?;
         out.push((topic_id, partitions));
     }
     Ok(out)
@@ -112,6 +129,20 @@ mod tests {
         KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT, KEY_SHARE_TARGET_ASSIGNMENT_MEMBER, ShareGroupKey,
         encode_share_key, parse_share_key, test_support::peek_version,
     };
+
+    #[test]
+    fn target_assignment_member_bytes_match_kafka_schema() {
+        let v = ShareGroupTargetAssignmentMemberValue {
+            topic_partitions: vec![(Uuid([1; 16]), vec![3])],
+        };
+        let mut want: Vec<u8> = vec![0x00, 0x00, 0x02];
+        want.extend_from_slice(&[1u8; 16]);
+        want.push(0x02);
+        want.extend_from_slice(&3i32.to_be_bytes());
+        want.push(0x00); // TopicPartition tagged fields
+        want.push(0x00); // message tagged fields
+        assert!(&v.encode()[..] == &want[..]);
+    }
 
     #[test]
     fn target_assignment_member_round_trip() {
@@ -131,6 +162,21 @@ mod tests {
     }
 
     #[test]
+    fn current_member_assignment_bytes_match_kafka_schema() {
+        let v = ShareGroupCurrentMemberAssignmentValue {
+            member_epoch: 5,
+            assigned_partitions: vec![],
+        };
+        let mut want: Vec<u8> = vec![0x00, 0x00];
+        want.extend_from_slice(&5i32.to_be_bytes()); // MemberEpoch
+        want.extend_from_slice(&5i32.to_be_bytes()); // PreviousMemberEpoch
+        want.push(0x00); // MemberState.STABLE
+        want.push(0x01); // empty AssignedPartitions
+        want.push(0x00); // message tagged fields
+        assert!(&v.encode()[..] == &want[..]);
+    }
+
+    #[test]
     fn current_member_assignment_round_trip() {
         let key = ShareGroupKey::CurrentMemberAssignment {
             group_id: "g1".into(),
@@ -146,5 +192,13 @@ mod tests {
             assigned_partitions: vec![(Uuid([3; 16]), vec![0, 1])],
         };
         assert!(ShareGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
+    }
+
+    #[test]
+    fn assignment_records_reject_a_missing_tagged_trailer() {
+        let t = ShareGroupTargetAssignmentMemberValue::default().encode();
+        assert!(ShareGroupTargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
+        let c = ShareGroupCurrentMemberAssignmentValue::default().encode();
+        assert!(ShareGroupCurrentMemberAssignmentValue::decode(&c[..c.len() - 1]).is_err());
     }
 }
