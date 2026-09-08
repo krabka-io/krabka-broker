@@ -233,6 +233,51 @@ def image_for(images, key):
             return found.value
     return ""
 
+def built_image_keys(images):
+    """The keys of `//bazel/images`'s `BUILT_IMAGES` dict.
+
+    `image_for` scans the whole file and so answers for a pulled image and a
+    built one alike, which is what a caller wanting the tag should do. A caller
+    wanting the *pin* has to tell them apart: a pulled image is pinned by the
+    digest `MODULE.bazel` names, and a built one has no digest to name -- it is
+    assembled here from an apko lock that pins every package by version and
+    checksum instead.
+    """
+    opening = "BUILT_IMAGES = {"
+    start = images.find(opening)
+    if start < 0:
+        return []
+    close = _matching_brace(images, start + len("BUILT_IMAGES = "))
+    if close < 0:
+        fail("unbalanced BUILT_IMAGES map in %s" % _IMAGES)
+    keys = []
+    for line in _strip_comments(images[start:close]).splitlines():
+        stripped = line.lstrip(_WHITESPACE)
+        found = _quoted(stripped, 0)
+        if found != None and found.value:
+            keys.append(found.value)
+    return keys
+
+def lock_for(module, key):
+    """The apko lock `//MODULE.bazel` translates for built image `key`, or `""`.
+
+    The repository an `apk.translate_lock` declares is the image's key with
+    `_lock` appended, and the `lock` attribute beneath it is the label of the
+    file that pins the packages. That label is the built image's pin, standing
+    where a pulled image's digest stands.
+    """
+    opening = 'name = "%s_lock"' % key
+    at = module.find(opening)
+    if at < 0:
+        return ""
+    label = module.find('lock = "', at)
+    if label < 0:
+        return ""
+    found = _quoted(module, label + len('lock = '))
+    if found == None:
+        return ""
+    return found.value
+
 def digest_for(module, key):
     """The digest `//MODULE.bazel` pins image `key` to, or `""`.
 
@@ -1036,6 +1081,22 @@ def _image(pins, key):
 def _digest(pins, key):
     return _evidence(digest_for(pins.module, key), _MODULE, '("%s", ..., "sha256:...")' % key)
 
+def _require_pinned(pins, key):
+    """Assert that image `key` is pinned, by whichever means its kind is pinned.
+
+    A row's evidence is only as good as the image that produced it, so this
+    holds either kind to a pin. It does not return one: a built image has no
+    single string that plays the digest's part, and nothing renders it.
+    """
+    if key in built_image_keys(pins.images):
+        _require(
+            lock_for(pins.module, key),
+            _MODULE,
+            'apk.translate_lock(name = "%s_lock", lock = "...")' % key,
+        )
+    else:
+        _digest(pins, key)
+
 def _pinned(pins, key):
     return "%s@%s" % (_image(pins, key), _digest(pins, key))
 
@@ -1113,7 +1174,7 @@ def _librdkafka_evidence(fs, root, pins, broker_build):
     for image, program, library in clients:
         if image not in loaded:
             fail("librdkafka client image %s is not one Bazel loads" % image)
-        _digest(pins, keys[loaded.index(image)])
+        _require_pinned(pins, keys[loaded.index(image)])
         fragments.append(kcat_evidence(image, program, library))
     return "<br>".join(fragments)
 
