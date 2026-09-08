@@ -14,8 +14,9 @@ use super::ports::minio_port;
 //
 // Spins up a real `mirror.gcr.io/minio/minio` container, points the broker at it via the
 // S3-compatible `S3RemoteStorage` backend, then drives a JVM producer +
-// consumer against a topic with `remote.storage.enable=true` and aggressive
-// `segment.bytes` / `local.retention.bytes` overrides. We assert both that
+// consumer against a topic with `remote.storage.enable=true` and an
+// aggressive `local.retention.bytes` override, on a broker whose default
+// segment size is small (`TIERED_SEGMENT_SIZE`). We assert both that
 // segment objects materialise in the MinIO bucket and that the JVM consumer
 // reads back every record — including offsets whose local segments have
 // already been evicted by `local_retention_pass`, forcing the read to come

@@ -18,19 +18,44 @@ use super::{
     ports::broker0_advertised,
 };
 
+/// Segment size every tiered-storage suite boots its broker with, as
+/// `BrokerConfig::log_config.segment_size`.
+///
+/// The topic cannot ask for it. Kafka's topic-level `segment.bytes` has a
+/// floor of 1 MiB (`LogConfig`, `atLeast(1024 * 1024)`), which krabka matches,
+/// and the only topic config that goes below it is Kafka 4.x's internal
+/// `internal.segment.bytes` — a key `TopicCommand` in every image these suites
+/// pin rejects client-side, before the request leaves the container. The
+/// small segment therefore comes from the broker's own `LogConfig`, which a
+/// topic that overrides nothing inherits. Kafka floors its broker-level
+/// `log.segment.bytes` at 1 MiB too (`SERVER_CONFIG_DEF`), but that is the
+/// validator on a parsed broker config; this is a harness constructing the
+/// struct directly, which is how Kafka's own tests get a small segment.
+///
+/// At this size a produce of a couple of hundred ~30-byte records seals
+/// several segments, which is what gives the tier-copy path repeated work.
+pub(crate) const TIERED_SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(2048);
+
 /// Create a KIP-405 tiered topic and wait for the config overrides to propagate
 /// into the partition's `LogConfig`.
 ///
-/// This function uses `internal.segment.bytes=2048` and `local.retention.bytes=1`, so
-/// a small produce batch seals several segments and the broker evicts every
-/// copied segment from local disk at once. Later reads must then go through
-/// the remote tier.
+/// This function pairs [`TIERED_SEGMENT_SIZE`], inherited from the broker
+/// default, with `local.retention.bytes=1` on the topic, so a small produce
+/// batch seals several segments and the broker evicts every copied segment
+/// from local disk at once. Later reads must then go through the remote tier.
 ///
 /// The function waits up to 10 s for `ReplicatorSupervisor::reconcile` to
-/// apply the config to the live partition. Without this gate, the producer's
-/// first batches land in a default-config `Log` with 1 GiB segments and
-/// `remote_storage_enable=false`, and nothing triggers the tier-copy path.
-/// See `compact_log_cleaner_round_trip` for the same pattern.
+/// apply the topic's overrides to the live partition. Without this gate, the
+/// producer's first batches land in a partition with
+/// `remote_storage_enable=false` and no local-retention bound, and nothing
+/// triggers the tier-copy path. See `compact_log_cleaner_round_trip` for the
+/// same pattern.
+///
+/// # Panics
+///
+/// If the broker was not started with `log_config.segment_size` set to
+/// [`TIERED_SEGMENT_SIZE`]: the produce would then fill one 1 GiB segment and
+/// seal nothing.
 pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, topic: &str) {
     // Uses the KIP-405-aware `cp-kafka:7.8.8` image — older clients' `TopicCommand`
     // validates `--config` keys client-side and rejects `remote.storage.enable` /
@@ -50,8 +75,6 @@ pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, to
             "--config",
             "remote.storage.enable=true",
             "--config",
-            "internal.segment.bytes=2048",
-            "--config",
             "local.retention.bytes=1",
             "--config",
             "retention.bytes=-1",
@@ -62,14 +85,15 @@ pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, to
         ],
     );
 
+    // Only the overrides the JVM CLI actually sent are worth waiting for; the
+    // segment size is inherited the moment the partition exists.
     let cfg_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
+    let cfg = loop {
         if let Some(cfg) = broker.partition_log_config_for_test(topic, 0)
             && cfg.remote_storage_enable
-            && cfg.segment_size == krabka_units::bytes(2048)
             && cfg.local_retention_size == Some(krabka_units::bytes(1))
         {
-            break;
+            break cfg;
         }
         assert!(
             std::time::Instant::now() <= cfg_deadline,
@@ -79,14 +103,20 @@ pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, to
         // intentional: bounded poll of the local reconciled LogConfig override;
         // `partition_log_config_for_test` is not surfaced by any awaiter/metric.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    };
+    assert!(
+        cfg.segment_size == TIERED_SEGMENT_SIZE,
+        "the tiered harness must boot its broker with log_config.segment_size = \
+         {TIERED_SEGMENT_SIZE:?}; the partition inherited {:?}",
+        cfg.segment_size
+    );
 }
 
 /// Stream `n` records with the format `record-NNNN` into `topic` through the
 /// JVM console producer.
 ///
 /// This function forces per-record batches with `batch.size=1` and
-/// `linger.ms=0`, so the broker rolls segments at `internal.segment.bytes=2048`.
+/// `linger.ms=0`, so the broker rolls segments at [`TIERED_SEGMENT_SIZE`].
 /// Without that, the JVM producer collects everything into one large batch
 /// and writes it into a single segment. Nothing then triggers a segment
 /// roll, and the tier-copy path gets no work.

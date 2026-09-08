@@ -31,9 +31,9 @@ const KEY_ID: &str = "worm-itest-key";
 
 const TOPIC: &str = "krabka-worm-lock-itest";
 
-/// 200 records of about 30 bytes each, so `internal.segment.bytes=2048` rolls several
-/// sealed segments and the copy path runs more than once. The same fixture the
-/// `jvm_acceptance_tiered` suites use.
+/// 200 records of about 30 bytes each, so the broker's `TIERED_SEGMENT_SIZE`
+/// default rolls several sealed segments and the copy path runs more than
+/// once. The same fixture the `jvm_acceptance_tiered` suites use.
 const RECORDS: usize = 200;
 
 // Same multi-thread caveat as the other container suites: blocking
@@ -211,7 +211,13 @@ async fn start_worm_broker(
         listen_addr,
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
+        // `create_tiered_topic` sends no segment override — the JVM
+        // `TopicCommand` in the image it uses cannot name a sub-1-MiB one —
+        // so the topic inherits this. See `TIERED_SEGMENT_SIZE`.
+        log_config: LogConfig {
+            segment_size: TIERED_SEGMENT_SIZE,
+            ..LogConfig::default()
+        },
         node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
         controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],

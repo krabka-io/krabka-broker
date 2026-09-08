@@ -23,7 +23,8 @@ use crate::jvm_acceptance::{
 ///
 /// 1. Spin up a single-broker cluster with a fast cleaner interval (3s).
 /// 2. `kafka-topics --create --topic compacted-jvm --config cleanup.policy=compact
-///    --config internal.segment.bytes=256 --partitions 1 --replication-factor 1`
+///    --partitions 1 --replication-factor 1`, on a broker whose default
+///    segment size is `SEGMENT_SIZE`
 /// 3. `kafka-console-producer --property parse.key=true --property key.separator=:`
 ///    with this stdin:
 ///      k1:v1
@@ -39,6 +40,18 @@ use crate::jvm_acceptance::{
 #[ignore = "requires Docker"]
 async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     const TOPIC: &str = "compacted-jvm";
+    /// Segment size the broker boots with, and so the size the topic
+    /// inherits: small enough that a handful of records seal a segment the
+    /// cleaner can then work on.
+    ///
+    /// It is a broker default rather than a topic override because Kafka's
+    /// topic-level `segment.bytes` has a 1 MiB floor, which krabka matches,
+    /// and the one topic config that goes below it — Kafka 4.x's
+    /// `internal.segment.bytes` — is rejected client-side by the
+    /// `TopicCommand` in the image this suite pins. Kafka floors its
+    /// broker-level `log.segment.bytes` at 1 MiB as well, but that validates a
+    /// parsed broker config; the harness sets the struct field directly.
+    const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(256);
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -56,7 +69,12 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         listen_addr,
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
-        log_config: krabka_log::LogConfig::default(),
+        // The topic below overrides no segment size, so it inherits this one.
+        // See `SEGMENT_SIZE`.
+        log_config: krabka_log::LogConfig {
+            segment_size: SEGMENT_SIZE,
+            ..krabka_log::LogConfig::default()
+        },
         node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
         controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
@@ -78,8 +96,10 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     );
     nc_check_connectivity();
 
-    // 1. Create the topic with cleanup.policy=compact and a tiny internal.segment.bytes
-    //    so records are sealed into a second segment before the cleaner runs.
+    // 1. Create the topic with cleanup.policy=compact. The tiny segment size
+    //    that seals records into a second segment before the cleaner runs is
+    //    the broker default the topic inherits, not an override: see
+    //    `SEGMENT_SIZE`.
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
@@ -92,8 +112,6 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         "1",
         "--config",
         "cleanup.policy=compact",
-        "--config",
-        "internal.segment.bytes=256",
         // Kafka's default `min.cleanable.dirty.ratio` is 0.5, so a partition
         // whose dirty region is a small share of the log earns no pass. This
         // test produces a handful of records and then waits for a pass, so it
@@ -105,28 +123,35 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         broker0_advertised(),
     ]);
 
-    // 1b. Wait for cleanup.policy=compact + internal.segment.bytes=256 to propagate
-    //     from the metadata image into the partition's LogConfig via the
-    //     ReplicatorSupervisor reconcile loop. Without this wait, produces
-    //     can land in a default-config Log (1GiB segments, Delete policy) →
-    //     no segment rolls, no compaction.
+    // 1b. Wait for cleanup.policy=compact + min.cleanable.dirty.ratio=0.0 to
+    //     propagate from the metadata image into the partition's LogConfig via
+    //     the ReplicatorSupervisor reconcile loop. Without this wait, produces
+    //     can land in a Log that still carries the Delete policy → no
+    //     compaction. The segment size is not waited on: it is the broker
+    //     default and is in place the moment the partition exists, so the
+    //     assertion after the loop is a check on the harness rather than on
+    //     propagation.
     let cfg_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
+    let cfg = loop {
         if let Some(cfg) = broker.partition_log_config_for_test(TOPIC, 0)
             && cfg.cleanup_policy == krabka_log::CleanupPolicy::Compact
-            && cfg.segment_size == krabka_units::bytes(256)
             && cfg.min_cleanable_dirty_ratio == krabka_units::fraction(0.0)
         {
-            break;
+            break cfg;
         }
         assert!(
             std::time::Instant::now() <= cfg_deadline,
-            "cleanup.policy/internal.segment.bytes/min.cleanable.dirty.ratio never propagated within 10s"
+            "cleanup.policy/min.cleanable.dirty.ratio never propagated within 10s"
         );
         // intentional: bounded poll of the local reconciled LogConfig override;
         // `partition_log_config_for_test` is not surfaced by any awaiter/metric.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    };
+    assert!(
+        cfg.segment_size == SEGMENT_SIZE,
+        "the partition must inherit the broker's {SEGMENT_SIZE:?} segment size; saw {:?}",
+        cfg.segment_size
+    );
 
     // 2. Produce 5 records under 3 keys — k1 has three values (v1, v2, v4);
     //    only v4 should survive compaction.
@@ -151,7 +176,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
             // multiple in-flight records bundled when they're submitted
             // back-to-back. Setting batch.size=1 and max-in-flight=1 makes
             // each line a separate batch, which is what we need so
-            // internal.segment.bytes=256 actually rolls segments mid-workload.
+            // `SEGMENT_SIZE` actually rolls segments mid-workload.
             "--producer-property",
             "batch.size=1",
             "--producer-property",
@@ -166,7 +191,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         .expect("spawn producer");
     // First 5 records: the actual workload. After that, a burst of "pad"
     // records under a sentinel key forces the active segment past
-    // `internal.segment.bytes=256` so v5 ends up sealed (otherwise the compactor
+    // `SEGMENT_SIZE` so v5 ends up sealed (otherwise the compactor
     // can't see it; it never touches the active segment) and the test's
     // "no stale v1" assertion can actually hold for k1.
     child
