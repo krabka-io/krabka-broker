@@ -33,7 +33,6 @@ fn classic_member_metadata(m: &MemberState) -> Option<ClassicMemberMetadata> {
         session_timeout_ms: i32::try_from(f.session_timeout.as_millis())
             .unwrap_or(FALLBACK_SESSION_TIMEOUT_MS_I32),
         supported_protocols: f.supported_protocols.clone(),
-        last_synced_assignment: f.last_synced_assignment.clone(),
     })
 }
 

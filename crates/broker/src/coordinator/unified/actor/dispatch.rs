@@ -213,7 +213,7 @@ pub(super) async fn handle_actor_message(
         }
         GroupActorMessage::Seed(seed) => {
             if let Some(state) = group.as_consumer_mut() {
-                apply_seed(state, seed);
+                apply_seed(state, seed, &services.metadata.snapshot());
             }
             true
         }

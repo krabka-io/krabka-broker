@@ -315,7 +315,6 @@ async fn member_with_classic_block_replays_facade() {
                 classic: Some(persistence_next_gen::ClassicMemberMetadata {
                     session_timeout_ms: 30_000,
                     supported_protocols: vec![("range".into(), bytes::Bytes::from_static(b"meta"))],
-                    last_synced_assignment: bytes::Bytes::from_static(b"asn"),
                 }),
             }
             .encode(),

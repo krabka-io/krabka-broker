@@ -21,15 +21,11 @@
 //! Every string is compact, every array is compact, and the message and the
 //! nested structs each end with a tagged-field count.
 //!
-//! ## The one krabka-private field
-//!
-//! Kafka's schema has no home for `last_synced_assignment`, the blob the
-//! hosted-classic path compares a freshly translated assignment against. It
-//! travels as a tagged field at [`TAG_LAST_SYNCED_ASSIGNMENT`], a tag number
-//! far outside the range Kafka assigns. Kafka's generated reader collects a tag
-//! it does not know into the message's unknown tagged fields and reads on, so
-//! the record still decodes; a record for a member with no classic sub-state
-//! carries no such field and is byte-identical to what Kafka writes.
+//! The record carries Kafka's fields and nothing else. What a hosted classic
+//! member last synced is not stored here: it is the member's k8 current
+//! assignment, translated back into a `ConsumerProtocolAssignment` blob when
+//! `apply_seed` hydrates the group. See
+//! `crate::coordinator::unified::actor::seed`.
 
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::ProtocolError;
@@ -51,11 +47,6 @@ use crate::{
 /// `ConsumerGroupMemberMetadataValue`.
 const TAG_CLASSIC_MEMBER_METADATA: u32 = 0;
 
-/// krabka's own tag for the classic member's last synced assignment, which
-/// Kafka's schema does not carry. It sits far above Kafka's assigned tags so
-/// that a later Kafka field cannot collide with it.
-const TAG_LAST_SYNCED_ASSIGNMENT: u32 = 1000;
-
 /// Classic-protocol sub-state for a member hosted inside an upgraded consumer
 /// group (KIP-848 migration). It mirrors Kafka's
 /// `ConsumerGroupMemberMetadataValue.ClassicMemberMetadata`. It lets a
@@ -65,9 +56,6 @@ const TAG_LAST_SYNCED_ASSIGNMENT: u32 = 1000;
 pub struct ClassicMemberMetadata {
     pub session_timeout_ms: i32,
     pub supported_protocols: Vec<(String, Bytes)>,
-    /// Not part of Kafka's schema. See the module docs: it rides in the
-    /// krabka-private tagged field.
-    pub last_synced_assignment: Bytes,
 }
 
 impl ClassicMemberMetadata {
@@ -100,7 +88,6 @@ impl ClassicMemberMetadata {
         Ok(Self {
             session_timeout_ms,
             supported_protocols,
-            last_synced_assignment: Bytes::new(),
         })
     }
 }
@@ -139,9 +126,6 @@ impl MemberMetadataValue {
         let mut tags = Vec::new();
         if let Some(c) = &self.classic {
             tags.push((TAG_CLASSIC_MEMBER_METADATA, c.encode_tag_payload()));
-            if !c.last_synced_assignment.is_empty() {
-                tags.push((TAG_LAST_SYNCED_ASSIGNMENT, c.last_synced_assignment.clone()));
-            }
         }
         put_tagged_fields(&mut buf, tags);
         buf.freeze()
@@ -161,7 +145,6 @@ impl MemberMetadataValue {
         let server_assignor = get_compact_nullable_string(&mut buf)?;
 
         let mut classic: Option<ClassicMemberMetadata> = None;
-        let mut last_synced_assignment = Bytes::new();
         let mut tag_error: Option<BrokerError> = None;
         read_tagged(&mut buf, |tag, payload| match tag {
             TAG_CLASSIC_MEMBER_METADATA => match ClassicMemberMetadata::decode_tag_payload(payload)
@@ -175,18 +158,10 @@ impl MemberMetadataValue {
                     Err(ProtocolError::InvalidValue("bad ClassicMemberMetadata"))
                 }
             },
-            TAG_LAST_SYNCED_ASSIGNMENT => {
-                last_synced_assignment = Bytes::copy_from_slice(&payload[..]);
-                *payload = &payload[payload.len()..];
-                Ok(true)
-            }
             _ => Ok(false),
         })?;
         if let Some(e) = tag_error {
             return Err(e);
-        }
-        if let Some(c) = classic.as_mut() {
-            c.last_synced_assignment = last_synced_assignment;
         }
         Ok(Self {
             instance_id,
@@ -272,7 +247,6 @@ mod tests {
             classic: Some(ClassicMemberMetadata {
                 session_timeout_ms: 2,
                 supported_protocols: vec![("range".into(), Bytes::from_static(b"m"))],
-                last_synced_assignment: Bytes::new(),
             }),
         };
         let mut want: Vec<u8> = Vec::new();
@@ -306,7 +280,6 @@ mod tests {
             classic: Some(ClassicMemberMetadata {
                 session_timeout_ms: 30_000,
                 supported_protocols: vec![("range".into(), Bytes::from_static(b"meta"))],
-                last_synced_assignment: Bytes::from_static(b"asn"),
             }),
             ..native()
         };
