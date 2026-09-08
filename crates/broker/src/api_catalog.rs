@@ -32,15 +32,6 @@ pub enum KipStatus {
     OutOfScope,
 }
 
-/// Which non-JVM client family a suite drives against the KIP.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClientEvidence {
-    /// No non-JVM client suite exercises the KIP.
-    NotCovered,
-    /// The stock kcat of `tests/librdkafka_conformance.rs` exercises it.
-    Kcat,
-}
-
 /// One row of the generated KIP matrix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KipAnnotation {
@@ -55,9 +46,9 @@ pub struct KipAnnotation {
     /// The tests that establish the status, as `path` or `path::function`
     /// from the repository root. A container-driven suite carries its Kafka
     /// image into the matrix through its crate's `BUILD.bazel` `docker` map.
+    /// A `tests/librdkafka_conformance.rs::<function>` entry here is also what
+    /// puts the clients that test drives in the matrix's client column.
     pub tests: &'static [&'static str],
-    /// The non-JVM client suite that also exercises the KIP.
-    pub clients: ClientEvidence,
     /// What the status leaves out, or the citation for a scope decision.
     pub note: &'static str,
 }
@@ -90,7 +81,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_quotas.rs",
             "crates/broker/tests/client_quotas/throttling.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -103,7 +93,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/log/tests/integration.rs::jvm_consumes_rust_written_log_dir",
             "crates/broker/tests/legacy_fetch.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -115,7 +104,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/delegation_tokens.rs",
             "crates/broker/tests/jvm_acceptance_quotas/delegation_tokens.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -127,7 +115,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/group_protocol_negotiation.rs",
             "crates/broker/tests/unit/consumer_group.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -136,7 +123,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/throttle/mod.rs",
         tests: &["crates/broker/tests/throttle.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "The measured throttled-replication rate is published as `krabka_broker_replication_throttled_bytes_out` and `krabka_broker_replication_throttled_bytes_in`, which stand for Kafka's `kafka.server:type=LeaderReplication,name=byte-rate` and its `FollowerReplication` twin, with `krabka_broker_replication_throttle_sleeps` for the rounds the throttle held back entirely. Kafka delays a throttled fetch; krabka drops the partition from the round and the follower re-asks, so there is no `throttle_time_ms` to attribute and the byte-rate is what says whether the throttle is biting.",
     },
     KipAnnotation {
@@ -151,7 +137,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_connect_distributed.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -164,7 +149,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/leader_epoch/epoch_diverge_leader.rs",
             "crates/broker/tests/leader_epoch/epoch_fencing.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -176,7 +160,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_admin_delete_records.rs",
             "crates/broker/tests/admin_handlers/admin_delete_records.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -189,7 +172,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/admin_handlers/admin_topic_policy.rs",
             "crates/broker/tests/topic_freeze/wire.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The policy is the declared `[topic_policy]` rule set rather than a Java class named by `create.topic.policy.class.name`: a replication-factor floor, a partition ceiling, a `min.insync.replicas` floor, and required / forbidden config values. It runs where Kafka calls `CreateTopicPolicy.validate` — after config validation, before the records are generated — on validate-only requests too. A frozen topic answers with the same error 44.",
     },
     KipAnnotation {
@@ -201,7 +183,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/recompression.rs",
             "crates/broker/tests/legacy_fetch.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "A zstd batch is re-compressed as snappy for a v0 or v1 fetch, because those formats never carried zstd.",
     },
     KipAnnotation {
@@ -213,7 +194,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jbod_disk_failure.rs",
             "crates/broker/tests/offline_replicas.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -226,7 +206,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jbod.rs",
             "crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -238,7 +217,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_quotas/throttling.rs",
             "crates/broker/src/network/dispatch/tests/throttle_mute.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -251,7 +229,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/handlers/incremental_alter_configs/topic_scope.rs",
             "crates/broker/tests/admin_handlers/admin_topic_policy.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The same `[topic_policy]` rule set stands in for the class named by `alter.config.policy.class.name`. Both alter paths check the resolved post-change config map, as `AlterConfigPolicy.validate` does; its `RequestMetadata` carries no partition count and no replication factor, so those two rules apply to `CreateTopics` alone.",
     },
     KipAnnotation {
@@ -260,7 +237,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/data_path_model/model.rs",
         tests: &["crates/broker/src/data_path_model/model.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "The exhaustive data-path model checks durability without a watermark monotonicity assertion, which is what the KIP allows.",
     },
     KipAnnotation {
@@ -269,7 +245,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/coordinator/retention.rs",
         tests: &["crates/broker/tests/offsets_retention.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -281,7 +256,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_quotas/throttling.rs",
             "crates/broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs; the rest are `InlineExempt`, so only a reply outside their advertised version range can be held without an echo.",
     },
     KipAnnotation {
@@ -290,7 +264,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/describe_configs.rs",
         tests: &["crates/broker/tests/jvm_acceptance_cli/configs.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -299,7 +272,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/fetch_session.rs",
         tests: &["crates/broker/tests/fetch_session.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -308,7 +280,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/network/auth/oauthbearer.rs",
         tests: &["crates/broker/tests/auth_handlers/oauthbearer.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -320,7 +291,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_quotas.rs",
             "crates/broker/tests/tuple_quota_enforcement.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -329,7 +299,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/acl_wire.rs",
         tests: &["crates/broker/tests/acl_handlers.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -342,7 +311,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_kip320_divergence/wire_conformance.rs",
             "crates/broker/tests/consumer_proactive_validation.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -354,7 +322,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/static_membership.rs",
             "crates/broker/tests/jvm_acceptance_cli/console_groups.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -366,7 +333,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transactions/txn_fencing.rs::init_producer_id_fences_a_stale_producer_identity",
             "crates/broker/tests/jvm_acceptance_durability/transactional_eos.rs::transactional_console_producer_eos",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -380,7 +346,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/auth_handlers/scram.rs::scram_session_capped_by_connections_max_reauth_then_closes",
             "crates/broker/tests/jvm_acceptance_sasl/scram.rs::jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "`connections.max.reauth.ms` bounds every mechanism, and PLAIN, SCRAM and GSSAPI all re-authenticate in band under it. GSSAPI carries no automated re-auth case, because the suite has no KDC.",
     },
     KipAnnotation {
@@ -393,7 +358,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/file_config/listener.rs::apply_to_listener_parses_principal_mapping_rules",
             "crates/broker/tests/jvm_acceptance_tls/mtls_principal_mapping.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`.",
     },
     KipAnnotation {
@@ -404,7 +368,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure.",
     },
     KipAnnotation {
@@ -413,7 +376,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/replica_selector.rs",
         tests: &["crates/broker/tests/kip_392_fetch_from_follower.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -422,7 +384,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/coordinator/unified/classic_ops/join.rs",
         tests: &["crates/broker/tests/group_protocol_negotiation.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -438,7 +399,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/restore/tests/roundtrip.rs",
             "crates/restore/tests/roundtrip/consume.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The tier's traffic and lag are published per topic under the `krabka_broker_remote_*` names, which stand for Kafka's `BrokerTopicMetrics` `RemoteCopyBytesPerSec`, `RemoteFetchBytesPerSec`, the three `Remote*RequestsPerSec` and `Remote*ErrorsPerSec` meters, and the four `Remote*Lag*` gauges. The bounded reader pool and the on-disk index cache report `krabka_broker_remote_log_reader_task_queue_size`, `_avg_idle_percent` and `_fetch_duration_seconds` for Kafka's `RemoteLogManager` gauges, plus rejection and cache hit / miss counters Kafka has no counterpart for. The GCS lane of the evidence, `gcs_emulator.rs`, covers the native `[remote_storage.gcs]` backend's reads, deletes and WORM startup gate against an emulator; it does not cover a GCS copy, because `object_store` writes an object with the Cloud Storage XML API and no GCS emulator serves that PUT. The copy path is covered against MinIO and `InMemory` instead.",
     },
     KipAnnotation {
@@ -450,7 +410,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_broker_loggers.rs",
             "crates/broker/tests/broker_logger_config.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -462,7 +421,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/group_protocol_negotiation.rs",
             "crates/broker/tests/jvm_acceptance_cli/console_groups.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -471,7 +429,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/authorized_operations.rs",
         tests: &["crates/broker/tests/authorized_operations.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -483,7 +440,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/txn_offset_commit_materialize.rs",
             "crates/broker/src/handlers/offset_fetch/tests.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -496,7 +452,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_reassign.rs",
             "crates/broker/tests/jvm_acceptance_reassign/cancel_gate.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -508,7 +463,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/elect_leaders.rs",
             "crates/broker/tests/elect_leaders/auto_rebalance.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -517,7 +471,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/produce/schema.rs",
         tests: &["crates/broker/tests/schema_validation/rejected.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -529,7 +482,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/network/dispatch/tests.rs",
             "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
         ],
-        clients: ClientEvidence::Kcat,
         note: "",
     },
     KipAnnotation {
@@ -541,7 +493,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/offset_delete.rs",
             "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -553,7 +504,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/controlled_shutdown.rs",
             "crates/broker/tests/advertised_controller_liveness.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -565,7 +515,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_software_versions.rs",
             "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
         ],
-        clients: ClientEvidence::Kcat,
         note: "",
     },
     KipAnnotation {
@@ -581,7 +530,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/kip516_delete_topics.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -590,7 +538,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/create_topics.rs",
         tests: &["crates/broker/tests/admin_handlers.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -603,7 +550,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/log/src/compact_model/pass.rs",
             "crates/broker/tests/compaction.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -615,7 +561,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_quotas.rs",
             "crates/broker/tests/jvm_acceptance_quotas/client_quotas.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -628,7 +573,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/auth_handlers/alter_scram.rs",
             "crates/broker/tests/jvm_acceptance_sasl/scram.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -637,7 +581,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/sync_group.rs",
         tests: &["crates/broker/tests/kip559_l7_proxy_fields.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -650,7 +593,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/api_versions_features.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`.",
     },
     KipAnnotation {
@@ -662,7 +604,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/kip590_envelope.rs",
             "crates/broker/tests/jvm_role_separated_admin.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The broker side of KIP-590 is not needed: a Krabka broker reaches its controller over the krabka-private `SubmitChange` RPC (`crates/broker/src/metadata_source/observer_source.rs`), and a JVM controller is outside the compatibility target (crates/raft/src/lib.rs:54).",
     },
     KipAnnotation {
@@ -676,7 +617,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_static_quorum_spike.rs",
             "crates/broker/tests/admin_handlers/admin_describe_quorum.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -685,7 +625,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/quota/controller_mutation.rs",
         tests: &["crates/broker/tests/controller_mutation_quota.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -694,7 +633,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/broker/accept.rs",
         tests: &["crates/broker/tests/ip_quotas.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -707,7 +645,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/raft/tests/kraft_checkpoint_jvm.rs",
             "crates/broker/tests/fetch_snapshot.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -719,7 +656,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/raft/tests/kraft_checkpoint_jvm.rs",
             "crates/broker/tests/unregister_broker.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -728,7 +664,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::OutOfScope,
         module: "crates/raft/src/controller/membership.rs",
         tests: &[],
-        clients: ClientEvidence::NotCovered,
         note: "Voter changes go one node at a time through KIP-853. `change_membership` rejects a batch that adds or removes more than one voter.",
     },
     KipAnnotation {
@@ -740,7 +675,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/describe_producers.rs",
             "crates/broker/tests/list_describe_transactions.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -752,7 +686,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/handlers/alter_partition/isr_update.rs::error_response_preserves_non_default_partition_fields",
             "crates/broker/src/handlers/alter_partition/tests.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The wire half only. `leader_recovery_state` is a literal 0 -- `RECOVERED` -- at every site that writes it, on the leader side at crates/broker/src/isr_maintenance/request_builder.rs:67 and crates/broker/src/isr_maintenance/request_builder.rs:120 and on the controller side at crates/broker/src/handlers/alter_partition/isr_update.rs:160 and crates/broker/src/handlers/alter_partition/isr_update.rs:179, and nothing under `crates/` reads the field. So the RECOVERING state does not exist here: a partition that comes back from an unclean leader election is advertised as fully recovered from its first AlterPartition onward, no leader is held in recovery, and the controller ignores the state a leader reports rather than answering it. The row is Partial because the field is carried and negotiated, not because any part of the recovery protocol runs.",
     },
     KipAnnotation {
@@ -765,7 +698,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_metrics_config.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "GetTelemetrySubscriptions (71) and PushTelemetry (72) are advertised only when the broker has a client-metrics receiver: the `[runtime]` key `client_metrics_enable`, or a configured `client_metrics_otlp_endpoint`, which implies it. The default is off, which is what a stock Kafka broker advertises when `metric.reporters` holds no `ClientTelemetry` implementation, so a modern Java or librdkafka client opens no telemetry handshake it has nowhere to push to. `api_catalog::ClientMetricsReceiver` names the gate and `BrokerConfig::client_metrics_receiver` reads it. Both handlers stay registered either way and answer a client that sends one anyway.",
     },
     KipAnnotation {
@@ -774,7 +706,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/list_offsets/timestamp.rs",
         tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -788,7 +719,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/oauth_jwks/fetch.rs::fetch_jwks_parses_served_keyset",
             "crates/verified/src/jwks.rs::cache_requires_one_fresh_stable_generation",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "The broker half of the KIP: `crates/broker/src/oauth_jwks/` GETs the provider's JWKS document over HTTP or HTTPS, parses it, and swaps the key set into the shared `JwksHandle` a `SignedJwsValidator` reads, so rotated keys are picked up with no restart. It refreshes on a cadence and on a validator's unknown-kid signal, rate-limits the on-demand path, keeps the previous key set when a fetch fails, and fences readers with the even/odd generation counter that crates/verified/src/jwks.rs:42 proves admission against; the same file's crates/verified/src/jwks.rs:84 keeps the on-demand limiter monotonic across a wall-clock rollback. Cache expiry, issuer and audience checks, the principal and groups claims, the `typ` check, clock skew, an operator-supplied `IdP` TLS trust bundle and the `use=enc` filter are configured from the `[oauthbearer]` TOML table rather than Kafka's `sasl.oauthbearer.*` JAAS options. The KIP's client half -- the login callback that retrieves a token with an OAuth `client_credentials` grant -- is a client concern and lives in `krabka-client-rs`, not in this repository.",
     },
     KipAnnotation {
@@ -800,7 +730,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/format/tests/format_smoke.rs",
             "crates/broker/tests/format_features.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -809,7 +738,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/describe_log_dirs/dirs.rs",
         tests: &["crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -821,7 +749,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/leader_election.rs",
             "crates/broker/src/leader_election/scan/dead_broker_tests.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -836,7 +763,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. Two residues remain, both documented on `check_subscribed_topic_regex`: `regex` character-class set operations are accepted where RE2J would not, and RE2's literal-quoting escape pair, which `regex` has no equivalent for, is rejected where RE2J would accept. Neither can change which topics an accepted subscription matches. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker.",
     },
     KipAnnotation {
@@ -849,7 +775,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/raft/tests/reconfig.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -861,7 +786,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jbod_disk_failure.rs",
             "crates/broker/tests/offline_replicas.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -873,7 +797,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transaction_version.rs",
             "crates/broker/tests/transaction_version/txnver_verify_only.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -885,7 +808,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/raft/src/kraft/controller/tests_broker_registration.rs",
             "crates/broker/src/elr/tests.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -898,7 +820,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_admin_controller_bootstrap.rs",
             "crates/broker/tests/unregister_broker.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -912,7 +833,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/share_admin_offsets.rs",
             "crates/broker/tests/jvm_share_groups.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -924,7 +844,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transactions_2pc.rs",
             "crates/broker/src/txn/two_pc_model.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -936,7 +855,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/config_keys/validation/tests.rs",
             "crates/broker/tests/jvm_acceptance_tiered.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "`remote.storage.enable` going true -> false is refused unless `remote.log.delete.on.disable=true` comes with it, and the flip then erases the partition's remote segments and raises its log start offset to the local log start. `remote.log.copy.disable=true` is the read-only tier: no new copies, reads and remote retention unchanged. Under a WORM archive the cascade clears the partition's remote metadata and removes nothing from the archive, as a `DeleteTopics` cascade does.",
     },
     KipAnnotation {
@@ -948,7 +866,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/produce_leader_gate.rs",
             "crates/broker/tests/producer_leader_routing.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -962,7 +879,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_cli/elr_columns.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "ELR maintenance is gated on the `eligible.leader.replicas.version` feature, as Kafka gates it on `FeatureControlManager.isElrFeatureEnabled()`: at level 0 the controller publishes no eligible or last-known-eligible set, and a downgrade to 0 clears what an earlier level 1 published. The release default is 0 at every `metadata.version` krabka advertises, because `ELRV_1` bootstraps at 4.1-IV0; level 1 declares Kafka's KIP-1022 dependency on `metadata.version` at 4.0-IV1. krabka carries the state as the controller-managed `krabka.elr` topic override rather than in `PartitionRecord`, so it does not consume ELR fields written by a JVM controller.",
     },
     KipAnnotation {
@@ -975,7 +891,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/raft/tests/kraft_engine_sim/failover.rs",
             "crates/broker/tests/jvm_static_quorum_spike/contested_election.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -984,7 +899,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/list_offsets/sentinels.rs",
         tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -996,7 +910,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/format_features.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1005,7 +918,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/list_offsets/resolve.rs",
         tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1019,7 +931,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_streams_groups.rs",
             "crates/broker/tests/jvm_streams_app.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1028,7 +939,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/describe_cluster.rs",
         tests: &["crates/broker/tests/role_separation_observer.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1037,7 +947,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/list_offsets/remote.rs",
         tests: &["crates/broker/src/config_keys/registry/tests.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1046,7 +955,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::OutOfScope,
         module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
         tests: &[],
-        clients: ClientEvidence::NotCovered,
         note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape; krabka decides that from the metadata image instead, so it keeps no such hash. The field is tagged and its default is 0, so the record krabka writes is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
     },
     KipAnnotation {
@@ -1055,7 +963,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/list_config_resources.rs",
         tests: &["crates/broker/tests/admin_handlers/admin_listings.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1067,7 +974,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/raft/src/kraft/controller/tests_downgrade.rs",
             "crates/broker/tests/jvm_kip320_divergence/metadata_version_downgrade.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1076,7 +982,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/raft/src/server/voter_admin.rs",
         tests: &["crates/broker/tests/jvm_features.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1085,7 +990,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/api_versions.rs",
         tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1094,7 +998,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::OutOfScope,
         module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
         tests: &[],
-        clients: ClientEvidence::NotCovered,
         note: "Kafka stamps each target assignment with the time it was computed, for its own assignment metrics. krabka does not measure assignment latency from the log, so it writes the tagged field's default of 0, which is what Kafka writes when it has no timestamp to record.",
     },
     KipAnnotation {
@@ -1106,7 +1009,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transaction_version.rs",
             "crates/broker/tests/transactions.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "",
     },
     KipAnnotation {
@@ -1118,7 +1020,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/gssapi_e2e.rs",
             "crates/broker/tests/auth_handlers/gssapi.rs",
         ],
-        clients: ClientEvidence::NotCovered,
         note: "Kerberos predates the KIP process (KAFKA-1686, Kafka 0.9), so no KIP number. Both suites run in the scheduled `container gssapi` CI job: the KDC fixture writes keytabs through a bind mount, so the lane is schedule and workflow_dispatch only.",
     },
     KipAnnotation {
@@ -1127,7 +1028,6 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::OutOfScope,
         module: "crates/raft/src/lib.rs",
         tests: &[],
-        clients: ClientEvidence::NotCovered,
         note: "Outside the raft crate's compatibility target: crates/raft/src/lib.rs:54.",
     },
 ];
