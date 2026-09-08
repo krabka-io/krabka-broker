@@ -273,7 +273,7 @@ def lock_for(module, key):
     label = module.find('lock = "', at)
     if label < 0:
         return ""
-    found = _quoted(module, label + len('lock = '))
+    found = _quoted(module, label + len("lock = "))
     if found == None:
         return ""
     return found.value

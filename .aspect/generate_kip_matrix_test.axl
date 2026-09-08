@@ -649,19 +649,18 @@ def _test_render_page(_ctx):
     check(page.find("It ran against\n`log-image`.") >= 0, "the log image is named")
     check(page.find("The oracle is `api-image`.") >= 0, "the oracle is named")
 
-
 _BUILT_IMAGES = "\n".join([
-    'IMAGES = {',
+    "IMAGES = {",
     '    "apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1",',
-    '}',
-    '',
+    "}",
+    "",
     "# Assembled here rather than pulled: nothing published carries them.",
-    'BUILT_IMAGES = {',
+    "BUILT_IMAGES = {",
     "    # A Go CLI on sarama, so neither librdkafka nor the JVM.",
     '    "kaf_sarama": "docker.io/krabka-io/kaf:0.2.14",',
     '    # "retired_image": "docker.io/krabka-io/gone:1",',
     '    "kcat_librdkafka_2x": "docker.io/krabka-io/kcat:librdkafka-2.15.0",',
-    '}',
+    "}",
 ])
 
 _LOCKS = "\n".join([
