@@ -175,6 +175,10 @@ pub(crate) async fn delete_offsets(
             {
                 state.initialized.extend(removed);
                 error_code = codes::COORDINATOR_NOT_AVAILABLE;
+            } else {
+                // The record just written no longer lists the topic, so the
+                // group has no further use for its name.
+                state.forget_unused_topic_names();
             }
         }
         results.push(error_code);

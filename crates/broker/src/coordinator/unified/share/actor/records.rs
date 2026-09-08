@@ -14,10 +14,10 @@ use crate::coordinator::unified::{
     offsets_log::OffsetsLog,
     share::{
         persistence::{
-            ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMemberMetadataValue,
-            ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue,
-            ShareGroupTargetAssignmentMemberValue, ShareGroupTargetAssignmentMetadataValue,
-            encode_share_key,
+            InitializedTopic, ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
+            ShareGroupMemberMetadataValue, ShareGroupMetadataValue,
+            ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
+            ShareGroupTargetAssignmentMetadataValue, UNKNOWN_TOPIC_NAME, encode_share_key,
         },
         state::ShareGroupState,
     },
@@ -163,8 +163,16 @@ pub(super) fn snapshot_pending_after_change(
 }
 
 /// Build the `ShareGroupStatePartitionMetadata` (key v15) value from the live
-/// Initialized set. There is one `(topic_id, partitions)` row per topic, and
-/// the partitions are sorted for a stable encoding.
+/// Initialized set. There is one row per topic, and the partitions are sorted
+/// for a stable encoding.
+///
+/// Each row names its topic. The name comes from
+/// [`ShareGroupState::topic_names`], which the lifecycle hook fills from the
+/// metadata image and bootstrap replay refills from the previous record. A
+/// topic id with no name left — its topic was deleted from the cluster while
+/// the group still held share state for it — is written as
+/// [`UNKNOWN_TOPIC_NAME`], which is what Kafka's
+/// `GroupMetadataManager.attachInitValue` writes in the same position.
 pub(super) fn state_partition_metadata_from(
     state: &ShareGroupState,
 ) -> ShareGroupStatePartitionMetadataValue {
@@ -172,14 +180,21 @@ pub(super) fn state_partition_metadata_from(
     for (tid, p) in &state.initialized {
         by_topic.entry(*tid).or_default().push(*p);
     }
-    let mut initialized: Vec<(uuid::Uuid, Vec<i32>)> = by_topic
+    let mut initialized: Vec<InitializedTopic> = by_topic
         .into_iter()
         .map(|(tid, mut parts)| {
             parts.sort_unstable();
-            (uuid::Uuid::from_bytes(tid.0), parts)
+            InitializedTopic {
+                topic_id: uuid::Uuid::from_bytes(tid.0),
+                topic_name: state
+                    .topic_names
+                    .get(&tid)
+                    .map_or_else(|| UNKNOWN_TOPIC_NAME.to_owned(), Clone::clone),
+                partitions: parts,
+            }
         })
         .collect();
-    initialized.sort_by_key(|(tid, _)| *tid);
+    initialized.sort_by_key(|topic| topic.topic_id);
     ShareGroupStatePartitionMetadataValue {
         initialized,
         deleting: Vec::new(),
@@ -222,6 +237,39 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+
+    #[test]
+    fn state_partition_metadata_names_every_topic_it_lists() {
+        let named = Uuid([1; 16]);
+        let forgotten = Uuid([2; 16]);
+        let mut state = ShareGroupState::new("g");
+        for partition in [1, 0] {
+            state.initialized.insert((named, partition));
+        }
+        state.initialized.insert((forgotten, 0));
+        state.topic_names.insert(named, "orders".to_owned());
+
+        // Rows sorted by topic id, partitions sorted, and the topic whose name
+        // the group no longer knows gets Kafka's `<UNKNOWN>` placeholder.
+        assert!(
+            state_partition_metadata_from(&state)
+                == ShareGroupStatePartitionMetadataValue {
+                    initialized: vec![
+                        InitializedTopic {
+                            topic_id: uuid::Uuid::from_bytes([1; 16]),
+                            topic_name: "orders".to_owned(),
+                            partitions: vec![0, 1],
+                        },
+                        InitializedTopic {
+                            topic_id: uuid::Uuid::from_bytes([2; 16]),
+                            topic_name: UNKNOWN_TOPIC_NAME.to_owned(),
+                            partitions: vec![0],
+                        },
+                    ],
+                    deleting: Vec::new(),
+                }
+        );
+    }
 
     #[test]
     fn pending_records_tombstone_omits_value() {

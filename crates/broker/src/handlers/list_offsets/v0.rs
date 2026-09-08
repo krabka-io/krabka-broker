@@ -211,7 +211,7 @@ mod tests {
             TOPIC,
             vec![
                 krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
-                    name: "segment.bytes".into(),
+                    name: "internal.segment.bytes".into(),
                     value: Some("1".into()),
                     ..Default::default()
                 },

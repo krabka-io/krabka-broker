@@ -91,7 +91,7 @@ async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
                         ..Default::default()
                     },
                     CreatableTopicConfig {
-                        name: "segment.bytes".into(),
+                        name: "internal.segment.bytes".into(),
                         value: Some("1024".into()),
                         ..Default::default()
                     },

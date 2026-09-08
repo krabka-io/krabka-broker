@@ -70,6 +70,20 @@ pub struct ShareGroupState {
     /// post-restart heartbeat does not re-Initialize. The lifecycle hook adds
     /// to this on each successful `SharePersister::initialize`.
     pub initialized: HashSet<(Uuid, i32)>,
+    /// The topic name behind each topic id in [`Self::initialized`].
+    ///
+    /// KIP-932's `ShareGroupStatePartitionMetadata` carries `TopicName` beside
+    /// `TopicId` on every entry, and the tooling that reads that record has no
+    /// topic-id index of its own, so the name has to live as long as the entry
+    /// does. It is learned from the metadata image when the lifecycle hook
+    /// initializes a partition, and re-seeded from the replayed record after a
+    /// restart, exactly as Kafka's `GroupMetadataManager` keeps
+    /// `InitMapValue.name()`. An id with no name here is written as
+    /// [`UNKNOWN_TOPIC_NAME`], the same fallback Kafka writes for an id its
+    /// metadata image no longer holds.
+    ///
+    /// [`UNKNOWN_TOPIC_NAME`]: super::persistence::UNKNOWN_TOPIC_NAME
+    pub topic_names: HashMap<Uuid, String>,
 }
 
 impl ShareGroupState {
@@ -84,7 +98,21 @@ impl ShareGroupState {
             },
             dirty: false,
             initialized: HashSet::new(),
+            topic_names: HashMap::new(),
         }
+    }
+
+    /// Drop the name of every topic that no longer has an initialized
+    /// partition, so the map stays exactly the set of topics the next
+    /// `ShareGroupStatePartitionMetadata` record will name.
+    pub fn forget_unused_topic_names(&mut self) {
+        let Self {
+            initialized,
+            topic_names,
+            ..
+        } = self;
+        let live: HashSet<Uuid> = initialized.iter().map(|(topic_id, _)| *topic_id).collect();
+        topic_names.retain(|topic_id, _| live.contains(topic_id));
     }
 
     pub fn bump_epoch(&mut self) -> bool {
@@ -200,5 +228,19 @@ mod tests {
         let evicted = g.evict_expired(later, Duration::from_millis(1));
         assert!(evicted == vec!["m1".to_string()]);
         assert!(g.members.is_empty());
+    }
+
+    #[test]
+    fn forgetting_names_keeps_exactly_the_initialized_topics() {
+        let kept = Uuid([1; 16]);
+        let dropped = Uuid([2; 16]);
+        let mut g = ShareGroupState::new("g1");
+        g.initialized.insert((kept, 0));
+        g.topic_names.insert(kept, "orders".to_owned());
+        g.topic_names.insert(dropped, "carts".to_owned());
+
+        g.forget_unused_topic_names();
+
+        assert!(g.topic_names == HashMap::from([(kept, "orders".to_owned())]));
     }
 }

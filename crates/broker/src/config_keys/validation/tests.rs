@@ -6,7 +6,7 @@ use krabka_log::CleanupPolicy;
 use super::{
     super::{
         DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES, FLUSH_MS, INDEX_INTERVAL_BYTES,
-        LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
+        INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
         MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE,
         MIN_COMPACTION_LAG_MS, MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE,
         REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
@@ -38,14 +38,57 @@ fn validate_retention_ms_boundary_cases() {
     }
 }
 
+/// Kafka floors `segment.bytes` at one mebibyte: `LogConfig` validates the key
+/// with `atLeast(1024 * 1024)`, and `apache/kafka:4.3.1` refuses anything below
+/// it with `Invalid value 1048575 for configuration segment.bytes: Value must
+/// be at least 1048576`. A coordinator that wants a smaller segment reaches
+/// past the floor through `internal.segment.bytes`, which `defineInternal`
+/// gives no validator at all.
 #[test]
-fn validate_segment_bytes_rejects_zero() {
-    assert!(validate_topic_config(SEGMENT_BYTES, "0").is_err());
+fn validate_segment_bytes_floors_at_kafkas_one_mebibyte() {
+    let cases = [
+        ("0", false),
+        ("1", false),
+        ("14", false),
+        ("1048575", false),
+        ("1048576", true),
+        ("1073741824", true),
+        ("not-a-number", false),
+    ];
+    for (value, want_ok) in cases {
+        assert!(
+            validate_topic_config(SEGMENT_BYTES, value).is_ok() == want_ok,
+            "segment.bytes={value}"
+        );
+    }
+    // The floor is the topic key's alone. `internal.segment.bytes` is
+    // `defineInternal`'d with a null validator, so it still reaches below it.
+    assert!(validate_topic_config(INTERNAL_SEGMENT_BYTES, "1").is_ok());
 }
 
+/// `retention.bytes` is one of the few keys Kafka defines with no validator at
+/// all: `LogConfig` declares it as a bare `LONG` with a default, so every value
+/// the type holds is accepted and `LogManager`'s retention test is the plain
+/// `retentionSize < 0`. Refusing `-2` here would lose a `MirrorMaker` replay of
+/// a source topic that carries one.
 #[test]
-fn validate_segment_bytes_accepts_minimum_one() {
-    assert!(validate_topic_config(SEGMENT_BYTES, "1").is_ok());
+fn validate_retention_bytes_accepts_every_long_kafka_accepts() {
+    let cases = [
+        ("-1", true),
+        ("-2", true),
+        ("0", true),
+        ("1073741824", true),
+        ("-9223372036854775808", true),
+        ("9223372036854775807", true),
+        ("9223372036854775808", false),
+        ("abc", false),
+    ];
+    for (value, want_ok) in cases {
+        assert!(
+            validate_topic_config(RETENTION_BYTES, value).is_ok() == want_ok,
+            "retention.bytes={value}"
+        );
+    }
 }
 
 #[test]
@@ -74,20 +117,31 @@ fn validate_cleanup_policy_accepts_every_non_empty_subset_of_the_list() {
     }
 }
 
+/// `LogConfig` validates `compression.type` with
+/// `ValidString.in(BrokerCompressionType.names())`, and that enum has exactly
+/// six members. `none` is a producer-side codec name and is not one of them:
+/// `apache/kafka:4.3.1` refuses it with `Invalid value none for configuration
+/// compression.type: String must be one of: uncompressed, zstd, lz4, snappy,
+/// gzip, producer`.
 #[test]
-fn validate_compression_all_supported_values_accepted() {
-    for v in [
-        "producer",
-        "uncompressed",
-        "none",
-        "gzip",
-        "snappy",
-        "lz4",
-        "zstd",
-    ] {
+fn validate_compression_accepts_kafkas_six_names_and_no_others() {
+    let cases = [
+        ("producer", true),
+        ("uncompressed", true),
+        ("gzip", true),
+        ("snappy", true),
+        ("lz4", true),
+        ("zstd", true),
+        ("none", false),
+        ("", false),
+        // `ValidString.in` compares the string as given, so the enum's Java
+        // spelling is not a name Kafka accepts either.
+        ("GZIP", false),
+    ];
+    for (value, want_ok) in cases {
         assert!(
-            validate_topic_config(COMPRESSION_TYPE, v).is_ok(),
-            "compression.type={v} should be accepted",
+            validate_topic_config(COMPRESSION_TYPE, value).is_ok() == want_ok,
+            "compression.type={value}"
         );
     }
 }
@@ -113,6 +167,7 @@ fn parse_compression_type_maps_codecs() {
         ("zstd", CompressionType::Zstd),
         ("uncompressed", CompressionType::None),
     ];
+    assert!(parse_compression_type("none").is_err());
     for (input, want) in cases {
         assert!(
             parse_compression_type(input) == Ok(Some(want)),

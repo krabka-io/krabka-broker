@@ -310,7 +310,6 @@ mod tests {
                         "range".to_string(),
                         bytes::Bytes::from_static(b"meta"),
                     )],
-                    last_synced_assignment: bytes::Bytes::from_static(b"assigned"),
                 }),
             }},
             target_per_member: maplit::hashmap! {"m1".to_string() => p::TargetAssignmentMemberValue {

@@ -36,7 +36,7 @@ mod compaction_wire;
 /// End-to-end compaction test:
 ///
 /// 1. Boot a single broker with cleaner interval = 1s.
-/// 2. Create topic `compacted` with `cleanup.policy=compact` and `segment.bytes=256`.
+/// 2. Create topic `compacted` with `cleanup.policy=compact` and `internal.segment.bytes=256`.
 /// 3. Produce 30 records, 10 for each of the 3 keys, values v0-k1..v9-k3.
 /// 4. Wait for a compaction pass so the cleaner compacts the sealed segments.
 /// 5. Force-roll the active segment. Produce v10-k1, v10-k2, and v10-k3.
@@ -56,7 +56,10 @@ async fn compaction_dedupes_via_native_client() {
         "compacted",
         1,
         1,
-        vec![("cleanup.policy", "compact"), ("segment.bytes", "256")],
+        vec![
+            ("cleanup.policy", "compact"),
+            ("internal.segment.bytes", "256"),
+        ],
     )
     .await;
 
@@ -64,7 +67,7 @@ async fn compaction_dedupes_via_native_client() {
     handle.wait_until_partition_present("compacted", 0).await;
 
     // Wait for the topic-config overrides (cleanup.policy=compact +
-    // segment.bytes=256) to propagate from the metadata image through the
+    // internal.segment.bytes=256) to propagate from the metadata image through the
     // ReplicatorSupervisor reconcile loop into the partition's LogConfig.
     // Without this wait, produces can start before the supervisor reconciles,
     // so they land in a default-config Log (1GiB segments, Delete policy) →
@@ -73,7 +76,7 @@ async fn compaction_dedupes_via_native_client() {
     // partition's live LogConfig rather than the metadata image itself.
     handle
         .wait_for_metrics(
-            "cleanup.policy/segment.bytes propagate to partition LogConfig",
+            "cleanup.policy/internal.segment.bytes propagate to partition LogConfig",
             |_m| {
                 handle
                     .partition_log_config_for_test("compacted", 0)
@@ -153,7 +156,7 @@ async fn compaction_dedupes_via_native_client() {
     // We can't directly call `Log::roll_active_segment` from a test, so we
     // produce a small burst of records using a sentinel "pad" key (which the
     // assertions below ignore) until enough bytes accumulate to roll the
-    // segment past `segment.bytes=256`. ~8 small records is more than enough.
+    // segment past `internal.segment.bytes=256`. ~8 small records is more than enough.
     for round in 0..8 {
         let value = format!("padding-{round}");
         produce_record(addr, "compacted", topic_id, b"__pad__", value.as_bytes()).await;

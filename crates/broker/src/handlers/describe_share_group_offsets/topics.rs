@@ -24,11 +24,11 @@ pub(super) fn requested_topics(
     let mut topics: Vec<_> = metadata
         .initialized
         .iter()
-        .filter_map(|(topic_id, partitions)| {
-            image.topic_name_by_id(topic_id).map(|topic_name| {
+        .filter_map(|topic| {
+            image.topic_name_by_id(&topic.topic_id).map(|topic_name| {
                 DescribeShareGroupOffsetsRequestTopic {
                     topic_name: topic_name.into(),
-                    partitions: partitions.clone(),
+                    partitions: topic.partitions.clone(),
                     ..Default::default()
                 }
             })
@@ -44,7 +44,22 @@ mod tests {
     use krabka_metadata::{MetadataRecord, TopicRecord};
 
     use super::*;
-    use crate::handlers::describe_share_group_offsets::test_support::image_with_topic;
+    use crate::{
+        coordinator::unified::share::persistence::InitializedTopic,
+        handlers::describe_share_group_offsets::test_support::image_with_topic,
+    };
+
+    fn initialized_topic(
+        topic_id: uuid::Uuid,
+        topic_name: &str,
+        partitions: Vec<i32>,
+    ) -> InitializedTopic {
+        InitializedTopic {
+            topic_id,
+            topic_name: topic_name.to_owned(),
+            partitions,
+        }
+    }
 
     #[test]
     fn null_topics_resolves_all_initialized_topic_partitions() {
@@ -59,7 +74,11 @@ mod tests {
             replication_factor: 1,
         }));
         let metadata = crate::coordinator::unified::share::persistence::ShareGroupStatePartitionMetadataValue {
-            initialized: vec![(beta_id, vec![0]), (missing_id, vec![7]), (alpha_id, vec![0, 1])],
+            initialized: vec![
+                initialized_topic(beta_id, "beta", vec![0]),
+                initialized_topic(missing_id, "gone", vec![7]),
+                initialized_topic(alpha_id, "alpha", vec![0, 1]),
+            ],
             deleting: Vec::new(),
         };
 

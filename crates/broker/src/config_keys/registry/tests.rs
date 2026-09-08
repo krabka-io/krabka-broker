@@ -143,7 +143,10 @@ fn topic_key_defaults_match_apache_kafka() {
         (INDEX_INTERVAL_BYTES, "4096"),
         (PREALLOCATE, "false"),
         (MESSAGE_TIMESTAMP_TYPE, "CreateTime"),
-        (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "9223372036854775807"),
+        // Kafka's two timestamp windows do not share a default: the future
+        // one is `LOG_MESSAGE_TIMESTAMP_AFTER_MAX_MS_DEFAULT`, one hour, and
+        // the past one is `Long.MAX_VALUE`.
+        (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "3600000"),
         (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "9223372036854775807"),
     ] {
         let row = lookup(ConfigScope::Topic, name).expect(name);

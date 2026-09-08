@@ -40,14 +40,20 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
         state.target.per_member.insert(mid, entry);
     }
     // KIP-932: rehydrate the already-Initialized share-state set so the
-    // lifecycle hook skips partitions whose state survived the restart.
+    // lifecycle hook skips partitions whose state survived the restart. The
+    // record names every topic it lists, so the names come back with it and
+    // the next record the group writes keeps naming those topics even if the
+    // metadata image has since dropped them.
     state.initialized.clear();
-    for (topic_id, partitions) in &seed.state_partition_metadata.initialized {
-        let tid = Uuid(*topic_id.as_bytes());
-        for p in partitions {
+    state.topic_names.clear();
+    for topic in &seed.state_partition_metadata.initialized {
+        let tid = Uuid(*topic.topic_id.as_bytes());
+        state.topic_names.insert(tid, topic.topic_name.clone());
+        for p in &topic.partitions {
             state.initialized.insert((tid, *p));
         }
     }
+    state.forget_unused_topic_names();
     state.dirty = false;
 }
 
@@ -108,6 +114,9 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
+    use crate::coordinator::unified::share::persistence::{
+        InitializedTopic, ShareGroupStatePartitionMetadataValue,
+    };
 
     #[test]
     fn snapshot_seed_round_trips_through_apply() {
@@ -141,5 +150,50 @@ mod tests {
         check!(rm.member_epoch == 3);
         check!(rm.assigned_partitions[&id] == vec![0, 1]);
         check!(restored.target.per_member["m1"][&id] == vec![0, 1]);
+    }
+
+    #[test]
+    fn seed_round_trip_keeps_the_topic_name_of_every_initialized_topic() {
+        // The name a topic was initialized under survives the trip through the
+        // persisted record, so a restarted group keeps naming it even when the
+        // metadata image no longer resolves the id.
+        let id = Uuid([7; 16]);
+        let mut state = ShareGroupState::new("g");
+        state.initialized.insert((id, 0));
+        state.initialized.insert((id, 1));
+        state.topic_names.insert(id, "orders".to_owned());
+
+        let seed = snapshot_seed(&state);
+        let mut restored = ShareGroupState::new("g");
+        apply_seed(&mut restored, seed.clone());
+
+        check!(restored.topic_names == state.topic_names);
+        check!(restored.initialized == state.initialized);
+        assert!(snapshot_seed(&restored).state_partition_metadata == seed.state_partition_metadata);
+    }
+
+    #[test]
+    fn apply_seed_drops_a_name_with_no_initialized_partition() {
+        // A record entry with no partitions contributes nothing to the
+        // Initialized set, so its name is not carried either.
+        let id = Uuid([7; 16]);
+        let mut restored = ShareGroupState::new("g");
+        apply_seed(
+            &mut restored,
+            ShareGroupSeed {
+                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                    initialized: vec![InitializedTopic {
+                        topic_id: uuid::Uuid::from_bytes([7; 16]),
+                        topic_name: "orders".to_owned(),
+                        partitions: Vec::new(),
+                    }],
+                    deleting: Vec::new(),
+                },
+                ..Default::default()
+            },
+        );
+
+        check!(restored.topic_names.is_empty());
+        check!(!restored.initialized.iter().any(|(tid, _)| *tid == id));
     }
 }

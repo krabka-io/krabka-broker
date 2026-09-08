@@ -20,9 +20,9 @@ use krabka_broker::Broker;
 #[ignore = "requires Docker"]
 async fn tiered_storage_round_trip_through_minio() {
     const TOPIC: &str = "krabka-tiered-minio-itest";
-    // 200 records of ~30 bytes each → ~6 KiB total. With `segment.bytes=2048`
-    // that rolls into ~3 sealed segments plus the active one — enough to
-    // exercise the copy path multiple times.
+    // 200 records of ~30 bytes each → ~6 KiB total. With the broker's
+    // `TIERED_SEGMENT_SIZE` default that rolls into ~3 sealed segments plus
+    // the active one — enough to exercise the copy path multiple times.
     const RECORDS: usize = 200;
 
     let minio_port = minio_port();
@@ -38,7 +38,7 @@ async fn tiered_storage_round_trip_through_minio() {
         secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
         allow_http: true,
         // Force multipart on segments above 4 KiB so the multipart code
-        // path actually fires for the small `segment.bytes=2048` test
+        // path actually fires for the small `TIERED_SEGMENT_SIZE` test
         // fixture. `mc ls` doesn't distinguish single-PUT from multipart-
         // composed objects on read, so the consume assertion below
         // covers both paths transparently.
@@ -205,9 +205,9 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
 #[ignore = "requires Docker"]
 async fn tiered_storage_topic_rlmm_survives_restart() {
     const TOPIC: &str = "krabka-tiered-restart-itest";
-    // 200 records of ~30 bytes each → ~6 KiB total. With `segment.bytes=2048`
-    // that rolls into ~3 sealed segments plus the active one — enough to
-    // exercise the copy path multiple times.
+    // 200 records of ~30 bytes each → ~6 KiB total. With the broker's
+    // `TIERED_SEGMENT_SIZE` default that rolls into ~3 sealed segments plus
+    // the active one — enough to exercise the copy path multiple times.
     const RECORDS: usize = 200;
 
     let minio_port = minio_port();

@@ -30,13 +30,13 @@
 //!
 //! | topic | policy | segment | retention | what it exercises |
 //! | --- | --- | --- | --- | --- |
-//! | `soak-retention` | `delete` | `segment.bytes=64 KiB`, `segment.ms=5s` | `retention.ms=60s`, `retention.bytes=4 MiB` | segment roll, then deletion of the sealed segments |
-//! | `soak-compacted` | `compact` | `segment.bytes=64 KiB`, `segment.ms=5s` | `min.cleanable.dirty.ratio=0.01`, `min.compaction.lag.ms=0` | the cleaner, sweeping every second |
+//! | `soak-retention` | `delete` | `internal.segment.bytes=64 KiB`, `segment.ms=5s` | `retention.ms=60s`, `retention.bytes=4 MiB` | segment roll, then deletion of the sealed segments |
+//! | `soak-compacted` | `compact` | `internal.segment.bytes=64 KiB`, `segment.ms=5s` | `min.cleanable.dirty.ratio=0.01`, `min.compaction.lag.ms=0` | the cleaner, sweeping every second |
 //! | `soak-verify` | `delete` | default | unlimited | the acked records read back at the end |
 //!
 //! A 64 KiB segment is what makes the roll count reachable: at this suite's
 //! produce rate each partition of `soak-retention` fills one every half-minute
-//! or so, and the roll is driven by `segment.bytes` on the append path.
+//! or so, and the roll is driven by `internal.segment.bytes` on the append path.
 //! `--cleaner-interval` and `--log-retention-check-interval` are both set to
 //! one second (the broker defaults are thirty seconds and five minutes), so a
 //! three-minute local run gets around 180 opportunities of each kind rather
@@ -271,7 +271,7 @@ async fn create_topics(bootstrap: &str) {
             6,
             &[
                 ("cleanup.policy", "delete"),
-                ("segment.bytes", "65536"),
+                ("internal.segment.bytes", "65536"),
                 ("segment.ms", "5000"),
                 ("retention.ms", "60000"),
                 ("retention.bytes", "4194304"),
@@ -282,7 +282,7 @@ async fn create_topics(bootstrap: &str) {
             3,
             &[
                 ("cleanup.policy", "compact"),
-                ("segment.bytes", "65536"),
+                ("internal.segment.bytes", "65536"),
                 ("segment.ms", "5000"),
                 ("min.cleanable.dirty.ratio", "0.01"),
                 ("min.compaction.lag.ms", "0"),

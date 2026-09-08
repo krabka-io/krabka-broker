@@ -134,10 +134,13 @@ pub(crate) enum ValueCheck {
     /// One of a closed list, in the order the refusal names them.
     OneOf(&'static [&'static str]),
     /// An `i64` no smaller than the bound. Only a [`ConfigType::Long`] row
-    /// may carry it.
+    /// may carry it. A bound of `i64::MIN` is how a row spells the key Kafka
+    /// defines with no validator at all, such as `retention.bytes`: every
+    /// value the type holds is accepted, and only the parse can fail.
     I64AtLeast(i64),
     /// An `i32` no smaller than the bound, which is the width Kafka's `INT`
-    /// carries on the wire.
+    /// carries on the wire. `i32::MIN` spells "no validator", as it does for
+    /// `internal.segment.bytes`.
     I32AtLeast(i32),
     /// An `i32` inside a closed range, which is what Kafka's `between(min,
     /// max)` validator enforces. `compression.lz4.level` and
@@ -274,6 +277,12 @@ pub(super) const GZIP_MIN_LEVEL: i32 = 1;
 pub(super) const GZIP_MAX_LEVEL: i32 = 9;
 pub(super) const GZIP_DEFAULT_LEVEL: i32 = -1;
 
+/// Kafka's `segment.bytes` floor. `LogConfig` validates the key with
+/// `atLeast(1024 * 1024)`, so a topic cannot ask for a segment smaller than
+/// one mebibyte; Kafka's own coordinators reach below it through
+/// `internal.segment.bytes`, which `defineInternal` gives no validator at all.
+const SEGMENT_BYTES_MIN: i32 = 1024 * 1024;
+
 /// The two values every boolean key accepts, in the order a refusal names
 /// them.
 pub(super) const BOOLEAN_VALUES: &[&str] = &["true", "false"];
@@ -312,19 +321,19 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("-1"),
-            "Maximum partition size before old segments are deleted.",
-            ValueCheck::I64AtLeast(RETENTION_UNLIMITED),
+            "Maximum partition size before old segments are deleted. -1, the default, removes the bound; any other negative value means the same thing, because Kafka defines no validator for the key and its retention test is `retention.bytes < 0`.",
+            ValueCheck::I64AtLeast(i64::MIN),
         )
     },
     ConfigKey {
-        type_note: Some("bytes"),
+        type_note: Some("bytes, >=1048576"),
         ..key(
             SEGMENT_BYTES,
             ConfigScope::Topic,
             ConfigType::Int,
             Some("1073741824"),
-            "Target size of a single log segment file.",
-            ValueCheck::I32AtLeast(1),
+            "Target size of a single log segment file. Kafka floors it at one mebibyte; a coordinator that needs a smaller segment sets internal.segment.bytes, which carries no floor.",
+            ValueCheck::I32AtLeast(SEGMENT_BYTES_MIN),
         )
     },
     key(
@@ -595,7 +604,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Int,
             None,
-            "Kafka's internal segment-size override, which its own coordinators set on the internal topics they create. Kafka's ConfigDef marks it internal, which hides it from the CLI's help but not from topic-config validation, so an alter carrying it is accepted. Stored and reported only: krabka rolls on segment.bytes.",
+            "Kafka's internal segment-size override, which its own coordinators set on the internal topics they create. Kafka's ConfigDef marks it internal, which hides it from the CLI's help but not from topic-config validation, so an alter carrying it is accepted. When set it is the segment size the log rolls on, in place of segment.bytes, and it carries no floor of its own.",
             ValueCheck::I32AtLeast(i32::MIN),
         )
     },
@@ -720,8 +729,8 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             MESSAGE_TIMESTAMP_AFTER_MAX_MS,
             ConfigScope::Topic,
             ConfigType::Long,
-            Some("9223372036854775807"),
-            "How far ahead of the broker's clock a producer timestamp may sit. A batch holding a record past the window is refused with INVALID_TIMESTAMP. The default of Long.MAX_VALUE removes the bound, and a LogAppendTime topic ignores it, as in Kafka.",
+            Some("3600000"),
+            "How far ahead of the broker's clock a producer timestamp may sit. A batch holding a record past the window is refused with INVALID_TIMESTAMP. The default is one hour, as in Kafka; Long.MAX_VALUE removes the bound, and a LogAppendTime topic ignores it. A delivery.mode=scheduled topic ignores it too, because there the timestamp is the record's delivery time and delivery.max.delay.ms is the bound on it.",
             ValueCheck::I64AtLeast(0),
         )
     },

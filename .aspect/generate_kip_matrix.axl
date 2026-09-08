@@ -135,10 +135,10 @@ STATUS = {
     "OutOfScope": "Out of scope",
 }
 
-# The one non-JVM client suite, and what it drives.
+# The one non-JVM client suite. Which of its tests establish a row is the row's
+# own `tests` list, and which clients a test drives is read out of the suite, so
+# neither is written down here.
 _LIBRDKAFKA = "crates/broker/tests/librdkafka_conformance.rs"
-_LIBRDKAFKA_TEST = "round_trip_group_join_and_api_versions_with_kcat"
-_CLIENT_EVIDENCE = ["NotCovered", "Kcat"]
 
 # The scope decision the out-of-scope rows cite, and the words the cited line
 # has to still say.
@@ -553,11 +553,8 @@ def parse_annotations(catalog, source = _API_CATALOG):
     seen = {}
     for body in annotation_bodies(catalog[start:end]):
         status = annotation_variant(body, "status", "KipStatus", source)
-        clients = annotation_variant(body, "clients", "ClientEvidence", source)
         if status not in STATUS:
             fail("unknown KipStatus variant %s in %s" % (status, source))
-        if clients not in _CLIENT_EVIDENCE:
-            fail("unknown ClientEvidence variant %s in %s" % (clients, source))
         key = annotation_string(body, "key", source)
         if key in seen:
             fail("duplicate KIP_ANNOTATIONS keys in %s" % source)
@@ -568,7 +565,6 @@ def parse_annotations(catalog, source = _API_CATALOG):
             status = status,
             module = annotation_string(body, "module", source),
             tests = annotation_tests(body, source),
-            clients = clients,
             note = annotation_string(body, "note", source),
         ))
     if not rows:
@@ -767,6 +763,129 @@ def librdkafka_clients(suite, source = _LIBRDKAFKA):
         clients.append(tuple(fields))
     return clients
 
+def suite_functions(text, source = _LIBRDKAFKA):
+    """Every free function of a Rust suite, as `struct(name, body)`.
+
+    The suite is rustfmt output, so a free function opens at column zero and
+    closes on a line that is exactly `}`. Reading a body that way rather than
+    by matching braces keeps a `{}` inside a format string -- which these
+    suites are full of -- from being read as one.
+    """
+    functions = []
+    lines = text.splitlines()
+    opened = -1
+    name = ""
+    for index in range(len(lines)):
+        line = lines[index]
+        if opened < 0:
+            found = function_name(line)
+            if found:
+                name = found
+                opened = index + 1
+        elif line == "}":
+            functions.append(struct(name = name, body = "\n".join(lines[opened:index])))
+            opened = -1
+    if opened >= 0:
+        fail("unterminated fn %s in %s" % (name, source))
+    return functions
+
+def function_name(line):
+    """The name of the free function `line` opens, or `""`.
+
+    `pub`, `pub(crate)` and `async` may precede `fn`, and the name has to be
+    followed by a parameter or generic list, so a `fn` inside prose does not
+    open one.
+    """
+    rest = line
+    for word in ("pub(crate) ", "pub ", "async "):
+        if rest.startswith(word):
+            rest = rest[len(word):]
+    if not rest.startswith("fn "):
+        return ""
+    rest = rest[len("fn "):]
+    end = 0
+    for _ in range(200):
+        if end < len(rest) and is_word_char(rest[end]):
+            end += 1
+        else:
+            break
+    if end == 0 or rest[end:end + 1] not in ("(", "<"):
+        return ""
+    return rest[:end]
+
+def _bracket_index(text, at):
+    """The `n` of the `[n]` at `at`, or `None` when `at` opens no index."""
+    if text[at:at + 1] != "[":
+        return None
+    end = at + 1
+    for _ in range(32):
+        if end < len(text) and text[end].isdigit():
+            end += 1
+        else:
+            break
+    if end == at + 1 or text[end:end + 1] != "]":
+        return None
+    return int(text[at + 1:end])
+
+def direct_client_cases(body, count, source = _LIBRDKAFKA):
+    """The `CLIENTS` rows a function body names itself.
+
+    `CLIENTS[n]` names one row; naming the table any other way -- iterating it,
+    passing it on -- names all of them. A body that names none drives no client
+    of its own, and may still drive one through a helper it calls.
+    """
+    found = {}
+    at = 0
+    for _ in range(_SCAN_LIMIT):
+        opening = body.find("CLIENTS", at)
+        if opening < 0:
+            break
+        at = opening + len("CLIENTS")
+        if not _at_word_boundary(body, opening):
+            continue
+        if at < len(body) and is_word_char(body[at]):
+            continue
+        index = _bracket_index(body, at)
+        if index == None:
+            return list(range(count))
+        if index >= count:
+            fail("CLIENTS[%d] in %s is past the end of the table" % (index, source))
+        found[index] = True
+    return sorted(found)
+
+def calls_function(body, name):
+    """Whether `body` calls `name` as a whole word."""
+    at = 0
+    for _ in range(_SCAN_LIMIT):
+        found = body.find(name, at)
+        if found < 0:
+            return False
+        at = found + len(name)
+        if _at_word_boundary(body, found) and body[at:at + 1] == "(":
+            return True
+    fail("generate-kip-matrix: unbounded scan for a call to %s" % name)
+
+def client_cases_by_function(suite, count, source = _LIBRDKAFKA):
+    """Which `CLIENTS` rows each free function of the suite drives.
+
+    A function reaches a client either itself or through a helper that returns
+    one, which is the shape the suite has: the shared test iterates the table
+    and the newer test calls a helper for the single row it is about. One level
+    of call is as far as this looks, which is as far as Starlark's missing
+    recursion allows and as far as the suite goes.
+    """
+    functions = suite_functions(suite, source)
+    direct = {found.name: direct_client_cases(found.body, count, source) for found in functions}
+    resolved = {}
+    for found in functions:
+        cases = {index: True for index in direct[found.name]}
+        for other in functions:
+            if other.name != found.name and calls_function(found.body, other.name):
+                for index in direct[other.name]:
+                    cases[index] = True
+        resolved[found.name] = sorted(cases)
+    return resolved
+
 def citations(note):
     """Every `crates/<path>.rs:<line>` in `note`, as `struct(start, end, path, line)`.
 
@@ -922,22 +1041,46 @@ def throttle_echo_rows(divergences):
         for key, versions, reach in divergences
     ])
 
-def kcat_evidence(image, program, library):
-    """The client-family column for a row whose evidence is the kcat suite."""
+def client_evidence(client, test, path = _LIBRDKAFKA):
+    """The client-family fragment for one client and the test that drove it."""
+    image, program, library = client
     return "%s %s (%s): [`%s`](../%s)" % (
         program,
         image.rsplit(":", 1)[1],
         library,
-        _LIBRDKAFKA_TEST,
-        _LIBRDKAFKA,
+        test,
+        path,
     )
 
-def kip_row(row, tests, images, kcat, note):
+def client_cell(tests, clients, driven, key, path = _LIBRDKAFKA):
+    """The client-family cell for a row, from the client tests the row lists.
+
+    The column is not a claim of its own: a row is credited with a client
+    exactly when one of the tests it already cites drives that client. `driven`
+    says which `clients` each test function of the suite reaches, so a test
+    added to the suite is attributed by what it runs rather than by its name. A
+    row citing the suite file with no function named is credited with every
+    client in it, which is what running the whole suite establishes.
+    """
+    fragments = []
+    for test in tests:
+        cited, _, function = test.partition("::")
+        if cited != path:
+            continue
+        cases = driven.get(function, []) if function else list(range(len(clients)))
+        if not cases:
+            fail("%s lists %s, which drives no client of %s" % (key, test, path))
+        label = function or path[len("crates/"):]
+        for index in cases:
+            fragments.append(client_evidence(clients[index], label, path))
+    return "<br>".join(fragments) or "none"
+
+def kip_row(row, tests, images, clients, note):
     """One rendered per-KIP row.
 
     `tests` are the already-linked test cells, `images` the Kafka image keys
-    the listed suites load, `kcat` the client-family cell, and `note` the note
-    with its citations linked and its pipes escaped.
+    the listed suites load, `clients` the client-family cell, and `note` the
+    note with its citations linked and its pipes escaped.
     """
     return "| %s | %s | %s | [`%s`](../%s) | %s | %s | %s | %s |" % (
         row.key,
@@ -947,7 +1090,7 @@ def kip_row(row, tests, images, kcat, note):
         row.module,
         "<br>".join(tests) or "none",
         ", ".join(["`" + image + "`" for image in images]) or "in process",
-        kcat if row.clients == "Kcat" else "none",
+        clients,
         note,
     )
 
@@ -1009,9 +1152,12 @@ not define.
 - **Kafka image** is what the listed suites run against, read from each crate's
   `BUILD.bazel` `docker` map and pinned below; `in process` means no suite in
   the row starts a Kafka container.
-- **librdkafka** is the non-JVM client evidence:
+- **librdkafka** is the non-JVM client evidence, and it is read from the row's
+  own tests: a row is credited with a client exactly when a test it lists in
   [`librdkafka_conformance`](../crates/broker/tests/librdkafka_conformance.rs)
-  drives the stock `kcat` image against the broker.
+  drives that client. The suite's `CLIENTS` table names each one, and the cell
+  names the test that ran it, so a row citing the test that drives only the
+  librdkafka 2.x image is credited with that image and not the older one.
 
 | KIP | Status | Contract | Owner | Tests | Kafka image | librdkafka | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -1215,24 +1361,21 @@ def _throttle_echo(fs, root):
     return throttle_echo_rows(parse_divergences(audit))
 
 def _librdkafka_evidence(fs, root, pins, broker_build):
-    """What the librdkafka suite establishes, for the client-family column."""
-    suite = _read(fs, root, _LIBRDKAFKA)
-    _require(
-        defines_fn(suite, _LIBRDKAFKA_TEST, prefix = "async fn "),
-        _LIBRDKAFKA,
-        "async fn %s()" % _LIBRDKAFKA_TEST,
-    )
+    """The clients the librdkafka suite drives, and which test drives which.
 
+    Every client in the table has to be an image Bazel loads for that suite and
+    pins, because a row's client evidence is only as good as the image that
+    produced it.
+    """
+    suite = _read(fs, root, _LIBRDKAFKA)
     clients = librdkafka_clients(suite)
     keys = docker_map(broker_build, _BROKER_BUILD).get("librdkafka_conformance", [])
     loaded = [image_for(pins.images, key) for key in keys]
-    fragments = []
-    for image, program, library in clients:
+    for image, _, _ in clients:
         if image not in loaded:
             fail("librdkafka client image %s is not one Bazel loads" % image)
         _require_pinned(pins, keys[loaded.index(image)])
-        fragments.append(kcat_evidence(image, program, library))
-    return "<br>".join(fragments)
+    return clients, client_cases_by_function(suite, len(clients))
 
 def _kip_inventory(fs, root, catalog):
     """Every `KIP-<n>` a file under `crates/` names.
@@ -1378,8 +1521,7 @@ def _kip_rows(fs, root, pins, broker_build):
     if ordered != kip_order(ordered):
         fail("KIP_ANNOTATIONS is not in KIP order")
 
-    kcat = _librdkafka_evidence(fs, root, pins, broker_build)
-    kcat_test = "%s::%s" % (_LIBRDKAFKA, _LIBRDKAFKA_TEST)
+    clients, driven = _librdkafka_evidence(fs, root, pins, broker_build)
     maps = {"broker": docker_map(broker_build, _BROKER_BUILD)}
     used = {}
     rendered = []
@@ -1394,9 +1536,6 @@ def _kip_rows(fs, root, pins, broker_build):
         problem = decision_row_problem(row, mixed_quorum, forwarding, citation)
         if problem:
             fail(problem)
-        if row.clients == "Kcat" and kcat_test not in row.tests:
-            fail("%s claims kcat evidence without listing %s" % (row.key, _LIBRDKAFKA_TEST))
-
         images = []
         tests = []
         for test in row.tests:
@@ -1418,7 +1557,7 @@ def _kip_rows(fs, root, pins, broker_build):
             row,
             tests,
             images,
-            kcat,
+            client_cell(row.tests, clients, driven, row.key),
             link_citations(row.note, note).replace("|", "\\|"),
         ))
     return "\n".join(rendered), image_legend(used, pins.images, pins.module)

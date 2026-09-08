@@ -7,7 +7,10 @@
 use krabka_broker::{Broker, BrokerConfig};
 use krabka_log::LogConfig;
 
-use super::ports::{broker0_advertised, broker0_listen, controller_addr_0};
+use super::{
+    ports::{broker0_advertised, broker0_listen, controller_addr_0},
+    tiered_workload::TIERED_SEGMENT_SIZE,
+};
 
 /// Same shape as [`start_host_broker`] but with the S3 tiered-storage
 /// backend wired in and a lower `RemoteLogManager` tick, so the acceptance
@@ -47,7 +50,13 @@ pub(crate) fn start_host_broker_with_minio_tier(
         listen_addr,
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
+        // The tiered topics these suites create override no segment size —
+        // no old JVM `TopicCommand` can name a sub-1-MiB one — so they
+        // inherit this broker default. See `TIERED_SEGMENT_SIZE`.
+        log_config: LogConfig {
+            segment_size: TIERED_SEGMENT_SIZE,
+            ..LogConfig::default()
+        },
         node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
         controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],

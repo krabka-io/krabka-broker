@@ -133,7 +133,7 @@ async fn create_tiered_topic(client: &Client) {
                 replication_factor: 1,
                 configs: vec![
                     config("remote.storage.enable", "true"),
-                    config("segment.bytes", "1024"),
+                    config("internal.segment.bytes", "1024"),
                     // Evict every copied segment from local disk, so the reads
                     // below go to the remote tier.
                     config("local.retention.bytes", "1"),

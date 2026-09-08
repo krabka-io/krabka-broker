@@ -137,7 +137,15 @@ pub(crate) fn fetch_response(
                 // so the otherwise-unused LSO field carries that frontier.
                 last_stable_offset: log_end_offset,
                 log_start_offset,
-                records: (!records.is_empty()).then_some(RecordsPayload::Raw(records)),
+                // An empty record set, never a null one. This transport is
+                // krabka-to-krabka, so no third-party decoder reads it today
+                // and nothing is broken by the null -- but Kafka's own raft
+                // fetch writes `MemoryRecords.EMPTY` here too, and a reader
+                // that refuses a negative length (sarama's `getSubset` does)
+                // would drop the connection on it. The client-facing encoders
+                // already guarantee this; a private transport is not a reason
+                // to be the one path that does not.
+                records: Some(RecordsPayload::Raw(records)),
                 diverging_epoch: diverging_epoch.map_or_else(
                     Default::default,
                     |(epoch, end_offset)| fetch_resp::EpochEndOffset {

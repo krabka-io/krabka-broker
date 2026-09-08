@@ -265,17 +265,10 @@ const KRABKA_TOPIC_CONFIGS: &[&str] = &[
 /// This is not a place to park a fresh divergence. A row here is a behaviour
 /// krabka has not implemented, stated so that
 /// [`kafka_topic_key_types_and_defaults_match`] still pins every other key.
-const DEFAULT_DIVERGENCES: &[(&str, &str)] = &[
-    // Kafka 4.3.1 defaults `message.timestamp.after.max.ms` to one hour, so a
-    // stock Kafka topic refuses a record stamped further ahead than that.
-    // krabka reports `Long.MAX_VALUE` and enforces no bound unless the topic
-    // sets one, because a `delivery.mode=scheduled` topic (KFC-1) carries
-    // timestamps up to `delivery.max.delay.ms` -- seven days by default --
-    // into the future by design, and a one-hour default would refuse them.
-    // Closing this needs the produce path to exempt scheduled delivery, which
-    // is a change to `handlers::produce`, not to the registry.
-    ("message.timestamp.after.max.ms", "9223372036854775807"),
-];
+/// The table is empty, and
+/// [`every_recorded_divergence_is_still_a_divergence`] is what keeps a row
+/// from outliving the gap it names.
+const DEFAULT_DIVERGENCES: &[(&str, &str)] = &[];
 
 fn krabka_topic_keys() -> Vec<&'static str> {
     registry::keys_in(ConfigScope::Topic)
@@ -405,7 +398,6 @@ fn an_inert_key_says_so_where_an_operator_reads_it() {
         "compression.gzip.level",
         "compression.lz4.level",
         "compression.zstd.level",
-        "internal.segment.bytes",
         "segment.index.bytes",
         "segment.jitter.ms",
         "file.delete.delay.ms",
@@ -450,12 +442,49 @@ fn kafka_refuses_what_krabka_refuses() {
         // `Invalid value -1 for configuration max.message.bytes: Value must
         // be at least 0`.
         ("max.message.bytes", "-1"),
+        // `Invalid value 1048575 for configuration segment.bytes: Value must
+        // be at least 1048576`. `LogConfig` validates the key with
+        // `atLeast(1024 * 1024)`; `internal.segment.bytes` is the key that
+        // reaches below the floor, and `defineInternal` gives it no validator.
+        ("segment.bytes", "1048575"),
+        ("segment.bytes", "0"),
+        // `Invalid value none for configuration compression.type: String must
+        // be one of: uncompressed, zstd, lz4, snappy, gzip, producer`.
+        // `LogConfig` validates the key with
+        // `ValidString.in(BrokerCompressionType.names())`, and `none` is a
+        // producer-side codec name that enum does not carry.
+        ("compression.type", "none"),
     ] {
         check!(
             validate_topic_config(name, value).is_err(),
             "{name}={value} must be refused"
         );
     }
+}
+
+/// Not every Kafka key carries a validator. `LogConfig` declares
+/// `retention.bytes` as a bare `LONG` with a default and nothing else, so it
+/// accepts every value the type holds -- `-2` included, which `retention.ms`
+/// next to it refuses. A `MirrorMaker` replay of a source topic carrying one
+/// has to survive here, so krabka may not invent a floor Kafka does not have.
+#[test]
+fn a_key_kafka_gives_no_validator_accepts_every_value_of_its_type() {
+    for value in [
+        "-9223372036854775808",
+        "-2",
+        "-1",
+        "0",
+        "9223372036854775807",
+    ] {
+        check!(
+            validate_topic_config("retention.bytes", value) == Ok(()),
+            "retention.bytes={value}"
+        );
+    }
+    check!(
+        validate_topic_config("retention.bytes", "9223372036854775808").is_err(),
+        "a value Kafka's LONG cannot hold is still refused"
+    );
 }
 
 /// The levels Kafka's own validators accept at each end of their range.

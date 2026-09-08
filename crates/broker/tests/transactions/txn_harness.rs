@@ -38,7 +38,7 @@ pub async fn create_topic_with_segment_bytes(bootstrap: &str, name: &str, bytes:
         bootstrap,
         name,
         vec![CreatableTopicConfig {
-            name: "segment.bytes".into(),
+            name: "internal.segment.bytes".into(),
             value: Some(bytes.to_string()),
             ..Default::default()
         }],

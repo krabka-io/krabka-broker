@@ -295,20 +295,30 @@ pub(crate) fn parse_dirty_ratio(value: &str) -> Result<krabka_units::Ratio, Stri
 /// special `producer` value, which is the Kafka default and does no
 /// broker-side re-encoding. It returns `Ok(Some(_))` for any concrete codec.
 /// It returns `Err` for an unknown name.
+///
+/// The accepted set is Kafka's own and nothing else. `LogConfig` validates the
+/// key with `ValidString.in(BrokerCompressionType.names())`, and that enum has
+/// six members -- `uncompressed`, `zstd`, `lz4`, `snappy`, `gzip`, `producer`.
+/// `none` is a *producer*-side codec name, not a broker-side one, and
+/// `apache/kafka:4.3.1` refuses it with `Invalid value none for configuration
+/// compression.type: String must be one of: uncompressed, zstd, lz4, snappy,
+/// gzip, producer`. Accepting it here would let a topic be created against
+/// krabka that no Kafka broker would accept the config of, which is the
+/// direction of divergence that breaks a migration back.
 pub(crate) fn parse_compression_type(
     value: &str,
 ) -> Result<Option<krabka_compression::CompressionType>, String> {
     use krabka_compression::CompressionType;
     match value {
         "producer" => Ok(None),
-        "uncompressed" | "none" => Ok(Some(CompressionType::None)),
+        "uncompressed" => Ok(Some(CompressionType::None)),
         "gzip" => Ok(Some(CompressionType::Gzip)),
         "snappy" => Ok(Some(CompressionType::Snappy)),
         "lz4" => Ok(Some(CompressionType::Lz4)),
         "zstd" => Ok(Some(CompressionType::Zstd)),
         other => Err(format!(
             "compression.type=`{other}` not recognized; expected one of \
-             producer, uncompressed, gzip, snappy, lz4, zstd"
+             uncompressed, zstd, lz4, snappy, gzip, producer"
         )),
     }
 }

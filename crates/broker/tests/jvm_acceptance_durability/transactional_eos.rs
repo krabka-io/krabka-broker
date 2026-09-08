@@ -118,6 +118,19 @@ public final class ZombieProducer {
 async fn transactional_console_producer_eos() {
     const TOPIC: &str = "krabka-txn-itest";
     const ZOMBIE_TOPIC: &str = "krabka-txn-zombie";
+    /// Segment size every broker in this cluster boots with, so that each
+    /// batch the transactional producer writes lands in a segment of its own
+    /// and the abort marker's transaction index is sealed before the reads.
+    ///
+    /// It is a broker default, not a topic override: Kafka's topic-level
+    /// `segment.bytes` has a 1 MiB floor that krabka matches, and the only
+    /// topic config below it — Kafka 4.x's `internal.segment.bytes` — is
+    /// rejected client-side by the `TopicCommand` in the image this suite
+    /// pins. Kafka floors its broker-level `log.segment.bytes` at 1 MiB too,
+    /// but that validates a parsed broker config; the harness sets the struct
+    /// field directly, as Kafka's own tests do. 14 bytes is below any batch,
+    /// so no batch can ever fit twice.
+    const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(14);
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -159,7 +172,12 @@ async fn transactional_console_producer_eos() {
             listen_addr,
             advertised_listener: advertised_listener.clone(),
             log_dir: dir.path().to_path_buf(),
-            log_config: LogConfig::default(),
+            // Neither topic below overrides a segment size, so both inherit
+            // this one. See `SEGMENT_SIZE`.
+            log_config: LogConfig {
+                segment_size: SEGMENT_SIZE,
+                ..LogConfig::default()
+            },
             node_id: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
             controller_listen_addr: format!("0.0.0.0:{}", controller_ports[i])
                 .parse()
@@ -221,20 +239,21 @@ async fn transactional_console_producer_eos() {
         "1",
         "--replication-factor",
         "1",
-        "--config",
-        "segment.bytes=14",
         "--bootstrap-server",
         &bootstrap_1,
     ]);
+    // Wait for the partition to materialize on the broker that leads it: the
+    // producer's first batch must not land before the log exists with the
+    // segment size the cluster booted with.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     while !cluster.iter().any(|(broker, _)| {
         broker
             .partition_log_config_for_test(TOPIC, 0)
-            .is_some_and(|config| config.segment_size == krabka_units::bytes(14))
+            .is_some_and(|config| config.segment_size == SEGMENT_SIZE)
     }) {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "segment.bytes did not reach the transaction log"
+            "the transaction-log partition never materialized with a {SEGMENT_SIZE:?} segment"
         );
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }

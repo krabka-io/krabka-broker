@@ -5,14 +5,20 @@ load(
     "annotation_bodies",
     "api_versions_rows",
     "built_image_keys",
+    "calls_function",
     "catalog_outside_annotations",
     "citations",
+    "client_cases_by_function",
+    "client_cell",
+    "client_evidence",
     "const_str_value",
     "decision_row_problem",
     "declares_fn",
     "defines_fn",
     "digest_for",
+    "direct_client_cases",
     "docker_map",
+    "function_name",
     "image_for",
     "image_legend",
     "intent_cell",
@@ -20,7 +26,6 @@ load(
     "inventory_problem",
     "is_word_char",
     "kafka_image_keys",
-    "kcat_evidence",
     "kip_mentions",
     "kip_order",
     "kip_order_key",
@@ -33,6 +38,7 @@ load(
     "parse_divergences",
     "parse_inventory",
     "render_page",
+    "suite_functions",
     "suite_stem",
     "test_cell",
     "throttle_echo_rows",
@@ -241,7 +247,6 @@ _ANNOTATIONS = "\n".join([
     '            "crates/broker/tests/client_quotas.rs",',
     '            "crates/broker/tests/client_quotas/throttling.rs",',
     "        ],",
-    "        clients: ClientEvidence::NotCovered,",
     '        note: "",',
     "    },",
     "    KipAnnotation {",
@@ -250,7 +255,6 @@ _ANNOTATIONS = "\n".join([
     "        status: KipStatus::OutOfScope,",
     '        module: "crates/raft/src/lib.rs",',
     "        tests: &[],",
-    "        clients: ClientEvidence::Kcat,",
     '        note: "Outside the target: crates/raft/src/lib.rs:52.",',
     "    },",
     "];",
@@ -282,7 +286,6 @@ def _test_parse_annotations(_ctx):
                 "crates/broker/tests/client_quotas.rs",
                 "crates/broker/tests/client_quotas/throttling.rs",
             ],
-            clients = "NotCovered",
             note = "",
         ),
     )
@@ -295,7 +298,6 @@ def _test_parse_annotations(_ctx):
             status = "OutOfScope",
             module = "crates/raft/src/lib.rs",
             tests = [],
-            clients = "Kcat",
             note = "Outside the target: crates/raft/src/lib.rs:52.",
         ),
     )
@@ -651,23 +653,167 @@ def _test_intent_problem_rejects(_ctx):
         "api key 3 records an intent but its verdict is same",
     )
 
-def _test_kcat_evidence(_ctx):
+_SUITE = "\n".join([
+    "/// Every client this suite drives. CLIENTS is named in prose here.",
+    "const CLIENTS: [ClientCase; 2] = [",
+    "    ClientCase {",
+    '        image: "mirror.gcr.io/edenhill/kcat:1.7.1",',
+    '        program: "kcat",',
+    '        library: "librdkafka 1.8.2",',
+    "    },",
+    "    ClientCase {",
+    '        image: "docker.io/krabka-io/kcat:librdkafka-2.15.0",',
+    '        program: "kcat",',
+    '        library: "librdkafka 2.15.0",',
+    "    },",
+    "];",
+    "",
+    "/// The librdkafka 2.x row of [`CLIENTS`].",
+    "fn librdkafka_2x() -> &'static ClientCase {",
+    "    &CLIENTS[1]",
+    "}",
+    "",
+    "fn run_client(image: &str, program: &str) -> Output {",
+    '    panic!("{program} against {image} failed: {}", "{}");',
+    "}",
+    "",
+    "async fn round_trip_group_join_and_api_versions_with_kcat() {",
+    "    for case in CLIENTS.iter() {",
+    "        run_client(case.image, case.program);",
+    "    }",
+    "}",
+    "",
+    "async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {",
+    "    let case = librdkafka_2x();",
+    "    run_client(case.image, case.program);",
+    "}",
+])
+
+_CLIENTS = [
+    ("mirror.gcr.io/edenhill/kcat:1.7.1", "kcat", "librdkafka 1.8.2"),
+    ("docker.io/krabka-io/kcat:librdkafka-2.15.0", "kcat", "librdkafka 2.15.0"),
+]
+
+def _test_function_name(_ctx):
+    check_eq("a free function", function_name("fn run_client(image: &str) -> Output {"), "run_client")
+    check_eq("an async one", function_name("async fn round_trip() {"), "round_trip")
+    check_eq("a public one", function_name("pub fn broker0_advertised() -> &'static str {"), "broker0_advertised")
+    check_eq("a generic one", function_name("fn parse<T>(text: &str) -> T {"), "parse")
+    check_eq("an indented method is not a free function", function_name("    fn helper() {"), "")
+    check_eq("prose about fn is not one", function_name("/// The fn below."), "")
+    check_eq("a struct is not one", function_name("struct ClientCase {"), "")
+
+def _test_suite_functions(_ctx):
+    functions = suite_functions(_SUITE)
     check_eq(
-        "the client-family cell names the tag, not the whole image",
-        kcat_evidence("mirror.gcr.io/edenhill/kcat:1.7.1", "kcat", "librdkafka 1.8.2"),
+        "one entry per free function, in source order",
+        [found.name for found in functions],
+        [
+            "librdkafka_2x",
+            "run_client",
+            "round_trip_group_join_and_api_versions_with_kcat",
+            "next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
+        ],
+    )
+    check_eq("the body is what the braces hold", functions[0].body, "    &CLIENTS[1]")
+    check(
+        functions[1].body.find('"{}"') >= 0,
+        "a brace inside a format string does not close the body",
+    )
+
+def _test_direct_client_cases(_ctx):
+    check_eq("an indexed row", direct_client_cases("    &CLIENTS[1]", 2), [1])
+    check_eq("the whole table", direct_client_cases("    for case in CLIENTS.iter() {}", 2), [0, 1])
+    check_eq("no mention at all", direct_client_cases("    run_client(image);", 2), [])
+    check_eq(
+        "a longer identifier that merely starts with it",
+        direct_client_cases("    let CLIENTS_SEEN = 1;", 2),
+        [],
+    )
+    check_eq(
+        "two indexed rows, deduplicated and ordered",
+        direct_client_cases("&CLIENTS[1]; &CLIENTS[0]; &CLIENTS[1]", 2),
+        [0, 1],
+    )
+
+def _test_calls_function(_ctx):
+    check_eq("a call", calls_function("    let case = librdkafka_2x();", "librdkafka_2x"), True)
+    check_eq("a mention that is not a call", calls_function("/// [`librdkafka_2x`]", "librdkafka_2x"), False)
+    check_eq(
+        "a longer name that ends with it",
+        calls_function("    let case = old_librdkafka_2x();", "librdkafka_2x"),
+        False,
+    )
+
+def _test_client_cases_by_function(_ctx):
+    driven = client_cases_by_function(_SUITE, 2)
+    check_eq(
+        "the shared loop drives every client",
+        driven["round_trip_group_join_and_api_versions_with_kcat"],
+        [0, 1],
+    )
+    check_eq(
+        "the newer test drives the one client its helper returns",
+        driven["next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x"],
+        [1],
+    )
+    check_eq("a helper that touches no client drives none", driven["run_client"], [])
+
+def _test_client_evidence(_ctx):
+    check_eq(
+        "the fragment names the tag, not the whole image",
+        client_evidence(_CLIENTS[0], "round_trip_group_join_and_api_versions_with_kcat"),
         "kcat 1.7.1 (librdkafka 1.8.2): " +
         "[`round_trip_group_join_and_api_versions_with_kcat`]" +
         "(../crates/broker/tests/librdkafka_conformance.rs)",
     )
 
-def _row(status = "Implemented", clients = "NotCovered"):
+def _test_client_cell(_ctx):
+    driven = client_cases_by_function(_SUITE, 2)
+    suite = "crates/broker/tests/librdkafka_conformance.rs"
+    check_eq(
+        "a row citing the librdkafka 2.x test is credited with that client",
+        client_cell(
+            [
+                "crates/broker/tests/consumer_group_next_gen.rs",
+                suite + "::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
+            ],
+            _CLIENTS,
+            driven,
+            "KIP-848",
+        ),
+        "kcat librdkafka-2.15.0 (librdkafka 2.15.0): " +
+        "[`next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x`](../%s)" % suite,
+    )
+    check_eq(
+        "a row citing the shared loop is credited with both",
+        client_cell([suite + "::round_trip_group_join_and_api_versions_with_kcat"], _CLIENTS, driven, "KIP-482"),
+        "kcat 1.7.1 (librdkafka 1.8.2): " +
+        "[`round_trip_group_join_and_api_versions_with_kcat`](../%s)" % suite +
+        "<br>kcat librdkafka-2.15.0 (librdkafka 2.15.0): " +
+        "[`round_trip_group_join_and_api_versions_with_kcat`](../%s)" % suite,
+    )
+    check_eq(
+        "a row citing the suite file names every client in it",
+        client_cell([suite], _CLIENTS, driven, "KIP-482"),
+        "kcat 1.7.1 (librdkafka 1.8.2): " +
+        "[`broker/tests/librdkafka_conformance.rs`](../%s)" % suite +
+        "<br>kcat librdkafka-2.15.0 (librdkafka 2.15.0): " +
+        "[`broker/tests/librdkafka_conformance.rs`](../%s)" % suite,
+    )
+    check_eq(
+        "a row that cites no client test is credited with none",
+        client_cell(["crates/broker/tests/client_quotas.rs"], _CLIENTS, driven, "KIP-13"),
+        "none",
+    )
+
+def _row(status = "Implemented"):
     return struct(
         key = "KIP-13",
         claim = "Producer and consumer byte-rate quotas",
         status = status,
         module = "crates/broker/src/quota/mod.rs",
         tests = [],
-        clients = clients,
         note = "",
     )
 
@@ -678,7 +824,7 @@ def _test_kip_row(_ctx):
             _row(),
             [test_cell("crates/broker/tests/client_quotas.rs", "crates/broker/tests/client_quotas.rs")],
             ["cp_kafka_6_1_1"],
-            "kcat 1.7.1",
+            "none",
             "",
         ),
         "| KIP-13 | Implemented | Producer and consumer byte-rate quotas | " +
@@ -690,7 +836,7 @@ def _test_kip_row(_ctx):
 def _test_kip_row_without_evidence(_ctx):
     check_eq(
         "an out-of-scope row runs in process and lists no test",
-        kip_row(_row(status = "OutOfScope", clients = "Kcat"), [], [], "kcat 1.7.1", "a note"),
+        kip_row(_row(status = "OutOfScope"), [], [], "kcat 1.7.1", "a note"),
         "| KIP-13 | Out of scope | Producer and consumer byte-rate quotas | " +
         "[`broker/src/quota/mod.rs`](../crates/broker/src/quota/mod.rs) | " +
         "none | in process | kcat 1.7.1 | a note |",
@@ -826,7 +972,13 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_intent_cell,
     _test_intent_problem,
     _test_intent_problem_rejects,
-    _test_kcat_evidence,
+    _test_function_name,
+    _test_suite_functions,
+    _test_direct_client_cases,
+    _test_calls_function,
+    _test_client_cases_by_function,
+    _test_client_evidence,
+    _test_client_cell,
     _test_kip_row,
     _test_kip_row_without_evidence,
     _test_test_cell,

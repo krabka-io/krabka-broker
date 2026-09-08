@@ -39,5 +39,7 @@ pub use self::{
         encode_share_key, parse_share_key,
     },
     member::ShareGroupMemberMetadataValue,
-    partition_metadata::ShareGroupStatePartitionMetadataValue,
+    partition_metadata::{
+        DeletingTopic, InitializedTopic, ShareGroupStatePartitionMetadataValue, UNKNOWN_TOPIC_NAME,
+    },
 };

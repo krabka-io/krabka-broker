@@ -4,9 +4,9 @@
 use krabka_protocol::records::TimestampType;
 
 use crate::config_keys::{
-    COMPRESSION_TYPE, MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS,
-    MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, configured_min_insync_replicas,
-    parse_compression_type,
+    COMPRESSION_TYPE, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
+    MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
+    configured_min_insync_replicas, parse_compression_type,
 };
 
 /// Resolve `min.insync.replicas` for a topic from the metadata image.
@@ -71,15 +71,23 @@ pub struct TimestampPolicy {
     /// which removes the bound.
     before_max_ms: Option<i64>,
     /// `message.timestamp.after.max.ms`: how far ahead of the broker's clock a
-    /// producer timestamp may sit. `None` is the same default and the same
-    /// meaning.
+    /// producer timestamp may sit. `None` removes the bound, which is what
+    /// `Long.MAX_VALUE` spells; unlike the past window, this one is bounded by
+    /// default, at [`DEFAULT_AFTER_MAX_MS`].
     after_max_ms: Option<i64>,
 }
 
 impl Default for TimestampPolicy {
-    /// Kafka's defaults: the producer's own timestamps, and neither window
-    /// bounded. Every topic that configured none of the three keys resolves to
-    /// this, and so does the benchmark seam.
+    /// The policy that bounds nothing: the producer's own timestamps, and
+    /// neither window applied.
+    ///
+    /// This is not the policy a stock topic resolves to.
+    /// [`resolve_timestamp_policy`] gives an unconfigured topic Kafka's own
+    /// default, which bounds the future window at
+    /// [`DEFAULT_AFTER_MAX_MS`]. What resolves to this is a
+    /// `delivery.mode=scheduled` topic, whose timestamps are delivery times
+    /// rather than create times, and the benchmark seam, which exists to time
+    /// the append rather than the window.
     fn default() -> Self {
         Self {
             timestamp_type: TimestampType::CreateTime,
@@ -92,10 +100,12 @@ impl Default for TimestampPolicy {
 impl TimestampPolicy {
     /// Whether any record timestamp in a batch has to be looked at.
     ///
-    /// False on every topic that left both windows at their defaults, which is
-    /// every topic that did not ask for the check, and on a `LogAppendTime`
-    /// topic whatever the windows say. The produce path then reads no clock
-    /// and walks no records.
+    /// False on a topic that opened both windows -- a `LogAppendTime` topic
+    /// whatever the windows say, a KFC-1 scheduled topic, and a topic that set
+    /// `message.timestamp.after.max.ms` to `Long.MAX_VALUE` with the past
+    /// window left at its own unbounded default. The produce path then reads
+    /// no clock and walks no records. A stock topic is not one of these: Kafka
+    /// bounds the future window by default, so the walk is what Kafka does.
     pub(super) fn bounds_records(self) -> bool {
         self.timestamp_type == TimestampType::CreateTime
             && (self.before_max_ms.is_some() || self.after_max_ms.is_some())
@@ -125,11 +135,38 @@ impl TimestampPolicy {
 /// Kafka's `RecordBatch.NO_TIMESTAMP`: a record that carries no create time.
 const NO_TIMESTAMP: i64 = -1;
 
+/// Kafka's `message.timestamp.after.max.ms` default: one hour.
+///
+/// `LogConfig` reads it from
+/// `ServerLogConfigs.LOG_MESSAGE_TIMESTAMP_AFTER_MAX_MS_DEFAULT`, which is
+/// `3600000 // 1 hour`. The matching *before* key defaults to `Long.MAX_VALUE`
+/// and is therefore unbounded, so the asymmetry here is Kafka's: a stock topic
+/// accepts a record from any point in the past and refuses one stamped more
+/// than an hour ahead of the broker's clock.
+const DEFAULT_AFTER_MAX_MS: i64 = 3_600_000;
+
 /// Resolve a topic's produce-time timestamp policy from the metadata image.
 ///
-/// Every topic has one, so this returns a value rather than an `Option`: the
-/// default is `CreateTime` with both windows open, which is Kafka's default and
-/// costs the produce path one boolean test per batch.
+/// Every topic has one, so this returns a value rather than an `Option`. A
+/// topic that configured none of the keys resolves to Kafka's own default:
+/// `CreateTime`, the past window open, and the future window at
+/// [`DEFAULT_AFTER_MAX_MS`].
+///
+/// # Scheduled delivery
+///
+/// A `delivery.mode=scheduled` topic (KFC-1) resolves to no window at all, in
+/// either direction. On such a topic a record's timestamp is not a create time
+/// but the time the record becomes visible, which by design sits ahead of the
+/// broker's clock -- up to `delivery.max.delay.ms`, seven days by default.
+/// Kafka's one-hour future window is a statement about how far a producer's
+/// *clock* may have drifted, and it means nothing about a delivery time; the
+/// KFC-1 gate in [`super::delivery`] is what bounds that field, and a delivery
+/// time in the past is legal there because it comes due at once.
+///
+/// This is the same exemption Kafka already makes for `LogAppendTime`, and for
+/// the same reason: the window applies only where the timestamp is a producer's
+/// own create time. An immediate topic -- every topic that does not opt into
+/// KFC-1 -- is bounded exactly as a Kafka topic is.
 ///
 /// An unparseable window falls back to "no bound", the same direction the other
 /// produce-side config reads fall back in. `AlterConfigs` already refused the
@@ -147,19 +184,35 @@ pub(super) fn resolve_timestamp_policy(
     } else {
         TimestampType::CreateTime
     };
+    if value(DELIVERY_MODE) == Some(DELIVERY_MODE_SCHEDULED) {
+        return TimestampPolicy {
+            timestamp_type,
+            ..TimestampPolicy::default()
+        };
+    }
     TimestampPolicy {
         timestamp_type,
         before_max_ms: parse_timestamp_window(value(MESSAGE_TIMESTAMP_BEFORE_MAX_MS)),
-        after_max_ms: parse_timestamp_window(value(MESSAGE_TIMESTAMP_AFTER_MAX_MS)),
+        after_max_ms: match value(MESSAGE_TIMESTAMP_AFTER_MAX_MS) {
+            // Kafka's default applies to the topic that set nothing, and only
+            // to it: an explicit value speaks for itself, `Long.MAX_VALUE`
+            // included.
+            None => Some(DEFAULT_AFTER_MAX_MS),
+            explicit => parse_timestamp_window(explicit),
+        },
     }
 }
 
 /// One `message.timestamp.{before,after}.max.ms` value as a bound.
 ///
-/// `None` is "no bound": the key is unset, it carries Kafka's `Long.MAX_VALUE`
-/// default, or it carries a value that does not parse. A negative value is a
-/// bound of its own in Kafka -- the config's minimum is 0 -- so nothing here
-/// clamps one.
+/// `None` is "no bound": the key is unset, it carries `Long.MAX_VALUE`, or it
+/// carries a value that does not parse. A negative value is a bound of its own
+/// in Kafka -- the config's minimum is 0 -- so nothing here clamps one.
+///
+/// Unset means "no bound" only for the *past* window, whose Kafka default is
+/// `Long.MAX_VALUE`. The future window defaults to
+/// [`DEFAULT_AFTER_MAX_MS`], so [`resolve_timestamp_policy`] handles the unset
+/// case for that key before it reaches this function.
 fn parse_timestamp_window(value: Option<&str>) -> Option<i64> {
     value
         .and_then(|raw| raw.parse::<i64>().ok())
@@ -177,7 +230,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config_keys::MIN_INSYNC_REPLICAS,
+        config_keys::{DELIVERY_MODE_IMMEDIATE, MIN_INSYNC_REPLICAS},
         handlers::produce::test_support::{image_with_topic, set_min_isr},
     };
 
@@ -410,23 +463,33 @@ mod tests {
         }
     }
 
-    /// The three keys the produce path resolves per topic, and the defaults it
+    /// Kafka's own default policy: `CreateTime`, no bound on how old a record
+    /// may be, and one hour of tolerance on how far ahead of the broker's
+    /// clock it may be stamped.
+    fn kafka_default() -> TimestampPolicy {
+        TimestampPolicy {
+            timestamp_type: TimestampType::CreateTime,
+            before_max_ms: None,
+            after_max_ms: Some(DEFAULT_AFTER_MAX_MS),
+        }
+    }
+
+    /// The keys the produce path resolves per topic, and the defaults it
     /// resolves for a topic that set none of them.
     #[test]
-    fn resolve_timestamp_policy_reads_the_three_keys() {
+    fn resolve_timestamp_policy_reads_the_keys() {
         let cases = [
             (
-                "an unconfigured topic is CreateTime with both windows open",
+                "an unconfigured topic carries Kafka's one-hour future window",
                 vec![],
-                TimestampPolicy::default(),
+                kafka_default(),
             ),
             (
                 "LogAppendTime alone",
                 vec![(MESSAGE_TIMESTAMP_TYPE, "LogAppendTime")],
                 TimestampPolicy {
                     timestamp_type: TimestampType::LogAppendTime,
-                    before_max_ms: None,
-                    after_max_ms: None,
+                    ..kafka_default()
                 },
             ),
             (
@@ -442,8 +505,16 @@ mod tests {
                 },
             ),
             (
-                "Kafka's Long.MAX_VALUE default spells `no bound`",
-                vec![(MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "9223372036854775807")],
+                "Kafka's Long.MAX_VALUE spells `no bound` in either direction",
+                vec![
+                    (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "9223372036854775807"),
+                    (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "9223372036854775807"),
+                ],
+                TimestampPolicy::default(),
+            ),
+            (
+                "an explicit Long.MAX_VALUE outranks the one-hour default",
+                vec![(MESSAGE_TIMESTAMP_AFTER_MAX_MS, "9223372036854775807")],
                 TimestampPolicy::default(),
             ),
             (
@@ -454,7 +525,7 @@ mod tests {
             (
                 "an unknown timestamp type is CreateTime, the default",
                 vec![(MESSAGE_TIMESTAMP_TYPE, "WallClock")],
-                TimestampPolicy::default(),
+                kafka_default(),
             ),
         ];
         for (label, overrides, want) in cases {
@@ -471,12 +542,63 @@ mod tests {
         }
     }
 
-    /// A topic the image does not know resolves to the defaults rather than
-    /// refusing every write to it.
+    /// KFC-1: a scheduled topic's timestamps are delivery times, so neither
+    /// window applies to them -- not the one-hour future default a stock topic
+    /// carries, and not a window the topic set for itself. The bound on how
+    /// far ahead a batch may be scheduled is `delivery.max.delay.ms`, which
+    /// [`crate::handlers::produce::delivery`] applies.
+    ///
+    /// Without this, a scheduled topic would refuse its own writes: the
+    /// default delay is seven days and the default future window would be one
+    /// hour.
+    #[test]
+    fn a_scheduled_topic_has_no_timestamp_window() {
+        let cases = [
+            (
+                "scheduled alone drops Kafka's one-hour future default",
+                vec![(DELIVERY_MODE, DELIVERY_MODE_SCHEDULED)],
+                TimestampPolicy::default(),
+            ),
+            (
+                "scheduled drops a window the topic set for itself, too",
+                vec![
+                    (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED),
+                    (MESSAGE_TIMESTAMP_BEFORE_MAX_MS, "1000"),
+                    (MESSAGE_TIMESTAMP_AFTER_MAX_MS, "2000"),
+                ],
+                TimestampPolicy::default(),
+            ),
+            (
+                "an immediate topic is bounded exactly as a Kafka topic is",
+                vec![(DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE)],
+                kafka_default(),
+            ),
+        ];
+        for (label, overrides, want) in cases {
+            let mut img = image_with_topic("t", &[1]);
+            let mut map = BTreeMap::new();
+            for (key, value) in overrides {
+                map.insert(key.to_string(), value.to_string());
+            }
+            img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "t".into(),
+                overrides: map,
+            }));
+            let resolved = resolve_timestamp_policy(&img, "t");
+            check!(resolved == want, "{label}");
+            check!(
+                resolved.bounds_records() == want.bounds_records(),
+                "{label}"
+            );
+        }
+    }
+
+    /// A topic the image does not know resolves to Kafka's defaults rather
+    /// than refusing every write to it.
     #[test]
     fn resolve_timestamp_policy_defaults_on_an_unknown_topic() {
         let img = MetadataImage::new(Uuid::nil());
 
-        check!(resolve_timestamp_policy(&img, "ghost") == TimestampPolicy::default());
+        check!(resolve_timestamp_policy(&img, "ghost") == kafka_default());
     }
 }

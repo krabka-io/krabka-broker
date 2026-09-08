@@ -67,8 +67,8 @@ pub(super) async fn describe_topic(
             .and_then(|m| {
                 m.initialized
                     .iter()
-                    .find(|(tid, _)| *tid == topic_id)
-                    .map(|(_, parts)| parts.clone())
+                    .find(|topic| topic.topic_id == topic_id)
+                    .map(|topic| topic.partitions.clone())
             })
             .unwrap_or_default()
     } else {

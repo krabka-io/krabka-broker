@@ -11,10 +11,30 @@
 //! - `InitializedTopics` (the same struct),
 //! - `DeletingTopics` (`[]TopicInfo{TopicId uuid, TopicName string}`).
 //!
-//! The broker tracks initialization by topic id, and its share-state lifecycle
-//! has no separate "initializing" phase to persist, so it writes an empty
-//! `InitializingTopics` and an empty `TopicName` on each entry it does write.
-//! Both are values Kafka's reader accepts; the decoder drops them again.
+//! # Topic names
+//!
+//! `__consumer_offsets` is read by tooling that has no access to the broker's
+//! topic-id index, so every entry carries the topic's real name, exactly as
+//! `GroupCoordinatorRecordHelpers.newShareGroupStatePartitionMetadataRecord`
+//! writes `InitMapValue.name()`. The name reaches this record from the
+//! metadata image, and it survives a restart because the decoder keeps the
+//! name each entry was written with.
+//!
+//! A name the broker cannot resolve is written as [`UNKNOWN_TOPIC_NAME`],
+//! which is what `GroupMetadataManager.attachTopicName` and
+//! `GroupMetadataManager.attachInitValue` write for a topic id the metadata
+//! image no longer holds.
+//!
+//! The broker's share-state lifecycle has no separate "initializing" phase to
+//! persist, so it writes an empty `InitializingTopics`, and it drives the
+//! persister's delete to completion before it writes the record rather than
+//! staging the topic in `DeletingTopics`, so it writes that array empty too.
+//! Both are values Kafka's reader accepts, and a record from another writer
+//! that carries either still decodes: `DeletingTopics` round-trips through
+//! [`ShareGroupStatePartitionMetadataValue::deleting`], and an
+//! `InitializingTopics` entry is dropped, because a partition whose state is
+//! only being initialized is not yet initialized and so is nothing the broker
+//! would act on.
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -30,20 +50,35 @@ use crate::{
     error::BrokerError,
 };
 
-/// The `TopicName` the broker writes. Its share-group state is keyed by topic
-/// id, and the name is not part of that state.
-const UNKNOWN_TOPIC_NAME: &str = "";
+/// The `TopicName` written for a topic id the metadata image cannot resolve,
+/// byte for byte what Kafka's `GroupMetadataManager` writes in the same spot.
+pub const UNKNOWN_TOPIC_NAME: &str = "<UNKNOWN>";
+
+/// One `TopicPartitionsInfo` of the `InitializedTopics` array.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InitializedTopic {
+    pub topic_id: uuid::Uuid,
+    pub topic_name: String,
+    pub partitions: Vec<i32>,
+}
+
+/// One `TopicInfo` of the `DeletingTopics` array.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DeletingTopic {
+    pub topic_id: uuid::Uuid,
+    pub topic_name: String,
+}
 
 /// KIP-932 `ShareGroupStatePartitionMetadata`, key v15.
 ///
 /// The record tracks which `(topic_id, partition)` share-states a group has
-/// initialized. It also holds a set of topic ids whose share-state the broker is
-/// deleting. The record lets the group coordinator skip the re-initialization of
-/// partitions across restarts.
+/// initialized. It also holds the topics whose share-state the broker is
+/// deleting. The record lets the group coordinator skip the re-initialization
+/// of partitions across restarts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShareGroupStatePartitionMetadataValue {
-    pub initialized: Vec<(uuid::Uuid, Vec<i32>)>,
-    pub deleting: Vec<uuid::Uuid>,
+    pub initialized: Vec<InitializedTopic>,
+    pub deleting: Vec<DeletingTopic>,
 }
 
 impl ShareGroupStatePartitionMetadataValue {
@@ -53,16 +88,16 @@ impl ShareGroupStatePartitionMetadataValue {
         buf.put_i16(0);
         put_compact_array_len(&mut buf, 0); // InitializingTopics
         put_compact_array_len(&mut buf, self.initialized.len());
-        for (topic_id, partitions) in &self.initialized {
-            put_uuid(&mut buf, *topic_id.as_bytes());
-            put_compact_string(&mut buf, UNKNOWN_TOPIC_NAME);
-            put_i32_array(&mut buf, partitions);
+        for topic in &self.initialized {
+            put_uuid(&mut buf, *topic.topic_id.as_bytes());
+            put_compact_string(&mut buf, &topic.topic_name);
+            put_i32_array(&mut buf, &topic.partitions);
             put_empty_tagged_fields(&mut buf);
         }
         put_compact_array_len(&mut buf, self.deleting.len());
-        for topic_id in &self.deleting {
-            put_uuid(&mut buf, *topic_id.as_bytes());
-            put_compact_string(&mut buf, UNKNOWN_TOPIC_NAME);
+        for topic in &self.deleting {
+            put_uuid(&mut buf, *topic.topic_id.as_bytes());
+            put_compact_string(&mut buf, &topic.topic_name);
             put_empty_tagged_fields(&mut buf);
         }
         put_empty_tagged_fields(&mut buf);
@@ -87,17 +122,25 @@ impl ShareGroupStatePartitionMetadataValue {
         let mut initialized = Vec::with_capacity(n);
         for _ in 0..n {
             let topic_id = uuid::Uuid::from_bytes(get_uuid(&mut buf)?);
-            let _topic_name = get_compact_string(&mut buf)?;
+            let topic_name = get_compact_string(&mut buf)?;
             let partitions = get_i32_array(&mut buf)?;
             skip_tagged_fields(&mut buf)?;
-            initialized.push((topic_id, partitions));
+            initialized.push(InitializedTopic {
+                topic_id,
+                topic_name,
+                partitions,
+            });
         }
         let dn = get_compact_array_len(&mut buf)?;
         let mut deleting = Vec::with_capacity(dn);
         for _ in 0..dn {
-            deleting.push(uuid::Uuid::from_bytes(get_uuid(&mut buf)?));
-            let _topic_name = get_compact_string(&mut buf)?;
+            let topic_id = uuid::Uuid::from_bytes(get_uuid(&mut buf)?);
+            let topic_name = get_compact_string(&mut buf)?;
             skip_tagged_fields(&mut buf)?;
+            deleting.push(DeletingTopic {
+                topic_id,
+                topic_name,
+            });
         }
         skip_tagged_fields(&mut buf)?;
         Ok(Self {
@@ -117,23 +160,40 @@ mod tests {
         test_support::peek_version,
     };
 
+    fn initialized(id: u8, name: &str, partitions: Vec<i32>) -> InitializedTopic {
+        InitializedTopic {
+            topic_id: uuid::Uuid::from_bytes([id; 16]),
+            topic_name: name.to_owned(),
+            partitions,
+        }
+    }
+
+    fn deleting(id: u8, name: &str) -> DeletingTopic {
+        DeletingTopic {
+            topic_id: uuid::Uuid::from_bytes([id; 16]),
+            topic_name: name.to_owned(),
+        }
+    }
+
     #[test]
     fn state_partition_metadata_bytes_match_kafka_schema() {
         let v = ShareGroupStatePartitionMetadataValue {
-            initialized: vec![(uuid::Uuid::from_bytes([1; 16]), vec![0])],
-            deleting: vec![uuid::Uuid::from_bytes([9; 16])],
+            initialized: vec![initialized(1, "orders", vec![0])],
+            deleting: vec![deleting(9, "carts")],
         };
         let mut want: Vec<u8> = vec![0x00, 0x00];
         want.push(0x01); // empty InitializingTopics
         want.push(0x02); // one InitializedTopics entry
         want.extend_from_slice(&[1u8; 16]);
-        want.push(0x01); // empty TopicName
+        want.push(0x07); // TopicName "orders"
+        want.extend_from_slice(b"orders");
         want.push(0x02); // one partition
         want.extend_from_slice(&0i32.to_be_bytes());
         want.push(0x00); // TopicPartitionsInfo tagged fields
         want.push(0x02); // one DeletingTopics entry
         want.extend_from_slice(&[9u8; 16]);
-        want.push(0x01); // empty TopicName
+        want.push(0x06); // TopicName "carts"
+        want.extend_from_slice(b"carts");
         want.push(0x00); // TopicInfo tagged fields
         want.push(0x00); // message tagged fields
         assert!(&v.encode()[..] == &want[..]);
@@ -149,20 +209,26 @@ mod tests {
         assert!(ver == KEY_SHARE_GROUP_STATE_PARTITION_METADATA);
         assert!(parse_share_key(ver, body).unwrap() == key);
 
-        let v = ShareGroupStatePartitionMetadataValue {
-            initialized: vec![
-                (uuid::Uuid::from_bytes([1; 16]), vec![0, 1, 2]),
-                (uuid::Uuid::from_bytes([2; 16]), vec![]),
-            ],
-            deleting: vec![uuid::Uuid::from_bytes([9; 16])],
-        };
-        assert!(ShareGroupStatePartitionMetadataValue::decode(&v.encode()).unwrap() == v);
-    }
-
-    #[test]
-    fn state_partition_metadata_empty_round_trip() {
-        let v = ShareGroupStatePartitionMetadataValue::default();
-        assert!(ShareGroupStatePartitionMetadataValue::decode(&v.encode()).unwrap() == v);
+        let cases = [
+            ShareGroupStatePartitionMetadataValue::default(),
+            ShareGroupStatePartitionMetadataValue {
+                initialized: vec![
+                    initialized(1, "orders", vec![0, 1, 2]),
+                    initialized(2, "shipments", vec![]),
+                ],
+                deleting: vec![deleting(9, "carts")],
+            },
+            // A name the writer could not resolve stays exactly what Kafka
+            // would have written, and a name with multi-byte characters keeps
+            // its byte length through the compact-string codec.
+            ShareGroupStatePartitionMetadataValue {
+                initialized: vec![initialized(3, UNKNOWN_TOPIC_NAME, vec![7])],
+                deleting: vec![deleting(4, "temperaturmålinger")],
+            },
+        ];
+        for v in cases {
+            assert!(ShareGroupStatePartitionMetadataValue::decode(&v.encode()).unwrap() == v);
+        }
     }
 
     #[test]
