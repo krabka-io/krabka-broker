@@ -212,6 +212,10 @@ struct MemberIdentity {
 /// separator between them, so the stream is concatenated JSON rather than one
 /// document or one object per line.
 fn decode_stream(stdout: &str) -> Vec<serde_json::Value> {
+    // The tool writes its own notices to stdout ahead of the records -- a
+    // deprecation warning for a flag, for instance -- and those are not the
+    // formatter's output. The stream starts at the first object.
+    let stdout = stdout.find('{').map_or("", |start| &stdout[start..]);
     serde_json::Deserializer::from_str(stdout)
         .into_iter::<serde_json::Value>()
         .map(|value| value.expect("the formatter writes one JSON object per record"))
@@ -512,17 +516,17 @@ impl Cluster {
                 &RECORDS.to_string(),
                 "--timeout-ms",
                 CONSUME_TIMEOUT_MS,
-                "--consumer-property",
+                "--command-property",
                 "group.protocol=classic",
-                "--consumer-property",
+                "--command-property",
                 &format!("client.id={CLIENT_ID}"),
-                "--consumer-property",
+                "--command-property",
                 "enable.auto.commit=true",
-                "--consumer-property",
+                "--command-property",
                 &format!("session.timeout.ms={SESSION_TIMEOUT_MS}"),
-                "--consumer-property",
+                "--command-property",
                 &format!("max.poll.interval.ms={REBALANCE_TIMEOUT_MS}"),
-                "--consumer-property",
+                "--command-property",
                 &format!("partition.assignment.strategy={ASSIGNOR}"),
             ],
         );
@@ -551,13 +555,13 @@ impl Cluster {
                 &RECORDS.to_string(),
                 "--timeout-ms",
                 CONSUME_TIMEOUT_MS,
-                "--consumer-property",
+                "--command-property",
                 "group.protocol=consumer",
-                "--consumer-property",
+                "--command-property",
                 &format!("client.id={CLIENT_ID}"),
-                "--consumer-property",
+                "--command-property",
                 "enable.auto.commit=true",
-                "--consumer-property",
+                "--command-property",
                 &format!("max.poll.interval.ms={REBALANCE_TIMEOUT_MS}"),
             ],
         );
@@ -585,7 +589,7 @@ impl Cluster {
                 DRAIN_TIMEOUT_MS,
                 "--formatter",
                 formatter,
-                "--consumer-property",
+                "--command-property",
                 "exclude.internal.topics=false",
             ],
         );

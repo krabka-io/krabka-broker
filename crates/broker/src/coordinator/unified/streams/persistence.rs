@@ -14,7 +14,7 @@
 //! role.
 //!
 //! Key versions 17 and 19 to 23 belong to streams, and 18 to the one record
-//! Kafka no longer defines; see [`keys`] for the full mapping. The earlier
+//! Kafka no longer defines; see `keys` for the full mapping. The earlier
 //! numbers are Kafka's: 0 and 1 for offset-commit, 2 for the classic group, 3
 //! to 8 for the consumer next-gen family, and 10 to 15 for share.
 //!

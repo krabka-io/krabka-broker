@@ -8,8 +8,7 @@
 //! partition metadata. A value starts with an `i16` schema version, 0 for all
 //! six records, and is flexible: compact strings, compact arrays and a
 //! tagged-field trailer on the message and on every nested struct. The leaf
-//! helpers are in
-//! [`persistence::flex`](crate::coordinator::unified::persistence::flex).
+//! helpers are the shared `persistence::flex` ones.
 //!
 //! Share-group records drop the consumer-only fields: `instance_id`,
 //! `server_assignor`, `subscribed_topic_regex`, `rebalance_timeout_ms`, and the

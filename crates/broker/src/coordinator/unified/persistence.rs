@@ -17,7 +17,7 @@
 //! The later families do not. Every `coordinator-value` of the KIP-848,
 //! KIP-932 and KIP-1071 record types declares `"flexibleVersions": "0+"`, so
 //! their values are compact-encoded and carry a tagged-field trailer. Their
-//! leaf helpers live in [`flex`]. Every `coordinator-key` in the group
+//! leaf helpers live in the private `flex` submodule. Every `coordinator-key` in the group
 //! coordinator, of every family, declares `"flexibleVersions": "none"`, so
 //! keys use the helpers here.
 
