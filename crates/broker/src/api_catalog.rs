@@ -397,6 +397,17 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`.",
     },
     KipAnnotation {
+        key: "KIP-382",
+        claim: "MirrorMaker 2 replicates a Kafka cluster onto krabka",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_commit.rs",
+        tests: &[
+            "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
+        ],
+        clients: ClientEvidence::NotCovered,
+        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure.",
+    },
+    KipAnnotation {
         key: "KIP-392",
         claim: "Fetch from the closest replica",
         status: KipStatus::Implemented,

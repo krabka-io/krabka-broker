@@ -240,6 +240,11 @@ crate_tests(
             "kcat_1_7_1",
             "kcat_librdkafka_2x",
         ],
+        # MirrorMaker 2 out of the same image, mirroring a source cluster of
+        # that release onto krabka: `connect-mirror-maker.sh` and the stock
+        # broker it replicates from are both in it, so the migration path is
+        # one image.
+        "mirror_maker2": ["apache_kafka_4_3_1"],
         # `kaf`, a Go CLI on sarama: the one client in this tree that is
         # neither librdkafka nor the JVM, so its decoder agrees with neither
         # by construction.
