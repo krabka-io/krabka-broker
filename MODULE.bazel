@@ -229,7 +229,7 @@ register_toolchains("@krabka_rust_toolchains//...")
 # BCR's own builds puts that C under the same toolchain as everything else.
 # ---------------------------------------------------------------------------
 bazel_dep(name = "aws-lc", version = "5.1.0.bcr.2")
-bazel_dep(name = "jemalloc", version = "5.3.0-bcr.alpha.4")
+bazel_dep(name = "jemalloc", version = "5.3.0-bcr.alpha.5")
 bazel_dep(name = "zstd", version = "1.5.7.bcr.1")
 
 # aws-lc-sys' bindings are generated, and rules_rs prefers the pregenerated set
