@@ -1,8 +1,9 @@
 //! `kafka-acls --list` against a broker that has no authorizer.
 //!
 //! Kafka answers `DescribeAcls`, `CreateAcls` and `DeleteAcls` with
-//! `SECURITY_DISABLED` (54) and "No Authorizer is configured." whenever
-//! `authorizer.class.name` is unset, and krabka's `allow_all` authorizer -- the
+//! `SECURITY_DISABLED` (54) and "No Authorizer is configured on the broker"
+//! whenever `authorizer.class.name` is unset, and krabka's `allow_all`
+//! authorizer -- the
 //! default, and not a decision point -- is that same state. An empty listing
 //! would be the dangerous answer here: it tells an operator that the cluster
 //! has no ACLs, when the truth is that it would never consult one.
@@ -35,7 +36,8 @@ const ERRORS_PACKAGE: &str = "org.apache.kafka.common.errors.";
 
 /// The refusal both brokers owe an operator who administers ACLs on a cluster
 /// that has no authorizer to administer them for.
-const SECURITY_DISABLED: &str = "SecurityDisabledException: No Authorizer is configured.";
+const SECURITY_DISABLED: &str =
+    "SecurityDisabledException: No Authorizer is configured on the broker";
 
 /// Every Kafka exception one run rendered, as a set.
 ///

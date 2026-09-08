@@ -161,7 +161,7 @@ async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_
 
     let disabled = DeleteAclsFilterResult {
         error_code: codes::SECURITY_DISABLED,
-        error_message: Some("No Authorizer is configured.".into()),
+        error_message: Some("No Authorizer is configured on the broker".into()),
         matching_acls: Vec::new(),
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };

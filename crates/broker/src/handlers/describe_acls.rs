@@ -416,7 +416,7 @@ mod tests {
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,
             error_code: codes::SECURITY_DISABLED,
-            error_message: Some("No Authorizer is configured.".into()),
+            error_message: Some("No Authorizer is configured on the broker".into()),
             resources: Vec::new(),
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };

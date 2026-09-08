@@ -201,7 +201,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 
     let disabled = AclCreationResult {
         error_code: codes::SECURITY_DISABLED,
-        error_message: Some("No Authorizer is configured.".into()),
+        error_message: Some("No Authorizer is configured on the broker".into()),
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     let expected = CreateAclsResponse {
