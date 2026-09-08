@@ -143,78 +143,18 @@ async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partition: i
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn produce_to_non_leader_is_rejected() {
-    let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-
-    let bootstrap = cluster[0].1.listen_addr.to_string();
-    let admin = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
-
-    // rf=3 topic (a replica on every broker) and a rf=1, 6-partition topic
-    // (each partition on exactly one broker, so non-leaders hold no replica).
-    let cr = admin
-        .send(CreateTopicsRequest {
-            topics: vec![
-                CreatableTopic {
-                    name: "gate-rf3".into(),
-                    num_partitions: 1,
-                    replication_factor: 3,
-                    ..Default::default()
-                },
-                CreatableTopic {
-                    name: "gate-rf1".into(),
-                    num_partitions: 6,
-                    replication_factor: 1,
-                    ..Default::default()
-                },
-            ],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(
-        cr.topics.iter().all(|t| t.error_code == 0),
-        "create: {cr:?}"
-    );
-    // v13 Produce drops topic.name and carries only topic_id; echo the ids.
-    let rf3_id = cr
-        .topics
-        .iter()
-        .find(|t| t.name == "gate-rf3")
-        .unwrap()
-        .topic_id;
-    let rf1_id = cr
-        .topics
-        .iter()
-        .find(|t| t.name == "gate-rf1")
-        .unwrap()
-        .topic_id;
-
-    // Wait until node 1's image knows every partition's leader. Mirrors the
-    // `partition_leader_for_test(..).is_some()` predicate exactly: partition
-    // present in the image AND its leader field elected (non-zero).
-    cluster[0]
-        .0
-        .wait_for_image(|img| {
-            img.partition("gate-rf3", 0)
-                .is_some_and(|pr| pr.leader != 0)
-                && (0..6).all(|p| {
-                    img.partition("gate-rf1", p)
-                        .is_some_and(|pr| pr.leader != 0)
-                })
-        })
-        .await;
-
-    // ───────────────────────────────────────────────────────────────────
-    // Case A: rf=3 — Produce to a NON-leader that DOES hold a follower replica.
-    // ───────────────────────────────────────────────────────────────────
+/// Case A of [`produce_to_non_leader_is_rejected`]: a Produce sent to a
+/// non-leader that *does* hold a follower replica.
+///
+/// It is the case that can fail silently. A broker that appends to its own
+/// follower replica answers as if it had led the write, and only the local log
+/// end offset says otherwise -- which is why this asserts the follower's log
+/// did not grow, alongside the refusal, the leader hint and the KIP-951
+/// endpoint that makes the hint usable.
+async fn rf3_produce_to_a_follower_is_refused(
+    cluster: &[(BrokerHandle, krabka_broker::BrokerConfig, tempfile::TempDir)],
+    rf3_id: WireUuid,
+) -> u64 {
     let rf3_leader = cluster[0]
         .0
         .partition_leader_for_test("gate-rf3", 0)
@@ -287,6 +227,80 @@ async fn produce_to_non_leader_is_rejected() {
         "rejected Produce must NOT append to the follower's local log: \
          before={follower_leo_before} after={follower_leo_after}"
     );
+
+    rf3_leader
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn produce_to_non_leader_is_rejected() {
+    let _g = cluster_lock().lock().await;
+    let cluster = support::start_n_node_with_retry(3).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+
+    let bootstrap = cluster[0].1.listen_addr.to_string();
+    let admin = Client::builder()
+        .bootstrap(bootstrap.clone())
+        .build()
+        .await
+        .unwrap();
+
+    // rf=3 topic (a replica on every broker) and a rf=1, 6-partition topic
+    // (each partition on exactly one broker, so non-leaders hold no replica).
+    let cr = admin
+        .send(CreateTopicsRequest {
+            topics: vec![
+                CreatableTopic {
+                    name: "gate-rf3".into(),
+                    num_partitions: 1,
+                    replication_factor: 3,
+                    ..Default::default()
+                },
+                CreatableTopic {
+                    name: "gate-rf1".into(),
+                    num_partitions: 6,
+                    replication_factor: 1,
+                    ..Default::default()
+                },
+            ],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        cr.topics.iter().all(|t| t.error_code == 0),
+        "create: {cr:?}"
+    );
+    // v13 Produce drops topic.name and carries only topic_id; echo the ids.
+    let rf3_id = cr
+        .topics
+        .iter()
+        .find(|t| t.name == "gate-rf3")
+        .unwrap()
+        .topic_id;
+    let rf1_id = cr
+        .topics
+        .iter()
+        .find(|t| t.name == "gate-rf1")
+        .unwrap()
+        .topic_id;
+
+    // Wait until node 1's image knows every partition's leader. Mirrors the
+    // `partition_leader_for_test(..).is_some()` predicate exactly: partition
+    // present in the image AND its leader field elected (non-zero).
+    cluster[0]
+        .0
+        .wait_for_image(|img| {
+            img.partition("gate-rf3", 0)
+                .is_some_and(|pr| pr.leader != 0)
+                && (0..6).all(|p| {
+                    img.partition("gate-rf1", p)
+                        .is_some_and(|pr| pr.leader != 0)
+                })
+        })
+        .await;
+
+    let rf3_leader = rf3_produce_to_a_follower_is_refused(&cluster, rf3_id).await;
 
     // ───────────────────────────────────────────────────────────────────
     // Case B: rf=1 — Produce to a NON-leader that holds NO replica.
