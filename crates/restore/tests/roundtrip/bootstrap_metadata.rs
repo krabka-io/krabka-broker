@@ -177,7 +177,16 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
     check!(report.metadata.topic_configs == 1);
     check!(report.metadata.access_control_entries == 1);
 
-    let broker = Broker::start(BrokerConfig::for_tests(log_dir))
+    // `DescribeAcls` answers `SECURITY_DISABLED` on a cluster with no
+    // authorizer, as Kafka does, so the restored bindings are only reachable
+    // through a broker that has one. The plaintext client arrives as
+    // `ANONYMOUS`, which the authorizer's own super-user set lets past the
+    // cluster-describe gate in front of the listing.
+    let mut config = BrokerConfig::for_tests(log_dir);
+    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
+        std::iter::once("ANONYMOUS".to_owned()).collect(),
+    ));
+    let broker = Broker::start(config)
         .await
         .expect("restored broker starts");
     let client = krabka_client_core::Client::builder()

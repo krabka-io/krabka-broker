@@ -14,10 +14,14 @@
 //! controller-plane APIs answer elsewhere and never reach this table, and it
 //! withholds `GetTelemetrySubscriptions` and `PushTelemetry` unless a
 //! client-telemetry exporter is configured, which a stock broker has none of.
-//! krabka runs both roles behind one listener and advertises the union, so
-//! those are the rows the expectation records as `krabka_only`.
-//! `docs/KIP_MATRIX.md` repeats this beside the table a reader sees, because
-//! `krabka_only` otherwise reads as "Kafka does not have the API".
+//!
+//! krabka scopes its own table the same way. `start_krabka` binds one
+//! `PLAINTEXT` listener with no client-metrics receiver, so it answers with
+//! `api_catalog::ListenerKind::Client` and
+//! `api_catalog::ClientMetricsReceiver::Absent`, and the keys Kafka withholds
+//! here are the keys krabka withholds here. The expectation therefore records
+//! no `krabka_only` row: the join is `same` wherever both sides agree and
+//! `range_differs` for the four ranges krabka means to widen.
 
 use std::{
     process::{Command, Stdio},

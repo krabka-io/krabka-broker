@@ -51,10 +51,20 @@ const CLIENT_INFO_MIN_VERSION: i16 = 3;
 /// First `ApiVersions` version that carries the KIP-1242 routing identity.
 const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 
-pub(crate) fn unsupported_version_response() -> Result<Bytes, BrokerError> {
+/// The v0 answer to an `ApiVersions` request at a version this broker does not
+/// serve. Kafka answers it with the same table the listener would otherwise
+/// advertise, so it is scoped to `listener_name` exactly as the accepted path
+/// is.
+pub(crate) fn unsupported_version_response(
+    broker: &Broker,
+    listener_name: &str,
+) -> Result<Bytes, BrokerError> {
     let response = ApiVersionsResponse {
         error_code: codes::UNSUPPORTED_VERSION,
-        api_keys: crate::api_catalog::supported_apis(),
+        api_keys: crate::api_catalog::supported_apis(
+            broker.config.listener_kind(listener_name),
+            broker.config.client_metrics_receiver(),
+        ),
         ..Default::default()
     };
     let mut body = BytesMut::with_capacity(response.encoded_len(0));
@@ -109,6 +119,9 @@ pub(crate) fn handle<'a>(
     context: &'a crate::handlers::RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     let handler_start = std::time::Instant::now();
+    let listener_kind = broker
+        .config
+        .listener_kind(context.connection_listener_name);
     let metrics = broker.metrics.clone();
     let image = broker.controller.current_image();
     let expected_cluster_id = image.cluster_id().to_string();
@@ -158,7 +171,14 @@ pub(crate) fn handle<'a>(
         }
 
         let resp = ApiVersionsResponse {
-            api_keys: crate::api_catalog::supported_apis(),
+            // KIP-714 and Kafka's `ApiMessageType.ListenerType`: the table is
+            // scoped to the listener this request arrived on and to whether a
+            // client-metrics receiver is configured, so a client reads back
+            // what it reads back from a Kafka broker.
+            api_keys: crate::api_catalog::supported_apis(
+                listener_kind,
+                broker.config.client_metrics_receiver(),
+            ),
             // KIP-584 write-side. `supported_features` advertises the
             // broker's `crate::features` table; `finalized_features` + the
             // epoch are read from the live metadata image. A fresh broker

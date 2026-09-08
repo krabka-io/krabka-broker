@@ -203,7 +203,7 @@ impl DispatchRegistry {
     }
 
     pub(crate) fn apply_api_catalog(&mut self) {
-        for api in crate::api_catalog::supported_apis() {
+        for api in crate::api_catalog::dispatched_apis() {
             let entry = self
                 .table
                 .get_mut(&api.api_key)

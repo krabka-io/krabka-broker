@@ -24,7 +24,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `audit` | table | broker default |  | `[audit]` section of `broker.toml` (`FedRAMP` 20x MLA). See `[audit]` below. |
-| `authorization` | table | broker default |  | TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer. See `[authorization]` below. |
+| `authorization` | table | broker default |  | TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. Omitting the whole block leaves the cluster with no authorizer, which is what Kafka has when `authorizer.class.name` is unset: every principal is allowed everything, and the ACL administration RPCs -- `DescribeAcls`, `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with "No Authorizer is configured." rather than an empty listing or a stored binding nothing would consult. `kafka-acls` reports that refusal. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer. See `[authorization]` below. |
 | `auto_join` | boolean | broker default |  | Enable automatic dynamic controller enrollment. |
 | `bootstrap_servers` | array of string | `[]` |  | KIP-853 controller discovery endpoints. Hosts remain unresolved so DNS names can be refreshed on each retry. |
 | `break_glass` | table | broker default |  | TOML shape of `[break_glass]`. Maps to [`crate::config::BreakGlassConfig`]. Every field is `Option`, so `approvers = []` and `signed_actions = []` are each a written choice and are distinct from omitting the key. `deny_unknown_fields` so a misspelled key is rejected at parse time. See `[break_glass]` below. |
@@ -108,13 +108,13 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 
 ### `[authorization]`
 
-TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer.
+TOML shape of `[authorization]`. `type` (renamed to `authz_type` on the Rust side to avoid shadowing the keyword) defaults to `AllowAll`; `super_users` is the principal bypass list consulted by every concrete authorizer impl. Omitting the whole block leaves the cluster with no authorizer, which is what Kafka has when `authorizer.class.name` is unset: every principal is allowed everything, and the ACL administration RPCs -- `DescribeAcls`, `CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with "No Authorizer is configured." rather than an empty listing or a stored binding nothing would consult. `kafka-acls` reports that refusal. `deny_unknown_fields` so a misspelled `super_user` typo at the top of the `[authorization]` block is rejected at parse time rather than silently producing the wrong authorizer.
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `opa` | table | broker default |  | TOML shape of `[authorization.opa]`. Mirrors the constructor arguments of [`crate::authorizer::opa::OpaAuthorizer::new`]. Defaults are picked to match Strimzi's `KafkaAuthorizationOpa` (`50_000` LRU entries, 1 h TTL, fail-closed on OPA error). See `[authorization.opa]` below. |
 | `super_users` | array of string | `[]` |  | Principals that bypass every ACL check, Kafka's `super.users`. The active authorizer and the delegation-token `act-as` gate both read it. Empty is the default and grants no bypass. |
-| `type` | one of `allow_all`, `simple`, `opa` | broker default |  | Which [`crate::authorizer::Authorizer`] impl to instantiate. `snake_case` to match the spec's `type = "allow_all" \| "simple" \| "opa"` wire shape. |
+| `type` | one of `allow_all`, `simple`, `opa` | broker default |  | Which [`crate::authorizer::Authorizer`] impl to instantiate. `snake_case` to match the spec's `type = "allow_all" \| "simple" \| "opa"` wire shape. `allow_all` is the default and is not an authorizer: it allows every principal every operation, and the ACL administration RPCs answer `SECURITY_DISABLED` (54) with "No Authorizer is configured.", as Kafka does with no `authorizer.class.name`. `simple` and `opa` are decision points, and under either the ACL RPCs serve requests normally. |
 
 #### `[authorization.opa]`
 
@@ -381,6 +381,7 @@ Validated operational policy loaded from `[runtime]`.
 | `classic_group_initial_rebalance_delay` | string | broker default | duration | Initial delay before a classic group begins rebalancing, Kafka's `group.initial.rebalance.delay.ms`. |
 | `cleaner_interval` | string | broker default | duration | Cadence of log cleaner maintenance. |
 | `client_metrics_default_interval` | string | broker default | duration | Default KIP-714 client telemetry subscription push interval. |
+| `client_metrics_enable` | boolean | broker default |  | Whether the broker advertises the KIP-714 client-metrics RPCs, `GetTelemetrySubscriptions` (71) and `PushTelemetry` (72). Kafka advertises them only when `metric.reporters` holds a `ClientTelemetry` implementation, so the default here is `false` as well and a client starts no telemetry handshake the broker has nowhere to forward. A configured `[telemetry]` OTLP endpoint turns them on without this key. |
 | `client_metrics_eviction_tick` | string | broker default | duration | Cadence at which the KIP-714 client-metrics cache evicts entries. |
 | `client_metrics_otlp_queue_capacity` | integer (uint) | broker default |  | Capacity of the client-metrics OTLP forwarding queue. |
 | `client_metrics_prom_snapshot_ttl` | string | broker default | duration | Lifetime of a Prometheus client-metrics snapshot. |

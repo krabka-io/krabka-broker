@@ -245,6 +245,7 @@ impl Default for BrokerConfig {
             // metrics by default.
             metrics_listen_addr: None,
             profiling: krabka_telemetry::profiling::ProfilingConfig::default(),
+            client_metrics_enable: false,
             client_metrics_otlp_endpoint: None,
             client_metrics_otlp_protocol: krabka_telemetry::OtlpProtocol::Grpc,
             // The broker binary replaces this with the controller that drives

@@ -204,8 +204,11 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
     let client = TcpStream::connect(addr).await.expect("connect");
     let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
 
-    for (correlation_id, api) in crate::api_catalog::supported_apis().into_iter().enumerate() {
-        let entry = registry.get(api.api_key).expect("advertised API entry");
+    for (correlation_id, api) in crate::api_catalog::dispatched_apis()
+        .into_iter()
+        .enumerate()
+    {
+        let entry = registry.get(api.api_key).expect("dispatched API entry");
         let version = api
             .max_version
             .checked_add(1)
@@ -254,7 +257,15 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
             let decoded = ApiVersionsResponse::decode(&mut &response[header_len..], 0)
                 .expect("max+1 ApiVersions uses the v0 body");
             check!(decoded.error_code == codes::UNSUPPORTED_VERSION);
-            check!(decoded.api_keys == crate::api_catalog::supported_apis());
+            // The `PLAINTEXT` listener above is the only one this broker
+            // binds, so it advertises the client table.
+            check!(
+                decoded.api_keys
+                    == crate::api_catalog::supported_apis(
+                        crate::api_catalog::ListenerKind::Client,
+                        crate::api_catalog::ClientMetricsReceiver::Absent,
+                    )
+            );
         }
     }
 

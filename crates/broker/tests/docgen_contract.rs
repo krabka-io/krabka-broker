@@ -49,7 +49,10 @@ fn file_config_schema_has_the_shape_docgen_renders() {
 
 #[test]
 fn supported_apis_is_non_empty_and_unique_by_key() {
-    let apis = krabka_broker::api_catalog::supported_apis();
+    let apis = krabka_broker::api_catalog::supported_apis(
+        krabka_broker::api_catalog::ListenerKind::Client,
+        krabka_broker::api_catalog::ClientMetricsReceiver::Absent,
+    );
     assert!(!apis.is_empty());
     let keys: BTreeSet<i16> = apis.iter().map(|api| api.api_key).collect();
     assert!(

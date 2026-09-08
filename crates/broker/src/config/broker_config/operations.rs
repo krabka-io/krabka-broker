@@ -38,6 +38,23 @@ macro_rules! operations_fields {
             /// CPU and heap profiling endpoint policy.
             pub profiling: krabka_telemetry::profiling::ProfilingConfig,
 
+            /// Whether this broker advertises the KIP-714 client-metrics RPCs,
+            /// `GetTelemetrySubscriptions` (71) and `PushTelemetry` (72).
+            ///
+            /// Kafka advertises the pair only when `metric.reporters` holds a
+            /// `ClientTelemetry` implementation, so a stock broker offers no
+            /// telemetry handshake and a modern Java or librdkafka client
+            /// starts none. This key is krabka's equivalent, and the default is
+            /// `false` for the same reason. A configured
+            /// [`client_metrics_otlp_endpoint`][Self::client_metrics_otlp_endpoint]
+            /// is a receiver in its own right and turns the pair on without
+            /// this key; [`BrokerConfig::client_metrics_receiver`] is where the
+            /// two meet.
+            ///
+            /// Turning advertisement off does not unregister the handlers. A
+            /// client that sends either RPC anyway is still answered.
+            pub client_metrics_enable: bool,
+
             /// Optional OTLP endpoint for KIP-714 client metrics forwarding.
             /// Binaries populate it from their parsed runtime configuration. The
             /// broker does not read it from the environment at startup.

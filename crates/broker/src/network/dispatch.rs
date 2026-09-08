@@ -233,11 +233,17 @@ async fn send_unsupported_version<S>(
     entry: crate::handlers::registry::DispatchEntry,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
-    started: std::time::Instant,
+    listener_name: &str,
 ) -> AfterResponse
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let (started, _in_flight) = begin_request(broker, parsed);
+    tracing::warn!(
+        api_key = parsed.api_key,
+        api_version = parsed.api_version,
+        "unsupported api version"
+    );
     broker
         .metrics
         .record_unsupported_api_request(parsed.api_key);
@@ -247,7 +253,10 @@ where
         entry.nearest_supported_version(parsed.api_version)
     };
     let encoded_body = if parsed.api_key == API_VERSIONS_KEY {
-        Some(crate::handlers::api_versions::unsupported_version_response())
+        Some(crate::handlers::api_versions::unsupported_version_response(
+            broker,
+            listener_name,
+        ))
     } else {
         unsupported_version::body(parsed.api_key, response_version)
     };
@@ -482,13 +491,7 @@ async fn serve_connection_stream<S>(
             break;
         };
         if !entry.supports_version(parsed.api_version) {
-            let (started, _in_flight) = begin_request(&broker, &parsed);
-            tracing::warn!(
-                api_key = parsed.api_key,
-                api_version = parsed.api_version,
-                "unsupported api version"
-            );
-            match send_unsupported_version(&mut framed, &broker, entry, &parsed, &auth, started)
+            match send_unsupported_version(&mut framed, &broker, entry, &parsed, &auth, &spec.name)
                 .await
             {
                 AfterResponse::Close => break,

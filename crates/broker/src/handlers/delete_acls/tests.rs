@@ -22,7 +22,7 @@ use crate::{
     codes,
     handlers::delete_acls::test_support::{
         OPERATION_READ, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, RESOURCE_TYPE_TOPIC, VERSION, acl,
-        decode_response, filter, request, test_context,
+        configured_authorizer, decode_response, filter, request, test_context,
     },
     test_support::{
         DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
@@ -89,7 +89,7 @@ async fn handle_denies_cluster_alter_for_each_filter() {
 
 #[tokio::test]
 async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     seed_acls(
         &broker_handle,
         vec![
@@ -132,5 +132,45 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
 
     let remaining = all_acls(&broker_handle);
     assert!(remaining == vec![acl("payments", "User:bob", AclOperation::Write)]);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka's `KafkaApis.handleDeleteAcls` refuses every filter with
+/// `SECURITY_DISABLED` when no authorizer is configured, and reports no
+/// matching ACLs. The default `AllowAllAuthorizer` is that state, and the
+/// seeded binding must survive the refusal.
+#[tokio::test]
+async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_configured() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    seed_acls(
+        &broker_handle,
+        vec![acl("orders", "User:alice", AclOperation::Read)],
+    )
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let req = request(vec![
+        filter(Some("orders"), Some("User:alice")),
+        filter(Some("payments"), Some("User:bob")),
+    ]);
+
+    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
+    let resp = decode_response(&resp);
+
+    let disabled = DeleteAclsFilterResult {
+        error_code: codes::SECURITY_DISABLED,
+        error_message: Some("No Authorizer is configured.".into()),
+        matching_acls: Vec::new(),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let expected = DeleteAclsResponse {
+        throttle_time_ms: 0,
+        filter_results: vec![disabled.clone(), disabled],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+    assert!(all_acls(&broker_handle) == vec![acl("orders", "User:alice", AclOperation::Read)]);
     broker_handle.shutdown().await;
 }

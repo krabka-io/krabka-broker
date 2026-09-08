@@ -10,6 +10,13 @@ use krabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
 /// Every cluster-scoped ACL and authorization check targets this name.
 pub const CLUSTER_RESOURCE_NAME: &str = "kafka-cluster";
 
+/// What Kafka's `KafkaApis` puts in the error message of `DescribeAcls`,
+/// `CreateAcls` and `DeleteAcls` when the cluster runs no authorizer. It
+/// builds the `CreateAcls` and `DeleteAcls` responses from a
+/// `SecurityDisabledException` carrying this text, and writes it into the
+/// `DescribeAcls` response field directly.
+pub const NO_AUTHORIZER_MESSAGE: &str = "No Authorizer is configured.";
+
 /// Wire `i8` discriminant of an ACL `resource_type` field.
 pub type ResourceTypeCode = i8;
 /// Wire `i8` discriminant of an ACL `pattern_type` field.

@@ -87,7 +87,10 @@ async fn wait_for_leader(broker: &Broker) {
 
 #[test]
 fn api_versions_advertises_legacy_data_plane_min() {
-    let table = crate::api_catalog::supported_apis();
+    let table = crate::api_catalog::supported_apis(
+        crate::api_catalog::ListenerKind::Client,
+        crate::api_catalog::ClientMetricsReceiver::Absent,
+    );
     let produce = table.iter().find(|v| v.api_key == 0).expect("produce");
     let fetch = table.iter().find(|v| v.api_key == 1).expect("fetch");
     let list_offsets = table.iter().find(|v| v.api_key == 2).expect("list offsets");
@@ -108,7 +111,12 @@ fn api_versions_advertises_legacy_data_plane_min() {
 #[test]
 fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
     use krabka_protocol::owned;
-    let table = crate::api_catalog::supported_apis();
+    // UpdateRaftVoter (82) is inter-broker only, so the table that carries all
+    // three KIP-853 RPCs is the inter-broker listener's.
+    let table = crate::api_catalog::supported_apis(
+        crate::api_catalog::ListenerKind::InterBroker,
+        crate::api_catalog::ClientMetricsReceiver::Absent,
+    );
     let by_key = |k: i16| table.iter().find(|v| v.api_key == k);
 
     for (key, max) in [
@@ -202,7 +210,11 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     check!(
-        resp.api_keys == crate::api_catalog::supported_apis(),
+        resp.api_keys
+            == crate::api_catalog::supported_apis(
+                crate::api_catalog::ListenerKind::Client,
+                crate::api_catalog::ClientMetricsReceiver::Absent,
+            ),
         "{resp:?}"
     );
     check!(!resp.supported_features.is_empty(), "{resp:?}");

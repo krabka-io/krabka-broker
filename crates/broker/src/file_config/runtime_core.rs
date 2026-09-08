@@ -65,6 +65,7 @@ impl RuntimeFileConfig {
             future_log_move_retry_backoff,
             cfg.future_log_move_retry_backoff
         );
+        set_runtime_plain!(runtime, client_metrics_enable, cfg.client_metrics_enable);
         set_runtime_time_millis!(
             runtime,
             client_metrics_eviction_tick,

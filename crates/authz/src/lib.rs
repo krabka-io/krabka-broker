@@ -101,6 +101,19 @@ pub trait Authorizer: Send + Sync + std::fmt::Debug {
         source: &dyn AclSource,
         req: &AuthorizationRequest<'_>,
     ) -> AuthorizationResult;
+
+    /// Whether this implementation is a real authorization decision point,
+    /// the way Kafka's `authorizer.class.name` names one.
+    ///
+    /// Only [`AllowAllAuthorizer`] answers `false`: it is what a deployment
+    /// gets when it configures no authorizer at all, so a stored ACL would
+    /// never be consulted. The ACL administration RPCs read this to answer
+    /// `SECURITY_DISABLED`, as Kafka's `KafkaApis` does under
+    /// `authorizer.isEmpty`. A decorator must forward it to the authorizer it
+    /// wraps.
+    fn is_configured(&self) -> bool {
+        true
+    }
 }
 
 /// Batch-authorize a set of topic names against the same principal, host, and

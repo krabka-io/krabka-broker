@@ -159,7 +159,7 @@ fn registry_reports_missing_keys() {
 fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
     let registry = build_registry();
     let registered: BTreeSet<ApiKeyCode> = registry.registered_api_keys().collect();
-    let advertised: BTreeSet<ApiKeyCode> = crate::api_catalog::supported_apis()
+    let dispatched: BTreeSet<ApiKeyCode> = crate::api_catalog::dispatched_apis()
         .into_iter()
         .map(|api| api.api_key)
         .collect();
@@ -171,22 +171,22 @@ fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
         .filter(|key| *key < floor)
         .collect();
 
-    // Every advertised key is registered, and every registered Kafka key is
-    // advertised. The krabka-private keys are deliberately absent from the
+    // Every dispatched key is registered, and every registered Kafka key is
+    // dispatched. The krabka-private keys are deliberately absent from the
     // catalog: advertising them would put UNKNOWN(1010) rows into
     // kafka-broker-api-versions output, a visible divergence from a real
     // broker, and a client that does not find a key negotiates (0, 0),
     // which is right for a MIN = MAX = 0 request.
-    assert!(advertised.is_subset(&registered));
-    assert!(registered_kafka == advertised);
-    assert!(advertised.iter().all(|key| *key < floor));
+    assert!(dispatched.is_subset(&registered));
+    assert!(registered_kafka == dispatched);
+    assert!(dispatched.iter().all(|key| *key < floor));
 }
 
 #[test]
 fn registry_version_bounds_match_api_catalog() {
     let registry = build_registry();
 
-    for api in crate::api_catalog::supported_apis() {
+    for api in crate::api_catalog::dispatched_apis() {
         let entry = registry
             .get(api.api_key)
             .unwrap_or_else(|| panic!("registered api_key {}", api.api_key));

@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AuthzType": {
-      "description": "Which [`crate::authorizer::Authorizer`] impl to instantiate.\n`snake_case` to match the spec's `type = \"allow_all\" | \"simple\" |\n\"opa\"` wire shape.",
+      "description": "Which [`crate::authorizer::Authorizer`] impl to instantiate.\n`snake_case` to match the spec's `type = \"allow_all\" | \"simple\" |\n\"opa\"` wire shape.\n\n`allow_all` is the default and is not an authorizer: it allows every\nprincipal every operation, and the ACL administration RPCs answer\n`SECURITY_DISABLED` (54) with \"No Authorizer is configured.\", as Kafka\ndoes with no `authorizer.class.name`. `simple` and `opa` are decision\npoints, and under either the ACL RPCs serve requests normally.",
       "enum": [
         "allow_all",
         "simple",
@@ -151,7 +151,7 @@
     },
     "FileAuthorizationConfig": {
       "additionalProperties": false,
-      "description": "TOML shape of `[authorization]`. `type` (renamed to `authz_type` on\nthe Rust side to avoid shadowing the keyword) defaults to\n`AllowAll`; `super_users` is the principal bypass list consulted by\nevery concrete authorizer impl.\n\n`deny_unknown_fields` so a misspelled `super_user` typo at the top\nof the `[authorization]` block is rejected at parse time rather\nthan silently producing the wrong authorizer.",
+      "description": "TOML shape of `[authorization]`. `type` (renamed to `authz_type` on\nthe Rust side to avoid shadowing the keyword) defaults to\n`AllowAll`; `super_users` is the principal bypass list consulted by\nevery concrete authorizer impl.\n\nOmitting the whole block leaves the cluster with no authorizer, which is\nwhat Kafka has when `authorizer.class.name` is unset: every principal is\nallowed everything, and the ACL administration RPCs -- `DescribeAcls`,\n`CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with\n\"No Authorizer is configured.\" rather than an empty listing or a stored\nbinding nothing would consult. `kafka-acls` reports that refusal.\n\n`deny_unknown_fields` so a misspelled `super_user` typo at the top\nof the `[authorization]` block is rejected at parse time rather\nthan silently producing the wrong authorizer.",
       "properties": {
         "opa": {
           "anyOf": [
@@ -1558,6 +1558,13 @@
           "format": "duration",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "client_metrics_enable": {
+          "description": "Whether the broker advertises the KIP-714 client-metrics RPCs,\n`GetTelemetrySubscriptions` (71) and `PushTelemetry` (72). Kafka\nadvertises them only when `metric.reporters` holds a `ClientTelemetry`\nimplementation, so the default here is `false` as well and a client\nstarts no telemetry handshake the broker has nowhere to forward. A\nconfigured `[telemetry]` OTLP endpoint turns them on without this key.",
+          "type": [
+            "boolean",
             "null"
           ]
         },
