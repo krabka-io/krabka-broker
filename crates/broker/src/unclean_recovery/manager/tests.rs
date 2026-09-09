@@ -421,10 +421,12 @@ async fn audit_only_elects_and_records_the_bypass() {
 #[tokio::test]
 async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
     let (audit_log, mut events) = AuditLog::new(8);
-    let source = source_with(Some(NODE), image_with_partition(1, &[1, 2]));
+    let mut seeded = image_with_partition(1, &[1, 2]);
+    publish_elr(&mut seeded, &[2]);
+    let source = source_with(Some(NODE), seeded);
     let image = source.current_image();
     let mgr = manager_with(
-        source,
+        Arc::clone(&source),
         liveness_with_alive(&[2]).await,
         &gated(BackgroundUncleanRecovery::AuditOnly),
         audit_log,
@@ -449,6 +451,12 @@ async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
         .await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
+    let submitted = source.submitted();
+    assert!(submitted.len() == 1, "{submitted:?}");
+    assert!(let MetadataRecord::V1PartitionUpdate(update) = &submitted[0][0]);
+    check!(update.partition.leader == NodeId(2));
+    check!(update.recovery_state.is_none());
+    check!(submitted[0].len() == 1, "lossless election: {submitted:?}");
     let event = events
         .try_recv()
         .expect("an election reaches the audit log");

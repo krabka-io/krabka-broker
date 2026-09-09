@@ -192,6 +192,10 @@ async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_chan
             }
     );
     check!(*one_partition_change(&records[1..]) == elected());
+    assert!(let MetadataRecord::V1PartitionUpdate(update) = &records[1]);
+    check!(update.eligible_leader_replicas == Some(Vec::new()));
+    check!(update.last_known_elr == Some(Vec::new()));
+    check!(update.recovery_state == Some(krabka_metadata::LeaderRecoveryState::Recovering));
     handle.shutdown().await;
 }
 

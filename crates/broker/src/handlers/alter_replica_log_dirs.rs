@@ -51,6 +51,7 @@ pub(crate) fn handle(
     let all_log_dirs = broker.config.all_log_dirs();
     let log_config = broker.config.log_config.clone();
     let log_dir_status = broker.log_dir_status.clone();
+    let controller = broker.controller.clone();
     let move_policy = future_log::MovePolicy {
         retry_backoff: broker.config.future_log_move_retry_backoff,
         read_chunk: broker.config.future_log_move_read_chunk,
@@ -59,6 +60,7 @@ pub(crate) fn handle(
     Box::pin(async move {
         let mut cur: &[u8] = &req_bytes;
         let req = AlterReplicaLogDirsRequest::decode(&mut cur, version)?;
+        let image = controller.current_image();
 
         // (topic, partition) → error code. The wire format lets a
         // client list the same partition under multiple target dirs;
@@ -77,6 +79,7 @@ pub(crate) fn handle(
                         &log_dir_status,
                         &log_config,
                         (&topic.name, krabka_ids::PartitionIndex(partition_index)),
+                        image.topic(&topic.name).map(|topic| topic.topic_id),
                         &target_path,
                         move_policy.clone(),
                     )

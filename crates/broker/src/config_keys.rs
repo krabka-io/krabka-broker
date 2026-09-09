@@ -115,6 +115,9 @@ mod schema;
 mod topic_scope;
 mod validation;
 
+#[cfg(test)]
+pub(crate) use topic_scope::ELIGIBLE_LEADER_REPLICAS;
+
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
 // Reached only from #[cfg(test)] code -- the produce delivery/throttle tests and
 // the alter_configs tests -- so an ungated re-export is dead in a normal build.
@@ -154,8 +157,6 @@ pub(crate) use self::{
         validate_remote_storage_disable, validate_topic_config, validate_topic_config_map,
     },
 };
-#[cfg(test)]
-pub(crate) use topic_scope::ELIGIBLE_LEADER_REPLICAS;
 
 pub(crate) const RETENTION_MS: &str = "retention.ms";
 pub(crate) const RETENTION_BYTES: &str = "retention.bytes";

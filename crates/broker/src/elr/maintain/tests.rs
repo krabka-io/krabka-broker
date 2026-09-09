@@ -1,5 +1,5 @@
 //! The KIP-966 state machine: what one partition's ELR becomes when a change
-//! applies, and the `V1TopicConfig` records the publisher appends for it.
+//! applies, and the `V1PartitionElr` records the publisher appends for it.
 
 use assert2::assert;
 use krabka_metadata::{
@@ -266,6 +266,35 @@ fn the_published_record_keeps_the_topics_other_overrides() {
     ElrPublisher::new(&image).extend(&mut changes);
 
     assert!(changes == vec![update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[])]);
+}
+
+#[test]
+fn a_partition_change_migrates_legacy_elr_without_losing_it() {
+    let before = partition(1, &[1, 2, 3], &[1]);
+    let mut image = image(Some("3"), None, &before);
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: TOPIC.into(),
+        overrides: [
+            (MIN_INSYNC_REPLICAS.to_string(), "3".to_string()),
+            ("krabka.elr".to_string(), "0:2,3:".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    }));
+    let mut changes = vec![MetadataRecord::V1Partition(before)];
+
+    ElrPublisher::new(&image).extend(&mut changes);
+    for record in changes {
+        image.apply(&record);
+    }
+
+    assert!(TopicElr::of_topic(&image, TOPIC).partition(0) == elr(&[2, 3], &[]));
+    assert!(
+        !image
+            .topic_config(TOPIC)
+            .unwrap()
+            .contains_key("krabka.elr")
+    );
 }
 
 /// A topic that recovers drops the key rather than publishing an entry that

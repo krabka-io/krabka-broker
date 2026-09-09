@@ -37,6 +37,7 @@ pub(crate) async fn start_move(
     log_dir_status: &crate::log_dir_status::LogDirRegistry,
     log_config: &LogConfig,
     topic_partition: (&str, PartitionIndex),
+    topic_id: Option<uuid::Uuid>,
     target_log_dir: &Path,
     policy: MovePolicy,
 ) -> Result<(), MoveError> {
@@ -62,14 +63,18 @@ pub(crate) async fn start_move(
     let part = if let Some(part) = partitions.get(topic, partition) {
         part
     } else {
-        partitions.set_preferred_log_dir(topic, partition, target_log_dir.clone());
+        if let Some(topic_id) = topic_id {
+            partitions.set_preferred_log_dir(topic_id, partition, target_log_dir.clone());
+        }
         let Some(part) = partitions.get(topic, partition) else {
             return Err(MoveError::ReplicaNotAvailable);
         };
         // Materialization won the race before it could consume the
         // preference. Continue as an ordinary live-replica move without
         // leaving stale placement state behind.
-        partitions.clear_preferred_log_dir(topic, partition);
+        if let Some(topic_id) = topic_id {
+            partitions.clear_preferred_log_dir(topic_id, partition);
+        }
         part
     };
 
@@ -222,6 +227,7 @@ mod tests {
             &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             bogus.path(),
             test_policy(),
         )
@@ -242,6 +248,7 @@ mod tests {
             &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            Some(uuid::Uuid::from_u128(1)),
             dir.path(),
             test_policy(),
         )
@@ -249,7 +256,8 @@ mod tests {
         .expect_err("expected ReplicaNotAvailable");
         assert!(matches!(err, MoveError::ReplicaNotAvailable));
         assert!(
-            partitions.preferred_log_dir("t", PartitionIndex(0)) == Some(dir.path().to_path_buf())
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
+                == Some(dir.path().to_path_buf())
         );
     }
 
@@ -259,7 +267,11 @@ mod tests {
         let future_logs = Arc::new(DashMap::new());
         let valid = tempdir().unwrap();
         let invalid = tempdir().unwrap();
-        partitions.set_preferred_log_dir("t", PartitionIndex(0), valid.path().to_path_buf());
+        partitions.set_preferred_log_dir(
+            uuid::Uuid::from_u128(1),
+            PartitionIndex(0),
+            valid.path().to_path_buf(),
+        );
 
         let err = start_move(
             &partitions,
@@ -268,6 +280,7 @@ mod tests {
             &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            Some(uuid::Uuid::from_u128(1)),
             invalid.path(),
             test_policy(),
         )
@@ -276,7 +289,7 @@ mod tests {
 
         assert!(matches!(err, MoveError::LogDirNotFound));
         assert!(
-            partitions.preferred_log_dir("t", PartitionIndex(0))
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
                 == Some(valid.path().to_path_buf())
         );
     }
@@ -297,6 +310,7 @@ mod tests {
                 &crate::log_dir_status::LogDirRegistry::default(),
                 &LogConfig::default(),
                 ("t", PartitionIndex(0)),
+                Some(uuid::Uuid::from_u128(1)),
                 target,
                 test_policy(),
             )
@@ -305,7 +319,10 @@ mod tests {
             assert!(matches!(error, MoveError::ReplicaNotAvailable));
         }
 
-        assert!(partitions.preferred_log_dir("t", PartitionIndex(0)) == Some(log_dirs[1].clone()));
+        assert!(
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
+                == Some(log_dirs[1].clone())
+        );
     }
 
     #[tokio::test]
@@ -316,7 +333,11 @@ mod tests {
         let offline = tempdir().unwrap();
         let status = crate::log_dir_status::LogDirRegistry::default();
         status.mark_offline(offline.path(), "test failure");
-        partitions.set_preferred_log_dir("t", PartitionIndex(0), first.path().to_path_buf());
+        partitions.set_preferred_log_dir(
+            uuid::Uuid::from_u128(1),
+            PartitionIndex(0),
+            first.path().to_path_buf(),
+        );
 
         let error = start_move(
             &partitions,
@@ -325,6 +346,7 @@ mod tests {
             &status,
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            Some(uuid::Uuid::from_u128(1)),
             offline.path(),
             test_policy(),
         )
@@ -333,7 +355,7 @@ mod tests {
 
         assert!(matches!(error, MoveError::Storage(_)));
         assert!(
-            partitions.preferred_log_dir("t", PartitionIndex(0))
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
                 == Some(first.path().to_path_buf())
         );
     }
@@ -357,6 +379,7 @@ mod tests {
             &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             primary.path(),
             test_policy(),
         )
@@ -428,6 +451,7 @@ mod tests {
             &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             extra.path(),
             test_policy(),
         )
@@ -479,6 +503,7 @@ mod tests {
             &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             third.path(),
             test_policy(),
         )

@@ -65,14 +65,14 @@
 //! registration handler calls that, not this, whenever the clean-shutdown
 //! proof fails.
 //!
-//! Kafka gates the whole thing on `isElrFeatureEnabled`. krabka has no such
-//! feature to finalize -- see [`crate::elr::maintain`] -- so the withdrawal is
-//! unconditional, the way the rest of krabka's ELR maintenance is.
+//! Kafka gates the whole thing on `isElrFeatureEnabled`; krabka applies the
+//! same feature-level gate below.
+
+use krabka_metadata::{MetadataImage, MetadataRecord, NodeId};
 
 use crate::features::{ELR_VERSION, feature_enabled};
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionElrRecord};
 
-/// The `V1TopicConfig` records that take `node` out of every ELR it is named
+/// The `V1PartitionElr` records that take `node` out of every ELR it is named
 /// in, cluster-wide.
 ///
 /// Empty when the node is in no ELR anywhere, which is the common case: a
@@ -83,9 +83,9 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
     // A node id too wide for the wire could never have been published into an
     // ELR value in the first place -- `wire_node_ids` drops it -- so there is
     // nothing to withdraw.
-    let Ok(node) = i32::try_from(node.0) else {
+    if i32::try_from(node.0).is_err() {
         return Vec::new();
-    };
+    }
     // Kafka's `handleBrokerShutdown` runs its unclean branch only under
     // `isElrFeatureEnabled()`. Below level 1 the controller publishes no ELR,
     // and a downgrade to 0 has already cleared whatever an earlier level 1
@@ -93,32 +93,33 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
     if !feature_enabled(image, ELR_VERSION, 1) {
         return Vec::new();
     }
-    image
+    let topics: std::collections::BTreeSet<_> = image
         .all_partitions()
-        .filter_map(|partition| {
-            let (eligible, last_known) = image.partition_elr(&partition.topic, partition.partition);
-            let node = NodeId(u64::try_from(node).ok()?);
-            if !eligible.contains(&node) {
+        .map(|partition| partition.topic.as_str())
+        .collect();
+    topics
+        .into_iter()
+        .flat_map(|topic| crate::elr::TopicElr::of_topic(image, topic).records(topic))
+        .filter_map(|record| {
+            let MetadataRecord::V1PartitionElr(mut record) = record else {
+                unreachable!()
+            };
+            if !record.eligible_leader_replicas.contains(&node) {
                 return None;
             }
-            let mut eligible = eligible.to_vec();
-            eligible.retain(|candidate| *candidate != node);
-            let mut last_known = last_known.to_vec();
-            if !last_known.contains(&node) {
-                last_known.push(node);
-                last_known.sort_unstable();
+            record
+                .eligible_leader_replicas
+                .retain(|candidate| *candidate != node);
+            if !record.last_known_elr.contains(&node) {
+                record.last_known_elr.push(node);
+                record.last_known_elr.sort_unstable();
             }
-            Some(MetadataRecord::V1PartitionElr(PartitionElrRecord {
-                topic: partition.topic.clone(),
-                partition: partition.partition,
-                eligible_leader_replicas: eligible,
-                last_known_elr: last_known,
-            }))
+            Some(MetadataRecord::V1PartitionElr(record))
         })
         .collect()
 }
 
-/// The `V1TopicConfig` records that drop every published ELR, cluster-wide.
+/// The records that drop every published ELR, cluster-wide.
 ///
 /// `UpdateFeatures` emits them in the same batch as the
 /// `eligible.leader.replicas.version` record that finalizes the feature back
@@ -130,21 +131,25 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
 /// Empty when no topic carries the override, which is every cluster that
 /// never turned the feature on.
 pub(crate) fn clear_published_elr(image: &MetadataImage) -> Vec<MetadataRecord> {
-    image
+    let topics: std::collections::BTreeSet<_> = image
         .all_partitions()
-        .filter(|partition| {
-            let (eligible, last_known) = image.partition_elr(&partition.topic, partition.partition);
-            !eligible.is_empty() || !last_known.is_empty()
-        })
-        .map(|partition| {
-            MetadataRecord::V1PartitionElr(PartitionElrRecord {
-                topic: partition.topic.clone(),
-                partition: partition.partition,
-                eligible_leader_replicas: Vec::new(),
-                last_known_elr: Vec::new(),
-            })
-        })
-        .collect()
+        .map(|partition| partition.topic.as_str())
+        .collect();
+    let mut records = Vec::new();
+    for topic in topics {
+        for record in crate::elr::TopicElr::of_topic(image, topic).records(topic) {
+            let MetadataRecord::V1PartitionElr(mut record) = record else {
+                unreachable!()
+            };
+            record.eligible_leader_replicas.clear();
+            record.last_known_elr.clear();
+            records.push(MetadataRecord::V1PartitionElr(record));
+        }
+        if let Some(record) = crate::elr::state::without_legacy_elr(image, topic, None) {
+            records.push(record);
+        }
+    }
+    records
 }
 
 #[cfg(test)]

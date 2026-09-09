@@ -53,11 +53,9 @@
 //!
 //! [`ElrPublisher::extend`] reads the partition changes a controller path has
 //! already built, works out the ELR each of their partitions ends up with,
-//! and appends one `V1TopicConfig` per topic whose rendered value moved.
-//! Applying a `V1TopicConfig` replaces a topic's whole override map, so the
-//! appended record carries every other override the topic has as well; it is
-//! built from the batch's own config record for that topic when the batch has
-//! one, and from the image otherwise.
+//! and appends one `V1PartitionElr` per partition whose rendered value moved.
+//! Legacy topic-config state is migrated first; removing its private key keeps
+//! every other topic override from the batch or image intact.
 //!
 //! Nothing is appended when nothing moved, which is the common case: a
 //! cluster that leaves `min.insync.replicas` at Kafka's default of 1 can
@@ -68,7 +66,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionElrRecord, PartitionRecord};
 
-use super::state::{PartitionElr, wire_node_ids};
+use super::state::{PartitionElr, TopicElr, legacy_elr, wire_node_ids, without_legacy_elr};
 use crate::{
     config_keys::effective_min_insync_replicas,
     features::{ELR_VERSION, feature_enabled},
@@ -127,7 +125,7 @@ impl<'a> ElrPublisher<'a> {
         }
     }
 
-    /// Append to `changes` the `V1TopicConfig` records that carry the ELR
+    /// Append to `changes` the `V1PartitionElr` records that carry the ELR
     /// state its partition changes imply.
     ///
     /// Call it once, after a controller path has built its whole batch and
@@ -137,13 +135,35 @@ impl<'a> ElrPublisher<'a> {
     /// established.
     pub(crate) fn extend(&self, changes: &mut Vec<MetadataRecord>) {
         if feature_enabled(self.image, ELR_VERSION, 1) {
-            let published = self.partition_records(changes);
+            let mut published = self.legacy_migration_records(changes);
+            published.extend(self.partition_records(changes));
             changes.extend(published);
         }
         coalesce_partition_state(changes);
     }
 
-    /// The `V1TopicConfig` records `extend` appends. Split out so the
+    fn legacy_migration_records(&self, changes: &[MetadataRecord]) -> Vec<MetadataRecord> {
+        let batch = Batch::of(changes);
+        let mut records = Vec::new();
+        for topic in batch.partitions.keys() {
+            let Some(legacy) = legacy_elr(self.image, topic) else {
+                continue;
+            };
+            records.extend(legacy.records(topic));
+            let replacement = changes.iter().rev().find_map(|record| match record {
+                MetadataRecord::V1TopicConfig(config) if config.topic == *topic => {
+                    Some(&config.overrides)
+                }
+                _ => None,
+            });
+            if let Some(record) = without_legacy_elr(self.image, topic, replacement) {
+                records.push(record);
+            }
+        }
+        records
+    }
+
+    /// The `V1PartitionElr` records `extend` appends. Split out so the
     /// decision can be tested without the append.
     fn partition_records(&self, changes: &[MetadataRecord]) -> Vec<MetadataRecord> {
         let batch = Batch::of(changes);
@@ -159,7 +179,7 @@ impl<'a> ElrPublisher<'a> {
             .collect()
     }
 
-    /// The one topic's `V1TopicConfig`, or `None` when its rendered ELR value
+    /// The partition's `V1PartitionElr`, or `None` when its rendered ELR value
     /// is the one the topic already carries.
     fn partition_record(
         &self,
@@ -167,11 +187,7 @@ impl<'a> ElrPublisher<'a> {
         partition: i32,
         record: &PartitionRecord,
     ) -> Option<MetadataRecord> {
-        let (eligible, last_known) = self.image.partition_elr(topic, partition);
-        let before = PartitionElr {
-            eligible_leader_replicas: wire_node_ids(eligible.iter().copied()),
-            last_known_elr: wire_node_ids(last_known.iter().copied()),
-        };
+        let before = TopicElr::of_topic(self.image, topic).partition(partition);
         let after = next_partition_elr(
             self.image,
             self.image.partition(topic, partition),
@@ -320,7 +336,7 @@ impl<'a> Batch<'a> {
 /// The ELR one partition ends up with when `next` applies.
 ///
 /// `previous` is the partition as the image holds it, `None` for a partition
-/// the batch creates. `published` is the ELR the topic config currently
+/// the batch creates. `published` is the ELR the metadata image currently
 /// carries for it. `unclean_shutdown` is Kafka's `uncleanShutdownReplicas`:
 /// replicas the batch has just stopped trusting, which no rule here may make
 /// eligible again.

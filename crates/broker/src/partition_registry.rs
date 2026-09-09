@@ -33,7 +33,7 @@ use crate::partition::Partition;
 #[derive(Debug, Default)]
 pub(crate) struct PartitionRegistry {
     inner: DashMap<Arc<str>, DashMap<PartitionIndex, Arc<Partition>>>,
-    preferred_log_dirs: DashMap<(String, PartitionIndex), std::path::PathBuf>,
+    preferred_log_dirs: DashMap<(uuid::Uuid, PartitionIndex), std::path::PathBuf>,
     stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 }
 
@@ -151,28 +151,27 @@ impl PartitionRegistry {
 
     pub(crate) fn set_preferred_log_dir(
         &self,
-        topic: &str,
+        topic_id: uuid::Uuid,
         partition: PartitionIndex,
         log_dir: std::path::PathBuf,
     ) {
         self.preferred_log_dirs
-            .insert((topic.to_string(), partition), log_dir);
+            .insert((topic_id, partition), log_dir);
     }
 
     #[must_use]
     pub(crate) fn preferred_log_dir(
         &self,
-        topic: &str,
+        topic_id: uuid::Uuid,
         partition: PartitionIndex,
     ) -> Option<std::path::PathBuf> {
         self.preferred_log_dirs
-            .get(&(topic.to_string(), partition))
+            .get(&(topic_id, partition))
             .map(|entry| entry.value().clone())
     }
 
-    pub(crate) fn clear_preferred_log_dir(&self, topic: &str, partition: PartitionIndex) {
-        self.preferred_log_dirs
-            .remove(&(topic.to_string(), partition));
+    pub(crate) fn clear_preferred_log_dir(&self, topic_id: uuid::Uuid, partition: PartitionIndex) {
+        self.preferred_log_dirs.remove(&(topic_id, partition));
     }
 
     /// The partition indices currently hosted for `topic`. It is empty when
@@ -368,6 +367,20 @@ mod tests {
             reg.materialize_if_vacant::<String>("t", PartitionIndex(2), || Err("boom".to_string()));
         assert!(err == Err("boom".to_string()));
         assert!(!reg.contains("t", PartitionIndex(2)));
+    }
+
+    #[test]
+    fn preferred_log_dirs_are_scoped_to_the_topic_incarnation() {
+        let reg = PartitionRegistry::new();
+        let old_topic_id = uuid::Uuid::from_u128(1);
+        let new_topic_id = uuid::Uuid::from_u128(2);
+        reg.set_preferred_log_dir(old_topic_id, PartitionIndex(0), "/old".into());
+
+        assert!(
+            reg.preferred_log_dir(new_topic_id, PartitionIndex(0))
+                .is_none()
+        );
+        assert!(reg.preferred_log_dir(old_topic_id, PartitionIndex(0)) == Some("/old".into()));
     }
 
     #[tokio::test]

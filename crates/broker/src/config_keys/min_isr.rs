@@ -50,22 +50,26 @@ pub(crate) fn clear_elr_records(
     if !crate::features::feature_enabled(image, crate::features::ELR_VERSION, 1) {
         return Vec::new();
     }
-    image
+    let topics: std::collections::BTreeSet<_> = image
         .all_partitions()
         .filter(|partition| topic.is_none_or(|name| partition.topic == name))
-        .filter(|partition| {
-            let (eligible, last_known) = image.partition_elr(&partition.topic, partition.partition);
-            !eligible.is_empty() || !last_known.is_empty()
-        })
-        .map(|partition| {
-            krabka_metadata::MetadataRecord::V1PartitionElr(krabka_metadata::PartitionElrRecord {
-                topic: partition.topic.clone(),
-                partition: partition.partition,
-                eligible_leader_replicas: Vec::new(),
-                last_known_elr: Vec::new(),
-            })
-        })
-        .collect()
+        .map(|partition| partition.topic.as_str())
+        .collect();
+    let mut records = Vec::new();
+    for topic in topics {
+        for record in crate::elr::TopicElr::of_topic(image, topic).records(topic) {
+            let krabka_metadata::MetadataRecord::V1PartitionElr(mut record) = record else {
+                unreachable!()
+            };
+            record.eligible_leader_replicas.clear();
+            record.last_known_elr.clear();
+            records.push(krabka_metadata::MetadataRecord::V1PartitionElr(record));
+        }
+        if let Some(record) = crate::elr::state::without_legacy_elr(image, topic, None) {
+            records.push(record);
+        }
+    }
+    records
 }
 
 /// Apache Kafka's `min.insync.replicas` default, used when neither the topic

@@ -358,14 +358,16 @@ impl UncleanRecoveryManager {
         // most-complete-log winner need not hold every committed record, so
         // nothing that was eligible before it still is and the publisher
         // clears the state outright.
-        let mut changes = vec![
-            MetadataRecord::V1Partition(new_pr),
-            MetadataRecord::V1PartitionRecovery(PartitionRecoveryRecord {
-                topic: job.topic.clone(),
-                partition: job.partition,
-                state: LeaderRecoveryState::Recovering,
-            }),
-        ];
+        let mut changes = vec![MetadataRecord::V1Partition(new_pr)];
+        if election.basis.loses_data() {
+            changes.push(MetadataRecord::V1PartitionRecovery(
+                PartitionRecoveryRecord {
+                    topic: job.topic.clone(),
+                    partition: job.partition,
+                    state: LeaderRecoveryState::Recovering,
+                },
+            ));
+        }
         crate::elr::ElrPublisher::new(image).extend(&mut changes);
         if let Err(e) = self.controller.submit_change(changes).await {
             warn!(error = %e, "unclean recovery submit_change failed");

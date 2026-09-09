@@ -74,8 +74,8 @@ pub(super) async fn elect_one(
                     .records
                     .push(MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
                         partition: new_pr,
-                        eligible_leader_replicas: None,
-                        last_known_elr: None,
+                        eligible_leader_replicas: Some(Vec::new()),
+                        last_known_elr: Some(Vec::new()),
                         recovery_state: Some(LeaderRecoveryState::Recovering),
                     }));
             } else {

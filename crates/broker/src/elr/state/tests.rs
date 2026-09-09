@@ -1,7 +1,9 @@
 //! Parsing and projection of the KIP-966 ELR state.
 
 use assert2::assert;
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord};
+use krabka_metadata::{
+    MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
+};
 
 use super::{PartitionElr, TopicElr};
 
@@ -66,6 +68,26 @@ fn of_topic_reads_the_published_config_and_defaults_to_no_elr() {
     assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[2, 3], &[4]));
     assert!(TopicElr::of_topic(&image, "orders").partition(1) == elr(&[], &[]));
     assert!(TopicElr::of_topic(&image, "payments").partition(0) == elr(&[], &[]));
+}
+
+#[test]
+fn of_topic_reads_legacy_elr_until_it_is_migrated() {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        topic: "orders".into(),
+        partition: 0,
+        ..Default::default()
+    }));
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "orders".into(),
+        overrides: [("krabka.elr".to_owned(), "0:2,3:4".to_owned())]
+            .into_iter()
+            .collect(),
+    }));
+
+    assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[], &[]));
+    crate::test_support::finalize_elr_version(&mut image);
+    assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[2, 3], &[4]));
 }
 
 /// A broker that can no longer be trusted to hold every committed record

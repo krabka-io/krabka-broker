@@ -75,7 +75,7 @@ pub(super) fn materialize_partition_with_replication_target(
     // partition can never pick two different log dirs.
     partitions.materialize_if_vacant(topic, PartitionIndex(partition), || {
         let partition_index = PartitionIndex(partition);
-        let preferred = partitions.preferred_log_dir(topic, partition_index);
+        let preferred = topic_id.and_then(|id| partitions.preferred_log_dir(id, partition_index));
         if preferred
             .as_ref()
             .is_some_and(|dir| log_dir_status.is_offline(dir))
@@ -146,7 +146,10 @@ pub(super) fn materialize_partition_with_replication_target(
         }
         .map_err(|e| format!("spawn partition: {e}"))?;
         if preferred.is_some() {
-            partitions.clear_preferred_log_dir(topic, partition_index);
+            partitions.clear_preferred_log_dir(
+                topic_id.expect("a preference is keyed by topic id"),
+                partition_index,
+            );
         }
         Ok(partition)
     })
@@ -263,12 +266,17 @@ mod tests {
         let first = tempfile::tempdir().expect("first log dir");
         let preferred = tempfile::tempdir().expect("preferred log dir");
         let partitions = Arc::new(PartitionRegistry::new());
-        partitions.set_preferred_log_dir("t", PartitionIndex(0), preferred.path().to_path_buf());
+        let topic_id = uuid::Uuid::from_u128(1);
+        partitions.set_preferred_log_dir(
+            topic_id,
+            PartitionIndex(0),
+            preferred.path().to_path_buf(),
+        );
 
         materialize_partition(MaterializePartitionConfig {
             partitions: &partitions,
             topic: "t",
-            topic_id: None,
+            topic_id: Some(topic_id),
             partition: 0,
             log_dirs: &[first.path().to_path_buf(), preferred.path().to_path_buf()],
             log_config: &LogConfig::default(),
@@ -289,7 +297,7 @@ mod tests {
         assert!(partition.log_dir.load_full().as_path() == preferred.path());
         assert!(
             partitions
-                .preferred_log_dir("t", PartitionIndex(0))
+                .preferred_log_dir(topic_id, PartitionIndex(0))
                 .is_none()
         );
     }
