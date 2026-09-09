@@ -86,7 +86,8 @@ async fn an_approved_proposal_survives_a_controller_failover() {
     let elected = wait_for_new_leader(&cluster[0].0, leader).await;
     check!(elected != leader, "a different node holds the quorum now");
 
-    let after_client = plain_client(&cluster[0].1.listen_addr.to_string()).await;
+    let elected_index = index_of(&cluster, elected);
+    let after_client = plain_client(&cluster[elected_index].1.listen_addr.to_string()).await;
     check!(
         stored(&after_client, id).await == before,
         "the proposal crossed the failover unchanged"
@@ -95,7 +96,7 @@ async fn an_approved_proposal_survives_a_controller_failover() {
         delete_topic(&after_client, "doomed").await == codes::NONE,
         "the surviving controller spends the approval"
     );
-    cluster[0]
+    cluster[elected_index]
         .0
         .wait_for_image(|image| {
             image
