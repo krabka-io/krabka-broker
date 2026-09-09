@@ -86,7 +86,7 @@
 //! A developer exercises the whole thing in a few minutes:
 //!
 //! ```text
-//! bazel run //packaging:image_load
+//! bazel run -c opt //packaging:image_load
 //! cargo test -p krabka-broker --test soak -- --ignored --nocapture
 //! ```
 //!

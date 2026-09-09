@@ -85,7 +85,7 @@ use zerocopy::FromBytes;
 ///
 /// `//bazel/defs.bzl` sets `KRABKA_BROKER_IMAGE` to the same string from
 /// `//bazel/krabka_image.bzl`, so the Bazel lane and a hand-run
-/// `bazel run //packaging:image_load && cargo test -- --ignored` agree.
+/// `bazel run -c opt //packaging:image_load && cargo test -- --ignored` agree.
 const DEFAULT_IMAGE: &str = "docker.io/krabka-io/krabka-broker:dev";
 
 /// Where the image's `working_dir` is, and what the data volume mounts on.
