@@ -3,8 +3,8 @@
 apko builds the locked Wolfi base. rules_img adds the Bazel-built broker and
 owns both local loading and registry delivery.
 
-    bazel run //packaging:image_load     # load into the local daemon
-    bazel run //packaging:push -- --tag dev
+    bazel run -c opt //packaging:image_load     # load into the local daemon
+    bazel run -c opt //packaging:push -- --tag dev
 
 The operator tools ride in the same image rather than a sibling one. The base
 has no shell, so nothing can be fetched, unpacked or run inside a running
@@ -123,7 +123,7 @@ filegroup(
 
 # What the image carries under /usr/bin, asserted against the built layers and
 # against the manifest that references them. The equivalent by hand is
-# `bazel run //packaging:image_load` and a `docker run --entrypoint` per binary;
+# `bazel run -c opt //packaging:image_load` and a `docker run --entrypoint` per binary;
 # this needs no daemon, so it runs in `bazel test //...` on every commit.
 sh_test(
     name = "image_binaries_test",

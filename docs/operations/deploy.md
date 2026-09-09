@@ -6,7 +6,7 @@ flags and files below are the ones the binary on this branch reads. Run
 
 ## Install
 
-The container image is the supported form. `bazel run //packaging:image_load`
+The container image is the supported form. `bazel run -c opt //packaging:image_load`
 builds it from locked Wolfi packages and loads it into the local daemon as
 `docker.io/krabka-io/krabka-broker:dev`; CI pushes the same image to
 `ghcr.io/krabka-io/krabka-broker`. The image runs as `nonroot` (65532), has
@@ -21,7 +21,7 @@ The image is **linux/amd64 only**. `packaging/base.apko.yaml` builds the Wolfi
 base for `amd64`, the manifest declares `linux/amd64`, and the tags CI pushes
 to `ghcr.io/krabka-io/krabka-broker` are bare amd64 manifests rather than a
 multi-architecture index. There is no arm64 image. On an aarch64 host
-`bazel run //packaging:image_load` does not produce a runnable image: the
+`bazel run -c opt //packaging:image_load` does not produce a runnable image: the
 manifest still says amd64 while the broker binary in it is an aarch64 ELF, so
 the container fails to exec. Bazel refuses to build `//packaging:image` off
 x86_64 for that reason. Multi-architecture images are a separate piece of work.
