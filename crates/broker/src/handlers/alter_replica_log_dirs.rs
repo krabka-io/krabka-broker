@@ -50,6 +50,7 @@ pub(crate) fn handle(
     let future_logs = broker.future_logs.clone();
     let all_log_dirs = broker.config.all_log_dirs();
     let log_config = broker.config.log_config.clone();
+    let log_dir_status = broker.log_dir_status.clone();
     let move_policy = future_log::MovePolicy {
         retry_backoff: broker.config.future_log_move_retry_backoff,
         read_chunk: broker.config.future_log_move_read_chunk,
@@ -73,6 +74,7 @@ pub(crate) fn handle(
                         &partitions,
                         &future_logs,
                         &all_log_dirs,
+                        &log_dir_status,
                         &log_config,
                         (&topic.name, krabka_ids::PartitionIndex(partition_index)),
                         &target_path,

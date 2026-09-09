@@ -5,8 +5,8 @@
 use assert2::{assert, check};
 use krabka_audit::{AuditEvent, AuditLog, AuditOutcome, PrivilegedPhase};
 use krabka_metadata::{
-    BreakGlassAction, BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord,
-    TopicRecord,
+    BreakGlassAction, BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionElrRecord,
+    PartitionRecord, TopicRecord,
 };
 use krabka_units::secs;
 use tokio::sync::oneshot;
@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     config::{BackgroundUncleanRecovery, BreakGlassConfig},
-    config_keys::{ELIGIBLE_LEADER_REPLICAS, RecoveryStrategy},
+    config_keys::RecoveryStrategy,
     heartbeat::controller_state::ControllerLivenessState,
     metadata_source::MetadataSource,
     test_support::FakeMetadataSource,
@@ -75,25 +75,17 @@ fn set_isr(img: &mut MetadataImage, isr: &[u64]) {
     }));
 }
 
-/// Publish `krabka.elr` for partition 0 of topic `t`, in the grammar
-/// `TopicElr::parse` reads: these node ids are eligible, none are last-known.
+/// Publish ELR for partition 0 of topic `t`.
 fn publish_elr(img: &mut MetadataImage, eligible: &[u64]) {
     // Publishing an ELR presupposes the KIP-966 feature is on: its release
     // default is 0, and the controller keeps no ELR below level 1.
     crate::test_support::finalize_elr_version(img);
-    let ids = eligible
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    img.apply(&MetadataRecord::V1TopicConfig(
-        krabka_metadata::TopicConfigRecord {
-            topic: "t".into(),
-            overrides: [(ELIGIBLE_LEADER_REPLICAS.to_string(), format!("0:{ids}:"))]
-                .into_iter()
-                .collect(),
-        },
-    ));
+    img.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+        topic: "t".into(),
+        partition: 0,
+        eligible_leader_replicas: eligible.iter().copied().map(NodeId).collect(),
+        last_known_elr: vec![],
+    }));
 }
 
 /// The election the URM reaches when nothing but the log lengths decided it.
@@ -398,7 +390,17 @@ async fn audit_only_elects_and_records_the_bypass() {
         partition_epoch: pr.partition_epoch + 1,
         ..pr.clone()
     };
-    assert!(batches == vec![vec![MetadataRecord::V1Partition(elected)]]);
+    assert!(
+        batches
+            == vec![vec![MetadataRecord::V1PartitionUpdate(
+                krabka_metadata::PartitionUpdateRecord {
+                    partition: elected,
+                    eligible_leader_replicas: None,
+                    last_known_elr: None,
+                    recovery_state: Some(LeaderRecoveryState::Recovering),
+                },
+            )]]
+    );
     check!(bypasses(&mgr.metrics) == 1);
     let event = events.try_recv().expect("a bypass reaches the audit log");
     assert!(let AuditEvent::PrivilegedAction { phase, target, reason, .. } = &event);

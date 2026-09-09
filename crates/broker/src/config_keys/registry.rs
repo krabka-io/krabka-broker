@@ -46,7 +46,7 @@ use super::{
         SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL,
         SCHEMA_VALIDATION_MODE_ID, SCHEMA_VALIDATION_VALUE,
     },
-    topic_scope::{ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE},
+    topic_scope::WRITE_FREEZE,
 };
 
 /// The `node.id` a broker resource reports beside its dynamic overrides. The
@@ -212,9 +212,9 @@ impl ConfigKey {
     /// Two things put a key outside that set. A key the resource's override
     /// map cannot hold is synthesised, so no alter has anywhere to store it.
     /// A key whose check is [`ValueCheck::NotAltered`] is stored but
-    /// controller-written: KIP-966's `krabka.elr` and the broker fencing and
-    /// stretch-site keys are published by the controller as cluster state
-    /// changes, and an operator who set one by hand would be overwritten.
+    /// controller-written: broker fencing and stretch-site keys are published
+    /// by the controller as cluster state changes, and an operator who set one
+    /// by hand would be overwritten.
     pub(crate) fn is_alterable(&self) -> bool {
         self.is_stored() && !matches!(self.check, ValueCheck::NotAltered)
     }
@@ -776,18 +776,6 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::String,
             Some("false"),
             "Write-freeze state of the topic: `false`, or `frozen:` and the registry scope that matched. Set and cleared with `krabka-guard freeze`.",
-            ValueCheck::NotAltered,
-        )
-    },
-    ConfigKey {
-        read_only: true,
-        kip: Some("KIP-966"),
-        ..key(
-            ELIGIBLE_LEADER_REPLICAS,
-            ConfigScope::Topic,
-            ConfigType::String,
-            None,
-            "Eligible-leader-replica state of the topic's partitions, one `partition:elr:last-known-elr` group per partition that has any. Only the controller's ISR transitions write it, and only while `eligible.leader.replicas.version` is finalized at 1; `kafka-topics --describe` reads it, and a downgrade of that feature to 0 drops it.",
             ValueCheck::NotAltered,
         )
     },

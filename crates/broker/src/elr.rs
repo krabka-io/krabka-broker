@@ -18,24 +18,18 @@
 //!
 //! ## Where the state lives
 //!
-//! [`krabka_metadata::PartitionRecord`] lives in the protocol crate and
-//! carries no ELR field, so krabka publishes the state as a controller-managed
-//! topic config, exactly as it publishes broker fencing as
-//! [`BROKER_FENCED`](crate::config_keys::BROKER_FENCED). The key is
-//! [`ELIGIBLE_LEADER_REPLICAS`](crate::config_keys::ELIGIBLE_LEADER_REPLICAS)
-//! and it holds every partition of the topic that has ELR state, in the
-//! grammar [`TopicElr::parse`] documents. Publishing it through the metadata
-//! log is what lets a request served by *any* node answer with the same
-//! columns as one served by the controller, and it survives snapshot and
-//! restore because it is an ordinary `V1TopicConfig` record.
+//! Krabka publishes ELR as `V1PartitionElr`, which translates to Kafka's
+//! standard `PartitionChangeRecord` fields. Publishing it through the
+//! metadata log lets every node answer with the same columns and makes the
+//! state survive replay, snapshots, and mixed Kafka/Krabka controller logs.
 //!
 //! ## The two halves
 //!
-//! [`state`] parses the published value and projects one partition's two
-//! lists. [`maintain`] is the controller half: every path that changes a
+//! [`state`] projects one partition's two lists. [`maintain`] is the
+//! controller half: every path that changes a
 //! partition's ISR or leader hands its emitted records to an
 //! [`ElrPublisher`], which recomputes the affected partitions and appends the
-//! `V1TopicConfig` records that carry the new state.
+//! `V1PartitionElr` records that carry the new state.
 //!
 //! The columns are not the only reader. KIP-966's point is that the set is
 //! *elected from*, and two paths do. `unclean_recovery`'s

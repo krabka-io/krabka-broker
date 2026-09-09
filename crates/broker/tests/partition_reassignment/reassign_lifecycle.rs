@@ -9,13 +9,79 @@
 use assert2::{assert, check};
 
 use crate::{
+    log_dir_wire::{alter_replica_log_dirs, describe_log_dirs},
     plaintext_cluster::{
         broker_id, controller_leader_addr, node_id, start_three_broker_plaintext_cluster,
-        wait_partition_exists,
+        start_three_broker_plaintext_cluster_with_log_dirs, wait_partition_exists,
     },
     plaintext_wire::create_topic_plaintext,
     reassign_rpc::{drive_alter_reassignments, drive_list_reassignments},
 };
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preplacement_log_dir_preference_survives_until_reassignment_materializes_the_replica() {
+    let extras = [
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    ];
+    let paths = extras.each_ref().map(|dir| dir.path().to_path_buf());
+    let (h1, h2, h3, _d1, _d2, _d3, addr) =
+        start_three_broker_plaintext_cluster_with_log_dirs(&paths).await;
+    create_topic_plaintext(addr, "preplaced", 1, 2).await;
+    wait_partition_exists(&h1, "preplaced", 0).await;
+
+    let partition = h1
+        .partition_record_for_test("preplaced", 0)
+        .expect("partition");
+    let new_replica = (1..=3)
+        .find(|id| !partition.replicas.contains(&node_id(*id)))
+        .expect("unassigned broker");
+    let target_idx = usize::try_from(new_replica - 1).unwrap();
+    let handles = [&h1, &h2, &h3];
+    let target_addr = handles[target_idx].listen_addr();
+    let target_dir = extras[target_idx].path();
+
+    let preference = alter_replica_log_dirs(target_addr, target_dir, "preplaced", vec![0]).await;
+    assert!(preference.results[0].partitions[0].error_code == 9);
+
+    let staying = broker_id(partition.replicas[0]);
+    let raft_addr = controller_leader_addr(&handles).await;
+    let response = drive_alter_reassignments(
+        raft_addr,
+        vec![("preplaced", 0, Some(vec![staying, new_replica]))],
+    )
+    .await;
+    assert!(response[0].1 == vec![(0, 0)]);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let described = describe_log_dirs(target_addr).await;
+        let materialized = described.results.iter().any(|result| {
+            std::fs::canonicalize(&result.log_dir).ok().as_deref()
+                == std::fs::canonicalize(target_dir).ok().as_deref()
+                && result.topics.iter().any(|topic| {
+                    topic.name == "preplaced"
+                        && topic.partitions.iter().any(|partition| {
+                            partition.partition_index == 0 && !partition.is_future_key
+                        })
+                })
+        });
+        if materialized {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "replica was not materialized in the preferred log dir"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(target_dir.join("preplaced-0").is_dir());
+
+    h1.shutdown().await;
+    h2.shutdown().await;
+    h3.shutdown().await;
+}
 
 /// Test 1: send `AlterPartitionReassignments`, then inject an ISR that
 /// includes the new replica. The background task sees that the adding set is

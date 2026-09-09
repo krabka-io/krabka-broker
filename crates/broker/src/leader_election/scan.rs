@@ -4,7 +4,9 @@
 //! broker; [`compute_offline_dir_failover_changes`] reacts to a live broker
 //! that lost a log directory (KIP-112).
 
-use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
+use krabka_metadata::{
+    LeaderRecoveryState, MetadataImage, MetadataRecord, PartitionRecord, PartitionRecoveryRecord,
+};
 use krabka_raft::NodeId;
 use tracing::warn;
 
@@ -147,6 +149,15 @@ pub(crate) async fn compute_failover_changes(
                     directories: pr.directories.clone(),
                     partition_epoch,
                 }));
+                if unclean {
+                    changes.push(MetadataRecord::V1PartitionRecovery(
+                        PartitionRecoveryRecord {
+                            topic: pr.topic.clone(),
+                            partition: pr.partition,
+                            state: LeaderRecoveryState::Recovering,
+                        },
+                    ));
+                }
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 let Some((partition_epoch, leader_epoch)) =
@@ -290,6 +301,15 @@ pub(crate) async fn compute_offline_dir_failover_changes(
                     directories: pr.directories.clone(),
                     partition_epoch,
                 }));
+                if unclean {
+                    changes.push(MetadataRecord::V1PartitionRecovery(
+                        PartitionRecoveryRecord {
+                            topic: pr.topic.clone(),
+                            partition: pr.partition,
+                            state: LeaderRecoveryState::Recovering,
+                        },
+                    ));
+                }
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 let Some((partition_epoch, leader_epoch)) =
@@ -454,6 +474,15 @@ pub(crate) async fn compute_unclean_restart_changes(
                     directories: pr.directories.clone(),
                     partition_epoch,
                 }));
+                if unclean {
+                    changes.push(MetadataRecord::V1PartitionRecovery(
+                        PartitionRecoveryRecord {
+                            topic: pr.topic.clone(),
+                            partition: pr.partition,
+                            state: LeaderRecoveryState::Recovering,
+                        },
+                    ));
+                }
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 let Some((partition_epoch, leader_epoch)) =

@@ -132,7 +132,7 @@ fn a_topic_replacement_audits_every_key_whose_value_moves() {
         expected.extend(keys.iter().map(|key| audit_resource("ConfigKey", *key)));
         expected
     };
-    let cases: [Audited<'_>; 5] = [
+    let cases: [Audited<'_>; 4] = [
         (
             "a replacement that drops a stored key",
             &[
@@ -157,15 +157,6 @@ fn a_topic_replacement_audits_every_key_whose_value_moves() {
         (
             "a replacement that restates every stored value",
             &[(config_keys::RETENTION_MS, "60000")],
-            &[(config_keys::RETENTION_MS, "60000")],
-            topic(&[]),
-        ),
-        (
-            "a replacement that omits the controller-managed state",
-            &[
-                (config_keys::ELIGIBLE_LEADER_REPLICAS, "0:2,3:"),
-                (config_keys::RETENTION_MS, "60000"),
-            ],
             &[(config_keys::RETENTION_MS, "60000")],
             topic(&[]),
         ),

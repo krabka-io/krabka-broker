@@ -359,7 +359,7 @@ mod wire_tests {
 
     use super::*;
     use crate::{
-        config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+        config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
         test_support::{
             decode_response, encode_request, request_context, start_broker_with_authorizer,
@@ -396,14 +396,7 @@ mod wire_tests {
     /// different columns: the ELR withdrawal fires on a partition node 2 has
     /// already left, and the ISR removal only on one it is still in.
     fn seed_records(isr: &[u64], min_isr: &str, elr: Option<&str>) -> Vec<MetadataRecord> {
-        let mut overrides: std::collections::BTreeMap<String, String> =
-            [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
-                .into_iter()
-                .collect();
-        if let Some(elr) = elr {
-            overrides.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), elr.to_string());
-        }
-        vec![
+        let mut records = vec![
             // KIP-966 ELR maintenance is gated on the feature, whose release
             // default is 0, so the seed finalizes it the way an operator's
             // `kafka-features upgrade` would.
@@ -449,9 +442,15 @@ mod wire_tests {
             }),
             MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: TOPIC.into(),
-                overrides,
+                overrides: [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
+                    .into_iter()
+                    .collect(),
             }),
-        ]
+        ];
+        if let Some(elr) = elr {
+            records.extend(crate::elr::state::test_records(TOPIC, elr));
+        }
+        records
     }
 
     /// The partition of `TOPIC` as it stands after a restart: the two columns

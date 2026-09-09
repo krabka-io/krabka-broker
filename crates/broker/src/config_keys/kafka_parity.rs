@@ -56,7 +56,7 @@ use super::{
     recovery::UNCLEAN_RECOVERY_STRATEGY,
     registry::{self, ConfigScope, ConfigType},
     schema::{SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_VALUE},
-    topic_scope::{ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE},
+    topic_scope::WRITE_FREEZE,
     validation::{validate_topic_config, validate_topic_config_map},
 };
 
@@ -257,7 +257,6 @@ const KRABKA_TOPIC_CONFIGS: &[&str] = &[
     SCHEMA_VALIDATION_VALUE,
     SCHEMA_VALIDATION_MODE,
     WRITE_FREEZE,
-    ELIGIBLE_LEADER_REPLICAS,
 ];
 
 /// Kafka keys whose default krabka reports differently, each with the reason.

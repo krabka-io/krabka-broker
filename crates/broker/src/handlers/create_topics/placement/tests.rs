@@ -330,6 +330,21 @@ fn a_cluster_without_racks_places_like_round_robin() {
 }
 
 #[test]
+fn a_mixed_rack_cluster_keeps_the_unracked_broker_placeable() {
+    let image = stretch_image(&[(1, Some("a")), (2, Some("b")), (3, None)], &[], None);
+    let views = site_broker_views(&image, Some(NodeId(1)), &std::collections::HashSet::new());
+
+    let assignments = resolve_assignments(&auto_topic(3, 3), &views, None)
+        .expect("mixed-rack automatic placement");
+
+    assert!(
+        assignments
+            .iter()
+            .all(|replicas| replicas.contains(&NodeId(3)))
+    );
+}
+
+#[test]
 fn a_manual_assignment_overrides_the_site_placement() {
     let image = stretch_image(&THREE_SITES, &[], Some("c"));
     let views = broker_views(&image, Some(NodeId(1)));

@@ -69,13 +69,8 @@
 //! feature to finalize -- see [`crate::elr::maintain`] -- so the withdrawal is
 //! unconditional, the way the rest of krabka's ELR maintenance is.
 
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord};
-
-use super::state::TopicElr;
-use crate::{
-    config_keys::ELIGIBLE_LEADER_REPLICAS,
-    features::{ELR_VERSION, feature_enabled},
-};
+use crate::features::{ELR_VERSION, feature_enabled};
+use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionElrRecord};
 
 /// The `V1TopicConfig` records that take `node` out of every ELR it is named
 /// in, cluster-wide.
@@ -99,34 +94,28 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
         return Vec::new();
     }
     image
-        .topics()
-        .filter_map(|topic| topic_record(image, &topic.name, node))
+        .all_partitions()
+        .filter_map(|partition| {
+            let (eligible, last_known) = image.partition_elr(&partition.topic, partition.partition);
+            let node = NodeId(u64::try_from(node).ok()?);
+            if !eligible.contains(&node) {
+                return None;
+            }
+            let mut eligible = eligible.to_vec();
+            eligible.retain(|candidate| *candidate != node);
+            let mut last_known = last_known.to_vec();
+            if !last_known.contains(&node) {
+                last_known.push(node);
+                last_known.sort_unstable();
+            }
+            Some(MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: partition.topic.clone(),
+                partition: partition.partition,
+                eligible_leader_replicas: eligible,
+                last_known_elr: last_known,
+            }))
+        })
         .collect()
-}
-
-/// One topic's rewritten config, or `None` when the topic's ELR does not name
-/// `node` and so does not move.
-fn topic_record(image: &MetadataImage, topic: &str, node: i32) -> Option<MetadataRecord> {
-    let before = image.topic_config(topic)?;
-    let mut elr = TopicElr::parse(before.get(ELIGIBLE_LEADER_REPLICAS)?);
-
-    if !elr.demote_node(node) {
-        return None;
-    }
-
-    // Applying a `V1TopicConfig` replaces the topic's whole override map, so
-    // the record carries every other override the topic has as well.
-    let mut after = before.clone();
-    let rendered = elr.render();
-    if rendered.is_empty() {
-        after.remove(ELIGIBLE_LEADER_REPLICAS);
-    } else {
-        after.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), rendered);
-    }
-    Some(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.to_string(),
-        overrides: after,
-    }))
 }
 
 /// The `V1TopicConfig` records that drop every published ELR, cluster-wide.
@@ -142,26 +131,20 @@ fn topic_record(image: &MetadataImage, topic: &str, node: i32) -> Option<Metadat
 /// never turned the feature on.
 pub(crate) fn clear_published_elr(image: &MetadataImage) -> Vec<MetadataRecord> {
     image
-        .topics()
-        .filter_map(|topic| cleared_topic_record(image, &topic.name))
+        .all_partitions()
+        .filter(|partition| {
+            let (eligible, last_known) = image.partition_elr(&partition.topic, partition.partition);
+            !eligible.is_empty() || !last_known.is_empty()
+        })
+        .map(|partition| {
+            MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: partition.topic.clone(),
+                partition: partition.partition,
+                eligible_leader_replicas: Vec::new(),
+                last_known_elr: Vec::new(),
+            })
+        })
         .collect()
-}
-
-/// One topic's config with the ELR override removed, or `None` when the topic
-/// carries none.
-fn cleared_topic_record(image: &MetadataImage, topic: &str) -> Option<MetadataRecord> {
-    let before = image.topic_config(topic)?;
-    if !before.contains_key(ELIGIBLE_LEADER_REPLICAS) {
-        return None;
-    }
-    // Applying a `V1TopicConfig` replaces the topic's whole override map, so
-    // the record carries every other override the topic has as well.
-    let mut after = before.clone();
-    after.remove(ELIGIBLE_LEADER_REPLICAS);
-    Some(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.to_string(),
-        overrides: after,
-    }))
 }
 
 #[cfg(test)]

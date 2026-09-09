@@ -33,6 +33,7 @@ use crate::partition::Partition;
 #[derive(Debug, Default)]
 pub(crate) struct PartitionRegistry {
     inner: DashMap<Arc<str>, DashMap<PartitionIndex, Arc<Partition>>>,
+    preferred_log_dirs: DashMap<(String, PartitionIndex), std::path::PathBuf>,
     stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 }
 
@@ -50,6 +51,7 @@ impl PartitionRegistry {
     ) -> Self {
         Self {
             inner: DashMap::new(),
+            preferred_log_dirs: DashMap::new(),
             stamp_source,
         }
     }
@@ -145,6 +147,32 @@ impl PartitionRegistry {
                 Ok(())
             }
         }
+    }
+
+    pub(crate) fn set_preferred_log_dir(
+        &self,
+        topic: &str,
+        partition: PartitionIndex,
+        log_dir: std::path::PathBuf,
+    ) {
+        self.preferred_log_dirs
+            .insert((topic.to_string(), partition), log_dir);
+    }
+
+    #[must_use]
+    pub(crate) fn preferred_log_dir(
+        &self,
+        topic: &str,
+        partition: PartitionIndex,
+    ) -> Option<std::path::PathBuf> {
+        self.preferred_log_dirs
+            .get(&(topic.to_string(), partition))
+            .map(|entry| entry.value().clone())
+    }
+
+    pub(crate) fn clear_preferred_log_dir(&self, topic: &str, partition: PartitionIndex) {
+        self.preferred_log_dirs
+            .remove(&(topic.to_string(), partition));
     }
 
     /// The partition indices currently hosted for `topic`. It is empty when

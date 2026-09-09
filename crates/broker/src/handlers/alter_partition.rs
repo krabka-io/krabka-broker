@@ -28,7 +28,7 @@ mod tests;
 
 use self::{
     authorization::{cluster_action_denied, denied_response},
-    isr_update::handle_partition,
+    isr_update::handle_partition_with_recovery,
 };
 use crate::{broker::Broker, codes, elr::ElrPublisher, error::BrokerError};
 
@@ -99,11 +99,12 @@ pub(crate) async fn handle(
 
             let mut resp_partitions: Vec<RespPartitionData> = Vec::new();
             for req_part in &req_topic.partitions {
-                let resp_part = handle_partition(
+                let resp_part = handle_partition_with_recovery(
                     &image,
                     topic_name_opt.as_deref(),
                     req_part.partition_index,
                     req_part.leader_epoch,
+                    req_part.leader_recovery_state,
                     &req_part.new_isr,
                     &req_part.new_isr_with_epochs,
                     &mut changes,

@@ -101,7 +101,10 @@ impl SnapshotWriter {
             // records, never as KIP-631 metadata values.
             if matches!(
                 rec,
-                MetadataRecord::V1Voters(_) | MetadataRecord::V1KRaftVersion(_)
+                MetadataRecord::V1Voters(_)
+                    | MetadataRecord::V1KRaftVersion(_)
+                    | MetadataRecord::V1PartitionElr(_)
+                    | MetadataRecord::V1PartitionRecovery(_)
             ) {
                 continue;
             }

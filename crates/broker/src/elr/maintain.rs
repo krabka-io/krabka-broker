@@ -66,11 +66,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord};
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionElrRecord, PartitionRecord};
 
-use super::state::{PartitionElr, TopicElr, wire_node_ids};
+use super::state::{PartitionElr, wire_node_ids};
 use crate::{
-    config_keys::{ELIGIBLE_LEADER_REPLICAS, effective_min_insync_replicas},
+    config_keys::effective_min_insync_replicas,
     features::{ELR_VERSION, feature_enabled},
 };
 
@@ -136,64 +136,149 @@ impl<'a> ElrPublisher<'a> {
     /// stale ELR rather than one that names a partition state no record ever
     /// established.
     pub(crate) fn extend(&self, changes: &mut Vec<MetadataRecord>) {
-        if !feature_enabled(self.image, ELR_VERSION, 1) {
-            return;
+        if feature_enabled(self.image, ELR_VERSION, 1) {
+            let published = self.partition_records(changes);
+            changes.extend(published);
         }
-        let published = self.topic_config_records(changes);
-        changes.extend(published);
+        coalesce_partition_state(changes);
     }
 
     /// The `V1TopicConfig` records `extend` appends. Split out so the
     /// decision can be tested without the append.
-    fn topic_config_records(&self, changes: &[MetadataRecord]) -> Vec<MetadataRecord> {
+    fn partition_records(&self, changes: &[MetadataRecord]) -> Vec<MetadataRecord> {
         let batch = Batch::of(changes);
         batch
             .partitions
             .iter()
             .filter(|(topic, _)| !batch.deleted.contains(*topic))
-            .filter_map(|(topic, partitions)| self.topic_record(&batch, topic, partitions))
+            .flat_map(|(topic, partitions)| {
+                partitions.iter().filter_map(|(partition, record)| {
+                    self.partition_record(topic, *partition, record)
+                })
+            })
             .collect()
     }
 
     /// The one topic's `V1TopicConfig`, or `None` when its rendered ELR value
     /// is the one the topic already carries.
-    fn topic_record(
+    fn partition_record(
         &self,
-        batch: &Batch<'_>,
         topic: &str,
-        partitions: &BTreeMap<i32, &PartitionRecord>,
+        partition: i32,
+        record: &PartitionRecord,
     ) -> Option<MetadataRecord> {
-        let before = batch.overrides(self.image, topic);
-        let mut elr = before
-            .get(ELIGIBLE_LEADER_REPLICAS)
-            .map_or_else(TopicElr::default, |value| TopicElr::parse(value));
-
-        for (partition, record) in partitions {
-            let previous = self.image.partition(topic, *partition);
-            let next = next_partition_elr(
-                self.image,
-                previous,
-                record,
-                &elr.partition(*partition),
-                &self.unclean_shutdown,
-            );
-            elr.set_partition(*partition, next);
-        }
-
-        let mut after = before.clone();
-        let rendered = elr.render();
-        if rendered.is_empty() {
-            after.remove(ELIGIBLE_LEADER_REPLICAS);
-        } else {
-            after.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), rendered);
-        }
+        let (eligible, last_known) = self.image.partition_elr(topic, partition);
+        let before = PartitionElr {
+            eligible_leader_replicas: wire_node_ids(eligible.iter().copied()),
+            last_known_elr: wire_node_ids(last_known.iter().copied()),
+        };
+        let after = next_partition_elr(
+            self.image,
+            self.image.partition(topic, partition),
+            record,
+            &before,
+            &self.unclean_shutdown,
+        );
         if after == before {
             return None;
         }
-        Some(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        Some(MetadataRecord::V1PartitionElr(PartitionElrRecord {
             topic: topic.to_string(),
-            overrides: after,
+            partition,
+            eligible_leader_replicas: after
+                .eligible_leader_replicas
+                .into_iter()
+                .filter_map(|id| u64::try_from(id).ok().map(krabka_metadata::NodeId))
+                .collect(),
+            last_known_elr: after
+                .last_known_elr
+                .into_iter()
+                .filter_map(|id| u64::try_from(id).ok().map(krabka_metadata::NodeId))
+                .collect(),
         }))
+    }
+}
+
+#[derive(Default)]
+struct PendingState {
+    eligible: Option<Vec<krabka_metadata::NodeId>>,
+    last_known: Option<Vec<krabka_metadata::NodeId>>,
+    recovery: Option<krabka_metadata::LeaderRecoveryState>,
+}
+
+/// Kafka carries structural, recovery, and ELR changes for one partition in
+/// one `PartitionChangeRecord`. Keep the internal batch equally atomic when a
+/// caller built those pieces independently.
+fn coalesce_partition_state(changes: &mut Vec<MetadataRecord>) {
+    let mut pending = BTreeMap::<(String, i32), PendingState>::new();
+    changes.retain(|record| match record {
+        MetadataRecord::V1PartitionElr(record) => {
+            let state = pending
+                .entry((record.topic.clone(), record.partition))
+                .or_default();
+            state.eligible = Some(record.eligible_leader_replicas.clone());
+            state.last_known = Some(record.last_known_elr.clone());
+            false
+        }
+        MetadataRecord::V1PartitionRecovery(record) => {
+            pending
+                .entry((record.topic.clone(), record.partition))
+                .or_default()
+                .recovery = Some(record.state);
+            false
+        }
+        _ => true,
+    });
+
+    for record in changes.iter_mut() {
+        let (topic, partition) = match record {
+            MetadataRecord::V1Partition(record) => (&record.topic, record.partition),
+            MetadataRecord::V1PartitionUpdate(record) => {
+                (&record.partition.topic, record.partition.partition)
+            }
+            _ => continue,
+        };
+        let Some(state) = pending.remove(&(topic.clone(), partition)) else {
+            continue;
+        };
+        match record {
+            MetadataRecord::V1Partition(partition) => {
+                *record =
+                    MetadataRecord::V1PartitionUpdate(krabka_metadata::PartitionUpdateRecord {
+                        partition: partition.clone(),
+                        eligible_leader_replicas: state.eligible,
+                        last_known_elr: state.last_known,
+                        recovery_state: state.recovery,
+                    });
+            }
+            MetadataRecord::V1PartitionUpdate(update) => {
+                update.eligible_leader_replicas =
+                    state.eligible.or(update.eligible_leader_replicas.take());
+                update.last_known_elr = state.last_known.or(update.last_known_elr.take());
+                update.recovery_state = state.recovery.or(update.recovery_state);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    for ((topic, partition), state) in pending {
+        if let (Some(eligible), Some(last_known)) = (state.eligible, state.last_known) {
+            changes.push(MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: topic.clone(),
+                partition,
+                eligible_leader_replicas: eligible,
+                last_known_elr: last_known,
+            }));
+        }
+        if let Some(recovery) = state.recovery {
+            changes.push(MetadataRecord::V1PartitionRecovery(
+                krabka_metadata::PartitionRecoveryRecord {
+                    topic,
+                    partition,
+                    state: recovery,
+                },
+            ));
+        }
     }
 }
 
@@ -202,7 +287,6 @@ impl<'a> ElrPublisher<'a> {
 /// batch deletes.
 struct Batch<'a> {
     partitions: BTreeMap<&'a str, BTreeMap<i32, &'a PartitionRecord>>,
-    configs: BTreeMap<&'a str, &'a BTreeMap<String, String>>,
     deleted: BTreeSet<&'a str>,
 }
 
@@ -212,7 +296,6 @@ impl<'a> Batch<'a> {
     fn of(changes: &'a [MetadataRecord]) -> Self {
         let mut batch = Self {
             partitions: BTreeMap::new(),
-            configs: BTreeMap::new(),
             deleted: BTreeSet::new(),
         };
         for change in changes {
@@ -224,11 +307,6 @@ impl<'a> Batch<'a> {
                         .or_default()
                         .insert(record.partition, record);
                 }
-                MetadataRecord::V1TopicConfig(record) => {
-                    batch
-                        .configs
-                        .insert(record.topic.as_str(), &record.overrides);
-                }
                 MetadataRecord::V1DeleteTopic(record) => {
                     batch.deleted.insert(record.name.as_str());
                 }
@@ -236,16 +314,6 @@ impl<'a> Batch<'a> {
             }
         }
         batch
-    }
-
-    /// The override map the topic ends the batch with, before the ELR key is
-    /// rewritten. A `V1TopicConfig` in the batch replaces the topic's whole
-    /// map, so one there wins over the image outright.
-    fn overrides(&self, image: &MetadataImage, topic: &str) -> BTreeMap<String, String> {
-        self.configs.get(topic).map_or_else(
-            || image.topic_config(topic).cloned().unwrap_or_default(),
-            |overrides| (*overrides).clone(),
-        )
     }
 }
 

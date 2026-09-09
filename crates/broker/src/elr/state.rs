@@ -19,8 +19,6 @@ use std::collections::BTreeMap;
 
 use krabka_metadata::{MetadataImage, NodeId};
 
-use crate::config_keys::ELIGIBLE_LEADER_REPLICAS;
-
 /// One partition's ELR state, in the wire types the response uses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PartitionElr {
@@ -52,10 +50,19 @@ impl TopicElr {
     /// partitions in a single pass and each lookup here is a config-map hit
     /// plus a parse of the whole value.
     pub(crate) fn of_topic(image: &MetadataImage, topic: &str) -> Self {
-        image
-            .topic_config(topic)
-            .and_then(|configs| configs.get(ELIGIBLE_LEADER_REPLICAS))
-            .map_or_else(Self::default, |value| Self::parse(value))
+        Self(
+            image
+                .partitions_of(topic)
+                .filter_map(|partition| {
+                    let (eligible, last_known) = image.partition_elr(topic, partition.partition);
+                    let state = PartitionElr {
+                        eligible_leader_replicas: wire_node_ids(eligible.iter().copied()),
+                        last_known_elr: wire_node_ids(last_known.iter().copied()),
+                    };
+                    (!state.is_empty()).then_some((partition.partition, state))
+                })
+                .collect(),
+        )
     }
 
     /// Parse the [`ELIGIBLE_LEADER_REPLICAS`] config value.
@@ -79,6 +86,7 @@ impl TopicElr {
     /// errors for a whole topic over a config the client cannot even see. A
     /// dropped entry reads as "no ELR", the same answer the topic gives before
     /// the controller has ever published the key.
+    #[cfg(test)]
     pub(crate) fn parse(value: &str) -> Self {
         Self(
             value
@@ -96,6 +104,7 @@ impl TopicElr {
     /// than storing it. Entries come out in partition order because the map is
     /// ordered, so one state renders to one string and a re-publication of
     /// unchanged state compares equal to what the image already holds.
+    #[cfg(test)]
     pub(crate) fn render(&self) -> String {
         self.0
             .iter()
@@ -116,17 +125,6 @@ impl TopicElr {
         self.0.get(&partition).cloned().unwrap_or_default()
     }
 
-    /// Replace one partition's state. A partition with neither set leaves the
-    /// value, so a topic that recovers renders back to the empty string and
-    /// the key is tombstoned rather than left holding `0::`.
-    pub(crate) fn set_partition(&mut self, partition: i32, elr: PartitionElr) {
-        if elr.is_empty() {
-            self.0.remove(&partition);
-        } else {
-            self.0.insert(partition, elr);
-        }
-    }
-
     /// Move `node` out of every partition's eligible set and into its
     /// last-known set, and report whether anything moved.
     ///
@@ -137,6 +135,7 @@ impl TopicElr {
     /// sets through `uncleanShutdownReplicas`, which
     /// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts from
     /// `targetElr` while `targetLastKnownElr` keeps it.
+    #[cfg(test)]
     pub(crate) fn demote_node(&mut self, node: i32) -> bool {
         let mut moved = false;
         for elr in self.0.values_mut() {
@@ -154,7 +153,32 @@ impl TopicElr {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_records(topic: &str, value: &str) -> Vec<krabka_metadata::MetadataRecord> {
+    TopicElr::parse(value)
+        .0
+        .into_iter()
+        .map(|(partition, elr)| {
+            krabka_metadata::MetadataRecord::V1PartitionElr(krabka_metadata::PartitionElrRecord {
+                topic: topic.to_owned(),
+                partition,
+                eligible_leader_replicas: elr
+                    .eligible_leader_replicas
+                    .into_iter()
+                    .filter_map(|id| u64::try_from(id).ok().map(NodeId))
+                    .collect(),
+                last_known_elr: elr
+                    .last_known_elr
+                    .into_iter()
+                    .filter_map(|id| u64::try_from(id).ok().map(NodeId))
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
 /// Render one node-id list.
+#[cfg(test)]
 fn render_ids(ids: &[i32]) -> String {
     ids.iter()
         .map(ToString::to_string)
@@ -177,6 +201,7 @@ pub(crate) fn wire_node_ids(nodes: impl IntoIterator<Item = NodeId>) -> Vec<i32>
 }
 
 /// Parse one `partition:ids:ids` entry. `None` drops the entry.
+#[cfg(test)]
 fn parse_entry(entry: &str) -> Option<(i32, PartitionElr)> {
     let mut fields = entry.split(':');
     let partition: i32 = fields.next()?.parse().ok()?;
@@ -197,6 +222,7 @@ fn parse_entry(entry: &str) -> Option<(i32, PartitionElr)> {
 }
 
 /// Parse a possibly-empty comma-separated node-id list.
+#[cfg(test)]
 fn parse_ids(ids: &str) -> Option<Vec<i32>> {
     if ids.is_empty() {
         return Some(Vec::new());

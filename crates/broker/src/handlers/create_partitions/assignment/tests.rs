@@ -71,6 +71,36 @@ fn a_cluster_without_sites_places_like_round_robin() {
 }
 
 #[test]
+fn a_mixed_rack_cluster_keeps_the_unracked_broker_placeable() {
+    let brokers = vec![
+        SiteBrokerView {
+            node_id: NodeId(1),
+            site: Some("a".into()),
+            is_witness: false,
+        },
+        SiteBrokerView {
+            node_id: NodeId(2),
+            site: Some("b".into()),
+            is_witness: false,
+        },
+        SiteBrokerView {
+            node_id: NodeId(3),
+            site: None,
+            is_witness: false,
+        },
+    ];
+
+    let assignments = resolve_new_partition_assignments(None, &brokers, 0, 3, 3, None)
+        .expect("mixed-rack automatic placement");
+
+    assert!(
+        assignments
+            .iter()
+            .all(|replicas| replicas.contains(&NodeId(3)))
+    );
+}
+
+#[test]
 fn placement_continues_rotation_from_existing() {
     let brokers = plain_brokers(&[0, 1, 2]);
     // Topic already has 2 partitions; adding 2 more (so partitions 2..4).

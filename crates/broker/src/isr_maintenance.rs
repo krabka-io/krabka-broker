@@ -58,33 +58,49 @@ pub(crate) async fn run(cfg: Config) {
             {
                 continue;
             }
-            let Some(proposal) = compute_proposal(&part, cfg.replica_lag_time_max.to_std()).await
-            else {
-                continue;
+            let proposal = compute_proposal(&part, cfg.replica_lag_time_max.to_std()).await;
+            let image = cfg.controller.current_image();
+            let recovering = image.leader_recovery_state(&part.topic, part.index.get())
+                == krabka_metadata::LeaderRecoveryState::Recovering;
+            let (new_isr, leader_epoch) = match proposal {
+                Some(proposal) => {
+                    // Classify the proposal as shrink/expand using the ISRs captured
+                    // inside `compute_proposal`'s single lock scope. `compute_proposal`
+                    // already filtered for "actually changed", so at least one of these
+                    // bumps fires. Reusing its captured `prev_isr` avoids a second
+                    // `replica_state` lock and closes the TOCTOU window where the ISR
+                    // could change between the two acquisitions.
+                    let prev_isr: std::collections::HashSet<NodeId> =
+                        proposal.prev_isr.iter().copied().collect();
+                    let next_isr: std::collections::HashSet<NodeId> =
+                        proposal.new_isr.iter().copied().collect();
+                    if prev_isr.difference(&next_isr).next().is_some() {
+                        cfg.metrics.isr_shrinks_total.inc();
+                    }
+                    if next_isr.difference(&prev_isr).next().is_some() {
+                        cfg.metrics.isr_expands_total.inc();
+                    }
+                    (proposal.new_isr, proposal.leader_epoch.0)
+                }
+                None if recovering => {
+                    let Some(metadata_partition) = image.partition(&part.topic, part.index.get())
+                    else {
+                        continue;
+                    };
+                    (
+                        metadata_partition.isr.clone(),
+                        metadata_partition.leader_epoch.0,
+                    )
+                }
+                None => continue,
             };
-            // Classify the proposal as shrink/expand using the ISRs captured
-            // inside `compute_proposal`'s single lock scope. `compute_proposal`
-            // already filtered for "actually changed", so at least one of these
-            // bumps fires. Reusing its captured `prev_isr` avoids a second
-            // `replica_state` lock and closes the TOCTOU window where the ISR
-            // could change between the two acquisitions.
-            let prev_isr: std::collections::HashSet<NodeId> =
-                proposal.prev_isr.iter().copied().collect();
-            let next_isr: std::collections::HashSet<NodeId> =
-                proposal.new_isr.iter().copied().collect();
-            if prev_isr.difference(&next_isr).next().is_some() {
-                cfg.metrics.isr_shrinks_total.inc();
-            }
-            if next_isr.difference(&prev_isr).next().is_some() {
-                cfg.metrics.isr_expands_total.inc();
-            }
             if let Err(e) = send_alter_partition(
                 &cfg.controller,
                 cfg.broker_id,
                 &part.topic,
                 part.index.get(),
-                proposal.new_isr,
-                proposal.leader_epoch.0,
+                new_isr,
+                leader_epoch,
                 &cfg.outbound_client,
                 cfg.listener_protocol,
                 &cfg.server_name,

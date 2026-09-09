@@ -43,6 +43,31 @@
 
 use super::{MIN_INSYNC_REPLICAS, lookup::topic_or_cluster_default};
 
+pub(crate) fn clear_elr_records(
+    image: &krabka_metadata::MetadataImage,
+    topic: Option<&str>,
+) -> Vec<krabka_metadata::MetadataRecord> {
+    if !crate::features::feature_enabled(image, crate::features::ELR_VERSION, 1) {
+        return Vec::new();
+    }
+    image
+        .all_partitions()
+        .filter(|partition| topic.is_none_or(|name| partition.topic == name))
+        .filter(|partition| {
+            let (eligible, last_known) = image.partition_elr(&partition.topic, partition.partition);
+            !eligible.is_empty() || !last_known.is_empty()
+        })
+        .map(|partition| {
+            krabka_metadata::MetadataRecord::V1PartitionElr(krabka_metadata::PartitionElrRecord {
+                topic: partition.topic.clone(),
+                partition: partition.partition,
+                eligible_leader_replicas: Vec::new(),
+                last_known_elr: Vec::new(),
+            })
+        })
+        .collect()
+}
+
 /// Apache Kafka's `min.insync.replicas` default, used when neither the topic
 /// nor the cluster-wide broker config names one.
 const KAFKA_DEFAULT_MIN_INSYNC_REPLICAS: usize = 1;
@@ -96,8 +121,8 @@ pub(crate) fn effective_min_insync_replicas(
 mod tests {
     use assert2::check;
     use krabka_metadata::{
-        BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
-        TopicConfigRecord, TopicRecord,
+        BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord, NodeId,
+        PartitionElrRecord, PartitionRecord, TopicConfigRecord, TopicRecord,
     };
 
     use super::*;
@@ -147,5 +172,35 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn a_min_isr_change_clears_only_the_selected_topics_elr() {
+        let mut image = image(None, None);
+        crate::test_support::finalize_elr_version(&mut image);
+        for topic in ["t", "other"] {
+            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+                topic: topic.into(),
+                partition: 0,
+                ..Default::default()
+            }));
+            image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: topic.into(),
+                partition: 0,
+                eligible_leader_replicas: vec![NodeId(2)],
+                last_known_elr: vec![],
+            }));
+        }
+
+        check!(
+            clear_elr_records(&image, Some("t"))
+                == [MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                    topic: "t".into(),
+                    partition: 0,
+                    eligible_leader_replicas: vec![],
+                    last_known_elr: vec![],
+                })]
+        );
+        check!(clear_elr_records(&image, None).len() == 2);
     }
 }

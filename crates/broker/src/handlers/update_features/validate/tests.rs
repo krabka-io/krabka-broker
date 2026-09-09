@@ -368,7 +368,7 @@ fn downgrade_type_cannot_raise_a_finalized_feature() {
 fn elr_image(
     metadata_version: i16,
     elr_level: Option<i16>,
-    published: Option<&str>,
+    published: bool,
 ) -> krabka_metadata::MetadataImage {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -381,28 +381,29 @@ fn elr_image(
             level,
         }));
     }
-    if let Some(published) = published {
+    if published {
         image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: "orders".into(),
             topic_id: uuid::Uuid::from_u128(1),
             partitions: 1,
             replication_factor: 3,
         }));
-        image.apply(&MetadataRecord::V1TopicConfig(
-            krabka_metadata::TopicConfigRecord {
+        image.apply(&MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
                 topic: "orders".into(),
-                overrides: [
-                    (
-                        crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
-                        "2".to_string(),
-                    ),
-                    (
-                        crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
-                        published.to_string(),
-                    ),
-                ]
-                .into_iter()
-                .collect(),
+                partition: 0,
+                ..Default::default()
+            },
+        ));
+        image.apply(&MetadataRecord::V1PartitionElr(
+            krabka_metadata::PartitionElrRecord {
+                topic: "orders".into(),
+                partition: 0,
+                eligible_leader_replicas: vec![
+                    krabka_metadata::NodeId(2),
+                    krabka_metadata::NodeId(3),
+                ],
+                last_known_elr: vec![],
             },
         ));
     }
@@ -416,11 +417,7 @@ fn elr_image(
 /// feature that still reads as on.
 #[test]
 fn an_elr_downgrade_clears_the_published_state_before_the_feature_record() {
-    let image = elr_image(
-        crate::features::METADATA_VERSION_MAX,
-        Some(1),
-        Some("0:2,3:"),
-    );
+    let image = elr_image(crate::features::METADATA_VERSION_MAX, Some(1), true);
     let request = validate_only(vec![elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
     let (results, records) = validate_updates(&request, &image, VERSION);
 
@@ -428,14 +425,11 @@ fn an_elr_downgrade_clears_the_published_state_before_the_feature_record() {
     assert!(
         records
             == vec![
-                MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
+                MetadataRecord::V1PartitionElr(krabka_metadata::PartitionElrRecord {
                     topic: "orders".into(),
-                    overrides: [(
-                        crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
-                        "2".to_string(),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    partition: 0,
+                    eligible_leader_replicas: vec![],
+                    last_known_elr: vec![],
                 }),
                 MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
                     name: crate::features::ELR_VERSION.into(),
@@ -450,7 +444,7 @@ fn an_elr_downgrade_clears_the_published_state_before_the_feature_record() {
 /// downgrade is the feature record alone.
 #[test]
 fn an_elr_downgrade_without_published_state_emits_only_the_feature_record() {
-    let image = elr_image(crate::features::METADATA_VERSION_MAX, Some(1), None);
+    let image = elr_image(crate::features::METADATA_VERSION_MAX, Some(1), false);
     let request = validate_only(vec![elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
     let (results, records) = validate_updates(&request, &image, VERSION);
 
@@ -487,7 +481,7 @@ fn elr_level_one_requires_the_elr_metadata_version() {
             codes::NONE,
         ),
     ] {
-        let image = elr_image(metadata_version, None, None);
+        let image = elr_image(metadata_version, None, false);
         let request = validate_only(vec![elr_update(1, 1)]);
         let (results, _records) = validate_updates(&request, &image, VERSION);
         assert!(results[0].error_code == want_code, "{case}: {results:?}");

@@ -64,6 +64,16 @@ pub(super) fn broker_config_records(
     }
 
     let current = image.broker_config(node_id);
+    if node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+        && image.finalized_feature(crate::features::ELR_VERSION) == Some(1)
+        && current.is_some_and(|configs| configs.contains_key(config_keys::MIN_INSYNC_REPLICAS))
+        && !replacement.contains_key(config_keys::MIN_INSYNC_REPLICAS)
+    {
+        return Err((
+            codes::INVALID_CONFIG,
+            "cannot remove the cluster-wide min.insync.replicas while ELR is enabled".into(),
+        ));
+    }
     let capacity = replacement.len() + current.map_or(0, std::collections::BTreeMap::len);
     let mut records = Vec::with_capacity(capacity);
     records.extend(replacement.iter().map(|(name, value)| {
@@ -236,6 +246,22 @@ mod tests {
             &image,
         )
         .expect_err("per-broker recovery setting must be rejected");
+
+        assert!(error.0 == codes::INVALID_CONFIG);
+    }
+
+    #[test]
+    fn elr_requires_the_cluster_min_isr_override_to_survive_replacement() {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        crate::test_support::finalize_elr_version(&mut image);
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            config_name: config_keys::MIN_INSYNC_REPLICAS.into(),
+            config_value: Some("2".into()),
+        }));
+
+        let error = broker_config_records(&broker_resource("", &[]), &image)
+            .expect_err("ELR requires a cluster-wide min ISR");
 
         assert!(error.0 == codes::INVALID_CONFIG);
     }

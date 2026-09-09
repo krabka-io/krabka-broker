@@ -264,6 +264,34 @@ async fn process_resource(
         }
     }
 
+    if to_submit.iter().any(|record| match record {
+        MetadataRecord::V1TopicConfig(config) => {
+            resource
+                .configs
+                .iter()
+                .any(|item| item.name == crate::config_keys::MIN_INSYNC_REPLICAS)
+                && image
+                    .topic_config(&config.topic)
+                    .and_then(|current| current.get(crate::config_keys::MIN_INSYNC_REPLICAS))
+                    != config
+                        .overrides
+                        .get(crate::config_keys::MIN_INSYNC_REPLICAS)
+        }
+        MetadataRecord::V1BrokerConfig(config) => {
+            config.node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+                && config.config_name == crate::config_keys::MIN_INSYNC_REPLICAS
+                && image
+                    .broker_config(config.node_id)
+                    .and_then(|current| current.get(&config.config_name))
+                    != config.config_value.as_ref()
+        }
+        _ => false,
+    }) {
+        let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
+            .then_some(resource.resource_name.as_str());
+        to_submit.extend(crate::config_keys::clear_elr_records(image, topic));
+    }
+
     if validate_only {
         // Validation pass already happened above (per-config loop). Nothing
         // to submit; the response already carries the per-resource result

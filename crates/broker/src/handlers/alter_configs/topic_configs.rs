@@ -11,16 +11,8 @@
 //! against the stored one. See
 //! [`crate::config_keys::validate_diskless_unchanged`].
 //!
-//! A stored controller-managed key is carried over. No client may name one, so
-//! a replacement can never restate it, and a replacement that dropped it would
-//! erase state the controller published: KIP-966's
-//! [`ELIGIBLE_LEADER_REPLICAS`](crate::config_keys::ELIGIBLE_LEADER_REPLICAS)
-//! would vanish the first time an operator set `retention.ms`, and every
-//! `DescribeTopicPartitions` after that would report the partition as having
-//! no eligible leader. Kafka has no such exposure: it carries the ELR on
-//! `PartitionRegistration`, where no config path can reach it. The keys the
-//! client sends are the whole *client* map; the record this builds is that map
-//! plus what only the controller writes.
+//! ELR is partition metadata, as it is in Kafka, so config replacement cannot
+//! erase it.
 
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
@@ -73,16 +65,6 @@ pub(super) fn topic_config_record(
     // refuses never reaches the policy.
     crate::topic_policy::check(policy, &resource.resource_name, None, None, &overrides)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
-    // Both validations read the client's map alone, so the carry-over comes
-    // after them: a controller-managed key is not the client's to be judged
-    // on, and it takes part in no cross-key rule.
-    overrides.extend(
-        current
-            .into_iter()
-            .flatten()
-            .filter(|(key, _)| config_keys::is_controller_managed_topic_config(key))
-            .map(|(key, value)| (key.clone(), value.clone())),
-    );
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides,
@@ -218,36 +200,6 @@ mod tests {
         assert!(record == expected);
     }
 
-    /// KIP-966 state survives a replacement that does not mention it. A
-    /// client cannot name the key, so an `AlterConfigs` that replaces a
-    /// topic's overrides would otherwise delete the ELR the controller keeps
-    /// and leave `DescribeTopicPartitions` reporting an empty set until the
-    /// next ISR change rebuilt one.
-    #[test]
-    fn topic_replacement_carries_the_controller_managed_state_forward() {
-        let image = image_with_topic_config(
-            "orders",
-            &[
-                (config_keys::ELIGIBLE_LEADER_REPLICAS, "0:2,3:"),
-                (config_keys::RETENTION_MS, "60000"),
-            ],
-        );
-
-        let record = topic_config_record(
-            &topic_resource("orders", &[(config_keys::RETENTION_MS, "120000")]),
-            &image,
-        )
-        .expect("an ordinary replacement is valid");
-
-        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: "orders".into(),
-            overrides: maplit::btreemap! {
-            config_keys::ELIGIBLE_LEADER_REPLICAS.to_string() => "0:2,3:".to_string(),
-            config_keys::RETENTION_MS.to_string() => "120000".to_string()},
-        });
-        assert!(record == expected);
-    }
-
     #[test]
     fn topic_replacement_rejects_controller_managed_configs() {
         let image = image_with_topic("orders");
@@ -342,38 +294,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// A replacement drops every stored key it does not restate, and no client
-    /// may restate a controller-managed one. The stored KIP-966 ELR state must
-    /// therefore survive a replacement that names only ordinary keys;
-    /// otherwise `kafka-configs --alter` on `retention.ms` would silently
-    /// erase it and every later `DescribeTopicPartitions` would report the
-    /// partition as having no eligible leader.
-    #[test]
-    fn topic_replacement_keeps_the_controller_managed_state_it_cannot_restate() {
-        let image = image_with_topic_config(
-            "orders",
-            &[
-                (config_keys::ELIGIBLE_LEADER_REPLICAS, "0:2:3"),
-                (config_keys::RETENTION_MS, "60000"),
-            ],
-        );
-
-        let record = topic_config_record(
-            &topic_resource("orders", &[(config_keys::CLEANUP_POLICY, "delete")]),
-            &image,
-        )
-        .expect("an ordinary replacement is valid");
-
-        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: "orders".into(),
-            overrides: maplit::btreemap! {
-                config_keys::CLEANUP_POLICY.to_string() => "delete".to_string(),
-                config_keys::ELIGIBLE_LEADER_REPLICAS.to_string() => "0:2:3".to_string(),
-            },
-        });
-        assert!(record == expected);
     }
 
     #[test]

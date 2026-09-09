@@ -680,13 +680,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-704",
         claim: "AlterPartition's leader recovery state after an unclean election",
-        status: KipStatus::Partial,
+        status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/alter_partition/isr_update.rs",
         tests: &[
-            "crates/broker/src/handlers/alter_partition/isr_update.rs::error_response_preserves_non_default_partition_fields",
+            "crates/broker/src/handlers/alter_partition/isr_update.rs::error_response_matches_kafkas_default_fields",
+            "crates/broker/src/handlers/alter_partition/isr_update.rs::recovering_partition_cannot_expand_until_leader_reports_recovered",
             "crates/broker/src/handlers/alter_partition/tests.rs",
+            "crates/broker/tests/leader_election.rs::unclean_failover_recovers_after_a_real_broker_restart",
         ],
-        note: "The wire half only. `leader_recovery_state` is a literal 0 -- `RECOVERED` -- at every site that writes it, on the leader side at crates/broker/src/isr_maintenance/request_builder.rs:67 and crates/broker/src/isr_maintenance/request_builder.rs:120 and on the controller side at crates/broker/src/handlers/alter_partition/isr_update.rs:160 and crates/broker/src/handlers/alter_partition/isr_update.rs:179, and nothing under `crates/` reads the field. So the RECOVERING state does not exist here: a partition that comes back from an unclean leader election is advertised as fully recovered from its first AlterPartition onward, no leader is held in recovery, and the controller ignores the state a leader reports rather than answering it. The row is Partial because the field is carried and negotiated, not because any part of the recovery protocol runs.",
+        note: "Unclean election commits RECOVERING with the leader change. The controller fences illegal RECOVERED-to-RECOVERING transitions and multi-member ISR proposals that still report RECOVERING; the elected leader's next maintenance proposal reports RECOVERED. Recovery state is stored in standard KRaft partition metadata and survives replay and snapshot restore.",
     },
     KipAnnotation {
         key: "KIP-714",
@@ -879,7 +881,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_cli/elr_columns.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        note: "ELR maintenance is gated on the `eligible.leader.replicas.version` feature, as Kafka gates it on `FeatureControlManager.isElrFeatureEnabled()`: at level 0 the controller publishes no eligible or last-known-eligible set, and a downgrade to 0 clears what an earlier level 1 published. The release default is 0 at every `metadata.version` krabka advertises, because `ELRV_1` bootstraps at 4.1-IV0; level 1 declares Kafka's KIP-1022 dependency on `metadata.version` at 4.0-IV1. krabka carries the state as the controller-managed `krabka.elr` topic override rather than in `PartitionRecord`, so it does not consume ELR fields written by a JVM controller.",
+        note: "ELR maintenance is gated on the `eligible.leader.replicas.version` feature, as Kafka gates it on `FeatureControlManager.isElrFeatureEnabled()`: at level 0 the controller publishes no eligible or last-known-eligible set, and a downgrade to 0 clears what an earlier level 1 published. The release default is 0 at every `metadata.version` krabka advertises, because `ELRV_1` bootstraps at 4.1-IV0; level 1 declares Kafka's KIP-1022 dependency on `metadata.version` at 4.0-IV1. ELR is carried by standard per-partition KRaft metadata and is consumed during JVM-compatible replay.",
     },
     KipAnnotation {
         key: "KIP-996",

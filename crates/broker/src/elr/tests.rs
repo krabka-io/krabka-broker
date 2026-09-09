@@ -32,7 +32,7 @@ use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
     broker::Broker,
     codes,
-    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+    config_keys::MIN_INSYNC_REPLICAS,
     test_support::{
         decode_response, encode_request, request_context, start_broker_with_authorizer,
     },
@@ -478,15 +478,4 @@ fn the_published_state_round_trips_through_a_snapshot() {
     }
 
     assert!(TopicElr::of_topic(&restored, TOPIC).partition(0) == before);
-    // The value itself survives byte for byte, not just its projection: a
-    // snapshot that rewrote it would still project correctly today and drift
-    // the first time the grammar grows.
-    assert!(
-        restored
-            .topic_config(TOPIC)
-            .and_then(|configs| configs.get(ELIGIBLE_LEADER_REPLICAS))
-            == image
-                .topic_config(TOPIC)
-                .and_then(|configs| configs.get(ELIGIBLE_LEADER_REPLICAS))
-    );
 }
