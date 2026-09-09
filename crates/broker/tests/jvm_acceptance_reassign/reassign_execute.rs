@@ -492,53 +492,82 @@ async fn reassign_partitions_additional_keeps_the_reassignment_already_running()
         h1.wait_until_partition_present(TOPIC, partition).await;
     }
 
-    // Move each partition onto the two brokers it is not on. Nothing in this
-    // harness makes the new replica catch up -- inter-broker replication does
-    // not route back into the VM -- so both moves stay in flight, which is the
-    // state `--additional` is about.
-    for partition in 0..2 {
-        let current = h1
-            .partition_record_for_test(TOPIC, partition)
-            .expect("partition record");
-        let held: BTreeSet<u64> = current.replicas.iter().map(|node| node.0).collect();
-        let targets: Vec<i32> = (1..=3)
-            .filter(|node| !held.contains(node))
-            .map(|node| i32::try_from(node).expect("a node id fits"))
-            .collect();
-        let plan = reassignment_json(&[Assignment {
-            partition: TopicPartition::new(TOPIC, partition),
-            replicas: targets,
-        }]);
-        let mut args = vec!["--execute", "--reassignment-json-file", PLAN_JSON];
-        // The second move is the one under test: without `--additional` it
-        // would cancel the first.
-        if partition == 1 {
-            args.push("--additional");
-        }
-        let run = reassign(
-            &side,
-            Some(&props),
-            &args,
-            vec![ToolFile::new(PLAN_JSON, &plan)],
-        );
-        assert!(
-            run.succeeded(),
-            "--execute for partition {partition} failed:\n{}",
-            run.text(),
-        );
-    }
+    // Stop a registered, non-bootstrap target so the first move cannot race
+    // replica catch-up and complete before the second command runs.
+    let first = h1
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition record");
+    let controller_leader = h1.wait_until_controller_leader().await.0;
+    let offline_node = (2_u64..=3)
+        .find(|node| {
+            *node != controller_leader && !first.replicas.iter().any(|replica| replica.0 == *node)
+        })
+        .expect("a non-bootstrap target broker");
+    let mut handles = [Some(h1), Some(h2), Some(h3)];
+    handles[usize::try_from(offline_node - 1).unwrap()]
+        .take()
+        .expect("offline target handle")
+        .shutdown()
+        .await;
+    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
 
-    for partition in 0..2 {
-        let record = h1
-            .partition_record_for_test(TOPIC, partition)
-            .expect("partition record after the second execute");
-        assert!(
-            !record.adding_replicas.is_empty(),
-            "partition {partition} must still be reassigning after --additional: {record:?}",
-        );
-    }
+    let staying = i32::try_from(first.replicas[0].0).expect("a node id fits");
+    let first_plan = reassignment_json(&[Assignment {
+        partition: TopicPartition::new(TOPIC, 0),
+        replicas: vec![
+            staying,
+            i32::try_from(offline_node).expect("a node id fits"),
+        ],
+    }]);
+    reassign(
+        &side,
+        Some(&props),
+        &["--execute", "--reassignment-json-file", PLAN_JSON],
+        vec![ToolFile::new(PLAN_JSON, &first_plan)],
+    )
+    .expect_success();
+    h1.wait_for_image(|image| {
+        image
+            .partition(TOPIC, 0)
+            .is_some_and(|record| !record.adding_replicas.is_empty())
+    })
+    .await;
 
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    // A no-op assignment is enough to exercise the client's `--additional`
+    // path. Its contract here is that it must not cancel partition 0.
+    let second = h1
+        .partition_record_for_test(TOPIC, 1)
+        .expect("second partition record");
+    let second_plan = reassignment_json(&[Assignment {
+        partition: TopicPartition::new(TOPIC, 1),
+        replicas: second
+            .replicas
+            .iter()
+            .map(|node| i32::try_from(node.0).expect("a node id fits"))
+            .collect(),
+    }]);
+    reassign(
+        &side,
+        Some(&props),
+        &[
+            "--execute",
+            "--reassignment-json-file",
+            PLAN_JSON,
+            "--additional",
+        ],
+        vec![ToolFile::new(PLAN_JSON, &second_plan)],
+    )
+    .expect_success();
+
+    let record = h1
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition record after the second execute");
+    assert!(
+        !record.adding_replicas.is_empty(),
+        "partition 0 must still be reassigning after --additional: {record:?}",
+    );
+
+    for handle in handles.into_iter().flatten() {
+        handle.shutdown().await;
+    }
 }

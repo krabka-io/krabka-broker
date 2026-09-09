@@ -404,18 +404,27 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
     .expect_success();
     h1.wait_until_partition_present(TOPIC, 0).await;
 
-    // Broker 3 is the preferred replica and is not in the ISR, while broker 2
-    // leads. Injection rather than an organic shrink, for the reasons the
-    // first case in this file sets out: inter-broker replication does not
-    // route back into the VM under WSL2, so an ISR this test waited for would
-    // never form.
+    // Keep a registered non-controller broker offline so the injected
+    // preferred replica cannot race back into the ISR before the JVM command.
+    let controller_leader = h1.wait_until_controller_leader().await.0;
+    let preferred = (2_u64..=3)
+        .find(|node| *node != controller_leader)
+        .expect("a non-bootstrap, non-controller broker");
+    let mut handles = [Some(h1), Some(h2), Some(h3)];
+    handles[usize::try_from(preferred - 1).unwrap()]
+        .take()
+        .expect("preferred replica handle")
+        .shutdown()
+        .await;
+    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
+
     h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
         krabka_metadata::PartitionRecord {
             topic: TOPIC.to_string(),
             partition: 0,
-            leader: krabka_broker::NodeId(2),
-            replicas: vec![krabka_broker::NodeId(3), krabka_broker::NodeId(2)],
-            isr: vec![krabka_broker::NodeId(2)],
+            leader: krabka_broker::NodeId(1),
+            replicas: vec![krabka_broker::NodeId(preferred), krabka_broker::NodeId(1)],
+            isr: vec![krabka_broker::NodeId(1)],
             leader_epoch: krabka_metadata::LeaderEpoch(1),
             adding_replicas: vec![],
             removing_replicas: vec![],
@@ -425,7 +434,15 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
     ))
     .await
     .expect("inject a partition whose preferred replica is outside the ISR");
-    wait_jvm_partition_leader(&h2, TOPIC, 0, 2).await;
+    h1.wait_for_image(|image| {
+        image.partition(TOPIC, 0).is_some_and(|record| {
+            record.leader == krabka_broker::NodeId(1)
+                && record.replicas.first() == Some(&krabka_broker::NodeId(preferred))
+                && record.isr == [krabka_broker::NodeId(1)]
+        })
+    })
+    .await;
+    wait_jvm_partition_leader(h1, TOPIC, 0, 1).await;
 
     let document = election_json(&[TopicPartition::new(TOPIC, 0)]);
     let run = side.run_with_files(
@@ -460,7 +477,7 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
         run.text(),
     );
 
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    for handle in handles.into_iter().flatten() {
+        handle.shutdown().await;
+    }
 }

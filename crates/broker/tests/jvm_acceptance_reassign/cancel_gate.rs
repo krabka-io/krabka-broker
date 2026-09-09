@@ -135,23 +135,23 @@ fn reassign(side: &Side<'_>, props: &str, args: &[&str], plan: &str) -> CliRun {
 /// Start a reassignment that will not finish on its own, and answer with the
 /// document that names it.
 ///
-/// Nothing in this harness makes the new replica catch up, so the move stays
-/// in flight -- which is the premise `--cancel` needs: the JVM tool asks the
+/// `target` is a registered broker stopped by the caller, so the move stays in
+/// flight -- which is the premise `--cancel` needs: the JVM tool asks the
 /// broker which partitions are actually reassigning and sends nothing at all
 /// for the ones that are not.
-async fn start_a_reassignment(handle: &BrokerHandle, side: &Side<'_>, props: &str) -> String {
+async fn start_a_reassignment(
+    handle: &BrokerHandle,
+    side: &Side<'_>,
+    props: &str,
+    target: i32,
+) -> String {
     let current = handle
         .partition_record_for_test(TOPIC, 0)
         .expect("partition record");
-    let held: std::collections::BTreeSet<u64> =
-        current.replicas.iter().map(|node| node.0).collect();
-    let targets: Vec<i32> = (1_u64..=3)
-        .filter(|node| !held.contains(node))
-        .map(|node| i32::try_from(node).expect("a node id fits"))
-        .collect();
+    let staying = i32::try_from(current.replicas[0].0).expect("a node id fits");
     let plan = reassignment_json(&[Assignment {
         partition: TopicPartition::new(TOPIC, 0),
-        replicas: targets,
+        replicas: vec![staying, target],
     }]);
     let started = reassign(side, props, &["--execute"], &plan);
     assert!(
@@ -300,9 +300,34 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
     .expect_success();
     h1.wait_until_partition_present(TOPIC, 0).await;
 
+    // Keep one valid target offline so every cancel below observes a real
+    // in-flight reassignment instead of racing replica catch-up.
+    let current = h1
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition record");
+    let controller_leader = h1.wait_until_controller_leader().await.0;
+    let offline_node = (2_u64..=3)
+        .find(|node| {
+            *node != controller_leader && !current.replicas.iter().any(|replica| replica.0 == *node)
+        })
+        .expect("a non-bootstrap target broker");
+    let mut handles = [Some(h1), Some(h2), Some(h3)];
+    handles[usize::try_from(offline_node - 1).unwrap()]
+        .take()
+        .expect("offline target handle")
+        .shutdown()
+        .await;
+    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
+
     // ── 1. the gate off ────────────────────────────────────────────────────
-    let plan = start_a_reassignment(&h1, &side, &props).await;
-    let ungated = reassign(&side, &props, &["--cancel"], &plan);
+    let plan = start_a_reassignment(
+        h1,
+        &side,
+        &props,
+        i32::try_from(offline_node).expect("a node id fits"),
+    )
+    .await;
+    let ungated = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
     check!(
         ungated.succeeded(),
         "with no approver set a cancel is not gated at all:\n{}",
@@ -342,15 +367,37 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
         );
         config
     });
-    for handle in [h1, h2, h3] {
+    for handle in handles.into_iter().flatten() {
         handle.shutdown().await;
     }
     let [h1, h2, h3] = restart(gated).await;
     wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
     // ── 2. the gate on, with no proposal ───────────────────────────────────
-    let plan = start_a_reassignment(&h1, &side, &props).await;
-    let refused = reassign(&side, &props, &["--cancel"], &plan);
+    let current = h1
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition record after restart");
+    let controller_leader = h1.wait_until_controller_leader().await.0;
+    let target = (2_u64..=3)
+        .find(|node| {
+            *node != controller_leader && !current.replicas.iter().any(|replica| replica.0 == *node)
+        })
+        .expect("a non-bootstrap target broker");
+    let mut handles = [Some(h1), Some(h2), Some(h3)];
+    handles[usize::try_from(target - 1).unwrap()]
+        .take()
+        .expect("offline target handle")
+        .shutdown()
+        .await;
+    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
+    let plan = start_a_reassignment(
+        h1,
+        &side,
+        &props,
+        i32::try_from(target).expect("a node id fits"),
+    )
+    .await;
+    let refused = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
     check!(
         !refused.succeeded(),
         "a gated cancel with no approval must exit non-zero:\n{}",
@@ -380,7 +427,7 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
     // `host.docker.internal` name the JVM tools bootstrap against, which CI
     // maps to loopback in `/etc/hosts`, so both halves address one broker.
     approve_a_cancel(side.bootstrap()).await;
-    let approved = reassign(&side, &props, &["--cancel"], &plan);
+    let approved = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
     check!(
         approved.succeeded(),
         "an approved cancel must succeed:\n{}",
@@ -392,7 +439,7 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
         approved.stdout,
     );
 
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    for handle in handles.into_iter().flatten() {
+        handle.shutdown().await;
+    }
 }
