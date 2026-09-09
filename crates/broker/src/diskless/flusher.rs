@@ -63,6 +63,9 @@ pub(crate) enum FlusherExit {
     /// the caller has to rebuild it. See
     /// [`DisklessIndexLog::wait_until_caught_up`].
     ReplayStalled,
+    /// The live index projection became invalid or stopped. Flushing and
+    /// reclamation must stop until the caller rebuilds it.
+    ProjectionUnavailable,
 }
 
 /// Flush committed tails until broker shutdown. A failed tick does not move
@@ -94,8 +97,14 @@ pub(crate) async fn run(
         );
         return FlusherExit::ReplayStalled;
     }
+    let projection_unusable = context.index_log.wait_until_unusable();
+    tokio::pin!(projection_unusable);
     let mut reclaimer = Reclaimer::new(RECLAIM_GRACE);
-    reclaimer.sweep(&context).await;
+    tokio::select! {
+        biased;
+        () = &mut projection_unusable => return FlusherExit::ProjectionUnavailable,
+        () = reclaimer.sweep(&context) => {}
+    }
     context.ready.store(true, Ordering::Release);
     let mut ticker = tokio::time::interval(config.interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -107,6 +116,11 @@ pub(crate) async fn run(
     let mut rotation = 0usize;
     loop {
         tokio::select! {
+            biased;
+            () = &mut projection_unusable => {
+                tracing::error!("diskless WAL index projection became unavailable; stopping flusher");
+                return FlusherExit::ProjectionUnavailable;
+            }
             _ = ticker.tick() => {
                 if let Err(error) = flush_tick(&context, &config, rotation).await {
                     tracing::warn!(%error, "diskless WAL flush failed; retrying");
@@ -356,6 +370,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_remote_storage_topic::MetadataEventLog;
     use krabka_units::ByteSize;
     use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
     use tempfile::tempdir;
@@ -1103,6 +1118,52 @@ mod tests {
             trim_safety_lag: None,
             ..FlushConfig::default()
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worker_stops_when_live_index_projection_becomes_invalid() {
+        let event_log: Arc<dyn MetadataEventLog> =
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+        let index = DisklessIndexLog::start(Arc::clone(&event_log))
+            .await
+            .unwrap();
+        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(MetadataImage::new(Uuid::nil())));
+        let ready = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn(run(
+            FlusherContext {
+                partitions: Arc::new(PartitionRegistry::new()),
+                image_rx,
+                object_store: Arc::new(InMemory::new()),
+                index_log: index,
+                node_id: NodeId(1),
+                broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
+                ready: Arc::clone(&ready),
+            },
+            FlushConfig {
+                interval: Duration::from_mins(1),
+                ..FlushConfig::default()
+            },
+            CancellationToken::new(),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !ready.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        event_log
+            .publish(0, bytes::Bytes::from_static(b"invalid index record"))
+            .await
+            .unwrap();
+
+        let exit = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("invalid projection stops the flusher")
+            .unwrap();
+        assert!(exit == FlusherExit::ProjectionUnavailable);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

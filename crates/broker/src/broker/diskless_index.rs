@@ -158,6 +158,13 @@ async fn bootstrap_from_source(
                             "diskless WAL index replay stalled; rebuilding the index log"
                         );
                     }
+                    crate::diskless::flusher::FlusherExit::ProjectionUnavailable => {
+                        tracing::error!(
+                            topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+                            backoff_ms = backoff.as_millis(),
+                            "diskless WAL index projection became unavailable; rebuilding it"
+                        );
+                    }
                 }
             }
             Err(error) => {

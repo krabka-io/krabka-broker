@@ -155,8 +155,11 @@ pub(crate) async fn handle(
             continue;
         }
 
-        let unavailable =
-            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+        let unavailable = if t.assignments.is_none() {
+            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await
+        } else {
+            std::collections::HashSet::new()
+        };
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),

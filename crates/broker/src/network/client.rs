@@ -165,7 +165,7 @@ impl InterBrokerClient {
     /// round-trip-bound exchanges that Nagle would stall, and once rustls owns
     /// the stream the raw socket is no longer reachable.
     async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
-        let tcp = TcpStream::connect((host, port)).await?;
+        let tcp = TcpStream::connect((unbracket_host(host), port)).await?;
         tune_outbound_socket(&tcp, self.socket_send_buffer, self.socket_receive_buffer);
         Ok(tcp)
     }
@@ -240,6 +240,12 @@ impl InterBrokerClient {
             .await
             .map_err(|e| InterBrokerError::Config(format!("Connection::from_stream: {e}")))
     }
+}
+
+fn unbracket_host(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -324,7 +330,10 @@ mod tests {
 
     use krabka_units::kibibytes;
 
-    use super::{DEFAULT_SOCKET_BUFFER, InterBrokerClient, to_client_creds, tune_outbound_socket};
+    use super::{
+        DEFAULT_SOCKET_BUFFER, InterBrokerClient, to_client_creds, tune_outbound_socket,
+        unbracket_host,
+    };
     use crate::config::InterBrokerCredentials;
 
     #[tokio::test]
@@ -358,6 +367,12 @@ mod tests {
         assert2::assert!(recv_after > recv_before);
         assert2::assert!(recv_after > send_after);
         drop(server);
+    }
+
+    #[test]
+    fn tuple_dial_host_strips_ipv6_brackets() {
+        assert2::assert!(unbracket_host("[2001:db8::7]") == "2001:db8::7");
+        assert2::assert!(unbracket_host("broker.example") == "broker.example");
     }
 
     #[tokio::test]

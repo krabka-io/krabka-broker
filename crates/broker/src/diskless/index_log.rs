@@ -167,14 +167,13 @@ impl DisklessIndexLog {
                         Err(error) => {
                             metrics.diskless_wal_index_decode_failures_total.inc();
                             pump_valid.store(false, Ordering::Release);
-                            *pump_cache.lock().await = WalIndexCache::default();
+                            progress_tx.send_modify(|progress| progress.invalid = true);
                             tracing::error!(
                                 partition = event.partition,
                                 offset = event.offset,
                                 %error,
                                 "diskless WAL index record rejected; projection is unsafe"
                             );
-                            progress_tx.send_modify(|progress| progress.invalid = true);
                         }
                         _ => unreachable!("decode result has exactly one record kind"),
                     }
@@ -244,6 +243,16 @@ impl DisklessIndexLog {
 
     pub(crate) fn is_valid(&self) -> bool {
         self.valid.load(Ordering::Acquire)
+    }
+
+    /// Wait until the live projection becomes invalid or its pump stops.
+    pub(crate) async fn wait_until_unusable(&self) {
+        let mut progress = self.progress.clone();
+        loop {
+            if progress.borrow_and_update().invalid || progress.changed().await.is_err() {
+                return;
+            }
+        }
     }
 
     /// Wait until `record` appears in the committed projection.
