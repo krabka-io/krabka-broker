@@ -70,7 +70,8 @@ jobs:
             echo "::error::${SIBLING} is pinned at more than one revision: ${current}"
             exit 1
           fi
-          latest="$(gh api "repos/krabka-io/${SIBLING}/commits/main" --jq .sha)"
+          default_branch="$(gh api "repos/krabka-io/${SIBLING}" --jq .default_branch)"
+          latest="$(gh api "repos/krabka-io/${SIBLING}/commits/${default_branch}" --jq .sha)"
 
           if [ "${current}" = "${latest}" ]; then
             echo "${SIBLING} is already at ${latest:0:7}"

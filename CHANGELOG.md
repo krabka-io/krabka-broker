@@ -29,6 +29,12 @@ the `krabka-*` names to crates.io.
 - The nightly Criterion lane now alternates three reference and candidate runs
   on one host and fails a machine-readable, raw-sample-backed verdict when a
   benchmark exceeds its variance-calibrated tolerance.
+- A checked-in ecosystem qualification manifest records the exact broker,
+  operator, CLI, observability, demo and client-stack revisions as one candidate
+  set. CI validates the draft contract; the manual final gate additionally
+  requires immutable artifact digests, passed evidence for installation,
+  operator lifecycle, authenticated CLI administration and four-signal WAL
+  recovery, plus a content-addressed published report.
 - A three-worker kind lane now applies the reference Kubernetes manifests,
   proves quorum pods land on distinct nodes, produces and consumes through the
   bootstrap Service, and verifies the data again after a rolling restart. The

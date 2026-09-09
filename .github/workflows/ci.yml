@@ -443,6 +443,11 @@ jobs:
       # The workspace version is written by hand in `[workspace.package]`, in every first-party `path` dependency's version requirement, in `module()`, in `WORKSPACE_VERSION` and in each `html_root_url`. `bazel/defs.bzl` stamps `WORKSPACE_VERSION` into every crate's purl, so one left behind by a bump attests an SBOM naming the previous release; the release workflow runs this same check against the tag.
       - name: version pins
         run: aspect check-version-pins
+      # The M20 candidate set is allowed to remain a draft while sibling-owned
+      # implementation is unfinished, but its repository revisions, artifact
+      # slots and four evidence gates may not silently disappear or drift.
+      - name: ecosystem qualification manifest
+        run: aspect check-qualification
       - name: markdown links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:

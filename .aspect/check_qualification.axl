@@ -1,0 +1,163 @@
+"""Validate the immutable component set and evidence for Milestone 20."""
+
+_HEX = "0123456789abcdef"
+_REPOSITORIES = [
+    "krabka-io/krabka-broker",
+    "krabka-io/krabka-cli",
+    "krabka-io/krabka-client-rs",
+    "krabka-io/krabka-connect",
+    "krabka-io/krabka-io.github.io",
+    "krabka-io/krabka-o11y",
+    "krabka-io/krabka-o11y-demo",
+    "krabka-io/krabka-operator",
+    "krabka-io/krabka-protocol",
+    "krabka-io/krabka-schema-registry",
+    "krabka-io/krabka-streams-go",
+    "krabka-io/krabka-streams-java",
+    "krabka-io/krabka-streams-rs",
+]
+_GATES = {
+    "installation": 523,
+    "operator-lifecycle": 524,
+    "cli-admin": 525,
+    "observability-recovery": 526,
+}
+_ARTIFACT_KINDS = {
+    "krabka-io/krabka-broker": ["image"],
+    "krabka-io/krabka-cli": ["binary"],
+    "krabka-io/krabka-o11y": ["image"],
+    "krabka-io/krabka-o11y-demo": ["compose"],
+    "krabka-io/krabka-operator": ["chart"],
+}
+_EVIDENCE = {
+    "installation": ["compose", "helm", "matrix"],
+    "operator-lifecycle": ["certificate-rotation", "ledger", "scale-down", "upgrade"],
+    "cli-admin": ["commands", "state"],
+    "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
+}
+
+def _hex(value, length):
+    if type(value) != "string" or len(value) != length:
+        return False
+    for index in range(len(value)):
+        if value[index] not in _HEX:
+            return False
+    return True
+
+def _digest(value):
+    return type(value) == "string" and value.startswith("sha256:") and _hex(value.removeprefix("sha256:"), 64)
+
+def _digits(value):
+    if not value:
+        return False
+    for index in range(len(value)):
+        if value[index] not in "0123456789":
+            return False
+    return True
+
+def utc_timestamp(value):
+    """Whether value is a calendar-valid YYYY-MM-DDTHH:MM:SSZ timestamp."""
+    if type(value) != "string" or len(value) != 20:
+        return False
+    if value[4] != "-" or value[7] != "-" or value[10] != "T" or value[13] != ":" or value[16] != ":" or value[19] != "Z":
+        return False
+    fields = [value[0:4], value[5:7], value[8:10], value[11:13], value[14:16], value[17:19]]
+    if False in [_digits(field) for field in fields]:
+        return False
+    year, month, day, hour, minute, second = [int(field) for field in fields]
+    if year < 1 or month < 1 or month > 12 or hour > 23 or minute > 59 or second > 59:
+        return False
+    days = [31, 29 if year % 400 == 0 or (year % 4 == 0 and year % 100 != 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    return day >= 1 and day <= days[month - 1]
+
+def manifest_problems(document, final = False):
+    """Return every contract violation without stopping at the first one."""
+    problems = []
+    if document.get("schema") != 1:
+        problems.append("schema must be 1")
+    if document.get("status") not in ["draft", "qualified"]:
+        problems.append("status must be draft or qualified")
+    if not utc_timestamp(document.get("captured_at", "")):
+        problems.append("captured_at must be a calendar-valid UTC timestamp")
+    if document.get("architectures") != ["linux/amd64"]:
+        problems.append("architectures must state the one published platform: linux/amd64")
+
+    repositories = []
+    strict = final or document.get("status") == "qualified"
+    for component in document.get("components", []):
+        repository = component.get("repository", "")
+        repositories.append(repository)
+        if not _hex(component.get("revision", ""), 40):
+            problems.append("%s: revision is not a 40-character commit" % repository)
+        if not component.get("default_branch"):
+            problems.append("%s: default_branch is empty" % repository)
+        artifacts = component.get("artifacts", [])
+        if repository in _ARTIFACT_KINDS and sorted([artifact.get("kind", "") for artifact in artifacts]) != _ARTIFACT_KINDS[repository]:
+            problems.append("%s: artifacts must preserve the %s slot" % (repository, ", ".join(_ARTIFACT_KINDS[repository])))
+        for artifact in artifacts:
+            if not artifact.get("kind") or not artifact.get("reference"):
+                problems.append("%s: artifact kind and reference are required" % repository)
+            if strict and not _digest(artifact.get("digest", "")):
+                problems.append("%s: qualified artifact has no sha256 digest" % repository)
+            if strict and artifact.get("kind") != "image" and not artifact.get("reference", "").startswith("https://"):
+                problems.append("%s: qualified non-image artifact needs an https URL" % repository)
+    if sorted(repositories) != _REPOSITORIES:
+        problems.append("components must name each canonical repository exactly once")
+
+    gates = []
+    for gate in document.get("gates", []):
+        name = gate.get("name", "")
+        gates.append(name)
+        if name not in _GATES or gate.get("issue") != _GATES.get(name):
+            problems.append("%s: gate does not name its Milestone 20 issue" % name)
+        if gate.get("status") not in ["pending", "passed"]:
+            problems.append("%s: status must be pending or passed" % name)
+        claimed = strict or gate.get("status") == "passed"
+        if strict:
+            if gate.get("status") != "passed":
+                problems.append("%s: qualification gate has not passed" % name)
+        if claimed:
+            if not gate.get("evidence"):
+                problems.append("%s: qualification gate has no evidence" % name)
+            names = sorted([evidence.get("name", "") for evidence in gate.get("evidence", [])])
+            if name in _EVIDENCE and names != _EVIDENCE[name]:
+                problems.append("%s: evidence does not cover %s" % (name, ", ".join(_EVIDENCE[name])))
+        for evidence in gate.get("evidence", []):
+            if not evidence.get("name") or not evidence.get("url", "").startswith("https://") or not _digest(evidence.get("sha256", "")):
+                problems.append("%s: evidence needs a name, https URL and sha256 digest" % name)
+    if sorted(gates) != sorted(_GATES.keys()):
+        problems.append("gates must name each Milestone 20 acceptance gate exactly once")
+
+    if strict:
+        if document.get("status") != "qualified":
+            problems.append("a final manifest must have status qualified")
+        report = document.get("report", {})
+        if not report.get("url", "").startswith("https://") or not _digest(report.get("sha256", "")):
+            problems.append("a final manifest needs a published report URL and sha256 digest")
+    return problems
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    document = json.decode(ctx.std.fs.read_to_string(root + "/" + ctx.args.manifest))
+    problems = manifest_problems(document, final = ctx.args.final)
+    for problem in problems:
+        ctx.std.io.stderr.write(problem + "\n")
+    if problems:
+        return 1
+    ctx.std.io.stdout.write(
+        "check-qualification: %d components and %d gates, %s\n" % (
+            len(document["components"]),
+            len(document["gates"]),
+            document["status"],
+        ),
+    )
+    return 0
+
+check_qualification = task(
+    summary = "Validate the Milestone 20 qualification manifest",
+    implementation = _impl,
+    args = {
+        "manifest": args.string(default = "qualification/milestone-20.json"),
+        "final": args.boolean(default = False, description = "Require immutable artifacts and passed evidence."),
+    },
+)
