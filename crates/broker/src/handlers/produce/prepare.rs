@@ -226,6 +226,9 @@ fn validate_owned_record_timestamps(
     batch: &RecordBatch,
     timestamps: TimestampPolicy,
 ) -> Result<(), i16> {
+    if !timestamps.bounds_records() {
+        return Ok(());
+    }
     let now_ms = crate::time_util::now_ms();
     batch.records.iter().try_for_each(|record| {
         let timestamp_ms = batch.base_timestamp.saturating_add(record.timestamp_delta);
