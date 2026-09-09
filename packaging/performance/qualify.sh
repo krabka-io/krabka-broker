@@ -75,6 +75,7 @@ scale_records=${scale_records}
 scale_rate=${scale_rate}
 scale_deadline=${scale_deadline}
 krabka_commit=$(git rev-parse HEAD)
+krabka_compilation_mode=opt
 kafka_image=apache/kafka:4.0.0
 broker_cpu_limit=2
 broker_memory_limit=2Gi
@@ -105,7 +106,7 @@ mkdir -p "${build_dir}/classes"
 javac --release 17 -cp "${build_dir}/libs/*" -d "${build_dir}/classes" \
   "${root}/packaging/performance/BrokerPerformanceWorkload.java"
 
-bazel run //packaging:image_load
+bazel run -c opt //packaging:image_load
 kind load docker-image --name "${cluster}" docker.io/krabka-io/krabka-broker:dev
 docker image inspect apache/kafka:4.0.0 docker.io/krabka-io/krabka-broker:dev \
   >"${artifact_dir}/image-inspect.json"

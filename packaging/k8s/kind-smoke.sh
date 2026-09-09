@@ -4,7 +4,7 @@ set -euo pipefail
 image=docker.io/krabka-io/krabka-broker:dev
 cluster=${KIND_CLUSTER_NAME:-krabka}
 
-bazel run //packaging:image_load
+bazel run -c opt //packaging:image_load
 kind load docker-image --name "${cluster}" "${image}"
 for worker in worker worker2 worker3; do
   docker exec "${cluster}-${worker}" mkdir -p /var/local/krabka
@@ -79,17 +79,17 @@ kubectl wait --for=condition=Ready pod/kafka-tools --timeout=2m
 kubectl exec kafka-tools -- /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server krabka-bootstrap:9092 \
   --create --topic kind-smoke --partitions 1 --replication-factor 3
-printf 'milestone-16\n' | kubectl exec -i kafka-tools -- \
+printf 'survives-restart\n' | kubectl exec -i kafka-tools -- \
   /opt/kafka/bin/kafka-console-producer.sh \
   --bootstrap-server krabka-bootstrap:9092 --topic kind-smoke
 consumed=$(kubectl exec kafka-tools -- /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server krabka-bootstrap:9092 --topic kind-smoke \
   --from-beginning --max-messages 1 --timeout-ms 30000)
-test "${consumed}" = milestone-16
+test "${consumed}" = survives-restart
 
 kubectl rollout restart statefulset/krabka
 kubectl rollout status statefulset/krabka --timeout=5m
 consumed=$(kubectl exec kafka-tools -- /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server krabka-bootstrap:9092 --topic kind-smoke \
   --from-beginning --max-messages 1 --timeout-ms 30000)
-test "${consumed}" = milestone-16
+test "${consumed}" = survives-restart

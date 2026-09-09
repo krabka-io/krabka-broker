@@ -47,7 +47,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-bazel run //packaging:image_load
+bazel run -c opt //packaging:image_load
 docker pull "${old_image}"
 docker network create "${network}"
 docker volume create "${volume}"

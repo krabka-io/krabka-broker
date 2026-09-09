@@ -153,7 +153,7 @@ jobs:
       # Bazel graph the delivery push builds from.
       - name: push release candidate
         if: steps.delivery.outputs.digest == ''
-        run: bazel run //packaging:push -- --tag "${CANDIDATE_TAG}"
+        run: bazel run -c opt //packaging:push -- --tag "${CANDIDATE_TAG}"
 
       - name: resolve image digest
         id: image
@@ -190,6 +190,7 @@ jobs:
                 externalParameters: {ref: $ref},
                 internalParameters: {
                   bazelTarget: "//packaging:image",
+                  compilationMode: "opt",
                   imageSource: $source
                 },
                 resolvedDependencies: [{
