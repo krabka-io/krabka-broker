@@ -598,6 +598,18 @@ mod tests {
         assert!(error.contains("unsupported diskless WAL index format version 1"));
     }
 
+    #[test]
+    fn current_layout_with_an_old_version_is_not_serialized() {
+        let record = WalFlushRecord {
+            object_key: "wal/old".into(),
+            format_version: WalFlushRecord::FORMAT_VERSION - 1,
+            entries: vec![],
+        };
+
+        let error = record.to_bytes().unwrap_err();
+        assert!(error.contains("unsupported diskless WAL index format version 1"));
+    }
+
     fn entry(p: i32, f: i64, l: i64) -> WalIndexEntry {
         WalIndexEntry {
             topic_id: Uuid::from_u128(1),

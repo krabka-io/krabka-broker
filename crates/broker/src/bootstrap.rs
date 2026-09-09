@@ -256,8 +256,9 @@ mod tests {
     fn read_directory_id_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
         let id = uuid::Uuid::new_v4();
+        let cluster_id = uuid::Uuid::new_v4();
         let meta = serde_json::json!({
-            "cluster_id": uuid::Uuid::new_v4().to_string(),
+            "cluster_id": cluster_id.to_string(),
             "directory_id": id.to_string(),
             "version": META_PROPERTIES_VERSION,
         });
@@ -267,6 +268,9 @@ mod tests {
         )
         .unwrap();
         assert!(read_directory_id(dir.path()).unwrap() == id);
+        let meta = read_and_validate_meta_properties(dir.path(), Some(cluster_id)).unwrap();
+        assert!(meta.cluster_id == cluster_id);
+        assert!(meta.directory_id == id);
     }
 
     #[test]

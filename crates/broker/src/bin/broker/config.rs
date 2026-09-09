@@ -87,6 +87,7 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use clap::Parser as _;
 
     use super::*;
 
@@ -120,6 +121,51 @@ mod tests {
                     krabka_broker::config::NodeRole::Controller,
                     krabka_broker::config::NodeRole::Witness
                 ]
+        );
+    }
+
+    #[test]
+    fn base_config_preserves_explicit_controller_discovery() {
+        let mut args = Args::try_parse_from([
+            "krabka-broker",
+            "--controller-quorum-voters",
+            "7@controller.example:9093",
+            "--controller-bootstrap-servers",
+            "bootstrap.example:9093",
+        ])
+        .unwrap();
+        let config = args.base_broker_config(
+            "broker.example:9092".into(),
+            "127.0.0.1:9093".parse().unwrap(),
+            7,
+            None,
+            None,
+            krabka_broker::telemetry::OtlpProtocol::Grpc,
+        );
+
+        assert!(
+            config.controller_quorum_voters
+                == vec![(krabka_broker::NodeId(7), "controller.example:9093".into())]
+        );
+        assert!(config.bootstrap_servers == vec!["bootstrap.example:9093"]);
+    }
+
+    #[test]
+    fn base_config_defaults_to_the_local_controller() {
+        let mut args = Args::try_parse_from(["krabka-broker"]).unwrap();
+        let controller = "127.0.0.1:9093".parse().unwrap();
+        let config = args.base_broker_config(
+            "127.0.0.1:9092".into(),
+            controller,
+            3,
+            None,
+            None,
+            krabka_broker::telemetry::OtlpProtocol::Grpc,
+        );
+
+        assert!(
+            config.controller_quorum_voters
+                == vec![(krabka_broker::NodeId(3), controller.to_string())]
         );
     }
 }
