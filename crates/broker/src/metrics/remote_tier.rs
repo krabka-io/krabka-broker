@@ -56,6 +56,7 @@ impl BrokerMetrics {
         }
         .get_or_create(&label)
         .inc();
+        self.track_topic_series(&label);
     }
 
     /// Counts one failed attempt on one of the tier's paths.
@@ -72,6 +73,7 @@ impl BrokerMetrics {
         }
         .get_or_create(&label)
         .inc();
+        self.track_topic_series(&label);
     }
 
     /// Accounts bytes moved on the copy or fetch path.
@@ -88,11 +90,11 @@ impl BrokerMetrics {
             RemoteTierPath::Fetch => &self.remote_fetch_bytes_total,
             RemoteTierPath::Delete => return,
         };
-        family
-            .get_or_create(&TopicLabel {
-                topic: Arc::from(topic),
-            })
-            .inc_by(bytes);
+        let label = TopicLabel {
+            topic: Arc::from(topic),
+        };
+        family.get_or_create(&label).inc_by(bytes);
+        self.track_topic_series(&label);
     }
 
     /// Sets what the copy path has left to do for one topic.
@@ -111,6 +113,7 @@ impl BrokerMetrics {
         self.remote_copy_lag_bytes
             .get_or_create(&label)
             .set(i64::try_from(bytes).unwrap_or(i64::MAX));
+        self.track_topic_series(&label);
     }
 
     /// Sets what the delete path has left to do for one topic.
@@ -128,6 +131,7 @@ impl BrokerMetrics {
         self.remote_delete_lag_bytes
             .get_or_create(&label)
             .set(i64::try_from(bytes).unwrap_or(i64::MAX));
+        self.track_topic_series(&label);
     }
 
     /// Accounts replication bytes the leader-side KIP-73 throttle granted.

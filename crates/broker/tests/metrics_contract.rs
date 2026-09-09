@@ -329,6 +329,7 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         remote_index_cache_bytes: _,
         remote_index_cache_entries: _,
         lag_series: _,
+        metric_series: _,
     } = metrics;
 }
 

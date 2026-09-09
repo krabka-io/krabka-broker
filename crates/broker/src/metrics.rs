@@ -41,10 +41,8 @@ mod request;
 mod schema_validation;
 mod traffic;
 
-pub(crate) use self::{
-    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, phases::RequestPhases,
-};
 pub use self::{
+    eviction::MetricSeriesIndex,
     labels::{
         ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
         BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, CleanerFailureLabel,
@@ -57,6 +55,9 @@ pub use self::{
     lag::LagSeriesIndex,
     remote_reader::{RemoteReaderLevels, RemoteReaderTotals},
     remote_tier::RemoteTierPath,
+};
+pub(crate) use self::{
+    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, phases::RequestPhases,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -799,6 +800,9 @@ pub struct BrokerMetrics {
     /// bundle without `..` and fail to compile when a family is added. The
     /// type is opaque outside the crate.
     pub lag_series: LagSeriesIndex,
+    /// Label sets materialised by the topic and partition metric families.
+    /// See [`MetricSeriesIndex`].
+    pub metric_series: MetricSeriesIndex,
 }
 
 /// Opaque `Debug`, so that a type holding a [`BrokerMetrics`] can still derive

@@ -27,5 +27,6 @@ impl BrokerMetrics {
         self.delivery_pending_records
             .get_or_create(&lbl)
             .set(pending);
+        self.track_partition_series(&lbl);
     }
 }

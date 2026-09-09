@@ -43,6 +43,7 @@ mod follower_throttle;
 /// `benches/perf_deferrals.rs`.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod hot_path;
+mod raw_fetch;
 mod response;
 mod session;
 #[cfg(test)]
@@ -134,10 +135,81 @@ pub(crate) type FollowedKey = (Arc<str>, PartitionIndex);
 
 /// The partitions one fetcher follows, shared with the supervisor.
 ///
-/// The supervisor replaces entries as metadata moves; the fetcher takes a
-/// snapshot at the top of each round. The lock is held only for the clone, so
-/// a reconcile never waits on a Fetch.
-pub(crate) type FollowedPartitions = Arc<Mutex<BTreeMap<FollowedKey, Arc<Config>>>>;
+/// The supervisor replaces entries as metadata moves. The fetcher clones a
+/// snapshot only when the generation changes, so ordinary Fetch rounds never
+/// walk this map or hold this lock.
+#[derive(Default)]
+pub(crate) struct FollowedPartitionsState {
+    entries: Mutex<BTreeMap<FollowedKey, Arc<Config>>>,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+pub(crate) type FollowedPartitions = Arc<FollowedPartitionsState>;
+
+impl FollowedPartitionsState {
+    pub(crate) fn new(entries: BTreeMap<FollowedKey, Arc<Config>>) -> Self {
+        Self {
+            entries: Mutex::new(entries),
+            generation: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+
+    pub(crate) fn lock(
+        &self,
+    ) -> std::sync::LockResult<std::sync::MutexGuard<'_, BTreeMap<FollowedKey, Arc<Config>>>> {
+        self.entries.lock()
+    }
+
+    pub(crate) fn replace(&self, entries: BTreeMap<FollowedKey, Arc<Config>>) {
+        let mut current = self
+            .entries
+            .lock()
+            .expect("followed-partitions mutex poisoned");
+        let unchanged = current.len() == entries.len()
+            && current
+                .iter()
+                .zip(&entries)
+                .all(|((old_key, old), (new_key, new))| {
+                    old_key == new_key && Arc::ptr_eq(old, new)
+                });
+        if unchanged {
+            return;
+        }
+        *current = entries;
+        drop(current);
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn snapshot_if_changed(
+        &self,
+        generation: u64,
+    ) -> Option<(u64, BTreeMap<FollowedKey, Arc<Config>>)> {
+        let current = self.generation.load(std::sync::atomic::Ordering::Acquire);
+        (current != generation).then(|| {
+            (
+                current,
+                self.entries
+                    .lock()
+                    .expect("followed-partitions mutex poisoned")
+                    .clone(),
+            )
+        })
+    }
+
+    pub(crate) fn remove(&self, key: &FollowedKey) {
+        if self
+            .entries
+            .lock()
+            .expect("followed-partitions mutex poisoned")
+            .remove(key)
+            .is_some()
+        {
+            self.generation
+                .fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
 
 /// Everything one fetcher needs that is the same for every partition it
 /// follows: which leader it dials, how it dials, and how it paces itself.

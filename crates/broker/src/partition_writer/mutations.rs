@@ -44,6 +44,34 @@ pub(super) async fn handle_replicate(
     }
 }
 
+pub(super) async fn handle_replicate_verbatim(
+    log: &Arc<Mutex<Log>>,
+    log_dir: &Arc<ArcSwap<PathBuf>>,
+    log_dir_status: &LogDirRegistry,
+    batch: krabka_log::VerbatimBatch,
+    base_offset: Offset,
+    ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
+    append_notify: &Notify,
+) {
+    let log_for_blocking = Arc::clone(log);
+    let result = run_log_mutation(
+        move || {
+            lock_log(&log_for_blocking)
+                .append_verbatim_at(&batch, base_offset)
+                .map(|_| ())
+                .map_err(crate::error::BrokerError::from)
+        },
+        "replicate verbatim task panicked",
+        (log_dir, log_dir_status),
+    )
+    .await;
+    let succeeded = result.is_ok();
+    let _ = ack.send(result);
+    if succeeded {
+        append_notify.notify_waiters();
+    }
+}
+
 pub(super) async fn handle_truncate(
     log: &Arc<Mutex<Log>>,
     storage_status: (&Arc<ArcSwap<PathBuf>>, &LogDirRegistry),

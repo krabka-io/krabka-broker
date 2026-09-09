@@ -60,14 +60,11 @@ impl ReplicatorSupervisor {
         //    every leader this broker now follows and did not before.
         for (key, wanted) in desired {
             if let Some(task) = self.tasks.get(&key) {
-                *task
-                    .followed
-                    .lock()
-                    .expect("followed-partitions mutex poisoned") = wanted.partitions;
+                task.followed.replace(wanted.partitions);
                 continue;
             }
             let token = self.shutdown.child_token();
-            let followed = Arc::new(std::sync::Mutex::new(wanted.partitions));
+            let followed = Arc::new(replicator::FollowedPartitionsState::new(wanted.partitions));
             let handle = tokio::spawn(replicator::run_fetcher(replicator::FetcherConfig {
                 node_id: self.node_id,
                 leader_node_id: key.0,
@@ -258,7 +255,7 @@ mod tests {
         FetcherTask {
             shutdown,
             handle: tokio::spawn(async move { child_shutdown.cancelled().await }),
-            followed: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            followed: Arc::new(replicator::FollowedPartitionsState::default()),
             endpoint,
         }
     }
@@ -480,7 +477,7 @@ mod tests {
             FetcherTask {
                 shutdown: stale_shutdown.clone(),
                 handle: tokio::spawn(async {}),
-                followed: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+                followed: Arc::new(replicator::FollowedPartitionsState::default()),
                 endpoint: leader_endpoint(&img, NodeId(1)),
             },
         );

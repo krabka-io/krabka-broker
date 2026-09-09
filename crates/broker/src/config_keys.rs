@@ -157,7 +157,6 @@ pub(crate) use self::{
         validate_remote_storage_disable, validate_topic_config, validate_topic_config_map,
     },
 };
-
 pub(crate) const RETENTION_MS: &str = "retention.ms";
 pub(crate) const RETENTION_BYTES: &str = "retention.bytes";
 pub(crate) const SEGMENT_BYTES: &str = "segment.bytes";

@@ -168,6 +168,7 @@ impl BrokerMetrics {
             break_glass_refusals: Family::default(),
             break_glass_bypassed: Family::default(),
             lag_series: crate::metrics::LagSeriesIndex::default(),
+            metric_series: crate::metrics::MetricSeriesIndex::default(),
             diskless_wal_durable_watermark: Family::default(),
             diskless_wal_voter_lag: Family::default(),
             diskless_wal_quorum_loss_events_total: Counter::default(),

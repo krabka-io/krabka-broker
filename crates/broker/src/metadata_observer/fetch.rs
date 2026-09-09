@@ -154,9 +154,12 @@ fn apply_fetch_records(
             }
         };
         let index = u64::try_from(batch.base_offset.max(0)).unwrap_or(0);
+        let next_offset = index
+            .saturating_add(u64::try_from(batch.last_offset_delta.max(0)).unwrap_or(0))
+            .saturating_add(1);
         // The LeaderChange control batch carries no metadata records.
         if batch.attributes.is_control_batch() {
-            new_offset = index + 1;
+            new_offset = next_offset;
             continue;
         }
         for r in &batch.records {
@@ -174,7 +177,7 @@ fn apply_fetch_records(
                 Err(e) => warn!(error = %e, "observer failed to decode record"),
             }
         }
-        new_offset = index + 1;
+        new_offset = next_offset;
     }
     if new_offset != fetch_offset {
         let _ = image_tx.send_replace(Arc::new(next));
@@ -266,5 +269,16 @@ mod tests {
 
         assert!(new_offset == 5);
         assert!(image_tx.borrow().topic("offset-topic").is_some());
+    }
+
+    #[test]
+    fn apply_fetch_records_advances_past_every_offset_in_a_batch() {
+        let image_tx = image_channel(Uuid::new_v4());
+        let mut batch = metadata_batch(4, &topic_record("multi-record-offset-topic"));
+        batch.last_offset_delta = 999;
+
+        let new_offset = apply_fetch_records(4, &encode_batches(&[batch]), &image_tx);
+
+        assert!(new_offset == 1_004);
     }
 }

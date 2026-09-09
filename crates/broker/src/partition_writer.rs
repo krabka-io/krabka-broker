@@ -176,6 +176,22 @@ pub async fn run_with_sequencer(
             WriterMessage::Replicate { batch, ack } => {
                 handle_replicate(&log, &log_dir, &log_dir_status, batch, ack, &append_notify).await;
             }
+            WriterMessage::ReplicateVerbatim {
+                batch,
+                base_offset,
+                ack,
+            } => {
+                mutations::handle_replicate_verbatim(
+                    &log,
+                    &log_dir,
+                    &log_dir_status,
+                    batch,
+                    base_offset,
+                    ack,
+                    &append_notify,
+                )
+                .await;
+            }
             WriterMessage::Truncate { offset, ack } => {
                 handle_truncate(
                     &log,

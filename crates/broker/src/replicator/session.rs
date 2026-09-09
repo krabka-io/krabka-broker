@@ -141,6 +141,31 @@ impl FollowerFetchSession {
         request
     }
 
+    /// Applies already-known changed and removed rows without rescanning the
+    /// whole session. The caller uses this after the full opening request;
+    /// Fetch responses identify exactly which offsets can have moved.
+    pub(super) fn build_changes(
+        &mut self,
+        changed: WantedRows,
+        removed: &[SessionKey],
+    ) -> SessionRequest {
+        if self.is_full() {
+            return self.build(changed);
+        }
+        let topics = fetch_topics(changed.iter().collect());
+        let forgotten_topics_data = forgotten_topics(removed.iter());
+        for key in removed {
+            self.sent.remove(key);
+        }
+        self.sent.extend(changed);
+        SessionRequest {
+            session_id: self.session_id,
+            session_epoch: self.next_epoch,
+            topics,
+            forgotten_topics_data,
+        }
+    }
+
     /// Folds one response's session fields back into the handler, and reports
     /// whether the round's partition rows may be applied at all.
     ///

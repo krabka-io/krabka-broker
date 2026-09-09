@@ -22,6 +22,7 @@ impl BrokerMetrics {
             topic: Arc::from(topic),
         };
         self.topic_freeze_rejections.get_or_create(&lbl).inc();
+        self.track_topic_series(&lbl);
     }
 
     /// KFC-9: publish the number of live entries in the freeze registry.

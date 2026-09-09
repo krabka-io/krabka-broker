@@ -190,13 +190,23 @@ pub(super) fn prepare_batch(
     {
         return owned_fallback(bytes, timestamps, topic_name, metrics, policy);
     }
-    validated
-        .validate_records(policy)
-        .map_err(|_| codes::INVALID_RECORD)?;
-
-    let prepared = PreparedBatch::from_header(header, bytes);
-    validate_record_timestamps(&prepared, timestamps, policy)?;
-    Ok(prepared)
+    if timestamps.bounds_records() {
+        // The timestamp walk is also a complete owned record decode. Reuse it
+        // as structural validation instead of decompressing and parsing the
+        // same body once in `validate_records` and again below.
+        let mut cursor: &[u8] = &bytes;
+        let batch = RecordBatch::decode_with_policy(&mut cursor, policy)
+            .map_err(|_| codes::INVALID_RECORD)?;
+        if !cursor.is_empty() {
+            return Err(codes::INVALID_RECORD);
+        }
+        validate_owned_record_timestamps(&batch, timestamps)?;
+    } else {
+        validated
+            .validate_records(policy)
+            .map_err(|_| codes::INVALID_RECORD)?;
+    }
+    Ok(PreparedBatch::from_header(header, bytes))
 }
 
 /// Apply the topic's `message.timestamp.before.max.ms` and
@@ -224,30 +234,41 @@ fn validate_record_timestamps(
     if !timestamps.bounds_records() {
         return Ok(());
     }
-    let now_ms = crate::time_util::now_ms();
-    let refuse = |timestamp_ms: i64| {
-        if timestamps.rejects_record(timestamp_ms, now_ms) {
-            Err(codes::INVALID_TIMESTAMP)
-        } else {
-            Ok(())
-        }
-    };
     match &prepared.source {
-        PreparedSource::Owned(batch) => batch.records.iter().try_for_each(|record| {
-            refuse(batch.base_timestamp.saturating_add(record.timestamp_delta))
-        }),
+        PreparedSource::Owned(batch) => validate_owned_record_timestamps(batch, timestamps),
         PreparedSource::Verbatim(bytes) => {
+            let now_ms = crate::time_util::now_ms();
             let mut cursor: &[u8] = bytes;
             let borrowed = RecordBatchBorrowed::decode_borrow_with_policy(&mut cursor, policy)
                 .map_err(|_| codes::INVALID_RECORD)?;
             let base_timestamp = borrowed.header().base_timestamp.get();
             for record in &borrowed {
                 let record = record.map_err(|_| codes::INVALID_RECORD)?;
-                refuse(base_timestamp.saturating_add(record.timestamp_delta))?;
+                if timestamps.rejects_record(
+                    base_timestamp.saturating_add(record.timestamp_delta),
+                    now_ms,
+                ) {
+                    return Err(codes::INVALID_TIMESTAMP);
+                }
             }
             Ok(())
         }
     }
+}
+
+fn validate_owned_record_timestamps(
+    batch: &RecordBatch,
+    timestamps: TimestampPolicy,
+) -> Result<(), i16> {
+    let now_ms = crate::time_util::now_ms();
+    batch.records.iter().try_for_each(|record| {
+        let timestamp_ms = batch.base_timestamp.saturating_add(record.timestamp_delta);
+        if timestamps.rejects_record(timestamp_ms, now_ms) {
+            Err(codes::INVALID_TIMESTAMP)
+        } else {
+            Ok(())
+        }
+    })
 }
 
 /// The owned-decode fallback for a v≥3 records slice that the verbatim

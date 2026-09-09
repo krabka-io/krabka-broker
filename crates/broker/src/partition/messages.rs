@@ -114,6 +114,14 @@ pub enum WriterMessage {
         batch: RecordBatch,
         ack: oneshot::Sender<Result<(), BrokerError>>,
     },
+    /// Append a leader's already-encoded data batch without decoding or
+    /// recompressing it. Control batches cannot use this arm because their
+    /// marker record is needed for transaction bookkeeping.
+    ReplicateVerbatim {
+        batch: VerbatimBatch,
+        base_offset: Offset,
+        ack: oneshot::Sender<Result<(), BrokerError>>,
+    },
     /// Truncate the log so no records at offset `>= offset` remain. Used
     /// by the replicator's `OFFSET_OUT_OF_RANGE` recovery path.
     Truncate {

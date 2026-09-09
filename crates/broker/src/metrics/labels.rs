@@ -37,20 +37,12 @@ pub struct TopicLabel {
 /// Per-partition label set, paired with the `partition_*` and `delivery_*`
 /// metric families. Consumed by the rebalancer's metric scraper.
 ///
-/// The `metrics::eviction` watcher drops a partition's series once the image
-/// stops naming this broker in that partition's replica set, and drops every
-/// partition of a topic when that topic is deleted. Across the label sets an
-/// image named, cardinality is therefore bounded by the partitions the cluster
-/// holds now rather than by every partition this broker has ever seen: a
-/// misrouted request materialises a label for a partition this broker does not
-/// host, but that partition exists, and the topic going away releases it.
-///
-/// No such bound covers a label set no image ever named. Produce and fetch
-/// account for a request the broker rejected as well as one it served, so a
-/// client naming a topic or a partition index the image does not hold still
-/// materialises a series here, and the image diff has no record of it to
-/// release. Bounding that case needs eviction driven by series creation
-/// rather than by the image, which is issue #199.
+/// `metrics::eviction` indexes labels as the data path materialises them and
+/// reconciles that index with the current image. A partition's series leave
+/// when this broker no longer hosts it, including invented client labels and a
+/// straggler write after reassignment. The index retains no tombstones, so
+/// cardinality is bounded by currently hosted partitions plus labels created
+/// since the most recent bounded reconciliation pass.
 ///
 /// `topic` is an `Arc<str>` for the reason [`TopicLabel::topic`] is: this is
 /// the label set the produce, fetch and replication paths build once per

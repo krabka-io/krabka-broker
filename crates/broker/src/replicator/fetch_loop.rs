@@ -1,10 +1,9 @@
 //! The follower fetch loop.
 //!
-//! Each round takes a snapshot of the partitions the fetcher follows, reads
-//! each one's local end offset and KIP-73 throttle budget, folds them into one
-//! `Fetch` request through the KIP-227 session handler, and applies the
-//! response row by row. The loop reconnects on transport failure and returns
-//! when the fetcher is cancelled.
+//! A full or metadata-changed round snapshots every followed partition. Later
+//! KIP-227 rounds replan only rows named by the leader's last incremental
+//! response, then apply only the rows the next response carries. The loop
+//! reconnects on transport failure and returns when the fetcher is cancelled.
 //!
 //! A round costs one request and one response however many partitions the
 //! fetcher follows, and after the first round the request names only the
@@ -28,8 +27,9 @@ use super::{
     connection::connect_with_backoff,
     ensure_local_partition,
     follower_throttle::{FetchThrottleDecision, follower_partition_fetch_cap},
+    raw_fetch::RawFetchRequest,
     replication_target_changed,
-    response::{RoundEntry, RowAction, apply_response},
+    response::{FollowedIndex, RoundEntry, RowAction, apply_response_indexed},
     session::{FollowerFetchSession, SessionKey, SessionOutcome, WantedRows},
 };
 
@@ -45,11 +45,15 @@ use super::{
 /// membership where it belongs and stops the churn.
 type DelayedUntil = std::collections::HashMap<FollowedKey, tokio::time::Instant>;
 
+/// Catch out-of-band local log mutations without putting a full partition
+/// scan back into every incremental Fetch round.
+const PARTITION_STATE_AUDIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// One round's plan: what goes on the wire, and which partition each row
 /// belongs to once the answer comes back.
-struct Round<'round> {
+struct Round {
     wanted: WantedRows,
-    entries: Vec<RoundEntry<'round>>,
+    entries: Vec<RoundEntry>,
     keys: Vec<FollowedKey>,
     /// Every partition wanted a fetch this round but no budget was left for
     /// any of them, so the round has nothing to send and should wait for the
@@ -65,7 +69,14 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
     // would put the registry lookup back on the per-partition path this
     // batching exists to leave.
     let mut materialized: std::collections::HashSet<FollowedKey> = std::collections::HashSet::new();
+    let mut followed = BTreeMap::new();
+    let mut followed_generation = 0;
+    let mut followed_index = FollowedIndex::new(&followed);
+    let mut dirty = std::collections::BTreeSet::new();
+    let mut request_epochs = std::collections::HashMap::new();
+    let mut forgotten = Vec::new();
     let mut delayed: DelayedUntil = DelayedUntil::new();
+    let mut next_partition_audit = tokio::time::Instant::now() + PARTITION_STATE_AUDIT_INTERVAL;
     // The leader connection, dialled lazily. Opening the local logs must not
     // wait behind the dial: a follower whose leader is not accepting yet still
     // has to have its replicas on disk, because the ISR report, a later
@@ -79,26 +90,49 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             return Ok(());
         }
 
-        let followed = snapshot(fetcher);
-        materialized.retain(|key| followed.contains_key(key));
-        for (key, cfg) in &followed {
-            if materialized.contains(key) {
-                continue;
+        if let Some((generation, snapshot)) =
+            fetcher.followed.snapshot_if_changed(followed_generation)
+        {
+            followed_generation = generation;
+            followed = snapshot;
+            followed_index = FollowedIndex::new(&followed);
+            dirty = followed.keys().cloned().collect();
+            request_epochs.retain(|key, _| followed.contains_key(key));
+            forgotten.clear();
+            session.reset();
+            materialized.retain(|key| followed.contains_key(key));
+            for (key, cfg) in &followed {
+                if materialized.contains(key) {
+                    continue;
+                }
+                if let Err(error) = ensure_local_partition(cfg) {
+                    warn!(error = %error, topic = %cfg.topic, partition = cfg.partition.get(),
+                        "replicator failed to open local partition; not following it");
+                    drop_partition(fetcher, key);
+                    continue;
+                }
+                materialized.insert(key.clone());
             }
-            if let Err(error) = ensure_local_partition(cfg) {
-                warn!(error = %error, topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator failed to open local partition; not following it");
-                drop_partition(fetcher, key);
-                continue;
-            }
-            materialized.insert(key.clone());
         }
 
+        let now = tokio::time::Instant::now();
+        if now >= next_partition_audit {
+            dirty.extend(followed.keys().cloned());
+            next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
+        }
+        dirty.extend(
+            delayed
+                .iter()
+                .filter(|(_, until)| **until <= now)
+                .map(|(key, _)| key.clone()),
+        );
         delayed.retain(|key, until| {
             followed.contains_key(key) && *until > tokio::time::Instant::now()
         });
-        let round = plan_round(&followed, &delayed);
-        if round.entries.is_empty() {
+        let round = plan_changed(&followed, &delayed, &dirty);
+        if round.entries.is_empty()
+            && (session.is_full() || followed.is_empty() || round.all_throttled)
+        {
             // Nothing to ask for: either this fetcher follows nothing yet, or
             // every partition it follows is out of throttle budget. Wait, and
             // let the next reconcile or the next refill decide.
@@ -117,20 +151,30 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             Some(ref mut connection) => connection,
             None => client.insert(connect_with_backoff(fetcher).await?),
         };
-        let request = build_fetch_request(fetcher, &mut session, round.wanted);
+        for (key, entry) in round.keys.iter().zip(&round.entries) {
+            request_epochs.insert(key.clone(), entry.request_leader_epoch);
+        }
+        let removed = std::mem::take(&mut forgotten);
+        let request = RawFetchRequest(build_fetch_request(
+            fetcher,
+            &mut session,
+            round.wanted,
+            &removed,
+        ));
         let send = tokio::select! {
             () = fetcher.shutdown.cancelled() => return Ok(()),
             r = connection.send(request) => r,
         };
 
         let mut resp: FetchResponse = match send {
-            Ok(r) => r,
+            Ok(r) => r.0,
             // Transport / framing failure: the leader may or may not have seen
             // the request, so what it holds for this session is unknowable.
             // Drop the session with the connection; the next round is full.
             Err(ClientError::Disconnected | ClientError::Io(_)) => {
                 client = None;
                 session.reset();
+                dirty = followed.keys().cloned().collect();
                 continue;
             }
             Err(e) => {
@@ -138,6 +182,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                     "replicator: client.send unexpected error; retrying after backoff");
                 client = None;
                 session.reset();
+                dirty = followed.keys().cloned().collect();
                 if !sleep_or_stop(fetcher, fetcher.replication.send_error_backoff).await {
                     return Ok(());
                 }
@@ -147,6 +192,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
 
         if session.handle_response(resp.error_code, resp.session_id) == SessionOutcome::SessionLost
         {
+            dirty = followed.keys().cloned().collect();
             info!(
                 leader_node_id = fetcher.leader_node_id.0,
                 error_code = resp.error_code,
@@ -155,12 +201,18 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             continue;
         }
 
-        let actions = apply_response(&mut resp, &round.entries).await;
+        let actions = apply_response_indexed(&mut resp, &followed_index, &request_epochs).await;
+        for key in &round.keys {
+            dirty.remove(key);
+        }
         let mut backoff: Option<Time> = None;
-        for (key, action) in round.keys.iter().zip(actions) {
+        for (key, action) in actions {
             match action {
-                RowAction::Continue => {}
+                RowAction::Continue => {
+                    dirty.insert(key);
+                }
                 RowAction::Drop => {
+                    dirty.remove(&key);
                     info!(topic = %key.0, partition = key.1.get(),
                         "replicator.not_leader; holding the partition back until \
                          the metadata image settles");
@@ -169,17 +221,24 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                         tokio::time::Instant::now()
                             + fetcher.replication.epoch_fence_backoff.to_std(),
                     );
+                    if let Some(cfg) = followed.get(&key) {
+                        forgotten.push(session_key(cfg));
+                    }
                     // The leader's cached set still holds it; the next round
                     // forgets it, which is what the session handler does with
                     // a key that left the wanted set.
                 }
                 RowAction::Backoff(delay) => {
+                    dirty.insert(key);
                     backoff = Some(match backoff {
                         Some(current) if current > delay => current,
                         _ => delay,
                     });
                 }
             }
+        }
+        if session.is_full() {
+            dirty = followed.keys().cloned().collect();
         }
         if let Some(delay) = backoff
             && !sleep_or_stop(fetcher, delay).await
@@ -189,23 +248,10 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
     }
 }
 
-/// The partitions this fetcher follows right now.
-fn snapshot(fetcher: &FetcherConfig) -> BTreeMap<FollowedKey, Arc<Config>> {
-    fetcher
-        .followed
-        .lock()
-        .expect("followed-partitions mutex poisoned")
-        .clone()
-}
-
 /// Stops following one partition. The supervisor re-adds it if the next image
 /// still says this broker follows it from this leader.
 fn drop_partition(fetcher: &FetcherConfig, key: &FollowedKey) {
-    fetcher
-        .followed
-        .lock()
-        .expect("followed-partitions mutex poisoned")
-        .remove(key);
+    fetcher.followed.remove(key);
 }
 
 /// Sleeps, or reports `false` when the fetcher was cancelled during the wait.
@@ -224,10 +270,17 @@ async fn sleep_or_stop(fetcher: &FetcherConfig, delay: Time) -> bool {
 /// only, which is how Kafka's follower quota holds one partition back without
 /// holding back the ones sharing its fetcher. A partition the leader disowned
 /// is held back by `delayed` for the same reason.
-fn plan_round<'round>(
-    followed: &'round BTreeMap<FollowedKey, Arc<Config>>,
+#[cfg(test)]
+fn plan_round(followed: &BTreeMap<FollowedKey, Arc<Config>>, delayed: &DelayedUntil) -> Round {
+    let dirty = followed.keys().cloned().collect();
+    plan_changed(followed, delayed, &dirty)
+}
+
+fn plan_changed(
+    followed: &BTreeMap<FollowedKey, Arc<Config>>,
     delayed: &DelayedUntil,
-) -> Round<'round> {
+    dirty: &std::collections::BTreeSet<FollowedKey>,
+) -> Round {
     let mut round = Round {
         wanted: WantedRows::new(),
         entries: Vec::new(),
@@ -236,7 +289,10 @@ fn plan_round<'round>(
     };
     let mut wanted_a_fetch = 0_usize;
     let mut throttled_out = 0_usize;
-    for (key, cfg) in followed {
+    for key in dirty {
+        let Some(cfg) = followed.get(key) else {
+            continue;
+        };
         if delayed.contains_key(key) || replication_target_changed(cfg) {
             continue;
         }
@@ -256,22 +312,22 @@ fn plan_round<'round>(
         let Some(row) = partition_row(cfg, partition_max_cap) else {
             continue;
         };
-        round.wanted.insert(
-            SessionKey {
-                topic: cfg.topic.to_string(),
-                topic_id: cfg.topic_id,
-                partition: cfg.partition.get(),
-            },
-            row.request,
-        );
+        round.wanted.insert(session_key(cfg), row.request);
         round.entries.push(RoundEntry {
-            cfg,
             request_leader_epoch: row.request_leader_epoch,
         });
         round.keys.push(key.clone());
     }
     round.all_throttled = throttled_out > 0 && throttled_out == wanted_a_fetch;
     round
+}
+
+fn session_key(cfg: &Config) -> SessionKey {
+    SessionKey {
+        topic: cfg.topic.to_string(),
+        topic_id: cfg.topic_id,
+        partition: cfg.partition.get(),
+    }
 }
 
 /// One partition's request row, and the epoch its response is fenced against.
@@ -326,8 +382,13 @@ fn build_fetch_request(
     fetcher: &FetcherConfig,
     session: &mut FollowerFetchSession,
     wanted: WantedRows,
+    forgotten: &[SessionKey],
 ) -> FetchRequest {
-    let session_request = session.build(wanted);
+    let session_request = if session.is_full() {
+        session.build(wanted)
+    } else {
+        session.build_changes(wanted, forgotten)
+    };
     // `replica_id` is the wire field on Fetch v0-14. KIP-903 (Kafka 3.5) moved
     // it into a tagged `replica_state` struct on v15+; the codegen serializes
     // whichever the negotiated version requires. Populate BOTH so the request
@@ -438,7 +499,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let req = build_fetch_request(&fetcher, &mut session, wanted);
+        let req = build_fetch_request(&fetcher, &mut session, wanted, &[]);
 
         let rid = i32::try_from(NODE_ID.0).unwrap();
         check!(req.replica_id == rid);
@@ -476,16 +537,11 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        build_fetch_request(&fetcher, &mut session, first);
+        build_fetch_request(&fetcher, &mut session, first, &[]);
         session.handle_response(crate::codes::NONE, 77);
 
-        let second: WantedRows = [
-            wanted_row(PARTITION, 5, 99),
-            wanted_row(PARTITION + 1, 0, 99),
-        ]
-        .into_iter()
-        .collect();
-        let req = build_fetch_request(&fetcher, &mut session, second);
+        let second: WantedRows = [wanted_row(PARTITION, 5, 99)].into_iter().collect();
+        let req = build_fetch_request(&fetcher, &mut session, second, &[]);
 
         check!(req.session_id == 77);
         check!(req.session_epoch == 1);
@@ -511,6 +567,7 @@ mod tests {
             &fetcher,
             &mut session,
             [wanted_row(PARTITION, 0, 1)].into_iter().collect(),
+            &[],
         );
 
         check!(req.replica_id == -1);
@@ -585,6 +642,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_incremental_round_does_not_replan_caught_up_partitions() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        ensure_local_partition(&cfg).unwrap();
+        let key = (Arc::clone(&cfg.topic), cfg.partition);
+        let followed = [(key, Arc::new(cfg))].into_iter().collect();
+
+        let round = plan_changed(
+            &followed,
+            &DelayedUntil::new(),
+            &std::collections::BTreeSet::default(),
+        );
+
+        check!(round.entries.is_empty());
+        check!(round.wanted.is_empty());
+    }
+
+    #[tokio::test]
     async fn a_cancelled_fetcher_stops_without_dialling() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
@@ -608,7 +682,7 @@ mod tests {
         let partitions = cfg.partitions.clone();
         let topic = Arc::clone(&cfg.topic);
         let partition = cfg.partition;
-        let followed: FollowedPartitions = Arc::new(std::sync::Mutex::new(
+        let followed: FollowedPartitions = Arc::new(super::super::FollowedPartitionsState::new(
             [((Arc::clone(&topic), partition), Arc::new(cfg))]
                 .into_iter()
                 .collect(),

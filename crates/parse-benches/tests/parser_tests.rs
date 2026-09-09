@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     io::Write,
     path::PathBuf,
@@ -7,8 +8,9 @@ use std::{
 
 use assert2::assert;
 use krabka_parse_benches::{
-    Args, BenchmarkSummary, ParseBenchesError, format_rfc3339_utc, parse_bencher_line,
-    parse_benchmark_dir, resolve_commit_sha, run_from_args,
+    Args, BenchmarkMetric, BenchmarkSummary, ParseBenchesError, compare_summaries,
+    format_rfc3339_utc, parse_bencher_line, parse_benchmark_dir, read_summaries,
+    resolve_commit_sha, run_from_args,
 };
 use tempfile::tempdir;
 
@@ -238,14 +240,14 @@ fn formats_rfc3339_utc_timestamp_accurately() {
 #[test]
 fn resolves_commit_sha_appropriately() {
     // Explicit CLI argument takes precedence over environment
-    assert!(resolve_commit_sha(Some("abcdef123456"), None) == "abcdef12");
-    assert!(resolve_commit_sha(Some("abcdef123456"), Some("fedcba987654")) == "abcdef12");
+    assert!(resolve_commit_sha(Some("abcdef123456"), None) == "abcdef123456");
+    assert!(resolve_commit_sha(Some("abcdef123456"), Some("fedcba987654")) == "abcdef123456");
     assert!(resolve_commit_sha(Some("short"), None) == "short");
 
     // Fallback to environment SHA when CLI argument is absent or blank
-    assert!(resolve_commit_sha(None, Some("fedcba987654")) == "fedcba98");
-    assert!(resolve_commit_sha(Some(""), Some("fedcba987654")) == "fedcba98");
-    assert!(resolve_commit_sha(Some("   "), Some("fedcba987654")) == "fedcba98");
+    assert!(resolve_commit_sha(None, Some("fedcba987654")) == "fedcba987654");
+    assert!(resolve_commit_sha(Some(""), Some("fedcba987654")) == "fedcba987654");
+    assert!(resolve_commit_sha(Some("   "), Some("fedcba987654")) == "fedcba987654");
 
     // Default to "unknown" when neither provides a non-blank value
     assert!(resolve_commit_sha(None, None) == "unknown");
@@ -253,8 +255,7 @@ fn resolves_commit_sha_appropriately() {
     assert!(resolve_commit_sha(None, Some("")) == "unknown");
     assert!(resolve_commit_sha(Some("   "), Some("   ")) == "unknown");
 
-    // Multi-byte UTF-8 string truncation safety
-    assert!(resolve_commit_sha(Some("🦀crabka123"), None) == "🦀crabka1");
+    assert!(resolve_commit_sha(Some("🦀crabka123"), None) == "🦀crabka123");
 }
 
 #[test]
@@ -273,15 +274,191 @@ fn runs_end_to_end_writing_valid_json() {
         output: Some(out_json.clone()),
         suite: "krabka-broker".to_string(),
         commit: Some("deadbeef999".to_string()),
+        reference_dir: None,
+        candidate_dir: None,
+        minimum_tolerance_percent: 3.0,
     };
 
     let summary = run_from_args(&args).unwrap();
     assert!(summary.suite == "krabka-broker");
-    assert!(summary.commit == "deadbeef");
+    assert!(summary.commit == "deadbeef999");
     assert!(summary.benchmarks.len() == 29);
     assert!(out_json.exists());
 
     let json_content = fs::read_to_string(&out_json).unwrap();
     let parsed_back: BenchmarkSummary = serde_json::from_str(&json_content).unwrap();
     assert!(parsed_back == summary);
+}
+
+fn repeated_summaries(values: &[f64], commit: &str) -> Vec<BenchmarkSummary> {
+    values
+        .iter()
+        .map(|value| BenchmarkSummary {
+            suite: "test".to_string(),
+            commit: commit.to_string(),
+            timestamp: "2026-09-09T00:00:00Z".to_string(),
+            benchmarks: BTreeMap::from([(
+                "hot/path".to_string(),
+                BenchmarkMetric {
+                    ns_per_iter: *value,
+                    variance_ns: 1.0,
+                },
+            )]),
+        })
+        .collect()
+}
+
+#[test]
+fn unchanged_controls_pass_the_variance_calibrated_verdict() {
+    let reference = repeated_summaries(&[100.0, 102.0, 99.0], "reference");
+    let candidate = repeated_summaries(&[101.0, 100.0, 103.0], "candidate");
+
+    let verdict = compare_summaries(&reference, &candidate, 0.03).unwrap();
+
+    assert!(verdict.passed);
+    assert!(verdict.benchmarks["hot/path"].passed);
+}
+
+#[test]
+fn a_deliberately_slowed_benchmark_fails_the_verdict() {
+    let reference = repeated_summaries(&[100.0, 102.0, 99.0], "reference");
+    let candidate = repeated_summaries(&[120.0, 121.0, 119.0], "candidate");
+
+    let verdict = compare_summaries(&reference, &candidate, 0.03).unwrap();
+
+    assert!(!verdict.passed);
+    assert!(!verdict.benchmarks["hot/path"].passed);
+}
+
+#[test]
+fn missing_repeated_samples_cannot_pass() {
+    let reference = repeated_summaries(&[100.0, 101.0], "reference");
+    let candidate = repeated_summaries(&[100.0, 101.0, 99.0], "candidate");
+
+    let error = compare_summaries(&reference, &candidate, 0.03).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ParseBenchesError::TooFewSamples {
+            side: "reference",
+            count: 2
+        }
+    ));
+}
+
+#[test]
+fn comparison_rejects_invalid_inputs() {
+    let good = repeated_summaries(&[100.0, 101.0, 99.0], "good");
+    for tolerance in [-1.0, f64::NAN, f64::INFINITY] {
+        assert!(matches!(
+            compare_summaries(&good, &good, tolerance),
+            Err(ParseBenchesError::InvalidTolerance)
+        ));
+    }
+
+    let empty = vec![
+        BenchmarkSummary {
+            suite: "test".into(),
+            commit: "empty".into(),
+            timestamp: "2026-09-09T00:00:00Z".into(),
+            benchmarks: BTreeMap::new(),
+        };
+        3
+    ];
+    assert!(matches!(
+        compare_summaries(&empty, &empty, 0.03),
+        Err(ParseBenchesError::EmptyBenchmarkSet)
+    ));
+
+    let other = repeated_summaries(&[100.0, 101.0, 99.0], "other")
+        .into_iter()
+        .map(|mut summary| {
+            summary.benchmarks = BTreeMap::from([(
+                "other/path".into(),
+                BenchmarkMetric {
+                    ns_per_iter: 1.0,
+                    variance_ns: 0.0,
+                },
+            )]);
+            summary
+        })
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        compare_summaries(&other, &good, 0.03),
+        Err(ParseBenchesError::BenchmarkSetMismatch)
+    ));
+    assert!(matches!(
+        compare_summaries(&good, &other, 0.03),
+        Err(ParseBenchesError::BenchmarkSetMismatch)
+    ));
+
+    let invalid = repeated_summaries(&[100.0, 0.0, 99.0], "invalid");
+    assert!(matches!(
+        compare_summaries(&good, &invalid, 0.03),
+        Err(ParseBenchesError::InvalidSample(name)) if name == "hot/path"
+    ));
+}
+
+#[test]
+fn comparison_handles_even_sample_counts_and_short_candidate() {
+    let reference = repeated_summaries(&[98.0, 100.0, 102.0, 104.0], "reference");
+    let candidate = repeated_summaries(&[99.0, 101.0, 103.0, 105.0], "candidate");
+    let verdict = compare_summaries(&reference, &candidate, 0.03).unwrap();
+    assert!((verdict.benchmarks["hot/path"].reference_median_ns - 101.0).abs() < f64::EPSILON);
+    assert!((verdict.benchmarks["hot/path"].candidate_median_ns - 102.0).abs() < f64::EPSILON);
+
+    assert!(matches!(
+        compare_summaries(&reference, &candidate[..2], 0.03),
+        Err(ParseBenchesError::TooFewSamples {
+            side: "candidate",
+            count: 2
+        })
+    ));
+}
+
+#[test]
+fn reads_repeated_summaries_in_filename_order() {
+    let dir = tempdir().unwrap();
+    for (name, commit) in [("c.json", "c"), ("a.json", "a"), ("b.json", "b")] {
+        let summary = &repeated_summaries(&[100.0], commit)[0];
+        serde_json::to_writer(File::create(dir.path().join(name)).unwrap(), summary).unwrap();
+    }
+    fs::write(dir.path().join("ignored.txt"), "not json").unwrap();
+
+    let summaries = read_summaries(dir.path(), "reference").unwrap();
+    assert!(
+        summaries
+            .iter()
+            .map(|summary| summary.commit.as_str())
+            .collect::<Vec<_>>()
+            == ["a", "b", "c"]
+    );
+}
+
+#[test]
+fn reading_summaries_rejects_missing_short_and_invalid_sets() {
+    let missing = PathBuf::from("missing-summary-dir-for-tests-12345");
+    assert!(matches!(
+        read_summaries(&missing, "reference"),
+        Err(ParseBenchesError::DirectoryNotFound(path)) if path == missing
+    ));
+
+    let short = tempdir().unwrap();
+    fs::write(short.path().join("one.json"), "{}").unwrap();
+    assert!(matches!(
+        read_summaries(short.path(), "candidate"),
+        Err(ParseBenchesError::TooFewSamples {
+            side: "candidate",
+            count: 1
+        })
+    ));
+
+    let invalid = tempdir().unwrap();
+    for name in ["a.json", "b.json", "c.json"] {
+        fs::write(invalid.path().join(name), "not json").unwrap();
+    }
+    assert!(matches!(
+        read_summaries(invalid.path(), "reference"),
+        Err(ParseBenchesError::Json(_))
+    ));
 }

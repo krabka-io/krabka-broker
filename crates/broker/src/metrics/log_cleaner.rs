@@ -30,6 +30,7 @@ impl BrokerMetrics {
             partition,
         };
         self.log_compactions_total.get_or_create(&lbl).inc();
+        self.track_partition_series(&lbl);
     }
 
     /// Account one failed per-partition compaction pass
