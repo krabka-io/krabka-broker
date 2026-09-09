@@ -190,6 +190,7 @@ jobs:
                 externalParameters: {ref: $ref},
                 internalParameters: {
                   bazelTarget: "//packaging:image",
+                  compilationMode: "opt",
                   imageSource: $source
                 },
                 resolvedDependencies: [{
