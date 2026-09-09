@@ -120,7 +120,12 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     // KIP-853: recover this replica's stable directory id, written by
     // `krabka format`. Required for every formatted node; absence means the
     // dir was never formatted, which is an operator error.
-    config.directory_id = krabka_broker::bootstrap::read_directory_id(&config.log_dir)?;
+    let meta = krabka_broker::bootstrap::read_and_validate_meta_properties(
+        &config.log_dir,
+        config.cluster_id,
+    )?;
+    config.cluster_id = Some(meta.cluster_id);
+    config.directory_id = meta.directory_id;
     tracing::info!(
         bootstrap_mode = ?config.bootstrap_mode,
         directory_id = %config.directory_id,

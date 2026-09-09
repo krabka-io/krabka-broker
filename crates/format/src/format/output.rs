@@ -15,6 +15,7 @@ use wincode::Serialize as _;
 use crate::ids::{ClusterId, DirectoryId};
 
 pub(super) const ZERO_CHECKPOINT_NAME: &str = "00000000000000000000-0000000000.checkpoint";
+const META_PROPERTIES_VERSION: u64 = 2;
 
 /// Persist `meta.properties.json` — the broker recovers `directory_id`
 /// from it on every boot (KIP-853 voter identity).
@@ -33,7 +34,7 @@ pub(super) fn write_meta_properties(
     let meta = serde_json::json!({
         "cluster_id": cluster_id.to_string(),
         "directory_id": directory_id.to_string(),
-        "version": 1,
+        "version": META_PROPERTIES_VERSION,
     });
     let bytes = serde_json::to_vec_pretty(&meta)
         .map_err(|e| format!("serialize meta.properties.json: {e}"))?;

@@ -278,6 +278,7 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         diskless_wal_flush_attempts_total: _,
         diskless_wal_flush_bytes_total: _,
         diskless_wal_flush_failures_total: _,
+        diskless_wal_index_decode_failures_total: _,
         diskless_wal_index_projection_lag: _,
         diskless_wal_trim_frontier: _,
         diskless_wal_expired_ranges_total: _,

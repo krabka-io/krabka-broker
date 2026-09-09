@@ -108,7 +108,7 @@ pub(crate) async fn flush_once(
     };
     let record = WalFlushRecord {
         object_key,
-        format_version: 1,
+        format_version: WalFlushRecord::FORMAT_VERSION,
         entries,
     };
     if let Err(error) = index_log.publish_flush(&record).await {
@@ -470,7 +470,7 @@ mod tests {
         let index = DisklessIndexLog::start(event_log).await.unwrap();
         let record = WalFlushRecord {
             object_key: "diskless-wal/test.ckwl".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![WalIndexEntry {
                 topic_id: Uuid::from_u128(11),
                 partition: 0,

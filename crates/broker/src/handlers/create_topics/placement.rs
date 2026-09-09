@@ -108,16 +108,19 @@ fn manual_replicas(
 pub(crate) fn site_broker_views(
     image: &krabka_metadata::MetadataImage,
     local_broker: Option<krabka_raft::NodeId>,
+    unavailable: &std::collections::HashSet<u64>,
 ) -> Vec<SiteBrokerView> {
+    let has_registrations = image.brokers().next().is_some();
     let mut views = image
         .brokers()
+        .filter(|broker| !unavailable.contains(&broker.node_id.0))
         .map(|broker| SiteBrokerView {
             node_id: broker.node_id,
             site: broker.rack.clone(),
             is_witness: resolve_broker_witness(image, broker.node_id),
         })
         .collect::<Vec<_>>();
-    if let (true, Some(node_id)) = (views.is_empty(), local_broker) {
+    if let (false, true, Some(node_id)) = (has_registrations, views.is_empty(), local_broker) {
         views.push(SiteBrokerView {
             node_id,
             site: None,

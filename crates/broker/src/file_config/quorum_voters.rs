@@ -7,57 +7,57 @@
 
 use super::{FileConfig, FileConfigError};
 
+/// Validate an unresolved KIP-853 `host:port` endpoint.
+///
+/// # Errors
+/// Returns [`FileConfigError::InvalidQuorumVoter`] when the endpoint is not a
+/// valid `host:port` pair.
+pub fn parse_bootstrap_server(entry: &str) -> Result<String, FileConfigError> {
+    parse_quorum_voter(&format!("0@{entry}")).map(|(_, endpoint)| endpoint)
+}
+
+/// Parse a KIP-595 `<node_id>@<host>:<port>` voter without resolving DNS.
+///
+/// # Errors
+/// Returns [`FileConfigError::InvalidQuorumVoter`] when the voter id or
+/// endpoint is malformed.
+pub fn parse_quorum_voter(entry: &str) -> Result<(krabka_raft::NodeId, String), FileConfigError> {
+    let (id_str, host_port) = entry.split_once('@').ok_or_else(|| {
+        FileConfigError::InvalidQuorumVoter(format!(
+            "{entry:?}: expected `<node_id>@<host>:<port>` (missing `@`)"
+        ))
+    })?;
+    let node_id = krabka_raft::NodeId(id_str.parse::<u64>().map_err(|e| {
+        FileConfigError::InvalidQuorumVoter(format!("{entry:?}: invalid node id {id_str:?}: {e}"))
+    })?);
+    // Validate the `<host>:<port>` shape without resolving. Split on the
+    // LAST ':' so the port is taken from the end (the dialer splits the
+    // same way), then carry `<host>:<port>` verbatim for per-dial lookup.
+    let (host, port_str) = host_port.rsplit_once(':').ok_or_else(|| {
+        FileConfigError::InvalidQuorumVoter(format!(
+            "{entry:?}: expected `<host>:<port>` after `@` (missing `:port`)"
+        ))
+    })?;
+    if host.is_empty() {
+        return Err(FileConfigError::InvalidQuorumVoter(format!(
+            "{entry:?}: empty host"
+        )));
+    }
+    port_str.parse::<u16>().map_err(|e| {
+        FileConfigError::InvalidQuorumVoter(format!("{entry:?}: invalid port {port_str:?}: {e}"))
+    })?;
+    Ok((node_id, host_port.to_string()))
+}
+
 impl FileConfig {
-    /// Parse a single `controller_quorum_voters` entry of the form
-    /// `<node_id>@<host>:<port>` into `(NodeId, "<host>:<port>")`. The host is
-    /// **not** DNS-resolved — it is carried verbatim so the dialer can
-    /// re-resolve it on every (re)connect. Freezing a peer's boot-time IP here
-    /// would strand a `StatefulSet` peer that restarts on a new pod IP (its
-    /// stable DNS name still resolves, but to a different address). Only the
-    /// shape is validated: a numeric node id and a `<host>:<port>` with a
-    /// non-empty host and a numeric port.
-    ///
-    /// # Errors
-    ///
-    /// [`FileConfigError::InvalidQuorumVoter`] when the entry has no `@`, a
-    /// non-numeric node id, or a malformed `<host>:<port>` (missing port,
-    /// empty host, or non-numeric port).
     pub(super) fn parse_quorum_voter(
         entry: &str,
     ) -> Result<(krabka_raft::NodeId, String), FileConfigError> {
-        let (id_str, host_port) = entry.split_once('@').ok_or_else(|| {
-            FileConfigError::InvalidQuorumVoter(format!(
-                "{entry:?}: expected `<node_id>@<host>:<port>` (missing `@`)"
-            ))
-        })?;
-        let node_id = krabka_raft::NodeId(id_str.parse::<u64>().map_err(|e| {
-            FileConfigError::InvalidQuorumVoter(format!(
-                "{entry:?}: invalid node id {id_str:?}: {e}"
-            ))
-        })?);
-        // Validate the `<host>:<port>` shape without resolving. Split on the
-        // LAST ':' so the port is taken from the end (the dialer splits the
-        // same way), then carry `<host>:<port>` verbatim for per-dial lookup.
-        let (host, port_str) = host_port.rsplit_once(':').ok_or_else(|| {
-            FileConfigError::InvalidQuorumVoter(format!(
-                "{entry:?}: expected `<host>:<port>` after `@` (missing `:port`)"
-            ))
-        })?;
-        if host.is_empty() {
-            return Err(FileConfigError::InvalidQuorumVoter(format!(
-                "{entry:?}: empty host"
-            )));
-        }
-        port_str.parse::<u16>().map_err(|e| {
-            FileConfigError::InvalidQuorumVoter(format!(
-                "{entry:?}: invalid port {port_str:?}: {e}"
-            ))
-        })?;
-        Ok((node_id, host_port.to_string()))
+        parse_quorum_voter(entry)
     }
 
     pub(super) fn parse_bootstrap_server(entry: &str) -> Result<String, FileConfigError> {
-        Self::parse_quorum_voter(&format!("0@{entry}")).map(|(_, endpoint)| endpoint)
+        parse_bootstrap_server(entry)
     }
 }
 

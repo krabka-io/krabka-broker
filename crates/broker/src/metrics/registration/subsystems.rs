@@ -339,6 +339,11 @@ impl BrokerMetrics {
             self.diskless_wal_flush_failures_total.clone(),
         );
         registry.register(
+            "diskless_wal_index_decode_failures",
+            "Diskless WAL index records rejected because their payload or format is invalid.",
+            self.diskless_wal_index_decode_failures_total.clone(),
+        );
+        registry.register(
             "diskless_wal_expired_ranges",
             "Committed diskless WAL index ranges tombstoned by retention or DeleteRecords.",
             self.diskless_wal_expired_ranges_total.clone(),

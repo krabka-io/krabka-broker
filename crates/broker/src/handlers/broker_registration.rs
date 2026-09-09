@@ -487,6 +487,14 @@ mod wire_tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
         broker.controller.submit_change(seed).await.expect("seed");
+        // This fixture represents a stopped old broker. Make that state
+        // explicit instead of racing the controller's leadership seeding.
+        assert!(
+            broker
+                .liveness
+                .apply_fencing(REGISTERED.0, true, true)
+                .await
+        );
 
         let image = broker.controller.current_image();
         let previous_broker_epoch = match offer {

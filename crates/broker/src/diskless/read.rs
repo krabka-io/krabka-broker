@@ -64,6 +64,11 @@ impl DisklessReadHandle {
         offset: i64,
         max_bytes: usize,
     ) -> Result<Option<Bytes>, crate::error::BrokerError> {
+        if self.index_log().is_some_and(|log| !log.is_valid()) {
+            return Err(crate::error::BrokerError::Txn(
+                "diskless WAL index projection is unavailable or invalid".into(),
+            ));
+        }
         let Some((object_key, byte_start, byte_len)) = self
             .index
             .lock()
@@ -227,6 +232,7 @@ mod tests {
     use object_store::{ObjectStoreExt, PutPayload, path::Path};
 
     use super::*;
+    use crate::diskless::wal_index::WalFlushRecord;
 
     fn batch(base_offset: i64, value: &'static [u8]) -> RecordBatch {
         RecordBatch {
@@ -416,7 +422,7 @@ mod tests {
         let mut cache = WalIndexCache::default();
         cache.apply(&super::super::wal_index::WalFlushRecord {
             object_key: "diskless-wal/o".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![super::super::wal_index::WalIndexEntry {
                 topic_id,
                 partition: 0,
@@ -472,7 +478,7 @@ mod tests {
             .await
             .apply(&super::super::wal_index::WalFlushRecord {
                 object_key: "diskless-wal/present".into(),
-                format_version: 1,
+                format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![
                     super::super::wal_index::WalIndexEntry {
                         topic_id,
@@ -554,7 +560,7 @@ mod tests {
             .await
             .apply(&super::super::wal_index::WalFlushRecord {
                 object_key: "diskless-wal/missing".into(),
-                format_version: 1,
+                format_version: WalFlushRecord::FORMAT_VERSION,
                 entries: vec![super::super::wal_index::WalIndexEntry {
                     topic_id,
                     partition: 0,

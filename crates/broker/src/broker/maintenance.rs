@@ -20,13 +20,16 @@ pub(super) fn spawn_storage_security_maintenance(
     config: &BrokerConfig,
     partitions: &Arc<PartitionRegistry>,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    inter_broker_listener_protocol: krabka_security::ListenerProtocol,
     metrics: &crate::metrics::BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
     tokio::spawn(crate::isr_maintenance::run(
         crate::isr_maintenance::Config {
-            client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
-            client_frame_max: config.client_frame_max,
+            outbound_client: Arc::clone(inter_broker_client),
+            listener_protocol: inter_broker_listener_protocol,
+            server_name: config.inter_broker_server_name.clone(),
             node_id: config.node_id,
             partitions: Arc::clone(partitions),
             controller: Arc::clone(controller),

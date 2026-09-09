@@ -105,6 +105,7 @@ pub(crate) fn diskless_wal_placement_error(
     fields(api = "CreateTopics", version, req_bytes = req_bytes.len()),
     err,
 )]
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
@@ -227,7 +228,16 @@ pub(crate) async fn handle(
         // site and the witness role of each broker. `site_broker_views` sorts
         // by node id for determinism, and it covers the race in which the
         // self-registration record has not reached the local image yet.
-        let brokers = site_broker_views(&image, broker.config.is_broker().then_some(node_id));
+        let unavailable = if topic_req.assignments.is_empty() {
+            super::offline_replicas::unavailable_brokers(broker, &image).await
+        } else {
+            std::collections::HashSet::new()
+        };
+        let brokers = site_broker_views(
+            &image,
+            broker.config.is_broker().then_some(node_id),
+            &unavailable,
+        );
 
         let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
             Ok(assignments) => assignments,

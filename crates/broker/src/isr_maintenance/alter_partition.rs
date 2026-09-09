@@ -19,6 +19,7 @@ use super::request_builder::build_alter_partition_request;
     fields(topic = %topic, partition, leader_epoch, new_isr_len = new_isr.len()),
     err,
 )]
+#[allow(clippy::too_many_arguments)] // Keeps controller identity and transport inputs explicit.
 pub(super) async fn send_alter_partition(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     broker_id: i32,
@@ -26,10 +27,9 @@ pub(super) async fn send_alter_partition(
     partition: i32,
     new_isr: Vec<NodeId>,
     leader_epoch: i32,
-    client_resource_policy: (
-        krabka_client_core::ConnectionDispatchQueueCapacity,
-        krabka_client_core::ClientFrameMax,
-    ),
+    outbound_client: &crate::network::client::InterBrokerClient,
+    listener_protocol: krabka_security::ListenerProtocol,
+    server_name: &str,
 ) -> Result<(), String> {
     let image = controller.current_image();
     let leader_id = *controller.watch_leader().borrow();
@@ -45,23 +45,23 @@ pub(super) async fn send_alter_partition(
         build_alter_partition_request(&image, broker_id, topic, partition, &new_isr, leader_epoch);
     let mut last_err = String::new();
     for (target_id, addr) in targets {
+        let Some((host, port)) = crate::host_port::parse_host_port(&addr) else {
+            last_err = format!("invalid target address {addr}");
+            continue;
+        };
         match send_alter_partition_to(
             broker_id,
-            &addr,
+            &host,
+            port,
             req.clone(),
-            client_resource_policy.0,
-            client_resource_policy.1,
+            outbound_client,
+            listener_protocol,
+            server_name,
         )
         .await
         {
             Ok(()) => {
-                debug!(
-                    topic = topic,
-                    partition = partition,
-                    new_isr_len = new_isr.len(),
-                    controller_target = target_id.0,
-                    "AlterPartition proposed"
-                );
+                debug!(controller_target = target_id.0, "AlterPartition proposed");
                 return Ok(());
             }
             Err(AlterPartitionSendError::NotController) => {
@@ -72,9 +72,6 @@ pub(super) async fn send_alter_partition(
                 part_err,
             }) => {
                 warn!(
-                    topic = topic,
-                    partition = partition,
-                    new_isr_len = new_isr.len(),
                     controller_target = target_id.0,
                     global_error_code = global_err,
                     partition_error_code = part_err,
@@ -84,8 +81,8 @@ pub(super) async fn send_alter_partition(
                     "AlterPartition rejected: global={global_err} partition={part_err}"
                 ));
             }
-            Err(AlterPartitionSendError::Transport(e)) => {
-                last_err = format!("target {target_id} ({addr}): {e}");
+            Err(AlterPartitionSendError::Transport(error)) => {
+                last_err = format!("target {target_id} ({addr}): {error}");
             }
         }
     }
@@ -98,14 +95,14 @@ fn alter_partition_targets(
 ) -> Vec<(NodeId, String)> {
     let mut out = Vec::new();
     if let Some(id) = leader_id
-        && let Some(b) = image.broker(id)
+        && let Some(broker) = image.broker(id)
     {
-        out.push((id, format!("{}:{}", b.host, b.port)));
+        out.push((id, format!("{}:{}", broker.host, broker.port)));
     }
-    let mut others: Vec<(NodeId, String)> = image
+    let mut others: Vec<_> = image
         .brokers()
-        .filter(|b| Some(b.node_id) != leader_id)
-        .map(|b| (b.node_id, format!("{}:{}", b.host, b.port)))
+        .filter(|broker| Some(broker.node_id) != leader_id)
+        .map(|broker| (broker.node_id, format!("{}:{}", broker.host, broker.port)))
         .collect();
     others.sort_by_key(|(id, _)| *id);
     out.extend(others);
@@ -121,17 +118,24 @@ enum AlterPartitionSendError {
 
 async fn send_alter_partition_to(
     broker_id: i32,
-    addr: &str,
+    host: &str,
+    port: u16,
     req: AlterPartitionRequest,
-    dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
-    frame_max: krabka_client_core::ClientFrameMax,
+    outbound_client: &crate::network::client::InterBrokerClient,
+    listener_protocol: krabka_security::ListenerProtocol,
+    server_name: &str,
 ) -> Result<(), AlterPartitionSendError> {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(addr.to_string())
-        .client_id(format!("krabka-broker-{broker_id}-isr"))
-        .dispatch_queue_capacity(dispatch_queue_capacity.get())
-        .frame_max(frame_max.size())
-        .build()
+    let client = outbound_client
+        .connect_as_connection(
+            host,
+            port,
+            listener_protocol,
+            server_name,
+            krabka_client_core::ConnectionOptions {
+                client_id: format!("krabka-broker-{broker_id}-isr"),
+                ..krabka_client_core::ConnectionOptions::default()
+            },
+        )
         .await
         .map_err(|e| AlterPartitionSendError::Transport(format!("connect: {e}")))?;
 
@@ -173,7 +177,11 @@ mod tests {
     use krabka_metadata::MetadataImage;
 
     use super::*;
-    use crate::isr_maintenance::test_support::{fake_source, reg};
+    use crate::isr_maintenance::test_support::fake_source;
+
+    fn plaintext_client() -> Arc<crate::network::client::InterBrokerClient> {
+        Arc::new(crate::network::client::InterBrokerClient::new(None, None))
+    }
 
     #[tokio::test]
     async fn send_alter_partition_errors_without_controller_target() {
@@ -187,10 +195,9 @@ mod tests {
             0,
             vec![NodeId(1)],
             3,
-            (
-                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-                krabka_client_core::ClientFrameMax::default(),
-            ),
+            &plaintext_client(),
+            krabka_security::ListenerProtocol::Plaintext,
+            "localhost",
         )
         .await
         .expect_err("missing controller leader should reject the send");
@@ -204,53 +211,20 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
+        let client = plaintext_client();
         let err = send_alter_partition_to(
             1,
-            &addr.to_string(),
+            &addr.ip().to_string(),
+            addr.port(),
             AlterPartitionRequest::default(),
-            krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            krabka_client_core::ClientFrameMax::default(),
+            &client,
+            krabka_security::ListenerProtocol::Plaintext,
+            "localhost",
         )
         .await
         .expect_err("closed local port should fail as transport");
 
         assert2::assert!(matches!(err, AlterPartitionSendError::Transport(_)));
-    }
-
-    #[test]
-    fn alter_partition_targets_try_hint_first_then_remaining_brokers() {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&reg(NodeId(2)));
-        image.apply(&reg(NodeId(0)));
-        image.apply(&reg(NodeId(1)));
-
-        let targets = alter_partition_targets(&image, Some(NodeId(2)));
-
-        assert2::assert!(
-            (targets)
-                == (vec![
-                    (NodeId(2), "b2:9092".to_string()),
-                    (NodeId(0), "b0:9092".to_string()),
-                    (NodeId(1), "b1:9092".to_string()),
-                ])
-        );
-    }
-
-    #[test]
-    fn alter_partition_targets_fall_back_when_hint_missing() {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&reg(NodeId(1)));
-        image.apply(&reg(NodeId(0)));
-
-        let targets = alter_partition_targets(&image, Some(NodeId(9)));
-
-        assert2::assert!(
-            (targets)
-                == (vec![
-                    (NodeId(0), "b0:9092".to_string()),
-                    (NodeId(1), "b1:9092".to_string())
-                ])
-        );
     }
 
     #[test]

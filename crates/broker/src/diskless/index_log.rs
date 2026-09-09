@@ -1,6 +1,13 @@
 //! Projection of committed diskless WAL index events.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -15,6 +22,7 @@ use super::wal_index::{
 pub(crate) mod test_support;
 
 pub(crate) const DISKLESS_WAL_INDEX_TOPIC: &str = "__diskless_wal_index";
+const REPLAY_FENCE_KEY: &[u8] = b"__krabka_diskless_replay_fence";
 
 /// How far the pump has walked the replay it started with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +33,7 @@ struct ReplayProgress {
     slowest_pending: u64,
     /// Whether every partition has reached its replay target.
     caught_up: bool,
+    invalid: bool,
 }
 
 #[derive(Clone)]
@@ -33,6 +42,7 @@ pub(crate) struct DisklessIndexLog {
     cache: Arc<Mutex<WalIndexCache>>,
     progress: watch::Receiver<ReplayProgress>,
     applied: watch::Receiver<u64>,
+    valid: Arc<AtomicBool>,
 }
 
 impl DisklessIndexLog {
@@ -41,7 +51,7 @@ impl DisklessIndexLog {
         log: Arc<dyn MetadataEventLog>,
     ) -> Result<Self, crate::error::BrokerError> {
         let cache = Arc::new(Mutex::new(WalIndexCache::default()));
-        Self::start_with_cache(log, cache).await
+        Self::start_with_cache(log, cache, crate::metrics::BrokerMetrics::new()).await
     }
 
     /// Subscribe the projection to the index topic and replay it from the
@@ -64,6 +74,7 @@ impl DisklessIndexLog {
     pub(crate) async fn start_with_cache(
         log: Arc<dyn MetadataEventLog>,
         cache: Arc<Mutex<WalIndexCache>>,
+        metrics: crate::metrics::BrokerMetrics,
     ) -> Result<Self, crate::error::BrokerError> {
         let starts = (0..log.partition_count())
             .map(|partition| PartitionStart {
@@ -85,7 +96,7 @@ impl DisklessIndexLog {
             let offset = log
                 .publish_keyed(
                     partition,
-                    Bytes::from_static(b"__krabka_diskless_replay_fence"),
+                    Bytes::from_static(REPLAY_FENCE_KEY),
                     Some(Bytes::new()),
                 )
                 .await
@@ -97,10 +108,13 @@ impl DisklessIndexLog {
         let (progress_tx, progress_rx) = watch::channel(ReplayProgress {
             slowest_pending: 0,
             caught_up: pending.is_empty(),
+            invalid: false,
         });
         let (applied_tx, applied_rx) = watch::channel(0u64);
+        let valid = Arc::new(AtomicBool::new(true));
 
         let pump_cache = cache.clone();
+        let pump_valid = Arc::clone(&valid);
         tokio::spawn(async move {
             let mut delivered: HashMap<i32, u64> =
                 pending.keys().map(|partition| (*partition, 0)).collect();
@@ -116,34 +130,54 @@ impl DisklessIndexLog {
                     {
                         pump_cache.lock().await.remove(key);
                     }
-                } else if let Some(key) = floor_key {
-                    if let Ok(record) = WalDeleteFloorRecord::from_bytes(&event.payload) {
-                        pump_cache.lock().await.raise_delete_floor(
-                            key.topic_id,
-                            key.partition,
-                            record.floor,
-                        );
-                        applied_tx.send_modify(|generation| {
-                            *generation = generation.wrapping_add(1);
-                        });
-                    }
-                } else if let Ok(record) = WalFlushRecord::from_bytes(&event.payload) {
-                    let mut cache = pump_cache.lock().await;
-                    match event.key.as_deref() {
-                        Some(bytes) => {
-                            if let Some(key) = WalIndexKey::from_bytes(bytes) {
-                                cache.apply_keyed(key, &record);
-                            }
+                } else if event.key.as_deref() != Some(REPLAY_FENCE_KEY) {
+                    let result = if let Some(key) = floor_key {
+                        WalDeleteFloorRecord::from_bytes(&event.payload)
+                            .map(|record| (Some((key, record.floor)), None))
+                    } else {
+                        WalFlushRecord::from_bytes(&event.payload)
+                            .map(|record| (None, Some(record)))
+                    };
+                    match result {
+                        Ok((Some((key, floor)), None)) => {
+                            pump_cache.lock().await.raise_delete_floor(
+                                key.topic_id,
+                                key.partition,
+                                floor,
+                            );
+                            applied_tx.send_modify(|generation| {
+                                *generation = generation.wrapping_add(1);
+                            });
                         }
-                        None => cache.apply(&record),
+                        Ok((None, Some(record))) => {
+                            let mut cache = pump_cache.lock().await;
+                            match event.key.as_deref() {
+                                Some(bytes) => {
+                                    if let Some(key) = WalIndexKey::from_bytes(bytes) {
+                                        cache.apply_keyed(key, &record);
+                                    }
+                                }
+                                None => cache.apply(&record),
+                            }
+                            drop(cache);
+                            applied_tx.send_modify(|generation| {
+                                *generation = generation.wrapping_add(1);
+                            });
+                        }
+                        Err(error) => {
+                            metrics.diskless_wal_index_decode_failures_total.inc();
+                            pump_valid.store(false, Ordering::Release);
+                            progress_tx.send_modify(|progress| progress.invalid = true);
+                            tracing::error!(
+                                partition = event.partition,
+                                offset = event.offset,
+                                %error,
+                                "diskless WAL index record rejected; projection is unsafe"
+                            );
+                        }
+                        _ => unreachable!("decode result has exactly one record kind"),
                     }
-                    drop(cache);
-                    applied_tx.send_modify(|generation| {
-                        *generation = generation.wrapping_add(1);
-                    });
                 }
-                // A record that fails to decode still advances the replay:
-                // the gate tracks position in the topic, not content.
                 let Some(target) = pending.get(&event.partition).copied() else {
                     continue;
                 };
@@ -155,6 +189,7 @@ impl DisklessIndexLog {
                 let next = ReplayProgress {
                     slowest_pending: delivered.values().copied().min().unwrap_or(u64::MAX),
                     caught_up: pending.is_empty(),
+                    invalid: !pump_valid.load(Ordering::Acquire),
                 };
                 // Notify only on a real change, so a waiter's stall timer is
                 // not reset by a busy partition while another one is stuck.
@@ -170,6 +205,7 @@ impl DisklessIndexLog {
             cache,
             progress: progress_rx,
             applied: applied_rx,
+            valid,
         })
     }
 
@@ -185,8 +221,11 @@ impl DisklessIndexLog {
     pub(crate) async fn wait_until_caught_up(&self, stall_timeout: Duration) -> bool {
         let mut progress = self.progress.clone();
         loop {
-            let caught_up = progress.borrow_and_update().caught_up;
-            if caught_up {
+            let state = *progress.borrow_and_update();
+            if state.invalid {
+                return false;
+            }
+            if state.caught_up {
                 self.cache.lock().await.finish_legacy_replay();
                 return true;
             }
@@ -200,6 +239,20 @@ impl DisklessIndexLog {
     #[must_use]
     pub(crate) fn cache(&self) -> Arc<Mutex<WalIndexCache>> {
         self.cache.clone()
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        self.valid.load(Ordering::Acquire)
+    }
+
+    /// Wait until the live projection becomes invalid or its pump stops.
+    pub(crate) async fn wait_until_unusable(&self) {
+        let mut progress = self.progress.clone();
+        loop {
+            if progress.borrow_and_update().invalid || progress.changed().await.is_err() {
+                return;
+            }
+        }
     }
 
     /// Wait until `record` appears in the committed projection.
@@ -458,7 +511,7 @@ mod tests {
     fn flush_record(object_key: &str, topic_id: Uuid, first: i64, last: i64) -> WalFlushRecord {
         WalFlushRecord {
             object_key: object_key.into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![WalIndexEntry {
                 topic_id,
                 partition: 0,
@@ -489,6 +542,31 @@ mod tests {
             restarted.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8),
             "catch-up must not resolve before the whole backlog is projected"
         );
+    }
+
+    #[tokio::test]
+    async fn incompatible_index_record_fails_replay_and_increments_metric() {
+        let event_log = InProcessMetadataEventLog::new(1);
+        let mut old = flush_record("old-object", Uuid::from_u128(7), 0, 3);
+        old.format_version = WalFlushRecord::FORMAT_VERSION - 1;
+        let bytes =
+            <serde_wincode::SerdeCompat<WalFlushRecord> as wincode::Serialize>::serialize(&old)
+                .unwrap();
+        event_log.publish(0, Bytes::from(bytes)).await.unwrap();
+
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let failures = metrics.diskless_wal_index_decode_failures_total.clone();
+        let index = DisklessIndexLog::start_with_cache(
+            event_log,
+            Arc::new(Mutex::new(WalIndexCache::default())),
+            metrics,
+        )
+        .await
+        .unwrap();
+
+        assert!(!index.wait_until_caught_up(Duration::from_secs(1)).await);
+        assert!(!index.is_valid());
+        assert!(failures.get() == 1);
     }
 
     #[tokio::test]
@@ -650,7 +728,7 @@ mod tests {
         let topic_id = Uuid::from_u128(7);
         let record = WalFlushRecord {
             object_key: "object-a".into(),
-            format_version: 1,
+            format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![WalIndexEntry {
                 topic_id,
                 partition: 0,

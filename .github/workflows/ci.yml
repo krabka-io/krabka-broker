@@ -755,6 +755,55 @@ jobs:
             bazel build ${builds}
           fi
 
+  kubernetes:
+    name: kubernetes · kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: false
+          repository-cache: true
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
+      - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          cluster_name: krabka
+          config: .github/kind.yaml
+      - run: bash packaging/k8s/kind-smoke.sh
+
+  upgrade:
+    name: upgrade · previous release
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: false
+          repository-cache: true
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: bash packaging/upgrade-smoke.sh
+
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
   # Kerberos acceptance cases visible in their own scheduled lane instead of
   # leaving them permanently #[ignore]d.
@@ -1122,6 +1171,7 @@ jobs:
       - proofs
       - select
       - docker
+      - kubernetes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1172,7 +1222,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links, bench, soak]
+    needs: [select, docker, gssapi, links, bench, soak, kubernetes, upgrade]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'

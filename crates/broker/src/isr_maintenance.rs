@@ -20,8 +20,9 @@ mod test_support;
 use self::{alter_partition::send_alter_partition, proposal::compute_proposal};
 
 pub(crate) struct Config {
-    pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
-    pub client_frame_max: krabka_client_core::ClientFrameMax,
+    pub outbound_client: Arc<crate::network::client::InterBrokerClient>,
+    pub listener_protocol: krabka_security::ListenerProtocol,
+    pub server_name: String,
     pub node_id: NodeId,
     pub scan_interval: Time,
     pub partitions: Arc<PartitionRegistry>,
@@ -84,7 +85,9 @@ pub(crate) async fn run(cfg: Config) {
                 part.index.get(),
                 proposal.new_isr,
                 proposal.leader_epoch.0,
-                (cfg.client_dispatch_queue_capacity, cfg.client_frame_max),
+                &cfg.outbound_client,
+                cfg.listener_protocol,
+                &cfg.server_name,
             )
             .await
             {
@@ -139,9 +142,9 @@ mod tests {
         let metrics = crate::metrics::BrokerMetrics::default();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(Config {
-            client_dispatch_queue_capacity:
-                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: krabka_client_core::ClientFrameMax::default(),
+            outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
+            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+            server_name: "localhost".into(),
             node_id: NodeId(1),
             scan_interval: hours(1),
             partitions,

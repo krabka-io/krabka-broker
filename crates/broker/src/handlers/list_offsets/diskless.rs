@@ -34,7 +34,7 @@ mod tests {
         let mut cache = crate::diskless::wal_index::WalIndexCache::default();
         cache.apply(&crate::diskless::wal_index::WalFlushRecord {
             object_key: "o".into(),
-            format_version: 1,
+            format_version: crate::diskless::wal_index::WalFlushRecord::FORMAT_VERSION,
             entries: vec![crate::diskless::wal_index::WalIndexEntry {
                 topic_id,
                 partition: 0,

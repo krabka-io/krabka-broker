@@ -20,6 +20,15 @@ the `krabka-*` names to crates.io.
 
 ### Added
 
+- A three-worker kind lane now applies the reference Kubernetes manifests,
+  proves quorum pods land on distinct nodes, produces and consumes through the
+  bootstrap Service, and verifies the data again after a rolling restart. The
+  manifests carry required hostname spreading and bounded init/broker
+  resources. A scheduled previous-release lane also exercises the persisted
+  surfaces in one log directory and expects either compatible recovery or the
+  format refusal declared below. The new scaling guide and stalled-
+  reassignment runbook cover broker addition, throttled data movement,
+  decommission and the required break-glass approval.
 - `krabka-backup`, the operator tool for the restore inputs a KIP-405 archive
   does not hold. `capture` copies a node's RLMM snapshot and its newest
   controller metadata checkpoint, and every consumer group's committed offsets,
@@ -37,6 +46,22 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
+- Controller bootstrap CLI and environment entries now accept unresolved DNS
+  `host:port` names just like TOML, so a formatted joiner can discover a
+  Kubernetes Service. Automatic `CreateTopics` and `CreatePartitions`
+  placement excludes fenced and controller-dead brokers, and the reassignment
+  acceptance case now moves real records onto its added replica before the
+  source directory is pruned.
+- The `meta.properties.json` on-disk format stamp is now version 2. This build
+  refuses older or unknown stamps with instructions to run `krabka-format` on
+  a fresh directory and restore topic data, and refuses a configured cluster
+  id that disagrees with the formatted directory using
+  `INCONSISTENT_CLUSTER_ID`. This is a declared on-disk format break, not a
+  rolling-upgrade-compatible change.
+- The diskless WAL index format is now version 2 for the
+  `WalIndexEntry.max_timestamp_ms` layout. Replay refuses older, unknown or
+  undecodable records, logs and counts the failure, clears the unsafe
+  projection, and fails closed instead of serving an apparent data hole.
 - `DeleteRecords` on a tiered topic (KIP-405) now takes the deleted prefix out
   of the remote tier as well as out of the local log. A partition keeps two
   floors the way Kafka does: `logStartOffset`, which `DeleteRecords`, retention

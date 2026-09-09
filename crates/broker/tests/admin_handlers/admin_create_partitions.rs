@@ -3,14 +3,95 @@
 //! the `INVALID_REPLICA_ASSIGNMENT` path that must add no partition at all.
 
 use assert2::assert;
-use krabka_protocol::owned::create_partitions_request::{
-    CreatePartitionsRequest, CreatePartitionsTopic,
+use krabka_metadata::{BrokerConfigRecord, MetadataRecord};
+use krabka_protocol::owned::{
+    create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
+    create_topics_request::{CreatableTopic, CreateTopicsRequest},
 };
 
 use crate::{
     admin_harness::{build_client, create_topic_helper},
-    support::start_n_node,
+    support::{start_n_node, start_n_node_with_retry, wait_for_all_brokers_registered},
 };
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn automatic_placement_excludes_a_fenced_broker_for_create_and_expand() {
+    let cluster = start_n_node_with_retry(3).await;
+    wait_for_all_brokers_registered(&cluster, 3).await;
+    let (broker, cfg, _dir) = &cluster[0];
+    let client = build_client(cfg.listen_addr).await;
+
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: krabka_broker::NodeId(3),
+            config_name: "broker.fenced".into(),
+            config_value: Some("true".into()),
+        }))
+        .await
+        .unwrap();
+    broker
+        .wait_for_image(|_| broker.fenced_broker_ids_for_test().contains(&3))
+        .await;
+
+    let created = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "t-usable-brokers".into(),
+                num_partitions: 1,
+                replication_factor: 2,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(created.topics[0].error_code == 0);
+    broker
+        .wait_until_partition_present("t-usable-brokers", 0)
+        .await;
+
+    let expanded = client
+        .send(CreatePartitionsRequest {
+            topics: vec![CreatePartitionsTopic {
+                name: "t-usable-brokers".into(),
+                count: 3,
+                assignments: None,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(expanded.results[0].error_code == 0);
+
+    for partition in 0..3 {
+        broker
+            .wait_until_partition_present("t-usable-brokers", partition)
+            .await;
+        let record = broker
+            .partition_record_for_test("t-usable-brokers", partition)
+            .unwrap();
+        assert!(!record.replicas.contains(&krabka_broker::NodeId(3)));
+        assert!(!record.isr.contains(&krabka_broker::NodeId(3)));
+    }
+
+    let rejected = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "t-too-many-replicas".into(),
+                num_partitions: 1,
+                replication_factor: 3,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(rejected.topics[0].error_code == 38);
+}
 
 /// `CreatePartitions`: a request that extends a 1-partition topic to 3
 /// returns `error_code == 0`. All three partitions then materialise in the

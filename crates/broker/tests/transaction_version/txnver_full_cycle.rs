@@ -45,7 +45,12 @@ async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, gro
     producer.init_transactions().await.unwrap();
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["a", "b", "c"] {
-        drop(producer.send(rec(topic, v)).await);
+        producer
+            .send(rec(topic, v))
+            .await
+            .await
+            .expect("producer delivery channel open")
+            .expect("produce acknowledged");
     }
     txn.commit().await.unwrap();
 

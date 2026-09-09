@@ -57,6 +57,7 @@ pub use self::{
     object_store::{FileRemoteStorageGcsConfig, FileRemoteStorageS3Config, FileWormConfig},
     privileged_actions::{FileBreakGlassConfig, FileFreezeConfig, FileOperatorKey},
     process::{FileProcessConfig, FileStretchConfig},
+    quorum_voters::{parse_bootstrap_server, parse_quorum_voter},
     remote_storage::{FileKafkaRlmmConfig, FileRemoteStorageConfig},
     runtime_config::RuntimeFileConfig,
     sasl_plain::FileSaslPlainConfig,

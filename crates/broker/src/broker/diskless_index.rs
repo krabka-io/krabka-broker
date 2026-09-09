@@ -111,6 +111,7 @@ async fn bootstrap_from_source(
                 crate::diskless::index_log::DisklessIndexLog::start_with_cache(
                     log,
                     Arc::clone(&cache),
+                    flusher.metrics.clone(),
                 )
                 .await
             }
@@ -132,7 +133,7 @@ async fn bootstrap_from_source(
                         partitions: Arc::clone(&flusher.partitions),
                         image_rx: flusher.image_rx.clone(),
                         object_store: Arc::clone(&flusher.object_store),
-                        index_log,
+                        index_log: index_log.clone(),
                         node_id: flusher.node_id,
                         broker_id: flusher.broker_id,
                         metrics: flusher.metrics.clone(),
@@ -142,9 +143,12 @@ async fn bootstrap_from_source(
                     shutdown.clone(),
                 )
                 .await;
-                // A rebuilt log replaces this one, so no writer may keep
-                // publishing through the incarnation that just stopped.
-                flusher.index_log_slot.store(None);
+                // Keep an invalid projection visible so cold reads fail closed
+                // while the next attempt opens. A merely stalled connection is
+                // cleared so writers cannot retain it during reconnect.
+                if index_log.is_valid() {
+                    flusher.index_log_slot.store(None);
+                }
                 match exit {
                     crate::diskless::flusher::FlusherExit::ShutDown => return,
                     crate::diskless::flusher::FlusherExit::ReplayStalled => {
@@ -152,6 +156,13 @@ async fn bootstrap_from_source(
                             topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
                             backoff_ms = backoff.as_millis(),
                             "diskless WAL index replay stalled; rebuilding the index log"
+                        );
+                    }
+                    crate::diskless::flusher::FlusherExit::ProjectionUnavailable => {
+                        tracing::error!(
+                            topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+                            backoff_ms = backoff.as_millis(),
+                            "diskless WAL index projection became unavailable; rebuilding it"
                         );
                     }
                 }
@@ -255,7 +266,7 @@ mod tests {
             .unwrap();
         seed.publish_flush(&crate::diskless::wal_index::WalFlushRecord {
             object_key: "diskless-wal/1/seed.ckwl".into(),
-            format_version: 1,
+            format_version: crate::diskless::wal_index::WalFlushRecord::FORMAT_VERSION,
             entries: vec![crate::diskless::wal_index::WalIndexEntry {
                 topic_id: uuid::Uuid::from_u128(11),
                 partition: 0,

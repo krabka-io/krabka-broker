@@ -17,8 +17,10 @@ pub struct InProcess {
 
 pub async fn start() -> InProcess {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    config.heartbeat_timeout = krabka_units::secs(30);
     let broker = Broker::start(config).await.expect("broker start");
+    broker.wait_until_broker_alive(1).await;
     let bootstrap = broker.listen_addr().to_string();
     let client = Client::builder()
         .bootstrap(&bootstrap)
@@ -40,6 +42,7 @@ pub async fn start() -> InProcess {
 /// correctly. The helper detects an existing raft log and then uses `Rejoin`.
 pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_client_core::Client) {
     let mut config = BrokerConfig::for_tests(dir.to_path_buf());
+    config.heartbeat_timeout = krabka_units::secs(30);
     // Mirror the production heuristic from `detect_bootstrap_mode` in
     // broker.rs: key Rejoin on `metadata_log_nonempty` (committed
     // quorum-state), NOT bare directory presence.  The segment dir is created
@@ -50,6 +53,7 @@ pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_clie
         config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     }
     let broker = Broker::start(config).await.expect("broker start");
+    broker.wait_until_broker_alive(1).await;
     let bootstrap = broker.listen_addr().to_string();
     let client = krabka_client_core::Client::builder()
         .bootstrap(&bootstrap)
@@ -70,12 +74,14 @@ pub fn start_with_audit_key(
 ) -> impl std::future::Future<Output = InProcess> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    config.heartbeat_timeout = krabka_units::secs(30);
     config.audit_signing_key_path = Some(key_path.to_path_buf());
     config.audit_signing_key_id = Some(key_id.to_string());
     config.audit_checkpoint_every_n = every_n;
     config.audit_checkpoint_every = krabka_units::hours(1); // only count trigger fires
     Box::pin(async move {
         let broker = Broker::start(config).await.expect("broker start");
+        broker.wait_until_broker_alive(1).await;
         let bootstrap = broker.listen_addr().to_string();
         let client = Client::builder()
             .bootstrap(&bootstrap)
@@ -102,12 +108,14 @@ pub async fn start_with_deny_all_authz() -> InProcess {
 
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    config.heartbeat_timeout = krabka_units::secs(30);
     // Replace the default AllowAllAuthorizer with a deny-all SimpleAclAuthorizer
     // (empty ACL store, no super-users). The anonymous test client connects
     // with no credentials so it has no super-user bypass — every operation is
     // denied and the auditing decorator emits AuthorizationDenied events.
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
     let broker = Broker::start(config).await.expect("broker start");
+    broker.wait_until_broker_alive(1).await;
     let bootstrap = broker.listen_addr().to_string();
     let client = Client::builder()
         .bootstrap(&bootstrap)

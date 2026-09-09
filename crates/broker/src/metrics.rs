@@ -707,6 +707,8 @@ pub struct BrokerMetrics {
     pub diskless_wal_flush_bytes_total: Counter,
     /// WAL object flushes that failed after an attempt began.
     pub diskless_wal_flush_failures_total: Counter,
+    /// Diskless index records rejected during replay because their payload or format is invalid.
+    pub diskless_wal_index_decode_failures_total: Counter,
     /// Durable offsets not yet represented by the committed object index.
     pub diskless_wal_index_projection_lag: Family<WalShardLabel, Gauge>,
     /// Local WAL log-start offset after trimming.

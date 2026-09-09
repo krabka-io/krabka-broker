@@ -312,8 +312,9 @@ StatefulSet, a headless Service plus a bootstrap Service, and a
 PodDisruptionBudget. They are a starting point to read and adapt, not a chart.
 Set the image tag, the storage class and size, and above all the two identities
 the manifests ship placeholders for -- `KRABKA_CLUSTER_ID` and the seed
-directory ids in `KRABKA_INITIAL_CONTROLLERS` -- before you apply them. They
-have not been applied to a live cluster.
+directory ids in `KRABKA_INITIAL_CONTROLLERS` -- before you apply them. CI
+applies the same manifests to a three-worker kind cluster and exercises a
+rolling restart.
 
 ```
 kubectl apply -f packaging/k8s/

@@ -1,9 +1,10 @@
 //! The plain `kafka-reassign-partitions --execute` and `--verify` round-trip
 //! against a three-broker SASL cluster.
 //!
-//! The test injects the post-move ISR rather than waiting for inter-broker
-//! replication, which does not route back into the VM under WSL2; the throttled
-//! variant of the same flow lives in the sibling `reassign_throttle` module.
+//! The move completes only after the added replica fetches the real log and
+//! joins the ISR; no metadata record is injected by the test.
+
+use std::{io::Write as _, process::Stdio, time::Duration};
 
 use assert2::assert;
 
@@ -15,12 +16,13 @@ use crate::jvm_acceptance::{
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
+#[allow(clippy::too_many_lines)] // Keeps the external CLI lifecycle in one end-to-end test.
 async fn jvm_kafka_reassign_partitions_end_to_end() {
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
     const TOPIC: &str = "krabka-reassign-itest";
 
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
+    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, d1, d2, d3) =
         start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
     nc_check_connectivity();
 
@@ -58,6 +60,35 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     // Wait for broker 1 to see the partition in the committed metadata image.
     h1.wait_until_partition_present(TOPIC, 0).await;
 
+    let mut producer = std::process::Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-i",
+            "-v",
+            &admin_mount,
+            "--add-host=host.docker.internal:host-gateway",
+            KAFKA_IMAGE_TXN,
+            "kafka-console-producer",
+            "--topic",
+            TOPIC,
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--producer.config",
+            "/client.properties",
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn kafka-console-producer");
+    producer
+        .stdin
+        .as_mut()
+        .expect("producer stdin")
+        .write_all(b"before-reassignment\n")
+        .expect("write record");
+    drop(producer.stdin.take());
+    assert!(producer.wait().expect("producer exit").success());
+
     // Determine initial replicas and pick the third broker as the new target.
     // Broker node IDs are i32 on the wire but stored as u64 in PartitionRecord.
     let pr = h1
@@ -68,7 +99,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     let new_node: u64 = (1u64..=3)
         .find(|n| !initial.contains(&krabka_metadata::NodeId(*n)))
         .expect("free broker");
-    let staying: u64 = initial.first().unwrap().0;
+    let staying = pr.leader.0;
     eprintln!("KRABKA[test] initial replicas={initial:?} staying={staying} new_node={new_node}");
 
     // Write reassignment JSON: move partition 0 to [staying, new_node].
@@ -112,10 +143,6 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Inject ISR including new_node so the background reassignment-completion
-    // task can see the new broker in ISR without relying on inter-broker
-    // replication (which is broken under WSL2 due to host-gateway routing;
-    // the reassignment tests use the same technique).
     let pr_after = h1
         .partition_record_for_test(TOPIC, 0)
         .expect("partition record after alter");
@@ -129,25 +156,43 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
                 .copied()
                 .unwrap_or(krabka_metadata::NodeId(0))
         });
-    let injected = krabka_metadata::PartitionRecord {
-        isr: vec![
-            krabka_metadata::NodeId(staying),
-            krabka_metadata::NodeId(new_node),
-            removing_replica,
-        ],
-        ..pr_after.clone()
-    };
-    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(injected))
-        .await
-        .expect("inject ISR for reassignment completion");
+    let handles = [&h1, &h2, &h3];
+    let leader_leo = handles[usize::try_from(staying - 1).unwrap()]
+        .local_log_end_offset(TOPIC, 0)
+        .expect("leader log");
+    assert!(leader_leo > 0, "the reassignment must move real records");
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if handles[usize::try_from(new_node - 1).unwrap()].local_log_end_offset(TOPIC, 0)
+                == Some(leader_leo)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("added replica reaches the leader LEO");
 
     // Wait until adding_replicas and removing_replicas are both drained from
     // the committed metadata image.
-    h1.wait_for_image(|img| {
-        img.partition(TOPIC, 0)
-            .is_some_and(|pr| pr.adding_replicas.is_empty() && pr.removing_replicas.is_empty())
+    let completed = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if h1
+                .partition_record_for_test(TOPIC, 0)
+                .is_some_and(|pr| pr.adding_replicas.is_empty() && pr.removing_replicas.is_empty())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     })
     .await;
+    assert!(
+        completed.is_ok(),
+        "reassignment did not complete: {:?}",
+        h1.partition_record_for_test(TOPIC, 0)
+    );
     // After completion the replica set must match [staying, new_node].
     let pr = h1
         .partition_record_for_test(TOPIC, 0)
@@ -158,6 +203,16 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         got == want,
         "reassignment completed but replicas mismatch: got={got:?} want={want:?}"
     );
+    let dirs = [d1.path(), d2.path(), d3.path()];
+    let removed_dir =
+        dirs[usize::try_from(removing_replica.0 - 1).unwrap()].join(format!("{TOPIC}-0"));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while removed_dir.exists() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("removed replica directory is pruned");
     eprintln!("KRABKA[test] reassignment completed; running --verify");
 
     // --verify should report completion.
@@ -194,6 +249,13 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         verify_out.status.success(),
         "kafka-reassign-partitions --verify failed: stderr={}",
         String::from_utf8_lossy(&verify_out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&verify_out.stdout)
+            .to_ascii_lowercase()
+            .contains("complete"),
+        "verify did not report completion: {}",
+        String::from_utf8_lossy(&verify_out.stdout)
     );
 
     h1.shutdown().await;
@@ -430,53 +492,82 @@ async fn reassign_partitions_additional_keeps_the_reassignment_already_running()
         h1.wait_until_partition_present(TOPIC, partition).await;
     }
 
-    // Move each partition onto the two brokers it is not on. Nothing in this
-    // harness makes the new replica catch up -- inter-broker replication does
-    // not route back into the VM -- so both moves stay in flight, which is the
-    // state `--additional` is about.
-    for partition in 0..2 {
-        let current = h1
-            .partition_record_for_test(TOPIC, partition)
-            .expect("partition record");
-        let held: BTreeSet<u64> = current.replicas.iter().map(|node| node.0).collect();
-        let targets: Vec<i32> = (1..=3)
-            .filter(|node| !held.contains(node))
-            .map(|node| i32::try_from(node).expect("a node id fits"))
-            .collect();
-        let plan = reassignment_json(&[Assignment {
-            partition: TopicPartition::new(TOPIC, partition),
-            replicas: targets,
-        }]);
-        let mut args = vec!["--execute", "--reassignment-json-file", PLAN_JSON];
-        // The second move is the one under test: without `--additional` it
-        // would cancel the first.
-        if partition == 1 {
-            args.push("--additional");
-        }
-        let run = reassign(
-            &side,
-            Some(&props),
-            &args,
-            vec![ToolFile::new(PLAN_JSON, &plan)],
-        );
-        assert!(
-            run.succeeded(),
-            "--execute for partition {partition} failed:\n{}",
-            run.text(),
-        );
-    }
+    // Stop a registered, non-bootstrap target so the first move cannot race
+    // replica catch-up and complete before the second command runs.
+    let first = h1
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition record");
+    let controller_leader = h1.wait_until_controller_leader().await.0;
+    let offline_node = (2_u64..=3)
+        .find(|node| {
+            *node != controller_leader && !first.replicas.iter().any(|replica| replica.0 == *node)
+        })
+        .expect("a non-bootstrap target broker");
+    let mut handles = [Some(h1), Some(h2), Some(h3)];
+    handles[usize::try_from(offline_node - 1).unwrap()]
+        .take()
+        .expect("offline target handle")
+        .shutdown()
+        .await;
+    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
 
-    for partition in 0..2 {
-        let record = h1
-            .partition_record_for_test(TOPIC, partition)
-            .expect("partition record after the second execute");
-        assert!(
-            !record.adding_replicas.is_empty(),
-            "partition {partition} must still be reassigning after --additional: {record:?}",
-        );
-    }
+    let staying = i32::try_from(first.replicas[0].0).expect("a node id fits");
+    let first_plan = reassignment_json(&[Assignment {
+        partition: TopicPartition::new(TOPIC, 0),
+        replicas: vec![
+            staying,
+            i32::try_from(offline_node).expect("a node id fits"),
+        ],
+    }]);
+    reassign(
+        &side,
+        Some(&props),
+        &["--execute", "--reassignment-json-file", PLAN_JSON],
+        vec![ToolFile::new(PLAN_JSON, &first_plan)],
+    )
+    .expect_success();
+    h1.wait_for_image(|image| {
+        image
+            .partition(TOPIC, 0)
+            .is_some_and(|record| !record.adding_replicas.is_empty())
+    })
+    .await;
 
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    // A no-op assignment is enough to exercise the client's `--additional`
+    // path. Its contract here is that it must not cancel partition 0.
+    let second = h1
+        .partition_record_for_test(TOPIC, 1)
+        .expect("second partition record");
+    let second_plan = reassignment_json(&[Assignment {
+        partition: TopicPartition::new(TOPIC, 1),
+        replicas: second
+            .replicas
+            .iter()
+            .map(|node| i32::try_from(node.0).expect("a node id fits"))
+            .collect(),
+    }]);
+    reassign(
+        &side,
+        Some(&props),
+        &[
+            "--execute",
+            "--reassignment-json-file",
+            PLAN_JSON,
+            "--additional",
+        ],
+        vec![ToolFile::new(PLAN_JSON, &second_plan)],
+    )
+    .expect_success();
+
+    let record = h1
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition record after the second execute");
+    assert!(
+        !record.adding_replicas.is_empty(),
+        "partition 0 must still be reassigning after --additional: {record:?}",
+    );
+
+    for handle in handles.into_iter().flatten() {
+        handle.shutdown().await;
+    }
 }
