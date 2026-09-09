@@ -284,7 +284,11 @@ SIBLING_MEMBERS = {
     "krabka-client-consumer": "crates/client-consumer",
     "krabka-client-core": "crates/client-core",
     "krabka-client-producer": "crates/client-producer",
+    "krabka-authz": "crates/authz",
+    "krabka-logfmt": "crates/logfmt",
+    "krabka-schema-registry": "crates/schema-registry",
     "krabka-schema-serde": "crates/schema-serde",
+    "krabka-telemetry": "crates/telemetry",
 }
 
 [
