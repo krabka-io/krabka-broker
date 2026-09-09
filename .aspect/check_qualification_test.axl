@@ -1,6 +1,6 @@
 """Unit tests for check_qualification.axl."""
 
-load("./check_qualification.axl", "manifest_problems")
+load("./check_qualification.axl", "manifest_problems", "utc_timestamp")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 _SHA = "0123456789abcdef" * 2 + "01234567"
@@ -26,12 +26,19 @@ _EVIDENCE = {
     "cli-admin": ["commands", "state"],
     "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
 }
+_ARTIFACT_KINDS = {
+    "krabka-io/krabka-broker": "image",
+    "krabka-io/krabka-cli": "binary",
+    "krabka-io/krabka-o11y": "image",
+    "krabka-io/krabka-o11y-demo": "compose",
+    "krabka-io/krabka-operator": "chart",
+}
 
 def _manifest(status = "draft", gate_status = "pending", artifact_digest = ""):
     components = [{"repository": repository, "revision": _SHA, "default_branch": "main", "artifacts": []} for repository in _REPOSITORIES]
     for component in components:
-        if component["repository"] in ["krabka-io/krabka-broker", "krabka-io/krabka-cli", "krabka-io/krabka-o11y", "krabka-io/krabka-o11y-demo", "krabka-io/krabka-operator"]:
-            component["artifacts"] = [{"kind": "image", "reference": "ghcr.io/example/image", "digest": artifact_digest}]
+        if component["repository"] in _ARTIFACT_KINDS:
+            component["artifacts"] = [{"kind": _ARTIFACT_KINDS[component["repository"]], "reference": "https://example.test/artifact", "digest": artifact_digest}]
     gates = []
     for name, issue in [("installation", 523), ("operator-lifecycle", 524), ("cli-admin", 525), ("observability-recovery", 526)]:
         evidence = []
@@ -57,6 +64,31 @@ def _test_final_requires_digests_and_evidence(_ctx):
     check_eq("all four gates lack evidence", len([problem for problem in problems if "has no evidence" in problem]), 4)
     check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 5)
 
+def _test_qualified_status_is_strict_without_the_flag(_ctx):
+    manifest = _manifest(status = "qualified")
+    manifest["report"] = {"url": "", "sha256": ""}
+    problems = manifest_problems(manifest)
+    check_eq("all artifact digests are required", len([problem for problem in problems if "artifact has no" in problem]), 5)
+    check_eq("all pending gates are rejected", len([problem for problem in problems if "gate has not passed" in problem]), 4)
+    check_eq("all gate evidence is required", len([problem for problem in problems if "gate has no evidence" in problem]), 4)
+    check_eq("the report is required", len([problem for problem in problems if "published report" in problem]), 1)
+
+def _test_a_draft_preserves_artifact_slots(_ctx):
+    manifest = _manifest()
+    manifest["components"][0]["artifacts"] = []
+    check_eq("missing slot", len([problem for problem in manifest_problems(manifest) if "preserve the image slot" in problem]), 1)
+
+def _test_a_passed_gate_requires_complete_evidence(_ctx):
+    manifest = _manifest()
+    manifest["gates"][0]["status"] = "passed"
+    manifest["gates"][0]["evidence"] = [{"name": "compose", "url": "https://example.test/compose", "sha256": _DIGEST}]
+    check_eq("incomplete evidence", len([problem for problem in manifest_problems(manifest) if "evidence does not cover" in problem]), 1)
+
+def _test_timestamps_are_calendar_valid(_ctx):
+    for value in ["Z", "2026-99-09T00:00:00Z", "2026-02-29T00:00:00Z", "2026-09-09T24:00:00Z"]:
+        check_eq("invalid %s" % value, utc_timestamp(value), False)
+    check_eq("leap day", utc_timestamp("2028-02-29T23:59:59Z"), True)
+
 def _test_a_qualified_manifest_is_valid(_ctx):
     check_eq(
         "qualified",
@@ -67,6 +99,10 @@ def _test_a_qualified_manifest_is_valid(_ctx):
 check_qualification_tests = suite("check-qualification", [
     _test_a_complete_draft_is_valid,
     _test_final_requires_digests_and_evidence,
+    _test_qualified_status_is_strict_without_the_flag,
+    _test_a_draft_preserves_artifact_slots,
+    _test_a_passed_gate_requires_complete_evidence,
+    _test_timestamps_are_calendar_valid,
     _test_a_qualified_manifest_is_valid,
 ])
 
