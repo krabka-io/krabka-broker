@@ -20,6 +20,15 @@ the `krabka-*` names to crates.io.
 
 ### Added
 
+- A reproducible real-cluster performance qualification now drives the same
+  external workload against pinned Kafka and Krabka clusters under equal
+  durability and resource settings. Its published three-run comparison and
+  partition-envelope result include raw provenance, exact reconciliation,
+  tail latency, resource snapshots, metrics cost, controller failover,
+  readiness and reassignment; the measured 10,000-partition tier passed.
+- The nightly Criterion lane now alternates three reference and candidate runs
+  on one host and fails a machine-readable, raw-sample-backed verdict when a
+  benchmark exceeds its variance-calibrated tolerance.
 - A three-worker kind lane now applies the reference Kubernetes manifests,
   proves quorum pods land on distinct nodes, produces and consumes through the
   bootstrap Service, and verifies the data again after a rolling restart. The
@@ -46,6 +55,13 @@ the `krabka-*` names to crates.io.
 
 ### Fixed
 
+- Broker-only metadata observers now advance past every record offset in a
+  multi-record metadata batch. Large reassignments previously applied the
+  batch but left readiness permanently behind its high watermark.
+- Topic and partition metric families now reconcile the labels their data
+  paths actually created against the current metadata image. Invented topic
+  names, invalid partition indexes, and writes racing a reassignment are
+  collected without an ever-growing tombstone set.
 - Controller bootstrap CLI and environment entries now accept unresolved DNS
   `host:port` names just like TOML, so a formatted joiner can discover a
   Kubernetes Service. Automatic `CreateTopics` and `CreatePartitions`

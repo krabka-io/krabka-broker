@@ -62,6 +62,31 @@ pub enum ParseBenchesError {
     /// Underlying JSON serialization error.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// Fewer than three repeated summaries were supplied for one side.
+    #[error("{side} needs at least 3 repeated benchmark summaries, got {count}")]
+    TooFewSamples {
+        /// The comparison side.
+        side: &'static str,
+        /// Number of supplied summaries.
+        count: usize,
+    },
+
+    /// Reference and candidate summaries did not contain the same benchmarks.
+    #[error("reference and candidate benchmark sets differ")]
+    BenchmarkSetMismatch,
+
+    /// A benchmark sample was zero, negative, NaN, or infinite.
+    #[error("invalid sample for benchmark '{0}'")]
+    InvalidSample(String),
+
+    /// A supplied summary had no benchmark metrics.
+    #[error("benchmark summaries contain no metrics")]
+    EmptyBenchmarkSet,
+
+    /// The configured tolerance was negative, NaN, or infinite.
+    #[error("minimum tolerance must be a finite non-negative ratio")]
+    InvalidTolerance,
 }
 
 /// A single benchmark measurement in nanoseconds per iteration.
@@ -86,6 +111,177 @@ pub struct BenchmarkSummary {
     pub benchmarks: BTreeMap<String, BenchmarkMetric>,
 }
 
+/// One benchmark's variance-calibrated reference/candidate decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchmarkComparison {
+    /// Median reference time in nanoseconds.
+    pub reference_median_ns: f64,
+    /// Median candidate time in nanoseconds.
+    pub candidate_median_ns: f64,
+    /// Candidate/reference ratio.
+    pub ratio: f64,
+    /// Allowed relative slowdown, derived from repeated-run MAD with a floor.
+    pub tolerance: f64,
+    /// Whether this benchmark stayed within its tolerance.
+    pub passed: bool,
+}
+
+/// Machine-readable verdict over repeated same-host benchmark runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchmarkVerdict {
+    /// Exact commits represented by the reference samples.
+    pub reference_commits: Vec<String>,
+    /// Exact commits represented by the candidate samples.
+    pub candidate_commits: Vec<String>,
+    /// Per-benchmark decisions.
+    pub benchmarks: BTreeMap<String, BenchmarkComparison>,
+    /// True only when every benchmark passed.
+    pub passed: bool,
+}
+
+fn median(mut values: Vec<f64>) -> f64 {
+    values.sort_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        f64::midpoint(values[middle - 1], values[middle])
+    } else {
+        values[middle]
+    }
+}
+
+fn relative_mad(values: &[f64], center: f64) -> f64 {
+    median(values.iter().map(|value| (value - center).abs()).collect()) / center
+}
+
+/// Compare at least three repeated reference and candidate summaries.
+///
+/// The tolerance is three times the larger side's median absolute deviation,
+/// with `minimum_tolerance` as a floor. A missing, non-finite, or non-positive
+/// sample is an error and therefore cannot silently pass.
+///
+/// # Errors
+///
+/// Returns [`ParseBenchesError`] for too few samples, mismatched benchmark
+/// sets, or invalid measurements.
+pub fn compare_summaries(
+    reference: &[BenchmarkSummary],
+    candidate: &[BenchmarkSummary],
+    minimum_tolerance: f64,
+) -> Result<BenchmarkVerdict, ParseBenchesError> {
+    if !minimum_tolerance.is_finite() || minimum_tolerance < 0.0 {
+        return Err(ParseBenchesError::InvalidTolerance);
+    }
+    for (side, summaries) in [("reference", reference), ("candidate", candidate)] {
+        if summaries.len() < 3 {
+            return Err(ParseBenchesError::TooFewSamples {
+                side,
+                count: summaries.len(),
+            });
+        }
+    }
+    let reference_names: Vec<_> = reference[0].benchmarks.keys().collect();
+    if reference_names.is_empty() {
+        return Err(ParseBenchesError::EmptyBenchmarkSet);
+    }
+    if reference.iter().any(|summary| {
+        summary
+            .benchmarks
+            .keys()
+            .ne(reference_names.iter().copied())
+    }) || candidate.iter().any(|summary| {
+        summary
+            .benchmarks
+            .keys()
+            .ne(reference_names.iter().copied())
+    }) {
+        return Err(ParseBenchesError::BenchmarkSetMismatch);
+    }
+
+    let mut benchmarks = BTreeMap::new();
+    for name in reference_names {
+        let reference_values: Vec<_> = reference
+            .iter()
+            .map(|summary| summary.benchmarks[name].ns_per_iter)
+            .collect();
+        let candidate_values: Vec<_> = candidate
+            .iter()
+            .map(|summary| summary.benchmarks[name].ns_per_iter)
+            .collect();
+        if reference_values
+            .iter()
+            .chain(&candidate_values)
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(ParseBenchesError::InvalidSample(name.clone()));
+        }
+        let reference_median_ns = median(reference_values.clone());
+        let candidate_median_ns = median(candidate_values.clone());
+        let tolerance = minimum_tolerance.max(
+            3.0 * relative_mad(&reference_values, reference_median_ns)
+                .max(relative_mad(&candidate_values, candidate_median_ns)),
+        );
+        let ratio = candidate_median_ns / reference_median_ns;
+        benchmarks.insert(
+            name.clone(),
+            BenchmarkComparison {
+                reference_median_ns,
+                candidate_median_ns,
+                ratio,
+                tolerance,
+                passed: ratio <= 1.0 + tolerance,
+            },
+        );
+    }
+    let passed = benchmarks.values().all(|benchmark| benchmark.passed);
+    Ok(BenchmarkVerdict {
+        reference_commits: reference
+            .iter()
+            .map(|summary| summary.commit.clone())
+            .collect(),
+        candidate_commits: candidate
+            .iter()
+            .map(|summary| summary.commit.clone())
+            .collect(),
+        benchmarks,
+        passed,
+    })
+}
+
+/// Read every JSON summary in `directory`, sorted by filename.
+///
+/// # Errors
+///
+/// Returns [`ParseBenchesError`] when the directory is missing, contains fewer
+/// than three summaries, or a summary is unreadable or invalid JSON.
+pub fn read_summaries(
+    directory: &Path,
+    side: &'static str,
+) -> Result<Vec<BenchmarkSummary>, ParseBenchesError> {
+    if !directory.is_dir() {
+        return Err(ParseBenchesError::DirectoryNotFound(
+            directory.to_path_buf(),
+        ));
+    }
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    if paths.len() < 3 {
+        return Err(ParseBenchesError::TooFewSamples {
+            side,
+            count: paths.len(),
+        });
+    }
+    paths
+        .into_iter()
+        .map(|path| Ok(serde_json::from_reader(File::open(path)?)?))
+        .collect()
+}
+
 /// CLI configuration arguments for parsing benchmarks.
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -108,6 +304,18 @@ pub struct Args {
     /// Git commit SHA (defaults to `GITHUB_SHA` env var or `"unknown"`).
     #[arg(long)]
     pub commit: Option<String>,
+
+    /// Directory of repeated reference summary JSON files to compare.
+    #[arg(long, requires = "candidate_dir")]
+    pub reference_dir: Option<PathBuf>,
+
+    /// Directory of repeated candidate summary JSON files to compare.
+    #[arg(long, requires = "reference_dir")]
+    pub candidate_dir: Option<PathBuf>,
+
+    /// Minimum allowed slowdown percentage for comparison mode.
+    #[arg(long, default_value_t = 3.0)]
+    pub minimum_tolerance_percent: f64,
 }
 
 /// Parses a single line of Criterion bencher output.
@@ -251,7 +459,7 @@ pub fn resolve_commit_sha(commit_arg: Option<&str>, env_sha: Option<&str>) -> St
         return "unknown".to_string();
     };
 
-    trimmed.chars().take(8).collect()
+    trimmed.to_string()
 }
 
 /// Generates a [`BenchmarkSummary`] from the provided command-line arguments.

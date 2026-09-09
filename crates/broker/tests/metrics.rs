@@ -75,9 +75,13 @@ async fn round_trip(
 }
 
 async fn create_topic(addr: std::net::SocketAddr) {
+    create_topic_named(addr, TOPIC).await;
+}
+
+async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
     let req = CreateTopicsRequest {
         topics: vec![CreatableTopic {
-            name: TOPIC.into(),
+            name: topic.into(),
             num_partitions: 1,
             replication_factor: 1,
             ..Default::default()
@@ -97,6 +101,12 @@ async fn create_topic(addr: std::net::SocketAddr) {
 }
 
 async fn produce_one(addr: std::net::SocketAddr) -> u64 {
+    let (bytes, error_code) = produce_to(addr, TOPIC, 0).await;
+    assert!(error_code == 0, "produce error code: {error_code}");
+    bytes
+}
+
+async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> (u64, i16) {
     use krabka_protocol::records::{Record, RecordBatch};
     let batch = RecordBatch {
         records: vec![Record {
@@ -107,7 +117,7 @@ async fn produce_one(addr: std::net::SocketAddr) -> u64 {
         ..Default::default()
     };
     let part = PartitionProduceData {
-        index: 0,
+        index: partition,
         records: Some(batch.into()),
         ..Default::default()
     };
@@ -115,7 +125,7 @@ async fn produce_one(addr: std::net::SocketAddr) -> u64 {
         acks: 1,
         timeout_ms: 5_000,
         topic_data: vec![TopicProduceData {
-            name: TOPIC.into(),
+            name: topic.into(),
             partition_data: vec![part],
             ..Default::default()
         }],
@@ -135,8 +145,7 @@ async fn produce_one(addr: std::net::SocketAddr) -> u64 {
         .into_iter()
         .next()
         .expect("one partition in resp");
-    assert!(part.error_code == 0, "produce: {part:?}");
-    body.len() as u64
+    (body.len() as u64, part.error_code)
 }
 
 async fn fetch_one(addr: std::net::SocketAddr) {
@@ -181,6 +190,49 @@ async fn scrape(addr: std::net::SocketAddr) -> String {
     // Strip the HTTP head, keep the body so we can grep metric names.
     let body_start = s.find("\r\n\r\n").map_or(0, |i| i + 4);
     s[body_start..].to_string()
+}
+
+async fn wait_until_absent(addr: std::net::SocketAddr, needle: &str) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let body = scrape(addr).await;
+            if !body.contains(needle) {
+                return body;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("metrics label {needle:?} was not evicted"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_client_labels_leave_the_metrics_body() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    let handle = Broker::start(cfg).await.unwrap();
+    let kafka_addr = handle.listen_addr();
+    let metrics_addr = handle.metrics_addr().expect("metrics listener");
+
+    let (_, unknown_error) = produce_to(kafka_addr, "invented-topic", 0).await;
+    check!(unknown_error != 0);
+    create_topic_named(kafka_addr, TOPIC).await;
+    handle.wait_until_partition_present(TOPIC, 0).await;
+    let body = wait_until_absent(metrics_addr, "invented-topic").await;
+    check!(!body.contains("invented-topic"));
+
+    let (_, partition_error) = produce_to(kafka_addr, TOPIC, 99).await;
+    check!(partition_error != 0);
+    create_topic_named(kafka_addr, "eviction-trigger").await;
+    handle
+        .wait_until_partition_present("eviction-trigger", 0)
+        .await;
+    let pair = format!("topic=\"{TOPIC}\",partition=\"99\"");
+    let body = wait_until_absent(metrics_addr, &pair).await;
+    check!(!body.contains(&pair));
+
+    handle.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

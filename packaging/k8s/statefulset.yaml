@@ -32,6 +32,9 @@ spec:
       labels:
         app.kubernetes.io/name: krabka
     spec:
+      volumes:
+        - name: tmp
+          emptyDir: {}
       # A three-voter quorum on one node is still one failure domain. Refuse
       # that placement instead of letting a node loss take the majority.
       topologySpreadConstraints:
@@ -118,6 +121,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/krabka
+            - name: tmp
+              mountPath: /tmp
       containers:
         - name: broker
           image: docker.io/krabka-io/krabka-broker:dev
@@ -209,6 +214,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/krabka
+            - name: tmp
+              mountPath: /tmp
   volumeClaimTemplates:
     - metadata:
         name: data

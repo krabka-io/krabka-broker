@@ -25,6 +25,7 @@ impl BrokerMetrics {
         if bytes > 0 {
             self.topic_bytes_in.get_or_create(&lbl).inc_by(bytes);
         }
+        self.track_topic_series(&lbl);
     }
 
     /// Account `messages` records received on the Produce
@@ -41,6 +42,7 @@ impl BrokerMetrics {
             topic: Arc::clone(topic),
         };
         self.topic_messages_in.get_or_create(&lbl).inc_by(messages);
+        self.track_topic_series(&lbl);
     }
 
     /// Convenience: record a Fetch hit on `topic` with the bytes
@@ -54,6 +56,7 @@ impl BrokerMetrics {
         if bytes > 0 {
             self.topic_bytes_out.get_or_create(&lbl).inc_by(bytes);
         }
+        self.track_topic_series(&lbl);
     }
 
     /// Record a single failed Produce partition response
@@ -65,6 +68,7 @@ impl BrokerMetrics {
             topic: Arc::clone(topic),
         };
         self.topic_failed_produce_requests.get_or_create(&lbl).inc();
+        self.track_topic_series(&lbl);
     }
 
     /// Record a single failed Fetch partition response
@@ -75,6 +79,7 @@ impl BrokerMetrics {
             topic: Arc::clone(topic),
         };
         self.topic_failed_fetch_requests.get_or_create(&lbl).inc();
+        self.track_topic_series(&lbl);
     }
 
     /// Convenience: account a partition's slice of a Produce request.
@@ -89,6 +94,7 @@ impl BrokerMetrics {
             partition,
         };
         self.partition_bytes_in.get_or_create(&lbl).inc_by(bytes);
+        self.track_partition_series(&lbl);
     }
 
     /// Convenience: account a partition's slice of a Fetch response.
@@ -101,6 +107,7 @@ impl BrokerMetrics {
             partition,
         };
         self.partition_bytes_out.get_or_create(&lbl).inc_by(bytes);
+        self.track_partition_series(&lbl);
     }
 
     /// Account one v0/v1 → v2 up-conversion on the Produce
@@ -111,6 +118,7 @@ impl BrokerMetrics {
             topic: Arc::clone(topic),
         };
         self.produce_message_conversions.get_or_create(&lbl).inc();
+        self.track_topic_series(&lbl);
     }
 
     /// Account one v2 → v0/v1 down-conversion on the Fetch
@@ -121,6 +129,7 @@ impl BrokerMetrics {
             topic: Arc::clone(topic),
         };
         self.fetch_message_conversions.get_or_create(&lbl).inc();
+        self.track_topic_series(&lbl);
     }
 
     /// Convenience: account handler-thread microseconds spent on a
@@ -136,6 +145,7 @@ impl BrokerMetrics {
             partition,
         };
         self.partition_cpu_micros.get_or_create(&lbl).inc_by(micros);
+        self.track_partition_series(&lbl);
     }
 }
 

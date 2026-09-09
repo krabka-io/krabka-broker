@@ -260,15 +260,15 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
         .await
         .expect("finalize eligible.leader.replicas.version");
     p.broker
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1TopicConfig(
-            krabka_metadata::TopicConfigRecord {
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1PartitionElr(
+            krabka_metadata::PartitionElrRecord {
                 topic: "t".into(),
-                overrides: [
-                    ("min.insync.replicas".to_string(), "2".to_string()),
-                    ("krabka.elr".to_string(), "0:2,3:".to_string()),
-                ]
-                .into_iter()
-                .collect(),
+                partition: 0,
+                eligible_leader_replicas: vec![
+                    krabka_metadata::NodeId(2),
+                    krabka_metadata::NodeId(3),
+                ],
+                last_known_elr: vec![],
             },
         ))
         .await

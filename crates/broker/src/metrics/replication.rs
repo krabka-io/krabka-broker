@@ -21,6 +21,7 @@ impl BrokerMetrics {
             partition,
         };
         self.replication_bytes_in.get_or_create(&lbl).inc_by(bytes);
+        self.track_partition_series(&lbl);
     }
 
     /// KIP-841: account one unclean leader election (an
@@ -43,6 +44,7 @@ impl BrokerMetrics {
             partition,
         };
         self.replication_bytes_out.get_or_create(&lbl).inc_by(bytes);
+        self.track_partition_series(&lbl);
     }
 }
 

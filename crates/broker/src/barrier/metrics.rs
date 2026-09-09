@@ -105,12 +105,14 @@ impl BarrierMetrics for BrokerBarrierMetrics {
     }
 
     fn marker_written(&self, topic: &str) {
+        let label = crate::metrics::TopicLabel {
+            topic: std::sync::Arc::from(topic),
+        };
         self.metrics
             .barrier_markers_written_total
-            .get_or_create(&crate::metrics::TopicLabel {
-                topic: std::sync::Arc::from(topic),
-            })
+            .get_or_create(&label)
             .inc();
+        self.metrics.track_topic_series(&label);
     }
 
     fn marker_append_failed(&self, _topic: &str, _partition: PartitionIndex) {

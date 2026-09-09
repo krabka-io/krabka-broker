@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     io::Write,
     path::PathBuf,
@@ -7,8 +8,8 @@ use std::{
 
 use assert2::assert;
 use krabka_parse_benches::{
-    Args, BenchmarkSummary, ParseBenchesError, format_rfc3339_utc, parse_bencher_line,
-    parse_benchmark_dir, resolve_commit_sha, run_from_args,
+    Args, BenchmarkMetric, BenchmarkSummary, ParseBenchesError, compare_summaries,
+    format_rfc3339_utc, parse_bencher_line, parse_benchmark_dir, resolve_commit_sha, run_from_args,
 };
 use tempfile::tempdir;
 
@@ -238,14 +239,14 @@ fn formats_rfc3339_utc_timestamp_accurately() {
 #[test]
 fn resolves_commit_sha_appropriately() {
     // Explicit CLI argument takes precedence over environment
-    assert!(resolve_commit_sha(Some("abcdef123456"), None) == "abcdef12");
-    assert!(resolve_commit_sha(Some("abcdef123456"), Some("fedcba987654")) == "abcdef12");
+    assert!(resolve_commit_sha(Some("abcdef123456"), None) == "abcdef123456");
+    assert!(resolve_commit_sha(Some("abcdef123456"), Some("fedcba987654")) == "abcdef123456");
     assert!(resolve_commit_sha(Some("short"), None) == "short");
 
     // Fallback to environment SHA when CLI argument is absent or blank
-    assert!(resolve_commit_sha(None, Some("fedcba987654")) == "fedcba98");
-    assert!(resolve_commit_sha(Some(""), Some("fedcba987654")) == "fedcba98");
-    assert!(resolve_commit_sha(Some("   "), Some("fedcba987654")) == "fedcba98");
+    assert!(resolve_commit_sha(None, Some("fedcba987654")) == "fedcba987654");
+    assert!(resolve_commit_sha(Some(""), Some("fedcba987654")) == "fedcba987654");
+    assert!(resolve_commit_sha(Some("   "), Some("fedcba987654")) == "fedcba987654");
 
     // Default to "unknown" when neither provides a non-blank value
     assert!(resolve_commit_sha(None, None) == "unknown");
@@ -253,8 +254,7 @@ fn resolves_commit_sha_appropriately() {
     assert!(resolve_commit_sha(None, Some("")) == "unknown");
     assert!(resolve_commit_sha(Some("   "), Some("   ")) == "unknown");
 
-    // Multi-byte UTF-8 string truncation safety
-    assert!(resolve_commit_sha(Some("🦀crabka123"), None) == "🦀crabka1");
+    assert!(resolve_commit_sha(Some("🦀crabka123"), None) == "🦀crabka123");
 }
 
 #[test]
@@ -273,15 +273,74 @@ fn runs_end_to_end_writing_valid_json() {
         output: Some(out_json.clone()),
         suite: "krabka-broker".to_string(),
         commit: Some("deadbeef999".to_string()),
+        reference_dir: None,
+        candidate_dir: None,
+        minimum_tolerance_percent: 3.0,
     };
 
     let summary = run_from_args(&args).unwrap();
     assert!(summary.suite == "krabka-broker");
-    assert!(summary.commit == "deadbeef");
+    assert!(summary.commit == "deadbeef999");
     assert!(summary.benchmarks.len() == 29);
     assert!(out_json.exists());
 
     let json_content = fs::read_to_string(&out_json).unwrap();
     let parsed_back: BenchmarkSummary = serde_json::from_str(&json_content).unwrap();
     assert!(parsed_back == summary);
+}
+
+fn repeated_summaries(values: &[f64], commit: &str) -> Vec<BenchmarkSummary> {
+    values
+        .iter()
+        .map(|value| BenchmarkSummary {
+            suite: "test".to_string(),
+            commit: commit.to_string(),
+            timestamp: "2026-09-09T00:00:00Z".to_string(),
+            benchmarks: BTreeMap::from([(
+                "hot/path".to_string(),
+                BenchmarkMetric {
+                    ns_per_iter: *value,
+                    variance_ns: 1.0,
+                },
+            )]),
+        })
+        .collect()
+}
+
+#[test]
+fn unchanged_controls_pass_the_variance_calibrated_verdict() {
+    let reference = repeated_summaries(&[100.0, 102.0, 99.0], "reference");
+    let candidate = repeated_summaries(&[101.0, 100.0, 103.0], "candidate");
+
+    let verdict = compare_summaries(&reference, &candidate, 0.03).unwrap();
+
+    assert!(verdict.passed);
+    assert!(verdict.benchmarks["hot/path"].passed);
+}
+
+#[test]
+fn a_deliberately_slowed_benchmark_fails_the_verdict() {
+    let reference = repeated_summaries(&[100.0, 102.0, 99.0], "reference");
+    let candidate = repeated_summaries(&[120.0, 121.0, 119.0], "candidate");
+
+    let verdict = compare_summaries(&reference, &candidate, 0.03).unwrap();
+
+    assert!(!verdict.passed);
+    assert!(!verdict.benchmarks["hot/path"].passed);
+}
+
+#[test]
+fn missing_repeated_samples_cannot_pass() {
+    let reference = repeated_summaries(&[100.0, 101.0], "reference");
+    let candidate = repeated_summaries(&[100.0, 101.0, 99.0], "candidate");
+
+    let error = compare_summaries(&reference, &candidate, 0.03).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ParseBenchesError::TooFewSamples {
+            side: "reference",
+            count: 2
+        }
+    ));
 }

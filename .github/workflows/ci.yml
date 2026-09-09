@@ -7,6 +7,11 @@ on:
     # Nightly, 05:00 UTC: the full container run.
     - cron: "0 5 * * *"
   workflow_dispatch:
+    inputs:
+      reference_sha:
+        description: "Benchmark reference commit (defaults to the candidate's parent)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -950,52 +955,23 @@ jobs:
 
   # The criterion benches, on the nightly schedule and on demand.
   #
-  # Seven bench targets exist -- `produce`, `fetch_session`, `fetch_handoff`,
-  # `fetch_drain`, `perf_deferrals` and `metric_labels` in `//crates/broker`,
-  # `log` in `//crates/log` -- and until this job nothing ran them. The numbers
-  # quoted at the `PERF -- measured; decision: KEEP` sites and behind the
-  # `sendfile_min` default came from a developer's laptop and could not be
-  # reproduced from the repository; those comments now name this lane instead.
-  #
-  # Not on pull requests, and deliberately: a shared runner's wall clock moves
-  # by tens of percent between runs, so a per-pull-request number would be a
-  # coin flip dressed as a gate. What a pull request needs is that the benches
-  # still compile, and `cargo`'s `cargo clippy --workspace --all-targets`
-  # already type-checks every `[[bench]]` target -- adding
-  # `cargo bench --no-run` beside it would compile them a second time for the
-  # same answer. Regression *thresholds* on top of this baseline are a
-  # follow-up, not part of this lane.
-  #
-  # CodSpeed is the road not taken. Both manifests pull criterion in as
-  # `codspeed-criterion-compat`, whose comment promised an instrumented-walltime
-  # run that was never wired up, and wiring it needs a CodSpeed account and a
-  # `CODSPEED_TOKEN` secret this repository does not have -- a token reference
-  # that resolves to the empty string fails at the point of use, which is worse
-  # than not claiming it. So the shim runs as what it also is, plain criterion,
-  # and both manifests now say so. The comparison instead comes from criterion's
-  # own baseline: `--save-baseline main` loads the `main` baseline this job
-  # downloads from its last green run, prints the change against it, and writes
-  # the new samples back under the same name for the next run to read.
-  #
-  # `gh` rather than a fourth pinned action to move that directory, for the
-  # reason `nightly-report` gives: it is preinstalled and this is one API call.
+  # Each side runs three times, alternating on the same host. The verdict uses
+  # medians and three times the larger median absolute deviation, with a 3%
+  # floor. Missing or invalid samples fail. Raw output, exact commits and host
+  # resources travel with the verdict artifact. Pull requests only compile the
+  # benches; this six-pass lane is nightly and manually dispatchable.
   bench:
-    name: criterion benches
+    name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # Seven suites of criterion's default 100 samples, plus the compile.
-    timeout-minutes: 90
+    # Three alternating reference/candidate passes over all seven suites.
+    timeout-minutes: 360
     permissions:
       contents: read
-      # `gh run download` reads the Actions API, which `contents: read` does
-      # not cover. Read-only: this job publishes its baseline through
-      # `upload-artifact`, not through the API.
-      actions: read
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      BASELINE: criterion-baseline
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - uses: ./.github/actions/reclaim-disk
 
@@ -1019,67 +995,92 @@ jobs:
           # `cargo`'s clippy and nextest run leaves behind.
           key: bench
 
-      # Best-effort, and the first run has nothing to find: with no `main`
-      # baseline on disk criterion reports absolute times and no change
-      # column, which is exactly what a first run can honestly say.
-      - name: restore the previous baseline
+      - id: reference
+        name: resolve reference
+        env:
+          REFERENCE_INPUT: ${{ inputs.reference_sha }}
         run: |
           set -euo pipefail
-          run_id="$(gh run list \
-            --workflow ci.yml --branch main --event schedule --status success \
-            --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
-          if [ -z "${run_id}" ]; then
-            echo "No green scheduled run to take a baseline from; measuring absolute times only."
-            exit 0
+          reference_sha="${REFERENCE_INPUT}"
+          if [ -z "${reference_sha}" ]; then
+            reference_sha="$(git rev-parse HEAD^)"
           fi
-          mkdir -p target/criterion
-          if gh run download "${run_id}" --name "${BASELINE}" --dir target/criterion; then
-            echo "Baseline restored from run ${run_id}."
-          else
-            echo "Run ${run_id} carries no ${BASELINE} artifact; measuring absolute times only."
-          fi
+          git cat-file -e "${reference_sha}^{commit}"
+          echo "sha=$(git rev-parse "${reference_sha}^{commit}")" >> "${GITHUB_OUTPUT}"
 
-      # `--save-baseline main` is both halves of the comparison: criterion
-      # loads the `main` baseline the step above restored, prints each
-      # benchmark's change against it, and then overwrites it with this run's
-      # samples for the next run to compare against.
-      #
-      # `shell: bash` for pipefail, so a bench that fails to build or panics
-      # fails this step instead of being masked by `tee`.
-      - name: bench
+      - name: repeated same-host measurements
         shell: bash
         run: |
-          cargo bench -p krabka-broker -p krabka-log -- --save-baseline main \
-            | tee bench.log
+          set -euo pipefail
+          candidate_sha="$(git rev-parse HEAD)"
+          reference_dir="${RUNNER_TEMP}/krabka-benchmark-reference"
+          git worktree add --detach "${reference_dir}" '${{ steps.reference.outputs.sha }}'
+          mkdir -p benchmark-artifacts/{reference,candidate}/summaries
+          {
+            echo "candidate=${candidate_sha}"
+            echo "reference=${{ steps.reference.outputs.sha }}"
+            rustc -Vv
+            uname -a
+            lscpu
+            free -b
+            df -B1 .
+          } > benchmark-artifacts/environment.txt
+          for run in 1 2 3; do
+            for side in reference candidate; do
+              run_dir="benchmark-artifacts/${side}/run-${run}"
+              mkdir -p "${run_dir}"
+              if [ "${side}" = reference ]; then
+                source_dir="${reference_dir}"
+                commit='${{ steps.reference.outputs.sha }}'
+              else
+                source_dir="${GITHUB_WORKSPACE}"
+                commit="${candidate_sha}"
+              fi
+              (
+                cd "${source_dir}"
+                CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" cargo bench \
+                  -p krabka-broker -p krabka-log -- \
+                  --output-format bencher --noplot --sample-size 20 --measurement-time 2
+              ) | tee "${run_dir}/raw.txt"
+              cargo run -p krabka-parse-benches -- \
+                --results-dir "${run_dir}" \
+                --output "benchmark-artifacts/${side}/summaries/run-${run}.json" \
+                --suite krabka-broker \
+                --commit "${commit}"
+            done
+          done
 
-      # The `bench_ratio` tables -- the ones the `PERF` comments quote -- are
-      # plain `println!` output interleaved with criterion's own result lines,
-      # and both belong in the summary. Only criterion's per-benchmark progress
-      # chatter is dropped.
+      - name: regression verdict
+        run: |
+          cargo run -p krabka-parse-benches -- \
+            --reference-dir benchmark-artifacts/reference/summaries \
+            --candidate-dir benchmark-artifacts/candidate/summaries \
+            --minimum-tolerance-percent 3 \
+            --output benchmark-artifacts/verdict.json
+
       - name: summary
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           {
-            echo '## criterion'
-            echo
-            echo "Baseline \`main\`, refreshed by this run. Artifact: \`${BASELINE}\`."
+            echo '## variance-calibrated criterion verdict'
             echo
             echo '```'
-            grep -v '^Benchmarking ' bench.log || true
+            if [ -f benchmark-artifacts/verdict.json ]; then
+              jq -r '"passed=\(.passed)\nbenchmarks=\(.benchmarks | length)\nreference=\(.reference_commits[0])\ncandidate=\(.candidate_commits[0])"' benchmark-artifacts/verdict.json
+            else
+              echo 'No verdict: measurement or validation failed.'
+            fi
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # The next run's `main` baseline, and the raw samples behind any number
-      # this lane is cited for. 90 days so a quoted figure outlives the quarter
-      # it was measured in.
-      - name: upload the baseline
+      - name: upload raw samples and verdict
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ env.BASELINE }}
-          path: target/criterion/
+          name: benchmark-regression-evidence
+          path: benchmark-artifacts/
           retention-days: 90
 
   # Push the broker image.

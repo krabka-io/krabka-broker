@@ -13,6 +13,10 @@ fails the build when the series drift.
   start, stop and roll a cluster. Wire the `/healthz` and `/readyz` probes.
 - [Capacity](capacity.md): what a broker spends per partition and per byte,
   how to size disk, network and voters, and how to read the phase families.
+- [Performance qualification](performance-qualification.md): reproduce the
+  Kafka comparison and the 1,000/10,000-partition operating-envelope run.
+- [Broker performance results](performance-results.md): the measured
+  comparison and highest passing partition tier, with exact provenance.
 - [Scale a cluster](scaling.md): add capacity, move replicas with a throttle,
   and drain and unregister a broker, including the operator-managed path.
 - [Metrics](metrics.md): every exported series with its labels and the JMX

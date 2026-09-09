@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: krabka-3
+spec:
+  clusterIP: None
+  selector: {app: krabka-joiner}
+  ports:
+    - {name: kafka, port: 9092}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: krabka-joiner
+spec:
+  serviceName: krabka-3
+  replicas: 1
+  selector:
+    matchLabels: {app: krabka-joiner}
+  template:
+    metadata:
+      labels:
+        app: krabka-joiner
+        performance.krabka.io/broker: "true"
+    spec:
+      shareProcessNamespace: true
+      securityContext: {fsGroup: 65532}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: {performance.krabka.io/broker: "true"}
+      initContainers:
+        - name: format
+          image: docker.io/krabka-io/krabka-broker:dev
+          command: [/usr/bin/krabka-format]
+          args:
+            - --log-dir=/var/lib/krabka
+            - --node-id=3
+            - --cluster-id=b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10
+            - --no-initial-controllers
+            - --ignore-formatted
+          securityContext: {runAsUser: 65532, runAsGroup: 65532}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/krabka}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: broker
+          image: docker.io/krabka-io/krabka-broker:dev
+          args:
+            - --log-dir=/var/lib/krabka
+            - --broker-id=3
+            - --process-roles=broker
+            - --listen-addr=0.0.0.0:9092
+            - --controller-bootstrap-servers=krabka.broker-performance.svc.cluster.local:9093
+            - --controller-quorum-voters=0@krabka-0.krabka.broker-performance.svc.cluster.local:9093,1@krabka-1.krabka.broker-performance.svc.cluster.local:9093,2@krabka-2.krabka.broker-performance.svc.cluster.local:9093
+          env:
+            - {name: KRABKA_ADVERTISED_LISTENER, value: "krabka-joiner-0.krabka-3.broker-performance.svc.cluster.local:9092"}
+            - {name: KRABKA_CLUSTER_ID, value: b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10}
+            - {name: KRABKA_METRICS_LISTEN_ADDR, value: "0.0.0.0:9404"}
+            - {name: KRABKA_HEALTH_LISTEN_ADDR, value: "0.0.0.0:9405"}
+          ports:
+            - {name: kafka, containerPort: 9092}
+            - {name: metrics, containerPort: 9404}
+            - {name: health, containerPort: 9405}
+          readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 5, failureThreshold: 2}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "2", memory: 2Gi}
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/krabka}
+            - {name: tmp, mountPath: /tmp}
+        - name: probe
+          image: busybox:1.37.0
+          command: [sh, -c, "trap : TERM INT; sleep infinity & wait"]
+          resources:
+            requests: {cpu: 5m, memory: 8Mi}
+            limits: {cpu: 20m, memory: 32Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data, readOnly: true}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard
+        resources:
+          requests: {storage: 100Gi}

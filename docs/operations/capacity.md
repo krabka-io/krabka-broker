@@ -1,9 +1,10 @@
 # Capacity
 
 How to size a krabka-broker cluster and how to read the series that say
-whether the size is right. The numbers here are the ones the broker
-enforces or defaults to; the sizing rules are the ones a JVM Kafka fleet
-uses, because the data path has the same shape.
+whether the size is right. The numbers here are the ones the broker enforces
+or defaults to. The [broker performance result](performance-results.md) is the
+measured reference point; re-run its workload on production hardware before
+using it as a capacity promise.
 
 ## What a broker spends
 
@@ -29,10 +30,12 @@ factor. Keep 20 percent free: the log cleaner and segment rolls need room,
 and a disk that fills stops every partition on it, not one.
 
 **Partitions.** Each partition costs a segment file set, a place in the
-per-second gauge sampler, and a series in every per-partition family. A
-broker that hosts more than a few thousand replicas pays for it in metadata
-image size and in scrape size. `krabka_broker_partitions_total` is the count
-to watch; the per-partition families multiply by it.
+per-second gauge sampler, and a series in every per-partition family.
+`krabka_broker_partitions_total` is the count to watch; the per-partition
+families multiply by it. The reference workload passed 10,000 user
+partitions at RF 3 on its stated 16-CPU host, with up to 9,718 hosted replicas
+reported on one broker. Treat that as one measured point, not a supported
+ceiling.
 
 **Replication headroom.** A follower must take ingest faster than the leader
 receives it, or it falls out of the ISR after `replica_lag_time_max` (default
@@ -114,7 +117,7 @@ bytes.
 
 The `/metrics` body grows with the label sets that are live. The
 per-partition families add one sample per hosted replica each, and the
-per-topic families one per topic. A broker with ten thousand replicas serves
-a body of some tens of megabytes; scrape it at 30s or 60s rather than 15s,
-and drop the per-partition families at the scrape with `metric_relabel_configs`
-when a dashboard does not need them.
+per-topic families one per topic. The reference run measured at most 2.35 MB,
+27,226 series and a 0.863-second scrape at roughly 10,000 hosted replicas.
+Scrape at 30s or 60s rather than 15s, and drop the per-partition families at
+the scrape with `metric_relabel_configs` when a dashboard does not need them.

@@ -65,6 +65,7 @@ impl DiskScanner {
                         .partition_disk_bytes
                         .get_or_create(&lbl)
                         .set(i64::try_from(bytes).unwrap_or(i64::MAX));
+                    self.metrics.track_partition_series(&lbl);
                 }
                 Err(e) => {
                     warn!(?topic, partition, error = %e, "disk scanner: sum_partition_dir failed; skipping partition");

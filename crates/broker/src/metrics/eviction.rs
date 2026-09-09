@@ -8,23 +8,20 @@
 //! per-partition series and a dozen per-topic series stay in the body for a
 //! partition this broker no longer hosts.
 //!
-//! The rule is the one the metadata image already states. A partition's series
-//! live while this broker sits in that partition's replica set, and a topic's
-//! series -- along with the series of every partition that topic held -- live
-//! while that topic exists, where "that topic" means the incarnation carrying
-//! the topic id the image named and not merely the name. The mechanism is the
-//! one `share_partition::backlog_poller` uses for the share-group backlog
-//! gauge: remember the label sets the last image justified, then remove the
-//! ones the next image no longer does.
+//! The current metadata image is the bound. A partition's series live while
+//! this broker sits in that partition's replica set, and a topic's series live
+//! while that topic exists. [`MetricSeriesIndex`] records what the data path
+//! actually materialised, including rejected client-supplied names, so a pass
+//! can release labels no image ever named. The pass also runs periodically to
+//! catch a write racing just behind an image update. The index contains live
+//! series rather than tombstones, so it has the registry's current bound.
 //!
-//! A deleted topic releases the series of partitions this broker never
-//! replicated, because a produce or fetch that this broker rejected as
-//! misrouted is accounted for under the partition the client asked for. That
-//! keeps such a series bounded by the partitions the cluster holds. It leaves
-//! one case unbounded: a label set no image ever named, which a client
-//! produces by naming a topic or a partition index that does not exist.
-//! Releasing those needs eviction driven by series creation rather than by the
-//! image diff, which is issue #199.
+//! Kafka's `BrokerTopicMetrics` marks a rejected request under the topic name
+//! the client supplied. Krabka keeps that accounting: handlers create and
+//! increment the series before reconciliation. Unlike Kafka's process-lifetime
+//! sensor, an unjustified label is then collected on the next pass (within 30
+//! seconds), which bounds hostile names without moving rejected traffic onto a
+//! synthetic label or silently dropping it at the handler.
 //!
 //! Five further families are keyed by a partition without taking a
 //! [`PartitionLabel`], and each is left to a narrower owner that releases it
@@ -56,8 +53,10 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 
+use dashmap::DashSet;
 use krabka_metadata::{MetadataImage, NodeId};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -67,6 +66,20 @@ use super::{BrokerMetrics, PartitionLabel, QuotaType, SchemaRejectionLabel, Topi
 use crate::schema_validation::RejectReason;
 
 impl BrokerMetrics {
+    pub(crate) fn track_topic_series(&self, label: &TopicLabel) {
+        self.metric_series.topics.insert(label.clone());
+    }
+
+    pub(crate) fn track_topic_name(&self, topic: &str) {
+        self.track_topic_series(&TopicLabel {
+            topic: Arc::from(topic),
+        });
+    }
+
+    pub(crate) fn track_partition_series(&self, label: &PartitionLabel) {
+        self.metric_series.partitions.insert(label.clone());
+    }
+
     /// Releases the per-entity throttle series one expired quota bucket
     /// published.
     ///
@@ -115,6 +128,7 @@ impl BrokerMetrics {
             family.remove(label);
         }
         self.evict_partition_lag_series(label);
+        self.metric_series.partitions.remove(label);
     }
 
     /// Drop every series that any per-topic family carries for `topic`.
@@ -166,60 +180,65 @@ impl BrokerMetrics {
                 });
         }
         self.evict_topic_lag_series(topic);
+        self.metric_series.topics.remove(&label);
+        let partitions: Vec<_> = self
+            .metric_series
+            .partitions
+            .iter()
+            .filter(|partition| partition.topic.as_ref() == topic)
+            .map(|partition| partition.clone())
+            .collect();
+        for partition in partitions {
+            self.evict_partition_series(&partition);
+        }
     }
 }
 
-/// One topic as the last image described it: which incarnation it was, and
-/// which partition indexes it held.
+/// Live topic and partition label sets created by broker data paths.
 ///
-/// The id is what separates a topic from a same-named topic created after it
-/// was deleted. A `watch` channel publishes only the newest image, so a delete
-/// and a recreate that land between two of this evictor's passes arrive as one
-/// image in which the name never disappeared; without the id the old
-/// incarnation's counters would carry over into the new one.
-///
-/// The partition indexes are every partition the image named, not only the
-/// ones this broker replicates. Produce and fetch account for a partition the
-/// broker rejected as well as one it served, so a misrouted request
-/// materialises a series for a partition this broker does not host, and the
-/// topic going away is what releases it.
-#[derive(Debug, PartialEq, Eq)]
-struct TrackedTopic {
-    id: Uuid,
-    partitions: Vec<i32>,
+/// Public only because [`BrokerMetrics`] exposes it for the compile-time
+/// metrics contract. Its sets stay private so every mutation remains paired
+/// with a metric-family mutation.
+#[derive(Clone, Default)]
+pub struct MetricSeriesIndex {
+    topics: Arc<DashSet<TopicLabel>>,
+    partitions: Arc<DashSet<PartitionLabel>>,
 }
 
 /// Reconciles the live metric series against the newest metadata image.
 ///
-/// It holds the `(topic, partition)` pairs whose replica set named this broker
-/// in the last image it saw, and the topics that image held. An image that
-/// drops one of them is what releases the series, so the evictor keeps no
-/// state that the image does not justify.
+/// It compares the labels the data path actually created with the labels the
+/// current image permits. This catches invented client labels as well as
+/// ordinary metadata removal.
 pub(crate) struct MetricSeriesEvictor {
     node_id: NodeId,
     metrics: BrokerMetrics,
-    hosted: HashSet<PartitionLabel>,
-    topics: HashMap<String, TrackedTopic>,
+    topics: HashMap<String, Uuid>,
+    initialized: bool,
 }
 
 impl MetricSeriesEvictor {
-    /// An evictor that has seen no image yet, so it tracks nothing and has
-    /// nothing to release.
     pub(crate) fn new(node_id: NodeId, metrics: BrokerMetrics) -> Self {
         Self {
             node_id,
             metrics,
-            hosted: HashSet::new(),
             topics: HashMap::new(),
+            initialized: false,
         }
     }
 
-    /// Evict the series `image` no longer justifies, then track what it does.
-    ///
-    /// The first call seeds the tracked sets and evicts nothing: a series is
-    /// released against an image that once justified it, never against the
-    /// first image the broker happens to see.
+    /// Evict every materialised label set `image` does not justify.
     pub(crate) fn apply(&mut self, image: &MetadataImage) {
+        let topics: HashMap<String, Uuid> = image
+            .topics()
+            .map(|topic| (topic.name.clone(), topic.topic_id))
+            .collect();
+        if !self.initialized {
+            self.topics = topics;
+            self.initialized = true;
+            return;
+        }
+
         let hosted: HashSet<PartitionLabel> = image
             .all_partitions()
             .filter(|partition| partition.replicas.contains(&self.node_id))
@@ -228,47 +247,43 @@ impl MetricSeriesEvictor {
                 partition: partition.partition,
             })
             .collect();
-        for label in self.hosted.difference(&hosted) {
+        let invalid_partitions: Vec<_> = self
+            .metrics
+            .metric_series
+            .partitions
+            .iter()
+            .filter(|label| !hosted.contains(label.key()))
+            .map(|label| label.clone())
+            .collect();
+        for label in invalid_partitions {
             tracing::debug!(
                 topic = %label.topic,
                 partition = label.partition,
                 "evicting partition metric series",
             );
-            self.metrics.evict_partition_series(label);
+            self.metrics.evict_partition_series(&label);
         }
-        self.hosted = hosted;
 
-        let topics: HashMap<String, TrackedTopic> = image
-            .topics()
-            .map(|topic| {
-                let partitions = image
-                    .partitions_of(&topic.name)
-                    .map(|partition| partition.partition)
-                    .collect();
-                (
-                    topic.name.clone(),
-                    TrackedTopic {
-                        id: topic.topic_id,
-                        partitions,
-                    },
-                )
-            })
+        let replaced: Vec<_> = self
+            .topics
+            .iter()
+            .filter(|(name, id)| topics.get(*name).is_some_and(|live| live != *id))
+            .map(|(name, _)| name.clone())
             .collect();
-        for (name, gone) in &self.topics {
-            // A name the new image still holds under a different id is a
-            // different topic, and the series belong to the incarnation that
-            // left.
-            if topics.get(name).is_some_and(|live| live.id == gone.id) {
-                continue;
-            }
-            tracing::debug!(topic = name, "evicting topic metric series");
-            self.metrics.evict_topic_series(name);
-            for partition in &gone.partitions {
-                self.metrics.evict_partition_series(&PartitionLabel {
-                    topic: Arc::from(name.as_str()),
-                    partition: *partition,
-                });
-            }
+        for topic in replaced {
+            self.metrics.evict_topic_series(&topic);
+        }
+        let invalid_topics: Vec<_> = self
+            .metrics
+            .metric_series
+            .topics
+            .iter()
+            .filter(|label| !topics.contains_key(label.topic.as_ref()))
+            .map(|label| Arc::clone(&label.topic))
+            .collect();
+        for topic in invalid_topics {
+            tracing::debug!(%topic, "evicting topic metric series");
+            self.metrics.evict_topic_series(&topic);
         }
         self.topics = topics;
     }
@@ -276,29 +291,33 @@ impl MetricSeriesEvictor {
 
 /// Run a [`MetricSeriesEvictor`] over every published image until `shutdown`.
 ///
-/// Eviction rides the image watch rather than a timer because the image is the
-/// authority the rule is stated against, and a timer would hold released
-/// series for up to one tick after the change that released them.
+/// Image changes release ordinary removals immediately. The periodic pass
+/// catches a data-path write that races behind the removing image.
 pub(crate) fn spawn_metric_series_evictor(
-    images: watch::Receiver<Arc<MetadataImage>>,
+    mut images: watch::Receiver<Arc<MetadataImage>>,
     node_id: NodeId,
     metrics: BrokerMetrics,
     shutdown: CancellationToken,
 ) {
     let mut evictor = MetricSeriesEvictor::new(node_id, metrics);
-    // Seed the baseline here rather than leaving it to the loop's own first
-    // pass, as `throttle::apply_image` does beside `throttle::run`. The loop
-    // reads whatever is current when the task is first polled, so a change
-    // published between this call and that poll would otherwise arrive as the
-    // baseline, and the series it should have released would stay in the body
-    // until the following change.
     evictor.apply(&images.borrow().clone());
-    tokio::spawn(crate::metadata_source::watch_image_loop(
-        images,
-        "metric series eviction",
-        shutdown,
-        move |image| evictor.apply(image),
-    ));
+    tokio::spawn(async move {
+        let period = Duration::from_secs(30);
+        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                changed = images.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    evictor.apply(&images.borrow_and_update().clone());
+                }
+                _ = interval.tick() => evictor.apply(&images.borrow().clone()),
+                () = shutdown.cancelled() => return,
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -383,6 +402,10 @@ mod tests {
                 partition,
             })
             .set(4_096);
+        metrics.track_partition_series(&PartitionLabel {
+            topic: Arc::clone(topic),
+            partition,
+        });
     }
 
     /// Touch every family that carries a [`TopicLabel`], plus the
@@ -402,6 +425,9 @@ mod tests {
                 topic: Arc::clone(topic),
             })
             .inc();
+        metrics.track_topic_series(&TopicLabel {
+            topic: Arc::clone(topic),
+        });
         for reason in RejectReason::LABELS {
             metrics.record_schema_validation_rejection(topic, reason);
         }
@@ -588,11 +614,10 @@ mod tests {
         check!(scrape(&metrics).contains(TOPIC));
     }
 
-    /// The first image an evictor sees is a baseline, never a reason to
-    /// release anything: a fresh broker whose data path has already recorded a
-    /// partition must not lose those series to its own first metadata apply.
+    /// Restored state can publish series before the metadata observer catches
+    /// up, so the first image seeds the baseline without evicting them.
     #[test]
-    fn the_first_image_seeds_the_baseline_and_evicts_nothing() {
+    fn the_first_image_preserves_restored_series() {
         let metrics = BrokerMetrics::new();
         create_partition_series(&metrics, &Arc::from(TOPIC), 0);
         create_topic_series(&metrics, &Arc::from(TOPIC));
@@ -601,7 +626,45 @@ mod tests {
         // An image that names neither the topic nor the partition.
         evictor.apply(&MetadataImage::new(uuid::Uuid::nil()));
 
-        check!(scrape(&metrics).contains(&partition_pair(TOPIC, 0)));
+        check!(scrape(&metrics).contains(TOPIC));
+    }
+
+    #[test]
+    fn invented_topic_and_partition_labels_are_released() {
+        let metrics = BrokerMetrics::new();
+        let mut evictor = MetricSeriesEvictor::new(THIS_BROKER, metrics.clone());
+        let image = MetadataImage::from_records(Uuid::nil(), &topic_records(&[&[THIS_BROKER]]));
+
+        create_topic_series(&metrics, &Arc::from("invented"));
+        create_partition_series(&metrics, &Arc::from(TOPIC), 99);
+        assert!(scrape(&metrics).contains("invented"));
+        assert!(scrape(&metrics).contains(&partition_pair(TOPIC, 99)));
+
+        evictor.apply(&image);
+        evictor.apply(&image);
+
+        let after = scrape(&metrics);
+        check!(!after.contains("invented"));
+        check!(!after.contains(&partition_pair(TOPIC, 99)));
+    }
+
+    #[test]
+    fn a_series_recreated_after_removal_is_released_by_the_next_pass() {
+        let metrics = BrokerMetrics::new();
+        let mut evictor = MetricSeriesEvictor::new(THIS_BROKER, metrics.clone());
+        let hosted = MetadataImage::from_records(Uuid::nil(), &topic_records(&[&[THIS_BROKER]]));
+        let unhosted = MetadataImage::from_records(Uuid::nil(), &topic_records(&[&[OTHER_BROKER]]));
+
+        evictor.apply(&hosted);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        evictor.apply(&unhosted);
+        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
+        assert!(scrape(&metrics).contains(&partition_pair(TOPIC, 0)));
+
+        evictor.apply(&unhosted);
+
+        check!(!scrape(&metrics).contains(&partition_pair(TOPIC, 0)));
+        check!(metrics.metric_series.partitions.is_empty());
     }
 
     /// Eviction is exhaustive over the families each entry point owns: after

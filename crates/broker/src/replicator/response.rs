@@ -12,18 +12,22 @@
 //! is the cost the batching exists to remove. A row that wants one says so
 //! with [`RowAction::Backoff`] and the loop applies the longest of them once.
 
-use krabka_log::Offset;
+use std::{collections::BTreeMap, sync::Arc};
+
+use bytes::Buf as _;
+use krabka_ids::{LeaderEpoch, PartitionIndex, ProducerId};
+use krabka_log::{Offset, VerbatimBatch};
 use krabka_protocol::{
     owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
     primitives::uuid::Uuid as WireUuid,
-    records::RecordsPayload,
+    records::{Attributes, RecordBatch, RecordsError, RecordsPayload, validate_one_v2_batch},
 };
 use krabka_units::Time;
 use krabka_verified::ReplicaFetchMutation;
 use tracing::{info, warn};
 
 use super::{
-    Config, replication_target_changed, task_replication_target,
+    Config, FollowedKey, replication_target_changed, task_replication_target,
     truncation::{
         handle_epoch_fence, handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
     },
@@ -167,50 +171,52 @@ pub(super) async fn handle_partition_response(
                     return RowAction::Drop;
                 }
             };
-            // Move the parsed v2 batches out of the owned response so each
-            // batch can be handed to the writer BY VALUE — no per-batch deep
-            // clone. `take()` leaves `None` behind; the response is dropped at
-            // the end of this call so nothing is read from `records` again.
-            // `Raw`/`Legacy` payloads were never processed here (the old
-            // `as_v2()` returned `None` for them), so they are ignored.
-            if let Some(RecordsPayload::V2(batches)) = part_resp.records.take() {
-                for batch in batches {
-                    if replication_target_changed(cfg) {
+            match part_resp.records.take() {
+                Some(RecordsPayload::Raw(bytes)) => {
+                    if replicate_raw_batches(&part, cfg, bytes).await == RowAction::Drop {
                         return RowAction::Drop;
                     }
-                    // Capture byte count before the move into replicate_batch
-                    // so the metrics update only fires on a successful append.
-                    // PERF — measured; decision: KEEP. `encoded_len()` is
-                    // computed here for the metric and again inside the append
-                    // path; threading a single computation through would save
-                    // the re-walk, but that changes the writer API
-                    // (cross-file). `benches/perf_deferrals.rs` times the walk
-                    // against the `replicate_batch` it precedes, over the
-                    // batch shapes a producer actually writes: 0.01% of the
-                    // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
-                    // for 1000 x 100 B. Even that worst shape's ~4% sits
-                    // inside the append's own run-to-run spread, so the
-                    // re-walk is not separable from noise in production.
-                    // Those three figures are what the `bench` job of the `ci`
-                    // workflow measures on the nightly schedule and prints in
-                    // its job summary; the latest scheduled `ci` run in the
-                    // Actions tab is the reproducible reading, and its
-                    // `criterion-baseline` artifact holds the samples.
-                    // Revisit only if the replicator's shape mix moves to very
-                    // wide batches of tiny records, where the walk is a
-                    // per-record cost and the append is not.
-                    let batch_bytes = batch.encoded_len();
-                    if let Err(e) = part.replicate_batch(batch).await {
-                        warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
-                            "replicator: replicate_batch failed");
-                        break;
-                    }
-                    cfg.metrics.record_replication_in(
-                        &cfg.topic,
-                        cfg.partition.get(),
-                        u64::try_from(batch_bytes).unwrap_or(0),
-                    );
                 }
+                Some(RecordsPayload::V2(batches)) => {
+                    for batch in batches {
+                        if replication_target_changed(cfg) {
+                            return RowAction::Drop;
+                        }
+                        // Capture byte count before the move into replicate_batch
+                        // so the metrics update only fires on a successful append.
+                        // PERF — measured; decision: KEEP. `encoded_len()` is
+                        // computed here for the metric and again inside the append
+                        // path; threading a single computation through would save
+                        // the re-walk, but that changes the writer API
+                        // (cross-file). `benches/perf_deferrals.rs` times the walk
+                        // against the `replicate_batch` it precedes, over the
+                        // batch shapes a producer actually writes: 0.01% of the
+                        // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
+                        // for 1000 x 100 B. Even that worst shape's ~4% sits
+                        // inside the append's own run-to-run spread, so the
+                        // re-walk is not separable from noise in production.
+                        // Those three figures are what the `bench` job of the `ci`
+                        // workflow measures on the nightly schedule and prints in
+                        // its job summary; the latest scheduled `ci` run in the
+                        // Actions tab is the reproducible reading, and its
+                        // `criterion-baseline` artifact holds the samples.
+                        // Revisit only if the replicator's shape mix moves to very
+                        // wide batches of tiny records, where the walk is a
+                        // per-record cost and the append is not.
+                        let batch_bytes = batch.encoded_len();
+                        if let Err(e) = part.replicate_batch(batch).await {
+                            warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
+                            "replicator: replicate_batch failed");
+                            break;
+                        }
+                        cfg.metrics.record_replication_in(
+                            &cfg.topic,
+                            cfg.partition.get(),
+                            u64::try_from(batch_bytes).unwrap_or(0),
+                        );
+                    }
+                }
+                _ => {}
             }
             // KIP-392: record the leader's high watermark so consumer reads
             // served from this follower are bounded correctly. Done on every
@@ -291,52 +297,152 @@ pub(super) async fn handle_partition_response(
     }
 }
 
+async fn replicate_raw_batches(
+    part: &crate::partition::Partition,
+    cfg: &Config,
+    mut remaining: bytes::Bytes,
+) -> RowAction {
+    while !remaining.is_empty() {
+        if replication_target_changed(cfg) {
+            return RowAction::Drop;
+        }
+        let validated = match validate_one_v2_batch(&remaining) {
+            Ok(batch) => batch,
+            Err(RecordsError::HeaderTooShort { .. } | RecordsError::BodyTooShort { .. }) => break,
+            Err(error) => {
+                warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
+                    "replicator: invalid raw record batch");
+                break;
+            }
+        };
+        let batch_len = validated.total_len;
+        let batch_bytes = remaining.slice(..batch_len);
+        let header = validated.header;
+        let attributes = Attributes(header.attributes.get());
+        let base_offset = Offset(header.base_offset.get());
+        let result = if attributes.is_control_batch() {
+            let mut cursor: &[u8] = &batch_bytes;
+            match RecordBatch::decode(&mut cursor) {
+                Ok(batch) => part.replicate_batch(batch).await,
+                Err(error) => {
+                    warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
+                        "replicator: invalid control batch");
+                    break;
+                }
+            }
+        } else {
+            let batch = VerbatimBatch {
+                bytes: batch_bytes,
+                last_offset_delta: header.last_offset_delta.get(),
+                max_timestamp: header.max_timestamp.get(),
+                leader_epoch: LeaderEpoch(header.partition_leader_epoch.get()),
+                producer_id: ProducerId(header.producer_id.get()),
+                producer_epoch: header.producer_epoch.get(),
+                base_sequence: header.base_sequence.get(),
+                is_transactional: attributes.is_transactional(),
+            };
+            part.replicate_verbatim(batch, base_offset).await
+        };
+        if let Err(error) = result {
+            warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
+                "replicator: append failed");
+            break;
+        }
+        cfg.metrics.record_replication_in(
+            &cfg.topic,
+            cfg.partition.get(),
+            u64::try_from(batch_len).unwrap_or(0),
+        );
+        remaining.advance(batch_len);
+    }
+    RowAction::Continue
+}
+
 /// One partition this round asked about, and the epoch it asked under.
-pub(super) struct RoundEntry<'round> {
-    pub(super) cfg: &'round Config,
+pub(super) struct RoundEntry {
     /// The `current_leader_epoch` this follower sent for this partition. The
     /// metadata image can advance while the request is in flight, so the fence
     /// is against what was sent and not against what is current.
     pub(super) request_leader_epoch: i32,
 }
 
-/// Applies one response to every partition of the round that asked for it.
-///
-/// Returns one action per entry of `round`, in the same order.
-///
-/// A partition the response does not mention gets [`RowAction::Continue`]: on
-/// a KIP-227 incremental fetch the leader answers only with the partitions
-/// whose state changed, so silence is the normal answer for a caught-up
-/// partition and not an error.
-///
-/// The response is indexed once, so a round covering ten thousand partitions
-/// costs one pass over the rows rather than one scan per partition. A
-/// partition named by two rows resolves to neither, which is what the
-/// single-row path did: a contradictory response is side-effect free.
-pub(super) async fn apply_response(
-    response: &mut FetchResponse,
-    round: &[RoundEntry<'_>],
-) -> Vec<RowAction> {
-    let index = ResponseIndex::of(response);
-    let mut actions = Vec::with_capacity(round.len());
-    for entry in round {
-        let Some(location) = index.locate(response, entry.cfg) else {
-            actions.push(RowAction::Continue);
-            continue;
+/// Stable lookup built only when a fetcher's metadata membership changes.
+pub(super) struct FollowedIndex {
+    by_id: std::collections::HashMap<(WireUuid, i32), Arc<Config>>,
+    by_name: std::collections::HashMap<Arc<str>, std::collections::HashMap<i32, Arc<Config>>>,
+}
+
+impl FollowedIndex {
+    pub(super) fn new(followed: &BTreeMap<FollowedKey, Arc<Config>>) -> Self {
+        let mut out = Self {
+            by_id: std::collections::HashMap::with_capacity(followed.len()),
+            by_name: std::collections::HashMap::with_capacity(followed.len()),
         };
-        let Some(part_resp) = response
-            .responses
-            .get_mut(location.0)
-            .and_then(|topic| topic.partitions.get_mut(location.1))
-        else {
-            actions.push(RowAction::Continue);
-            continue;
-        };
-        actions.push(
-            handle_partition_response(part_resp, entry.cfg, entry.request_leader_epoch).await,
-        );
+        for cfg in followed.values() {
+            out.by_id
+                .insert((cfg.topic_id, cfg.partition.get()), Arc::clone(cfg));
+            out.by_name
+                .entry(Arc::clone(&cfg.topic))
+                .or_default()
+                .insert(cfg.partition.get(), Arc::clone(cfg));
+        }
+        out
     }
-    actions
+
+    fn config(&self, topic: &FetchableTopicResponse, partition: i32) -> Option<Arc<Config>> {
+        let by_id = (topic.topic_id != WireUuid::ZERO)
+            .then(|| self.by_id.get(&(topic.topic_id, partition)))
+            .flatten();
+        let by_name = if topic.topic.is_empty() {
+            None
+        } else {
+            self.by_name
+                .get(topic.topic.as_str())
+                .and_then(|partitions| partitions.get(&partition))
+        };
+        match (by_id, by_name) {
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => Some(Arc::clone(a)),
+            (Some(cfg), None) | (None, Some(cfg)) => Some(Arc::clone(cfg)),
+            _ => None,
+        }
+    }
+}
+
+/// Applies only rows the leader returned. Incremental Fetch responses omit
+/// caught-up partitions, so this avoids walking every followed partition on
+/// every long-poll completion.
+pub(super) async fn apply_response_indexed(
+    response: &mut FetchResponse,
+    followed: &FollowedIndex,
+    request_epochs: &std::collections::HashMap<FollowedKey, i32>,
+) -> Vec<(FollowedKey, RowAction)> {
+    let response_index = ResponseIndex::of(response);
+    let mut rows = Vec::new();
+    for topic_index in 0..response.responses.len() {
+        for partition_index in 0..response.responses[topic_index].partitions.len() {
+            let topic = &response.responses[topic_index];
+            let partition = topic.partitions[partition_index].partition_index;
+            let Some(cfg) = followed.config(topic, partition) else {
+                continue;
+            };
+            if response_index.locate(response, &cfg) != Some((topic_index, partition_index)) {
+                continue;
+            }
+            let key = (Arc::clone(&cfg.topic), PartitionIndex(partition));
+            let request_epoch = request_epochs
+                .get(&key)
+                .copied()
+                .unwrap_or(cfg.leader_epoch.0);
+            let action = handle_partition_response(
+                &mut response.responses[topic_index].partitions[partition_index],
+                &cfg,
+                request_epoch,
+            )
+            .await;
+            rows.push((key, action));
+        }
+    }
+    rows
 }
 
 /// Where each `(topic identity, partition)` sits in one response.
@@ -416,15 +522,16 @@ pub(super) async fn handle_response(
     cfg: &Config,
     request_leader_epoch: i32,
 ) -> RowAction {
-    let round = [RoundEntry {
+    let index = ResponseIndex::of(&resp);
+    let Some((topic, partition)) = index.locate(&resp, cfg) else {
+        return RowAction::Continue;
+    };
+    handle_partition_response(
+        &mut resp.responses[topic].partitions[partition],
         cfg,
         request_leader_epoch,
-    }];
-    apply_response(&mut resp, &round)
-        .await
-        .into_iter()
-        .next()
-        .expect("a round of one answers one action")
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -432,12 +539,14 @@ mod tests {
     use std::time::Duration;
 
     use assert2::assert;
+    use bytes::BytesMut;
+    use krabka_compression::CompressionType;
     use krabka_protocol::{
         owned::fetch_response::{EpochEndOffset, LeaderIdAndEpoch},
         records::{Record, RecordBatch},
     };
     use krabka_raft::NodeId;
-    use krabka_units::secs;
+    use krabka_units::{mebibytes, secs};
 
     use super::*;
     use crate::replicator::{
@@ -648,6 +757,39 @@ mod tests {
         );
         assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
         assert!(part.log_end_offset() == Offset(1));
+    }
+
+    #[tokio::test]
+    async fn raw_compressed_replication_stays_byte_exact() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        ensure_local_partition(&cfg).unwrap();
+        let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+        let mut batch = one_record_batch(0);
+        batch.partition_leader_epoch = cfg.leader_epoch.0;
+        batch.attributes = batch.attributes.with_compression(CompressionType::Lz4);
+        let mut encoded = BytesMut::new();
+        batch.encode(&mut encoded).unwrap();
+        let encoded = encoded.freeze();
+        let response = fetch_response(
+            TOPIC,
+            WIRE_TOPIC_ID,
+            PartitionData {
+                partition_index: PARTITION,
+                error_code: codes::NONE,
+                records: Some(RecordsPayload::Raw(encoded.clone())),
+                ..PartitionData::default()
+            },
+        );
+
+        assert!(handle_response(response, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
+        let stored = part
+            .log
+            .lock()
+            .unwrap()
+            .read_raw(Offset(0), Offset(1), mebibytes(1))
+            .unwrap()
+            .bytes;
+        assert!(stored == encoded);
     }
 
     #[tokio::test]

@@ -70,6 +70,25 @@ impl Partition {
             .map_err(|_| BrokerError::Replication("ack dropped".into()))?
     }
 
+    pub async fn replicate_verbatim(
+        &self,
+        batch: krabka_log::VerbatimBatch,
+        base_offset: Offset,
+    ) -> Result<(), BrokerError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterMessage::ReplicateVerbatim {
+                batch,
+                base_offset,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
+        ack_rx
+            .await
+            .map_err(|_| BrokerError::Replication("ack dropped".into()))?
+    }
+
     /// Truncate the log to `offset` and drop all records at offsets
     /// `>= offset`. The replicator's `OFFSET_OUT_OF_RANGE` recovery path
     /// calls this, and so does the KIP-320 in-band `diverging_epoch`

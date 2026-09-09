@@ -17,6 +17,7 @@ impl BrokerMetrics {
             reason: reason.to_string(),
         };
         self.schema_validation_rejections.get_or_create(&lbl).inc();
+        self.track_topic_name(topic);
     }
 
     /// KFC-7: account one schema lookup the broker answered from its local
