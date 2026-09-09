@@ -1,0 +1,73 @@
+"""Unit tests for check_qualification.axl."""
+
+load("./check_qualification.axl", "manifest_problems")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_SHA = "0123456789abcdef" * 2 + "01234567"
+_DIGEST = "sha256:" + ("0123456789abcdef" * 4)
+_REPOSITORIES = [
+    "krabka-io/krabka-broker",
+    "krabka-io/krabka-cli",
+    "krabka-io/krabka-client-rs",
+    "krabka-io/krabka-connect",
+    "krabka-io/krabka-io.github.io",
+    "krabka-io/krabka-o11y",
+    "krabka-io/krabka-o11y-demo",
+    "krabka-io/krabka-operator",
+    "krabka-io/krabka-protocol",
+    "krabka-io/krabka-schema-registry",
+    "krabka-io/krabka-streams-go",
+    "krabka-io/krabka-streams-java",
+    "krabka-io/krabka-streams-rs",
+]
+_EVIDENCE = {
+    "installation": ["compose", "helm", "matrix"],
+    "operator-lifecycle": ["certificate-rotation", "ledger", "scale-down", "upgrade"],
+    "cli-admin": ["commands", "state"],
+    "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
+}
+
+def _manifest(status = "draft", gate_status = "pending", artifact_digest = ""):
+    components = [{"repository": repository, "revision": _SHA, "default_branch": "main", "artifacts": []} for repository in _REPOSITORIES]
+    for component in components:
+        if component["repository"] in ["krabka-io/krabka-broker", "krabka-io/krabka-cli", "krabka-io/krabka-o11y", "krabka-io/krabka-o11y-demo", "krabka-io/krabka-operator"]:
+            component["artifacts"] = [{"kind": "image", "reference": "ghcr.io/example/image", "digest": artifact_digest}]
+    gates = []
+    for name, issue in [("installation", 523), ("operator-lifecycle", 524), ("cli-admin", 525), ("observability-recovery", 526)]:
+        evidence = []
+        if gate_status == "passed":
+            evidence = [{"name": item, "url": "https://example.test/" + item, "sha256": _DIGEST} for item in _EVIDENCE[name]]
+        gates.append({"name": name, "issue": issue, "status": gate_status, "evidence": evidence})
+    return {
+        "schema": 1,
+        "status": status,
+        "captured_at": "2026-09-09T00:00:00Z",
+        "architectures": ["linux/amd64"],
+        "components": components,
+        "gates": gates,
+        "report": {"url": "https://example.test/report", "sha256": _DIGEST},
+    }
+
+def _test_a_complete_draft_is_valid(_ctx):
+    check_eq("draft", manifest_problems(_manifest()), [])
+
+def _test_final_requires_digests_and_evidence(_ctx):
+    problems = manifest_problems(_manifest(), final = True)
+    check_eq("all four gates remain pending", len([problem for problem in problems if "has not passed" in problem]), 4)
+    check_eq("all four gates lack evidence", len([problem for problem in problems if "has no evidence" in problem]), 4)
+    check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 5)
+
+def _test_a_qualified_manifest_is_valid(_ctx):
+    check_eq(
+        "qualified",
+        manifest_problems(_manifest(status = "qualified", gate_status = "passed", artifact_digest = _DIGEST), final = True),
+        [],
+    )
+
+check_qualification_tests = suite("check-qualification", [
+    _test_a_complete_draft_is_valid,
+    _test_final_requires_digests_and_evidence,
+    _test_a_qualified_manifest_is_valid,
+])
+
+check_qualification_tests_task = suite_task(check_qualification_tests)

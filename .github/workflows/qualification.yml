@@ -1,0 +1,55 @@
+name: ecosystem qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-set:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+      - name: require completed evidence
+        run: aspect check-qualification --final
+      - name: verify source revisions and OCI digests still exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          jq -r '.components[] | [.repository, .revision] | @tsv' qualification/milestone-20.json |
+            while IFS=$'\t' read -r repository revision; do
+              test "$(gh api "repos/${repository}/commits/${revision}" --jq .sha)" = "${revision}"
+            done
+          jq -r '.components[].artifacts[] | select(.kind == "image") | [.reference, .digest] | @tsv' qualification/milestone-20.json |
+            while IFS=$'\t' read -r reference digest; do
+              docker buildx imagetools inspect "${reference}@${digest}" >/dev/null
+            done
+      - name: verify published artifacts, evidence and report bytes
+        run: |
+          set -euo pipefail
+          jq -r '
+            [.components[].artifacts[] | select(.kind != "image") | [.reference, .digest]],
+            [.gates[].evidence[] | [.url, .sha256]],
+            [[.report.url, .report.sha256]] |
+            .[] | @tsv
+          ' qualification/milestone-20.json |
+            while IFS=$'\t' read -r url digest; do
+              file="$(mktemp)"
+              trap 'rm -f "${file}"' EXIT
+              curl --fail --location --silent --show-error "${url}" --output "${file}"
+              echo "${digest#sha256:}  ${file}" | sha256sum --check --status
+              rm -f "${file}"
+              trap - EXIT
+            done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: milestone-20-qualification
+          path: qualification/milestone-20.json
+          if-no-files-found: error
+          retention-days: 90

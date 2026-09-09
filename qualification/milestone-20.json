@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "status": "draft",
+  "captured_at": "2026-09-09T02:23:08Z",
+  "architectures": ["linux/amd64"],
+  "components": [
+    {"repository": "krabka-io/krabka-broker", "revision": "1bf03499f4d6bbd9ba4f5245fcce68b7fc7e9a6c", "default_branch": "main", "artifacts": [{"kind": "image", "reference": "ghcr.io/krabka-io/krabka-broker", "digest": ""}], "entrypoints": ["krabka-broker", "krabka-format"], "config": ["docs/config-reference.md"], "probes": ["/healthz", "/readyz"]},
+    {"repository": "krabka-io/krabka-protocol", "revision": "d252ed24df9eeeb092b9a7989da8667b3229e559", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-client-rs", "revision": "056e7e3eddb7da2ba21c7893993897e6169bc8f2", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-schema-registry", "revision": "ae9876d15da12e6123b77b4fc77f50bb9d162556", "default_branch": "claude/broker-schema-validation-registry-s451bp", "artifacts": []},
+    {"repository": "krabka-io/krabka-streams-rs", "revision": "5b0dd5511674b90db5dce9017904aede105704c8", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-streams-java", "revision": "85b0d7866e69c299611e60d2feca16754db202b6", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-streams-go", "revision": "a416d3a5e59eae7c2897228851c8d05e03a02b0f", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-connect", "revision": "54627bceca48c01bda5c44a49be172cb387695a1", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-operator", "revision": "ab416b99139a63ca0178f93dbb79250862dd2ef8", "default_branch": "main", "artifacts": [{"kind": "chart", "reference": "charts/krabka-operator", "digest": ""}], "entrypoints": ["krabka-operator"], "config": ["charts/krabka-operator/values.yaml"], "probes": []},
+    {"repository": "krabka-io/krabka-cli", "revision": "3f16c30a038b370af757992a709c15341e470728", "default_branch": "main", "artifacts": [{"kind": "binary", "reference": "https://github.com/krabka-io/krabka-cli/releases", "digest": ""}], "entrypoints": ["krabka"], "config": ["--command-config"], "probes": []},
+    {"repository": "krabka-io/krabka-o11y", "revision": "5d6fa5622a764108ebde0d1f5a6489c0306a1b6c", "default_branch": "main", "artifacts": [{"kind": "image", "reference": "ghcr.io/krabka-io/krabka-o11y", "digest": ""}]},
+    {"repository": "krabka-io/krabka-o11y-demo", "revision": "bfdfc598f1de57a4151143ffe2739472d6b17fa1", "default_branch": "main", "artifacts": [{"kind": "compose", "reference": "demo/observability/docker-compose.yml", "digest": ""}]},
+    {"repository": "krabka-io/krabka-io.github.io", "revision": "93515582c3c804556d1e24a6e85bfc8f46f16f8d", "default_branch": "main", "artifacts": []}
+  ],
+  "gates": [
+    {"name": "installation", "issue": 523, "status": "pending", "evidence": []},
+    {"name": "operator-lifecycle", "issue": 524, "status": "pending", "evidence": []},
+    {"name": "cli-admin", "issue": 525, "status": "pending", "evidence": []},
+    {"name": "observability-recovery", "issue": 526, "status": "pending", "evidence": []}
+  ],
+  "report": {"url": "", "sha256": ""}
+}
