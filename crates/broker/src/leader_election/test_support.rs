@@ -131,12 +131,23 @@ pub fn set_topic_config(img: &mut MetadataImage, topic: &str, key: &str, value: 
 pub fn set_topic_configs(img: &mut MetadataImage, topic: &str, entries: &[(&str, &str)]) {
     let overrides: BTreeMap<String, String> = entries
         .iter()
+        .filter(|(key, _)| *key != crate::config_keys::ELIGIBLE_LEADER_REPLICAS)
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect();
-    img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.into(),
-        overrides,
-    }));
+    if !overrides.is_empty() {
+        img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: topic.into(),
+            overrides,
+        }));
+    }
+    for (_, value) in entries
+        .iter()
+        .filter(|(key, _)| *key == crate::config_keys::ELIGIBLE_LEADER_REPLICAS)
+    {
+        for record in crate::elr::state::test_records(topic, value) {
+            img.apply(&record);
+        }
+    }
 }
 
 pub fn set_cluster_default(img: &mut MetadataImage, key: &str, value: &str) {
@@ -188,6 +199,7 @@ pub fn fencing_updates(batches: &[Vec<MetadataRecord>]) -> Vec<(u64, bool)> {
 pub fn elected_partition(changes: &[MetadataRecord]) -> &PartitionRecord {
     let mut partitions = changes.iter().filter_map(|record| match record {
         MetadataRecord::V1Partition(pr) => Some(pr),
+        MetadataRecord::V1PartitionUpdate(update) => Some(&update.partition),
         _ => None,
     });
     let first = partitions
@@ -209,7 +221,8 @@ pub fn one_partition_change(changes: &[MetadataRecord]) -> &PartitionRecord {
     );
     match &changes[0] {
         MetadataRecord::V1Partition(pr) => pr,
-        other => panic!("expected V1Partition, got {other:?}"),
+        MetadataRecord::V1PartitionUpdate(update) => &update.partition,
+        other => panic!("expected a partition change, got {other:?}"),
     }
 }
 

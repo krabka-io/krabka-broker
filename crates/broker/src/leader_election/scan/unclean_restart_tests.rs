@@ -7,7 +7,7 @@
 //! implemented.
 
 use assert2::assert;
-use krabka_metadata::{LeaderEpoch, TopicConfigRecord};
+use krabka_metadata::{LeaderEpoch, PartitionElrRecord, PartitionUpdateRecord};
 
 use super::*;
 use crate::{
@@ -56,8 +56,8 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
     assert!(plan.unavailable.is_empty());
     assert!(
         plan.changes
-            == vec![
-                MetadataRecord::V1Partition(PartitionRecord {
+            == vec![MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
+                partition: PartitionRecord {
                     topic: "t".into(),
                     partition: 0,
                     leader: NodeId(1),
@@ -68,17 +68,11 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
                     removing_replicas: vec![],
                     directories: vec![],
                     partition_epoch: 1,
-                }),
-                MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                    topic: "t".into(),
-                    overrides: [
-                        (MIN_INSYNC_REPLICAS.to_string(), "3".to_string()),
-                        (ELIGIBLE_LEADER_REPLICAS.to_string(), "0::3".to_string()),
-                    ]
-                    .into_iter()
-                    .collect(),
-                }),
-            ]
+                },
+                eligible_leader_replicas: Some(vec![]),
+                last_known_elr: Some(vec![NodeId(3)]),
+                recovery_state: None,
+            }),]
     );
 }
 
@@ -96,11 +90,11 @@ async fn a_published_membership_is_withdrawn_without_a_partition_change() {
 
     assert!(
         plan.changes
-            == vec![MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            == vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {
                 topic: "t".into(),
-                overrides: [(ELIGIBLE_LEADER_REPLICAS.to_string(), "0::3".to_string())]
-                    .into_iter()
-                    .collect(),
+                partition: 0,
+                eligible_leader_replicas: vec![],
+                last_known_elr: vec![NodeId(3)],
             })]
     );
 }

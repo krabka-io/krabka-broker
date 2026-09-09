@@ -134,20 +134,15 @@ async fn seed_cancellable_partition(broker: &Broker) {
     records.push(MetadataRecord::V1TopicConfig(
         krabka_metadata::TopicConfigRecord {
             topic: "orders".into(),
-            overrides: [
-                (
-                    crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
-                    "3".to_string(),
-                ),
-                (
-                    crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
-                    "7:2,3:".to_string(),
-                ),
-            ]
+            overrides: [(
+                crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                "3".to_string(),
+            )]
             .into_iter()
             .collect(),
         },
     ));
+    records.extend(crate::elr::state::test_records("orders", "7:2,3:"));
     broker
         .controller
         .submit_change(records)

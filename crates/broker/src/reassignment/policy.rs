@@ -255,42 +255,50 @@ mod tests {
             image.apply(&MetadataRecord::V1TopicConfig(
                 krabka_metadata::TopicConfigRecord {
                     topic: "foo".into(),
-                    overrides: [
-                        (
-                            crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
-                            "3".to_string(),
-                        ),
-                        (
-                            crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
-                            published.to_string(),
-                        ),
-                    ]
+                    overrides: [(
+                        crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                        "3".to_string(),
+                    )]
                     .into_iter()
                     .collect(),
                 },
             ));
+            for record in crate::elr::state::test_records("foo", published) {
+                image.apply(&record);
+            }
             let l = liveness(&[1, 2, 3]).await;
 
             let updates = compute_reassignment_progress(&image, &l).await;
 
-            let mut overrides = std::collections::BTreeMap::from([(
-                crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
-                "3".to_string(),
-            )]);
-            if let Some(value) = want {
-                overrides.insert(
-                    crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
-                    value.to_string(),
-                );
-            }
+            let expected = want.map_or_else(
+                || {
+                    MetadataRecord::V1PartitionElr(krabka_metadata::PartitionElrRecord {
+                        topic: "foo".into(),
+                        partition: 0,
+                        eligible_leader_replicas: vec![],
+                        last_known_elr: vec![],
+                    })
+                },
+                |value| crate::elr::state::test_records("foo", value).remove(0),
+            );
+            let MetadataRecord::V1PartitionElr(expected) = expected else {
+                unreachable!()
+            };
+            let [MetadataRecord::V1PartitionUpdate(update)] = updates.as_slice() else {
+                panic!("{label}: {updates:?}")
+            };
             check!(
-                updates[1..]
-                    == [MetadataRecord::V1TopicConfig(
-                        krabka_metadata::TopicConfigRecord {
-                            topic: "foo".into(),
-                            overrides,
-                        }
-                    )],
+                update.partition.replicas == [NodeId(1), NodeId(2)],
+                "{label}"
+            );
+            check!(update.partition.removing_replicas.is_empty(), "{label}");
+            check!(
+                update.eligible_leader_replicas.as_ref()
+                    == Some(&expected.eligible_leader_replicas),
+                "{label}"
+            );
+            check!(
+                update.last_known_elr.as_ref() == Some(&expected.last_known_elr),
                 "{label}"
             );
         }

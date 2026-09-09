@@ -351,28 +351,21 @@ mod tests {
                 partition_epoch: 4,
             })
         };
+        let mut records = vec![
+            MetadataRecord::V1Topic(TopicRecord {
+                name: "orders".into(),
+                topic_id: uuid::Uuid::from_u128(1),
+                partitions: 2,
+                replication_factor: 3,
+            }),
+            partition(0),
+            partition(1),
+        ];
+        records.extend(crate::elr::state::test_records("orders", elr_config));
         handle
             .broker_arc_for_test()
             .controller
-            .submit_change(vec![
-                MetadataRecord::V1Topic(TopicRecord {
-                    name: "orders".into(),
-                    topic_id: uuid::Uuid::from_u128(1),
-                    partitions: 2,
-                    replication_factor: 3,
-                }),
-                partition(0),
-                partition(1),
-                MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
-                    topic: "orders".into(),
-                    overrides: [(
-                        crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
-                        elr_config.to_string(),
-                    )]
-                    .into_iter()
-                    .collect(),
-                }),
-            ])
+            .submit_change(records)
             .await
             .expect("seed topic + partitions + ELR state");
     }

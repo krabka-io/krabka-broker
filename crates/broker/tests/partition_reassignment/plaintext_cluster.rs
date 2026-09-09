@@ -51,6 +51,31 @@ pub async fn start_three_broker_plaintext_cluster() -> (
     (h1, h2, h3, d1, d2, d3, addr1)
 }
 
+pub async fn start_three_broker_plaintext_cluster_with_log_dirs(
+    extra_log_dirs: &[std::path::PathBuf; 3],
+) -> (
+    BrokerHandle,
+    BrokerHandle,
+    BrokerHandle,
+    TempDir,
+    TempDir,
+    TempDir,
+    SocketAddr,
+) {
+    let cluster = support::start_n_node_with(3, |index, config| {
+        config.extra_log_dirs = vec![extra_log_dirs[index].clone()];
+    })
+    .await
+    .expect("start three-broker JBOD cluster");
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let mut it = cluster.into_iter();
+    let (h1, _cfg1, d1) = it.next().unwrap();
+    let (h2, _cfg2, d2) = it.next().unwrap();
+    let (h3, _cfg3, d3) = it.next().unwrap();
+    let addr1 = h1.listen_addr();
+    (h1, h2, h3, d1, d2, d3, addr1)
+}
+
 /// Polls until the raft controller leader is stable, then returns its listen
 /// address. It tries each handle in `handles` to find the one whose `node_id`
 /// matches the reported raft leader.

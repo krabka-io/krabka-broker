@@ -384,8 +384,7 @@ fn parse_i32_at_least(min: i32, value: &str) -> Result<i32, String> {
 /// Returns `true` if `key` is one of the recognized topic-config keys.
 /// This helps `IncrementalAlterConfigs` DELETE-op validation, which then
 /// needs no sentinel probe value. A controller-written key such as
-/// [`super::WRITE_FREEZE`] or [`super::ELIGIBLE_LEADER_REPLICAS`] is not
-/// recognized: no alter path may write it.
+/// [`super::WRITE_FREEZE`] is not recognized: no alter path may write it.
 pub(crate) fn is_recognized(key: &str) -> bool {
     registry::lookup(ConfigScope::Topic, key).is_some_and(registry::ConfigKey::is_alterable)
 }

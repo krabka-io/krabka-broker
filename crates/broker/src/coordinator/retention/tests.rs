@@ -281,7 +281,7 @@ async fn empty_group_loses_its_offsets_after_the_retention() {
 
     remove_last_member(&broker).await;
 
-    let now_ms = crate::time_util::now_ms() + RETENTION_MS + 1;
+    let now_ms = empty_since_ms(&broker).await + RETENTION_MS + 1;
     let swept = sweep(
         &broker.group_coordinator,
         |_| true,

@@ -5,7 +5,7 @@
 //! offset-aware recovery strategy goes to the Unclean Recovery Manager, and
 //! every other target elects straight out of the metadata image.
 
-use krabka_metadata::MetadataRecord;
+use krabka_metadata::{LeaderRecoveryState, MetadataRecord, PartitionUpdateRecord};
 use krabka_protocol::owned::elect_leaders_response::PartitionResult;
 
 use super::{
@@ -63,7 +63,24 @@ pub(super) async fn elect_one(
     match result {
         Ok(new_pr) => {
             let proposal_id = batch.spend(consumed);
-            batch.records.push(MetadataRecord::V1Partition(new_pr));
+            let recovering = matches!(env.election, ElectionType::Unclean)
+                && !env
+                    .image
+                    .partition_elr(topic, partition)
+                    .0
+                    .contains(&new_pr.leader);
+            if recovering {
+                batch
+                    .records
+                    .push(MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
+                        partition: new_pr,
+                        eligible_leader_replicas: Some(Vec::new()),
+                        last_known_elr: Some(Vec::new()),
+                        recovery_state: Some(LeaderRecoveryState::Recovering),
+                    }));
+            } else {
+                batch.records.push(MetadataRecord::V1Partition(new_pr));
+            }
             if matches!(env.election, ElectionType::Unclean) {
                 batch
                     .applied

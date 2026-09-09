@@ -5,13 +5,13 @@ use std::collections::BTreeMap;
 
 use assert2::assert;
 use krabka_metadata::{
-    LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord,
-    TopicRecord,
+    LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord,
+    TopicConfigRecord, TopicRecord,
 };
 
 use super::withdraw_elr_membership;
 use crate::{
-    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+    config_keys::MIN_INSYNC_REPLICAS,
     elr::state::{PartitionElr, TopicElr},
 };
 
@@ -23,9 +23,6 @@ fn nodes(ids: &[u64]) -> Vec<NodeId> {
 fn topic_records(name: &str, partitions: i32, elr: &str) -> Vec<MetadataRecord> {
     let mut overrides = BTreeMap::new();
     overrides.insert(MIN_INSYNC_REPLICAS.to_string(), "2".to_string());
-    if !elr.is_empty() {
-        overrides.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), elr.to_string());
-    }
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: name.into(),
         topic_id: uuid::Uuid::new_v4(),
@@ -50,6 +47,28 @@ fn topic_records(name: &str, partitions: i32, elr: &str) -> Vec<MetadataRecord> 
         topic: name.into(),
         overrides,
     }));
+    let state = TopicElr::parse(elr);
+    for partition in 0..partitions {
+        let partition_elr = state.partition(partition);
+        if !partition_elr.eligible_leader_replicas.is_empty()
+            || !partition_elr.last_known_elr.is_empty()
+        {
+            records.push(MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: name.into(),
+                partition,
+                eligible_leader_replicas: partition_elr
+                    .eligible_leader_replicas
+                    .into_iter()
+                    .map(|id| NodeId(u64::try_from(id).unwrap()))
+                    .collect(),
+                last_known_elr: partition_elr
+                    .last_known_elr
+                    .into_iter()
+                    .map(|id| NodeId(u64::try_from(id).unwrap()))
+                    .collect(),
+            }));
+        }
+    }
     records
 }
 
@@ -150,7 +169,11 @@ fn the_last_eligible_replica_leaving_tombstones_the_key_and_keeps_other_override
     }
     let overrides = after.topic_config("orders").expect("topic keeps overrides");
     assert!(overrides.get(MIN_INSYNC_REPLICAS) == Some(&"2".to_string()));
-    // Node 2 is still last-known-complete, so the key stays -- with only that
-    // half of the entry.
-    assert!(overrides.get(ELIGIBLE_LEADER_REPLICAS) == Some(&"0::2".to_string()));
+    assert!(
+        TopicElr::of_topic(&after, "orders").partition(0)
+            == PartitionElr {
+                eligible_leader_replicas: vec![],
+                last_known_elr: vec![2],
+            }
+    );
 }

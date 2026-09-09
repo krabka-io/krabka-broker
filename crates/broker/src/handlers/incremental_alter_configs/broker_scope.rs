@@ -22,6 +22,7 @@ pub(in crate::handlers) fn is_known_broker_config(name: &str) -> bool {
             | crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY
             | config_keys::UNCLEAN_LEADER_ELECTION_ENABLE
             | config_keys::UNCLEAN_RECOVERY_STRATEGY
+            | config_keys::MIN_INSYNC_REPLICAS
             | config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS
     )
 }
@@ -33,7 +34,9 @@ pub(in crate::handlers) fn is_known_broker_config(name: &str) -> bool {
 pub(in crate::handlers) fn is_cluster_default_topic_config(name: &str) -> bool {
     matches!(
         name,
-        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE | config_keys::UNCLEAN_RECOVERY_STRATEGY
+        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE
+            | config_keys::UNCLEAN_RECOVERY_STRATEGY
+            | config_keys::MIN_INSYNC_REPLICAS
     )
 }
 
@@ -51,9 +54,9 @@ pub(in crate::handlers) fn validate_broker_config_value(
             .parse::<i64>()
             .map(|_| ())
             .map_err(|e| format!("invalid rate: {e}")),
-        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE | config_keys::UNCLEAN_RECOVERY_STRATEGY => {
-            config_keys::validate_topic_config(name, value)
-        }
+        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE
+        | config_keys::UNCLEAN_RECOVERY_STRATEGY
+        | config_keys::MIN_INSYNC_REPLICAS => config_keys::validate_topic_config(name, value),
         config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS => {
             config_keys::parse_remote_list_offsets_timeout(value).map(|_| ())
         }
@@ -128,7 +131,22 @@ pub(super) fn handle_broker_scoped(
                 }
                 Some(v)
             }
-            OP_DELETE => None,
+            OP_DELETE => {
+                if cfg.name == config_keys::MIN_INSYNC_REPLICAS
+                    && image.finalized_feature(crate::features::ELR_VERSION) == Some(1)
+                    && image
+                        .broker_config(node_id)
+                        .is_some_and(|configs| configs.contains_key(&cfg.name))
+                {
+                    out.error_code = codes::INVALID_CONFIG;
+                    out.error_message = Some(
+                        "cannot remove the cluster-wide min.insync.replicas while ELR is enabled"
+                            .into(),
+                    );
+                    return;
+                }
+                None
+            }
             _ => {
                 out.error_code = codes::INVALID_REQUEST;
                 out.error_message = Some(format!(

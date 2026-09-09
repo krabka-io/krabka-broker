@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use krabka_metadata::{MetadataImage, NodeId};
 
-use crate::config_keys::ELIGIBLE_LEADER_REPLICAS;
+const LEGACY_ELR_CONFIG: &str = "krabka.elr";
 
 /// One partition's ELR state, in the wire types the response uses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -52,10 +52,26 @@ impl TopicElr {
     /// partitions in a single pass and each lookup here is a config-map hit
     /// plus a parse of the whole value.
     pub(crate) fn of_topic(image: &MetadataImage, topic: &str) -> Self {
-        image
-            .topic_config(topic)
-            .and_then(|configs| configs.get(ELIGIBLE_LEADER_REPLICAS))
-            .map_or_else(Self::default, |value| Self::parse(value))
+        let mut state = if crate::features::feature_enabled(image, crate::features::ELR_VERSION, 1)
+        {
+            image
+                .topic_config(topic)
+                .and_then(|config| config.get(LEGACY_ELR_CONFIG))
+                .map_or_else(Self::default, |value| Self::parse(value))
+        } else {
+            Self::default()
+        };
+        for partition in image.partitions_of(topic) {
+            let (eligible, last_known) = image.partition_elr(topic, partition.partition);
+            let dedicated = PartitionElr {
+                eligible_leader_replicas: wire_node_ids(eligible.iter().copied()),
+                last_known_elr: wire_node_ids(last_known.iter().copied()),
+            };
+            if !dedicated.is_empty() {
+                state.0.insert(partition.partition, dedicated);
+            }
+        }
+        state
     }
 
     /// Parse the [`ELIGIBLE_LEADER_REPLICAS`] config value.
@@ -96,6 +112,7 @@ impl TopicElr {
     /// than storing it. Entries come out in partition order because the map is
     /// ordered, so one state renders to one string and a re-publication of
     /// unchanged state compares equal to what the image already holds.
+    #[cfg(test)]
     pub(crate) fn render(&self) -> String {
         self.0
             .iter()
@@ -116,15 +133,20 @@ impl TopicElr {
         self.0.get(&partition).cloned().unwrap_or_default()
     }
 
-    /// Replace one partition's state. A partition with neither set leaves the
-    /// value, so a topic that recovers renders back to the empty string and
-    /// the key is tombstoned rather than left holding `0::`.
-    pub(crate) fn set_partition(&mut self, partition: i32, elr: PartitionElr) {
-        if elr.is_empty() {
-            self.0.remove(&partition);
-        } else {
-            self.0.insert(partition, elr);
-        }
+    pub(crate) fn records(&self, topic: &str) -> Vec<krabka_metadata::MetadataRecord> {
+        self.0
+            .iter()
+            .map(|(partition, elr)| {
+                krabka_metadata::MetadataRecord::V1PartitionElr(
+                    krabka_metadata::PartitionElrRecord {
+                        topic: topic.to_owned(),
+                        partition: *partition,
+                        eligible_leader_replicas: metadata_node_ids(&elr.eligible_leader_replicas),
+                        last_known_elr: metadata_node_ids(&elr.last_known_elr),
+                    },
+                )
+            })
+            .collect()
     }
 
     /// Move `node` out of every partition's eligible set and into its
@@ -137,6 +159,7 @@ impl TopicElr {
     /// sets through `uncleanShutdownReplicas`, which
     /// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts from
     /// `targetElr` while `targetLastKnownElr` keeps it.
+    #[cfg(test)]
     pub(crate) fn demote_node(&mut self, node: i32) -> bool {
         let mut moved = false;
         for elr in self.0.values_mut() {
@@ -154,7 +177,43 @@ impl TopicElr {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_records(topic: &str, value: &str) -> Vec<krabka_metadata::MetadataRecord> {
+    TopicElr::parse(value).records(topic)
+}
+
+pub(crate) fn legacy_elr(image: &MetadataImage, topic: &str) -> Option<TopicElr> {
+    image
+        .topic_config(topic)?
+        .get(LEGACY_ELR_CONFIG)
+        .map(|value| TopicElr::parse(value))
+}
+
+pub(crate) fn without_legacy_elr(
+    image: &MetadataImage,
+    topic: &str,
+    replacement: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<krabka_metadata::MetadataRecord> {
+    let mut overrides = replacement
+        .cloned()
+        .or_else(|| image.topic_config(topic).cloned())?;
+    overrides.remove(LEGACY_ELR_CONFIG)?;
+    Some(krabka_metadata::MetadataRecord::V1TopicConfig(
+        krabka_metadata::TopicConfigRecord {
+            topic: topic.to_owned(),
+            overrides,
+        },
+    ))
+}
+
+fn metadata_node_ids(ids: &[i32]) -> Vec<NodeId> {
+    ids.iter()
+        .filter_map(|id| u64::try_from(*id).ok().map(NodeId))
+        .collect()
+}
+
 /// Render one node-id list.
+#[cfg(test)]
 fn render_ids(ids: &[i32]) -> String {
     ids.iter()
         .map(ToString::to_string)

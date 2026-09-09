@@ -32,7 +32,7 @@ use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
     broker::Broker,
     codes,
-    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+    config_keys::MIN_INSYNC_REPLICAS,
     test_support::{
         decode_response, encode_request, request_context, start_broker_with_authorizer,
     },
@@ -139,6 +139,11 @@ async fn wait_for_leader(broker: &Broker) {
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+async fn mark_broker_3_unavailable(broker: &Broker) {
+    broker.liveness.record_heartbeat(3).await;
+    broker.liveness.apply_fencing(3, true, true).await;
 }
 
 fn principal() -> Principal {
@@ -385,23 +390,25 @@ async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
         .submit_change(seed)
         .await
         .expect("seed orders");
+    mark_broker_3_unavailable(&broker).await;
 
     // Broker 3 is registered and in a healthy ISR, so nothing is published
-    // about it and nothing about it is offline.
-    assert!(describe_partition(&broker).await == row(&[1, 2, 3], &[], &[], &[2]));
+    // about it. It is explicitly fenced so the returning incarnation is
+    // deterministic even when coverage instrumentation delays this test.
+    assert!(describe_partition(&broker).await == row(&[1, 2, 3], &[], &[], &[2, 3]));
 
     let response = register_broker_3(&broker, 2).await;
     assert!(response.error_code == codes::NONE, "{response:?}");
 
     // The registration itself takes broker 3 out of the ISR. The ISR that is
     // left still meets `min.insync.replicas`, so nothing is eligible yet.
-    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[], &[2]));
+    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[], &[2, 3]));
 
     // The change that used to re-derive the membership. Broker 2 left an ISR
     // that met min ISR, so it is eligible; broker 3 is no longer in any ISR
     // the derivation reads, so it is not.
     alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == row(&[1], &[2], &[], &[2]));
+    assert!(describe_partition(&broker).await == row(&[1], &[2], &[], &[2, 3]));
 
     handle.shutdown().await;
 }
@@ -430,16 +437,17 @@ async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
         .submit_change(seed)
         .await
         .expect("seed orders");
+    mark_broker_3_unavailable(&broker).await;
 
     let response = register_broker_3(&broker, 2).await;
     assert!(response.error_code == codes::NONE, "{response:?}");
 
-    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[3], &[2]));
+    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[3], &[2, 3]));
 
     // And it stays out of every later derivation, while broker 2 -- which
     // left the ISR without its log being called into question -- goes in.
     alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == row(&[1], &[2], &[3], &[2]));
+    assert!(describe_partition(&broker).await == row(&[1], &[2], &[3], &[2, 3]));
 
     handle.shutdown().await;
 }
@@ -478,15 +486,4 @@ fn the_published_state_round_trips_through_a_snapshot() {
     }
 
     assert!(TopicElr::of_topic(&restored, TOPIC).partition(0) == before);
-    // The value itself survives byte for byte, not just its projection: a
-    // snapshot that rewrote it would still project correctly today and drift
-    // the first time the grammar grows.
-    assert!(
-        restored
-            .topic_config(TOPIC)
-            .and_then(|configs| configs.get(ELIGIBLE_LEADER_REPLICAS))
-            == image
-                .topic_config(TOPIC)
-                .and_then(|configs| configs.get(ELIGIBLE_LEADER_REPLICAS))
-    );
 }

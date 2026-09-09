@@ -11,6 +11,7 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
+use krabka_metadata::{LeaderRecoveryState, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -213,6 +214,80 @@ async fn broker_death_elects_new_leader() {
     // Clean up surviving brokers.
     for (h, _, _) in cluster {
         h.shutdown().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_failover_recovers_after_a_real_broker_restart() {
+    let _g = cluster_lock().lock().await;
+    let mut cluster = support::start_n_node_with_retry(3).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let bootstrap = cluster[0].1.listen_addr.to_string();
+    create_topic(&cluster[0].0, &bootstrap, "kip704-restart", 3).await;
+
+    cluster[0]
+        .0
+        .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "kip704-restart".into(),
+            overrides: [("unclean.leader.election.enable".into(), "true".into())]
+                .into_iter()
+                .collect(),
+        }))
+        .await
+        .expect("enable unclean election");
+    let mut partition = cluster[0]
+        .0
+        .partition_record_for_test("kip704-restart", 0)
+        .expect("partition");
+    let victim = partition.leader;
+    partition.isr = vec![victim];
+    cluster[0]
+        .0
+        .submit_metadata_record_for_test(MetadataRecord::V1Partition(partition))
+        .await
+        .expect("make the leader the only ISR member");
+    cluster[0]
+        .0
+        .wait_for_image(|image| {
+            image
+                .partition("kip704-restart", 0)
+                .is_some_and(|partition| partition.isr == [victim])
+        })
+        .await;
+
+    let victim_idx = cluster
+        .iter()
+        .position(|(_, config, _)| config.node_id == victim)
+        .expect("leader broker");
+    let (dead, mut reborn_config, dead_dir) = cluster.remove(victim_idx);
+    let survivor = &cluster[0].0;
+    tokio::join!(
+        survivor.wait_for_image(|image| {
+            image.leader_recovery_state("kip704-restart", 0) == LeaderRecoveryState::Recovering
+        }),
+        dead.shutdown()
+    );
+    survivor
+        .wait_for_image(|image| {
+            image.leader_recovery_state("kip704-restart", 0) == LeaderRecoveryState::Recovered
+                && image
+                    .partition("kip704-restart", 0)
+                    .is_some_and(|partition| partition.leader != victim)
+        })
+        .await;
+
+    reborn_config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    let reborn = support::start_reusing_addrs(&reborn_config, "KIP-704 broker restart").await;
+    reborn
+        .wait_for_image(|image| {
+            image.leader_recovery_state("kip704-restart", 0) == LeaderRecoveryState::Recovered
+        })
+        .await;
+
+    reborn.shutdown().await;
+    drop(dead_dir);
+    for (handle, _, _) in cluster {
+        handle.shutdown().await;
     }
 }
 

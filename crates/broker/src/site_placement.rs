@@ -63,14 +63,18 @@ struct SiteTable {
 
 impl SiteTable {
     /// Groups the sorted brokers by site.
-    fn new(sorted: &[&SiteBrokerView]) -> Self {
+    fn new(sorted: &[&SiteBrokerView], place_unracked: bool) -> Self {
         let mut names: Vec<&str> = Vec::new();
         let mut sites: Vec<Vec<usize>> = Vec::new();
         let mut site_of: Vec<Option<usize>> = Vec::new();
         for (index, broker) in sorted.iter().enumerate() {
-            let Some(name) = broker.site.as_deref() else {
-                site_of.push(None);
-                continue;
+            let name = match broker.site.as_deref() {
+                Some(name) => name,
+                None if place_unracked => "",
+                None => {
+                    site_of.push(None);
+                    continue;
+                }
             };
             let known = names.iter().position(|candidate| *candidate == name);
             let site = if let Some(site) = known {
@@ -144,7 +148,11 @@ pub(crate) fn stretch_replicas(
         return round_robin_replicas(&node_ids, num_partitions, replication_factor);
     }
 
-    let table = SiteTable::new(&sorted);
+    // Kafka treats every broker without `broker.rack` as a member of one
+    // anonymous rack in an ordinary mixed-rack cluster. An explicit stretch
+    // profile stays fail-closed: its preferred-site marker means an unracked
+    // broker cannot satisfy the declared site topology.
+    let table = SiteTable::new(&sorted, preferred_site.is_none());
     let leaders = leader_candidates(&sorted, &table, preferred_site);
     (0..partition_count)
         .map(|partition| {

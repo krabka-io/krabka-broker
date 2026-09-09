@@ -74,7 +74,18 @@ pub(super) fn materialize_partition_with_replication_target(
     // under this lock too, so two concurrent materializations of the same
     // partition can never pick two different log dirs.
     partitions.materialize_if_vacant(topic, PartitionIndex(partition), || {
-        let dir = crate::log_dir::place_partition_dir(log_dirs, topic, partition);
+        let partition_index = PartitionIndex(partition);
+        let preferred = topic_id.and_then(|id| partitions.preferred_log_dir(id, partition_index));
+        if preferred
+            .as_ref()
+            .is_some_and(|dir| log_dir_status.is_offline(dir))
+        {
+            return Err("preferred log directory is offline".to_owned());
+        }
+        let dir = preferred.as_ref().map_or_else(
+            || crate::log_dir::place_partition_dir(log_dirs, topic, partition),
+            |log_dir| crate::log_dir::partition_dir(log_dir, topic, partition),
+        );
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
         let open_config = crate::diskless::recovery::open_config(log_config, diskless);
         let mut log = Log::open(&dir, open_config).map_err(|e| format!("Log::open: {e}"))?;
@@ -127,13 +138,20 @@ pub(super) fn materialize_partition_with_replication_target(
             wal_shards,
             sequencer,
         };
-        match initial_target {
+        let partition = match initial_target {
             Some(target) => {
                 crate::broker::try_spawn_partition_with_replication_target(spawn, target)
             }
             None => crate::broker::try_spawn_partition_with_sequencer(spawn),
         }
-        .map_err(|e| format!("spawn partition: {e}"))
+        .map_err(|e| format!("spawn partition: {e}"))?;
+        if preferred.is_some() {
+            partitions.clear_preferred_log_dir(
+                topic_id.expect("a preference is keyed by topic id"),
+                partition_index,
+            );
+        }
+        Ok(partition)
     })
 }
 
@@ -241,6 +259,47 @@ mod tests {
         .await;
         let st = part.replica_state.lock().await;
         assert!(st.isr.len() == 3);
+    }
+
+    #[tokio::test]
+    async fn materialization_consumes_precreation_log_dir_preference() {
+        let first = tempfile::tempdir().expect("first log dir");
+        let preferred = tempfile::tempdir().expect("preferred log dir");
+        let partitions = Arc::new(PartitionRegistry::new());
+        let topic_id = uuid::Uuid::from_u128(1);
+        partitions.set_preferred_log_dir(
+            topic_id,
+            PartitionIndex(0),
+            preferred.path().to_path_buf(),
+        );
+
+        materialize_partition(MaterializePartitionConfig {
+            partitions: &partitions,
+            topic: "t",
+            topic_id: Some(topic_id),
+            partition: 0,
+            log_dirs: &[first.path().to_path_buf(), preferred.path().to_path_buf()],
+            log_config: &LogConfig::default(),
+            log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
+            producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
+            producer_id_expiration: hours(24),
+            max_produce_group: 1_024,
+            partition_writer_queue_depth: 64,
+            diskless_wal_local_replica_count: 3,
+            diskless: false,
+            hot_tail: None,
+            wal_shards: None,
+            sequencer: None,
+        })
+        .expect("materialize");
+
+        let partition = partitions.get("t", PartitionIndex(0)).expect("partition");
+        assert!(partition.log_dir.load_full().as_path() == preferred.path());
+        assert!(
+            partitions
+                .preferred_log_dir(topic_id, PartitionIndex(0))
+                .is_none()
+        );
     }
 
     #[tokio::test]

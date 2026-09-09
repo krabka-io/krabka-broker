@@ -7,7 +7,9 @@
 //! `PartitionRecord` change or an error response, so the whole per-row
 //! decision belongs in one module.
 
-use krabka_metadata::{MetadataRecord, PartitionRecord};
+use krabka_metadata::{
+    LeaderRecoveryState, MetadataRecord, PartitionRecord, PartitionRecoveryRecord,
+};
 use krabka_protocol::{
     UnknownTaggedFields, owned::alter_partition_response::PartitionData as RespPartitionData,
 };
@@ -22,11 +24,13 @@ use crate::codes;
 /// carries the v3 field. A v3 request leaves `new_isr` empty and fills
 /// `new_isr_with_epochs`. When `new_isr` is empty, this function therefore
 /// takes the broker IDs from `new_isr_with_epochs`.
-pub(super) fn handle_partition(
+#[allow(clippy::too_many_arguments)] // Mirrors one AlterPartition request row plus output batch.
+pub(super) fn handle_partition_with_recovery(
     image: &krabka_metadata::MetadataImage,
     topic_name: Option<&str>,
     partition_index: i32,
     req_leader_epoch: i32,
+    req_recovery_state: i8,
     new_isr_i32: &[i32],
     new_isr_with_epochs: &[krabka_protocol::owned::alter_partition_request::BrokerState],
     changes: &mut Vec<MetadataRecord>,
@@ -38,6 +42,7 @@ pub(super) fn handle_partition(
             0,
             0,
             &[],
+            0,
         );
     };
     let Some(part_rec) = image.partition(topic_name, partition_index) else {
@@ -47,6 +52,7 @@ pub(super) fn handle_partition(
             0,
             0,
             &[],
+            0,
         );
     };
 
@@ -56,6 +62,8 @@ pub(super) fn handle_partition(
         .iter()
         .map(|n| i32::try_from(n.0).unwrap_or(0))
         .collect();
+    let current_recovery_state = image.leader_recovery_state(topic_name, partition_index);
+    let current_recovery_i8 = current_recovery_state as i8;
 
     // Resolve the effective ISR from the request. Protocol v2 sends
     // `new_isr: Vec<i32>`; v3 sends `new_isr_with_epochs` instead and
@@ -104,6 +112,7 @@ pub(super) fn handle_partition(
                 leader_i32,
                 part_rec.leader_epoch.0,
                 &current_isr_i32,
+                current_recovery_i8,
             );
         }
         IsrAdmission::InvalidProposal => {
@@ -113,6 +122,7 @@ pub(super) fn handle_partition(
                 leader_i32,
                 part_rec.leader_epoch.0,
                 &current_isr_i32,
+                current_recovery_i8,
             );
         }
         IsrAdmission::IneligibleReplica => {
@@ -122,10 +132,38 @@ pub(super) fn handle_partition(
                 leader_i32,
                 part_rec.leader_epoch.0,
                 &current_isr_i32,
+                current_recovery_i8,
             );
         }
         IsrAdmission::Admit => proposed_isr.expect("verified ISR proposal contains valid IDs"),
     };
+
+    let requested_recovery_state = match req_recovery_state {
+        0 => LeaderRecoveryState::Recovered,
+        1 => LeaderRecoveryState::Recovering,
+        _ => {
+            return error_part(
+                partition_index,
+                codes::INVALID_REQUEST,
+                leader_i32,
+                part_rec.leader_epoch.0,
+                &current_isr_i32,
+                current_recovery_i8,
+            );
+        }
+    };
+    if requested_recovery_state == LeaderRecoveryState::Recovering
+        && (proposed_isr.len() > 1 || current_recovery_state == LeaderRecoveryState::Recovered)
+    {
+        return error_part(
+            partition_index,
+            codes::INVALID_REQUEST,
+            leader_i32,
+            part_rec.leader_epoch.0,
+            &current_isr_i32,
+            current_recovery_i8,
+        );
+    }
 
     // Success: submit the ISR change.
     let Some(new_partition_epoch) = crate::metadata_epoch::next_i32(part_rec.partition_epoch)
@@ -136,6 +174,7 @@ pub(super) fn handle_partition(
             leader_i32,
             part_rec.leader_epoch.0,
             &current_isr_i32,
+            current_recovery_i8,
         );
     };
     changes.push(MetadataRecord::V1Partition(PartitionRecord {
@@ -150,6 +189,15 @@ pub(super) fn handle_partition(
         directories: part_rec.directories.clone(),
         partition_epoch: new_partition_epoch,
     }));
+    if requested_recovery_state != current_recovery_state {
+        changes.push(MetadataRecord::V1PartitionRecovery(
+            PartitionRecoveryRecord {
+                topic: topic_name.to_string(),
+                partition: partition_index,
+                state: requested_recovery_state,
+            },
+        ));
+    }
 
     RespPartitionData {
         partition_index,
@@ -157,28 +205,46 @@ pub(super) fn handle_partition(
         leader_id: leader_i32,
         leader_epoch: part_rec.leader_epoch.0,
         isr: effective_isr_i32.to_vec(),
-        leader_recovery_state: 0,
+        leader_recovery_state: requested_recovery_state as i8,
         partition_epoch: new_partition_epoch,
         unknown_tagged_fields: UnknownTaggedFields::default(),
     }
 }
 
+#[cfg(test)]
+fn handle_partition(
+    image: &krabka_metadata::MetadataImage,
+    topic_name: Option<&str>,
+    partition_index: i32,
+    req_leader_epoch: i32,
+    new_isr_i32: &[i32],
+    new_isr_with_epochs: &[krabka_protocol::owned::alter_partition_request::BrokerState],
+    changes: &mut Vec<MetadataRecord>,
+) -> RespPartitionData {
+    handle_partition_with_recovery(
+        image,
+        topic_name,
+        partition_index,
+        req_leader_epoch,
+        LeaderRecoveryState::Recovered as i8,
+        new_isr_i32,
+        new_isr_with_epochs,
+        changes,
+    )
+}
+
 fn error_part(
     partition_index: i32,
     error_code: i16,
-    leader_id: i32,
-    leader_epoch: i32,
-    isr: &[i32],
+    _leader_id: i32,
+    _leader_epoch: i32,
+    _isr: &[i32],
+    _leader_recovery_state: i8,
 ) -> RespPartitionData {
     RespPartitionData {
         partition_index,
         error_code,
-        leader_id,
-        leader_epoch,
-        isr: isr.to_vec(),
-        leader_recovery_state: 0,
-        partition_epoch: 0,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
+        ..Default::default()
     }
 }
 
@@ -258,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn error_response_preserves_non_default_partition_fields() {
+    fn error_response_matches_kafkas_default_fields() {
         let image = image_with_partition(
             &PartitionFixture {
                 partition: 7,
@@ -276,12 +342,7 @@ mod tests {
         let expected = RespPartitionData {
             partition_index: 7,
             error_code: codes::FENCED_LEADER_EPOCH,
-            leader_id: 2,
-            leader_epoch: 9,
-            isr: vec![2, 4],
-            leader_recovery_state: 0,
-            partition_epoch: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
+            ..Default::default()
         };
         assert!(resp == expected);
         assert!(changes.is_empty());
@@ -376,5 +437,54 @@ mod tests {
 
         assert!(resp.error_code == codes::INVALID_REQUEST);
         assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn recovering_partition_cannot_expand_until_leader_reports_recovered() {
+        let mut image = image_with(&[(1, 10), (2, 20)]);
+        image.apply(&MetadataRecord::V1PartitionRecovery(
+            PartitionRecoveryRecord {
+                topic: "t".into(),
+                partition: 0,
+                state: LeaderRecoveryState::Recovering,
+            },
+        ));
+        let mut changes = Vec::new();
+
+        let rejected = handle_partition_with_recovery(
+            &image,
+            Some("t"),
+            0,
+            5,
+            LeaderRecoveryState::Recovering as i8,
+            &[1, 2],
+            &[],
+            &mut changes,
+        );
+        assert!(rejected.error_code == codes::INVALID_REQUEST);
+        assert!(rejected.leader_recovery_state == LeaderRecoveryState::Recovered as i8);
+        assert!(changes.is_empty());
+
+        let recovered = handle_partition_with_recovery(
+            &image,
+            Some("t"),
+            0,
+            5,
+            LeaderRecoveryState::Recovered as i8,
+            &[1],
+            &[],
+            &mut changes,
+        );
+        assert!(recovered.error_code == codes::NONE);
+        assert!(matches!(
+            changes.as_slice(),
+            [
+                MetadataRecord::V1Partition(_),
+                MetadataRecord::V1PartitionRecovery(PartitionRecoveryRecord {
+                    state: LeaderRecoveryState::Recovered,
+                    ..
+                })
+            ]
+        ));
     }
 }

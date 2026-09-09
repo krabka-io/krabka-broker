@@ -1,10 +1,11 @@
 //! Parsing and projection of the KIP-966 ELR state.
 
 use assert2::assert;
-use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
+use krabka_metadata::{
+    MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
+};
 
 use super::{PartitionElr, TopicElr};
-use crate::config_keys::ELIGIBLE_LEADER_REPLICAS;
 
 fn elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
     PartitionElr {
@@ -47,21 +48,46 @@ fn parse_projects_each_partition_of_the_config_value() {
     }
 }
 
-/// The projection reads the topic config out of the image, so a topic the
+/// The projection reads partition metadata out of the image, so a topic the
 /// controller has never published ELR for answers with empty lists.
 #[test]
 fn of_topic_reads_the_published_config_and_defaults_to_no_elr() {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
         topic: "orders".into(),
-        overrides: [(ELIGIBLE_LEADER_REPLICAS.to_string(), "0:2,3:4".to_string())]
-            .into_iter()
-            .collect(),
+        partition: 0,
+        ..Default::default()
+    }));
+    image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+        topic: "orders".into(),
+        partition: 0,
+        eligible_leader_replicas: vec![NodeId(2), NodeId(3)],
+        last_known_elr: vec![NodeId(4)],
     }));
 
     assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[2, 3], &[4]));
     assert!(TopicElr::of_topic(&image, "orders").partition(1) == elr(&[], &[]));
     assert!(TopicElr::of_topic(&image, "payments").partition(0) == elr(&[], &[]));
+}
+
+#[test]
+fn of_topic_reads_legacy_elr_until_it_is_migrated() {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        topic: "orders".into(),
+        partition: 0,
+        ..Default::default()
+    }));
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "orders".into(),
+        overrides: [("krabka.elr".to_owned(), "0:2,3:4".to_owned())]
+            .into_iter()
+            .collect(),
+    }));
+
+    assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[], &[]));
+    crate::test_support::finalize_elr_version(&mut image);
+    assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[2, 3], &[4]));
 }
 
 /// A broker that can no longer be trusted to hold every committed record

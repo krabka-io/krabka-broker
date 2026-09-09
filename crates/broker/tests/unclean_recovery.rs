@@ -58,7 +58,9 @@ use std::{io, net::SocketAddr, time::Duration};
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
 use krabka_broker::BrokerHandle;
-use krabka_metadata::{BrokerConfigRecord, MetadataRecord, PartitionRecord, TopicConfigRecord};
+use krabka_metadata::{
+    BrokerConfigRecord, MetadataRecord, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
+};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -74,11 +76,6 @@ use tokio::{
 mod support;
 
 const ELECT_LEADERS_VERSION: i16 = 2;
-
-/// The controller-managed topic config that carries KIP-966 ELR state. It is
-/// `crate::config_keys::ELIGIBLE_LEADER_REPLICAS`, which a test crate cannot
-/// name.
-const ELR_CONFIG_KEY: &str = "krabka.elr";
 
 /// The controller-managed broker config that carries the witness role. It is
 /// `crate::config_keys::BROKER_WITNESS`, which a test crate cannot name, and a
@@ -273,21 +270,16 @@ async fn wait_partition_isr_only(
         .await;
 }
 
-/// The topic's whole controller-managed override map: the recovery strategy
-/// that routes an UNCLEAN election through the URM, plus the published
-/// eligible-leader-replica value when the case has one.
-fn topic_config(topic: &str, elr: Option<&str>) -> MetadataRecord {
-    let mut overrides = std::collections::BTreeMap::new();
-    overrides.insert(
-        "unclean.recovery.strategy".to_string(),
-        "Aggressive".to_string(),
-    );
-    if let Some(elr) = elr {
-        overrides.insert(ELR_CONFIG_KEY.to_string(), elr.to_string());
-    }
+/// The recovery strategy that routes an UNCLEAN election through the URM.
+fn topic_config(topic: &str) -> MetadataRecord {
     MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: topic.to_string(),
-        overrides,
+        overrides: [(
+            "unclean.recovery.strategy".to_string(),
+            "Aggressive".to_string(),
+        )]
+        .into_iter()
+        .collect(),
     })
 }
 
@@ -309,8 +301,7 @@ async fn unclean_recovery_elects_longest_log_replica() {
 /// record, and broker 2's longer log is only the longest one that answered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unclean_recovery_prefers_an_eligible_leader_replica() {
-    // `krabka.elr` grammar: partition 0 has ELR {3} and no last-known ELR.
-    run_unclean_recovery(Some("0:3:"), None, 3).await;
+    run_unclean_recovery(Some("3"), None, 3).await;
 }
 
 /// A witness replicates the partition and can be published as an eligible
@@ -322,7 +313,7 @@ async fn unclean_recovery_prefers_an_eligible_leader_replica() {
 /// reported as free.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unclean_recovery_never_elects_a_witness_from_the_elr() {
-    run_unclean_recovery(Some("0:3:"), Some(3), 2).await;
+    run_unclean_recovery(Some("3"), Some(3), 2).await;
 }
 
 /// Leaves partition 0 of `topic` offline on an RF=3 cluster, with the three
@@ -365,7 +356,7 @@ async fn offline_partition_with_diverged_logs(
 
     // ── Set unclean.recovery.strategy=Aggressive so UNCLEAN routes through
     //    the offset-aware Unclean Recovery Manager. ──
-    h1.submit_metadata_record_for_test(topic_config(topic, None))
+    h1.submit_metadata_record_for_test(topic_config(topic))
         .await
         .expect("set unclean.recovery.strategy=Aggressive");
 
@@ -472,21 +463,28 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
         .await;
     }
 
-    // ── Publish the eligible-leader-replica set, if this case has one. It
-    //    goes in last: a `V1TopicConfig` replaces the topic's whole override
-    //    map, and writing it after the partition is already offline keeps any
-    //    controller path that recomputes ELR from clearing it first. The
-    //    record carries the recovery strategy along with it for the same
-    //    reason. ──
+    // ── Publish the eligible-leader-replica set, if this case has one. ──
     if let Some(elr) = elr {
-        h1.submit_metadata_record_for_test(topic_config(topic, Some(elr)))
-            .await
-            .expect("publish the eligible leader replicas");
-        // Event-driven: await the published value in the image the URM reads.
+        let eligible_leader_replicas = elr
+            .split(',')
+            .map(|id| krabka_broker::NodeId(id.parse().expect("ELR broker id")))
+            .collect();
+        h1.submit_metadata_record_for_test(MetadataRecord::V1PartitionElr(PartitionElrRecord {
+            topic: topic.to_string(),
+            partition: 0,
+            eligible_leader_replicas,
+            last_known_elr: vec![],
+        }))
+        .await
+        .expect("publish the eligible leader replicas");
         h1.wait_for_image(|img| {
-            img.topic_config(topic)
-                .and_then(|configs| configs.get(ELR_CONFIG_KEY))
-                .is_some_and(|value| value == elr)
+            img.partition_elr(topic, 0)
+                .0
+                .iter()
+                .map(|id| id.get().to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+                == elr
         })
         .await;
     }

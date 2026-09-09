@@ -139,8 +139,9 @@ mod tests {
     use assert2::check;
     use bytes::{BufMut, BytesMut};
     use krabka_metadata::{
-        FeatureLevelRecord, LeaderEpoch, MetadataRecord, NodeId, PartitionRecord, TopicRecord,
-        Voter, VoterEndpoint, VoterSet, voters::KRaftVersionRange,
+        FeatureLevelRecord, LeaderEpoch, LeaderRecoveryState, MetadataRecord, NodeId,
+        PartitionElrRecord, PartitionRecord, PartitionRecoveryRecord, TopicRecord, Voter,
+        VoterEndpoint, VoterSet, voters::KRaftVersionRange,
     };
     use krabka_protocol::{
         owned::{
@@ -199,6 +200,19 @@ mod tests {
                 partition_epoch: 0,
             }));
         }
+        image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+            topic: "orders".into(),
+            partition: 0,
+            eligible_leader_replicas: vec![NodeId(2)],
+            last_known_elr: vec![],
+        }));
+        image.apply(&MetadataRecord::V1PartitionRecovery(
+            PartitionRecoveryRecord {
+                topic: "orders".into(),
+                partition: 0,
+                state: LeaderRecoveryState::Recovering,
+            },
+        ));
 
         let bytes = SnapshotWriter::serialize(&image, 1_700_000_000_000).unwrap();
         let records = SnapshotReader::read(&bytes).unwrap().metadata_records;

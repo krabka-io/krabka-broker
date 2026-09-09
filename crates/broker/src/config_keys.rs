@@ -82,12 +82,10 @@
 //! them, so [`validate_config_combination`] checks all four rules over a whole
 //! override map.
 //!
-//! Two topic keys sit outside the whitelist, because the controller is their
-//! only writer. KFC-9's [`WRITE_FREEZE`] is synthesised for `DescribeConfigs`
-//! and is never stored. KIP-966's [`ELIGIBLE_LEADER_REPLICAS`] is stored, but
-//! only the controller's ISR transitions write it and only
-//! `DescribeTopicPartitions` reads it. [`validate_topic_config`] accepts
-//! neither and both alter paths refuse them by name. See
+//! KFC-9's [`WRITE_FREEZE`] sits outside the whitelist because only the
+//! controller writes it. It is synthesised for `DescribeConfigs` and never
+//! stored. KIP-966 ELR state lives in partition metadata, not config.
+//! [`validate_topic_config`] does not accept the freeze key. See
 //! [`topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
 //!
 //! The broker rejects unknown keys with `INVALID_CONFIG`.
@@ -117,6 +115,9 @@ mod schema;
 mod topic_scope;
 mod validation;
 
+#[cfg(test)]
+pub(crate) use topic_scope::ELIGIBLE_LEADER_REPLICAS;
+
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
 // Reached only from #[cfg(test)] code -- the produce delivery/throttle tests and
 // the alter_configs tests -- so an ungated re-export is dead in a normal build.
@@ -141,7 +142,7 @@ pub(crate) use self::{
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
     message_size::resolve_max_message_bytes,
-    min_isr::{configured_min_insync_replicas, effective_min_insync_replicas},
+    min_isr::{clear_elr_records, configured_min_insync_replicas, effective_min_insync_replicas},
     qos::resolve_qos_tier,
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY,
@@ -149,8 +150,7 @@ pub(crate) use self::{
     },
     schema::resolve_schema_validation,
     topic_scope::{
-        ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE, controller_managed_topic_config_message,
-        is_controller_managed_topic_config,
+        WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
     },
     validation::{
         is_recognized, parse_compression_type, validate_config_combination,

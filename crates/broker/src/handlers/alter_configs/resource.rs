@@ -84,7 +84,7 @@ pub(super) async fn process_resource(
         return out;
     }
 
-    let records = match resource.resource_type {
+    let mut records = match resource.resource_type {
         RESOURCE_TYPE_TOPIC => {
             match topic_config_record(&resource, image, &broker.config.topic_policy) {
                 Ok(record) => vec![record],
@@ -105,6 +105,30 @@ pub(super) async fn process_resource(
         },
         _ => unreachable!("resource type passed ACL dispatch"),
     };
+    let min_isr_changed = records.iter().any(|record| match record {
+        krabka_metadata::MetadataRecord::V1TopicConfig(config) => {
+            image
+                .topic_config(&config.topic)
+                .and_then(|current| current.get(crate::config_keys::MIN_INSYNC_REPLICAS))
+                != config
+                    .overrides
+                    .get(crate::config_keys::MIN_INSYNC_REPLICAS)
+        }
+        krabka_metadata::MetadataRecord::V1BrokerConfig(config) => {
+            config.node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+                && config.config_name == crate::config_keys::MIN_INSYNC_REPLICAS
+                && image
+                    .broker_config(config.node_id)
+                    .and_then(|current| current.get(&config.config_name))
+                    != config.config_value.as_ref()
+        }
+        _ => false,
+    });
+    if min_isr_changed {
+        let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
+            .then_some(resource.resource_name.as_str());
+        records.extend(crate::config_keys::clear_elr_records(image, topic));
+    }
     if validate_only {
         // Validation pass already happened above (per-config loop). Nothing
         // to submit; the response already carries the per-resource result

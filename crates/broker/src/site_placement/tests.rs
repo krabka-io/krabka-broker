@@ -214,20 +214,24 @@ fn a_cluster_of_witnesses_cannot_lead_a_partition() {
 }
 
 #[test]
-fn a_broker_without_a_site_does_not_weaken_the_site_spread() {
+fn an_ordinary_mixed_rack_cluster_places_unracked_brokers_as_one_rack() {
     let brokers = vec![replica(1, "a"), replica(2, "b"), broker(3, None, false)];
 
-    // Two sites can hold two replicas, but not three: the third broker
-    // could be in either site, so the code does not place it.
     assert!(
-        stretch_replicas(&brokers, 3, 2, None)
+        stretch_replicas(&brokers, 3, 3, None)
             == vec![
-                vec![NodeId(1), NodeId(2)],
-                vec![NodeId(2), NodeId(1)],
-                vec![NodeId(1), NodeId(2)],
+                vec![NodeId(1), NodeId(2), NodeId(3)],
+                vec![NodeId(2), NodeId(3), NodeId(1)],
+                vec![NodeId(3), NodeId(1), NodeId(2)],
             ]
     );
-    assert!(stretch_replicas(&brokers, 3, 3, None).is_empty());
+}
+
+#[test]
+fn an_explicit_stretch_cluster_still_rejects_unracked_capacity() {
+    let brokers = vec![replica(1, "a"), replica(2, "b"), broker(3, None, false)];
+
+    assert!(stretch_replicas(&brokers, 3, 3, Some("a")).is_empty());
 }
 
 #[test]

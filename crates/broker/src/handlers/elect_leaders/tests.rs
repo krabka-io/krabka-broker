@@ -28,7 +28,7 @@ use crate::{
     codes,
     config::BreakGlassConfig,
     handlers::RequestContext,
-    leader_election::ElectionType,
+    leader_election::{ElectionType, test_support::one_partition_change},
     test_support::{peer, principal, start_broker_with},
     time_util::now_ms,
 };
@@ -191,7 +191,11 @@ async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_chan
                 ..proposal
             }
     );
-    check!(records[1] == MetadataRecord::V1Partition(elected()));
+    check!(*one_partition_change(&records[1..]) == elected());
+    assert!(let MetadataRecord::V1PartitionUpdate(update) = &records[1]);
+    check!(update.eligible_leader_replicas == Some(Vec::new()));
+    check!(update.last_known_elr == Some(Vec::new()));
+    check!(update.recovery_state == Some(krabka_metadata::LeaderRecoveryState::Recovering));
     handle.shutdown().await;
 }
 
@@ -255,7 +259,7 @@ async fn a_broker_with_no_approver_set_gates_nothing() {
     let (row, records) = elect(&broker, &image_with(&[]), ElectionType::Unclean).await;
 
     check!(row.error_code == codes::NONE);
-    assert!(records == vec![MetadataRecord::V1Partition(elected())]);
+    assert!(*one_partition_change(&records) == elected());
     handle.shutdown().await;
 }
 

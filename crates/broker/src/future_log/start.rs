@@ -29,12 +29,15 @@ use crate::{log_dir, partition::Partition, partition_registry::PartitionRegistry
 /// Idempotency: if a move with the same target is already in flight,
 /// returns `Ok(())` without spawning a second task. If its target differs,
 /// the old task and future log are removed before the replacement starts.
+#[allow(clippy::too_many_arguments)] // KIP-113 move inputs are independent runtime resources.
 pub(crate) async fn start_move(
     partitions: &Arc<PartitionRegistry>,
     future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
     all_log_dirs: &[PathBuf],
+    log_dir_status: &crate::log_dir_status::LogDirRegistry,
     log_config: &LogConfig,
     topic_partition: (&str, PartitionIndex),
+    topic_id: Option<uuid::Uuid>,
     target_log_dir: &Path,
     policy: MovePolicy,
 ) -> Result<(), MoveError> {
@@ -49,12 +52,31 @@ pub(crate) async fn start_move(
     let Some(target_log_dir) = target_match else {
         return Err(MoveError::LogDirNotFound);
     };
+    if log_dir_status.is_offline(&target_log_dir) {
+        return Err(MoveError::Storage(crate::error::BrokerError::Io(
+            std::io::Error::other("target log directory is offline"),
+        )));
+    }
 
     // (2) Partition must be hosted on this broker.
     let key = (topic.to_string(), partition);
-    let part = partitions
-        .get(topic, partition)
-        .ok_or(MoveError::ReplicaNotAvailable)?;
+    let part = if let Some(part) = partitions.get(topic, partition) {
+        part
+    } else {
+        if let Some(topic_id) = topic_id {
+            partitions.set_preferred_log_dir(topic_id, partition, target_log_dir.clone());
+        }
+        let Some(part) = partitions.get(topic, partition) else {
+            return Err(MoveError::ReplicaNotAvailable);
+        };
+        // Materialization won the race before it could consume the
+        // preference. Continue as an ordinary live-replica move without
+        // leaving stale placement state behind.
+        if let Some(topic_id) = topic_id {
+            partitions.clear_preferred_log_dir(topic_id, partition);
+        }
+        part
+    };
 
     // (3) Already moving? Keep a same-target request idempotent. Kafka stops
     //     and removes a future replica when a later request changes its
@@ -202,8 +224,10 @@ mod tests {
             &partitions,
             &future_logs,
             &log_dirs,
+            &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             bogus.path(),
             test_policy(),
         )
@@ -221,14 +245,119 @@ mod tests {
             &partitions,
             &future_logs,
             &[dir.path().to_path_buf()],
+            &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            Some(uuid::Uuid::from_u128(1)),
             dir.path(),
             test_policy(),
         )
         .await
         .expect_err("expected ReplicaNotAvailable");
         assert!(matches!(err, MoveError::ReplicaNotAvailable));
+        assert!(
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
+                == Some(dir.path().to_path_buf())
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_target_does_not_replace_precreation_preference() {
+        let partitions = Arc::new(PartitionRegistry::new());
+        let future_logs = Arc::new(DashMap::new());
+        let valid = tempdir().unwrap();
+        let invalid = tempdir().unwrap();
+        partitions.set_preferred_log_dir(
+            uuid::Uuid::from_u128(1),
+            PartitionIndex(0),
+            valid.path().to_path_buf(),
+        );
+
+        let err = start_move(
+            &partitions,
+            &future_logs,
+            &[valid.path().to_path_buf()],
+            &crate::log_dir_status::LogDirRegistry::default(),
+            &LogConfig::default(),
+            ("t", PartitionIndex(0)),
+            Some(uuid::Uuid::from_u128(1)),
+            invalid.path(),
+            test_policy(),
+        )
+        .await
+        .expect_err("invalid target");
+
+        assert!(matches!(err, MoveError::LogDirNotFound));
+        assert!(
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
+                == Some(valid.path().to_path_buf())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_later_valid_precreation_request_replaces_the_preference() {
+        let partitions = Arc::new(PartitionRegistry::new());
+        let future_logs = Arc::new(DashMap::new());
+        let first = tempdir().unwrap();
+        let second = tempdir().unwrap();
+        let log_dirs = [first.path().to_path_buf(), second.path().to_path_buf()];
+
+        for target in [&log_dirs[0], &log_dirs[1]] {
+            let error = start_move(
+                &partitions,
+                &future_logs,
+                &log_dirs,
+                &crate::log_dir_status::LogDirRegistry::default(),
+                &LogConfig::default(),
+                ("t", PartitionIndex(0)),
+                Some(uuid::Uuid::from_u128(1)),
+                target,
+                test_policy(),
+            )
+            .await
+            .expect_err("the replica is not created yet");
+            assert!(matches!(error, MoveError::ReplicaNotAvailable));
+        }
+
+        assert!(
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
+                == Some(log_dirs[1].clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_offline_target_does_not_replace_the_preference() {
+        let partitions = Arc::new(PartitionRegistry::new());
+        let future_logs = Arc::new(DashMap::new());
+        let first = tempdir().unwrap();
+        let offline = tempdir().unwrap();
+        let status = crate::log_dir_status::LogDirRegistry::default();
+        status.mark_offline(offline.path(), "test failure");
+        partitions.set_preferred_log_dir(
+            uuid::Uuid::from_u128(1),
+            PartitionIndex(0),
+            first.path().to_path_buf(),
+        );
+
+        let error = start_move(
+            &partitions,
+            &future_logs,
+            &[first.path().to_path_buf(), offline.path().to_path_buf()],
+            &status,
+            &LogConfig::default(),
+            ("t", PartitionIndex(0)),
+            Some(uuid::Uuid::from_u128(1)),
+            offline.path(),
+            test_policy(),
+        )
+        .await
+        .expect_err("offline target");
+
+        assert!(matches!(error, MoveError::Storage(_)));
+        assert!(
+            partitions.preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
+                == Some(first.path().to_path_buf())
+        );
     }
 
     #[tokio::test]
@@ -247,8 +376,10 @@ mod tests {
             &partitions,
             &future_logs,
             &log_dirs,
+            &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             primary.path(),
             test_policy(),
         )
@@ -317,8 +448,10 @@ mod tests {
             &partitions,
             &future_logs,
             &log_dirs,
+            &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             extra.path(),
             test_policy(),
         )
@@ -367,8 +500,10 @@ mod tests {
             &partitions,
             &future_logs,
             &log_dirs,
+            &crate::log_dir_status::LogDirRegistry::default(),
             &LogConfig::default(),
             ("t", PartitionIndex(0)),
+            None,
             third.path(),
             test_policy(),
         )

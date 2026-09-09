@@ -1,16 +1,16 @@
 //! The KIP-966 state machine: what one partition's ELR becomes when a change
-//! applies, and the `V1TopicConfig` records the publisher appends for it.
+//! applies, and the `V1PartitionElr` records the publisher appends for it.
 
 use assert2::assert;
 use krabka_metadata::{
-    LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord,
-    TopicRecord,
+    LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord,
+    PartitionUpdateRecord, TopicConfigRecord, TopicRecord,
 };
 
 use super::{ElrPublisher, next_partition_elr};
 use crate::{
-    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS, RETENTION_MS},
-    elr::state::PartitionElr,
+    config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS},
+    elr::state::{PartitionElr, TopicElr},
 };
 
 const TOPIC: &str = "orders";
@@ -41,6 +41,15 @@ fn elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
     }
 }
 
+fn update(partition: PartitionRecord, eligible: &[u64], last_known: &[u64]) -> MetadataRecord {
+    MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
+        partition,
+        eligible_leader_replicas: Some(nodes(eligible)),
+        last_known_elr: Some(nodes(last_known)),
+        recovery_state: None,
+    })
+}
+
 /// An image holding topic `orders` with the given overrides and the given
 /// partition state. `min_isr` is published as an ordinary topic override, the
 /// way `kafka-configs --alter` sets it.
@@ -58,17 +67,36 @@ fn image(
         replication_factor: i16::try_from(current.replicas.len()).expect("rf fits i16"),
     }));
     image.apply(&MetadataRecord::V1Partition(current.clone()));
-    let overrides: std::collections::BTreeMap<String, String> = [
-        min_isr.map(|value| (MIN_INSYNC_REPLICAS.to_string(), value.to_string())),
-        published.map(|value| (ELIGIBLE_LEADER_REPLICAS.to_string(), value.to_string())),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let overrides: std::collections::BTreeMap<String, String> =
+        [min_isr.map(|value| (MIN_INSYNC_REPLICAS.to_string(), value.to_string()))]
+            .into_iter()
+            .flatten()
+            .collect();
     if !overrides.is_empty() {
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: TOPIC.into(),
             overrides,
+        }));
+    }
+    if let Some(value) = published {
+        let state = TopicElr::parse(value).partition(current.partition);
+        image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+            topic: TOPIC.into(),
+            partition: current.partition,
+            eligible_leader_replicas: nodes(
+                &state
+                    .eligible_leader_replicas
+                    .iter()
+                    .map(|id| u64::try_from(*id).unwrap())
+                    .collect::<Vec<_>>(),
+            ),
+            last_known_elr: nodes(
+                &state
+                    .last_known_elr
+                    .iter()
+                    .map(|id| u64::try_from(*id).unwrap())
+                    .collect::<Vec<_>>(),
+            ),
         }));
     }
     image
@@ -218,25 +246,13 @@ fn an_unclean_shutdown_replica_is_not_re_derived_from_the_isr_it_is_leaving() {
     let image = image(Some("3"), None, &before);
     let shrink = MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1, 2]));
 
-    let published = |value: &str| {
-        MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: TOPIC.into(),
-            overrides: [
-                (MIN_INSYNC_REPLICAS.to_string(), "3".to_string()),
-                (ELIGIBLE_LEADER_REPLICAS.to_string(), value.to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        })
-    };
-
     let mut plain = vec![shrink.clone()];
     ElrPublisher::new(&image).extend(&mut plain);
-    assert!(plain == vec![shrink.clone(), published("0:3:")]);
+    assert!(plain == vec![update(partition(1, &[1, 2, 3], &[1, 2]), &[3], &[])]);
 
     let mut excluded = vec![shrink.clone()];
     ElrPublisher::after_unclean_shutdown(&image, NodeId(3)).extend(&mut excluded);
-    assert!(excluded == vec![shrink, published("0::3")]);
+    assert!(excluded == vec![update(partition(1, &[1, 2, 3], &[1, 2]), &[], &[3])]);
 }
 
 /// The published record replaces a topic's whole override map, so it has to
@@ -249,20 +265,35 @@ fn the_published_record_keeps_the_topics_other_overrides() {
 
     ElrPublisher::new(&image).extend(&mut changes);
 
+    assert!(changes == vec![update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[])]);
+}
+
+#[test]
+fn a_partition_change_migrates_legacy_elr_without_losing_it() {
+    let before = partition(1, &[1, 2, 3], &[1]);
+    let mut image = image(Some("3"), None, &before);
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: TOPIC.into(),
+        overrides: [
+            (MIN_INSYNC_REPLICAS.to_string(), "3".to_string()),
+            ("krabka.elr".to_string(), "0:2,3:".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    }));
+    let mut changes = vec![MetadataRecord::V1Partition(before)];
+
+    ElrPublisher::new(&image).extend(&mut changes);
+    for record in changes {
+        image.apply(&record);
+    }
+
+    assert!(TopicElr::of_topic(&image, TOPIC).partition(0) == elr(&[2, 3], &[]));
     assert!(
-        changes
-            == vec![
-                MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1])),
-                MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                    topic: TOPIC.into(),
-                    overrides: [
-                        (MIN_INSYNC_REPLICAS.to_string(), "2".to_string()),
-                        (ELIGIBLE_LEADER_REPLICAS.to_string(), "0:2,3:".to_string()),
-                    ]
-                    .into_iter()
-                    .collect(),
-                }),
-            ]
+        !image
+            .topic_config(TOPIC)
+            .unwrap()
+            .contains_key("krabka.elr")
     );
 }
 
@@ -280,15 +311,7 @@ fn a_recovered_topic_drops_the_key_and_keeps_the_rest() {
 
     ElrPublisher::new(&image).extend(&mut changes);
 
-    assert!(
-        changes[1..]
-            == [MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: TOPIC.into(),
-                overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
-                    .into_iter()
-                    .collect(),
-            })]
-    );
+    assert!(changes == vec![update(partition(1, &[1, 2, 3], &[1, 2]), &[], &[])]);
 }
 
 /// Nothing is appended when the state does not move. This is what keeps the
@@ -355,18 +378,7 @@ fn the_appended_record_builds_on_a_topic_config_the_batch_already_carries() {
 
     ElrPublisher::new(&image).extend(&mut changes);
 
-    assert!(
-        changes[2..]
-            == [MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: TOPIC.into(),
-                overrides: [
-                    (MIN_INSYNC_REPLICAS.to_string(), "2".to_string()),
-                    (ELIGIBLE_LEADER_REPLICAS.to_string(), "0:2,3:".to_string()),
-                ]
-                .into_iter()
-                .collect(),
-            })]
-    );
+    assert!(changes[1..] == [update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[])]);
 }
 
 /// A batch that deletes the topic gets no ELR record: the delete removes the
@@ -400,25 +412,17 @@ fn one_record_carries_every_partition_the_batch_moved() {
     shrunk_one.partition = 1;
     let mut changes = vec![
         MetadataRecord::V1Partition(shrunk_zero),
-        MetadataRecord::V1Partition(shrunk_one),
+        MetadataRecord::V1Partition(shrunk_one.clone()),
     ];
 
     ElrPublisher::new(&image).extend(&mut changes);
 
     assert!(
-        changes[2..]
-            == [MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: TOPIC.into(),
-                overrides: [
-                    (MIN_INSYNC_REPLICAS.to_string(), "2".to_string()),
-                    (
-                        ELIGIBLE_LEADER_REPLICAS.to_string(),
-                        "0:2,3:;1:1,3:".to_string()
-                    ),
-                ]
-                .into_iter()
-                .collect(),
-            })]
+        changes
+            == [
+                update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[]),
+                update(shrunk_one, &[1, 3], &[]),
+            ]
     );
 }
 
@@ -433,9 +437,9 @@ fn the_publisher_appends_nothing_below_feature_level_one() {
     let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
     let shrink = MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1]));
 
-    for (case, enabled, want_appended) in [
-        ("the feature is off", false, 0),
-        ("the feature is finalized at 1", true, 1),
+    for (case, enabled) in [
+        ("the feature is off", false),
+        ("the feature is finalized at 1", true),
     ] {
         // `image` finalizes the feature; the off case builds the same image
         // without that record.
@@ -464,10 +468,13 @@ fn the_publisher_appends_nothing_below_feature_level_one() {
         let mut changes = vec![shrink.clone()];
         ElrPublisher::new(&img).extend(&mut changes);
 
-        assert!(
-            changes.len() == 1 + want_appended,
-            "{case}: appended {} record(s), want {want_appended}: {changes:?}",
-            changes.len() - 1
-        );
+        if enabled {
+            assert!(
+                changes == vec![update(partition(1, &[1, 2, 3], &[1]), &[2, 3], &[])],
+                "{case}"
+            );
+        } else {
+            assert!(changes == vec![shrink.clone()], "{case}");
+        }
     }
 }
