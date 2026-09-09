@@ -68,6 +68,7 @@ allow-git = [
     # First-party crates are revision-pinned in Cargo.toml until they are
     # published from their sibling repositories.
     "https://github.com/krabka-io/krabka-client-rs",
+    "https://github.com/krabka-io/krabka-broker",
     "https://github.com/krabka-io/krabka-protocol",
     "https://github.com/krabka-io/krabka-schema-registry",
     # krabka-security pins unreleased GSSAPI fixes from this fork.

@@ -121,23 +121,52 @@ async fn wait_for_primary(nodes: &mut [RegistryNode]) -> usize {
 async fn register(client: &reqwest::Client, url: &str, subject: &str, body: Value) -> u32 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let response = client
-            .post(format!("{url}/subjects/{subject}/versions"))
-            .json(&body)
-            .send()
-            .await
-            .unwrap();
+        let response = tokio::time::timeout_at(
+            deadline,
+            client
+                .post(format!("{url}/subjects/{subject}/versions"))
+                .json(&body)
+                .send(),
+        )
+        .await
+        .expect("registry registration deadline")
+        .unwrap();
         let status = response.status();
-        let response_body: Value = response.json().await.unwrap();
         if status.is_success() {
+            let response_body: Value = tokio::time::timeout_at(deadline, response.json())
+                .await
+                .expect("registry response deadline")
+                .unwrap();
             return u32::try_from(response_body["id"].as_u64().expect("schema id")).unwrap();
         }
+        let response_body = tokio::time::timeout_at(deadline, response.text())
+            .await
+            .expect("registry response deadline")
+            .unwrap_or_default();
         assert!(
             tokio::time::Instant::now() < deadline,
             "registry returned {status}: {response_body}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn wait_for_schema(client: &reqwest::Client, url: &str, id: u32) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if client
+                .get(format!("{url}/schemas/ids/{id}"))
+                .send()
+                .await
+                .is_ok_and(|response| response.status().is_success())
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("schema replication deadline");
 }
 
 async fn get_json(client: &reqwest::Client, url: &str) -> Value {
@@ -369,10 +398,19 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
                 None,
             ]
     );
+    let control_leader_id = cluster[0]
+        .0
+        .partition_leader_for_test("control", 0)
+        .expect("control leader");
+    let control_leader = cluster
+        .iter()
+        .find(|(broker, _, _)| broker.node_id() == control_leader_id)
+        .unwrap();
+    let control_client = client(&control_leader.0.listen_addr().to_string()).await;
     check!(
         fetch_values(
-            &cluster[leader_index].0,
-            &leader_client,
+            &control_leader.0,
+            &control_client,
             "control",
             control_topic,
             1,
@@ -438,6 +476,7 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         }),
     )
     .await;
+    wait_for_schema(&http, &registries[0].url, evolved_id).await;
     let preserved = get_json(
         &http,
         &format!("{}/subjects/referenced-value/versions/1", registries[0].url),
