@@ -179,15 +179,10 @@ async fn metadata_response_carries_listener_endpoints() {
     let pem_dir = tempfile::tempdir().unwrap();
     let (cert_path, key_path) = write_dev_pem(pem_dir.path());
 
-    // Pre-reserve two distinct ephemeral ports (bind-and-drop trick) so
-    // the listener-conflict validation sees two different `bind_addr`s.
-    // `BrokerConfig::validate` rejects `"127.0.0.1:0" == "127.0.0.1:0"`
-    // even though the OS would assign distinct ports at bind time.
-    let p1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let p2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let plaintext_bind = p1.local_addr().unwrap();
-    let ssl_bind = p2.local_addr().unwrap();
-    drop((p1, p2));
+    // Distinct wildcard and loopback binds satisfy listener validation while
+    // leaving port allocation atomic with Broker startup.
+    let plaintext_bind = "127.0.0.1:0".parse().unwrap();
+    let ssl_bind = "0.0.0.0:0".parse().unwrap();
 
     // Two listeners on independent ephemeral ports. PLAINTEXT is the
     // inter-broker listener (so self-registration's `host`/`port` falls
