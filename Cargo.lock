@@ -2972,13 +2972,13 @@ dependencies = [
 [[package]]
 name = "krabka-compression"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "assert2",
  "bytes",
  "flate2",
  "krabka-units",
- "lz4_flex",
+ "lz4rip",
  "refined_type",
  "snap",
  "thiserror 2.0.20",
@@ -3034,7 +3034,7 @@ dependencies = [
 [[package]]
 name = "krabka-ids"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "assert2",
  "derive_more",
@@ -3095,7 +3095,7 @@ dependencies = [
 [[package]]
 name = "krabka-metadata"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "assert2",
  "bytes",
@@ -3151,7 +3151,7 @@ dependencies = [
 [[package]]
 name = "krabka-protocol"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "arbitrary",
  "assert2",
@@ -3342,7 +3342,7 @@ dependencies = [
 [[package]]
 name = "krabka-security"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "arc-swap",
  "assert2",
@@ -3416,7 +3416,7 @@ dependencies = [
 [[package]]
 name = "krabka-trace-context"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "opentelemetry",
  "serde",
@@ -3428,7 +3428,7 @@ dependencies = [
 [[package]]
 name = "krabka-units"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "num-traits",
  "serde",
@@ -3451,7 +3451,7 @@ dependencies = [
 [[package]]
 name = "krabka-voters"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=150e8373b93ad71e4bafbfbeab2fd3c0df19e53a#150e8373b93ad71e4bafbfbeab2fd3c0df19e53a"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=b79bf4965075a96ab88f2612f0b7cb9c86d2097b#b79bf4965075a96ab88f2612f0b7cb9c86d2097b"
 dependencies = [
  "assert2",
  "krabka-ids",
@@ -3581,12 +3581,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
-name = "lz4_flex"
-version = "0.14.0"
+name = "lz4rip"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+checksum = "3f15da938fe56acadf8dd510f4bfaaf53deb9051361fc3d71ddeba2e0f12fc48"
 dependencies = [
+ "lz4rip-core",
+ "lz4rip-decode",
+ "lz4rip-encode",
  "twox-hash",
+]
+
+[[package]]
+name = "lz4rip-core"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22fc4edb61fcaf1cdad24ac2982eff7af4417ef463c33bcf5c42ba549abd8b96"
+
+[[package]]
+name = "lz4rip-decode"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60d65bfd4c032fefcf8c18fb5f8d9958f4925146845db16dbc9d416f1566b9bf"
+dependencies = [
+ "lz4rip-core",
+]
+
+[[package]]
+name = "lz4rip-encode"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a4e226501cf35f6f17d82f4384668c39477ea1ce40ff1d74369fb68ab8b6957"
+dependencies = [
+ "lz4rip-core",
 ]
 
 [[package]]

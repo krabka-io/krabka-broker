@@ -8,8 +8,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::records::{
-    Attributes, RecordBatch, RecordBatchBorrowed, RecordsPayload, TimestampType, ValidatedBatch,
-    validate_one_v2_batch,
+    Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
 };
 use krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission};
 
@@ -150,8 +149,7 @@ fn encoded_len(batch: &RecordBatch) -> Option<usize> {
 /// that buffer and retains the original compressed wire bytes.
 /// [`decode_owned_batch`] up-converts the legacy v0-2 payloads.
 ///
-/// The function returns the response error *code* on a bad field, either
-/// `INVALID_REQUEST` or `INVALID_RECORD`.
+/// The function returns the response error *code* on a bad field.
 pub(super) fn prepare_batch(
     payload: PartitionPayload,
     topic_compression: Option<krabka_compression::CompressionType>,
@@ -165,9 +163,8 @@ pub(super) fn prepare_batch(
         PartitionPayload::Owned(rp) => {
             let batch = decode_owned_batch(rp, topic_name, metrics, policy)?;
             validate_owned_client_batch(&batch)?;
-            let prepared = PreparedBatch::from_owned(batch);
-            validate_record_timestamps(&prepared, timestamps, policy)?;
-            return Ok(prepared);
+            validate_owned_record_timestamps(&batch, timestamps)?;
+            return Ok(PreparedBatch::from_owned(batch));
         }
         PartitionPayload::Null => return Err(codes::INVALID_REQUEST),
         PartitionPayload::Slice(b) => b,
@@ -191,16 +188,19 @@ pub(super) fn prepare_batch(
         return owned_fallback(bytes, timestamps, topic_name, metrics, policy);
     }
     if timestamps.bounds_records() {
-        // The timestamp walk is also a complete owned record decode. Reuse it
-        // as structural validation instead of decompressing and parsing the
-        // same body once in `validate_records` and again below.
-        let mut cursor: &[u8] = &bytes;
-        let batch = RecordBatch::decode_with_policy(&mut cursor, policy)
+        let now_ms = crate::time_util::now_ms();
+        let mut invalid_timestamp = false;
+        validated
+            .validate_records_with(policy, |record| {
+                invalid_timestamp |= timestamps.rejects_record(
+                    header.base_timestamp.saturating_add(record.timestamp_delta),
+                    now_ms,
+                );
+            })
             .map_err(|_| codes::INVALID_RECORD)?;
-        if !cursor.is_empty() {
-            return Err(codes::INVALID_RECORD);
+        if invalid_timestamp {
+            return Err(codes::INVALID_TIMESTAMP);
         }
-        validate_owned_record_timestamps(&batch, timestamps)?;
     } else {
         validated
             .validate_records(policy)
@@ -219,43 +219,9 @@ pub(super) fn prepare_batch(
 /// record's own delta, which is how the v2 format stores it, so the walk is
 /// over deltas and not over absolute values.
 ///
-/// A topic that left both windows at Kafka's `Long.MAX_VALUE` default, and a
-/// `LogAppendTime` topic, ask nothing of this function: it reads no clock and
-/// touches no record for them, which is every topic by default. Only a topic
-/// that configured a window pays for the walk, and on the verbatim path that
-/// walk is a second borrowed pass over bytes the CRC check already read. The
-/// bytes stay the producer's own either way; nothing here decodes into the
-/// append.
-fn validate_record_timestamps(
-    prepared: &PreparedBatch,
-    timestamps: TimestampPolicy,
-    policy: RecordDecompressionPolicy,
-) -> Result<(), i16> {
-    if !timestamps.bounds_records() {
-        return Ok(());
-    }
-    match &prepared.source {
-        PreparedSource::Owned(batch) => validate_owned_record_timestamps(batch, timestamps),
-        PreparedSource::Verbatim(bytes) => {
-            let now_ms = crate::time_util::now_ms();
-            let mut cursor: &[u8] = bytes;
-            let borrowed = RecordBatchBorrowed::decode_borrow_with_policy(&mut cursor, policy)
-                .map_err(|_| codes::INVALID_RECORD)?;
-            let base_timestamp = borrowed.header().base_timestamp.get();
-            for record in &borrowed {
-                let record = record.map_err(|_| codes::INVALID_RECORD)?;
-                if timestamps.rejects_record(
-                    base_timestamp.saturating_add(record.timestamp_delta),
-                    now_ms,
-                ) {
-                    return Err(codes::INVALID_TIMESTAMP);
-                }
-            }
-            Ok(())
-        }
-    }
-}
-
+/// A topic that does not bound timestamps asks nothing of this function. The
+/// verbatim path performs the same check while validating borrowed records;
+/// this helper covers only batches that already require owned decoding.
 fn validate_owned_record_timestamps(
     batch: &RecordBatch,
     timestamps: TimestampPolicy,
@@ -290,9 +256,8 @@ pub(super) fn owned_fallback(
     match RecordsPayload::from_bytes_with_policy(bytes, policy) {
         Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
             validate_owned_client_batch(&batch)?;
-            let prepared = PreparedBatch::from_owned(batch);
-            validate_record_timestamps(&prepared, timestamps, policy)?;
-            Ok(prepared)
+            validate_owned_record_timestamps(&batch, timestamps)?;
+            Ok(PreparedBatch::from_owned(batch))
         }),
         Err(_) => Err(codes::INVALID_RECORD),
     }
@@ -304,6 +269,7 @@ pub(super) fn owned_fallback(
 #[derive(Debug, Clone, Copy)]
 struct ValidatedHeader {
     base_offset: i64,
+    base_timestamp: i64,
     attributes: Attributes,
     last_offset_delta: i32,
     records_count: i32,
@@ -317,6 +283,7 @@ impl From<&ValidatedBatch<'_>> for ValidatedHeader {
     fn from(v: &ValidatedBatch<'_>) -> Self {
         Self {
             base_offset: v.header.base_offset.get(),
+            base_timestamp: v.header.base_timestamp.get(),
             attributes: Attributes(v.header.attributes.get()),
             last_offset_delta: v.header.last_offset_delta.get(),
             records_count: v.header.records_count.get(),
