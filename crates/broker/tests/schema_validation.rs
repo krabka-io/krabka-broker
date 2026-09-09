@@ -34,6 +34,8 @@ mod accepted;
 mod full_mode;
 #[path = "schema_validation/harness.rs"]
 mod harness;
+#[path = "schema_validation/live_registry.rs"]
+mod live_registry;
 #[path = "schema_validation/registry_availability.rs"]
 mod registry_availability;
 #[path = "schema_validation/rejected.rs"]

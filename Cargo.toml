@@ -163,6 +163,11 @@ krabka-units = "0.4.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
+# The schema-registry service used by M19's acceptance test consumes these two
+# broker crates as published dependencies. They are not published yet, so use
+# the registry repository's own tested broker revision.
+krabka-authz = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
+krabka-telemetry = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
 krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
 krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
 krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
@@ -175,4 +180,4 @@ krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = 
 krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b79bf4965075a96ab88f2612f0b7cb9c86d2097b" }
 krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b79bf4965075a96ab88f2612f0b7cb9c86d2097b" }
 krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b79bf4965075a96ab88f2612f0b7cb9c86d2097b" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "7d6ef5bfe8a5e357bb136cdc89ebf253afc756db" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ae9876d15da12e6123b77b4fc77f50bb9d162556" }

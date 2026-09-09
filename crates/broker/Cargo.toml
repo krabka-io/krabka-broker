@@ -179,6 +179,9 @@ krabka-restore = { version = "0.5.4", path = "../restore" }
 krabka-client-admin = { version = "0.4" }
 krabka-client-consumer = { version = "0.4" }
 krabka-client-producer = { version = "0.4" }
+# M19's live-registry acceptance runs the real first-party service instead of
+# another HTTP fixture. Keep it on the production serde dependency's revision.
+krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ae9876d15da12e6123b77b4fc77f50bb9d162556" }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the
 # real-Kafka Docker capture (`describe_groups_jvm.rs`).
 krabka-client-core = { version = "0.4", features = ["mock"] }

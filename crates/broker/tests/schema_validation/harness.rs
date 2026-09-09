@@ -179,12 +179,23 @@ pub async fn create_topic(
     name: &str,
     configs: &[(&str, &str)],
 ) -> WireUuid {
+    create_topic_rf(broker, client, name, configs, 1).await
+}
+
+/// Create `name` with an explicit replication factor.
+pub async fn create_topic_rf(
+    broker: &BrokerHandle,
+    client: &Client,
+    name: &str,
+    configs: &[(&str, &str)],
+    replication_factor: i16,
+) -> WireUuid {
     let resp = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
                 name: name.into(),
                 num_partitions: 1,
-                replication_factor: 1,
+                replication_factor,
                 configs: configs
                     .iter()
                     .map(|(k, v)| CreatableTopicConfig {
