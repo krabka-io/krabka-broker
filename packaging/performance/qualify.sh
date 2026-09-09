@@ -38,6 +38,11 @@ if [[ $(</proc/sys/fs/inotify/max_user_instances) -lt 512 ]]; then
   exit 2
 fi
 
+if [[ -e ${artifact_dir} && ! -d ${artifact_dir} ]] \
+  || [[ -d ${artifact_dir} && -n $(find "${artifact_dir}" -mindepth 1 -print -quit) ]]; then
+  echo "artifact directory must not exist or must be empty: ${artifact_dir}" >&2
+  exit 2
+fi
 mkdir -p "${artifact_dir}"
 exec > >(tee "${artifact_dir}/qualification.log") 2>&1
 
@@ -97,7 +102,7 @@ client_container=$(docker create apache/kafka:4.0.0)
 docker cp "${client_container}:/opt/kafka/libs/." "${build_dir}/libs"
 docker rm "${client_container}" >/dev/null
 mkdir -p "${build_dir}/classes"
-javac --release 21 -cp "${build_dir}/libs/*" -d "${build_dir}/classes" \
+javac --release 17 -cp "${build_dir}/libs/*" -d "${build_dir}/classes" \
   "${root}/packaging/performance/BrokerPerformanceWorkload.java"
 
 bazel run //packaging:image_load

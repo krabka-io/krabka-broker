@@ -117,7 +117,7 @@ bytes.
 
 The `/metrics` body grows with the label sets that are live. The
 per-partition families add one sample per hosted replica each, and the
-per-topic families one per topic. The reference run measured at most 2.35 MB,
-27,226 series and a 0.863-second scrape at roughly 10,000 hosted replicas.
+per-topic families one per topic. The reference run measured at most 2.38 MB,
+27,249 series and a 1.121-second scrape at roughly 10,000 hosted replicas.
 Scrape at 30s or 60s rather than 15s, and drop the per-partition families at
 the scrape with `metric_relabel_configs` when a dashboard does not need them.

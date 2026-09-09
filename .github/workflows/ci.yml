@@ -1039,7 +1039,7 @@ jobs:
               (
                 cd "${source_dir}"
                 CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" cargo bench \
-                  -p krabka-broker -p krabka-log -- \
+                  -p krabka-broker -p krabka-log --benches -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
               ) | tee "${run_dir}/raw.txt"
               cargo run -p krabka-parse-benches -- \

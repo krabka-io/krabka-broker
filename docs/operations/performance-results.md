@@ -6,15 +6,15 @@ produced by the [qualification harness](performance-qualification.md).
 
 ## Provenance and contract
 
-The run used Krabka commit `b04c22d5b422bf43f737de55de6567a0011b2c86`
+The run used Krabka commit `106ae27b121c8317ba86c10e462fa8c9baaad3b1`
 plus a source patch whose SHA-256 is
-`b8ff4efd6354d887d44e1334619ce4fd22cb74b516dec4df631370879eb43201`.
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 The Krabka image id was
-`sha256:5f1161dcd9431ee75da68998adbcd5fb4941563f087a210e79e36cca80b1eb6d`;
+`sha256:d46923ca9c40895650975aea38c535758cb5958ad6bcc3cc21a79aa4d0c1f624`;
 the pinned `apache/kafka:4.0.0` image id was
 `sha256:3f7b939115cd4872e9cee9369d80bd69712fde55f9902f46d793f64848dedc75`.
 
-The host had 16 logical CPUs (AMD EPYC 4344P), 65.9 GB RAM and 547.7 GB
+The host had 16 logical CPUs (AMD EPYC 4344P), 65.9 GB RAM and 361.9 GB
 available disk. Each of three broker/controller pods had a 2 CPU, 2 GiB and
 100 GiB claim. Both sides used 12 partitions, RF 3, min ISR 2, `acks=all`,
 idempotence, LZ4, a 65,536-byte batch and 5 ms linger with 1,024-byte records.
@@ -34,30 +34,33 @@ it sent with zero producer errors and zero duplicate sequences.
 
 | Broker | Shape | Run | records/s | MiB/s | p50 ms | p95 ms | p99 ms |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Kafka | saturation | 1 | 160,476.415 | 156.715 | 298.509 | 368.587 | 389.876 |
-| Kafka | saturation | 2 | 337,283.015 | 329.378 | 6.924 | 20.588 | 29.543 |
-| Kafka | saturation | 3 | 382,837.328 | 373.865 | 19.360 | 29.813 | 35.510 |
-| Krabka | saturation | 1 | 78,931.278 | 77.081 | 565.825 | 881.522 | 941.920 |
-| Krabka | saturation | 2 | 76,417.276 | 74.626 | 588.172 | 896.159 | 964.327 |
-| Krabka | saturation | 3 | 76,419.269 | 74.628 | 632.635 | 909.588 | 970.326 |
-| Kafka | steady | 1 | 4,999.361 | 4.882 | 3.283 | 5.838 | 6.464 |
-| Kafka | steady | 2 | 4,999.532 | 4.882 | 3.066 | 5.576 | 5.960 |
-| Kafka | steady | 3 | 4,999.545 | 4.882 | 3.094 | 5.608 | 5.949 |
-| Krabka | steady | 1 | 4,999.312 | 4.882 | 5.323 | 7.852 | 8.492 |
-| Krabka | steady | 2 | 4,999.300 | 4.882 | 5.406 | 7.923 | 8.612 |
-| Krabka | steady | 3 | 4,999.288 | 4.882 | 5.596 | 8.172 | 8.827 |
+| Kafka | saturation | 1 | 171,307.957 | 167.293 | 252.705 | 338.327 | 378.705 |
+| Kafka | saturation | 2 | 344,926.749 | 336.843 | 10.567 | 20.193 | 26.417 |
+| Kafka | saturation | 3 | 300,566.675 | 293.522 | 38.088 | 60.924 | 80.089 |
+| Krabka | saturation | 1 | 185,568.285 | 181.219 | 169.953 | 252.837 | 315.207 |
+| Krabka | saturation | 2 | 172,020.136 | 167.988 | 179.715 | 265.506 | 293.146 |
+| Krabka | saturation | 3 | 169,372.170 | 165.403 | 183.986 | 299.008 | 311.533 |
+| Kafka | steady | 1 | 4,999.505 | 4.882 | 3.244 | 5.790 | 6.465 |
+| Kafka | steady | 2 | 4,999.438 | 4.882 | 3.317 | 6.400 | 212.183 |
+| Kafka | steady | 3 | 4,999.441 | 4.882 | 3.110 | 5.623 | 5.968 |
+| Krabka | steady | 1 | 4,999.266 | 4.882 | 4.582 | 7.193 | 7.739 |
+| Krabka | steady | 2 | 4,999.391 | 4.882 | 4.674 | 7.203 | 7.864 |
+| Krabka | steady | 3 | 4,999.409 | 4.882 | 4.719 | 7.121 | 7.790 |
 
-The saturation medians were 337,283 records/s and 35.510 ms p99 for Kafka,
-and 76,419 records/s and 964.327 ms p99 for Krabka. At the fixed rate, both
-held 4,999 records/s; median p99 was 5.960 ms for Kafka and 8.612 ms for
+The saturation medians were 300,567 records/s and 80.089 ms p99 for Kafka,
+and 172,020 records/s and 311.533 ms p99 for Krabka, a 1.75x throughput gap.
+The first saturation run was 171,308 records/s for Kafka and 185,568 records/s
+for Krabka, so the gap is concentrated in Kafka's warm runs. At the fixed rate,
+both held 4,999 records/s; median p99 was 6.465 ms for Kafka and 7.790 ms for
 Krabka.
 
-Across the three steady runs, the three broker processes consumed 1,141--3,320
-CPU ticks per Kafka run and 5,447--5,677 per Krabka run. Peak per-process RSS
-was 952 MiB for Kafka and 104 MiB for Krabka. Aggregate volume growth was
-26.3--26.4 MB and network receive/transmit growth was 43.3--44.2 MB for Kafka;
-Krabka recorded 26.8--26.9 MB and 47.9--49.1 MB. The raw before/after snapshots
-also retain per-process file descriptors and every individual run.
+Across the three steady runs, the three broker processes consumed 1,234--3,273
+CPU ticks per Kafka run and 3,705--4,091 per Krabka run. Peak per-process RSS
+was 945 MiB for Kafka and 92 MiB for Krabka. Aggregate volume growth was
+26.3 MB on both brokers. Kafka received 43.2--43.6 MB and transmitted
+43.6--44.0 MB; Krabka received 47.8--48.2 MB and transmitted 48.3--48.7 MB.
+The raw before/after snapshots also retain per-process file descriptors and
+every individual run.
 
 ## Partition envelope
 
@@ -67,13 +70,13 @@ Both tiers passed their predeclared 30-minute deadline.
 
 | User partitions | User replicas | User replicas per broker after move | Failover | Restart ready | Reassignment ready | p50 / p95 / p99 | Result |
 | ---: | ---: | :--- | ---: | ---: | ---: | :--- | :--- |
-| 1,000 | 3,000 | 667 / 667 / 666 / 1,000 | 22 s | 25 s | 1 s | 11.959 / 81.426 / 10,368.438 ms | pass |
-| 10,000 | 30,000 | 9,667 / 9,667 / 9,666 / 1,000 | 24 s | 26 s | 1 s | 425.212 / 1,075.863 / 12,273.299 ms | pass |
+| 1,000 | 3,000 | 667 / 667 / 666 / 1,000 | 22 s | 24 s | 0 s | 22.680 / 296.989 / 10,084.009 ms | pass |
+| 10,000 | 30,000 | 9,667 / 9,667 / 9,666 / 1,000 | 23 s | 26 s | 2 s | 430.922 / 3,487.868 / 12,756.453 ms | pass |
 
 Both tiers consumed 600,000 of 600,000 records with zero errors and duplicates.
 All four brokers ended with metadata lag 0. At 10,000 partitions, the largest
-broker metrics body was 2,340,650 bytes with 27,132 series and the slowest
-scrape took 1.124 seconds. Peak per-process RSS was 490,320 KiB, peak file
-descriptor count was 30,177, and peak volume use was 63,953,511 bytes.
+broker metrics body was 2,376,748 bytes with 27,249 series and the slowest
+scrape took 1.121 seconds. Peak per-process RSS was 890,356 KiB, peak file
+descriptor count was 30,178, and peak volume use was 64,039,262 bytes.
 `scale/verdict.txt` therefore records `highest_passing_tier=10000`; this is the
 highest tested tier, not the product's maximum.

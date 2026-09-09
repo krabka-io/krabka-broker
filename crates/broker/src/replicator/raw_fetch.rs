@@ -114,24 +114,20 @@ fn decode_partition<B: Buf>(
         high_watermark: get_i64(buf)?,
         ..PartitionData::default()
     };
-    if version >= 4 {
-        out.last_stable_offset = get_i64(buf)?;
-    }
+    out.last_stable_offset = get_i64(buf)?;
     if version >= 5 {
         out.log_start_offset = get_i64(buf)?;
     }
-    if version >= 4 {
-        out.aborted_transactions = match get_nullable_array_len(buf, flex)? {
-            None => None,
-            Some(count) => {
-                let mut transactions = Vec::with_capacity(count);
-                for _ in 0..count {
-                    transactions.push(AbortedTransaction::decode(buf, version)?);
-                }
-                Some(transactions)
+    out.aborted_transactions = match get_nullable_array_len(buf, flex)? {
+        None => None,
+        Some(count) => {
+            let mut transactions = Vec::with_capacity(count);
+            for _ in 0..count {
+                transactions.push(AbortedTransaction::decode(buf, version)?);
             }
-        };
-    }
+            Some(transactions)
+        }
+    };
     if version >= 11 {
         out.preferred_read_replica = get_i32(buf)?;
     }
@@ -178,31 +174,62 @@ mod tests {
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
     use krabka_protocol::{
-        Decode as _, Encode as _,
-        owned::fetch_response::{
-            FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData,
+        Decode as _, Encode as _, ProtocolError, UnknownTaggedField, UnknownTaggedFields,
+        owned::{
+            fetch_request::FetchRequest,
+            fetch_response::{
+                AbortedTransaction, EpochEndOffset, FetchResponse, FetchableTopicResponse,
+                LeaderIdAndEpoch, PartitionData, SnapshotId,
+            },
         },
         primitives::uuid::Uuid,
         records::RecordsPayload,
     };
 
-    use super::RawFetchResponse;
+    use super::{RawFetchRequest, RawFetchResponse};
 
     #[test]
     fn keeps_records_encoded() {
         let raw = Bytes::from_static(b"wire record bytes");
-        for version in [12, 18] {
+        for version in [4, 5, 7, 11, 12, 13, 18] {
             let response = FetchResponse {
+                throttle_time_ms: 3,
+                error_code: 4,
+                session_id: 5,
                 responses: vec![FetchableTopicResponse {
                     topic: "t".into(),
                     topic_id: Uuid([7; 16]),
                     partitions: vec![PartitionData {
+                        partition_index: 2,
+                        high_watermark: 11,
+                        last_stable_offset: 10,
+                        log_start_offset: 1,
+                        aborted_transactions: Some(vec![AbortedTransaction {
+                            producer_id: 8,
+                            first_offset: 9,
+                            ..AbortedTransaction::default()
+                        }]),
+                        preferred_read_replica: 6,
                         records: Some(RecordsPayload::Raw(raw.clone())),
+                        diverging_epoch: EpochEndOffset {
+                            epoch: 7,
+                            end_offset: 8,
+                            ..EpochEndOffset::default()
+                        },
                         current_leader: LeaderIdAndEpoch {
                             leader_id: 4,
                             leader_epoch: 9,
                             ..LeaderIdAndEpoch::default()
                         },
+                        snapshot_id: SnapshotId {
+                            end_offset: 12,
+                            epoch: 10,
+                            ..SnapshotId::default()
+                        },
+                        unknown_tagged_fields: UnknownTaggedFields(vec![UnknownTaggedField {
+                            tag: 9,
+                            bytes: Bytes::from_static(b"unknown"),
+                        }]),
                         ..PartitionData::default()
                     }],
                     ..FetchableTopicResponse::default()
@@ -216,7 +243,34 @@ mod tests {
                 .0;
             let partition = &decoded.responses[0].partitions[0];
             assert!(partition.records == Some(RecordsPayload::Raw(raw.clone())));
-            assert!(partition.current_leader.leader_epoch == 9);
+            if version >= 12 {
+                assert!(partition.current_leader.leader_epoch == 9);
+                assert!(partition.diverging_epoch.end_offset == 8);
+                assert!(partition.snapshot_id.end_offset == 12);
+                assert!(partition.unknown_tagged_fields.0[0].tag == 9);
+            }
+            assert!(partition.aborted_transactions.as_ref().unwrap()[0].producer_id == 8);
         }
+    }
+
+    #[test]
+    fn request_encoding_delegates_and_response_rejects_unknown_versions() {
+        let request = FetchRequest::default();
+        let wrapped = RawFetchRequest(request.clone());
+        let mut expected = BytesMut::new();
+        request.encode(&mut expected, 18).unwrap();
+        let mut actual = BytesMut::new();
+        wrapped.encode(&mut actual, 18).unwrap();
+        assert!(actual == expected);
+        assert!(wrapped.encoded_len(18) == expected.len());
+
+        assert!(matches!(
+            RawFetchResponse::decode(&mut Bytes::new(), -1),
+            Err(ProtocolError::UnsupportedVersion { version: -1, .. })
+        ));
+        assert!(matches!(
+            RawFetchResponse::decode(&mut Bytes::new(), 19),
+            Err(ProtocolError::UnsupportedVersion { version: 19, .. })
+        ));
     }
 }
