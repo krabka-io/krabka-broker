@@ -1131,7 +1131,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: push
-        run: bazel run //packaging:push -- --tag "${GITHUB_SHA}"
+        run: bazel run -c opt //packaging:push -- --tag "${GITHUB_SHA}"
 
   # The single context `main` requires, and the reason the list of required
   # checks is one name rather than one name per job.
