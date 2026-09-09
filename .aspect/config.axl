@@ -24,6 +24,8 @@ covers those with `cargo clippy --workspace --all-targets`.
 """
 
 def config(ctx: ConfigContext):
+    ctx.tasks["delivery"].args.bazel_flags = ["-c", "opt"]
+
     # Register the clippy aspect so `aspect lint` runs it natively, without
     # needing Bazel's `--config=lint`.
     ctx.tasks["lint"].args.aspects = [

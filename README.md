@@ -157,7 +157,7 @@ equivalent, so the CLI is a convenience rather than a requirement:
 | Format | `aspect format` | `bazel run //tools/format` |
 | Coverage | `aspect test --coverage` | `bazel coverage //crates/...` |
 | Docs | — | `bazel build //crates/audit:audit_doc` |
-| Delivery | `aspect delivery` | `bazel run //packaging:push -- --tag dev` |
+| Delivery | `aspect delivery` | `bazel run -c opt //packaging:push -- --tag dev` |
 
 \* No single CI job runs this command. `coverage` executes `bazel coverage
 //crates/...` (`--test_tag_filters=-docker,-timing-sensitive`), and the `ci`
@@ -269,8 +269,8 @@ until it reproduces there.
 ## Delivery
 
 ```
-bazel run //packaging:image_load    # load into the local daemon
-bazel run //packaging:push -- --tag dev  # push to ghcr.io
+bazel run -c opt //packaging:image_load    # load into the local daemon
+bazel run -c opt //packaging:push -- --tag dev  # push to ghcr.io
 ```
 
 apko builds the broker base from locked Wolfi packages, including glibc and CA
