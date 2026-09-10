@@ -385,9 +385,7 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     json.register_subject("json");
     protobuf.register_subject("protobuf");
     cache.prewarm().await.unwrap();
-    let avro_payload = avro
-        .serialize("avro", &Order { id: "a".into() })
-        .unwrap();
+    let avro_payload = avro.serialize("avro", &Order { id: "a".into() }).unwrap();
     let json_payload = json.serialize("json", &JsonOrder { id: 1 }).unwrap();
     let protobuf_payload = protobuf.serialize("protobuf", &ProtoOrder).unwrap();
     let avro_id = schema_id(&avro_payload);
