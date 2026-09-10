@@ -173,12 +173,21 @@ fn validate_body_with_references(
                 .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
             let instance: serde_json::Value = serde_json::from_slice(body)
                 .map_err(|error| SchemaSerdeError::Deserialize(error.to_string()))?;
+            let base_uri = jsonschema::uri::from_str(
+                writer
+                    .get("$id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+            )
+            .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
             let references = references
                 .iter()
                 .map(|(name, source)| {
-                    serde_json::from_str(source)
-                        .map(|schema| (name.clone(), schema))
-                        .map_err(|error| SchemaSerdeError::Schema(error.to_string()))
+                    let schema = serde_json::from_str(source)
+                        .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
+                    let uri = jsonschema::uri::resolve_against(&base_uri.borrow(), name)
+                        .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
+                    Ok((uri.to_string(), schema))
                 })
                 .collect::<Result<HashMap<_, _>, _>>()?;
             let validator = jsonschema::options()
@@ -555,8 +564,8 @@ mod tests {
             .and(path(format!("/schemas/ids/{KNOWN_ID}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "schemaType": "JSON",
-                "schema": r#"{"$ref":"https://schemas.example/base.json"}"#,
-                "references": [{"name":"https://schemas.example/base.json","subject":"order-base","version":1}]
+                "schema": r#"{"$id":"https://schemas.example/root.json","$ref":"base.json"}"#,
+                "references": [{"name":"base.json","subject":"order-base","version":1}]
             })))
             .expect(1)
             .mount(&server)
