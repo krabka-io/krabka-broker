@@ -17,14 +17,17 @@ jobs:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: require completed evidence
         run: aspect check-qualification --final
-      - name: verify source revisions and OCI digests still exist
+      - name: verify source revisions, branches and OCI digests still exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          jq -r '.components[] | [.repository, .revision] | @tsv' qualification/milestone-20.json |
-            while IFS=$'\t' read -r repository revision; do
+          jq -r '.components[] | [.repository, .revision, .default_branch] | @tsv' qualification/milestone-20.json |
+            while IFS=$'\t' read -r repository revision default_branch; do
+              test "$(gh api "repos/${repository}" --jq .default_branch)" = "${default_branch}"
               test "$(gh api "repos/${repository}/commits/${revision}" --jq .sha)" = "${revision}"
+              status="$(gh api "repos/${repository}/compare/${revision}...${default_branch}" --jq .status)"
+              test "${status}" = ahead -o "${status}" = identical
             done
           jq -r '.components[].artifacts[] | select(.kind == "image") | [.reference, .digest] | @tsv' qualification/milestone-20.json |
             while IFS=$'\t' read -r reference digest; do

@@ -21,7 +21,7 @@ _REPOSITORIES = [
     "krabka-io/krabka-streams-rs",
 ]
 _EVIDENCE = {
-    "installation": ["compose", "helm", "matrix"],
+    "installation": ["compose", "helm", "m19", "matrix", "negative-compat"],
     "operator-lifecycle": ["certificate-rotation", "ledger", "scale-down", "upgrade"],
     "cli-admin": ["commands", "state"],
     "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],

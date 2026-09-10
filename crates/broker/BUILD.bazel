@@ -131,6 +131,10 @@ crate_tests(
         # them under `$TEST_SRCDIR/$TEST_WORKSPACE/docs/operations`.
         "//docs/operations:contract",
     ],
+    # The runnable example only needs normal dependencies. Keeping the live
+    # Schema Registry dev dependency out also avoids loading its older
+    # krabka-audit beside this workspace's crate under coverage instrumentation.
+    doc_test_dev_deps = False,
     docker = {
         # One image, used twice: as the client that reads krabka's advertised
         # table and as the Kafka broker that table is compared against.

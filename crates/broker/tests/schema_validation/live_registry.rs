@@ -1,13 +1,24 @@
 //! M19: the broker's schema gate against the real first-party registry.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
+use apache_avro::{AvroSchema, Schema, to_avro_datum_schemata, to_value};
 use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes};
 use krabka_broker::schema_validation::SchemaValidator;
 use krabka_client_core::Client;
-use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
+use krabka_protocol::{
+    owned::{
+        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        produce_response::PartitionProduceResponse,
+    },
+    primitives::uuid::Uuid as WireUuid,
+};
 use krabka_schema_registry::{
     auth::{AuthState, basic::BasicAuthStore},
     config::{RegistryConfig, RegistryRuntimeConfig, SecurityConfig},
@@ -15,7 +26,21 @@ use krabka_schema_registry::{
     kafkastore::KafkaStore,
     rest::{self, AppState, SecurityLayers, forward::ForwardState},
 };
+use krabka_schema_serde::{
+    AvroSerde, CacheConfig, JsonSerde, ProtobufSerde, RegistryClient, SchemaCache,
+    format::{SchemaSerializer, SchemaSubject},
+};
 use krabka_units::{minutes, secs};
+use prost::{
+    DecodeError, Message,
+    encoding::{DecodeContext, WireType},
+};
+use prost_reflect::{
+    DescriptorPool, MessageDescriptor, ReflectMessage,
+    prost_types::{DescriptorProto, FileDescriptorProto, FileDescriptorSet},
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -27,12 +52,79 @@ use crate::{
     support,
 };
 
-const ORDER_AVRO: &str =
-    r#"{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}"#;
-const ORDER_JSON: &str = r#"{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false}"#;
-const ORDER_PROTOBUF: &str = "syntax = \"proto3\"; message Order { int64 id = 1; }";
 const REGISTRY_USERNAME: &str = "broker";
 const REGISTRY_PASSWORD: &str = "m19-secret";
+const REGISTRY_FORWARD_SECRET: &str = "m19-forward-secret";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, AvroSchema)]
+struct Order {
+    id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+struct JsonOrder {
+    id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct Base {
+    id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct Envelope {
+    base: Base,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ProtoOrder;
+
+impl Message for ProtoOrder {
+    fn encode_raw(&self, _buf: &mut impl BufMut) {}
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        Ok(())
+    }
+
+    fn encoded_len(&self) -> usize {
+        0
+    }
+
+    fn clear(&mut self) {}
+}
+
+impl ReflectMessage for ProtoOrder {
+    fn descriptor(&self) -> MessageDescriptor {
+        static POOL: OnceLock<DescriptorPool> = OnceLock::new();
+        POOL.get_or_init(|| {
+            DescriptorPool::from_file_descriptor_set(FileDescriptorSet {
+                file: vec![FileDescriptorProto {
+                    name: Some("order.proto".into()),
+                    package: Some("m19".into()),
+                    syntax: Some("proto3".into()),
+                    message_type: vec![DescriptorProto {
+                        name: Some("Order".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+            })
+            .unwrap()
+        })
+        .get_message_by_name("m19.Order")
+        .unwrap()
+    }
+}
+
+fn schema_id(payload: &[u8]) -> u32 {
+    u32::from_be_bytes(payload[1..5].try_into().unwrap())
+}
 
 struct RegistryNode {
     url: String,
@@ -82,6 +174,7 @@ async fn start_registry(
         .unwrap();
     store.install_primary(primary.clone());
     let auth = AuthState {
+        audit: krabka_audit_registry::AuditLog::disabled(),
         basic: Some(Arc::new(BasicAuthStore::from_users(HashMap::from([(
             REGISTRY_USERNAME.to_owned(),
             REGISTRY_PASSWORD.to_owned(),
@@ -89,6 +182,7 @@ async fn start_registry(
         bearer: None,
         require_auth: true,
         realm: "m19".into(),
+        forward_secret: Some(REGISTRY_FORWARD_SECRET.into()),
     };
     let app = rest::router_with_security(
         AppState { store },
@@ -100,6 +194,7 @@ async fn start_registry(
                 http: reqwest::Client::new(),
                 node_id: url.clone(),
                 forward_max_body: config.runtime.forward_max_body,
+                forward_secret: Some(REGISTRY_FORWARD_SECRET.into()),
             },
         },
     );
@@ -133,6 +228,26 @@ async fn wait_for_primary(nodes: &mut [RegistryNode]) -> usize {
     })
     .await
     .expect("registry primary election")
+}
+
+async fn produce_when_ready(
+    client: &Client,
+    topic: &str,
+    topic_id: WireUuid,
+    value: Option<Bytes>,
+) -> PartitionProduceResponse {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = produce(client, topic, topic_id, batch_with_value(value.clone())).await;
+        if !matches!(response.error_code, 3 | 6 | 100) {
+            return response;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{topic} did not become produceable: {response:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn register(client: &reqwest::Client, url: &str, subject: &str, body: Value) -> u32 {
@@ -299,27 +414,21 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         .default_headers(headers)
         .build()
         .unwrap();
-    let avro_id = register(
-        &http,
-        &registries[secondary].url,
-        "avro-value",
-        serde_json::json!({"schema": ORDER_AVRO}),
-    )
-    .await;
-    let json_id = register(
-        &http,
-        &registries[secondary].url,
-        "json-value",
-        serde_json::json!({"schemaType": "JSON", "schema": ORDER_JSON}),
-    )
-    .await;
-    let protobuf_id = register(
-        &http,
-        &registries[secondary].url,
-        "protobuf-value",
-        serde_json::json!({"schemaType": "PROTOBUF", "schema": ORDER_PROTOBUF}),
-    )
-    .await;
+    let cache = SchemaCache::new(
+        RegistryClient::with_http_client(registries[secondary].url.clone(), http.clone()),
+        CacheConfig::default(),
+    );
+    let avro = AvroSerde::<Order>::value(&cache);
+    let json = JsonSerde::<JsonOrder>::value(&cache, true);
+    let protobuf = ProtobufSerde::<ProtoOrder>::value(&cache);
+    avro.register_subject("avro");
+    json.register_subject("json");
+    protobuf.register_subject("protobuf");
+    cache.prewarm().await.unwrap();
+    let avro_payload = avro.serialize("avro", &Order { id: "a".into() }).unwrap();
+    let json_payload = json.serialize("json", &JsonOrder { id: 1 }).unwrap();
+    let protobuf_payload = protobuf.serialize("protobuf", &ProtoOrder).unwrap();
+    let avro_id = schema_id(&avro_payload);
     let wrong_subject_id = register(
         &http,
         &registries[secondary].url,
@@ -354,6 +463,23 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     )
     .await;
     check!(referenced["references"][0]["subject"] == "order-base");
+    let referenced_schemas = Schema::parse_list([
+        r#"{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}"#,
+        r#"{"type":"record","name":"Envelope","fields":[{"name":"base","type":"Base"}]}"#,
+    ])
+    .unwrap();
+    let referenced_body = to_avro_datum_schemata(
+        &referenced_schemas[1],
+        referenced_schemas.iter().collect(),
+        to_value(Envelope {
+            base: Base {
+                id: "referenced".into(),
+            },
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let referenced_payload = framed(referenced_id, &referenced_body);
 
     let bootstrap_client = client(&bootstrap).await;
     let validation = &[
@@ -364,6 +490,14 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     let json_topic = create_topic_rf(&cluster[0].0, &bootstrap_client, "json", validation, 3).await;
     let protobuf_topic =
         create_topic_rf(&cluster[0].0, &bootstrap_client, "protobuf", validation, 3).await;
+    let referenced_topic = create_topic_rf(
+        &cluster[0].0,
+        &bootstrap_client,
+        "referenced",
+        validation,
+        3,
+    )
+    .await;
     let control_topic = create_topic_rf(&cluster[0].0, &bootstrap_client, "control", &[], 3).await;
 
     let leader_id = cluster[0]
@@ -377,46 +511,56 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     let leader_client = client(&cluster[leader_index].0.listen_addr().to_string()).await;
 
     for (topic, topic_id, value) in [
-        ("avro", avro_topic, framed(avro_id, &order_avro_body())),
-        ("json", json_topic, framed(json_id, br#"{"id":1}"#)),
-        (
-            "protobuf",
-            protobuf_topic,
-            // Confluent's single-top-level-message index is one zero byte;
-            // field 1 then carries the varint value 1.
-            framed(protobuf_id, &[0, 0x08, 0x01]),
-        ),
+        ("avro", avro_topic, avro_payload.clone()),
+        ("json", json_topic, json_payload),
+        ("protobuf", protobuf_topic, protobuf_payload),
+        ("referenced", referenced_topic, referenced_payload.clone()),
     ] {
-        let response = produce(
-            &leader_client,
-            topic,
-            topic_id,
-            batch_with_value(Some(value)),
-        )
-        .await;
+        let response = produce_when_ready(&leader_client, topic, topic_id, Some(value)).await;
         check!(response.error_code == 0, "{topic}: {response:?}");
     }
 
     // Warm-cache acceptance and every required rejection keep the leader LEO
     // exact; no error response is allowed to hide an append.
-    let warm = produce(
+    let warm = produce_when_ready(
         &leader_client,
         "avro",
         avro_topic,
-        batch_with_value(Some(framed(avro_id, &order_avro_body()))),
+        Some(avro_payload.clone()),
     )
     .await;
     check!(warm.error_code == 0, "{warm:?}");
-    let control = produce(
+    let control = produce_when_ready(
         &leader_client,
         "control",
         control_topic,
-        batch_with_value(Some(Bytes::from_static(b"unframed-control"))),
+        Some(Bytes::from_static(b"unframed-control")),
     )
     .await;
     check!(control.error_code == 0, "{control:?}");
-    let tombstone = produce(&leader_client, "avro", avro_topic, batch_with_value(None)).await;
+    let tombstone = produce_when_ready(&leader_client, "avro", avro_topic, None).await;
     check!(tombstone.error_code == 0, "{tombstone:?}");
+
+    let referenced_leader_id = cluster[0]
+        .0
+        .partition_leader_for_test("referenced", 0)
+        .expect("referenced leader");
+    let referenced_leader = cluster
+        .iter()
+        .find(|(broker, _, _)| broker.node_id() == referenced_leader_id)
+        .unwrap();
+    let referenced_client = client(&referenced_leader.0.listen_addr().to_string()).await;
+    check!(
+        fetch_values(
+            &referenced_leader.0,
+            &referenced_client,
+            "referenced",
+            referenced_topic,
+            1,
+        )
+        .await
+            == vec![Some(referenced_payload)]
+    );
 
     check!(
         fetch_values(
@@ -427,11 +571,7 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
             3
         )
         .await
-            == vec![
-                Some(framed(avro_id, &order_avro_body())),
-                Some(framed(avro_id, &order_avro_body())),
-                None,
-            ]
+            == vec![Some(avro_payload.clone()), Some(avro_payload), None,]
     );
     let control_leader_id = cluster[0]
         .0
@@ -535,11 +675,11 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         .find(|(broker, _, _)| broker.node_id() == new_leader_id)
         .unwrap();
     let failover_client = client(&new_leader.0.listen_addr().to_string()).await;
-    let response = produce(
+    let response = produce_when_ready(
         &failover_client,
         "avro",
         avro_topic,
-        batch_with_value(Some(framed(evolved_id, &[0x02, b'b', 0x00]))),
+        Some(framed(evolved_id, &[0x02, b'b', 0x00])),
     )
     .await;
     check!(response.error_code == 0, "{response:?}");

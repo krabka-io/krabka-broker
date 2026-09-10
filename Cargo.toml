@@ -29,6 +29,7 @@ debug = "none"
 split-debuginfo = "packed"
 
 [workspace.dependencies]
+apache-avro = { version = "0.21", features = ["derive"] }
 arc-swap = "1"
 # Expressive test assertions: `assert!(a == b)` / `check!(..)` with
 # captured-expression diagnostics. Used for all test assertions workspace-wide.
@@ -96,6 +97,7 @@ pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hm
 prometheus-client = "0.25"
 proptest = "1"
 prost = "0.14"
+prost-reflect = "0.16"
 # Thread-safe clock abstraction (rs-clock). Production code reads time through
 # its three separate traits -- `WallClock` for business timestamps,
 # `MonotonicClock` for elapsed-time arithmetic, and `Timer` for delays -- so
@@ -124,6 +126,7 @@ schemars = "1.2"
 serde = { version = "1", features = ["derive"] }
 serde-wincode = "=0.1.2"
 serde_json = "1"
+jsonschema = { version = "0.49", default-features = false }
 sha2 = "0.11"
 # Jepsen-style exhaustive concurrency-correctness model checking (KRaft
 # consensus). Dev-dependency only — never linked into a shipped binary.
@@ -167,6 +170,7 @@ krabka-units = "0.4.0"
 # broker crates as published dependencies. They are not published yet, so use
 # the registry repository's own tested broker revision.
 krabka-authz = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
+krabka-audit = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
 krabka-telemetry = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
 krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
 krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
@@ -180,4 +184,4 @@ krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = 
 krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b79bf4965075a96ab88f2612f0b7cb9c86d2097b" }
 krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b79bf4965075a96ab88f2612f0b7cb9c86d2097b" }
 krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b79bf4965075a96ab88f2612f0b7cb9c86d2097b" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ae9876d15da12e6123b77b4fc77f50bb9d162556" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "d7cb5501ea57b0e8ee38953841a7b27762fedb77" }

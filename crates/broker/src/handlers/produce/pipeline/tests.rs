@@ -10,6 +10,7 @@ use krabka_protocol::{
     owned::produce_response::LeaderIdAndEpoch,
     records::{Record, RecordBatch},
 };
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 use super::*;
 use crate::handlers::produce::{
@@ -18,7 +19,23 @@ use crate::handlers::produce::{
 };
 
 #[tokio::test]
-async fn process_partition_non_leader_preserves_current_leader_hint() {
+async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint() {
+    let registry = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&registry)
+        .await;
+    let schema_validator = Arc::new(
+        crate::schema_validation::SchemaValidator::new(
+            registry.uri(),
+            false,
+            100,
+            krabka_units::minutes(1),
+            krabka_units::secs(1),
+        )
+        .expect("validator"),
+    );
     let mut img = image_with_topic("orders", &[2, 3]);
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         topic: "orders".into(),
@@ -46,7 +63,7 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
     let metrics = crate::metrics::BrokerMetrics::new();
     let payload = encode_batch(&RecordBatch {
         records: vec![Record {
-            value: Some(Bytes::from_static(b"hello")),
+            value: Some(Bytes::from_static(&[0, 0, 0, 0, 42, b'a'])),
             ..Default::default()
         }],
         ..Default::default()
@@ -54,7 +71,11 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
 
     let resp = process_partition(
         PartitionInput {
-            schema: None,
+            schema: Some(crate::schema_validation::SchemaGate {
+                key: false,
+                value: true,
+                mode: crate::schema_validation::ValidationMode::Full,
+            }),
             part_data: FramedPartition {
                 index: 0,
                 payload: PartitionPayload::Slice(payload),
@@ -70,7 +91,7 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
             timeout: Duration::from_millis(1),
         },
         PartitionServices {
-            schema_validator: None,
+            schema_validator: Some(&schema_validator),
             partitions: &partitions,
             txn_coordinator: &txn_coordinator,
             producer_state: &producer_state,

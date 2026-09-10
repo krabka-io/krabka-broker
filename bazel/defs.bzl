@@ -225,6 +225,7 @@ def crate_tests(
         manual = [],
         no_harness = [],
         doc_tests = True,
+        doc_test_dev_deps = True,
         mutants = True,
         mutants_jobs = 4,
         mutants_shards = 8,
@@ -254,6 +255,7 @@ def crate_tests(
       no_harness: test stems declared `harness = false` in Cargo.toml.
       doc_tests: whether to emit a `rust_doc_test`. `cargo test` runs rustdoc
         examples; without this they are simply not run.
+      doc_test_dev_deps: whether doctests need the crate's dev dependencies.
       mutants: whether to emit a `cargo_mutants_test` over unit and ordinary
         integration tests.
       mutants_jobs: mutants built and tested concurrently within one shard.
@@ -291,7 +293,7 @@ def crate_tests(
         rust_doc_test(
             name = lib + "_doc_test",
             crate = ":" + lib,
-            deps = all_crate_deps(normal_dev = True),
+            deps = all_crate_deps(normal_dev = True) if doc_test_dev_deps else all_crate_deps(normal = True),
         )
 
     if mutants:

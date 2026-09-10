@@ -319,8 +319,11 @@ jobs:
       - name: install cargo-nextest
         run: |
           set -euo pipefail
-          curl -LsSf --retry 5 https://get.nexte.st/latest/linux \
-            | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
+          curl -LsSf --retry 5 --retry-all-errors \
+            --output "${RUNNER_TEMP}/cargo-nextest.tar.gz" \
+            https://get.nexte.st/latest/linux
+          tar zxf "${RUNNER_TEMP}/cargo-nextest.tar.gz" \
+            -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
 
       # `--all-targets` is also what keeps the criterion benches compiling.
       # It includes `--benches`, so every `[[bench]]` target in

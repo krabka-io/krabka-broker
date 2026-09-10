@@ -1,5 +1,5 @@
 //! The KFC-7 schema-validation gate, which checks every record of a prepared
-//! batch against the registry before the batch reaches the leadership gate.
+//! batch against the registry after the leadership gate and before append.
 
 use std::sync::Arc;
 

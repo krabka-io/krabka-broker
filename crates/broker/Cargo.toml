@@ -59,6 +59,7 @@ krabka-security.workspace = true
 # KFC-7 broker-side schema validation: the Confluent wire framing, the
 # registry REST client, and the untyped body validators.
 krabka-schema-serde = { version = "0.4.0", features = ["avro", "protobuf", "json"] }
+apache-avro = { workspace = true }
 qubit-clock = { workspace = true }
 arc-swap.workspace = true
 async-trait.workspace = true
@@ -94,6 +95,7 @@ axum.workspace = true
 # RFC 7662 introspection POST; direct `serde_json` dep for the response value.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
 serde_json = { workspace = true }
+jsonschema = { workspace = true }
 # Compile customClaimCheck JsonPath expressions at config-load
 # and inject into the OAUTHBEARER validators.
 jsonpath-rust = { workspace = true }
@@ -181,7 +183,9 @@ krabka-client-consumer = { version = "0.4" }
 krabka-client-producer = { version = "0.4" }
 # M19's live-registry acceptance runs the real first-party service instead of
 # another HTTP fixture. Keep it on the production serde dependency's revision.
-krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ae9876d15da12e6123b77b4fc77f50bb9d162556" }
+krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "d7cb5501ea57b0e8ee38953841a7b27762fedb77" }
+krabka-audit-registry = { package = "krabka-audit", version = "0.4.0" }
+prost-reflect = { workspace = true }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the
 # real-Kafka Docker capture (`describe_groups_jvm.rs`).
 krabka-client-core = { version = "0.4", features = ["mock"] }
