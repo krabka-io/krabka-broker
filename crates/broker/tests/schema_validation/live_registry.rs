@@ -12,7 +12,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::{Buf, BufMut, Bytes};
 use krabka_broker::schema_validation::SchemaValidator;
 use krabka_client_core::Client;
-use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
+use krabka_protocol::{
+    owned::{
+        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        produce_response::PartitionProduceResponse,
+    },
+    primitives::uuid::Uuid as WireUuid,
+};
 use krabka_schema_registry::{
     auth::{AuthState, basic::BasicAuthStore},
     config::{RegistryConfig, RegistryRuntimeConfig, SecurityConfig},
@@ -208,6 +214,22 @@ async fn wait_for_primary(nodes: &mut [RegistryNode]) -> usize {
     })
     .await
     .expect("registry primary election")
+}
+
+async fn produce_when_ready(
+    client: &Client,
+    topic: &str,
+    topic_id: WireUuid,
+    value: Option<Bytes>,
+) -> PartitionProduceResponse {
+    for _ in 0..20 {
+        let response = produce(client, topic, topic_id, batch_with_value(value.clone())).await;
+        if !matches!(response.error_code, 3 | 6 | 100) {
+            return response;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{topic} did not become produceable");
 }
 
 async fn register(client: &reqwest::Client, url: &str, subject: &str, body: Value) -> u32 {
@@ -450,35 +472,29 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         ("json", json_topic, json_payload),
         ("protobuf", protobuf_topic, protobuf_payload),
     ] {
-        let response = produce(
-            &leader_client,
-            topic,
-            topic_id,
-            batch_with_value(Some(value)),
-        )
-        .await;
+        let response = produce_when_ready(&leader_client, topic, topic_id, Some(value)).await;
         check!(response.error_code == 0, "{topic}: {response:?}");
     }
 
     // Warm-cache acceptance and every required rejection keep the leader LEO
     // exact; no error response is allowed to hide an append.
-    let warm = produce(
+    let warm = produce_when_ready(
         &leader_client,
         "avro",
         avro_topic,
-        batch_with_value(Some(avro_payload.clone())),
+        Some(avro_payload.clone()),
     )
     .await;
     check!(warm.error_code == 0, "{warm:?}");
-    let control = produce(
+    let control = produce_when_ready(
         &leader_client,
         "control",
         control_topic,
-        batch_with_value(Some(Bytes::from_static(b"unframed-control"))),
+        Some(Bytes::from_static(b"unframed-control")),
     )
     .await;
     check!(control.error_code == 0, "{control:?}");
-    let tombstone = produce(&leader_client, "avro", avro_topic, batch_with_value(None)).await;
+    let tombstone = produce_when_ready(&leader_client, "avro", avro_topic, None).await;
     check!(tombstone.error_code == 0, "{tombstone:?}");
 
     check!(
@@ -594,11 +610,11 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         .find(|(broker, _, _)| broker.node_id() == new_leader_id)
         .unwrap();
     let failover_client = client(&new_leader.0.listen_addr().to_string()).await;
-    let response = produce(
+    let response = produce_when_ready(
         &failover_client,
         "avro",
         avro_topic,
-        batch_with_value(Some(framed(evolved_id, &[0x02, b'b', 0x00]))),
+        Some(framed(evolved_id, &[0x02, b'b', 0x00])),
     )
     .await;
     check!(response.error_code == 0, "{response:?}");
