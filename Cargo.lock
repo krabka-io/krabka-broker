@@ -2694,8 +2694,6 @@ dependencies = [
  "percent-encoding",
  "referencing",
  "regex",
- "reqwest 0.13.4",
- "rustls",
  "serde",
  "serde_json",
  "strum 0.28.0",

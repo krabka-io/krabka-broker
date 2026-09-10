@@ -168,7 +168,7 @@ fn validate_body_with_references(
         SchemaKind::Protobuf if !references.is_empty() => {
             validate_protobuf_with_references(schema, references, message_index, body)
         }
-        SchemaKind::Json if !references.is_empty() => {
+        SchemaKind::Json => {
             let writer: serde_json::Value = serde_json::from_str(schema)
                 .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
             let instance: serde_json::Value = serde_json::from_slice(body)
@@ -603,6 +603,46 @@ mod tests {
                 Role::Value,
                 ValidationMode::Full,
                 &invalid,
+                &no_metrics(),
+            )
+            .await;
+        assert!(let Err(reason) = result);
+        check!(reason.label() == "body_mismatch", "{reason}");
+    }
+
+    #[tokio::test]
+    async fn full_mode_never_fetches_json_references_outside_the_registry_cache() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"subject": "orders-value", "version": 1}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "schemaType": "JSON",
+                "schema": format!(r#"{{"$ref":"{}/outside.json"}}"#, server.uri())
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/outside.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let result = validator(server.uri())
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &framed(KNOWN_ID, br#"{}"#),
                 &no_metrics(),
             )
             .await;
