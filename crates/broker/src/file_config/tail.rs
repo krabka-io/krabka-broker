@@ -63,15 +63,55 @@ pub(super) fn apply_config_tail(
         };
     }
     if let Some(sr) = tail.schema_registry.as_ref() {
+        let basic_auth = match (
+            sr.basic_auth_username.as_ref(),
+            sr.basic_auth_password_path.as_ref(),
+        ) {
+            (None, None) => None,
+            (Some(username), Some(path)) => Some((
+                username.clone(),
+                std::fs::read_to_string(path)
+                    .map_err(|error| {
+                        FileConfigError::InvalidConfig(format!(
+                            "[schema_registry]: failed to read basic_auth_password_path {}: {error}",
+                            path.display()
+                        ))
+                    })?
+                    .trim_end_matches(['\n', '\r'])
+                    .to_owned(),
+            )),
+            _ => {
+                return Err(FileConfigError::InvalidConfig(
+                    "[schema_registry]: basic_auth_username and basic_auth_password_path must be set together"
+                        .to_owned(),
+                ));
+            }
+        };
         cfg.schema_validator = Some(std::sync::Arc::new(
-            crate::schema_validation::SchemaValidator::new(
-                sr.url.clone(),
-                sr.fail_open,
-                sr.maximum_cache_size,
-                Time::from_millis(sr.expire_after_ms),
-                cfg.schema_registry_http_timeout,
-            )
-            .map_err(|error| FileConfigError::SchemaRegistryConfig(format!("{error:?}")))?,
+            basic_auth
+                .map_or_else(
+                    || {
+                        crate::schema_validation::SchemaValidator::new(
+                            sr.url.clone(),
+                            sr.fail_open,
+                            sr.maximum_cache_size,
+                            Time::from_millis(sr.expire_after_ms),
+                            cfg.schema_registry_http_timeout,
+                        )
+                    },
+                    |(username, password)| {
+                        crate::schema_validation::SchemaValidator::new_with_basic_auth(
+                            sr.url.clone(),
+                            sr.fail_open,
+                            sr.maximum_cache_size,
+                            Time::from_millis(sr.expire_after_ms),
+                            cfg.schema_registry_http_timeout,
+                            username,
+                            password,
+                        )
+                    },
+                )
+                .map_err(|error| FileConfigError::SchemaRegistryConfig(format!("{error:?}")))?,
         ));
     }
     if let Some(process) = tail.process

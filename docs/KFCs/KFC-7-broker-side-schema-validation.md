@@ -43,11 +43,16 @@ Validation needs a registry to ask. It is configured in `broker.toml`:
 ```toml
 [schema_registry]
 url = "http://schema-registry:8081"
+basic_auth_username = "broker"
+basic_auth_password_path = "/run/secrets/schema-registry-password"
 # Security-sensitive. See "When the Registry Is Unreachable".
 fail_open = false
 maximum_cache_size = 50000
 expire_after_ms = 300000
 ```
+
+Omit both Basic-auth fields for an anonymous registry. The password path must
+name a readable mounted secret; the broker removes its trailing line ending.
 
 `[runtime] schema_registry_http_timeout` bounds one registry call. It defaults to 5 seconds, the same as `opa_http_timeout`.
 

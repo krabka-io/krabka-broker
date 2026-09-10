@@ -540,6 +540,8 @@ TOML shape of `[schema_registry]`. Mirrors the constructor arguments of [`crate:
 
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `basic_auth_password_path` | string | broker default |  | File containing the HTTP Basic password. One trailing newline is ignored. Set this together with `basic_auth_username`; keeping the password in a separate mounted secret avoids putting it in broker arguments or TOML. |
+| `basic_auth_username` | string | broker default |  | HTTP Basic username for an authenticated registry. Set this together with `basic_auth_password_path`. |
 | `expire_after_ms` | integer (int64) | `300000` | milliseconds | Schema-cache entry TTL, in milliseconds. Default `300_000`, which is 5 minutes. |
 | `fail_open` | boolean | `false` |  | **Security-sensitive.** Admit a record that the broker could not validate because the registry was unreachable. When `true`, a validated topic accepts whatever it is sent for the length of a registry outage. That is fail-open. Default `false`, which fails the produce instead. An unknown schema id, or a body that does not match its schema, is a rejection under either setting. This field governs only the case where the broker could not get an answer at all. |
 | `maximum_cache_size` | integer (uint) | `50000` | entries | Schema-cache capacity, in entries. Default `50_000`. |

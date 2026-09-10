@@ -1,17 +1,19 @@
 //! M19: the broker's schema gate against the real first-party registry.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use assert2::{assert, check};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use krabka_broker::schema_validation::SchemaValidator;
 use krabka_client_core::Client;
 use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
 use krabka_schema_registry::{
+    auth::{AuthState, basic::BasicAuthStore},
     config::{RegistryConfig, RegistryRuntimeConfig, SecurityConfig},
     election::{Election, PrimaryState},
     kafkastore::KafkaStore,
-    rest::{self, AppState, forward::ForwardState},
+    rest::{self, AppState, SecurityLayers, forward::ForwardState},
 };
 use krabka_units::{minutes, secs};
 use serde_json::Value;
@@ -29,6 +31,8 @@ const ORDER_AVRO: &str =
     r#"{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}"#;
 const ORDER_JSON: &str = r#"{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false}"#;
 const ORDER_PROTOBUF: &str = "syntax = \"proto3\"; message Order { int64 id = 1; }";
+const REGISTRY_USERNAME: &str = "broker";
+const REGISTRY_PASSWORD: &str = "m19-secret";
 
 struct RegistryNode {
     url: String,
@@ -77,13 +81,26 @@ async fn start_registry(
         .await
         .unwrap();
     store.install_primary(primary.clone());
-    let app = rest::router_with_forwarding(
+    let auth = AuthState {
+        basic: Some(Arc::new(BasicAuthStore::from_users(HashMap::from([(
+            REGISTRY_USERNAME.to_owned(),
+            REGISTRY_PASSWORD.to_owned(),
+        )])))),
+        bearer: None,
+        require_auth: true,
+        realm: "m19".into(),
+    };
+    let app = rest::router_with_security(
         AppState { store },
-        ForwardState {
-            primary: primary.clone(),
-            http: reqwest::Client::new(),
-            node_id: url.clone(),
-            forward_max_body: config.runtime.forward_max_body,
+        SecurityLayers {
+            auth,
+            authz: None,
+            forward: ForwardState {
+                primary: primary.clone(),
+                http: reqwest::Client::new(),
+                node_id: url.clone(),
+                forward_max_body: config.runtime.forward_max_body,
+            },
         },
     );
     let serve_cancel = cancel.clone();
@@ -242,7 +259,16 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     let registry_url = format!("http://{}", registry_listener.local_addr().unwrap());
     let mut cluster = support::start_n_node_with(3, |_, config| {
         config.schema_validator = Some(Arc::new(
-            SchemaValidator::new(registry_url.clone(), false, 64, minutes(5), secs(2)).unwrap(),
+            SchemaValidator::new_with_basic_auth(
+                registry_url.clone(),
+                false,
+                64,
+                minutes(5),
+                secs(2),
+                REGISTRY_USERNAME.into(),
+                REGISTRY_PASSWORD.into(),
+            )
+            .unwrap(),
         ));
     })
     .await
@@ -263,7 +289,16 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
 
     // Register through the secondary so the first write also proves forwarding
     // to the elected primary and replication through the RF=3 `_schemas` log.
-    let http = reqwest::Client::new();
+    let mut headers = reqwest::header::HeaderMap::new();
+    let credentials = STANDARD.encode(format!("{REGISTRY_USERNAME}:{REGISTRY_PASSWORD}"));
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Basic {credentials}").parse().unwrap(),
+    );
+    let http = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
     let avro_id = register(
         &http,
         &registries[secondary].url,

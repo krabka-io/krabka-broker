@@ -22,6 +22,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use krabka_schema_serde::registry::RegistryClient;
 use krabka_units::{Time, convert::TimeExt as _};
 use lru::LruCache;
@@ -115,6 +116,32 @@ impl SchemaValidator {
             maximum_cache_size,
             expire_after,
             http_timeout,
+            None,
+            Arc::new(qubit_clock::StdWallClock::new()),
+        )
+    }
+
+    /// Build a validator that authenticates to the registry with HTTP Basic.
+    ///
+    /// # Errors
+    ///
+    /// As [`SchemaValidator::new`].
+    pub fn new_with_basic_auth(
+        url: String,
+        fail_open: bool,
+        maximum_cache_size: usize,
+        expire_after: Time,
+        http_timeout: Time,
+        username: String,
+        password: String,
+    ) -> Result<Self, SchemaValidatorError> {
+        Self::with_clock(
+            url,
+            fail_open,
+            maximum_cache_size,
+            expire_after,
+            http_timeout,
+            Some((username, password)),
             Arc::new(qubit_clock::StdWallClock::new()),
         )
     }
@@ -134,12 +161,24 @@ impl SchemaValidator {
         maximum_cache_size: usize,
         expire_after: Time,
         http_timeout: Time,
+        basic_auth: Option<(String, String)>,
         clock: Arc<dyn qubit_clock::WallClock>,
     ) -> Result<Self, SchemaValidatorError> {
         let capacity =
             NonZeroUsize::new(maximum_cache_size).ok_or(SchemaValidatorError::ZeroCache)?;
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some((username, password)) = basic_auth {
+            let encoded = STANDARD.encode(format!("{username}:{password}"));
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                format!("Basic {encoded}")
+                    .parse()
+                    .map_err(|error| SchemaValidatorError::Http(format!("basic auth: {error}")))?,
+            );
+        }
         let http = reqwest::Client::builder()
             .timeout(http_timeout.to_std())
+            .default_headers(headers)
             .build()
             .map_err(|e| SchemaValidatorError::Http(e.to_string()))?;
         Ok(Self {

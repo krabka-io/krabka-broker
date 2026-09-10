@@ -5,6 +5,8 @@
 //! Confluent-compatible registry client each broker holds for KFC-7
 //! broker-side schema validation.
 
+use std::path::PathBuf;
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -21,6 +23,15 @@ pub struct FileSchemaRegistryConfig {
     /// Base URL of the Confluent-compatible schema registry, e.g.
     /// `http://schema-registry:8081`. The registry API path is appended to it.
     pub url: String,
+    /// HTTP Basic username for an authenticated registry.
+    ///
+    /// Set this together with `basic_auth_password_path`.
+    pub basic_auth_username: Option<String>,
+    /// File containing the HTTP Basic password. One trailing newline is ignored.
+    ///
+    /// Set this together with `basic_auth_username`; keeping the password in a
+    /// separate mounted secret avoids putting it in broker arguments or TOML.
+    pub basic_auth_password_path: Option<PathBuf>,
     /// **Security-sensitive.** Admit a record that the broker could not
     /// validate because the registry was unreachable. When `true`, a validated
     /// topic accepts whatever it is sent for the length of a registry outage.
@@ -82,6 +93,8 @@ expire_after_ms = 60000
 
         let expected = FileSchemaRegistryConfig {
             url: "http://schema-registry:8081".to_owned(),
+            basic_auth_username: None,
+            basic_auth_password_path: None,
             fail_open: true,
             maximum_cache_size: 128,
             expire_after_ms: 60_000,
@@ -101,6 +114,8 @@ url = "http://schema-registry:8081"
 
         let expected = FileSchemaRegistryConfig {
             url: "http://schema-registry:8081".to_owned(),
+            basic_auth_username: None,
+            basic_auth_password_path: None,
             fail_open: false,
             maximum_cache_size: 50_000,
             expire_after_ms: 300_000,
@@ -134,6 +149,45 @@ url = "http://schema-registry.invalid:8081"
 
         file.apply_to(&mut cfg)
             .expect("apply schema_registry section");
+
+        assert!(cfg.schema_validator.is_some());
+    }
+
+    #[test]
+    fn schema_registry_basic_auth_requires_both_fields() {
+        let file: FileConfig = toml::from_str(
+            r#"
+[schema_registry]
+url = "http://schema-registry.invalid:8081"
+basic_auth_username = "broker"
+"#,
+        )
+        .unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        let error = file.apply_to(&mut cfg).unwrap_err();
+
+        assert!(error.to_string().contains("basic_auth_password_path"));
+    }
+
+    #[test]
+    fn schema_registry_basic_auth_reads_password_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let password_path = dir.path().join("registry-password");
+        std::fs::write(&password_path, "secret\n").unwrap();
+        let file: FileConfig = toml::from_str(&format!(
+            r#"
+[schema_registry]
+url = "http://schema-registry.invalid:8081"
+basic_auth_username = "broker"
+basic_auth_password_path = "{}"
+"#,
+            password_path.display()
+        ))
+        .unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).unwrap();
 
         assert!(cfg.schema_validator.is_some());
     }
