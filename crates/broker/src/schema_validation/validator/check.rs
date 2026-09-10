@@ -643,7 +643,7 @@ mod tests {
                 "orders",
                 Role::Value,
                 ValidationMode::Full,
-                &framed(KNOWN_ID, br#"{}"#),
+                &framed(KNOWN_ID, br"{}"),
                 &no_metrics(),
             )
             .await;
