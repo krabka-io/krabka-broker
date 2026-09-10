@@ -39,7 +39,7 @@ def _impl(ctx):
     deny_output = _capture(ctx, "cargo", [
         "deny",
         "--manifest-path",
-        "crates/broker/Cargo.toml",
+        "Cargo.toml",
         "--target",
         "x86_64-unknown-linux-gnu",
         "--exclude-dev",
