@@ -169,12 +169,11 @@ impl SchemaValidator {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some((username, password)) = basic_auth {
             let encoded = STANDARD.encode(format!("{username}:{password}"));
-            headers.insert(
-                reqwest::header::AUTHORIZATION,
-                format!("Basic {encoded}")
-                    .parse()
-                    .map_err(|error| SchemaValidatorError::Http(format!("basic auth: {error}")))?,
-            );
+            let mut authorization = format!("Basic {encoded}")
+                .parse::<reqwest::header::HeaderValue>()
+                .map_err(|error| SchemaValidatorError::Http(format!("basic auth: {error}")))?;
+            authorization.set_sensitive(true);
+            headers.insert(reqwest::header::AUTHORIZATION, authorization);
         }
         let http = reqwest::Client::builder()
             .timeout(http_timeout.to_std())
