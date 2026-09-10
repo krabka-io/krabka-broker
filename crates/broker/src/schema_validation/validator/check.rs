@@ -8,7 +8,8 @@
 //! `cache`.
 
 use krabka_schema_serde::{
-    format::validate::validate_body,
+    error::SchemaSerdeError,
+    format::validate::{validate_body, validate_protobuf_with_references},
     subject::{Role, SchemaKind, SubjectStrategy as _, TopicNameStrategy},
     wire,
 };
@@ -72,7 +73,7 @@ impl SchemaValidator {
             return Ok(());
         }
 
-        let Some((kind, text)) = entry.body.as_ref() else {
+        let Some(schema_body) = entry.body.as_ref() else {
             // `entry` was fetched for `Full`, so the text is there unless the
             // registry answered without one. Treat that as unavailable rather
             // than as a passing record.
@@ -84,7 +85,7 @@ impl SchemaValidator {
 
         // Protobuf carries a message-index between the id and the body, so the
         // body offset depends on the format the id resolved to.
-        let (message_index, body) = if *kind == SchemaKind::Protobuf {
+        let (message_index, body) = if schema_body.kind == SchemaKind::Protobuf {
             let (decoded_id, index, body) =
                 wire::decode_protobuf(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
             if decoded_id != id {
@@ -97,7 +98,15 @@ impl SchemaValidator {
             (Vec::new(), &field[5..])
         };
 
-        validate_body(*kind, text, &message_index, body).map_err(|e| RejectReason::BodyMismatch {
+        validate_body_with_references(
+            schema_body.kind,
+            &schema_body.schema,
+            &schema_body.references,
+            &schema_body.reference_order,
+            &message_index,
+            body,
+        )
+        .map_err(|e| RejectReason::BodyMismatch {
             id,
             detail: e.to_string(),
         })
@@ -119,6 +128,50 @@ impl SchemaValidator {
             krabka_verified::SchemaFailureDecision::AllowUnvalidated => Ok(()),
             krabka_verified::SchemaFailureDecision::Reject => Err(reason),
         }
+    }
+}
+
+fn validate_body_with_references(
+    kind: SchemaKind,
+    schema: &str,
+    references: &std::collections::HashMap<String, String>,
+    reference_order: &[String],
+    message_index: &[i32],
+    body: &[u8],
+) -> Result<(), SchemaSerdeError> {
+    match kind {
+        SchemaKind::Avro if !references.is_empty() => {
+            let mut sources: Vec<_> = reference_order
+                .iter()
+                .filter_map(|name| references.get(name).map(String::as_str))
+                .collect();
+            sources.push(schema);
+            let schemas = apache_avro::Schema::parse_list(&sources)
+                .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
+            let writer = schemas
+                .last()
+                .ok_or_else(|| SchemaSerdeError::Schema("empty Avro schema set".into()))?;
+            let mut cursor = body;
+            apache_avro::from_avro_datum_schemata(
+                writer,
+                schemas.iter().collect(),
+                &mut cursor,
+                None,
+            )
+            .map_err(|error| SchemaSerdeError::Deserialize(format!("avro body: {error}")))?;
+            if cursor.is_empty() {
+                Ok(())
+            } else {
+                Err(SchemaSerdeError::Deserialize(format!(
+                    "avro body: {} trailing byte(s) after the datum",
+                    cursor.len()
+                )))
+            }
+        }
+        SchemaKind::Protobuf if !references.is_empty() => {
+            validate_protobuf_with_references(schema, references, message_index, body)
+        }
+        _ => validate_body(kind, schema, message_index, body),
     }
 }
 
@@ -316,17 +369,62 @@ mod tests {
         // One Avro datum of AVRO: `id = "a"`. A string is a zig-zag varint
         // length then the bytes, and 1 zig-zag encodes to 0x02.
         let field = framed(KNOWN_ID, &[0x02, b'a']);
-        check!(
-            v.check(
+        let result = v
+            .check(
                 "orders",
                 Role::Value,
                 ValidationMode::Full,
                 &field,
-                &no_metrics()
+                &no_metrics(),
             )
-            .await
-            .is_ok()
-        );
+            .await;
+        check!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn full_mode_resolves_avro_references_before_validating() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"subject": "orders-value", "version": 1}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "schema": r#"{"type":"record","name":"Envelope","fields":[{"name":"base","type":"Base"}]}"#,
+                "references": [{"name":"Base","subject":"order-base","version":1}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/subjects/order-base/versions/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "subject": "order-base",
+                "version": 1,
+                "id": 7,
+                "schema": r#"{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}"#
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let v = validator(server.uri());
+        let field = framed(KNOWN_ID, &[0x02, b'a']);
+        let result = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &field,
+                &no_metrics(),
+            )
+            .await;
+        check!(result.is_ok(), "{result:?}");
     }
 
     #[tokio::test]

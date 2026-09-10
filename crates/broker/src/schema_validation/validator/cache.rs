@@ -6,9 +6,11 @@
 //! keeping the two apart means the caching policy, including the shorter TTL
 //! for a registry that could not answer, reads in one place.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use krabka_schema_serde::{error::SchemaSerdeError, subject::SchemaKind};
+use krabka_schema_serde::{
+    error::SchemaSerdeError, registry::model::SchemaReference, subject::SchemaKind,
+};
 use krabka_units::convert::TimeExt as _;
 use qubit_clock::WallClock as _;
 
@@ -24,7 +26,15 @@ pub(super) struct SchemaEntry {
     /// The schema text and its format. Only [`ValidationMode::Full`] needs it,
     /// so it is fetched on the first `Full` check for this id and not before —
     /// an `Id`-mode topic never pays for the second registry call.
-    pub(super) body: Option<(SchemaKind, String)>,
+    pub(super) body: Option<SchemaBody>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SchemaBody {
+    pub(super) kind: SchemaKind,
+    pub(super) schema: String,
+    pub(super) references: HashMap<String, String>,
+    pub(super) reference_order: Vec<String>,
 }
 
 /// One cached answer, positive or negative, with the instant it goes stale.
@@ -116,12 +126,77 @@ impl SchemaValidator {
                 .schema_by_id(id)
                 .await
                 .map_err(|e| Self::fetch_error(id, &e))?;
-            Some((fetched.kind, fetched.schema))
+            let (references, reference_order) = self
+                .reference_sources_ordered(&fetched.references)
+                .await
+                .map_err(|e| Self::fetch_error(id, &e))?;
+            Some(SchemaBody {
+                kind: fetched.kind,
+                schema: fetched.schema,
+                references,
+                reference_order,
+            })
         } else {
             None
         };
 
         Ok(SchemaEntry { subjects, body })
+    }
+
+    async fn reference_sources_ordered(
+        &self,
+        references: &[SchemaReference],
+    ) -> Result<(HashMap<String, String>, Vec<String>), SchemaSerdeError> {
+        let mut sources = HashMap::new();
+        let mut order = Vec::new();
+        let mut resolving = HashSet::new();
+        self.resolve_reference_sources(references, &mut sources, &mut order, &mut resolving, 0)
+            .await?;
+        Ok((sources, order))
+    }
+
+    async fn resolve_reference_sources(
+        &self,
+        references: &[SchemaReference],
+        sources: &mut HashMap<String, String>,
+        order: &mut Vec<String>,
+        resolving: &mut HashSet<(String, i32)>,
+        depth: usize,
+    ) -> Result<(), SchemaSerdeError> {
+        const MAX_REFERENCE_DEPTH: usize = 32;
+        if depth >= MAX_REFERENCE_DEPTH {
+            return Err(SchemaSerdeError::Schema(format!(
+                "schema reference depth exceeds {MAX_REFERENCE_DEPTH}"
+            )));
+        }
+        for reference in references {
+            if sources.contains_key(&reference.name) {
+                continue;
+            }
+            let key = (reference.subject.clone(), reference.version);
+            if !resolving.insert(key.clone()) {
+                return Err(SchemaSerdeError::Schema(format!(
+                    "cyclic schema reference at {} version {}",
+                    reference.subject, reference.version
+                )));
+            }
+            let fetched = self
+                .client
+                .schema_by_subject_version(&reference.subject, reference.version)
+                .await?;
+            Box::pin(self.resolve_reference_sources(
+                &fetched.references,
+                sources,
+                order,
+                resolving,
+                depth + 1,
+            ))
+            .await?;
+            resolving.remove(&key);
+            sources.insert(reference.name.clone(), fetched.schema);
+            order.push(reference.name.clone());
+        }
+        Ok(())
     }
 
     /// Turn a registry failure into the reason it stands for.

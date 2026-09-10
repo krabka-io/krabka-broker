@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use apache_avro::AvroSchema;
+use apache_avro::{AvroSchema, Schema, to_avro_datum_schemata, to_value};
 use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::{Buf, BufMut, Bytes};
@@ -54,6 +54,7 @@ use crate::{
 
 const REGISTRY_USERNAME: &str = "broker";
 const REGISTRY_PASSWORD: &str = "m19-secret";
+const REGISTRY_FORWARD_SECRET: &str = "m19-forward-secret";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, AvroSchema)]
 struct Order {
@@ -63,6 +64,16 @@ struct Order {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 struct JsonOrder {
     id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct Base {
+    id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct Envelope {
+    base: Base,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -163,6 +174,7 @@ async fn start_registry(
         .unwrap();
     store.install_primary(primary.clone());
     let auth = AuthState {
+        audit: krabka_audit_registry::AuditLog::disabled(),
         basic: Some(Arc::new(BasicAuthStore::from_users(HashMap::from([(
             REGISTRY_USERNAME.to_owned(),
             REGISTRY_PASSWORD.to_owned(),
@@ -170,6 +182,7 @@ async fn start_registry(
         bearer: None,
         require_auth: true,
         realm: "m19".into(),
+        forward_secret: Some(REGISTRY_FORWARD_SECRET.into()),
     };
     let app = rest::router_with_security(
         AppState { store },
@@ -181,6 +194,7 @@ async fn start_registry(
                 http: reqwest::Client::new(),
                 node_id: url.clone(),
                 forward_max_body: config.runtime.forward_max_body,
+                forward_secret: Some(REGISTRY_FORWARD_SECRET.into()),
             },
         },
     );
@@ -445,6 +459,23 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     )
     .await;
     check!(referenced["references"][0]["subject"] == "order-base");
+    let referenced_schemas = Schema::parse_list([
+        r#"{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}"#,
+        r#"{"type":"record","name":"Envelope","fields":[{"name":"base","type":"Base"}]}"#,
+    ])
+    .unwrap();
+    let referenced_body = to_avro_datum_schemata(
+        &referenced_schemas[1],
+        referenced_schemas.iter().collect(),
+        to_value(Envelope {
+            base: Base {
+                id: "referenced".into(),
+            },
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let referenced_payload = framed(referenced_id, &referenced_body);
 
     let bootstrap_client = client(&bootstrap).await;
     let validation = &[
@@ -455,6 +486,14 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     let json_topic = create_topic_rf(&cluster[0].0, &bootstrap_client, "json", validation, 3).await;
     let protobuf_topic =
         create_topic_rf(&cluster[0].0, &bootstrap_client, "protobuf", validation, 3).await;
+    let referenced_topic = create_topic_rf(
+        &cluster[0].0,
+        &bootstrap_client,
+        "referenced",
+        validation,
+        3,
+    )
+    .await;
     let control_topic = create_topic_rf(&cluster[0].0, &bootstrap_client, "control", &[], 3).await;
 
     let leader_id = cluster[0]
@@ -471,6 +510,7 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         ("avro", avro_topic, avro_payload.clone()),
         ("json", json_topic, json_payload),
         ("protobuf", protobuf_topic, protobuf_payload),
+        ("referenced", referenced_topic, referenced_payload.clone()),
     ] {
         let response = produce_when_ready(&leader_client, topic, topic_id, Some(value)).await;
         check!(response.error_code == 0, "{topic}: {response:?}");
@@ -496,6 +536,27 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     check!(control.error_code == 0, "{control:?}");
     let tombstone = produce_when_ready(&leader_client, "avro", avro_topic, None).await;
     check!(tombstone.error_code == 0, "{tombstone:?}");
+
+    let referenced_leader_id = cluster[0]
+        .0
+        .partition_leader_for_test("referenced", 0)
+        .expect("referenced leader");
+    let referenced_leader = cluster
+        .iter()
+        .find(|(broker, _, _)| broker.node_id() == referenced_leader_id)
+        .unwrap();
+    let referenced_client = client(&referenced_leader.0.listen_addr().to_string()).await;
+    check!(
+        fetch_values(
+            &referenced_leader.0,
+            &referenced_client,
+            "referenced",
+            referenced_topic,
+            1,
+        )
+        .await
+            == vec![Some(referenced_payload)]
+    );
 
     check!(
         fetch_values(
