@@ -68,6 +68,7 @@ pub struct SchemaValidator {
     client: RegistryClient,
     cache: Mutex<LruCache<u32, Cached>>,
     expire_after: Time,
+    operation_timeout: std::time::Duration,
     /// **Security-sensitive.** `true` admits a record the broker could not
     /// validate because the registry was unreachable, which is fail-open: for
     /// the length of a registry outage, a validated topic accepts whatever it
@@ -184,6 +185,7 @@ impl SchemaValidator {
             client: RegistryClient::with_http_client(url, http),
             cache: Mutex::new(LruCache::new(capacity)),
             expire_after,
+            operation_timeout: http_timeout.to_std(),
             fail_open,
             clock,
         })

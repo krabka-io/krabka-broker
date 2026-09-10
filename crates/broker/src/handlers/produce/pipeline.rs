@@ -120,6 +120,29 @@ impl PartitionOutcome {
     }
 }
 
+async fn local_replica_is_ready(
+    part: &Arc<crate::partition::Partition>,
+    image: &krabka_metadata::MetadataImage,
+    topic_name: &str,
+    idx: i32,
+) -> bool {
+    let transition = part.lock_produce_transition().await;
+    let record = image.partition(topic_name, idx).expect("gate checked");
+    let topic_id = image.topic(topic_name).map(|topic| topic.topic_id);
+    if !replication_target_matches_image(&transition, topic_id, record)
+        || (part.diskless && !diskless_role_ready(part, record))
+    {
+        return false;
+    }
+    if !part.diskless {
+        let replica_state = part.replica_state.lock().await;
+        if !replica_state_matches_image(&replica_state, record) {
+            return false;
+        }
+    }
+    true
+}
+
 pub(super) async fn process_partition(
     input: PartitionInput<'_>,
     services: PartitionServices<'_>,
@@ -274,28 +297,6 @@ pub(super) async fn process_partition(
         return Ok(PartitionOutcome::Done(out));
     }
 
-    // ── KFC-7 schema validation ──────────────────────────────────────
-    // Before the leadership gate, so that record-shape rejections keep coming
-    // ahead of leadership ones, which is the order every gate above this line
-    // already follows. `gate` is `None` on a topic that did not ask, and this
-    // whole block is then one `if let` that does not match.
-    if let Some(gate) = schema
-        && let Err(rejection) = validate_batch_schemas(
-            &prepared,
-            gate,
-            schema_validator,
-            topic_name,
-            record_decompression_policy,
-            metrics,
-        )
-        .await
-    {
-        out.error_code = codes::INVALID_RECORD;
-        out.error_message = Some(SCHEMA_REJECTION_MESSAGE.to_owned());
-        out.record_errors = rejection;
-        return Ok(PartitionOutcome::Done(out));
-    }
-
     // ── leadership gate (Kafka: only the LEADER accepts Produce) ──────
     // Only the partition leader may accept a Produce. A Produce misrouted
     // to a non-leader must be rejected so the client refreshes its
@@ -344,12 +345,40 @@ pub(super) async fn process_partition(
             return Ok(PartitionOutcome::Done(out));
         }
     };
+
+    if !local_replica_is_ready(&part, image, topic_name, idx).await {
+        out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
+        out.current_leader =
+            current_leader_hint(image.partition(topic_name, idx).expect("gate checked"));
+        return Ok(PartitionOutcome::Done(out));
+    }
+
+    // ── KFC-7 schema validation ──────────────────────────────────────
+    // Registry I/O is allowed only after both the metadata gate and the local
+    // replica state have proved this broker is ready to lead the partition.
+    // A misrouted Produce therefore cannot make a reachable follower fetch an
+    // attacker-selected schema closure. The local state is checked again
+    // immediately after the bounded registry operation.
+    if let Some(gate) = schema
+        && let Err(rejection) = validate_batch_schemas(
+            &prepared,
+            gate,
+            schema_validator,
+            topic_name,
+            record_decompression_policy,
+            metrics,
+        )
+        .await
+    {
+        out.error_code = codes::INVALID_RECORD;
+        out.error_message = Some(SCHEMA_REJECTION_MESSAGE.to_owned());
+        out.record_errors = rejection;
+        return Ok(PartitionOutcome::Done(out));
+    }
+
     // Hold the transition barrier through dedup, enqueue, append, and ack.
-    // Diskless promotion takes the write side before hydrating and rebuilding
-    // producer state, so it cannot publish a half-adopted prefix or race an
-    // idempotent retry already admitted here. The guard is owned, so a
-    // partition whose ack is still pending carries it into its [`PendingAck`]
-    // and holds the barrier across the overlapped wait too.
+    // Schema validation released it around network I/O, so repeat the local
+    // readiness proof before admitting this batch to any stateful gate.
     let transition = part.lock_produce_transition().await;
     let record = image.partition(topic_name, idx).expect("gate checked");
     let topic_id = image.topic(topic_name).map(|topic| topic.topic_id);

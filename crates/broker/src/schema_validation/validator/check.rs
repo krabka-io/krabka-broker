@@ -59,7 +59,7 @@ impl SchemaValidator {
         };
         let subject = TopicNameStrategy.subject(topic, role);
 
-        let entry = match self.entry(id, mode, metrics).await {
+        let entry = match self.entry(id, &subject, mode, metrics).await {
             Ok(entry) => entry,
             // A registry that could not answer is what `fail_open` governs. An
             // answer of "not registered" is an answer, and it rejects either
@@ -354,6 +354,40 @@ mod tests {
             )
             .await;
         assert!(let Err(reason) = got);
+        check!(reason.label() == "wrong_subject", "{reason}");
+    }
+
+    #[tokio::test]
+    async fn wrong_subject_is_rejected_before_the_schema_closure_is_fetched() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"subject": "other-value", "version": 1}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "schema": r#"{"type":"record","name":"Envelope","fields":[]}"#,
+                "references": [{"name":"Base","subject":"base","version":1}]
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let result = validator(server.uri())
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &framed(KNOWN_ID, &[]),
+                &no_metrics(),
+            )
+            .await;
+        assert!(let Err(reason) = result);
         check!(reason.label() == "wrong_subject", "{reason}");
     }
 
