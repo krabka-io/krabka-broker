@@ -7,13 +7,14 @@
 //! failure runs into, are what this module holds; the lookup behind it is in
 //! `cache`.
 
+use std::collections::HashMap;
+
 use krabka_schema_serde::{
     error::SchemaSerdeError,
     format::validate::{validate_body, validate_protobuf_with_references},
     subject::{Role, SchemaKind, SubjectStrategy as _, TopicNameStrategy},
     wire,
 };
-use std::collections::HashMap;
 
 use super::{SchemaValidator, reject::RejectReason};
 use crate::{metrics::BrokerMetrics, schema_validation::ValidationMode};
