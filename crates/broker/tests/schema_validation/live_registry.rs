@@ -236,14 +236,18 @@ async fn produce_when_ready(
     topic_id: WireUuid,
     value: Option<Bytes>,
 ) -> PartitionProduceResponse {
-    for _ in 0..20 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
         let response = produce(client, topic, topic_id, batch_with_value(value.clone())).await;
         if !matches!(response.error_code, 3 | 6 | 100) {
             return response;
         }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{topic} did not become produceable: {response:?}"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("{topic} did not become produceable");
 }
 
 async fn register(client: &reqwest::Client, url: &str, subject: &str, body: Value) -> u32 {
