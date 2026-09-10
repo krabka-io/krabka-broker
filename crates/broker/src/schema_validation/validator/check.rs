@@ -13,6 +13,7 @@ use krabka_schema_serde::{
     subject::{Role, SchemaKind, SubjectStrategy as _, TopicNameStrategy},
     wire,
 };
+use std::collections::HashMap;
 
 use super::{SchemaValidator, reject::RejectReason};
 use crate::{metrics::BrokerMetrics, schema_validation::ValidationMode};
@@ -134,26 +135,22 @@ impl SchemaValidator {
 fn validate_body_with_references(
     kind: SchemaKind,
     schema: &str,
-    references: &std::collections::HashMap<String, String>,
+    references: &HashMap<String, String>,
     reference_order: &[String],
     message_index: &[i32],
     body: &[u8],
 ) -> Result<(), SchemaSerdeError> {
     match kind {
         SchemaKind::Avro if !references.is_empty() => {
-            let mut sources: Vec<_> = reference_order
+            let sources: Vec<_> = reference_order
                 .iter()
                 .filter_map(|name| references.get(name).map(String::as_str))
                 .collect();
-            sources.push(schema);
-            let schemas = apache_avro::Schema::parse_list(&sources)
+            let (writer, schemas) = apache_avro::Schema::parse_str_with_list(schema, sources)
                 .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
-            let writer = schemas
-                .last()
-                .ok_or_else(|| SchemaSerdeError::Schema("empty Avro schema set".into()))?;
             let mut cursor = body;
             apache_avro::from_avro_datum_schemata(
-                writer,
+                &writer,
                 schemas.iter().collect(),
                 &mut cursor,
                 None,
@@ -171,7 +168,42 @@ fn validate_body_with_references(
         SchemaKind::Protobuf if !references.is_empty() => {
             validate_protobuf_with_references(schema, references, message_index, body)
         }
+        SchemaKind::Json if !references.is_empty() => {
+            let writer: serde_json::Value = serde_json::from_str(schema)
+                .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
+            let instance: serde_json::Value = serde_json::from_slice(body)
+                .map_err(|error| SchemaSerdeError::Deserialize(error.to_string()))?;
+            let references = references
+                .iter()
+                .map(|(name, source)| {
+                    serde_json::from_str(source)
+                        .map(|schema| (name.clone(), schema))
+                        .map_err(|error| SchemaSerdeError::Schema(error.to_string()))
+                })
+                .collect::<Result<HashMap<_, _>, _>>()?;
+            let validator = jsonschema::options()
+                .with_retriever(CachedJsonSchemas(references))
+                .build(&writer)
+                .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
+            validator.validate(&instance).map_err(|error| {
+                SchemaSerdeError::Deserialize(format!("json schema validation: {error}"))
+            })
+        }
         _ => validate_body(kind, schema, message_index, body),
+    }
+}
+
+#[derive(Debug)]
+struct CachedJsonSchemas(HashMap<String, serde_json::Value>);
+
+impl jsonschema::Retrieve for CachedJsonSchemas {
+    fn retrieve(
+        &self,
+        uri: &jsonschema::Uri<String>,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        self.0.get(uri.as_str()).cloned().ok_or_else(|| {
+            format!("JSON Schema reference {uri} is not present in the registry cache").into()
+        })
     }
 }
 
@@ -425,6 +457,114 @@ mod tests {
             )
             .await;
         check!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn full_mode_accepts_an_unnamed_avro_root_with_a_reference() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"subject": "orders-value", "version": 1}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "schema": r#"{"type":"array","items":"Base"}"#,
+                "references": [{"name":"Base","subject":"order-base","version":1}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/subjects/order-base/versions/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "subject": "order-base",
+                "version": 1,
+                "id": 7,
+                "schema": r#"{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}"#
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let v = validator(server.uri());
+        // One-element array, one record containing "a", then the array terminator.
+        let field = framed(KNOWN_ID, &[0x02, 0x02, b'a', 0x00]);
+        let result = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &field,
+                &no_metrics(),
+            )
+            .await;
+        check!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn full_mode_resolves_json_schema_references_before_validating() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"subject": "orders-value", "version": 1}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "schemaType": "JSON",
+                "schema": r#"{"$ref":"https://schemas.example/base.json"}"#,
+                "references": [{"name":"https://schemas.example/base.json","subject":"order-base","version":1}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/subjects/order-base/versions/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "subject": "order-base",
+                "version": 1,
+                "id": 7,
+                "schemaType": "JSON",
+                "schema": r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}"#
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let v = validator(server.uri());
+        let valid = framed(KNOWN_ID, br#"{"id":"a"}"#);
+        let valid_result = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &valid,
+                &no_metrics(),
+            )
+            .await;
+        check!(valid_result.is_ok(), "{valid_result:?}");
+
+        let invalid = framed(KNOWN_ID, br#"{"id":1}"#);
+        let result = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &invalid,
+                &no_metrics(),
+            )
+            .await;
+        assert!(let Err(reason) = result);
+        check!(reason.label() == "body_mismatch", "{reason}");
     }
 
     #[tokio::test]

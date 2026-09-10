@@ -164,7 +164,7 @@ impl SchemaValidator {
         depth: usize,
     ) -> Result<(), SchemaSerdeError> {
         const MAX_REFERENCE_DEPTH: usize = 32;
-        if depth >= MAX_REFERENCE_DEPTH {
+        if !references.is_empty() && depth >= MAX_REFERENCE_DEPTH {
             return Err(SchemaSerdeError::Schema(format!(
                 "schema reference depth exceeds {MAX_REFERENCE_DEPTH}"
             )));
@@ -455,5 +455,45 @@ mod tests {
                 .advance(Duration::from_millis(unavailable_ttl_ms() + 1))
                 .expect("manual time moves forward");
         }
+    }
+
+    #[tokio::test]
+    async fn a_reference_chain_may_end_at_the_depth_limit() {
+        const DEPTH: usize = 32;
+        let server = MockServer::start().await;
+        for index in 0..DEPTH {
+            let references = if index + 1 == DEPTH {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([{
+                    "name": format!("Ref{}", index + 1),
+                    "subject": format!("subject-{}", index + 1),
+                    "version": 1
+                }])
+            };
+            Mock::given(method("GET"))
+                .and(path(format!("/subjects/subject-{index}/versions/1")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "subject": format!("subject-{index}"),
+                    "version": 1,
+                    "id": index,
+                    "schema": r#"{"type":"record","name":"Leaf","fields":[]}"#,
+                    "references": references
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let v = validator(server.uri());
+        let root = [SchemaReference {
+            name: "Ref0".to_owned(),
+            subject: "subject-0".to_owned(),
+            version: 1,
+        }];
+        let result = v.reference_sources_ordered(&root).await;
+        assert!(let Ok((sources, order)) = result);
+        check!(sources.len() == DEPTH);
+        check!(order.len() == DEPTH);
     }
 }
