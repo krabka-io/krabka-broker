@@ -179,6 +179,10 @@ expire_after_ms = 3600000
 # KFC-7 broker-side schema validation against a Confluent-compatible registry.
 [schema_registry]
 url = "http://schema-registry.default.svc:8081"
+# For a registry that requires HTTP Basic, set both fields and mount the
+# password as a secret file.
+# basic_auth_username = "broker"
+# basic_auth_password_path = "/run/secrets/schema-registry-password"
 fail_open = false
 maximum_cache_size = 50000
 expire_after_ms = 300000

@@ -225,8 +225,9 @@ mod tests {
         let server = registry(2).await;
         let timeline = ManualMonotonicClock::new_shared();
         let clock = timeline.new_wall_clock(SystemTime::now());
-        let v = SchemaValidator::with_clock(server.uri(), false, 100, millis(10), secs(5), clock)
-            .expect("validator");
+        let v =
+            SchemaValidator::with_clock(server.uri(), false, 100, millis(10), secs(5), None, clock)
+                .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
         check!(
@@ -310,8 +311,9 @@ mod tests {
 
         let timeline = ManualMonotonicClock::new_shared();
         let clock = timeline.new_wall_clock(SystemTime::now());
-        let v = SchemaValidator::with_clock(server.uri(), false, 100, minutes(5), secs(5), clock)
-            .expect("validator");
+        let v =
+            SchemaValidator::with_clock(server.uri(), false, 100, minutes(5), secs(5), None, clock)
+                .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
         let got = v
@@ -357,8 +359,9 @@ mod tests {
             .await;
         let timeline = ManualMonotonicClock::new_shared();
         let clock = timeline.new_wall_clock(SystemTime::now());
-        let v = SchemaValidator::with_clock(server.uri(), false, 100, minutes(5), secs(5), clock)
-            .expect("validator");
+        let v =
+            SchemaValidator::with_clock(server.uri(), false, 100, minutes(5), secs(5), None, clock)
+                .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
         for _ in 0..2 {
