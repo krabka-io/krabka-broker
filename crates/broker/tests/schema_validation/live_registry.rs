@@ -1,10 +1,15 @@
 //! M19: the broker's schema gate against the real first-party registry.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
+use apache_avro::AvroSchema;
 use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes};
 use krabka_broker::schema_validation::SchemaValidator;
 use krabka_client_core::Client;
 use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
@@ -15,7 +20,21 @@ use krabka_schema_registry::{
     kafkastore::KafkaStore,
     rest::{self, AppState, SecurityLayers, forward::ForwardState},
 };
+use krabka_schema_serde::{
+    AvroSerde, CacheConfig, JsonSerde, ProtobufSerde, RegistryClient, SchemaCache,
+    format::{SchemaSerializer, SchemaSubject},
+};
 use krabka_units::{minutes, secs};
+use prost::{
+    DecodeError, Message,
+    encoding::{DecodeContext, WireType},
+};
+use prost_reflect::{
+    DescriptorPool, MessageDescriptor, ReflectMessage,
+    prost_types::{DescriptorProto, FileDescriptorProto, FileDescriptorSet},
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -27,12 +46,68 @@ use crate::{
     support,
 };
 
-const ORDER_AVRO: &str =
-    r#"{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}"#;
-const ORDER_JSON: &str = r#"{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false}"#;
-const ORDER_PROTOBUF: &str = "syntax = \"proto3\"; message Order { int64 id = 1; }";
 const REGISTRY_USERNAME: &str = "broker";
 const REGISTRY_PASSWORD: &str = "m19-secret";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, AvroSchema)]
+struct Order {
+    id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+struct JsonOrder {
+    id: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ProtoOrder;
+
+impl Message for ProtoOrder {
+    fn encode_raw(&self, _buf: &mut impl BufMut) {}
+
+    fn merge_field(
+        &mut self,
+        _tag: u32,
+        _wire_type: WireType,
+        _buf: &mut impl Buf,
+        _ctx: DecodeContext,
+    ) -> Result<(), DecodeError> {
+        Ok(())
+    }
+
+    fn encoded_len(&self) -> usize {
+        0
+    }
+
+    fn clear(&mut self) {}
+}
+
+impl ReflectMessage for ProtoOrder {
+    fn descriptor(&self) -> MessageDescriptor {
+        static POOL: OnceLock<DescriptorPool> = OnceLock::new();
+        POOL.get_or_init(|| {
+            DescriptorPool::from_file_descriptor_set(FileDescriptorSet {
+                file: vec![FileDescriptorProto {
+                    name: Some("order.proto".into()),
+                    package: Some("m19".into()),
+                    syntax: Some("proto3".into()),
+                    message_type: vec![DescriptorProto {
+                        name: Some("Order".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+            })
+            .unwrap()
+        })
+        .get_message_by_name("m19.Order")
+        .unwrap()
+    }
+}
+
+fn schema_id(payload: &[u8]) -> u32 {
+    u32::from_be_bytes(payload[1..5].try_into().unwrap())
+}
 
 struct RegistryNode {
     url: String,
@@ -299,27 +374,23 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         .default_headers(headers)
         .build()
         .unwrap();
-    let avro_id = register(
-        &http,
-        &registries[secondary].url,
-        "avro-value",
-        serde_json::json!({"schema": ORDER_AVRO}),
-    )
-    .await;
-    let json_id = register(
-        &http,
-        &registries[secondary].url,
-        "json-value",
-        serde_json::json!({"schemaType": "JSON", "schema": ORDER_JSON}),
-    )
-    .await;
-    let protobuf_id = register(
-        &http,
-        &registries[secondary].url,
-        "protobuf-value",
-        serde_json::json!({"schemaType": "PROTOBUF", "schema": ORDER_PROTOBUF}),
-    )
-    .await;
+    let cache = SchemaCache::new(
+        RegistryClient::with_http_client(registries[secondary].url.clone(), http.clone()),
+        CacheConfig::default(),
+    );
+    let avro = AvroSerde::<Order>::value(&cache);
+    let json = JsonSerde::<JsonOrder>::value(&cache, true);
+    let protobuf = ProtobufSerde::<ProtoOrder>::value(&cache);
+    avro.register_subject("avro");
+    json.register_subject("json");
+    protobuf.register_subject("protobuf");
+    cache.prewarm().await.unwrap();
+    let avro_payload = avro
+        .serialize("avro", &Order { id: "a".into() })
+        .unwrap();
+    let json_payload = json.serialize("json", &JsonOrder { id: 1 }).unwrap();
+    let protobuf_payload = protobuf.serialize("protobuf", &ProtoOrder).unwrap();
+    let avro_id = schema_id(&avro_payload);
     let wrong_subject_id = register(
         &http,
         &registries[secondary].url,
@@ -377,15 +448,9 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     let leader_client = client(&cluster[leader_index].0.listen_addr().to_string()).await;
 
     for (topic, topic_id, value) in [
-        ("avro", avro_topic, framed(avro_id, &order_avro_body())),
-        ("json", json_topic, framed(json_id, br#"{"id":1}"#)),
-        (
-            "protobuf",
-            protobuf_topic,
-            // Confluent's single-top-level-message index is one zero byte;
-            // field 1 then carries the varint value 1.
-            framed(protobuf_id, &[0, 0x08, 0x01]),
-        ),
+        ("avro", avro_topic, avro_payload.clone()),
+        ("json", json_topic, json_payload),
+        ("protobuf", protobuf_topic, protobuf_payload),
     ] {
         let response = produce(
             &leader_client,
@@ -403,7 +468,7 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         &leader_client,
         "avro",
         avro_topic,
-        batch_with_value(Some(framed(avro_id, &order_avro_body()))),
+        batch_with_value(Some(avro_payload.clone())),
     )
     .await;
     check!(warm.error_code == 0, "{warm:?}");
@@ -427,11 +492,7 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
             3
         )
         .await
-            == vec![
-                Some(framed(avro_id, &order_avro_body())),
-                Some(framed(avro_id, &order_avro_body())),
-                None,
-            ]
+            == vec![Some(avro_payload.clone()), Some(avro_payload), None,]
     );
     let control_leader_id = cluster[0]
         .0

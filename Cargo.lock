@@ -2825,6 +2825,7 @@ dependencies = [
 name = "krabka-broker"
 version = "0.5.4"
 dependencies = [
+ "apache-avro",
  "arc-swap",
  "assert2",
  "async-trait",
@@ -2881,6 +2882,7 @@ dependencies = [
  "prometheus-client",
  "proptest",
  "prost 0.14.4",
+ "prost-reflect",
  "qubit-clock",
  "rcgen",
  "refined_type",

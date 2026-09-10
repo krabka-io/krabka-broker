@@ -147,6 +147,7 @@ rcgen = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
 
 [dev-dependencies]
+apache-avro = { workspace = true }
 # Trait mocks for the KIP-939 reaper orchestration unit tests
 # (`txn::coordinator::ReaperBackend`).
 mockall = { workspace = true }
@@ -182,6 +183,7 @@ krabka-client-producer = { version = "0.4" }
 # M19's live-registry acceptance runs the real first-party service instead of
 # another HTTP fixture. Keep it on the production serde dependency's revision.
 krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ae9876d15da12e6123b77b4fc77f50bb9d162556" }
+prost-reflect = { workspace = true }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the
 # real-Kafka Docker capture (`describe_groups_jvm.rs`).
 krabka-client-core = { version = "0.4", features = ["mock"] }
