@@ -694,7 +694,9 @@ docker run --rm --network "$network" -v "$work:/work:ro" --entrypoint /usr/bin/k
   --bootstrap-server "$scope-restored-1:9094" --command-config /work/backup.properties \
   --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
   --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
-  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix"
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
+  --worm-key-id qualification-worm --worm-public-key /work/worm/signing.pub \
+  --worm-expect-head "$(awk '$1 == "diskless-capture" {print $2}' "$evidence/worm-heads.txt")"
 
 for topic in classic diskless; do
   messages=200

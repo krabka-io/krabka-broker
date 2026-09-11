@@ -167,14 +167,6 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     let store = open_archive(args)?;
     let diskless_capture = diskless::load(args.archive.diskless_wal_capture.as_deref()).await?;
     let mut archive = inventory(&store, args).await?;
-    if let Some(capture) = &diskless_capture {
-        diskless::add_partitions(&mut archive, capture, args)?;
-    }
-    if archive.partitions.is_empty() {
-        return Err(RestoreError::EmptyArchive {
-            prefix: store.prefix().unwrap_or("").to_owned(),
-        });
-    }
     let trusted = trusted_keys(args)?;
     let has_classic = archive
         .partitions
@@ -238,6 +230,29 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         authenticate_metadata_snapshot(args, diskless_capture.as_ref(), trusted.is_some()).await?;
     let rlmm_authenticated =
         authenticate_rlmm_snapshot(args, diskless_capture.as_ref(), trusted.is_some()).await?;
+    if rlmm_authenticated && has_classic {
+        let rlmm_snapshot = args.archive.rlmm_snapshot.as_deref().ok_or_else(|| {
+            RestoreError::Integrity("authenticated RLMM snapshot has no path".to_owned())
+        })?;
+        discover::reconcile_authenticated_with_snapshot(
+            &mut archive.partitions,
+            args,
+            rlmm_snapshot,
+        )?;
+        if archive.partitions.is_empty() {
+            return Err(RestoreError::EmptyArchive {
+                prefix: store.prefix().unwrap_or("").to_owned(),
+            });
+        }
+    }
+    if let Some(capture) = &diskless_capture {
+        diskless::add_partitions(&mut archive, capture, args)?;
+    }
+    if archive.partitions.is_empty() {
+        return Err(RestoreError::EmptyArchive {
+            prefix: store.prefix().unwrap_or("").to_owned(),
+        });
+    }
     let predicates = Predicates::from_args(args)?;
     let format = format_target(args, &archive).await?;
     seed_rlmm_snapshot(

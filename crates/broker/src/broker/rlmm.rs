@@ -183,6 +183,7 @@ pub(super) fn metadata_log_config(
         replication: config.replication,
         client_id,
         compacted: false,
+        provision_topic: true,
         security: config.security.as_deref().cloned(),
         topic_create_timeout: config.topic_create_timeout,
         fetch_max_wait: config.fetch_max_wait,

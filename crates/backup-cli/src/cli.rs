@@ -23,6 +23,22 @@ pub struct CaptureSigningArgs {
     pub worm_signing_key: Option<std::path::PathBuf>,
 }
 
+/// Independently pinned trust material for a signed diskless capture.
+#[derive(Args, Debug, Default)]
+pub struct CaptureTrustArgs {
+    /// Trusted id of the Ed25519 key that signed the capture.
+    #[arg(long, value_name = "ID", requires_all = ["worm_public_key", "worm_expect_head"])]
+    pub worm_key_id: Option<String>,
+
+    /// Raw 32-byte Ed25519 public key for `--worm-key-id`.
+    #[arg(long, value_name = "PATH", requires_all = ["worm_key_id", "worm_expect_head"])]
+    pub worm_public_key: Option<std::path::PathBuf>,
+
+    /// Independently recorded head of the signed diskless capture.
+    #[arg(long, value_name = "HEX", requires_all = ["worm_key_id", "worm_public_key"])]
+    pub worm_expect_head: Option<String>,
+}
+
 /// Captures the inputs a point-in-time restore needs, and puts committed group
 /// offsets back after one.
 #[derive(Parser, Debug)]
@@ -106,6 +122,10 @@ pub enum Command {
         /// Report what would be committed and commit nothing.
         #[arg(long)]
         dry_run: bool,
+
+        /// Trust boundary for offsets bound into a signed diskless capture.
+        #[command(flatten)]
+        trust: CaptureTrustArgs,
 
         /// Where the captures are.
         #[command(flatten)]
@@ -259,6 +279,32 @@ mod tests {
                 "capture-key",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn signed_offset_restore_trust_is_an_explicit_triple() {
+        let base = [
+            "krabka-backup",
+            "restore-offsets",
+            "-b",
+            "broker:9092",
+            "--archive-local",
+            "/archive",
+        ];
+        check!(
+            Cli::try_parse_from(base.into_iter().chain([
+                "--worm-key-id",
+                "capture-key",
+                "--worm-public-key",
+                "/keys/capture.pub",
+                "--worm-expect-head",
+                "00",
+            ]))
+            .is_ok()
+        );
+        check!(
+            Cli::try_parse_from(base.into_iter().chain(["--worm-key-id", "capture-key"])).is_err()
         );
     }
 }

@@ -253,6 +253,21 @@ async fn verify_archive_inner(
     trusted: &TrustedManifestKeys,
 ) -> Result<(ArchiveVerifyReport, BTreeMap<String, ObjectEntry>), WormError> {
     let mut listing = list_archive(store, request.prefix.as_deref()).await?;
+    let global_orphan_objects = listing
+        .iter()
+        .filter(|(dir, _)| {
+            dir.rsplit('/')
+                .next()
+                .and_then(parse_partition_dir_name)
+                .is_none()
+        })
+        .flat_map(|(_, entries)| entries.keys())
+        .filter(|key| {
+            !request.externally_authenticated_objects.contains(*key)
+                && !capture_namespace(key, request.prefix.as_deref())
+        })
+        .cloned()
+        .collect();
     listing.retain(|dir, _| {
         dir.rsplit('/')
             .next()
@@ -276,5 +291,20 @@ async fn verify_archive_inner(
     // The listing is a `BTreeMap` keyed by directory, so the partitions are
     // already in directory order. Sorting again states the guarantee locally.
     partitions.sort_by(|a, b| a.partition_dir.cmp(&b.partition_dir));
-    Ok((ArchiveVerifyReport { partitions }, objects))
+    Ok((
+        ArchiveVerifyReport {
+            partitions,
+            global_orphan_objects,
+        },
+        objects,
+    ))
+}
+
+fn capture_namespace(key: &str, prefix: Option<&str>) -> bool {
+    let relative = prefix
+        .and_then(|prefix| key.strip_prefix(prefix)?.strip_prefix('/'))
+        .unwrap_or(key);
+    relative
+        .split('/')
+        .any(|component| component == "restore-inputs")
 }

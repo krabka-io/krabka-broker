@@ -205,6 +205,31 @@ fn capture_preserves_empty_diskless_partitions() {
     );
 }
 
+#[test]
+fn capture_ignores_index_state_for_topics_outside_the_authorized_topology() {
+    let mut projection = WalCaptureProjection::default();
+    let mut unauthorized = entry(0, 0);
+    unauthorized.topic_id = Uuid::from_u128(8);
+    projection
+        .apply(
+            Some(&WalIndexKey::from(&unauthorized).to_bytes()),
+            Some(&value("other-tenant", unauthorized)),
+        )
+        .unwrap();
+
+    let capture = projection
+        .capture(
+            &HashMap::from([(Uuid::from_u128(7), ("orders".to_owned(), 1))]),
+            vec![1],
+            0,
+        )
+        .unwrap();
+
+    check!(capture.partitions.len() == 1);
+    check!(capture.partitions[0].topic == "orders");
+    check!(capture.partitions[0].ranges.is_empty());
+}
+
 fn signable_capture() -> DisklessWalCapture {
     DisklessWalCapture {
         format_version: DisklessWalCapture::FORMAT_VERSION,
@@ -223,6 +248,7 @@ fn signable_capture() -> DisklessWalCapture {
         }],
         metadata_snapshot_sha256: None,
         rlmm_snapshot_sha256: None,
+        group_offsets_sha256: None,
         authentication: None,
     }
 }
@@ -272,6 +298,14 @@ fn signed_capture_binds_state_objects_trust_and_external_head() {
     changed_rlmm.rlmm_snapshot_sha256 = Some(Sha256Digest::of(b"different snapshot"));
     check!(
         changed_rlmm
+            .authenticate(&trusted, Some(&head.to_string()))
+            .is_err()
+    );
+
+    let mut changed_offsets = capture.clone();
+    changed_offsets.group_offsets_sha256 = Some(Sha256Digest::of(b"forged offsets"));
+    check!(
+        changed_offsets
             .authenticate(&trusted, Some(&head.to_string()))
             .is_err()
     );

@@ -120,10 +120,15 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    ```sh
    krabka-backup restore-offsets --capture <id> \
      -b restored-broker:9092 \
+     --worm-key-id <id> --worm-public-key <path> \
+     --worm-expect-head <diskless-capture-head> \
      --archive-s3-bucket krabka-tier --archive-prefix prod/
    ```
 
    Run it with `--dry-run` first to see the positions it will write. It commits
+   only after a signed capture authenticates their digest when the backup used
+   capture signing. The expected head must come from the incident evidence,
+   not from the archive being restored. It commits
    as a simple consumer, so the coordinator fences it on any group that already
    has live members. That is why this step comes before the consumers: a group
    that is running has to be stopped for its position to be set.

@@ -165,7 +165,7 @@ pub(super) async fn materialize(
     authenticated: Option<&std::collections::BTreeMap<String, ObjectEntry>>,
 ) -> Result<DisklessRestoreReport, RestoreError> {
     capture.validate().map_err(RestoreError::Integrity)?;
-    let mut objects: HashMap<String, Bytes> = HashMap::new();
+    let mut cached_object: Option<(String, Bytes)> = None;
     let mut reports = Vec::new();
     for partition in capture
         .partitions
@@ -191,7 +191,7 @@ pub(super) async fn materialize(
         };
         for range in &partition.ranges {
             let object =
-                fetch_object(store, &mut objects, &range.object_key, authenticated).await?;
+                fetch_object(store, &mut cached_object, &range.object_key, authenticated).await?;
             object_names.insert(range.object_key.as_str());
             validate_footer_range(&object, range)?;
             let start = usize::try_from(range.entry.byte_start)
@@ -394,13 +394,14 @@ fn limitations() -> Vec<String> {
 
 async fn fetch_object(
     store: &ArchiveStore,
-    objects: &mut HashMap<String, Bytes>,
+    cached: &mut Option<(String, Bytes)>,
     key: &str,
     authenticated: Option<&std::collections::BTreeMap<String, ObjectEntry>>,
 ) -> Result<Bytes, RestoreError> {
-    if let Some(bytes) = objects.get(key) {
+    if let Some((_, bytes)) = cached.as_ref().filter(|(cached_key, _)| cached_key == key) {
         return Ok(bytes.clone());
     }
+    *cached = None;
     let bytes = fetch_capped(
         store.ops(),
         &ObjectPath::from(key),
@@ -408,6 +409,6 @@ async fn fetch_object(
         authenticated,
     )
     .await?;
-    objects.insert(key.to_owned(), bytes.clone());
+    *cached = Some((key.to_owned(), bytes.clone()));
     Ok(bytes)
 }

@@ -96,6 +96,7 @@ fn fixture_with_second_base(
         }],
         metadata_snapshot_sha256: None,
         rlmm_snapshot_sha256: None,
+        group_offsets_sha256: None,
         authentication: None,
     };
     (capture, topic_id)

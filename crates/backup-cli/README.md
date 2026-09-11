@@ -71,6 +71,8 @@ After a restore, put the group positions back:
 krabka-backup restore-offsets \
   -b restored-broker:9092 \
   --command-config /etc/krabka/backup-client.properties \
+  --worm-key-id backup --worm-public-key /etc/krabka/backup.pub \
+  --worm-expect-head <independently-recorded-diskless-capture-head> \
   --archive-s3-bucket krabka-tier --archive-prefix prod/
 ```
 
@@ -81,7 +83,7 @@ krabka-backup restore-offsets \
 | `capture` | `--log-dir <dir>`, `--bootstrap-server <host:port>` (`-b`), `--command-config <file>`, `--worm-signing-key-id <id> --worm-signing-key <path>` | Copies the RLMM snapshot, newest metadata checkpoint, committed group offsets, and committed diskless-WAL projection into `restore-inputs/<capture-id>/`, with a `manifest.json`. The signing pair authenticates the diskless capture boundary, both snapshot digests, and every referenced WAL object. Each source is optional; at least one has to give something. |
 | `list` | none | Names every capture in the archive, oldest first, with the artifacts it holds. |
 | `verify` | `--capture <id\|latest>` | Re-reads each artifact and checks its size and SHA-256 against the manifest. |
-| `restore-offsets` | `--capture <id\|latest>`, `-b <host:port>`, `--command-config <file>`, `--dry-run` | Commits the captured offsets into a restored cluster. |
+| `restore-offsets` | `--capture <id\|latest>`, `-b <host:port>`, `--command-config <file>`, `--dry-run`, `--worm-key-id <id> --worm-public-key <path> --worm-expect-head <hex>` | Commits the captured offsets into a restored cluster. A signed diskless capture requires the trust triple and binds the offsets to that boundary. |
 
 A capture id is the epoch millisecond, zero-padded, so the plain alphabetical
 order of the directory names is their time order and `latest` is a listing and a
@@ -119,6 +121,10 @@ The offsets a capture holds are as old as the capture. A group that committed
 after the last capture resumes at the older position and reads some records a
 second time, which is the at-least-once behaviour every Kafka consumer already
 has to be correct under.
+
+When capture signing is enabled, the signed diskless boundary includes the
+group-offset digest. `restore-offsets` then requires the trusted key and the
+independently retained capture head before it will commit anything.
 
 ## Secured clusters
 

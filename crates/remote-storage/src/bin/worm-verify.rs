@@ -280,9 +280,14 @@ fn grade(
     }
 
     let orphans: Vec<&String> = report
-        .partitions
+        .global_orphan_objects
         .iter()
-        .flat_map(|partition| partition.orphan_objects.iter())
+        .chain(
+            report
+                .partitions
+                .iter()
+                .flat_map(|partition| partition.orphan_objects.iter()),
+        )
         .collect();
     if !orphans.is_empty() {
         report_orphans(&orphans, args.grading.strict_orphans);
@@ -567,6 +572,7 @@ mod tests {
                 ok: first_break.is_none(),
                 first_break,
             }],
+            global_orphan_objects: Vec::new(),
         }
     }
 

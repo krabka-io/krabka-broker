@@ -112,9 +112,6 @@ pub fn seed_rlmm_snapshot(
     let Some(path) = args.archive.rlmm_snapshot.as_ref() else {
         return Ok(());
     };
-    if args.dry_run {
-        return Ok(());
-    }
     let mut snapshot = crate::discover::load_snapshot(path)?;
     snapshot.committed_offsets.fill(-1);
     snapshot
@@ -123,6 +120,9 @@ pub fn seed_rlmm_snapshot(
         .retain(|partition| args.selects_topic(&partition.topic_id_partition.topic));
     if let Some(report) = authenticated {
         seed_authenticated_chain_tips(&mut snapshot.dump, report)?;
+    }
+    if args.dry_run {
+        return Ok(());
     }
     snapshot
         .write_atomic(
@@ -485,6 +485,25 @@ mod tests {
         .expect("restored snapshot exists");
         check!(restored.committed_offsets == vec![-1]);
         check!(restored.dump == dump);
+    }
+
+    #[test]
+    fn authenticated_dry_run_still_validates_the_rlmm_snapshot() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let target = tempfile::tempdir().expect("target tempdir");
+        let source_path = source.path().join("snapshot");
+        std::fs::write(&source_path, b"not a snapshot").expect("write malformed snapshot");
+        let args = args_from(
+            &[
+                "--rlmm-snapshot",
+                &source_path.display().to_string(),
+                "--dry-run",
+            ],
+            target.path(),
+        );
+
+        check!(seed_rlmm_snapshot(&args, None).is_err());
+        check!(!target.path().join("remote-log-metadata/snapshot").exists());
     }
 
     #[test]

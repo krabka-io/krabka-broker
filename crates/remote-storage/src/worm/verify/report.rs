@@ -104,13 +104,16 @@ pub struct PartitionVerifyReport {
 pub struct ArchiveVerifyReport {
     /// One report per partition directory, sorted by directory.
     pub partitions: Vec<PartitionVerifyReport>,
+    /// Unreferenced objects outside canonical partition directories.
+    pub global_orphan_objects: Vec<String>,
 }
 
 impl ArchiveVerifyReport {
     /// `true` when every partition is unbroken, fully attested, and complete.
     #[must_use]
     pub fn ok(&self) -> bool {
-        self.partitions.iter().all(|partition| partition.ok)
+        self.global_orphan_objects.is_empty()
+            && self.partitions.iter().all(|partition| partition.ok)
     }
 
     /// Manifests verified across every partition.

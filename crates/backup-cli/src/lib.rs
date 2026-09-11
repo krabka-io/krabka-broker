@@ -106,12 +106,18 @@ pub async fn run(cli: Cli) -> i32 {
             bootstrap_server,
             security,
             dry_run,
+            trust,
             archive,
-        } => {
-            run::restore_offsets_configured(capture, bootstrap_server, security, *dry_run, archive)
-                .await
-                .map(|_| ())
-        }
+        } => run::restore_offsets_configured(
+            capture,
+            bootstrap_server,
+            security,
+            trust,
+            *dry_run,
+            archive,
+        )
+        .await
+        .map(|_| ()),
     };
     match outcome {
         Ok(()) => 0,

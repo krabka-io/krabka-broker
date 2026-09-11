@@ -244,6 +244,9 @@ pub struct DisklessWalCapture {
     /// Digest of the RLMM cache snapshot captured beside this boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rlmm_snapshot_sha256: Option<Sha256Digest>,
+    /// Digest of the consumer-group offsets captured beside this boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_offsets_sha256: Option<Sha256Digest>,
     /// Optional signed WORM boundary covering this capture and its WAL objects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<SegmentManifest>,
@@ -648,21 +651,18 @@ impl WalCaptureProjection {
             }
         }
         for range in self.ranges.values() {
-            let (topic, _) = topics.get(&range.entry.topic_id).ok_or_else(|| {
-                format!(
-                    "no live diskless topic names WAL topic id {}",
-                    range.entry.topic_id
-                )
-            })?;
+            let Some((topic, _)) = topics.get(&range.entry.topic_id) else {
+                continue;
+            };
             grouped
                 .entry((topic.clone(), range.entry.topic_id, range.entry.partition))
                 .or_default()
                 .push(range.clone());
         }
         for (topic_id, partition) in self.floors.keys() {
-            let (topic, _) = topics
-                .get(topic_id)
-                .ok_or_else(|| format!("no live diskless topic names WAL topic id {topic_id}"))?;
+            let Some((topic, _)) = topics.get(topic_id) else {
+                continue;
+            };
             grouped
                 .entry((topic.clone(), *topic_id, *partition))
                 .or_default();
@@ -737,6 +737,7 @@ impl WalCaptureProjection {
             partitions,
             metadata_snapshot_sha256: None,
             rlmm_snapshot_sha256: None,
+            group_offsets_sha256: None,
             authentication: None,
         })
     }

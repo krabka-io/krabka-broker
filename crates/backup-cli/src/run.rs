@@ -19,7 +19,7 @@ use krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig}
 use crate::{
     archive::{Archive, ArchiveArgs},
     capture::{RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, newest_metadata_checkpoint},
-    cli::{CaptureSigningArgs, LATEST},
+    cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST},
     connection::SecurityArgs,
     error::BackupError,
     manifest::{
@@ -147,6 +147,7 @@ async fn capture_secured(
             context: GROUP_OFFSETS.to_owned(),
             source,
         })?;
+        let group_offsets_sha256 = Some(Sha256Digest::of(&bytes));
         artifacts.push(upload(&store, &id, GROUP_OFFSETS, bootstrap, bytes).await?);
         if let Some(bytes) = capture_diskless_index(
             &store,
@@ -155,6 +156,7 @@ async fn capture_secured(
             signing,
             metadata_snapshot_sha256,
             rlmm_snapshot_sha256,
+            group_offsets_sha256,
         )
         .await?
         {
@@ -209,6 +211,7 @@ async fn capture_diskless_index(
     signing: &CaptureSigningArgs,
     metadata_snapshot_sha256: Option<Sha256Digest>,
     rlmm_snapshot_sha256: Option<Sha256Digest>,
+    group_offsets_sha256: Option<Sha256Digest>,
 ) -> Result<Option<Vec<u8>>, BackupError> {
     const TOPIC: &str = "__diskless_wal_index";
     const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -238,7 +241,9 @@ async fn capture_diskless_index(
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
     "krabka-backup-diskless-capture".clone_into(&mut config.client_id);
-    config.compacted = true;
+    // Capture is read-only: the broker owns provisioning and compaction policy.
+    config.compacted = false;
+    config.provision_topic = false;
     config.security = security;
     let log = KafkaMetadataEventLog::start(config)
         .await
@@ -248,6 +253,7 @@ async fn capture_diskless_index(
         .map_err(BackupError::Integrity)?;
     capture.metadata_snapshot_sha256 = metadata_snapshot_sha256;
     capture.rlmm_snapshot_sha256 = rlmm_snapshot_sha256;
+    capture.group_offsets_sha256 = group_offsets_sha256;
     log.shutdown().await;
     if let (Some(key_id), Some(key_path)) = (
         signing.worm_signing_key_id.as_ref(),
@@ -529,7 +535,15 @@ pub async fn restore_offsets(
     dry_run: bool,
     archive: &ArchiveArgs,
 ) -> Result<usize, BackupError> {
-    restore_offsets_secured(capture, bootstrap_server, None, dry_run, archive).await
+    restore_offsets_secured(
+        capture,
+        bootstrap_server,
+        None,
+        &CaptureTrustArgs::default(),
+        dry_run,
+        archive,
+    )
+    .await
 }
 
 /// Load command-config security and restore one capture's group offsets.
@@ -542,6 +556,7 @@ pub async fn restore_offsets_configured(
     capture: &str,
     bootstrap_server: &str,
     security: &SecurityArgs,
+    trust: &CaptureTrustArgs,
     dry_run: bool,
     archive: &ArchiveArgs,
 ) -> Result<usize, BackupError> {
@@ -549,6 +564,7 @@ pub async fn restore_offsets_configured(
         capture,
         bootstrap_server,
         security.load().await?,
+        trust,
         dry_run,
         archive,
     )
@@ -559,6 +575,7 @@ async fn restore_offsets_secured(
     capture: &str,
     bootstrap_server: &str,
     security: Option<ClientSecurity>,
+    trust: &CaptureTrustArgs,
     dry_run: bool,
     archive: &ArchiveArgs,
 ) -> Result<usize, BackupError> {
@@ -572,6 +589,7 @@ async fn restore_offsets_secured(
     if let Some(problem) = artifact_problem(recorded, &bytes) {
         return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
     }
+    verify_offsets_boundary(&store, &id, &manifest, &bytes, trust).await?;
     let offsets: GroupOffsetsFile =
         serde_json::from_slice(&bytes).map_err(|source| BackupError::Json {
             context: capture_key(&id, GROUP_OFFSETS),
@@ -637,6 +655,55 @@ async fn restore_offsets_secured(
         println!("{}: {} offsets committed", group.group, group.offsets.len());
     }
     Ok(committed)
+}
+
+async fn verify_offsets_boundary(
+    store: &Archive,
+    id: &str,
+    manifest: &Manifest,
+    offsets: &[u8],
+    trust: &CaptureTrustArgs,
+) -> Result<(), BackupError> {
+    let configured = trust.worm_key_id.is_some()
+        || trust.worm_public_key.is_some()
+        || trust.worm_expect_head.is_some();
+    let Some(recorded) = manifest.artifact(DISKLESS_WAL_INDEX) else {
+        if configured {
+            return Err(BackupError::Integrity(format!(
+                "capture {id} holds no signed diskless boundary for group offsets"
+            )));
+        }
+        return Ok(());
+    };
+    let bytes = store.get(&capture_key(id, DISKLESS_WAL_INDEX)).await?;
+    if let Some(problem) = artifact_problem(recorded, &bytes) {
+        return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
+    }
+    let capture = krabka_remote_storage::diskless::DisklessWalCapture::from_slice(&bytes)
+        .map_err(BackupError::Integrity)?;
+    if capture.authentication.is_none() && !configured {
+        return Ok(());
+    }
+    let key_id = trust.worm_key_id.as_ref().ok_or_else(|| {
+        BackupError::Integrity("signed offset restore requires --worm-key-id".to_owned())
+    })?;
+    let key_path = trust.worm_public_key.as_ref().ok_or_else(|| {
+        BackupError::Integrity("signed offset restore requires --worm-public-key".to_owned())
+    })?;
+    let expected_head = trust.worm_expect_head.as_deref().ok_or_else(|| {
+        BackupError::Integrity("signed offset restore requires --worm-expect-head".to_owned())
+    })?;
+    let public_key = tokio::fs::read(key_path).await?;
+    let trusted = krabka_remote_storage::TrustedManifestKeys::single(key_id.clone(), public_key);
+    capture
+        .authenticate(&trusted, Some(expected_head))
+        .map_err(BackupError::Integrity)?;
+    if capture.group_offsets_sha256 != Some(Sha256Digest::of(offsets)) {
+        return Err(BackupError::Integrity(
+            "group offsets do not match the signed diskless capture boundary".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// The topic id the restored cluster gave each topic the capture names.
@@ -736,12 +803,14 @@ mod tests {
     use assert2::{assert, check};
 
     use super::{
-        BackupError, GROUP_OFFSETS, MANIFEST, METADATA_CHECKPOINT, RLMM_SNAPSHOT, capture, list,
-        restore_offsets, verify,
+        BackupError, DISKLESS_WAL_INDEX, FileEd25519Signer, GROUP_OFFSETS, MANIFEST,
+        METADATA_CHECKPOINT, RLMM_SNAPSHOT, Sha256Digest, capture, list, restore_offsets, verify,
+        verify_offsets_boundary,
     };
     use crate::{
         archive::{Archive, ArchiveArgs},
         capture::capture_key,
+        cli::CaptureTrustArgs,
         manifest::{Artifact, Manifest, sha256_hex},
         offsets::{CommittedOffset, GroupOffsets, GroupOffsetsFile},
     };
@@ -833,6 +902,76 @@ mod tests {
             }],
         })
         .expect("encode the offsets")
+    }
+
+    #[tokio::test]
+    async fn signed_capture_boundary_rejects_forged_group_offsets() {
+        const PKCS8: &[u8] = &[
+            0x30, 0x53, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20, 0x10, 0xb4, 0x98, 0x61, 0xa2, 0x6e, 0xcb, 0x9b, 0x94, 0x33, 0x41, 0xa3,
+            0x7f, 0xb7, 0x7d, 0x80, 0x95, 0x6a, 0xa7, 0xda, 0x95, 0x25, 0x62, 0xc6, 0x9b, 0x61,
+            0xfd, 0xb6, 0x63, 0x77, 0xe5, 0xba, 0xa1, 0x23, 0x03, 0x21, 0x00, 0x13, 0x57, 0x2a,
+            0x6e, 0xa1, 0xd1, 0xe1, 0x9d, 0x61, 0x77, 0x0e, 0xcb, 0xe3, 0x12, 0x91, 0xe9, 0xac,
+            0x86, 0x0f, 0x0b, 0x93, 0xf5, 0x60, 0x09, 0xfe, 0xa8, 0xcc, 0xc9, 0x0e, 0xfe, 0x2a,
+            0x87,
+        ];
+        let offsets = offsets_json();
+        let signer = FileEd25519Signer::from_pkcs8_bytes(PKCS8, "capture-key".into()).unwrap();
+        let mut capture = krabka_remote_storage::diskless::DisklessWalCapture {
+            format_version: krabka_remote_storage::diskless::DisklessWalCapture::FORMAT_VERSION,
+            captured_at_ms: 42,
+            source_cutoffs: Vec::new(),
+            partitions: Vec::new(),
+            metadata_snapshot_sha256: None,
+            rlmm_snapshot_sha256: None,
+            group_offsets_sha256: Some(Sha256Digest::of(&offsets)),
+            authentication: None,
+        };
+        let head = capture.seal(Vec::new(), &signer).unwrap();
+        let capture_bytes = serde_json::to_vec(&capture).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let public_key = root.path().join("capture.pub");
+        std::fs::write(&public_key, signer.public_key()).unwrap();
+        let archive = archive_args(root.path()).open().unwrap();
+        let id = "0000000000000042";
+        archive
+            .put(&capture_key(id, DISKLESS_WAL_INDEX), capture_bytes.clone())
+            .await
+            .unwrap();
+        let manifest = Manifest {
+            capture_id: id.into(),
+            captured_at_ms: 42,
+            log_dir: None,
+            bootstrap_server: Some("broker:9092".into()),
+            artifacts: vec![
+                Artifact {
+                    name: GROUP_OFFSETS.into(),
+                    source: "broker:9092".into(),
+                    size_bytes: offsets.len() as u64,
+                    sha256: sha256_hex(&offsets),
+                },
+                Artifact {
+                    name: DISKLESS_WAL_INDEX.into(),
+                    source: "broker:9092".into(),
+                    size_bytes: capture_bytes.len() as u64,
+                    sha256: sha256_hex(&capture_bytes),
+                },
+            ],
+        };
+        let trust = CaptureTrustArgs {
+            worm_key_id: Some("capture-key".into()),
+            worm_public_key: Some(public_key),
+            worm_expect_head: Some(head.to_string()),
+        };
+
+        verify_offsets_boundary(&archive, id, &manifest, &offsets, &trust)
+            .await
+            .expect("authentic offsets");
+        check!(
+            verify_offsets_boundary(&archive, id, &manifest, b"forged", &trust)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

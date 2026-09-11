@@ -50,6 +50,30 @@ async fn backup_capture_namespace_is_not_a_classic_partition() {
     .unwrap();
     check!(report.ok());
     check!(report.partitions.len() == 1);
+    check!(report.global_orphan_objects.is_empty());
+}
+
+#[tokio::test]
+async fn an_object_outside_partition_and_capture_directories_is_a_global_orphan() {
+    let archive = Archive::build(&[1]).await;
+    archive
+        .store
+        .put(
+            &Path::from("archive/unclaimed.bin"),
+            PutPayload::from_static(b"unclaimed"),
+        )
+        .await
+        .unwrap();
+
+    let report = verify_archive(
+        &archive.store,
+        &VerifyRequest::default(),
+        &archive.trusted(),
+    )
+    .await
+    .unwrap();
+    check!(!report.ok());
+    check!(report.global_orphan_objects == vec!["archive/unclaimed.bin"]);
 }
 
 /// The kind of break a row expects, matched against the reason text the
@@ -419,6 +443,7 @@ async fn verify_reports_a_clean_archive_in_full() {
             ok: true,
             first_break: None,
         }],
+        global_orphan_objects: Vec::new(),
     };
     check!(report == expected);
     check!(report.ok());
@@ -463,7 +488,8 @@ async fn verify_of_an_empty_archive_is_ok() {
     check!(
         report
             == ArchiveVerifyReport {
-                partitions: Vec::new()
+                partitions: Vec::new(),
+                global_orphan_objects: Vec::new(),
             }
     );
     check!(report.ok());
