@@ -63,10 +63,12 @@ pub use self::{
         VerifyBreak,
     },
 };
-use crate::storage_manager::parse_partition_dir_name;
-use crate::worm::{
-    error::WormError,
-    manifest::{ChainHead, ObjectEntry},
+use crate::{
+    storage_manager::parse_partition_dir_name,
+    worm::{
+        error::WormError,
+        manifest::{ChainHead, ObjectEntry},
+    },
 };
 
 /// A deep WORM verification and the signed object claims it authenticated.
