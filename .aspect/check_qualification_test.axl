@@ -186,6 +186,14 @@ def _test_installation_enables_the_streams_protocol(_ctx):
     ]:
         check_eq(setting, setting in commands, True)
 
+def _test_installation_finalizes_topics_before_the_cluster(_ctx):
+    commands = gate_script("installation")
+    topic_delete = commands.find("kubectl delete kafkatopic --all")
+    cluster_delete = commands.find('kubectl delete -f "$work/cluster.json"')
+    check_eq("topic delete exists", topic_delete >= 0, True)
+    check_eq("cluster delete exists", cluster_delete >= 0, True)
+    check_eq("topic first", topic_delete < cluster_delete, True)
+
 def _test_a_failed_smoke_pipeline_cannot_pass(ctx):
     script = "set -eu\nfalse | tee /dev/null\nexit 0\n"
     result = ctx.std.process.command("bash").args(["-o", "pipefail", "-c", script]).spawn().wait()
@@ -247,6 +255,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_final_candidate_requires_all_four_fresh_receipts,
     _test_all_adapters_are_executable_shell,
     _test_installation_enables_the_streams_protocol,
+    _test_installation_finalizes_topics_before_the_cluster,
     _test_a_failed_smoke_pipeline_cannot_pass,
     _test_retained_evidence_cannot_be_substituted,
     _test_assembly_writes_a_verified_manifest_and_real_bundles,

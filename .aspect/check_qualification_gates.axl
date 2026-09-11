@@ -146,7 +146,9 @@ kubectl get pods -A -o json > "$evidence/helm-pods.json"
 for image in "$broker_image" "$operator_image" "$rebalancer_image"; do
   check "installed-$image" jq -e --arg image "$image" 'any(.items[].spec.containers[]; .image == $image)' "$evidence/helm-pods.json"
 done
-kubectl delete -f "$work/cluster.json" --timeout=5m
+# Let topic finalizers reach the broker before removing their cluster.
+kubectl delete kafkatopic --all --timeout=5m
+kubectl delete -f "$work/cluster.json" --ignore-not-found --timeout=5m
 helm uninstall rebalancer
 helm uninstall operator -n krabka-system
 helm list -A -o json > "$evidence/helm-after-uninstall.json"
