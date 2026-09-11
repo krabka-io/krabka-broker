@@ -293,6 +293,7 @@ def run_gate(ctx, document, identity, name, digest):
     created = ctx.std.process.command("mkdir").args(["-p", output]).spawn().wait()
     if created.code != 0:
         return created.code
+
     # Refuse accidental mixing of reruns. Each GitHub attempt or local retry
     # supplies its own output path; a failed attempt keeps its diagnostic log.
     marker = ctx.std.process.command("test").args(["!", "-e", output + "/commands.txt"]).spawn().wait()
@@ -306,11 +307,17 @@ def run_gate(ctx, document, identity, name, digest):
     commands = gate_script(name)
     ctx.std.fs.write(output + "/candidate.json", manifest)
     ctx.std.fs.write(output + "/commands.txt", commands)
+
     # tee retains stdout and stderr even if the caller cancels the task. The
     # external timeout also bounds hung helper processes outside Actions.
     result = ctx.std.process.command("bash").args([
-        "-c", "set -o pipefail; timeout 150m bash \"$1\" \"$2\" \"$3\" \"$4\" 2>&1 | tee \"$3/run.log\"",
-        "qualification", output + "/commands.txt", output + "/candidate.json", output, work,
+        "-c",
+        "set -o pipefail; timeout 150m bash \"$1\" \"$2\" \"$3\" \"$4\" 2>&1 | tee \"$3/run.log\"",
+        "qualification",
+        output + "/commands.txt",
+        output + "/candidate.json",
+        output,
+        work,
     ]).spawn().wait()
     if result.code != 0:
         ctx.std.io.stderr.write("qualification failed; retained evidence in " + output + "; scratch " + work + "\n")

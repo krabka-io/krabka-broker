@@ -93,8 +93,11 @@ def candidate_identity(document):
         ])
         components.append([repository, component.get("revision"), component.get("default_branch"), artifacts])
     return text_digest(json.encode([
-        document.get("schema"), document.get("captured_at"), document.get("architectures"),
-        document.get("runner_sha256"), components,
+        document.get("schema"),
+        document.get("captured_at"),
+        document.get("architectures"),
+        document.get("runner_sha256"),
+        components,
     ]))
 
 def runner_digest():
@@ -154,9 +157,12 @@ def assemble_results(ctx, document):
         result = json.decode(ctx.std.fs.read_to_string(directory + "/result.json"))
         executed_candidate = json.decode(ctx.std.fs.read_to_string(directory + "/candidate.json"))
         problems = retained_result_problems(
-            document, name, result,
+            document,
+            name,
+            result,
             ctx.std.fs.read_to_string(directory + "/commands.txt"),
-            ctx.std.fs.read_to_string(directory + "/run.log"), executed_candidate,
+            ctx.std.fs.read_to_string(directory + "/run.log"),
+            executed_candidate,
         )
         if problems:
             fail("\n".join(problems))
