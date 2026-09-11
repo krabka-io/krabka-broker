@@ -16,7 +16,9 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-use krabka_client_core::{ClientFrameMax, ConnectionDispatchQueueCapacity, ConnectionOptions};
+use krabka_client_core::{
+    Client, ClientFrameMax, ConnectionDispatchQueueCapacity, FetchMinBytes, IsolatedFetch,
+};
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use krabka_units::prelude::{ByteSize, Time, TimeExt as _};
 use tokio::sync::mpsc;
@@ -24,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
 
 use crate::{
-    kafka_log::config::MetadataEventQueueCapacity,
+    kafka_log::{config::MetadataEventQueueCapacity, partition_leader},
     log::{AssignmentHandle, MetadataEventRecord, PartitionStart},
 };
 
@@ -129,56 +131,61 @@ async fn partition_fetch_loop(
     start_offset: i64,
     cancel: CancellationToken,
 ) {
-    use std::net::ToSocketAddrs;
-
-    use krabka_client_core::{Connection, fetch_partition};
-
-    // Dedicated connection for this partition's fetch loop. Resolve the
-    // bootstrap address; on failure, warn and exit. The partition then
-    // never advances past its resume offset, so the manager's readiness
-    // gate keeps returning `NotReady` (retryable) for reads that hash
-    // there until a later reconcile re-establishes the fetch loop.
-    let Some(addr) = state
-        .bootstrap
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut a| a.next())
-    else {
-        warn!(bootstrap = %state.bootstrap, "metadata consumer: bad bootstrap addr");
-        return;
-    };
-    let opts = ConnectionOptions {
-        client_id: state.client_id.clone(),
-        dispatch_queue_capacity: state.dispatch_queue_capacity,
-        frame_max: state.frame_max,
-        security: state.security.clone().map(Box::new),
-        ..Default::default()
-    };
-    let conn = match Connection::connect_with_options(addr, opts).await {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(error = %e, partition, "metadata consumer: connect failed");
+    let client = match Client::builder()
+        .bootstrap(state.bootstrap.clone())
+        .client_id(state.client_id.clone())
+        .dispatch_queue_capacity(state.dispatch_queue_capacity.get())
+        .frame_max(state.frame_max.size())
+        .maybe_security(state.security.clone())
+        .build()
+        .await
+    {
+        Ok(client) => client,
+        Err(error) => {
+            warn!(%error, partition, "metadata consumer: connect failed");
             return;
         }
     };
 
     let mut next_offset = start_offset.max(0);
+    let mut leader = None;
     loop {
+        if leader.is_none() {
+            match client.refresh_metadata().await {
+                Ok(metadata) => {
+                    leader = partition_leader(&metadata, &state.topic, partition);
+                    if leader.is_none() {
+                        warn!(
+                            partition,
+                            "metadata consumer: partition leader is unavailable"
+                        );
+                        tokio::time::sleep(state.fetch_retry_backoff.to_std()).await;
+                        continue;
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, partition, "metadata consumer: metadata refresh failed");
+                    tokio::time::sleep(state.fetch_retry_backoff.to_std()).await;
+                    continue;
+                }
+            }
+        }
         tokio::select! {
             biased;
             () = cancel.cancelled() => {
-                conn.close();
                 return;
             }
-            res = fetch_partition(
-                &conn,
-                &state.topic,
-                state.topic_id,
+            res = client.fetch_partition_with_isolation_on(leader.expect("leader resolved above"), IsolatedFetch {
+                topic: &state.topic,
+                topic_id: state.topic_id,
                 partition,
-                next_offset,
-                state.fetch_max_wait,
-                state.fetch_max_bytes,
-            ) => {
+                fetch_offset: next_offset,
+                max_wait: state.fetch_max_wait,
+                max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
+                partition_max: state.fetch_max_bytes,
+                fetch_min: FetchMinBytes::default(),
+                isolation_level: 0,
+            }) => {
                 match res {
                     Ok(records) => {
                         for r in records {
@@ -189,7 +196,6 @@ async fn partition_fetch_loop(
                             // task spawned on re-add from a new start_offset
                             // would double-deliver these same records.
                             if cancel.is_cancelled() {
-                                conn.close();
                                 return;
                             }
                             if r.offset < next_offset {
@@ -205,13 +211,13 @@ async fn partition_fetch_loop(
                             };
                             next_offset = r.offset + 1;
                             if state.tx.send(record).await.is_err() {
-                                conn.close();
                                 return; // stream dropped
                             }
                         }
                     }
                     Err(e) => {
                         warn!(error = %e, partition, "metadata consumer: fetch failed; retrying");
+                        leader = None;
                         tokio::time::sleep(state.fetch_retry_backoff.to_std()).await;
                     }
                 }
@@ -274,5 +280,28 @@ mod tests {
 
         assert!(handle.assigned() == vec![0]);
         state.cancel_all();
+    }
+
+    #[test]
+    fn partition_fetches_route_to_the_metadata_leader() {
+        use krabka_protocol::owned::metadata_response::{
+            MetadataResponse, MetadataResponsePartition, MetadataResponseTopic,
+        };
+
+        let metadata = MetadataResponse {
+            topics: vec![MetadataResponseTopic {
+                name: Some(METADATA_TOPIC.into()),
+                partitions: vec![MetadataResponsePartition {
+                    partition_index: 2,
+                    leader_id: 9,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        check!(partition_leader(&metadata, METADATA_TOPIC, 2) == Some(9));
+        check!(partition_leader(&metadata, METADATA_TOPIC, 1) == None);
     }
 }

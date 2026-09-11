@@ -61,6 +61,13 @@ pub(super) async fn ensure_topic(
         return Ok((entry.partition_count, topic_id));
     }
 
+    if !cfg.provision_topic {
+        return Err(MetadataLogError::Other(format!(
+            "metadata topic {} does not exist",
+            cfg.topic
+        )));
+    }
+
     let mut configs = BTreeMap::new();
     configs.insert(
         "cleanup.policy".to_string(),

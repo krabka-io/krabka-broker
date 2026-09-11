@@ -119,6 +119,82 @@ async fn a_delete_started_segment_is_excluded_from_the_inventory_without_an_erro
 }
 
 #[tokio::test]
+async fn authenticated_inventory_does_not_let_unsigned_rlmm_remove_a_segment() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = Uuid::from_u128(10);
+    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
+
+    let snap_path = archive.path().join("snapshot");
+    write_snapshot(
+        &snap_path,
+        RlmmCacheDump {
+            partitions: vec![PartitionDump {
+                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
+                segments: vec![snapshot_segment(
+                    "orders",
+                    0,
+                    topic_id,
+                    segment_id,
+                    0,
+                    RemoteLogSegmentState::DeleteSegmentStarted,
+                )],
+                delete_state: None,
+            }],
+        },
+    );
+    let mut args = args_from(
+        archive.path(),
+        &["--rlmm-snapshot", &snap_path.display().to_string()],
+    );
+    args.archive.worm_key_id.push("trusted".into());
+    args.archive.worm_public_key.push("unused.pub".into());
+    let store = open_archive(&args).expect("store");
+
+    let result = inventory(&store, &args).await.expect("inventory");
+    check!(result.partitions[0].segments.len() == 1);
+}
+
+#[tokio::test]
+async fn authenticated_rlmm_excludes_objects_retained_after_completed_deletion() {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = Uuid::from_u128(10);
+    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
+
+    let snap_path = archive.path().join("snapshot");
+    write_snapshot(
+        &snap_path,
+        RlmmCacheDump {
+            partitions: vec![PartitionDump {
+                topic_id_partition: TopicIdPartition::new(topic_id, "orders", 0),
+                segments: vec![snapshot_segment(
+                    "orders",
+                    0,
+                    topic_id,
+                    segment_id,
+                    0,
+                    RemoteLogSegmentState::DeleteSegmentFinished,
+                )],
+                delete_state: None,
+            }],
+        },
+    );
+    let mut args = args_from(
+        archive.path(),
+        &["--rlmm-snapshot", &snap_path.display().to_string()],
+    );
+    args.archive.worm_key_id.push("trusted".into());
+    args.archive.worm_public_key.push("unused.pub".into());
+    let store = open_archive(&args).expect("store");
+    let mut result = inventory(&store, &args).await.expect("inventory");
+
+    reconcile_authenticated_with_snapshot(&mut result.partitions, &args, &snap_path)
+        .expect("authenticated reconciliation");
+    check!(result.partitions.is_empty());
+}
+
+#[tokio::test]
 async fn a_segment_the_snapshot_does_not_mention_is_a_disagreement() {
     let archive = tempfile::tempdir().expect("temp dir");
     let topic_id = Uuid::from_u128(1);

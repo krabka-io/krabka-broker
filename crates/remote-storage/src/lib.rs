@@ -131,6 +131,7 @@
 #![doc(html_root_url = "https://docs.rs/krabka-remote-storage/0.5.4")]
 
 mod cache;
+pub mod diskless;
 pub mod dump;
 mod error;
 mod gcs;
@@ -175,11 +176,12 @@ pub use storage_manager::{
     parse_segment_file_name, partition_dir_name, segment_file_name,
 };
 pub use worm::{
-    ArchiveVerifyReport, ChainHead, ChainStamp, EpochId, EpochSpan, HexBytes, MANIFEST_BODY_DOMAIN,
-    MANIFEST_DOMAIN, MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX, MAX_MANIFEST_BYTES, ManifestBody,
-    ManifestSeq, ManifestSignature, ObjectEntry, ObjectProtectionReport, OffsetGap,
-    PartitionVerifyReport, SealedManifest, SegmentIdentity, SegmentManifest, Sha256Digest,
-    TrustedManifestKeys, VerifyBreak, VerifyDepth, VerifyRequest, WormArchiver, WormChainRecord,
-    WormConfig, WormError, canonical_manifest_bytes, manifest_head, manifest_signing_bytes,
-    next_chain_stamp, verify_archive, verify_manifest_signature,
+    ArchiveVerifyReport, AuthenticatedArchive, ChainHead, ChainStamp, EpochId, EpochSpan, HexBytes,
+    MANIFEST_BODY_DOMAIN, MANIFEST_DOMAIN, MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX,
+    MAX_MANIFEST_BYTES, ManifestBody, ManifestSeq, ManifestSignature, ObjectEntry,
+    ObjectProtectionReport, OffsetGap, PartitionVerifyReport, SealedManifest, SegmentIdentity,
+    SegmentManifest, Sha256Digest, TrustedManifestKeys, VerifyBreak, VerifyDepth, VerifyRequest,
+    WormArchiver, WormChainRecord, WormConfig, WormError, authenticate_archive,
+    canonical_manifest_bytes, manifest_head, manifest_signing_bytes, next_chain_stamp,
+    verify_archive, verify_manifest_signature,
 };

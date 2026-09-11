@@ -95,6 +95,8 @@ pub struct KafkaMetadataLogConfig {
     pub client_id: String,
     /// Provision and maintain this internal topic with log compaction.
     pub compacted: bool,
+    /// Create the topic when it is absent. Read-only tooling disables this.
+    pub provision_topic: bool,
     /// Client TLS/SASL security applied to the producer, the raw client,
     /// the admin client, and every per-partition fetch connection.
     /// `None` is plaintext loopback, and it is the default.
@@ -126,6 +128,7 @@ impl KafkaMetadataLogConfig {
             replication: DEFAULT_REPLICATION,
             client_id: "krabka-rlmm".to_string(),
             compacted: false,
+            provision_topic: true,
             security: None,
             topic_create_timeout: DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
             fetch_max_wait: DEFAULT_METADATA_FETCH_MAX_WAIT,
@@ -203,6 +206,7 @@ mod tests {
         check!(cfg.num_partitions == 50);
         check!(cfg.replication == 3);
         check!(!cfg.compacted);
+        check!(cfg.provision_topic);
         check!(cfg.bootstrap == "127.0.0.1:9092");
         check!(cfg.security.is_none());
         check!(cfg.topic_create_timeout == secs(30));

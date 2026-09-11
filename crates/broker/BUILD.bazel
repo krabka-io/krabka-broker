@@ -155,6 +155,9 @@ crate_tests(
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
+        # A pinned full Linux image holds the local-driver tmpfs volume open
+        # while the packaged broker mounts and exhausts it.
+        "jbod_enospc": ["apache_kafka_4_3_1"],
         "jvm_acceptance_freeze": ["cp_kafka_7_5_0"],
         "jvm_acceptance_legacy": [
             "cp_kafka_3_1_2",
@@ -286,6 +289,7 @@ crate_tests(
     # that names it, and it passes a `--test_timeout` because Bazel's longest
     # built-in timeout is an hour.
     krabka_image = [
+        "jbod_enospc",
         "process_kill_durability",
         "soak",
     ],

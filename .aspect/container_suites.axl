@@ -30,7 +30,7 @@ _IMAGE_PATH_PREFIXES = ["packaging/"]
 # suite is. `//crates/broker:BUILD.bazel` names them in `krabka_image`; they are
 # named here too because the rdeps query cannot see the image's layer list from
 # a broker source file any better than it can from `packaging/`.
-_IMAGE_SUITES = ["process_kill_durability"]
+_IMAGE_SUITES = ["jbod_enospc", "process_kill_durability"]
 
 # Suites that are not `jvm_acceptance_*` but are built out of that harness --
 # they `mod jvm_acceptance` for `start_host_broker` and `broker0_advertised` --
@@ -217,6 +217,16 @@ _FEATURE_RULES = [
         "crates/broker/src/log_dir",
         "crates/broker/src/handlers/describe_log_dirs",
     ], ["unavailable_partitions_jvm"]),
+    # The packaged-process acceptance boundary for a real ENOSPC: the writer
+    # marks the directory, heartbeat publishes it, election moves the leader,
+    # and restart materializes the replica on the recovered directory.
+    ([
+        "crates/broker/src/partition_writer",
+        "crates/broker/src/heartbeat",
+        "crates/broker/src/log_dir",
+        "crates/broker/src/leader_election",
+        "crates/broker/src/replicator_supervisor",
+    ], ["jbod_enospc"]),
     # `kafka-configs --describe --all` renders the synonym chain, the config
     # source and the config type; all three come out of the DescribeConfigs
     # entry builder.
@@ -620,8 +630,9 @@ def _self_test():
         "describe-cluster source must select the broker-logger suite, whose non---all describe reads it",
     )
     _check(
-        _select(["crates/broker/src/heartbeat/client.rs"], available) == [_target("jvm_role_separated_admin")],
-        "heartbeat source must select the role-separated suite",
+        _select(["crates/broker/src/heartbeat/client.rs"], available) ==
+        sorted([_target("jbod_enospc"), _target("jvm_role_separated_admin")]),
+        "heartbeat source must select the role-separated and real-ENOSPC suites",
     )
     _check(
         _select(["crates/broker/src/metadata_source/quorum_forwarder.rs"], available) == [_target("jvm_role_separated_admin")],
@@ -674,22 +685,35 @@ def _self_test():
     )
     _check(
         _select(["packaging/BUILD.bazel"], available) ==
-        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability")]),
+        sorted([_IMAGE_SUITE_TARGET, _target("jbod_enospc"), _target("process_kill_durability")]),
         "a change to the image's layer list must select the image suite and the suites that run it",
     )
     _check(
         _select(["packaging/image_binaries_test.sh"], available) ==
-        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability")]),
+        sorted([_IMAGE_SUITE_TARGET, _target("jbod_enospc"), _target("process_kill_durability")]),
         "a change to what the image asserts must select the image suite and the suites that run it",
     )
     _check(
         sorted(_select(["packaging/base.apko.yaml", "crates/broker/src/barrier/cut.rs"], available)) ==
-        sorted([_IMAGE_SUITE_TARGET, _target("process_kill_durability"), _target("jvm_barrier_markers")]),
+        sorted([
+            _IMAGE_SUITE_TARGET,
+            _target("jbod_enospc"),
+            _target("process_kill_durability"),
+            _target("jvm_barrier_markers"),
+        ]),
         "a change to both must select both",
     )
     _check(
         _select(["crates/broker/tests/process_kill_durability.rs"], available) == [_target("process_kill_durability")],
         "the kill suite's own source must select it, and nothing else",
+    )
+    _check(
+        _select(["crates/broker/tests/jbod_enospc.rs"], available) == [_target("jbod_enospc")],
+        "the real-ENOSPC suite's own source must select it, and nothing else",
+    )
+    _check(
+        _target("jbod_enospc") in _select(["crates/broker/src/partition_writer/produce.rs"], available),
+        "the storage-failure write path must select the real-ENOSPC suite",
     )
     _check(
         _target("process_kill_durability") in _select(["crates/log/src/recovery.rs"], available),

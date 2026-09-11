@@ -35,7 +35,10 @@
 //! manifest supplies. A damaged or hostile archive produces a report, never a
 //! panic.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use object_store::ObjectStore;
 
@@ -60,7 +63,37 @@ pub use self::{
         VerifyBreak,
     },
 };
-use crate::worm::{error::WormError, manifest::ChainHead};
+use crate::{
+    storage_manager::parse_partition_dir_name,
+    worm::{
+        error::WormError,
+        manifest::{ChainHead, ObjectEntry},
+    },
+};
+
+/// A deep WORM verification and the signed object claims it authenticated.
+///
+/// A reader must still hash bytes fetched after this run against [`Self::objects`]:
+/// the object store can replace a key between verification and consumption.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedArchive {
+    report: ArchiveVerifyReport,
+    objects: BTreeMap<String, ObjectEntry>,
+}
+
+impl AuthenticatedArchive {
+    /// The ordinary WORM verification report.
+    #[must_use]
+    pub fn report(&self) -> &ArchiveVerifyReport {
+        &self.report
+    }
+
+    /// Signed size and digest claims, keyed by full object-store key.
+    #[must_use]
+    pub fn objects(&self) -> &BTreeMap<String, ObjectEntry> {
+        &self.objects
+    }
+}
 
 /// Public keys the verifier accepts, keyed by `key_id`.
 ///
@@ -153,6 +186,12 @@ pub struct VerifyRequest {
     /// [`PartitionVerifyReport::ok`]: a restart is a hole in the attestation,
     /// not evidence of a rewrite.
     pub allow_epoch_restarts: bool,
+    /// Exact object keys authenticated by another signed boundary.
+    ///
+    /// Restore uses this for diskless WAL objects whose claims live in the
+    /// signed capture rather than a classic partition manifest. Every other
+    /// unreferenced object remains an orphan.
+    pub externally_authenticated_objects: BTreeSet<String>,
 }
 
 /// Verifies every partition the request selects.
@@ -183,15 +222,89 @@ pub async fn verify_archive(
     request: &VerifyRequest,
     trusted: &TrustedManifestKeys,
 ) -> Result<ArchiveVerifyReport, WormError> {
-    let listing = list_archive(store, request.prefix.as_deref()).await?;
+    let (report, _) = verify_archive_inner(store, request, trusted).await?;
+    Ok(report)
+}
+
+/// Deeply verifies an archive and returns the signed claims for every object
+/// accepted by the chain walk.
+///
+/// This always uses [`VerifyDepth::Deep`], regardless of `request.depth`.
+/// Callers must grade [`AuthenticatedArchive::report`] before consuming the
+/// claims, then hash the bytes they consume against [`AuthenticatedArchive::objects`].
+///
+/// # Errors
+///
+/// Returns [`WormError`] under the same conditions as [`verify_archive`].
+pub async fn authenticate_archive(
+    store: &Arc<dyn ObjectStore>,
+    request: &VerifyRequest,
+    trusted: &TrustedManifestKeys,
+) -> Result<AuthenticatedArchive, WormError> {
+    let mut request = request.clone();
+    request.depth = VerifyDepth::Deep;
+    let (report, objects) = verify_archive_inner(store, &request, trusted).await?;
+    Ok(AuthenticatedArchive { report, objects })
+}
+
+async fn verify_archive_inner(
+    store: &Arc<dyn ObjectStore>,
+    request: &VerifyRequest,
+    trusted: &TrustedManifestKeys,
+) -> Result<(ArchiveVerifyReport, BTreeMap<String, ObjectEntry>), WormError> {
+    let mut listing = list_archive(store, request.prefix.as_deref()).await?;
+    let global_orphan_objects = listing
+        .iter()
+        .filter(|(dir, _)| {
+            dir.rsplit('/')
+                .next()
+                .and_then(parse_partition_dir_name)
+                .is_none()
+        })
+        .flat_map(|(_, entries)| entries.keys())
+        .filter(|key| {
+            !request.externally_authenticated_objects.contains(*key)
+                && !capture_namespace(key, request.prefix.as_deref())
+        })
+        .cloned()
+        .collect();
+    listing.retain(|dir, _| {
+        dir.rsplit('/')
+            .next()
+            .and_then(parse_partition_dir_name)
+            .is_some()
+    });
+    for entries in listing.values_mut() {
+        entries.retain(|key, _| !request.externally_authenticated_objects.contains(key));
+    }
+    listing.retain(|_, entries| !entries.is_empty());
     let mut partitions = Vec::new();
+    let mut objects = BTreeMap::new();
     for (dir, entries) in &listing {
-        if let Some(report) = verify_partition(store, dir, entries, request, trusted).await? {
+        if let Some((report, verified)) =
+            verify_partition(store, dir, entries, request, trusted).await?
+        {
             partitions.push(report);
+            objects.extend(verified);
         }
     }
     // The listing is a `BTreeMap` keyed by directory, so the partitions are
     // already in directory order. Sorting again states the guarantee locally.
     partitions.sort_by(|a, b| a.partition_dir.cmp(&b.partition_dir));
-    Ok(ArchiveVerifyReport { partitions })
+    Ok((
+        ArchiveVerifyReport {
+            partitions,
+            global_orphan_objects,
+        },
+        objects,
+    ))
+}
+
+fn capture_namespace(key: &str, prefix: Option<&str>) -> bool {
+    let relative = prefix
+        .and_then(|prefix| key.strip_prefix(prefix)?.strip_prefix('/'))
+        .unwrap_or(key);
+    relative
+        .split('/')
+        .any(|component| component == "restore-inputs")
 }

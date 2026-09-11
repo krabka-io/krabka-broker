@@ -44,11 +44,16 @@
 use std::{ffi::OsString, path::Path};
 
 use clap::Parser;
+use krabka_remote_storage::{
+    AuthenticatedArchive, Sha256Digest, TrustedManifestKeys, VerifyRequest, authenticate_archive,
+    diskless::CAPTURE_HEAD_NAME,
+};
 
 mod args;
 mod backend;
 mod bound;
 mod discover;
+mod diskless;
 mod error;
 mod materialize;
 mod report;
@@ -68,9 +73,14 @@ pub use self::{
         EXIT_ARCHIVE_UNREADABLE, EXIT_BAD_ARGUMENTS, EXIT_DIRTY_LOG_DIR, EXIT_INTEGRITY,
         EXIT_MATERIALIZE, EXIT_OK, RestoreError,
     },
-    materialize::{FormatTargetOutcome, SegmentOutcome, format_target, write_segment},
-    report::{MetadataRestoreReport, PartitionReport, ReportFormat, RestoreReport, SkippedSegment},
-    verify::{SegmentFacts, VerifiedSegment, verify_segment},
+    materialize::{
+        FormatTargetOutcome, SegmentOutcome, format_target, seed_rlmm_snapshot, write_segment,
+    },
+    report::{
+        AuthenticationReport, DisklessPartitionReport, DisklessRestoreReport,
+        MetadataRestoreReport, PartitionReport, ReportFormat, RestoreReport, SkippedSegment,
+    },
+    verify::{SegmentFacts, VerifiedSegment, verify_segment, verify_segment_authenticated},
 };
 
 /// The restore command line.
@@ -155,18 +165,137 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     ensure_empty_log_dir(&args.target.log_dir)?;
 
     let store = open_archive(args)?;
-    let archive = inventory(&store, args).await?;
+    let diskless_capture = diskless::load(args.archive.diskless_wal_capture.as_deref()).await?;
+    let mut archive = inventory(&store, args).await?;
+    let trusted = trusted_keys(args)?;
+    let has_classic = archive
+        .partitions
+        .iter()
+        .any(|partition| !partition.segments.is_empty())
+        || args.worm_expect_head.iter().any(|value| {
+            value
+                .split_once('=')
+                .is_some_and(|(name, _)| name != CAPTURE_HEAD_NAME)
+        });
+    let diskless_authentication = match (&diskless_capture, &trusted) {
+        (Some(capture), Some((trusted, count))) => {
+            let (claims, head) = diskless::authenticate(capture, trusted, args)?;
+            Some((claims, head, *count))
+        }
+        (None, _) => {
+            if args.worm_expect_head.iter().any(|value| {
+                value
+                    .split_once('=')
+                    .is_some_and(|(name, _)| name == CAPTURE_HEAD_NAME)
+            }) {
+                return Err(RestoreError::Authenticity {
+                    reason: "a diskless-capture head was pinned but no --diskless-wal-capture was supplied".to_owned(),
+                });
+            }
+            None
+        }
+        (Some(_), None) => None,
+    };
+    let diskless_claims = diskless_authentication
+        .as_ref()
+        .map(|(claims, _, _)| claims);
+    let mut authenticated = match (&trusted, has_classic) {
+        (Some((trusted, count)), true) => {
+            authenticate_source(&store, args, trusted, *count, diskless_claims).await?
+        }
+        _ => None,
+    };
+    if let Some((_, head, count)) = &diskless_authentication {
+        let report = authenticated.get_or_insert_with(|| {
+            (
+                None,
+                AuthenticationReport {
+                    partitions: 0,
+                    manifests: 0,
+                    objects: 0,
+                    trusted_keys: *count,
+                    chain_heads: std::collections::BTreeMap::new(),
+                    tail_truncation_protected: true,
+                },
+            )
+        });
+        report.1.partitions += 1;
+        report.1.manifests += 1;
+        report
+            .1
+            .chain_heads
+            .insert(CAPTURE_HEAD_NAME.to_owned(), head.clone());
+    }
+    let metadata_authenticated =
+        authenticate_metadata_snapshot(args, diskless_capture.as_ref(), trusted.is_some()).await?;
+    let rlmm_authenticated =
+        authenticate_rlmm_snapshot(args, diskless_capture.as_ref(), trusted.is_some()).await?;
+    if rlmm_authenticated && has_classic {
+        let rlmm_snapshot = args.archive.rlmm_snapshot.as_deref().ok_or_else(|| {
+            RestoreError::Integrity("authenticated RLMM snapshot has no path".to_owned())
+        })?;
+        discover::reconcile_authenticated_with_snapshot(
+            &mut archive.partitions,
+            args,
+            rlmm_snapshot,
+        )?;
+        if archive.partitions.is_empty() {
+            return Err(RestoreError::EmptyArchive {
+                prefix: store.prefix().unwrap_or("").to_owned(),
+            });
+        }
+    }
+    if let Some(capture) = &diskless_capture {
+        diskless::add_partitions(&mut archive, capture, args)?;
+    }
+    if archive.partitions.is_empty() {
+        return Err(RestoreError::EmptyArchive {
+            prefix: store.prefix().unwrap_or("").to_owned(),
+        });
+    }
     let predicates = Predicates::from_args(args)?;
     let format = format_target(args, &archive).await?;
+    seed_rlmm_snapshot(
+        args,
+        authenticated
+            .as_ref()
+            .and_then(|(archive, _)| archive.as_ref())
+            .map(AuthenticatedArchive::report),
+    )?;
 
+    let mut consumed_authenticated_objects = std::collections::BTreeSet::new();
+    if metadata_authenticated {
+        consumed_authenticated_objects.insert("cluster-metadata.checkpoint".to_owned());
+    }
+    if rlmm_authenticated {
+        consumed_authenticated_objects.insert("rlmm-snapshot".to_owned());
+    }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
     let mut skipped = Vec::new();
     for entry in &archive.partitions {
+        if entry.segments.is_empty() {
+            continue;
+        }
         let mut segments = Vec::with_capacity(entry.segments.len());
         for segment in &entry.segments {
-            let verified = match verify_segment(&store, &entry.partition, segment).await {
+            let verification = match &authenticated {
+                Some((Some(authenticated), _)) => {
+                    verify_segment_authenticated(
+                        &store,
+                        &entry.partition,
+                        segment,
+                        authenticated.objects(),
+                    )
+                    .await
+                }
+                Some((None, _)) | None => verify_segment(&store, &entry.partition, segment).await,
+            };
+            let verified = match verification {
                 Ok(verified) => verified,
-                Err(error) if args.continue_on_corrupt => {
+                Err(error)
+                    if args.continue_on_corrupt
+                        && !matches!(error, RestoreError::Authenticity { .. }) =>
+                {
                     skipped.push(SkippedSegment {
                         topic: entry.partition.topic.clone(),
                         partition: entry.partition.partition,
@@ -177,6 +306,21 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
                 }
                 Err(error) => return Err(error),
             };
+            if matches!(&authenticated, Some((Some(_), _))) {
+                consumed_authenticated_objects.extend(
+                    [
+                        segment.log.as_ref(),
+                        segment.offset_index.as_ref(),
+                        segment.time_index.as_ref(),
+                        segment.producer_snapshot.as_ref(),
+                        segment.leader_epoch.as_ref(),
+                        segment.transaction_index.as_ref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(|object| object.key.to_string()),
+                );
+            }
             segments.push(write_segment(args, &entry.partition, &verified, &predicates).await?);
         }
         partitions.push(PartitionReport {
@@ -187,14 +331,193 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         });
     }
 
+    let diskless = match diskless_capture {
+        Some(capture) => {
+            let report =
+                diskless::materialize(&store, args, &predicates, &capture, diskless_claims).await?;
+            if diskless_claims.is_some() {
+                consumed_authenticated_objects.extend(
+                    capture
+                        .partitions
+                        .iter()
+                        .filter(|partition| args.selects_topic(&partition.topic))
+                        .flat_map(|partition| &partition.ranges)
+                        .map(|range| range.object_key.clone()),
+                );
+            }
+            Some(report)
+        }
+        None => None,
+    };
+    if let Some((_, report)) = &mut authenticated {
+        report.objects = u64::try_from(consumed_authenticated_objects.len()).unwrap_or(u64::MAX);
+    }
     Ok(RestoreReport {
         dry_run: args.dry_run,
         log_dir: args.target.log_dir.clone(),
         cluster_id: format.cluster_id,
+        authentication: authenticated.map(|(_, report)| report),
+        diskless,
         metadata: format.metadata,
         partitions,
         skipped,
     })
+}
+
+async fn authenticate_metadata_snapshot(
+    args: &RestoreArgs,
+    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    authenticated_restore: bool,
+) -> Result<bool, RestoreError> {
+    let Some(path) = args.archive.metadata_snapshot.as_ref() else {
+        return Ok(false);
+    };
+    if !authenticated_restore {
+        return Ok(false);
+    }
+    let expected = capture
+        .and_then(|capture| capture.metadata_snapshot_sha256)
+        .ok_or_else(|| RestoreError::Authenticity {
+            reason: "--metadata-snapshot is not bound to the signed diskless capture".to_owned(),
+        })?;
+    let bytes = tokio::fs::read(path).await?;
+    let actual = Sha256Digest::of(&bytes);
+    if actual != expected {
+        return Err(RestoreError::Authenticity {
+            reason: format!(
+                "--metadata-snapshot differs from the signed capture: expected SHA-256 {expected}, found {actual}"
+            ),
+        });
+    }
+    Ok(true)
+}
+
+async fn authenticate_rlmm_snapshot(
+    args: &RestoreArgs,
+    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    authenticated_restore: bool,
+) -> Result<bool, RestoreError> {
+    let Some(path) = args.archive.rlmm_snapshot.as_ref() else {
+        return Ok(false);
+    };
+    if !authenticated_restore {
+        return Ok(false);
+    }
+    let expected = capture
+        .and_then(|capture| capture.rlmm_snapshot_sha256)
+        .ok_or_else(|| RestoreError::Authenticity {
+            reason: "--rlmm-snapshot is not bound to the signed diskless capture".to_owned(),
+        })?;
+    let bytes = tokio::fs::read(path).await?;
+    let actual = Sha256Digest::of(&bytes);
+    if actual != expected {
+        return Err(RestoreError::Authenticity {
+            reason: format!(
+                "--rlmm-snapshot differs from the signed capture: expected SHA-256 {expected}, found {actual}"
+            ),
+        });
+    }
+    Ok(true)
+}
+
+async fn authenticate_source(
+    store: &ArchiveStore,
+    args: &RestoreArgs,
+    trusted: &TrustedManifestKeys,
+    trusted_keys: usize,
+    diskless_claims: Option<
+        &std::collections::BTreeMap<String, krabka_remote_storage::ObjectEntry>,
+    >,
+) -> Result<Option<(Option<AuthenticatedArchive>, AuthenticationReport)>, RestoreError> {
+    let request = VerifyRequest {
+        prefix: store.prefix().map(str::to_owned),
+        externally_authenticated_objects: diskless_claims
+            .into_iter()
+            .flat_map(|claims| claims.keys().cloned())
+            .collect(),
+        ..VerifyRequest::default()
+    };
+    let authenticated = authenticate_archive(store.store(), &request, trusted)
+        .await
+        .map_err(|error| RestoreError::Authenticity {
+            reason: error.to_string(),
+        })?;
+    let report = authenticated.report();
+    let reason = if report.partitions.is_empty() {
+        Some("no WORM manifest chain found".to_owned())
+    } else if let Some(found) = report.first_break() {
+        Some(format!(
+            "manifest `{}`: {}",
+            found.manifest_key, found.reason
+        ))
+    } else if !report.fully_attested() {
+        Some("one or more manifests are unsigned or use an untrusted key".to_owned())
+    } else if !report.ok() {
+        Some("the archive contains objects outside its authenticated manifests".to_owned())
+    } else if report.has_epoch_restarts() {
+        Some("the archive contains an untrusted manifest-chain restart".to_owned())
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        return Err(RestoreError::Authenticity { reason });
+    }
+    let expected_heads = args
+        .worm_expect_head
+        .iter()
+        .filter_map(|value| value.split_once('='))
+        .filter(|(partition, _)| *partition != CAPTURE_HEAD_NAME)
+        .map(|(partition, head)| (partition.to_owned(), head.to_ascii_lowercase()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let actual_heads = report
+        .partitions
+        .iter()
+        .filter_map(|partition| {
+            partition
+                .head
+                .map(|head| (partition.partition_dir.clone(), head.to_string()))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if expected_heads != actual_heads {
+        return Err(RestoreError::Authenticity {
+            reason: format!(
+                "pinned WORM chain heads do not exactly cover authenticated partitions: expected {expected_heads:?}, found {actual_heads:?}"
+            ),
+        });
+    }
+    let coverage = AuthenticationReport {
+        partitions: report.partitions.len(),
+        manifests: report.manifests(),
+        objects: u64::try_from(authenticated.objects().len()).unwrap_or(u64::MAX),
+        trusted_keys,
+        chain_heads: actual_heads,
+        tail_truncation_protected: true,
+    };
+    Ok(Some((Some(authenticated), coverage)))
+}
+
+fn trusted_keys(args: &RestoreArgs) -> Result<Option<(TrustedManifestKeys, usize)>, RestoreError> {
+    if args.archive.worm_key_id.is_empty() {
+        return Ok(None);
+    }
+    let pairs = args
+        .archive
+        .worm_key_id
+        .iter()
+        .zip(&args.archive.worm_public_key)
+        .map(|(id, path)| {
+            std::fs::read(path)
+                .map(|key| (id.clone(), key))
+                .map_err(|error| {
+                    RestoreError::InvalidArgument(format!(
+                        "cannot read --worm-public-key {}: {error}",
+                        path.display()
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let count = pairs.len();
+    Ok(Some((TrustedManifestKeys::from_pairs(pairs), count)))
 }
 
 /// Refuse a target that already holds entries.

@@ -11,6 +11,7 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::StreamExt;
+use krabka_remote_storage::diskless::REPLAY_FENCE_KEY;
 use krabka_remote_storage_topic::{MetadataEventLog, PartitionStart};
 use tokio::sync::{Mutex, watch};
 
@@ -22,7 +23,6 @@ use super::wal_index::{
 pub(crate) mod test_support;
 
 pub(crate) const DISKLESS_WAL_INDEX_TOPIC: &str = "__diskless_wal_index";
-const REPLAY_FENCE_KEY: &[u8] = b"__krabka_diskless_replay_fence";
 
 /// How far the pump has walked the replay it started with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

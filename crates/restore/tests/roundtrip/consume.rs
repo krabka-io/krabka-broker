@@ -36,8 +36,11 @@
 //! the archived end offset is what proves the restored high watermark seeded
 //! the next append rather than merely being reported.
 
+use std::sync::Arc;
+
 use assert2::{assert, check};
 use bytes::Bytes;
+use krabka_audit::signing::FileEd25519Signer;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use krabka_protocol::{
@@ -51,7 +54,8 @@ use krabka_protocol::{
     },
     records::{Attributes, Record, RecordBatch},
 };
-use krabka_restore::restore;
+use krabka_restore::{RestoreReport, restore};
+use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use uuid::Uuid;
 
 use crate::{
@@ -84,16 +88,20 @@ struct RestoredCluster {
     log_dir: std::path::PathBuf,
     broker: BrokerHandle,
     client: Client,
+    report: RestoreReport,
 }
 
 impl RestoredCluster {
     /// Restore the round-trip fixture and boot a broker on the result.
     async fn start() -> Self {
-        let fixture = build_fixture();
+        Self::start_with(build_fixture(), &[]).await
+    }
+
+    async fn start_with(fixture: Fixture, extra: &[&str]) -> Self {
         let target = tempfile::tempdir().expect("target parent");
         let log_dir = target.path().join("restored");
-        let args = restore_args(fixture.archive_root.path(), &log_dir, &[]);
-        restore(&args).await.expect("restore");
+        let args = restore_args(fixture.archive_root.path(), &log_dir, extra);
+        let report = restore(&args).await.expect("restore");
 
         let (broker, client) = boot(BrokerConfig::for_tests(log_dir.clone())).await;
         Self {
@@ -102,6 +110,7 @@ impl RestoredCluster {
             log_dir,
             broker,
             client,
+            report,
         }
     }
 
@@ -118,6 +127,7 @@ impl RestoredCluster {
             log_dir,
             broker,
             client,
+            report,
         } = self;
         drop(client);
         broker.shutdown().await;
@@ -130,6 +140,7 @@ impl RestoredCluster {
             log_dir,
             broker,
             client,
+            report,
         }
     }
 
@@ -345,6 +356,63 @@ async fn a_restored_broker_serves_the_archived_offsets_batches_and_epoch() {
         );
     }
 
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rotated_key_worm_archive_restores_boots_and_reads_original_offsets() {
+    let fixture = build_fixture();
+    let keys = tempfile::tempdir().expect("key dir");
+    let mut signers = Vec::new();
+    let mut key_paths = Vec::new();
+    for id in ["old", "new"] {
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let signer =
+            Arc::new(FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), id.to_owned()).unwrap());
+        let path = keys.path().join(format!("{id}.pub"));
+        std::fs::write(&path, signer.public_key()).expect("write public key");
+        signers.push(signer);
+        key_paths.push(path.display().to_string());
+    }
+    let heads = fixture.sign_worm(&signers);
+    let mut extra = vec![
+        "--worm-key-id".to_owned(),
+        "old".to_owned(),
+        "--worm-public-key".to_owned(),
+        key_paths[0].clone(),
+        "--worm-key-id".to_owned(),
+        "new".to_owned(),
+        "--worm-public-key".to_owned(),
+        key_paths[1].clone(),
+    ];
+    for (partition, head) in heads {
+        extra.push("--worm-expect-head".to_owned());
+        extra.push(format!("{partition}={head}"));
+    }
+    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
+    let cluster = RestoredCluster::start_with(fixture, &refs).await;
+    await_restored_partitions(&cluster.broker, &cluster.fixture).await;
+
+    let authentication = cluster
+        .report
+        .authentication
+        .as_ref()
+        .expect("authentication report");
+    check!(authentication.trusted_keys == 2);
+    check!(authentication.manifests > 0);
+    check!(authentication.objects > 0);
+    for partition in cluster.fixture.partitions() {
+        check!(
+            fetch_from(
+                &cluster.client,
+                partition,
+                cluster.fixture.topic_id(partition.topic),
+                partition.base_offset(),
+            )
+            .await
+                == partition.expected_batches()
+        );
+    }
     cluster.shutdown().await;
 }
 

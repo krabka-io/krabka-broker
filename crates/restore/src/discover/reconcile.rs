@@ -20,7 +20,7 @@ use crate::{args::RestoreArgs, error::RestoreError};
 /// [`RestoreError::Io`]: the restore crate defines no dedicated snapshot-error
 /// variant, and an operator who passed the flag expects the file to be there
 /// and to be readable.
-fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreError> {
+pub(crate) fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreError> {
     match Snapshot::load(path) {
         Ok(Some(snapshot)) => Ok(snapshot),
         Ok(None) => Err(RestoreError::Io(std::io::Error::new(
@@ -58,6 +58,26 @@ pub(super) fn reconcile_with_snapshot(
     args: &RestoreArgs,
     path: &std::path::Path,
 ) -> Result<(), RestoreError> {
+    reconcile_with_snapshot_policy(partitions, args, path, false)
+}
+
+/// Reconcile a WORM archive with a snapshot whose digest was authenticated by
+/// the signed capture boundary. Immutable objects for completed deletions are
+/// expected and are excluded from restore.
+pub(crate) fn reconcile_authenticated_with_snapshot(
+    partitions: &mut Vec<PartitionInventory>,
+    args: &RestoreArgs,
+    path: &std::path::Path,
+) -> Result<(), RestoreError> {
+    reconcile_with_snapshot_policy(partitions, args, path, true)
+}
+
+fn reconcile_with_snapshot_policy(
+    partitions: &mut Vec<PartitionInventory>,
+    args: &RestoreArgs,
+    path: &std::path::Path,
+    retain_deleted_objects: bool,
+) -> Result<(), RestoreError> {
     let snapshot = load_snapshot(path)?;
 
     let mut dumps: HashMap<(Uuid, i32), &PartitionDump> = HashMap::new();
@@ -82,7 +102,7 @@ pub(super) fn reconcile_with_snapshot(
     for partition in partitions.iter_mut() {
         let key = (partition.partition.topic_id, partition.partition.partition);
         scanned_keys.insert(key);
-        reconcile_partition(partition, dumps.get(&key).copied())?;
+        reconcile_partition(partition, dumps.get(&key).copied(), retain_deleted_objects)?;
     }
 
     // A partition the snapshot names with live segments, but the scan found
@@ -92,11 +112,9 @@ pub(super) fn reconcile_with_snapshot(
         if scanned_keys.contains(key) {
             continue;
         }
-        if dump
-            .segments
-            .iter()
-            .any(|segment| reconcile_decision(false, Some(segment.state())).is_none())
-        {
+        if dump.segments.iter().any(|segment| {
+            reconcile_decision(false, Some(segment.state()), retain_deleted_objects).is_none()
+        }) {
             return Err(RestoreError::MetadataDisagreement {
                 topic: dump.topic_id_partition.topic.clone(),
                 partition: dump.topic_id_partition.partition,
@@ -125,7 +143,17 @@ fn snapshot_state_tag(state: Option<RemoteLogSegmentState>) -> u8 {
     }
 }
 
-fn reconcile_decision(scanned: bool, state: Option<RemoteLogSegmentState>) -> Option<bool> {
+fn reconcile_decision(
+    scanned: bool,
+    state: Option<RemoteLogSegmentState>,
+    retain_deleted_objects: bool,
+) -> Option<bool> {
+    if retain_deleted_objects
+        && scanned
+        && state == Some(RemoteLogSegmentState::DeleteSegmentFinished)
+    {
+        return Some(false);
+    }
     krabka_verified::restore_archive_reconcile(scanned, snapshot_state_tag(state))
 }
 
@@ -139,6 +167,7 @@ fn reconcile_decision(scanned: bool, state: Option<RemoteLogSegmentState>) -> Op
 fn reconcile_partition(
     partition: &mut PartitionInventory,
     dump: Option<&PartitionDump>,
+    retain_deleted_objects: bool,
 ) -> Result<(), RestoreError> {
     let mut by_key: HashMap<(Uuid, i64), RemoteLogSegmentState> = HashMap::new();
     let mut duplicate_snapshot_key = false;
@@ -153,6 +182,7 @@ fn reconcile_partition(
             by_key
                 .get(&(segment.segment_id, segment.base_offset.get()))
                 .copied(),
+            retain_deleted_objects,
         )
         .is_none()
     });
@@ -164,7 +194,12 @@ fn reconcile_partition(
                     scanned.segment_id == snapshot_segment.remote_log_segment_id().id
                         && scanned.base_offset.get() == snapshot_segment.start_offset()
                 });
-                reconcile_decision(scanned, Some(snapshot_segment.state())).is_none()
+                reconcile_decision(
+                    scanned,
+                    Some(snapshot_segment.state()),
+                    retain_deleted_objects,
+                )
+                .is_none()
             });
 
     if duplicate_snapshot_key || scan_disagrees || snapshot_disagrees {
@@ -182,6 +217,7 @@ fn reconcile_partition(
             by_key
                 .get(&(segment.segment_id, segment.base_offset.get()))
                 .copied(),
+            retain_deleted_objects,
         ) == Some(true)
     });
     Ok(())

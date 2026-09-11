@@ -9,7 +9,7 @@
 //! outcome. Both render the same model, so they can never disagree. A dry run
 //! produces the same report as a real run, with `dry_run` set.
 
-use std::{fmt::Write as _, path::PathBuf};
+use std::{collections::BTreeMap, fmt::Write as _, path::PathBuf};
 
 use serde::Serialize;
 use uuid::Uuid;
@@ -38,12 +38,56 @@ pub struct RestoreReport {
     pub log_dir: PathBuf,
     /// The cluster id the target was formatted with.
     pub cluster_id: Uuid,
+    /// Trusted WORM coverage, absent for an integrity-only restore.
+    pub authentication: Option<AuthenticationReport>,
+    /// Diskless-WAL recovery boundary, absent when no capture was supplied.
+    pub diskless: Option<DisklessRestoreReport>,
     /// Cluster metadata recovered from the controller snapshot.
     pub metadata: MetadataRestoreReport,
     /// One entry per restored partition, ordered by topic then partition.
     pub partitions: Vec<PartitionReport>,
     /// Segments that failed verification and were skipped.
     pub skipped: Vec<SkippedSegment>,
+}
+
+/// Diskless-WAL recovery outcome and its explicit limitations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DisklessRestoreReport {
+    pub captured_at_ms: u64,
+    pub source_cutoffs: Vec<i64>,
+    pub partitions: Vec<DisklessPartitionReport>,
+    pub limitations: Vec<String>,
+}
+
+/// Recovery boundary for one diskless partition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DisklessPartitionReport {
+    pub topic: String,
+    pub partition: i32,
+    pub topic_id: Uuid,
+    pub delete_floor: i64,
+    pub recovery_cutoff: i64,
+    pub objects: u64,
+    pub batches: u64,
+    pub records: u64,
+    pub records_dropped: u64,
+}
+
+/// Signed WORM evidence applied to the bytes consumed by restore.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthenticationReport {
+    /// Manifest-chain partitions authenticated.
+    pub partitions: usize,
+    /// Signed manifests authenticated.
+    pub manifests: u64,
+    /// Objects whose consumed bytes matched a signed digest.
+    pub objects: u64,
+    /// Trusted public keys supplied, including rotation keys.
+    pub trusted_keys: usize,
+    /// Verified tip of each partition chain.
+    pub chain_heads: BTreeMap<String, String>,
+    /// Whether each tip was checked against an independently held boundary.
+    pub tail_truncation_protected: bool,
 }
 
 /// Cluster metadata recovered alongside the archived partition data.
@@ -157,6 +201,68 @@ impl RestoreReport {
                 .expect("String writer is infallible");
         }
         writeln!(out, "cluster id: {}", self.cluster_id).expect("String writer is infallible");
+
+        if let Some(diskless) = &self.diskless {
+            writeln!(
+                out,
+                "diskless WAL capture: {} partition{}, captured at {} ms",
+                diskless.partitions.len(),
+                plural(diskless.partitions.len() as u64),
+                diskless.captured_at_ms
+            )
+            .expect("String writer is infallible");
+            for partition in &diskless.partitions {
+                writeln!(
+                    out,
+                    "  {}-{}: floor {}, restored through offset {} (exclusive); {} batch{}, {} record{} kept, {} dropped",
+                    partition.topic,
+                    partition.partition,
+                    partition.delete_floor,
+                    partition.recovery_cutoff,
+                    partition.batches,
+                    plural(partition.batches),
+                    partition.records,
+                    plural(partition.records),
+                    partition.records_dropped,
+                )
+                .expect("String writer is infallible");
+            }
+            for limitation in &diskless.limitations {
+                writeln!(out, "WARNING: {limitation}").expect("String writer is infallible");
+            }
+        }
+
+        if let Some(authentication) = &self.authentication {
+            writeln!(
+                out,
+                "authentication: {} manifest{}, {} object{}, {} partition{}, {} trusted key{}",
+                authentication.manifests,
+                plural(authentication.manifests),
+                authentication.objects,
+                plural(authentication.objects),
+                authentication.partitions,
+                plural(authentication.partitions as u64),
+                authentication.trusted_keys,
+                plural(authentication.trusted_keys as u64),
+            )
+            .expect("String writer is infallible");
+            let tail = if authentication.tail_truncation_protected {
+                "tail truncation protected by independently pinned heads"
+            } else {
+                "tail truncation not protected without independently pinned heads"
+            };
+            writeln!(
+                out,
+                "authentication boundary: verified chain tips {}; {tail}",
+                authentication
+                    .chain_heads
+                    .iter()
+                    .map(|(partition, head)| format!("{partition}={head}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .expect("String writer is infallible");
+        }
 
         if let Some(warning) = self.metadata.warning() {
             writeln!(out, "{warning}").expect("String writer is infallible");
@@ -338,6 +444,8 @@ mod tests {
             dry_run,
             log_dir: "/var/lib/krabka/restored".into(),
             cluster_id: Uuid::from_u128(0xC1_A5_7E_00),
+            authentication: None,
+            diskless: None,
             metadata: MetadataRestoreReport {
                 snapshot: Some("/backup/metadata.checkpoint".into()),
                 topic_configs: 2,
@@ -431,6 +539,8 @@ mod tests {
             dry_run: false,
             log_dir: "/var/lib/krabka/restored".into(),
             cluster_id: Uuid::nil(),
+            authentication: None,
+            diskless: None,
             metadata: MetadataRestoreReport {
                 snapshot: Some("/backup/metadata.checkpoint".into()),
                 topic_configs: 1,
@@ -501,6 +611,8 @@ mod tests {
             dry_run: true,
             log_dir: "/tmp/restore".into(),
             cluster_id: Uuid::nil(),
+            authentication: None,
+            diskless: None,
             metadata: MetadataRestoreReport {
                 snapshot: None,
                 topic_configs: 0,

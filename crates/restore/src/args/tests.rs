@@ -94,6 +94,34 @@ fn the_report_format_defaults_to_text() {
 }
 
 #[test]
+fn trusted_worm_keys_pair_by_position() {
+    let args = args_from(&[
+        "--worm-key-id",
+        "old",
+        "--worm-public-key",
+        "/keys/old.pub",
+        "--worm-key-id",
+        "new",
+        "--worm-public-key",
+        "/keys/new.pub",
+    ])
+    .expect("args");
+    check!(args.archive.worm_key_id == vec!["old", "new"]);
+    check!(args.archive.worm_public_key.len() == 2);
+
+    let unequal = args_from(&[
+        "--worm-key-id",
+        "old",
+        "--worm-key-id",
+        "new",
+        "--worm-public-key",
+        "/keys/old.pub",
+    ])
+    .expect("clap accepts repeated paired flags");
+    check!(unequal.validate().is_err());
+}
+
+#[test]
 fn an_empty_topic_list_selects_everything() {
     let args = args_from(&[]).expect("args");
     check!(args.selects_topic("anything"));

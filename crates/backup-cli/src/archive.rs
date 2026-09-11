@@ -221,6 +221,29 @@ impl Archive {
         Ok(self.client.get(&self.key(relative)).await?.to_vec())
     }
 
+    /// Read an exact object key, refusing oversized bodies before buffering.
+    ///
+    /// # Errors
+    /// Returns [`BackupError::ObjectStore`] when the object is absent, exceeds
+    /// `max_bytes`, or cannot be read.
+    pub async fn get_absolute_capped(
+        &self,
+        key: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, BackupError> {
+        let key = Path::from(key);
+        let meta = self.client.head(&key).await?;
+        if meta.size > max_bytes {
+            return Err(krabka_object_store::ObjectStoreError::TooLarge {
+                key,
+                size: meta.size,
+                max_bytes,
+            }
+            .into());
+        }
+        Ok(self.client.get(&key).await?.to_vec())
+    }
+
     /// The distinct directory names one level below `relative`.
     ///
     /// Object stores have no directories, so this lists the keys under the
@@ -519,6 +542,20 @@ mod tests {
                 .expect("read an object back")
                 == b"bytes".to_vec()
         );
+    }
+
+    #[tokio::test]
+    async fn an_absolute_read_rejects_an_oversized_object_before_fetching_it() {
+        let root = tempfile::tempdir().expect("archive root");
+        std::fs::write(root.path().join("wal.ckwl"), b"oversized").expect("write object");
+        let archive = local_args(root.path()).open().expect("open the archive");
+
+        let error = archive
+            .get_absolute_capped("wal.ckwl", 4)
+            .await
+            .expect_err("object exceeds the cap");
+
+        check!(error.to_string().contains("exceeds cap of 4 bytes"));
     }
 
     #[test]

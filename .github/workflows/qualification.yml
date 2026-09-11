@@ -9,7 +9,7 @@ on:
         default: qualification/milestone-20.json
         type: string
       execute:
-        description: Execute all four gates and publish a new qualification release
+        description: Execute all candidate gates and publish a new qualification release
         required: true
         default: false
         type: boolean
@@ -27,11 +27,11 @@ permissions:
 
 jobs:
   immutable-set:
-    if: ${{ !inputs.execute }}
+    if: ${{ github.event_name != 'schedule' && !inputs.execute }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      MANIFEST: ${{ inputs.manifest }}
+      MANIFEST: ${{ inputs.manifest || 'qualification/milestone-20.json' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
@@ -80,7 +80,7 @@ jobs:
           retention-days: 90
 
   candidate:
-    if: ${{ inputs.execute }}
+    if: ${{ github.event_name == 'schedule' || inputs.execute }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -90,7 +90,7 @@ jobs:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: freeze candidate inputs
         env:
-          MANIFEST: ${{ inputs.manifest }}
+          MANIFEST: ${{ inputs.manifest || 'qualification/milestone-20.json' }}
           BROKER_REVISION: ${{ inputs.broker_revision }}
           BROKER_DIGEST: ${{ inputs.broker_digest }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -129,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [installation, operator-lifecycle, cli-admin, observability-recovery]
+        gate: [installation, operator-lifecycle, cli-admin, observability-recovery, disaster-recovery]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -191,7 +191,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir qualification-results
-          for gate in installation operator-lifecycle cli-admin observability-recovery; do
+          for gate in installation operator-lifecycle cli-admin observability-recovery disaster-recovery; do
             mv "qualification-downloads/qualification-${gate}" "qualification-results/${gate}"
           done
           aspect check-qualification --manifest .qualification-input.json --assemble \

@@ -64,6 +64,40 @@ impl RestoreArgs {
     pub fn validate(&self) -> Result<(), RestoreError> {
         self.validate_backend_flags()?;
 
+        if self.archive.worm_key_id.len() != self.archive.worm_public_key.len() {
+            return Err(RestoreError::InvalidArgument(format!(
+                "--worm-key-id was given {} time(s) and --worm-public-key {} time(s); they pair by position",
+                self.archive.worm_key_id.len(),
+                self.archive.worm_public_key.len()
+            )));
+        }
+        if !self.worm_expect_head.is_empty() && self.archive.worm_key_id.is_empty() {
+            return Err(RestoreError::InvalidArgument(
+                "--worm-expect-head requires --worm-key-id and --worm-public-key".to_owned(),
+            ));
+        }
+        let mut expected_partitions = std::collections::HashSet::new();
+        for expected in &self.worm_expect_head {
+            let Some((partition, head)) = expected.split_once('=') else {
+                return Err(RestoreError::InvalidArgument(format!(
+                    "--worm-expect-head must be PARTITION_DIR=64_HEX, got `{expected}`"
+                )));
+            };
+            if partition.is_empty()
+                || head.len() != 64
+                || !head.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(RestoreError::InvalidArgument(format!(
+                    "--worm-expect-head must be PARTITION_DIR=64_HEX, got `{expected}`"
+                )));
+            }
+            if !expected_partitions.insert(partition) {
+                return Err(RestoreError::InvalidArgument(format!(
+                    "--worm-expect-head names `{partition}` more than once"
+                )));
+            }
+        }
+
         let mut bounded: Vec<&PartitionRef> = Vec::with_capacity(self.to_offset.len());
         for bound in &self.to_offset {
             if bounded.contains(&&bound.partition) {

@@ -24,6 +24,7 @@ const DEFAULT_S3_REGION: &str = "us-east-1";
 /// Tokio runtime handle.
 #[derive(Clone)]
 pub struct ArchiveStore {
+    store: Arc<dyn object_store::ObjectStore>,
     client: ObjectStoreClient,
     prefix: Option<String>,
 }
@@ -33,6 +34,12 @@ impl ArchiveStore {
     #[must_use]
     pub fn ops(&self) -> &dyn ObjectOps {
         &self.client
+    }
+
+    /// The object-store handle used by the WORM verifier.
+    #[must_use]
+    pub fn store(&self) -> &Arc<dyn object_store::ObjectStore> {
+        &self.store
     }
 
     /// The key prefix every archive key carries, absent when the archive is
@@ -65,7 +72,8 @@ impl ArchiveStore {
     #[must_use]
     pub fn with_store(store: Arc<dyn object_store::ObjectStore>, prefix: Option<&str>) -> Self {
         Self {
-            client: ObjectStoreClient::new(store),
+            client: ObjectStoreClient::new(store.clone()),
+            store,
             prefix: normalize_prefix(prefix),
         }
     }
@@ -82,7 +90,8 @@ pub fn open_archive(args: &RestoreArgs) -> Result<ArchiveStore, RestoreError> {
     let config = object_store_config(args)?;
     let store: Arc<dyn object_store::ObjectStore> = build_object_store(&config)?;
     Ok(ArchiveStore {
-        client: ObjectStoreClient::new(store),
+        client: ObjectStoreClient::new(store.clone()),
+        store,
         prefix: normalize_prefix(args.archive.prefix.as_deref()),
     })
 }

@@ -62,8 +62,8 @@ pub use self::{
         manifest_head, manifest_signing_bytes, verify_manifest_signature,
     },
     verify::{
-        ArchiveVerifyReport, EpochSpan, MAX_MANIFEST_BYTES, ObjectProtectionReport, OffsetGap,
-        PartitionVerifyReport, TrustedManifestKeys, VerifyBreak, VerifyDepth, VerifyRequest,
-        verify_archive,
+        ArchiveVerifyReport, AuthenticatedArchive, EpochSpan, MAX_MANIFEST_BYTES,
+        ObjectProtectionReport, OffsetGap, PartitionVerifyReport, TrustedManifestKeys, VerifyBreak,
+        VerifyDepth, VerifyRequest, authenticate_archive, verify_archive,
     },
 };

@@ -36,7 +36,7 @@ The feature adds two commands, one to restore and one to capture what a restore 
 
 The crate is a library as well as a binary. `krabka_restore::restore` returns the structured report and the structured error, and only `run` and the binary turn an error into an exit code. A runbook that wraps the restore gets an exit code. A tool that embeds it keeps the error.
 
-One command restores; a second one supplies what the archive cannot. `krabka backup` (the `krabka-backup` binary) captures the two snapshot files and the committed group offsets from a running cluster, checks a capture against its own digests, and commits captured offsets into a restored cluster. It speaks no krabka-private API key: `ListGroups`, `OffsetFetch` and `OffsetCommit` are the whole of its cluster surface, and the two files it copies are read through a read-only mount of the broker's volume. It is a separate binary for the reason the restore is: the recovery path must not depend on the thing it recovers, and the copy has to be possible on a node whose image carries no shell.
+One command restores; a second one supplies what the archive cannot. `krabka backup` (the `krabka-backup` binary) captures the two snapshot files, committed group offsets, and the committed diskless-WAL index projection from a running cluster, checks a capture against its own digests, and commits captured offsets into a restored cluster. It speaks existing Kafka APIs rather than a krabka-private API key; diskless capture publishes a replay fence and reads the compacted `__diskless_wal_index` topic through the shared client. The two local files are read through a read-only mount of the broker's volume. It is a separate binary for the reason the restore is: the recovery path must not depend on the thing it recovers, and the copy has to be possible on a node whose image carries no shell.
 
 ### Where the Archive Is
 
@@ -48,6 +48,9 @@ One command restores; a second one supplies what the archive cannot. `krabka bac
 | `--archive-prefix PREFIX` | Key prefix inside the archive, for a bucket that holds more than the tiered tree. It applies to every backend. |
 | `--rlmm-snapshot PATH` | A broker's `<log.dir>/remote-log-metadata/snapshot`. |
 | `--metadata-snapshot PATH` | A controller `<offset>-<epoch>.checkpoint` from `<log.dir>/__cluster_metadata/@metadata-0/`. Topic configuration, ACLs, client quotas, SCRAM credentials and finalized feature levels are restored from it. |
+| `--diskless-wal-capture PATH` | A backup capture's committed diskless-WAL projection, including delete floors and recovery cutoffs. |
+| `--worm-key-id ID`, `--worm-public-key PATH` | A repeatable trusted Ed25519 key pair that enables authenticated restore. |
+| `--worm-expect-head PARTITION_DIR=HEX` | An independently retained classic partition-chain tip or the synthetic `diskless-capture` tip. Every authenticated source needs exact tip coverage. |
 
 Exactly one backend is selected. A sub-flag of a backend the operator did not select is an error rather than a value the tool ignores, and the message names both flags. Credentials are optional on both cloud backends, so an operator can restore under an instance role or under Workload Identity and never put a secret on a command line.
 
@@ -94,7 +97,7 @@ The split between 5 and 6 is the split a runbook branches on. Code 5 says the ar
 
 ### The Report
 
-The report names the target, the cluster id, and each restored partition with its topic id, the segments it wrote, the offsets they now span, and the counts of batches and records kept, rewritten, emptied, and dropped. It lists every segment that verification rejected, with the reason.
+The report names the target, the cluster id, and each restored partition with its topic id, the segments it wrote, the offsets they now span, and the counts of batches and records kept, rewritten, emptied, and dropped. It lists every segment that verification rejected, with the reason. Authenticated restores also report trusted-key count, signed manifest/object coverage, every pinned chain tip, and the diskless delete floor and exclusive recovery cutoff.
 
 The text rendering is for a person during an incident, and it sums the per-segment counters up to the partition. The JSON rendering is for a runbook that has to assert on the outcome, and it keeps the per-segment detail. Both render one model, so they cannot disagree.
 
@@ -134,13 +137,13 @@ From the batch headers the stage derives the two facts the rest of the pipeline 
 
 The `.log` is fetched exactly once. The verified bytes are handed forward, and the materialize stage writes from them rather than from a second download.
 
-### What Verification Does Not Prove
+### Authenticated WORM Restore
 
 A CRC proves that bytes did not rot. It does not prove that an attacker did not rewrite a segment and recompute the CRC over the result, and the motivation for this tool names two incidents where an attacker held a credential.
 
-The archive answers that separately. `krabka-remote-storage`'s WORM mode signs a per-segment manifest, hash-chains it per partition, and `krabka-worm-verify` checks the chain and the signatures with read-only credentials against a key the auditor holds. Verification of that kind belongs to an auditor who does not hold the writer's keys, and it is already a tool of its own.
+The archive answers that separately. `krabka-remote-storage`'s WORM mode signs a per-segment manifest and hash-chains it per partition. Trusted-key restore reuses that verifier in deep mode, rejects unsigned, untrusted, broken, restarted, missing, or orphaned evidence, and requires an independently retained exact head for every chain. Each object is hashed again when restore consumes it, closing the replacement window between verification and materialization. Key rotation is a repeated trusted-key pair, not a relaxed signature policy.
 
-`krabka restore` does not consult those manifests today. A WORM archive's `.manifest` objects reach the discover stage as unrecognized keys, and the report does not render them. An operator restoring after a credential compromise should run `krabka-worm-verify` against the archive first, and treat the restore's own checks as an integrity check and not as an authenticity check. Folding the chain check into the verify stage, behind a flag that names a trusted key, is the obvious follow-up, and it is a change to this document rather than a new one.
+A signed diskless capture uses the same manifest primitives for a synthetic `diskless-capture` boundary. Its signature binds the exact projection state, the controller metadata checkpoint and RLMM snapshot SHA-256 digests when captured, and a size and SHA-256 claim for every referenced absolute WAL object. Authenticated restore rejects either snapshot when it is unsigned or mismatched. It seeds the authenticated RLMM cache into the recovered broker with its metadata-topic cursors reset to `-1`, retaining WORM chain receipts while replaying the new `__remote_log_metadata` topic from offset zero. A separate pinned head prevents a valid older capture from being substituted. Without trusted keys the original CRC-only integrity mode remains available and is reported without authenticated coverage.
 
 ### Offsets Are the Contract
 
@@ -212,7 +215,7 @@ The epoch history reaches the target through the batch headers instead. Each arc
 
 A segment that fails verification stops the whole restore, and the error names the object and the byte position. This is the right default for a tool whose output an operator will trust: a partial restore that reports success is worse than a restore that stops.
 
-`--continue-on-corrupt` is the escape, and it is honest about what it costs. Each skipped segment appears in the report with the reason, and a skipped segment leaves a hole in the partition that the restore cannot fill. An operator who takes that trade is choosing the records they can still have, and the report tells them exactly which ones they cannot.
+`--continue-on-corrupt` is the escape, and it is honest about what it costs. Each skipped segment appears in the report with the reason, and a skipped segment leaves a hole in the partition that the restore cannot fill. An operator who takes that trade is choosing the records they can still have, and the report tells them exactly which ones they cannot. The flag never catches an authenticity failure.
 
 The flag does not rescue a materialization failure. A target that will not accept a write is not a damaged segment, and continuing past it would produce nothing.
 
@@ -224,7 +227,7 @@ Tiering is per topic, gated by `remote.storage.enable`, so a topic that was neve
 
 Internal topics follow the same rule. `__consumer_offsets` and `__transaction_state` are compacted and are not normally tiered, so no archive holds them and the restore rebuilds neither. In-flight transaction state ends there: a restore is a point in time, and a transaction that had not committed at that point has no outcome to restore. Committed group offsets do not end there, because they are readable from a live cluster over `OffsetFetch` and writable into a restored one over `OffsetCommit`. `krabka-backup` is the tool that does both, and the [Compatibility](#compatibility-deprecation-and-migration-plan) section states the split.
 
-Diskless topics are out of reach as well. A diskless partition holds its records in WAL objects under `diskless-wal/<broker-id>/<uuid>.ckwl`, and those are not archived segments. The archive scan in `discover::inventory` recognizes one key shape only: a partition directory named `<topic>-<partition>-<topic-uuid>`, with one segment artifact inside it. A diskless WAL key has one path part too many and no partition directory, so the scan puts it in `unrecognized` and the restore reads nothing from it. A restore of a diskless topic needs a reader for the WAL object format, which this design does not have.
+Diskless recovery is bounded by the committed capture, not by whatever objects happen to exist. Backup replays the keyed index through per-partition fences and records only its live projection, delete floors, and exclusive recovery cutoffs. Restore fetches those exact absolute WAL keys, checks each shared CKWL footer, validates every contained Kafka batch and CRC, and materializes the original offsets while setting the captured log-start floor. Retried index records collapse by key, tombstoned ranges and orphan objects are ignored, and missing or corrupt referenced objects stop the run. Records not yet archived at the capture cutoff and in-flight transaction state remain unavailable and are stated in the report.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -262,6 +265,8 @@ Every claim this document makes about a bound is a claim about bytes in a restor
 **Bounds.** `tests/bounds.rs` proves that each bound changes what a full restore writes, and not only what the predicate module decides in isolation. Every scenario reads the restored partition back and compares whole batches, which is what catches an offset that shifted.
 
 **Corruption.** `tests/corruption.rs` damages one artifact of a real archive on disk and asserts the error variant, the exit code, and the object named. It also proves that `--continue-on-corrupt` skips exactly the damaged segment and restores the rest.
+
+**Authenticity and diskless recovery.** The WORM roundtrip rotates trusted keys, boots the restored broker, and reads original offsets. Focused restore and remote-storage suites cover changed bytes, replacement after verification, untrusted keys, wrong heads, signed capture-state changes, multi-batch CKWL runs, delete floors, index retries and tombstones, orphan objects, and missing or corrupt referenced objects. Dry-run executes the same diskless validations as materialization.
 
 **Command line.** `tests/cli_surface.rs` runs the binary as a subprocess, which is what covers the flag surface and the exit codes a runbook branches on.
 

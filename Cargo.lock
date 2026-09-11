@@ -2883,13 +2883,18 @@ name = "krabka-backup"
 version = "0.5.4"
 dependencies = [
  "assert2",
+ "bytes",
  "clap",
  "futures-util",
  "hex",
+ "krabka-audit 0.5.4",
  "krabka-client-admin",
  "krabka-client-core",
  "krabka-object-store",
  "krabka-protocol",
+ "krabka-remote-storage",
+ "krabka-remote-storage-topic",
+ "krabka-security",
  "object_store",
  "serde",
  "serde_json",
@@ -2899,6 +2904,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3021,7 +3027,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-admin"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=f0c86c1ccdecd1776e32349764d7d2efe5dae347#f0c86c1ccdecd1776e32349764d7d2efe5dae347"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3042,7 +3048,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-consumer"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=f0c86c1ccdecd1776e32349764d7d2efe5dae347#f0c86c1ccdecd1776e32349764d7d2efe5dae347"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
 dependencies = [
  "assert2",
  "bon",
@@ -3062,7 +3068,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-core"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=f0c86c1ccdecd1776e32349764d7d2efe5dae347#f0c86c1ccdecd1776e32349764d7d2efe5dae347"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
 dependencies = [
  "async-trait",
  "bon",
@@ -3086,7 +3092,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-producer"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=f0c86c1ccdecd1776e32349764d7d2efe5dae347#f0c86c1ccdecd1776e32349764d7d2efe5dae347"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3389,6 +3395,7 @@ dependencies = [
  "reqwest 0.13.4",
  "ring",
  "serde",
+ "serde-wincode",
  "serde_json",
  "sha2 0.11.0",
  "tempfile",
@@ -3397,6 +3404,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wincode",
  "zerocopy",
 ]
 
@@ -3438,6 +3446,7 @@ dependencies = [
  "clap",
  "crc32c",
  "futures-util",
+ "krabka-audit 0.5.4",
  "krabka-backup",
  "krabka-broker",
  "krabka-client-admin",
@@ -3456,6 +3465,7 @@ dependencies = [
  "maplit",
  "object_store",
  "regex",
+ "ring",
  "serde",
  "serde_json",
  "tempfile",

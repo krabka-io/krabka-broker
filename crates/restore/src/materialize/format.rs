@@ -13,6 +13,10 @@ use std::{
 
 use krabka_ids::LeaderEpoch;
 use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_remote_storage::{
+    ArchiveVerifyReport, ChainHead, ChainStamp, RemoteLogSegmentState, WormChainRecord,
+    parse_partition_dir_name,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -92,6 +96,103 @@ pub async fn format_target(
     } else {
         Err(RestoreError::Format { code })
     }
+}
+
+/// Seed the restored broker's local RLMM cache while resetting its Kafka
+/// cursors for the new `__remote_log_metadata` topic.
+///
+/// # Errors
+/// Returns [`RestoreError`] when the source snapshot cannot be read, its
+/// authenticated chain tips cannot be established, or the target snapshot
+/// cannot be written.
+pub fn seed_rlmm_snapshot(
+    args: &RestoreArgs,
+    authenticated: Option<&ArchiveVerifyReport>,
+) -> Result<(), RestoreError> {
+    let Some(path) = args.archive.rlmm_snapshot.as_ref() else {
+        return Ok(());
+    };
+    let mut snapshot = crate::discover::load_snapshot(path)?;
+    snapshot.committed_offsets.fill(-1);
+    snapshot
+        .dump
+        .partitions
+        .retain(|partition| args.selects_topic(&partition.topic_id_partition.topic));
+    if let Some(report) = authenticated {
+        seed_authenticated_chain_tips(&mut snapshot.dump, report)?;
+    }
+    if args.dry_run {
+        return Ok(());
+    }
+    snapshot
+        .write_atomic(
+            &args
+                .target
+                .log_dir
+                .join("remote-log-metadata")
+                .join(krabka_remote_storage_topic::snapshot::SNAPSHOT_FILE_NAME),
+        )
+        .map_err(|error| {
+            RestoreError::Io(std::io::Error::other(format!(
+                "cannot seed restored RLMM snapshot: {error}"
+            )))
+        })
+}
+
+fn seed_authenticated_chain_tips(
+    dump: &mut krabka_remote_storage::RlmmCacheDump,
+    report: &ArchiveVerifyReport,
+) -> Result<(), RestoreError> {
+    for partition in &mut dump.partitions {
+        let tp = &partition.topic_id_partition;
+        let verified = report
+            .partitions
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .partition_dir
+                    .rsplit('/')
+                    .next()
+                    .and_then(parse_partition_dir_name)
+                    .is_some_and(|parsed| {
+                        parsed.topic_id == tp.topic_id && parsed.partition == tp.partition
+                    })
+            })
+            .and_then(|partition| partition.epochs.last())
+            .ok_or_else(|| RestoreError::Authenticity {
+                reason: format!(
+                    "RLMM snapshot partition {}-{} has no authenticated WORM chain tip",
+                    tp.topic, tp.partition
+                ),
+            })?;
+        let latest = partition
+            .segments
+            .iter_mut()
+            .filter(|segment| {
+                !matches!(
+                    segment.state(),
+                    RemoteLogSegmentState::DeleteSegmentStarted
+                        | RemoteLogSegmentState::DeleteSegmentFinished
+                )
+            })
+            .max_by_key(|segment| segment.start_offset())
+            .ok_or_else(|| RestoreError::Authenticity {
+                reason: format!(
+                    "RLMM snapshot partition {}-{} has no live segment for its authenticated WORM chain tip",
+                    tp.topic, tp.partition
+                ),
+            })?;
+        *latest = latest.clone().with_custom_metadata(
+            WormChainRecord::request(ChainStamp {
+                epoch_id: verified.epoch_id,
+                seq: verified.last_seq,
+                prev_head: ChainHead::GENESIS,
+            })
+            .with_head(verified.head)
+            .to_custom_metadata(),
+        );
+    }
+    Ok(())
 }
 
 async fn read_metadata_snapshot(
@@ -283,6 +384,10 @@ mod tests {
         PatternType, PermissionType, QuotaEntity, ResourceType, ScramCredentialRecord,
         TopicConfigRecord,
     };
+    use krabka_remote_storage::{
+        PartitionDump, RemotePartitionDeleteState, RlmmCacheDump, TopicIdPartition,
+    };
+    use krabka_remote_storage_topic::snapshot::Snapshot;
     use krabka_security::SaslMechanism;
 
     use super::*;
@@ -343,6 +448,62 @@ mod tests {
             metadata.topics_without_configuration
                 == vec!["orders".to_owned(), "payments".to_owned()]
         );
+    }
+
+    #[test]
+    fn restored_rlmm_snapshot_keeps_cached_state_and_replays_the_new_topic_from_zero() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let target = tempfile::tempdir().expect("target tempdir");
+        let source_path = source.path().join("snapshot");
+        let dump = RlmmCacheDump {
+            partitions: vec![PartitionDump {
+                topic_id_partition: TopicIdPartition::new(Uuid::from_u128(7), "orders", 0),
+                segments: Vec::new(),
+                delete_state: Some(RemotePartitionDeleteState::DeletePartitionMarked),
+            }],
+        };
+        Snapshot {
+            committed_offsets: vec![19],
+            dump: dump.clone(),
+        }
+        .write_atomic(&source_path)
+        .expect("write source snapshot");
+        let args = args_from(
+            &["--rlmm-snapshot", &source_path.display().to_string()],
+            target.path(),
+        );
+
+        seed_rlmm_snapshot(&args, None).expect("seed restored snapshot");
+
+        let restored = Snapshot::load(
+            &target
+                .path()
+                .join("remote-log-metadata")
+                .join(krabka_remote_storage_topic::snapshot::SNAPSHOT_FILE_NAME),
+        )
+        .expect("read restored snapshot")
+        .expect("restored snapshot exists");
+        check!(restored.committed_offsets == vec![-1]);
+        check!(restored.dump == dump);
+    }
+
+    #[test]
+    fn authenticated_dry_run_still_validates_the_rlmm_snapshot() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let target = tempfile::tempdir().expect("target tempdir");
+        let source_path = source.path().join("snapshot");
+        std::fs::write(&source_path, b"not a snapshot").expect("write malformed snapshot");
+        let args = args_from(
+            &[
+                "--rlmm-snapshot",
+                &source_path.display().to_string(),
+                "--dry-run",
+            ],
+            target.path(),
+        );
+
+        check!(seed_rlmm_snapshot(&args, None).is_err());
+        check!(!target.path().join("remote-log-metadata/snapshot").exists());
     }
 
     #[test]

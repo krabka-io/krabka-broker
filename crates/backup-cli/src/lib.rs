@@ -55,6 +55,8 @@ use clap::Parser as _;
 pub mod archive;
 pub mod capture;
 pub mod cli;
+pub mod connection;
+pub mod diskless;
 pub mod error;
 pub mod manifest;
 pub mod offsets;
@@ -85,20 +87,37 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Capture {
             log_dir,
             bootstrap_server,
+            security,
+            signing,
             archive,
-        } => run::capture(log_dir.as_deref(), bootstrap_server.as_deref(), archive)
-            .await
-            .map(|_| ()),
+        } => run::capture_configured(
+            log_dir.as_deref(),
+            bootstrap_server.as_deref(),
+            security,
+            signing,
+            archive,
+        )
+        .await
+        .map(|_| ()),
         Command::List { archive } => run::list(archive).await.map(|_| ()),
         Command::Verify { capture, archive } => run::verify(capture, archive).await,
         Command::RestoreOffsets {
             capture,
             bootstrap_server,
+            security,
             dry_run,
+            trust,
             archive,
-        } => run::restore_offsets(capture, bootstrap_server, *dry_run, archive)
-            .await
-            .map(|_| ()),
+        } => run::restore_offsets_configured(
+            capture,
+            bootstrap_server,
+            security,
+            trust,
+            *dry_run,
+            archive,
+        )
+        .await
+        .map(|_| ()),
     };
     match outcome {
         Ok(()) => 0,

@@ -11,7 +11,7 @@
 //! `--access-key` flag: an auditor should hold a read-only role, not a copy of
 //! the writer's keys.
 
-use std::{fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
+use std::{collections::BTreeSet, fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
 
 use clap::{Args, Parser, Subcommand};
 use krabka_audit::chain::from_hex32;
@@ -165,6 +165,7 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
         // outcome and is never reported as tampering.
         expect_head: None,
         allow_epoch_restarts: args.grading.allow_epoch_restarts,
+        externally_authenticated_objects: BTreeSet::default(),
     };
     match verify_archive(&store, &request, &trusted).await {
         Ok(report) => {
@@ -279,9 +280,14 @@ fn grade(
     }
 
     let orphans: Vec<&String> = report
-        .partitions
+        .global_orphan_objects
         .iter()
-        .flat_map(|partition| partition.orphan_objects.iter())
+        .chain(
+            report
+                .partitions
+                .iter()
+                .flat_map(|partition| partition.orphan_objects.iter()),
+        )
         .collect();
     if !orphans.is_empty() {
         report_orphans(&orphans, args.grading.strict_orphans);
@@ -566,6 +572,7 @@ mod tests {
                 ok: first_break.is_none(),
                 first_break,
             }],
+            global_orphan_objects: Vec::new(),
         }
     }
 

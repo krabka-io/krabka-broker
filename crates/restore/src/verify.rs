@@ -18,10 +18,12 @@
 //! the producer-state snapshot, and [`self::leader_epoch`] for the
 //! leader-epoch checkpoint.
 
+use std::collections::BTreeMap;
+
 use bytes::Bytes;
 use krabka_ids::{LeaderEpoch, Offset};
 use krabka_object_store::{ObjectOps, ObjectStoreError};
-use krabka_remote_storage::TopicIdPartition;
+use krabka_remote_storage::{ObjectEntry, Sha256Digest, TopicIdPartition};
 use object_store::path::Path;
 use uuid::Uuid;
 
@@ -81,7 +83,7 @@ pub struct VerifiedSegment {
 /// Kafka's default `segment.bytes` is 1 GiB, and an operator can raise it, so
 /// this cap is a generous multiple of that default rather than the exact
 /// configured value, which this offline tool never sees.
-const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub(super) const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Guard for the sparse `.index` and `.timeindex` sidecars. An entry lands
 /// only every `index.interval.bytes` (4 KiB by default), so even a segment at
@@ -112,6 +114,31 @@ pub async fn verify_segment(
     partition: &TopicIdPartition,
     segment: &SegmentInventory,
 ) -> Result<VerifiedSegment, RestoreError> {
+    verify_segment_inner(store, partition, segment, None).await
+}
+
+/// Fetch and verify one segment against signed WORM object claims.
+///
+/// # Errors
+///
+/// Returns [`RestoreError::Authenticity`] when an artifact is absent from the
+/// authenticated manifest set or the bytes fetched now differ from its signed
+/// size or digest. Other failures are the same as [`verify_segment`].
+pub async fn verify_segment_authenticated(
+    store: &ArchiveStore,
+    partition: &TopicIdPartition,
+    segment: &SegmentInventory,
+    objects: &BTreeMap<String, ObjectEntry>,
+) -> Result<VerifiedSegment, RestoreError> {
+    verify_segment_inner(store, partition, segment, Some(objects)).await
+}
+
+async fn verify_segment_inner(
+    store: &ArchiveStore,
+    partition: &TopicIdPartition,
+    segment: &SegmentInventory,
+    objects: Option<&BTreeMap<String, ObjectEntry>>,
+) -> Result<VerifiedSegment, RestoreError> {
     // Checked in the order the broker's copy path writes the artifacts, so a
     // torn copy is reported by the first one actually missing.
     let log = require_artifact(segment.log.as_ref(), ".log", partition, segment)?;
@@ -139,16 +166,17 @@ pub async fn verify_segment(
     let ops = store.ops();
     // The `.log` is fetched exactly once, here; every later stage reads it
     // from the `Bytes` this function returns, not from the archive again.
-    let log_bytes = fetch_capped(ops, &log.key, MAX_LOG_BYTES).await?;
-    let offset_index_bytes = fetch_capped(ops, &offset_index.key, MAX_INDEX_BYTES).await?;
-    let time_index_bytes = fetch_capped(ops, &time_index.key, MAX_INDEX_BYTES).await?;
+    let log_bytes = fetch_capped(ops, &log.key, MAX_LOG_BYTES, objects).await?;
+    let offset_index_bytes = fetch_capped(ops, &offset_index.key, MAX_INDEX_BYTES, objects).await?;
+    let time_index_bytes = fetch_capped(ops, &time_index.key, MAX_INDEX_BYTES, objects).await?;
     let producer_snapshot_bytes =
-        fetch_capped(ops, &producer_snapshot.key, MAX_SNAPSHOT_BYTES).await?;
-    let leader_epoch_bytes = fetch_capped(ops, &leader_epoch.key, MAX_LEADER_EPOCH_BYTES).await?;
+        fetch_capped(ops, &producer_snapshot.key, MAX_SNAPSHOT_BYTES, objects).await?;
+    let leader_epoch_bytes =
+        fetch_capped(ops, &leader_epoch.key, MAX_LEADER_EPOCH_BYTES, objects).await?;
     let transaction_index = match &segment.transaction_index {
         Some(artifact) => Some((
             artifact.key.clone(),
-            fetch_capped(ops, &artifact.key, MAX_TXN_INDEX_BYTES).await?,
+            fetch_capped(ops, &artifact.key, MAX_TXN_INDEX_BYTES, objects).await?,
         )),
         None => None,
     };
@@ -231,12 +259,29 @@ fn require_artifact<'a>(
 /// reimplemented here because that helper takes the concrete
 /// `Arc<dyn object_store::ObjectStore>` rather than the [`ObjectOps`] surface
 /// [`ArchiveStore`] exposes.
-async fn fetch_capped(
+pub(super) async fn fetch_capped(
     ops: &dyn ObjectOps,
     key: &Path,
     max_bytes: u64,
+    authenticated: Option<&BTreeMap<String, ObjectEntry>>,
 ) -> Result<Bytes, RestoreError> {
+    let expected = authenticated.and_then(|objects| objects.get(&key.to_string()));
+    if authenticated.is_some() && expected.is_none() {
+        return Err(RestoreError::Authenticity {
+            reason: format!("object `{key}` is not named by an authenticated manifest"),
+        });
+    }
     let meta = ops.head(key).await?;
+    if let Some(expected) = expected
+        && meta.size != expected.size_bytes
+    {
+        return Err(RestoreError::Authenticity {
+            reason: format!(
+                "object `{key}` changed after manifest verification: expected {} bytes, found {} bytes",
+                expected.size_bytes, meta.size
+            ),
+        });
+    }
     if meta.size > max_bytes {
         return Err(ObjectStoreError::TooLarge {
             key: key.clone(),
@@ -245,7 +290,20 @@ async fn fetch_capped(
         }
         .into());
     }
-    Ok(ops.get(key).await?)
+    let bytes = ops.get(key).await?;
+    if let Some(expected) = expected {
+        let actual_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let actual_digest = Sha256Digest::of(&bytes);
+        if expected.size_bytes != actual_size || expected.sha256 != actual_digest {
+            return Err(RestoreError::Authenticity {
+                reason: format!(
+                    "object `{key}` changed after manifest verification: expected {} bytes with SHA-256 {}, fetched {actual_size} bytes with SHA-256 {actual_digest}",
+                    expected.size_bytes, expected.sha256
+                ),
+            });
+        }
+    }
+    Ok(bytes)
 }
 
 /// Best-effort `i64` → `u64` for a diagnostic [`RestoreError`] field. A Kafka

@@ -3,13 +3,78 @@
 //! an empty archive produce.
 
 use assert2::check;
-use object_store::memory::InMemory;
+use object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path};
 
 use super::*;
 use crate::worm::{
     manifest::ManifestSeq,
     verify::test_support::{Archive, SEGMENT_SPAN, STRAY, Tamper},
 };
+
+#[tokio::test]
+async fn an_exact_externally_authenticated_object_is_not_an_orphan() {
+    let archive = Archive::build(&[1]).await;
+    Tamper::StrayObject.apply(&archive).await;
+    let request = VerifyRequest {
+        externally_authenticated_objects: std::collections::BTreeSet::from([format!(
+            "{}/{STRAY}",
+            archive.dir
+        )]),
+        ..Default::default()
+    };
+
+    let report = verify_archive(&archive.store, &request, &archive.trusted())
+        .await
+        .unwrap();
+    check!(report.ok());
+}
+
+#[tokio::test]
+async fn backup_capture_namespace_is_not_a_classic_partition() {
+    let archive = Archive::build(&[1]).await;
+    archive
+        .store
+        .put(
+            &Path::from("archive/restore-inputs/0001/manifest.json"),
+            PutPayload::from_static(b"capture"),
+        )
+        .await
+        .unwrap();
+
+    let report = verify_archive(
+        &archive.store,
+        &VerifyRequest::default(),
+        &archive.trusted(),
+    )
+    .await
+    .unwrap();
+    check!(report.ok());
+    check!(report.partitions.len() == 1);
+    check!(report.global_orphan_objects.is_empty());
+}
+
+#[tokio::test]
+async fn an_object_outside_partition_and_capture_directories_is_a_global_orphan() {
+    let archive = Archive::build(&[1]).await;
+    archive
+        .store
+        .put(
+            &Path::from("archive/unclaimed.bin"),
+            PutPayload::from_static(b"unclaimed"),
+        )
+        .await
+        .unwrap();
+
+    let report = verify_archive(
+        &archive.store,
+        &VerifyRequest::default(),
+        &archive.trusted(),
+    )
+    .await
+    .unwrap();
+    check!(!report.ok());
+    check!(report.global_orphan_objects == vec!["archive/unclaimed.bin"]);
+}
 
 /// The kind of break a row expects, matched against the reason text the
 /// report carries.
@@ -378,6 +443,7 @@ async fn verify_reports_a_clean_archive_in_full() {
             ok: true,
             first_break: None,
         }],
+        global_orphan_objects: Vec::new(),
     };
     check!(report == expected);
     check!(report.ok());
@@ -385,6 +451,27 @@ async fn verify_reports_a_clean_archive_in_full() {
     check!(report.fully_attested());
     check!(!report.has_epoch_restarts());
     check!(report.first_break() == None);
+}
+
+#[tokio::test]
+async fn authentication_returns_the_signed_object_claims() {
+    let archive = Archive::build(&[2]).await;
+    let authenticated = authenticate_archive(
+        &archive.store,
+        &VerifyRequest::default(),
+        &archive.trusted(),
+    )
+    .await
+    .unwrap();
+
+    check!(authenticated.report().ok());
+    check!(authenticated.report().fully_attested());
+    check!(authenticated.objects().len() == 4);
+    for segment in &archive.segments {
+        for entry in &segment.entries {
+            check!(authenticated.objects().get(&entry.key) == Some(entry));
+        }
+    }
 }
 
 #[tokio::test]
@@ -401,7 +488,8 @@ async fn verify_of_an_empty_archive_is_ok() {
     check!(
         report
             == ArchiveVerifyReport {
-                partitions: Vec::new()
+                partitions: Vec::new(),
+                global_orphan_objects: Vec::new(),
             }
     );
     check!(report.ok());

@@ -26,12 +26,12 @@
 //! same work and writes nothing.
 
 mod format;
-mod prepare;
+pub(crate) mod prepare;
 mod segment;
 #[cfg(test)]
 mod test_support;
 
 pub use self::{
-    format::{FormatTargetOutcome, format_target},
+    format::{FormatTargetOutcome, format_target, seed_rlmm_snapshot},
     segment::{SegmentOutcome, write_segment},
 };

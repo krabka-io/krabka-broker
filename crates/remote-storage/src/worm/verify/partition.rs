@@ -6,7 +6,7 @@
 //! the walk. A directory whose manifests do not all decode never reaches the
 //! walk: the refusal is the finding.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use object_store::ObjectStore;
 
@@ -19,7 +19,7 @@ use super::{
 };
 use crate::worm::{
     error::WormError,
-    manifest::{MANIFEST_SUFFIX, ManifestBody},
+    manifest::{MANIFEST_SUFFIX, ManifestBody, ObjectEntry},
 };
 
 /// Verifies one partition directory, or `None` when the request filters it out.
@@ -29,7 +29,7 @@ pub(super) async fn verify_partition(
     listing: &DirListing,
     request: &VerifyRequest,
     trusted: &TrustedManifestKeys,
-) -> Result<Option<PartitionVerifyReport>, WormError> {
+) -> Result<Option<(PartitionVerifyReport, BTreeMap<String, ObjectEntry>)>, WormError> {
     let mut decoded: Vec<KeyedManifest> = Vec::new();
     let mut rejected: Option<VerifyBreak> = None;
     for key in listing.keys().filter(|key| key.ends_with(MANIFEST_SUFFIX)) {
@@ -51,7 +51,10 @@ pub(super) async fn verify_partition(
 
     let orphan_objects = orphans(listing, &decoded);
     if let Some(first_break) = rejected {
-        return Ok(Some(broken_before_walk(dir, orphan_objects, first_break)));
+        return Ok(Some((
+            broken_before_walk(dir, orphan_objects, first_break),
+            BTreeMap::new(),
+        )));
     }
 
     let walk = walk_partition(store, &decoded, listing, request, trusted).await?;
