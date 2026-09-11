@@ -76,7 +76,7 @@ pub enum ParseBenchesError {
     #[error("reference and candidate benchmark sets differ")]
     BenchmarkSetMismatch,
 
-    /// A benchmark sample was zero, negative, NaN, or infinite.
+    /// A sample was non-finite or non-positive without every sample being zero.
     #[error("invalid sample for benchmark '{0}'")]
     InvalidSample(String),
 
@@ -156,8 +156,9 @@ fn relative_mad(values: &[f64], center: f64) -> f64 {
 /// Compare at least three repeated reference and candidate summaries.
 ///
 /// The tolerance is three times the larger side's median absolute deviation,
-/// with `minimum_tolerance` as a floor. A missing, non-finite, or non-positive
-/// sample is an error and therefore cannot silently pass.
+/// with `minimum_tolerance` as a floor. Bilateral all-zero samples are tied
+/// below bencher's integer-nanosecond resolution. Other missing, non-finite, or
+/// non-positive samples are errors and therefore cannot silently pass.
 ///
 /// # Errors
 ///
@@ -207,11 +208,21 @@ pub fn compare_summaries(
             .iter()
             .map(|summary| summary.benchmarks[name].ns_per_iter)
             .collect();
-        if reference_values
-            .iter()
-            .chain(&candidate_values)
-            .any(|value| !value.is_finite() || *value <= 0.0)
-        {
+        let mut values = reference_values.iter().chain(&candidate_values);
+        if values.clone().all(|value| *value == 0.0) {
+            benchmarks.insert(
+                name.clone(),
+                BenchmarkComparison {
+                    reference_median_ns: 0.0,
+                    candidate_median_ns: 0.0,
+                    ratio: 1.0,
+                    tolerance: minimum_tolerance,
+                    passed: true,
+                },
+            );
+            continue;
+        }
+        if values.any(|value| !value.is_finite() || *value <= 0.0) {
             return Err(ParseBenchesError::InvalidSample(name.clone()));
         }
         let reference_median_ns = median(reference_values.clone());
