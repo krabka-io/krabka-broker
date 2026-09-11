@@ -205,7 +205,7 @@ Guidance:
 
 - **Where the confusion risk is real, prefer a newtype over a bare primitive.** This matters most for functions and constructors that take **two or more parameters of the same primitive type** with different meanings. That is the swap bug the newtype exists to prevent.
 - **Split the derives by origin.** The identity and ordering traits come from the standard library. Use `Copy, Clone, PartialEq, Eq, Hash` for anything used as a `HashMap` key, and add `PartialOrd, Ord` for ordered values such as offsets and epochs. Keep id newtypes `Copy` (see [own-copy-small](https://github.com/leonardomso/rust-skills/blob/master/rules/own-copy-small.md)).
-- **Use [`derive_more`](https://lib.rs/crates/derive_more) for the wrapper boilerplate.** Do not hand-write these impls. It is a workspace dependency, declared with `derive_more.workspace = true`. Use:
+- **Use [`derive_more`](https://docs.rs/derive_more) for the wrapper boilerplate.** Do not hand-write these impls. It is a workspace dependency, declared with `derive_more.workspace = true`. Use:
   - `Display` — so the value logs as the bare inner primitive without an explicit `.0` at every `tracing` call. Write a manual `impl Display` only when the value needs special formatting, for example `ORD-{:08}`.
   - `From` / `Into` — the explicit, visible conversions to and from the inner primitive. Use them at the [wire boundary](#newtypes-for-domain-values), as in `BrokerId::from(raw)` and `let raw: i32 = id.into()`.
   - `FromStr` — for ids parsed from config or CLI args.

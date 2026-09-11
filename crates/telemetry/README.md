@@ -1,7 +1,7 @@
 # krabka-telemetry
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-telemetry.svg)](https://crates.io/crates/krabka-telemetry)
-[![Docs.rs](https://docs.rs/krabka-telemetry/badge.svg)](https://docs.rs/krabka-telemetry)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-telemetry/krabka_telemetry/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Generic OTLP distributed-tracing pipeline for Krabka services.
@@ -65,7 +65,7 @@ levels.set_level("krabka_broker", LogLevel::Debug);
 
 ## Documentation
 
-Read the API documentation at [docs.rs/krabka-telemetry](https://docs.rs/krabka-telemetry). The repository README contains the project-wide setup, development, and release notes.
+Read the [krabka-telemetry API documentation](https://krabka-io.github.io/krabka-broker/krabka-telemetry/krabka_telemetry/index.html). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

@@ -1,4 +1,7 @@
-"""Validate the immutable component set and evidence for Milestone 20."""
+"""Validate historical qualification and execute subsequent immutable candidates."""
+
+load("@std//hash.axl", "sha256")
+load("./check_qualification_gates.axl", "gate_script", "run_gate")
 
 _HEX = "0123456789abcdef"
 _REPOSITORIES = [
@@ -72,11 +75,129 @@ def utc_timestamp(value):
     days = [31, 29 if year % 400 == 0 or (year % 4 == 0 and year % 100 != 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     return day >= 1 and day <= days[month - 1]
 
+def text_digest(value):
+    """The SHA-256 identity of retained text, including its final newline."""
+    digest = sha256()
+    digest.update(value)
+    return "sha256:" + digest.hexdigest()
+
+def candidate_identity(document):
+    """Canonical input identity, excluding mutable progress and output evidence."""
+    components = []
+    by_repository = {component["repository"]: component for component in document.get("components", [])}
+    for repository in sorted(by_repository.keys()):
+        component = by_repository[repository]
+        artifacts = sorted([
+            [artifact.get("kind", ""), artifact.get("reference", ""), artifact.get("digest", "")]
+            for artifact in component.get("artifacts", [])
+        ])
+        components.append([repository, component.get("revision"), component.get("default_branch"), artifacts])
+    return text_digest(json.encode([
+        document.get("schema"),
+        document.get("captured_at"),
+        document.get("architectures"),
+        document.get("runner_sha256"),
+        components,
+    ]))
+
+def runner_digest():
+    """Bind candidate results to the reviewed adapters that performed the checks."""
+    return text_digest(json.encode([[name, gate_script(name)] for name in sorted(_GATES.keys())]))
+
+def result_problems(document, name, result):
+    """Reject reused, incomplete, zero-check or incorrectly bound gate receipts."""
+    problems = []
+    if type(result) != "dict":
+        return ["%s: result must be an object" % name]
+    if result.get("gate") != name or result.get("candidate_sha256") != candidate_identity(document):
+        problems.append("%s: result does not name this gate and candidate" % name)
+    if result.get("runner_sha256") != document.get("runner_sha256"):
+        problems.append("%s: result was produced by different qualification adapters" % name)
+    checks = result.get("checks", [])
+    if type(checks) != "list" or not checks or False in [type(check) == "string" and bool(check) for check in checks]:
+        problems.append("%s: result needs named executed checks" % name)
+        checks = []
+    elif len(checks) != len({check: True for check in checks}):
+        problems.append("%s: executed checks must be unique" % name)
+    if type(result.get("tests_passed")) != "int" or result.get("tests_passed", 0) <= 0 or result.get("tests_passed") != len(checks):
+        problems.append("%s: result must contain a nonzero count of executed checks" % name)
+    if type(result.get("exit_code")) != "int" or result.get("exit_code") != 0:
+        problems.append("%s: gate command did not succeed" % name)
+    for field in ["commands_sha256", "log_sha256"]:
+        if not _digest(result.get(field, "")):
+            problems.append("%s: result needs %s" % (name, field))
+    return problems
+
+def retained_result_problems(document, name, result, commands, log, executed_candidate):
+    """Validate downloaded evidence bytes as well as their execution receipt."""
+    problems = result_problems(document, name, result)
+    if candidate_identity(executed_candidate) != candidate_identity(document):
+        problems.append(name + ": retained input belongs to another candidate")
+    if result.get("commands_sha256") != text_digest(gate_script(name)):
+        problems.append(name + ": commands differ from the candidate's gate adapter")
+    for field, content in [("commands_sha256", commands), ("log_sha256", log)]:
+        if result.get(field) != text_digest(content):
+            problems.append(name + ": retained " + field + " differs from the executed result")
+    return problems
+
+def assemble_results(ctx, document):
+    """Package verified gate receipts into a final manifest and publishable report."""
+    if document.get("schema") != 2:
+        fail("assembly requires a schema-2 candidate")
+    if document.get("runner_sha256") != runner_digest():
+        fail("assembly needs the candidate's qualification adapters")
+    if not ctx.args.publish_prefix.startswith("https://github.com/krabka-io/krabka-broker/releases/download/"):
+        fail("assembly requires the immutable GitHub release download prefix")
+    root = ctx.std.env.bazel_root_dir()
+    output = root + "/" + ctx.args.output
+    report = ["# Ecosystem qualification", "", "Candidate: `" + candidate_identity(document) + "`", ""]
+    for gate in document["gates"]:
+        name = gate["name"]
+        directory = output + "/" + name
+        result = json.decode(ctx.std.fs.read_to_string(directory + "/result.json"))
+        executed_candidate = json.decode(ctx.std.fs.read_to_string(directory + "/candidate.json"))
+        problems = retained_result_problems(
+            document,
+            name,
+            result,
+            ctx.std.fs.read_to_string(directory + "/commands.txt"),
+            ctx.std.fs.read_to_string(directory + "/run.log"),
+            executed_candidate,
+        )
+        if problems:
+            fail("\n".join(problems))
+        archive = output + "/" + name + ".tar.gz"
+        status = ctx.std.process.command("tar").args(["-czf", archive, "-C", output, name]).spawn().wait()
+        if status.code != 0:
+            return status.code
+        hashed = ctx.std.process.command("sha256sum").args([archive]).stdout("piped").spawn().wait_with_output()
+        if hashed.status.code != 0:
+            return hashed.status.code
+        digest = "sha256:" + hashed.stdout.split()[0]
+        url = ctx.args.publish_prefix.rstrip("/") + "/" + name + ".tar.gz"
+        gate["status"] = "passed"
+        gate["result"] = result
+        gate["evidence"] = [{"name": item, "url": url, "sha256": digest} for item in _EVIDENCE[name]]
+        report.append("- [%s](%s): %d executed checks; `%s`." % (name, url, result["tests_passed"], digest))
+    report.extend(["", "Each bundle contains the candidate, exact commands, complete log, named executed checks and bound receipt.", ""])
+    report_text = "\n".join(report)
+    ctx.std.fs.write(output + "/report.md", report_text)
+    document["status"] = "qualified"
+    document["report"] = {"url": ctx.args.publish_prefix.rstrip("/") + "/report.md", "sha256": text_digest(report_text)}
+    problems = manifest_problems(document, final = True)
+    if problems:
+        fail("\n".join(problems))
+    ctx.std.fs.write(output + "/manifest.json", json.encode(document) + "\n")
+    return 0
+
 def manifest_problems(document, final = False):
     """Return every contract violation without stopping at the first one."""
     problems = []
-    if document.get("schema") != 1:
-        problems.append("schema must be 1")
+    candidate = document.get("schema") == 2
+    if document.get("schema") not in [1, 2]:
+        problems.append("schema must be 1 (historical) or 2 (candidate)")
+    if candidate and not _digest(document.get("runner_sha256", "")):
+        problems.append("candidate needs the qualification runner sha256")
     if document.get("status") not in ["draft", "qualified"]:
         problems.append("status must be draft or qualified")
     if not utc_timestamp(document.get("captured_at", "")):
@@ -99,9 +220,9 @@ def manifest_problems(document, final = False):
         for artifact in artifacts:
             if not artifact.get("kind") or not artifact.get("reference"):
                 problems.append("%s: artifact kind and reference are required" % repository)
-            if strict and not _digest(artifact.get("digest", "")):
+            if (strict or candidate) and not _digest(artifact.get("digest", "")):
                 problems.append("%s: qualified artifact has no sha256 digest" % repository)
-            if strict and artifact.get("kind") != "image" and not artifact.get("reference", "").startswith("https://"):
+            if (strict or candidate) and artifact.get("kind") != "image" and not artifact.get("reference", "").startswith("https://"):
                 problems.append("%s: qualified non-image artifact needs an https URL" % repository)
     if sorted(repositories) != _REPOSITORIES:
         problems.append("components must name each canonical repository exactly once")
@@ -119,6 +240,8 @@ def manifest_problems(document, final = False):
             if gate.get("status") != "passed":
                 problems.append("%s: qualification gate has not passed" % name)
         if claimed:
+            if candidate:
+                problems.extend(result_problems(document, name, gate.get("result", {})))
             if not gate.get("evidence"):
                 problems.append("%s: qualification gate has no evidence" % name)
             names = sorted([evidence.get("name", "") for evidence in gate.get("evidence", [])])
@@ -141,11 +264,39 @@ def manifest_problems(document, final = False):
 def _impl(ctx: TaskContext) -> int:
     root = ctx.std.env.bazel_root_dir()
     document = json.decode(ctx.std.fs.read_to_string(root + "/" + ctx.args.manifest))
+    if ctx.args.new_candidate:
+        if ctx.args.new_candidate == ctx.args.manifest:
+            fail("new candidate must not overwrite the input manifest")
+        absent = ctx.std.process.command("test").args(["!", "-e", root + "/" + ctx.args.new_candidate]).spawn().wait()
+        if absent.code != 0:
+            fail("new candidate destination already exists")
+        document["schema"] = 2
+        document["status"] = "draft"
+        document["runner_sha256"] = runner_digest()
+        stamp = ctx.std.process.command("date").args(["-u", "+%Y-%m-%dT%H:%M:%SZ"]).stdout("piped").spawn().wait_with_output()
+        if stamp.status.code != 0:
+            fail("cannot capture candidate timestamp")
+        document["captured_at"] = stamp.stdout.strip()
+        document["report"] = {"url": "", "sha256": ""}
+        for gate in document["gates"]:
+            gate["status"] = "pending"
+            gate["evidence"] = []
+            gate.pop("result", None)
+        ctx.std.fs.write(root + "/" + ctx.args.new_candidate, json.encode(document) + "\n")
+        return 0
     problems = manifest_problems(document, final = ctx.args.final)
     for problem in problems:
         ctx.std.io.stderr.write(problem + "\n")
     if problems:
         return 1
+    if ctx.args.assemble:
+        return assemble_results(ctx, document)
+    if ctx.args.gate:
+        if document.get("schema") != 2 or document.get("runner_sha256") != runner_digest():
+            fail("execution needs a schema-2 candidate bound to the current adapters")
+        if ctx.args.gate not in _GATES:
+            fail("unknown qualification gate: " + ctx.args.gate)
+        return run_gate(ctx, document, candidate_identity(document), ctx.args.gate, text_digest)
     ctx.std.io.stdout.write(
         "check-qualification: %d components and %d gates, %s\n" % (
             len(document["components"]),
@@ -156,10 +307,15 @@ def _impl(ctx: TaskContext) -> int:
     return 0
 
 check_qualification = task(
-    summary = "Validate the Milestone 20 qualification manifest",
+    summary = "Validate qualification or execute one immutable candidate gate",
     implementation = _impl,
     args = {
         "manifest": args.string(default = "qualification/milestone-20.json"),
         "final": args.boolean(default = False, description = "Require immutable artifacts and passed evidence."),
+        "new_candidate": args.string(default = "", description = "Copy the manifest into a fresh draft at this repository-relative path."),
+        "gate": args.string(default = "", description = "Execute one candidate gate; each invocation uses an isolated work directory."),
+        "output": args.string(default = ".qualification", description = "Repository-relative evidence directory."),
+        "assemble": args.boolean(default = False, description = "Assemble and validate the four retained gate receipts."),
+        "publish_prefix": args.string(default = "", description = "Immutable release download URL used by assembled evidence."),
     },
 )

@@ -16,3 +16,7 @@
 
 # Template links are relative to the future crate README, not this style guide.
 /docs/style_guides/docs/(?:design|test_coverage_report)\.md$
+
+# The crate-name placeholder is expanded when copying the README template;
+# nightly run 34583558613 confirmed the literal placeholder returns HTTP 400.
+^https://docs\.rs/krabka-(?:%3[Cc]name%3[Ee]|<name>)(?:/|$)

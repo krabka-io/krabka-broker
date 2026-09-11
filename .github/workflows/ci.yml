@@ -950,7 +950,7 @@ jobs:
   # links this lane has actually proven unreachable.
   links:
     name: external links
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1047,7 +1047,7 @@ jobs:
               (
                 cd "${source_dir}"
                 CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" cargo bench \
-                  -p krabka-broker -p krabka-log --benches -- \
+                  -p krabka-broker -p krabka-log --bench '*' -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
               ) | tee "${run_dir}/raw.txt"
               cargo run -p krabka-parse-benches -- \
@@ -1138,8 +1138,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: test the delivery image
+        run: bazel test -c opt --config=docker //packaging:image_docker_test
       - name: push
         run: bazel run -c opt //packaging:push -- --tag "${GITHUB_SHA}"
+
+      - name: record the delivery image digest
+        run: |
+          bazel build -c opt //packaging:image_manifest_blob
+          manifest="$(bazel cquery -c opt //packaging:image_manifest_blob --output=files)"
+          printf 'sha256:%s\n' "$(sha256sum "${manifest}" | cut -d ' ' -f 1)" >delivery-image.digest
+          aspect check-delivery-image --expected delivery-image.digest \
+            --image "ghcr.io/krabka-io/krabka-broker:${GITHUB_SHA}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: delivery-image
+          path: delivery-image.digest
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
 
   # The single context `main` requires, and the reason the list of required
   # checks is one name rather than one name per job.

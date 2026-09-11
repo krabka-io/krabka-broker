@@ -1,0 +1,39 @@
+"""Refuse release promotion unless the registry still holds delivery's digest."""
+
+load("./changes.axl", "run")
+
+def checked_digest(expected, observed):
+    """Return the immutable delivery digest, or an empty string on any mismatch."""
+    expected = expected.strip()
+    if not expected.startswith("sha256:") or len(expected) != 71:
+        return ""
+    for char in expected[7:].elems():
+        if char not in "0123456789abcdef":
+            return ""
+    return expected if observed.strip() == expected else ""
+
+def _impl(ctx: TaskContext) -> int:
+    expected = ctx.std.fs.read_to_string(ctx.args.expected)
+    observed = "\n".join(run(ctx, "docker", [
+        "buildx",
+        "imagetools",
+        "inspect",
+        ctx.args.image,
+        "--format",
+        "{{.Manifest.Digest}}",
+    ]))
+    digest = checked_digest(expected, observed)
+    if not digest:
+        ctx.std.io.stderr.write("Delivery image is missing, malformed, or differs from the successful main CI artifact; refusing release promotion.\n")
+        return 1
+    ctx.std.io.stdout.write(digest + "\n")
+    return 0
+
+check_delivery_image = task(
+    summary = "Check the delivery image against its successful main CI digest artifact",
+    implementation = _impl,
+    args = {
+        "expected": args.string(default = "delivery-image/delivery-image.digest", description = "Digest artifact downloaded from successful main CI."),
+        "image": args.string(default = "", description = "Registry delivery image reference."),
+    },
+)

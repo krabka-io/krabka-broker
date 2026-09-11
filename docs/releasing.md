@@ -121,8 +121,33 @@ Those three checks are what stands behind it.
 The `release` job then signs the image `delivery` already pushed for that
 commit -- `ghcr.io/krabka-io/krabka-broker:<commit sha>` -- rather than
 building it again, so the digest that is signed is the digest that was tested.
-It falls back to a rebuild only when that tag is absent, and the provenance
-predicate records which of the two happened in `internalParameters.imageSource`.
+Delivery hashes the built image manifest, checks the registry against it, and
+records that digest in the `delivery-image` Actions artifact. Release
+fetches that artifact from the successful `main` push run, requires the commit
+tag to resolve to that exact digest, and resolves the immutable reference before
+signing. Missing or expired evidence, an unavailable image, or a substituted
+commit tag stops the release before signing, attestations or release tags change.
+There is no rebuild fallback. The provenance records the CI run and immutable
+image reference in `internalParameters.imageSource`.
+
+The artifact is retained for 90 days. If it is unavailable, rerun main CI for
+the release commit and require that complete run to succeed before rerunning the
+release workflow. A locally rebuilt image or a manually replaced commit tag
+cannot stand in for delivery evidence.
+Commits from before delivery recorded digest artifacts require a new release
+commit that includes this workflow; their old CI run cannot provide the evidence.
+
+`aspect axl-tests --suite check-delivery-image` checks matching, missing,
+substituted and malformed digests. To repeat the registry check without
+publishing, download the successful run's `delivery-image` artifact and run:
+
+```sh
+aspect check-delivery-image --expected delivery-image.digest \
+  --image ghcr.io/krabka-io/krabka-broker:<commit-sha>
+```
+
+The command prints only the approved digest on success. Repeating it with a
+missing image reference or another image's digest must fail.
 
 It fails the release rather than publishing an unsigned or unverified image,
 because it runs `cosign verify` and `cosign verify-attestation` against the
@@ -139,6 +164,13 @@ cosign verify \
   --certificate-identity https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@refs/tags/v0.5.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/krabka-io/krabka-broker:v0.5.2
+```
+
+Also compare the release tag's digest against the delivery artifact:
+
+```sh
+aspect check-delivery-image --expected delivery-image.digest \
+  --image ghcr.io/krabka-io/krabka-broker:v0.5.2
 ```
 
 The GitHub release carries `sbom.cdx.json` for the same build.

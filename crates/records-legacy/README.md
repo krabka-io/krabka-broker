@@ -1,7 +1,7 @@
 # krabka-records-legacy
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-records-legacy.svg)](https://crates.io/crates/krabka-records-legacy)
-[![Docs.rs](https://docs.rs/krabka-records-legacy/badge.svg)](https://docs.rs/krabka-records-legacy)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-records-legacy/krabka_records_legacy/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Apache Kafka legacy (v0/v1) `MessageSet` codec, with bridges to and from the v2 `RecordBatch` types.
@@ -49,7 +49,7 @@ exposes no cargo features of its own.
 
 ## Documentation
 
-Read the API documentation at [docs.rs/krabka-records-legacy](https://docs.rs/krabka-records-legacy). The repository README contains the project-wide setup, development, and release notes.
+Read the [krabka-records-legacy API documentation](https://krabka-io.github.io/krabka-broker/krabka-records-legacy/krabka_records_legacy/index.html). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

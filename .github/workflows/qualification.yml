@@ -2,34 +2,56 @@ name: ecosystem qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      manifest:
+        description: Repository-relative immutable candidate or historical manifest
+        required: true
+        default: qualification/milestone-20.json
+        type: string
+      execute:
+        description: Execute all four gates and publish a new qualification release
+        required: true
+        default: false
+        type: boolean
+      broker_revision:
+        description: Optional delivered broker commit override (requires broker_digest)
+        default: ""
+        type: string
+      broker_digest:
+        description: Optional sha256 delivery image digest override
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   immutable-set:
+    if: ${{ !inputs.execute }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      MANIFEST: ${{ inputs.manifest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: require completed evidence
-        run: aspect check-qualification --final
+        run: aspect check-qualification --manifest "${MANIFEST}" --final
       - name: verify source revisions, branches and OCI digests still exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          jq -r '.components[] | [.repository, .revision, .default_branch] | @tsv' qualification/milestone-20.json |
+          jq -r '.components[] | [.repository, .revision, .default_branch] | @tsv' "${MANIFEST}" |
             while IFS=$'\t' read -r repository revision default_branch; do
               test "$(gh api "repos/${repository}" --jq .default_branch)" = "${default_branch}"
               test "$(gh api "repos/${repository}/commits/${revision}" --jq .sha)" = "${revision}"
               status="$(gh api "repos/${repository}/compare/${revision}...${default_branch}" --jq .status)"
               test "${status}" = ahead -o "${status}" = identical
             done
-          jq -r '.components[].artifacts[] | select(.kind == "image") | [.reference, .digest] | @tsv' qualification/milestone-20.json |
+          jq -r '.components[].artifacts[] | select(.kind == "image") | [.reference, .digest] | @tsv' "${MANIFEST}" |
             while IFS=$'\t' read -r reference digest; do
               docker buildx imagetools inspect "${reference}@${digest}" >/dev/null
             done
@@ -41,7 +63,7 @@ jobs:
             [.gates[].evidence[] | [.url, .sha256]],
             [[.report.url, .report.sha256]] |
             .[] | @tsv
-          ' qualification/milestone-20.json |
+          ' "${MANIFEST}" |
             while IFS=$'\t' read -r url digest; do
               file="$(mktemp)"
               trap 'rm -f "${file}"' EXIT
@@ -53,6 +75,145 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: milestone-20-qualification
-          path: qualification/milestone-20.json
+          path: ${{ inputs.manifest }}
           if-no-files-found: error
           retention-days: 90
+
+  candidate:
+    if: ${{ inputs.execute }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+      - name: freeze candidate inputs
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+          BROKER_REVISION: ${{ inputs.broker_revision }}
+          BROKER_DIGEST: ${{ inputs.broker_digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          aspect check-qualification --manifest "${MANIFEST}" --new-candidate .qualification-input.json
+          if [ -n "${BROKER_REVISION}" ] || [ -n "${BROKER_DIGEST}" ]; then
+            test -n "${BROKER_REVISION}" && test -n "${BROKER_DIGEST}"
+            jq --arg revision "${BROKER_REVISION}" --arg digest "${BROKER_DIGEST}" '
+              .components |= map(if .repository == "krabka-io/krabka-broker" then
+                .revision=$revision | .artifacts |= map(if .kind == "image" then .digest=$digest else . end)
+              else . end)
+            ' .qualification-input.json > .qualification-updated.json
+            mv .qualification-updated.json .qualification-input.json
+          fi
+          aspect check-qualification --manifest .qualification-input.json
+          jq -r '.components[] | [.repository, .revision, .default_branch] | @tsv' .qualification-input.json |
+            while IFS=$'\t' read -r repository revision branch; do
+              test "$(gh api "repos/${repository}/commits/${revision}" --jq .sha)" = "${revision}"
+              test "$(gh api "repos/${repository}" --jq .default_branch)" = "${branch}"
+              status="$(gh api "repos/${repository}/compare/${revision}...${branch}" --jq .status)"
+              test "${status}" = ahead -o "${status}" = identical
+            done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-input
+          path: .qualification-input.json
+          include-hidden-files: true
+          overwrite: true
+          if-no-files-found: error
+
+  gate:
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [installation, operator-lifecycle, cli-admin, observability-recovery]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: qualification-input
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        if: matrix.gate == 'installation' || matrix.gate == 'operator-lifecycle'
+        with:
+          install_only: true
+      - name: install pinned Helm
+        if: matrix.gate == 'installation' || matrix.gate == 'operator-lifecycle'
+        run: |
+          curl --fail --location --silent --show-error https://get.helm.sh/helm-v3.18.6-linux-amd64.tar.gz -o /tmp/qualification-helm.tar.gz
+          echo '3f43c0aa57243852dd542493a0f54f1396c0bc8ec7296bbb2c01e802010819ce  /tmp/qualification-helm.tar.gz' | sha256sum --check --status
+          tar -xzf /tmp/qualification-helm.tar.gz -C /tmp
+          sudo install /tmp/linux-amd64/helm /usr/local/bin/helm
+      - name: install JUnit XML reader
+        if: matrix.gate == 'installation'
+        run: sudo apt-get update && sudo apt-get install --yes libxml2-utils
+      - name: execute candidate acceptance
+        env:
+          GATE: ${{ matrix.gate }}
+        run: aspect check-qualification --manifest .qualification-input.json --gate "${GATE}" --output qualification-results
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qualification-${{ matrix.gate }}
+          path: qualification-results/${{ matrix.gate }}/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: [candidate, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: qualification-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: qualification-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: qualification-*
+          path: qualification-downloads
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+      - name: assemble and validate exact candidate receipts
+        run: |
+          set -euo pipefail
+          mkdir qualification-results
+          for gate in installation operator-lifecycle cli-admin observability-recovery; do
+            mv "qualification-downloads/qualification-${gate}" "qualification-results/${gate}"
+          done
+          aspect check-qualification --manifest .qualification-input.json --assemble \
+            --output qualification-results \
+            --publish-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          aspect check-qualification --manifest qualification-results/manifest.json --final
+          cd qualification-results
+          sha256sum manifest.json report.md *.tar.gz > SHA256SUMS
+      - name: upload, verify and publish retained evidence
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" --json isDraft >/tmp/qualification-release.json 2>/dev/null; then
+            jq -e '.isDraft == true' /tmp/qualification-release.json
+          else
+            gh release create "${TAG}" --target "${GITHUB_SHA}" --draft \
+              --title "Ecosystem qualification ${GITHUB_RUN_ID}" \
+              --notes-file qualification-results/report.md
+          fi
+          gh release upload "${TAG}" qualification-results/manifest.json qualification-results/report.md \
+            qualification-results/*.tar.gz qualification-results/SHA256SUMS --clobber
+          mkdir qualification-published
+          gh release download "${TAG}" --dir qualification-published
+          (cd qualification-published && sha256sum --check SHA256SUMS)
+          gh release edit "${TAG}" --draft=false --prerelease --latest=false
+          gh release view "${TAG}" --json url --jq .url >> "${GITHUB_STEP_SUMMARY}"

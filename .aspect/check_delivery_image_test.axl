@@ -1,0 +1,25 @@
+"""Promotion accepts only the exact digest recorded by successful delivery."""
+
+load("./check_delivery_image.axl", "checked_digest")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_DIGEST = "sha256:" + "a" * 64
+
+def _test_exact_delivery_digest_is_promotable(_ctx):
+    check_eq("exact bytes", checked_digest(_DIGEST + "\n", _DIGEST + "\n"), _DIGEST)
+
+def _test_missing_or_substituted_delivery_is_refused(_ctx):
+    for observed in ["", "manifest unknown", "sha256:" + "b" * 64]:
+        check_eq("unavailable or substituted image", checked_digest(_DIGEST, observed), "")
+
+def _test_invalid_delivery_evidence_is_refused(_ctx):
+    for expected in ["", "sha256:", "sha256:abc", "sha256:" + "g" * 64, "sha256:" + "a" * 65, _DIGEST + "\n" + _DIGEST]:
+        check_eq("invalid digest artifact", checked_digest(expected, expected), "")
+
+check_delivery_image_tests = suite("check-delivery-image", [
+    _test_exact_delivery_digest_is_promotable,
+    _test_missing_or_substituted_delivery_is_refused,
+    _test_invalid_delivery_evidence_is_refused,
+])
+
+test_check_delivery_image = suite_task(check_delivery_image_tests)
