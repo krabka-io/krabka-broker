@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-previous=$(git describe --tags --abbrev=0)
+previous=$(git describe --tags --abbrev=0 --match 'v*')
 old_image=ghcr.io/krabka-io/krabka-broker:${previous}
 head_image=docker.io/krabka-io/krabka-broker:dev
 suffix="${GITHUB_RUN_ID:-$$}"
