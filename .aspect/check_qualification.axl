@@ -11,6 +11,7 @@ _REPOSITORIES = [
     "krabka-io/krabka-o11y-demo",
     "krabka-io/krabka-operator",
     "krabka-io/krabka-protocol",
+    "krabka-io/krabka-rebalancer",
     "krabka-io/krabka-schema-registry",
     "krabka-io/krabka-streams-go",
     "krabka-io/krabka-streams-java",
@@ -27,7 +28,8 @@ _ARTIFACT_KINDS = {
     "krabka-io/krabka-cli": ["binary"],
     "krabka-io/krabka-o11y": ["image"],
     "krabka-io/krabka-o11y-demo": ["compose"],
-    "krabka-io/krabka-operator": ["chart"],
+    "krabka-io/krabka-operator": ["chart", "image"],
+    "krabka-io/krabka-rebalancer": ["chart", "image"],
 }
 _EVIDENCE = {
     "installation": ["compose", "helm", "m19", "matrix", "negative-compat"],

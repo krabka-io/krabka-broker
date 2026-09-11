@@ -15,6 +15,7 @@ _REPOSITORIES = [
     "krabka-io/krabka-o11y-demo",
     "krabka-io/krabka-operator",
     "krabka-io/krabka-protocol",
+    "krabka-io/krabka-rebalancer",
     "krabka-io/krabka-schema-registry",
     "krabka-io/krabka-streams-go",
     "krabka-io/krabka-streams-java",
@@ -27,18 +28,19 @@ _EVIDENCE = {
     "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
 }
 _ARTIFACT_KINDS = {
-    "krabka-io/krabka-broker": "image",
-    "krabka-io/krabka-cli": "binary",
-    "krabka-io/krabka-o11y": "image",
-    "krabka-io/krabka-o11y-demo": "compose",
-    "krabka-io/krabka-operator": "chart",
+    "krabka-io/krabka-broker": ["image"],
+    "krabka-io/krabka-cli": ["binary"],
+    "krabka-io/krabka-o11y": ["image"],
+    "krabka-io/krabka-o11y-demo": ["compose"],
+    "krabka-io/krabka-operator": ["chart", "image"],
+    "krabka-io/krabka-rebalancer": ["chart", "image"],
 }
 
 def _manifest(status = "draft", gate_status = "pending", artifact_digest = ""):
     components = [{"repository": repository, "revision": _SHA, "default_branch": "main", "artifacts": []} for repository in _REPOSITORIES]
     for component in components:
         if component["repository"] in _ARTIFACT_KINDS:
-            component["artifacts"] = [{"kind": _ARTIFACT_KINDS[component["repository"]], "reference": "https://example.test/artifact", "digest": artifact_digest}]
+            component["artifacts"] = [{"kind": kind, "reference": "https://example.test/artifact", "digest": artifact_digest} for kind in _ARTIFACT_KINDS[component["repository"]]]
     gates = []
     for name, issue in [("installation", 523), ("operator-lifecycle", 524), ("cli-admin", 525), ("observability-recovery", 526)]:
         evidence = []
@@ -62,13 +64,13 @@ def _test_final_requires_digests_and_evidence(_ctx):
     problems = manifest_problems(_manifest(), final = True)
     check_eq("all four gates remain pending", len([problem for problem in problems if "has not passed" in problem]), 4)
     check_eq("all four gates lack evidence", len([problem for problem in problems if "has no evidence" in problem]), 4)
-    check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 5)
+    check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 8)
 
 def _test_qualified_status_is_strict_without_the_flag(_ctx):
     manifest = _manifest(status = "qualified")
     manifest["report"] = {"url": "", "sha256": ""}
     problems = manifest_problems(manifest)
-    check_eq("all artifact digests are required", len([problem for problem in problems if "artifact has no" in problem]), 5)
+    check_eq("all artifact digests are required", len([problem for problem in problems if "artifact has no" in problem]), 8)
     check_eq("all pending gates are rejected", len([problem for problem in problems if "gate has not passed" in problem]), 4)
     check_eq("all gate evidence is required", len([problem for problem in problems if "gate has no evidence" in problem]), 4)
     check_eq("the report is required", len([problem for problem in problems if "published report" in problem]), 1)
