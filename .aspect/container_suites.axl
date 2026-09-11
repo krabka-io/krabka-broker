@@ -180,6 +180,9 @@ _FEATURE_RULES = [
         "crates/broker/src/broker/registration",
         "crates/broker/src/broker/liveness",
         "crates/broker/src/controller_admin",
+        "crates/broker/src/metadata_source/quorum_forwarder.rs",
+        "crates/broker/src/metadata_source/observer_source.rs",
+        "crates/broker/src/handlers/incremental_alter_configs.rs",
     ], ["jvm_role_separated_admin"]),
     ([
         "crates/broker/src/txn",
@@ -619,6 +622,18 @@ def _self_test():
     _check(
         _select(["crates/broker/src/heartbeat/client.rs"], available) == [_target("jvm_role_separated_admin")],
         "heartbeat source must select the role-separated suite",
+    )
+    _check(
+        _select(["crates/broker/src/metadata_source/quorum_forwarder.rs"], available) == [_target("jvm_role_separated_admin")],
+        "the quorum forwarder must select the role-separated suite",
+    )
+    _check(
+        _select(["crates/broker/src/metadata_source/observer_source.rs"], available) == [_target("jvm_role_separated_admin")],
+        "the observer metadata source must select the role-separated suite",
+    )
+    _check(
+        _select(["crates/broker/src/handlers/incremental_alter_configs.rs"], available) == [_target("jvm_role_separated_admin")],
+        "the incremental config handler must select the role-separated suite",
     )
     _check(
         _select(["crates/broker/src/handlers/produce/append.rs"], available) == [_target("jvm_acceptance_durability")],

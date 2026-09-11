@@ -106,7 +106,7 @@ Retention, compaction retention, the leader-epoch lookup, the index lookups, and
 - **[KIP-101](https://cwiki.apache.org/confluence/display/KAFKA/KIP-101+-+Alter+Replication+Protocol+to+use+Leader+Epoch+rather+than+High+Watermark+for+Truncation)** and **[KIP-320](https://cwiki.apache.org/confluence/display/KAFKA/KIP-320%3A+Allow+fetchers+to+detect+and+handle+log+truncation).** The checkpoint file and the `(found_epoch, end_offset)` lookup mirror `LeaderEpochFileCache`.
 - **[KIP-534](https://cwiki.apache.org/confluence/display/KAFKA/KIP-534%3A+Retain+tombstones+and+transaction+markers+for+approximately+delete.retention.ms+milliseconds).** Batch attribute bit 6 is the delete horizon, stamped exactly once. Control batches are kept out of the dedup map, which is the fix for the marker-deletion bug the compaction model documents.
 - **[KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage).** `local.retention.ms` and `local.retention.bytes` inherit the topic retention when unset, and a tiered topic's segment lifecycle is owned above this crate.
-- **[KIP-734](https://cwiki.apache.org/confluence/display/KAFKA/KIP-734%3A+Improve+Kafka+ListOffsets+API+to+support+MaxTimestamp+and+MinTimestamp).** Timestamp searches resolve ties to the earliest offset.
+- **[KIP-734](https://cwiki.apache.org/confluence/spaces/KAFKA/pages/177050893).** Timestamp searches resolve ties to the earliest offset.
 - **Krabka extensions.** Deliver-at-time visibility is [KFC-1](../../../docs/KFCs/KFC-1-deliver-at-time-visibility.md). The commit-stamp sidecar and the barrier control record used by [KFC-4](../../../docs/KFCs/KFC-4-cross-topic-snapshots.md) leave the Kafka-visible bytes untouched.
 
 ## Testing

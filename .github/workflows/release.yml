@@ -5,6 +5,7 @@ on:
     tags: ["v*"]
 
 permissions:
+  actions: read
   contents: write
   id-token: write
   packages: write
@@ -15,7 +16,6 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/krabka-io/krabka-broker
-  CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   # A `v*` tag is a name a person pushes, and before this job the workflow
@@ -30,6 +30,8 @@ jobs:
     name: verify
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      delivery_run: ${{ steps.main-ci.outputs.delivery_run }}
     permissions:
       contents: read
       # `gh run list` below reads this repository's workflow runs.
@@ -71,11 +73,12 @@ jobs:
       # A `pull_request` run is not: it tested the merge of the pull request
       # into `main`, which is a different tree.
       - name: main CI succeeded for this commit
+        id: main-ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           runs="$(gh run list --workflow ci.yml --commit "${GITHUB_SHA}" \
-            --limit 100 --json conclusion,event,url)"
+            --branch main --limit 100 --json conclusion,event,url,databaseId)"
           jq -r '.[] | "\(.conclusion)\t\(.event)\t\(.url)"' <<<"${runs}"
           passed="$(jq '[.[] | select(.event == "push" and .conclusion == "success")] | length' <<<"${runs}")"
           if [ "${passed}" -eq 0 ]; then
@@ -83,6 +86,8 @@ jobs:
             echo 'Only a commit whose main CI run went green is releasable.' >&2
             exit 1
           fi
+          delivery_run="$(jq -r '[.[] | select(.event == "push" and .conclusion == "success")][0].databaseId' <<<"${runs}")"
+          echo "delivery_run=${delivery_run}" >>"${GITHUB_OUTPUT}"
 
   release:
     runs-on: ubuntu-latest
@@ -127,48 +132,22 @@ jobs:
             --target x86_64-unknown-linux-gnu --exclude-dev check
           aspect sbom --output sbom.cdx.json
 
-      # Promotion over rebuild. `ci.yml`'s `delivery` job already pushed this
-      # exact commit as `${IMAGE}:${GITHUB_SHA}`, and `verify` above has
-      # established that the run which did so was green. Signing those bytes
-      # rather than a second build of them is what makes the signed digest the
-      # digest that was tested, instead of a rebuild that merely came from the
-      # same source.
-      - name: resolve the delivery image
-        id: delivery
-        run: |
-          digest=""
-          if inspected="$(docker buildx imagetools inspect "${IMAGE}:${GITHUB_SHA}" 2>&1)"; then
-            digest="$(awk '$1 == "Digest:" { print $2; exit }' <<<"${inspected}")"
-          else
-            echo "${inspected}"
-          fi
-          if [ "${digest#sha256:}" = "${digest}" ]; then
-            echo "No delivery image at ${IMAGE}:${GITHUB_SHA}; the release will rebuild it."
-            digest=""
-          fi
-          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
-
-      # The fallback, for a tag whose commit predates `delivery` or whose
-      # delivery tag has been reaped from the registry. It builds from the same
-      # Bazel graph the delivery push builds from.
-      - name: push release candidate
-        if: steps.delivery.outputs.digest == ''
-        run: bazel run -c opt //packaging:push -- --tag "${CANDIDATE_TAG}"
-
-      - name: resolve image digest
+      # Bind promotion to the digest recorded by the successful main push run.
+      # A commit tag alone is mutable, and a rebuild is not delivery's image.
+      - name: resolve the tested delivery image
         id: image
         env:
-          DELIVERY_DIGEST: ${{ steps.delivery.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DELIVERY_RUN: ${{ needs.verify.outputs.delivery_run }}
         run: |
-          if [ -n "${DELIVERY_DIGEST}" ]; then
-            digest="${DELIVERY_DIGEST}"
-            source="promoted from ${IMAGE}:${GITHUB_SHA}"
-          else
-            digest="$(docker buildx imagetools inspect "${IMAGE}:${CANDIDATE_TAG}" |
-              awk '$1 == "Digest:" { print $2; exit }')"
-            source="rebuilt as ${IMAGE}:${CANDIDATE_TAG}"
-          fi
-          test "${digest#sha256:}" != "${digest}"
+          gh run download "${DELIVERY_RUN}" --name delivery-image --dir delivery-image
+          digest="$(aspect check-delivery-image \
+            --expected delivery-image/delivery-image.digest \
+            --image "${IMAGE}:${GITHUB_SHA}")"
+          # Resolve the immutable reference as well, before signing anything.
+          aspect check-delivery-image --expected delivery-image/delivery-image.digest \
+            --image "${IMAGE}@${digest}"
+          source="promoted from CI run ${DELIVERY_RUN}: ${IMAGE}@${digest}"
           echo "Releasing ${digest}, ${source}."
           echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
           echo "source=${source}" >>"${GITHUB_OUTPUT}"

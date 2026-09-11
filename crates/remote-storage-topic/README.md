@@ -1,7 +1,7 @@
 # krabka-remote-storage-topic
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-remote-storage-topic.svg)](https://crates.io/crates/krabka-remote-storage-topic)
-[![Docs.rs](https://docs.rs/krabka-remote-storage-topic/badge.svg)](https://docs.rs/krabka-remote-storage-topic)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-remote-storage-topic/krabka_remote_storage_topic/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Topic-backed RemoteLogMetadataManager for Krabka tiered storage.
@@ -41,7 +41,7 @@ manager.shutdown_and_flush().await;
 
 ## Documentation
 
-Read the API documentation at [docs.rs/krabka-remote-storage-topic](https://docs.rs/krabka-remote-storage-topic). The repository README contains the project-wide setup, development, and release notes.
+Read the [krabka-remote-storage-topic API documentation](https://krabka-io.github.io/krabka-broker/krabka-remote-storage-topic/krabka_remote_storage_topic/index.html). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

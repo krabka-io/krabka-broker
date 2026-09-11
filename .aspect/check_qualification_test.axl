@@ -1,7 +1,8 @@
 """Unit tests for check_qualification.axl."""
 
-load("./check_qualification.axl", "manifest_problems", "utc_timestamp")
-load("./testing.axl", "check_eq", "suite", "suite_task")
+load("./check_qualification.axl", "assemble_results", "candidate_identity", "manifest_problems", "result_problems", "retained_result_problems", "runner_digest", "text_digest", "utc_timestamp")
+load("./check_qualification_gates.axl", "gate_script")
+load("./testing.axl", "check_eq", "suite", "suite_task", "temp_tree")
 
 _SHA = "0123456789abcdef" * 2 + "01234567"
 _DIGEST = "sha256:" + ("0123456789abcdef" * 4)
@@ -98,6 +99,130 @@ def _test_a_qualified_manifest_is_valid(_ctx):
         [],
     )
 
+def _candidate():
+    document = _manifest(artifact_digest = _DIGEST)
+    document["schema"] = 2
+    document["runner_sha256"] = runner_digest()
+    return document
+
+def _receipt(document, name):
+    return {
+        "gate": name,
+        "candidate_sha256": candidate_identity(document),
+        "runner_sha256": document["runner_sha256"],
+        "tests_passed": 1,
+        "checks": ["records read back"],
+        "exit_code": 0,
+        "commands_sha256": text_digest(gate_script(name)),
+        "log_sha256": text_digest("one check passed\n"),
+    }
+
+def _test_candidates_require_immutable_artifacts_even_before_execution(_ctx):
+    document = _candidate()
+    check_eq("candidate draft", manifest_problems(document), [])
+    document["components"][0]["artifacts"][0]["digest"] = ""
+    check_eq("mutable candidate", len(manifest_problems(document)), 1)
+
+def _test_candidate_identity_ignores_progress_but_binds_every_input(_ctx):
+    document = _candidate()
+    original = candidate_identity(document)
+    document["status"] = "qualified"
+    document["report"] = {"url": "https://example.test/new-report", "sha256": _DIGEST}
+    document["gates"] = list(reversed(document["gates"]))
+    document["components"] = list(reversed(document["components"]))
+    check_eq("output progress and order", candidate_identity(document), original)
+    for field, value in [("revision", "a" * 40), ("default_branch", "other")]:
+        changed = _candidate()
+        changed["components"][0][field] = value
+        check_eq(field, candidate_identity(changed) == original, False)
+    for field, value in [("digest", "sha256:" + "a" * 64), ("reference", "https://example.test/different-bytes")]:
+        changed = _candidate()
+        changed["components"][0]["artifacts"][0][field] = value
+        check_eq(field, candidate_identity(changed) == original, False)
+    document["captured_at"] = "2026-09-10T00:00:00Z"
+    check_eq("a fresh run cannot reuse old receipts", candidate_identity(document) == original, False)
+
+def _test_receipts_reject_the_wrong_gate_candidate_and_runner(_ctx):
+    document = _candidate()
+    name = "cli-admin"
+    check_eq("valid receipt", result_problems(document, name, _receipt(document, name)), [])
+    for field, value in [("gate", "installation"), ("candidate_sha256", _DIGEST), ("runner_sha256", _DIGEST)]:
+        result = _receipt(document, name)
+        result[field] = value
+        check_eq(field, len(result_problems(document, name, result)), 1)
+
+def _test_receipts_reject_zero_skipped_failed_or_uncounted_checks(_ctx):
+    document = _candidate()
+    for count, checks, exit_code in [(0, [], 0), (2, ["one"], 0), (1, ["one"], 1), (2, ["same", "same"], 0), (True, ["one"], 0)]:
+        result = _receipt(document, "installation")
+        result.update({"tests_passed": count, "checks": checks, "exit_code": exit_code})
+        check_eq("invalid execution evidence", bool(result_problems(document, "installation", result)), True)
+
+def _test_final_candidate_requires_all_four_fresh_receipts(_ctx):
+    document = _candidate()
+    document["status"] = "qualified"
+    for gate in document["gates"]:
+        name = gate["name"]
+        gate["status"] = "passed"
+        gate["evidence"] = [{"name": item, "url": "https://example.test/bundle", "sha256": _DIGEST} for item in _EVIDENCE[name]]
+        gate["result"] = _receipt(document, name)
+    check_eq("complete candidate", manifest_problems(document, final = True), [])
+    document["gates"][0].pop("result")
+    check_eq("historical evidence is insufficient", bool(manifest_problems(document, final = True)), True)
+    document["gates"].pop()
+    check_eq("missing gate", len([problem for problem in manifest_problems(document, final = True) if "exactly once" in problem]), 1)
+
+def _test_all_adapters_are_executable_shell(ctx):
+    for name in _EVIDENCE:
+        result = ctx.std.process.command("bash").args(["-n", "-c", gate_script(name)]).spawn().wait()
+        check_eq(name, result.code, 0)
+
+def _test_a_failed_smoke_pipeline_cannot_pass(ctx):
+    script = "set -eu\nfalse | tee /dev/null\nexit 0\n"
+    result = ctx.std.process.command("bash").args(["-o", "pipefail", "-c", script]).spawn().wait()
+    check_eq("failed smoke through tee", result.code, 1)
+
+def _test_retained_evidence_cannot_be_substituted(_ctx):
+    document = _candidate()
+    name = "cli-admin"
+    result = _receipt(document, name)
+    commands = gate_script(name)
+    log = "one check passed\n"
+    check_eq("retained receipt", retained_result_problems(document, name, result, commands, log, document), [])
+    check_eq("changed log", bool(retained_result_problems(document, name, result, commands, "different log", document)), True)
+    check_eq("changed command", bool(retained_result_problems(document, name, result, "true", log, document)), True)
+    other = _candidate()
+    other["components"][0]["revision"] = "a" * 40
+    check_eq("changed retained input", bool(retained_result_problems(document, name, result, commands, log, other)), True)
+
+def _test_assembly_writes_a_verified_manifest_and_real_bundles(ctx):
+    document = _candidate()
+    files = {}
+    for gate in document["gates"]:
+        name = gate["name"]
+        prefix = "evidence/" + name + "/"
+        files[prefix + "candidate.json"] = json.encode(document)
+        files[prefix + "result.json"] = json.encode(_receipt(document, name))
+        files[prefix + "commands.txt"] = gate_script(name)
+        files[prefix + "run.log"] = "one check passed\n"
+    directory = temp_tree(ctx, files)
+
+    def root_dir():
+        return directory
+
+    local = struct(
+        std = struct(fs = ctx.std.fs, process = ctx.std.process, env = struct(bazel_root_dir = root_dir)),
+        args = struct(output = "evidence", publish_prefix = "https://github.com/krabka-io/krabka-broker/releases/download/qualification-test"),
+    )
+    check_eq("assembly", assemble_results(local, document), 0)
+    qualified = json.decode(ctx.std.fs.read_to_string(directory + "/evidence/manifest.json"))
+    check_eq("assembled final", manifest_problems(qualified, final = True), [])
+    check_eq("report bytes", qualified["report"]["sha256"], text_digest(ctx.std.fs.read_to_string(directory + "/evidence/report.md")))
+    for gate in qualified["gates"]:
+        archive = directory + "/evidence/" + gate["name"] + ".tar.gz"
+        result = ctx.std.process.command("sha256sum").args([archive]).stdout("piped").spawn().wait_with_output()
+        check_eq("archive bytes", gate["evidence"][0]["sha256"], "sha256:" + result.stdout.split()[0])
+
 check_qualification_tests = suite("check-qualification", [
     _test_a_complete_draft_is_valid,
     _test_final_requires_digests_and_evidence,
@@ -106,6 +231,15 @@ check_qualification_tests = suite("check-qualification", [
     _test_a_passed_gate_requires_complete_evidence,
     _test_timestamps_are_calendar_valid,
     _test_a_qualified_manifest_is_valid,
+    _test_candidates_require_immutable_artifacts_even_before_execution,
+    _test_candidate_identity_ignores_progress_but_binds_every_input,
+    _test_receipts_reject_the_wrong_gate_candidate_and_runner,
+    _test_receipts_reject_zero_skipped_failed_or_uncounted_checks,
+    _test_final_candidate_requires_all_four_fresh_receipts,
+    _test_all_adapters_are_executable_shell,
+    _test_a_failed_smoke_pipeline_cannot_pass,
+    _test_retained_evidence_cannot_be_substituted,
+    _test_assembly_writes_a_verified_manifest_and_real_bundles,
 ])
 
 check_qualification_tests_task = suite_task(check_qualification_tests)

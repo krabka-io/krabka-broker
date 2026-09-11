@@ -1,25 +1,99 @@
 # Ecosystem qualification
 
 [`qualification/milestone-20.json`](../qualification/milestone-20.json) is the
-one candidate set. It records the exact revision of every repository that can
-change the installed stack, the artifacts and supported architecture, and the
-four broker-owned acceptance results. `draft` is intentionally not a release
-claim.
+completed historical candidate. Keep its revisions, evidence and report intact.
+Schema 1 describes that historical result. Schema 2 also binds newly executed
+checks to a candidate and the exact qualification adapters.
 
-Update the manifest only from completed sibling runs. An image or chart entry
-uses the digest of the bytes the run exercised, never a tag. Each gate evidence
-entry links one retained bundle and records that bundle's SHA-256. The bundle
-contains the commands, Kubernetes events, logs, acknowledged-offset ledger,
-queries, recovery durations and exact image references required by its issue.
+## Run a subsequent candidate
+
+The `ecosystem qualification` workflow accepts a repository-relative `manifest`
+and an `execute` switch. With `execute=false`, it verifies the existing published
+result and its hashes. With `execute=true`, it creates a fresh draft from that
+component set, runs four independent jobs, and publishes a qualification release
+only after every job succeeds.
+
+Supply both `broker_revision` and `broker_digest` to qualify a newly delivered
+broker using the same sibling set. The prepare job applies those overrides,
+freezes the complete input, verifies revisions against each recorded default
+branch, and distributes that exact input to every job. This needs no candidate
+commit after the delivery image has been published. To change sibling revisions
+or artifacts, provide a reviewed manifest containing that full candidate set.
 
 ```sh
-aspect check-qualification
-aspect check-qualification --final
+gh workflow run qualification.yml \
+  -f manifest=qualification/milestone-20.json \
+  -F execute=true \
+  -f broker_revision="$DELIVERED_COMMIT" \
+  -f broker_digest="$DELIVERED_IMAGE_DIGEST"
 ```
 
-The first command runs in ordinary CI and checks the contract. The second
-refuses a pending gate, mutable artifact, or unpublished report; the manually
-dispatched `ecosystem qualification` workflow also proves every recorded Git
-commit and OCI digest still resolves. A successful workflow artifact is the
-qualification result consumed by release review. It does not publish sibling
-artifacts or replace their own release workflows.
+The broker digest must come from the successful delivery run for that commit.
+The qualification workflow exercises those bytes; release promotion separately
+verifies the delivery record. Do not infer a delivery digest from a mutable tag.
+
+The matrix has `fail-fast: false`. GitHub's **Re-run failed jobs** retries only
+failed gates with the original uploaded candidate; successful gates remain
+available. Re-running the entire workflow creates a new candidate timestamp and
+reruns every gate. The jobs require Linux amd64, Docker, and sufficient capacity
+for the existing stack; installation and lifecycle also install pinned Helm and
+Kind. Their timeouts bound the run rather than turning a timeout into a pass.
+
+## What runs
+
+| Gate | Executed boundary |
+| :--- | :--- |
+| Installation | The pinned public Compose and Helm recipes with candidate images and downloaded, checksum-verified charts; produce/readback and uninstall. The existing Go and Java integration suites run against the installed broker, and the pinned broker's RF=3 schema suite plus incompatible-protocol build probe rerun the M19 supporting checks. |
+| Operator lifecycle | The pinned operator `packaging/kind-lifecycle.sh`, using published chart contents and the candidate broker, operator and rebalancer images; upgrade, disruption, scale-down, certificate rotation and acknowledged-record reconciliation. |
+| Authenticated CLI | The pinned CLI's real `candidate_broker` test, against a disposable three-broker SASL cluster. Its one executable lookup is adapted in the isolated checkout to invoke the downloaded CLI binary instead of a rebuilt binary; the patch is retained. |
+| Observability recovery | The pinned demo Compose recipe with explicit candidate broker/o11y overrides, followed by its `qualify-failover.sh`; signal queries, WAL recovery, offset reconciliation and alert firing/resolution. |
+
+The lifecycle harness expects a local operator tag. Its private alias is checked
+against the pulled candidate image ID before execution. It packages source
+charts as ancillary evidence, but installation uses the verified downloaded
+chart contents copied into the isolated harness tree. No user checkout is
+modified. Supporting source tests remain distinguishable from installed-image
+checks in the command log.
+
+A test process exiting successfully is insufficient: adapters check named live
+test results or behavioral outcomes and record the checks that actually ran.
+Skipped or zero-test runs cannot produce a valid gate receipt. Historical M19
+recovery/CDC evidence remains historical; this workflow does not relabel those
+old runs as fresh candidate results. Add the M22 disaster-recovery adapter and
+required gate when that implementation exists.
+
+## Local execution and evidence
+
+```sh
+aspect check-qualification --new-candidate qualification/candidate.json
+# Edit candidate.json to name the intended immutable revisions and artifacts.
+aspect check-qualification --manifest qualification/candidate.json
+aspect check-qualification --manifest qualification/candidate.json \
+  --gate cli-admin --output qualification-run-1
+```
+
+Every gate invocation uses a new temporary checkout. Choose a fresh `--output`
+for retries; existing evidence is never silently replaced. Failed attempts keep
+their command log and scratch directory for diagnosis. Successful receipts name
+the gate, candidate SHA-256, adapter SHA-256, executed check count and names,
+command hash, and log hash. The candidate identity covers its timestamp,
+architecture, all repository revisions/default branches, and artifact
+references/digests. Reordering components or adding output evidence does not
+change that identity.
+
+Run all four gates into the same output directory, then assemble:
+
+```sh
+aspect check-qualification --manifest qualification/candidate.json \
+  --assemble --output qualification-run-1 \
+  --publish-prefix https://github.com/krabka-io/krabka-broker/releases/download/qualification-RUN_ID
+aspect check-qualification --manifest qualification-run-1/manifest.json --final
+```
+
+Assembly verifies every receipt and retained log/command hash before writing a
+qualified manifest, report and per-gate bundles. It rejects another candidate's
+receipt, missing gates, failed commands and zero executed checks. Local assembly
+does not publish anything. The workflow uploads the assembled artifacts to a
+draft `qualification-RUN_ID` release, downloads them to verify checksums, then
+publishes it as a prerelease without changing `latest`. Published qualification
+releases are never overwritten by retries.

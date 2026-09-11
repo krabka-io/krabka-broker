@@ -1,7 +1,7 @@
 # krabka-raft
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-raft.svg)](https://crates.io/crates/krabka-raft)
-[![Docs.rs](https://docs.rs/krabka-raft/badge.svg)](https://docs.rs/krabka-raft)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-raft/krabka_raft/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Metadata KRaft quorum (KIP-595 KraftController) for Krabka.
@@ -41,7 +41,7 @@ assert!(machine.is_voter());
 
 - [Design](docs/design.md) — the sans-IO consensus core, the single-owner engine, submission and commit, snapshots, KIP-853 reconfiguration, and how the broker's controller logic plugs in.
 
-Read the API documentation at [docs.rs/krabka-raft](https://docs.rs/krabka-raft). The repository README contains the project-wide setup, development, and release notes.
+Read the [krabka-raft API documentation](https://krabka-io.github.io/krabka-broker/krabka-raft/krabka_raft/index.html). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

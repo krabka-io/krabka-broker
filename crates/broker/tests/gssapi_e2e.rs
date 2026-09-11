@@ -92,6 +92,9 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
     cfg.broker_id = 1;
     cfg.listen_addr = LISTEN.parse().expect("static addr");
     cfg.advertised_listener = BOOTSTRAP.into();
+    let controller = format!("127.0.0.1:{}", free_port());
+    cfg.controller_listen_addr = controller.parse().expect("controller addr");
+    cfg.controller_quorum_voters = vec![(cfg.node_id, controller)];
     let internal = format!("127.0.0.1:{}", free_port());
     cfg.listeners = vec![
         ListenerSpec {

@@ -52,15 +52,11 @@ docker pull "${old_image}"
 docker network create "${network}"
 docker volume create "${volume}"
 docker run --rm --user 0 -v "${volume}:/data" alpine:3.22 chown 65532:65532 /data
-# The released image predates packaging the separate formatter. Seed the
-# otherwise-compatible layout with HEAD's formatter, then restore the version
-# marker that release wrote; the release broker writes every tested surface.
+# Format with the release being upgraded so its broker owns the original layout.
 docker run --rm -v "${volume}:/var/lib/krabka" \
-  --entrypoint /usr/bin/krabka-format "${head_image}" \
+  --entrypoint /usr/bin/krabka-format "${old_image}" \
   --log-dir /var/lib/krabka --cluster-id "${cluster_id}" --standalone \
   --node-id 1 --controller-listener krabka-upgrade-old:9093
-docker run --rm -v "${volume}:/data" alpine:3.22 \
-  sed -i 's/"version": 2/"version": 1/' /data/meta.properties.json
 docker run --rm --user 0 -v "${volume}:/data" alpine:3.22 sh -c \
   'mkdir /data/objects && chown 65532:65532 /data/objects'
 docker run -d --name "${old_container}" --network "${network}" \
@@ -77,13 +73,23 @@ javac --release 17 -cp "${topic_tool}/kafka-clients-4.0.0.jar" \
   -d "${topic_tool}" packaging/CreateTopic.java
 docker cp "${topic_tool}/CreateTopic.class" "${tools_container}:/tmp/CreateTopic.class"
 
+old_ready=false
 for _ in $(seq 1 60); do
+  if [ "$(docker inspect --format '{{.State.Running}}' "${old_container}")" != true ]; then
+    break
+  fi
   if docker exec "${tools_container}" /opt/kafka/bin/kafka-topics.sh \
       --bootstrap-server krabka-upgrade-old:9092 --list >/dev/null 2>&1; then
+    old_ready=true
     break
   fi
   sleep 1
 done
+if [ "${old_ready}" != true ]; then
+  docker logs "${old_container}" >&2
+  echo "Previous release ${previous} did not become ready" >&2
+  exit 1
+fi
 docker exec "${tools_container}" /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server krabka-upgrade-old:9092 --create --topic upgrade-smoke \
   --partitions 1 --replication-factor 1
@@ -98,11 +104,24 @@ docker exec "${tools_container}" java -cp '/tmp:/opt/kafka/libs/*' CreateTopic \
 printf 'diskless-before-upgrade\n' | docker exec -i "${tools_container}" \
   /opt/kafka/bin/kafka-console-producer.sh \
   --bootstrap-server krabka-upgrade-old:9092 --topic upgrade-diskless
+# DeleteRecords must make the release write its own log-start checkpoint.
+docker exec "${tools_container}" /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server krabka-upgrade-old:9092 --create --topic upgrade-retention \
+  --partitions 1 --replication-factor 1
+printf 'deleted\nretained\n' | docker exec -i "${tools_container}" \
+  /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server krabka-upgrade-old:9092 --topic upgrade-retention
+docker exec -i "${tools_container}" sh -c 'cat >/tmp/delete-records.json' <<'JSON'
+{"partitions":[{"topic":"upgrade-retention","partition":0,"offset":1}],"version":1}
+JSON
+docker exec "${tools_container}" /opt/kafka/bin/kafka-delete-records.sh \
+  --bootstrap-server krabka-upgrade-old:9092 --offset-json-file /tmp/delete-records.json
 surfaces_ready=false
 for _ in $(seq 1 30); do
   if docker run --rm -v "${volume}:/data" alpine:3.22 sh -c '
       test -n "$(find /data/__cluster_metadata/@metadata-0 -name "*.checkpoint" ! -name "00000000000000000000-0000000000.checkpoint" -print -quit)" &&
-      test -n "$(find /data -path "*/__diskless_wal_index-*" -print -quit)"
+      test -n "$(find /data -path "*/__diskless_wal_index-*" -print -quit)" &&
+      test -n "$(find /data -path "*/upgrade-retention-0/log-start-offset-checkpoint" -print -quit)"
     '; then
     surfaces_ready=true
     break
@@ -113,20 +132,14 @@ test "${surfaces_ready}" = true
 docker stop "${old_container}" >/dev/null
 docker rm "${old_container}" >/dev/null
 
-# v0.5.3 predates the per-partition log-start checkpoint writer. Seed the
-# exact file layout here so the shared directory still covers that new surface.
-docker run --rm -v "${volume}:/data" alpine:3.22 sh -c '
-  dir=$(find /data -type d -name "upgrade-smoke-0" -print -quit)
-  test -n "$dir"
-  printf "0\n0\n" >"$dir/log-start-offset-checkpoint"
-'
-
-unreleased=$(awk '/^## \[Unreleased\]/{on=1; next} /^## \[/{on=0} on' CHANGELOG.md)
-if grep -Eqi 'format changed|on-disk format|fresh `krabka-format`' <<<"${unreleased}"; then
+# A declaration already present in the previous release is not a new break.
+changes=$(git diff --unified=0 "${previous}" -- CHANGELOG.md | sed -n 's/^+//p')
+if grep -Eqi 'format changed|on-disk format|fresh `krabka-format`' <<<"${changes}"; then
   if docker run --name "${head_container}" --network "${network}" \
+      --network-alias krabka-upgrade-old \
       -v "${volume}:/var/lib/krabka" -e KRABKA_CLUSTER_ID="${cluster_id}" \
-      "${head_image}" --log-dir /var/lib/krabka --broker-id 1 \
-      --listen-addr 0.0.0.0:9092 >"${head_log}" 2>&1; then
+      -v "${old_config}:/etc/krabka.toml:ro" "${head_image}" \
+      --config-file /etc/krabka.toml >"${head_log}" 2>&1; then
     echo "HEAD opened a directory despite the declared format break" >&2
     exit 1
   fi
@@ -134,11 +147,15 @@ if grep -Eqi 'format changed|on-disk format|fresh `krabka-format`' <<<"${unrelea
 else
   docker run -d --name "${head_container}" --network "${network}" \
     --network-alias krabka-upgrade-head \
+    --network-alias krabka-upgrade-old \
     -v "${volume}:/var/lib/krabka" -e KRABKA_CLUSTER_ID="${cluster_id}" \
-    -e KRABKA_ADVERTISED_LISTENER=krabka-upgrade-head:9092 "${head_image}" \
-    --log-dir /var/lib/krabka --broker-id 1 --listen-addr 0.0.0.0:9092
+    -v "${old_config}:/etc/krabka.toml:ro" "${head_image}" \
+    --config-file /etc/krabka.toml
   consumed=$(docker exec "${tools_container}" /opt/kafka/bin/kafka-console-consumer.sh \
     --bootstrap-server krabka-upgrade-head:9092 --topic upgrade-smoke \
     --from-beginning --max-messages 1 --timeout-ms 30000)
   test "${consumed}" = survives-upgrade
+  floor=$(docker exec "${tools_container}" /opt/kafka/bin/kafka-get-offsets.sh \
+    --bootstrap-server krabka-upgrade-head:9092 --topic upgrade-retention --time -2)
+  test "${floor}" = upgrade-retention:0:1
 fi

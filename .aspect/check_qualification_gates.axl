@@ -1,0 +1,332 @@
+"""Installed-artifact adapters for the four existing ecosystem gates.
+
+The shell runs inside the Aspect task: it is not another repository script.
+Each adapter uses an isolated directory and emits names only after behavioral
+checks pass. Source checkouts and downloaded artifacts come from the manifest.
+"""
+
+_COMMON = r"""
+set -euo pipefail
+manifest=$1
+evidence=$2
+work=$3
+scope=qualification-$(basename "$work" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')
+mkdir -p "$evidence" "$work/sources" "$work/artifacts"
+: > "$evidence/checks.txt"
+check() {
+  local name=$1
+  shift
+  "$@"
+  printf '%s\n' "$name" >> "$evidence/checks.txt"
+}
+junit_passed() {
+  local count
+  count=$(xmllint --xpath "count(/testsuite/testcase[@classname='$1' and @name='$2'][not(skipped) and not(failure) and not(error)])" "$3")
+  test "$count" = 1
+}
+revision() { jq -er --arg repo "krabka-io/$1" '.components[] | select(.repository == $repo) | .revision' "$manifest"; }
+source_repo() {
+  local repo=$1 destination="$work/sources/$1" rev
+  rev=$(revision "$repo")
+  if [ ! -d "$destination/.git" ]; then
+    git init -q "$destination"
+    git -C "$destination" remote add origin "https://github.com/krabka-io/$repo.git"
+    git -C "$destination" fetch -q --depth 1 origin "$rev"
+    git -C "$destination" checkout -q --detach FETCH_HEAD
+  fi
+  test "$(git -C "$destination" rev-parse HEAD)" = "$rev"
+  printf '%s\n' "$destination"
+}
+artifact_fields() {
+  jq -er --arg repo "krabka-io/$1" --arg kind "$2" '.components[] | select(.repository == $repo) | .artifacts[] | select(.kind == $kind) | [.reference,.digest] | @tsv' "$manifest"
+}
+download() {
+  local repo=$1 kind=$2 reference digest destination="$work/artifacts/$1-$2"
+  read -r reference digest < <(artifact_fields "$repo" "$kind")
+  curl --fail --location --silent --show-error "$reference" --output "$destination"
+  echo "${digest#sha256:}  $destination" | sha256sum --check --status
+  printf '%s\n' "$destination"
+}
+image_ref() {
+  local reference digest
+  read -r reference digest < <(artifact_fields "$1" image)
+  docker pull "$reference@$digest" >&2
+  docker image inspect "$reference@$digest" > "$evidence/$1-image.json"
+  printf '%s@%s\n' "$reference" "$digest"
+}
+broker_image=$(image_ref krabka-broker)
+tools_image=mirror.gcr.io/apache/kafka:4.0.0@sha256:01b9a4030e54c6068e66eb3ba4cb82c0d89238629ef1c30d79b86036bf89b1b7
+"""
+
+_INSTALLATION = r"""
+site=$(source_repo krabka-io.github.io)
+operator_image=$(image_ref krabka-operator)
+rebalancer_image=$(image_ref krabka-rebalancer)
+operator_chart=$(download krabka-operator chart)
+rebalancer_chart=$(download krabka-rebalancer chart)
+project=$scope-installation
+cluster=$scope-installation
+cleanup() {
+  docker compose -p "$project" -f "$work/compose.json" down -v > /dev/null 2>&1 || true
+  kind delete cluster --name "$cluster" > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+# Resolve the published recipe at its recorded Git revision, then substitute
+# only the candidate broker image. Docker's parser handles YAML and aliases.
+recipe="$site/public/quickstart/docker-compose.yml"
+test -f "$recipe"
+docker compose -f "$recipe" config --format json > "$work/recipe.json"
+jq --arg image "$broker_image" '.services |= with_entries(if (.value.image // "" | contains("krabka-broker")) then .value.image=$image else . end)' "$work/recipe.json" > "$work/compose.json"
+jq -e --arg image "$broker_image" 'any(.services[]; .image == $image)' "$work/compose.json" > /dev/null
+docker compose -p "$project" -f "$work/compose.json" up -d --wait --wait-timeout 180
+for attempt in $(seq 1 60); do
+  if docker run --rm --network host "$tools_image" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list; then break; fi
+  test "$attempt" -lt 60
+  sleep 2
+done
+docker run --rm --network host "$tools_image" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic qualification --partitions 1 --replication-factor 1
+printf 'candidate-installation\n' | docker run --rm -i --network host "$tools_image" /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic qualification
+docker run --rm --network host "$tools_image" /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic qualification --from-beginning --max-messages 1 --timeout-ms 60000 > "$evidence/compose-record.txt"
+check compose-record grep -Fx candidate-installation "$evidence/compose-record.txt"
+docker compose -p "$project" -f "$work/compose.json" ps --format json > "$evidence/compose-containers.json"
+# Re-run the existing M19 supporting suites while the installed candidate is
+# available. Explicit assertions on named live tests reject skipped suites.
+go_source=$(source_repo krabka-streams-go)
+(cd "$go_source" && bazel test //coordination:coordination_test --test_env=KRABKA_INTEGRATION_BOOTSTRAP=localhost:9092 --test_arg=-test.v --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/m19-go.log"
+check m19-go grep -F -- '--- PASS: TestKafkaTransportFencesAStaleLeaderAndKeepsSuccessionOrder' "$evidence/m19-go.log"
+java_source=$(source_repo krabka-streams-java)
+(cd "$java_source" && bazel test //krabka-streams-test-utils:integration_tests --strategy=TestRunner=local --test_arg="--reports-dir=$evidence/java-junit" --test_env=KRABKA_INTEGRATION_BOOTSTRAP=localhost:9092 --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/m19-java.log"
+# JUnit's XML names the individual method and records disabled/aborted tests
+# as skipped. Bazel's wrapper XML only describes the suite process.
+check m19-java-coordination junit_passed io.krabka.streams.test.CoordinationCompatibilityIT 'fencesTheOldLeaderAndAppendsARecoveredMemberToTheTail()' "$evidence/java-junit/TEST-junit-jupiter.xml"
+check m19-java-streams junit_passed io.krabka.streams.test.BrokerCompatibilityIT 'runsStreamsProtocolEosStandbyIqv2AndRestore()' "$evidence/java-junit/TEST-junit-jupiter.xml"
+broker_source=$(source_repo krabka-broker)
+(cd "$broker_source" && bazel test //crates/broker:schema_validation_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/m19-schema.log"
+check m19-schema grep -F 'test live_registry::rf_three_validation_survives_registry_and_broker_failover ... ok' "$evidence/m19-schema.log"
+# Match the historical negative-pin probe: unsupported protocol records must
+# produce a compiler diagnostic, not an apparent successful compatibility run.
+protocol_revision=$(revision krabka-protocol)
+bad_revision=d252ed24df9eeeb092b9a7989da8667b3229e559
+test "$protocol_revision" != "$bad_revision"
+grep -F "$protocol_revision" "$broker_source/Cargo.toml"
+sed -i "s/$protocol_revision/$bad_revision/g" "$broker_source/Cargo.toml"
+(cd "$broker_source" && cargo generate-lockfile) > "$evidence/negative-lock.log" 2>&1
+if (cd "$broker_source" && cargo check --locked -p krabka-broker) > "$evidence/negative-compat.log" 2>&1; then
+  echo 'unsupported protocol revision unexpectedly compiled' >&2
+  exit 1
+fi
+check negative-compat grep -E 'V1PartitionElr|V1PartitionRecovery' "$evidence/negative-compat.log"
+git -C "$broker_source" diff -- Cargo.toml Cargo.lock > "$evidence/negative-compat.patch"
+docker compose -p "$project" -f "$work/compose.json" down -v
+
+kind create cluster --name "$cluster" --wait 120s
+export KUBECONFIG="$work/kubeconfig"
+kind get kubeconfig --name "$cluster" > "$KUBECONFIG"
+mkdir -p "$work/crds"
+chmod 0777 "$work/crds"
+docker run --rm --user 0:0 -v "$work/crds:/crds" "$operator_image" gen-crds /crds
+kubectl apply -f "$work/crds"
+helm install operator "$operator_chart" --namespace krabka-system --create-namespace --wait --timeout 5m --set image.repository="${operator_image%@*}" --set image.digest="${operator_image#*@}"
+test -f "$site/public/quickstart/krabka-cluster.yaml"
+kubectl apply --dry-run=client -f "$site/public/quickstart/krabka-cluster.yaml" -o json | jq --arg image "$broker_image" 'if .kind == "List" then .items |= map(if .kind == "KafkaNodePool" then .spec.image=$image else . end) elif .kind == "KafkaNodePool" then .spec.image=$image else . end' > "$work/cluster.json"
+kubectl apply -f "$work/cluster.json"
+kubectl wait --for=condition=Ready kafka/m20-quickstart --timeout=10m
+kubectl wait --for=condition=Ready kafkatopic/quickstart --timeout=5m
+helm install rebalancer "$rebalancer_chart" --wait --timeout 5m --set bootstrapServers=m20-quickstart-broker-headless.default.svc.cluster.local:9092 --set image.repository="${rebalancer_image%@*}" --set image.digest="${rebalancer_image#*@}"
+kubectl run kafka-tools --image="$tools_image" --restart=Never --rm -i --pod-running-timeout=5m --command -- /bin/bash -lc 'printf "candidate-installation\n" | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server m20-quickstart-broker-headless.default.svc.cluster.local:9092 --topic quickstart && /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server m20-quickstart-broker-headless.default.svc.cluster.local:9092 --topic quickstart --from-beginning --max-messages 1 --timeout-ms 60000' > "$evidence/helm-record.txt"
+check helm-record grep -Fx candidate-installation "$evidence/helm-record.txt"
+kubectl get pods -A -o json > "$evidence/helm-pods.json"
+for image in "$broker_image" "$operator_image" "$rebalancer_image"; do
+  check "installed-$image" jq -e --arg image "$image" 'any(.items[].spec.containers[]; .image == $image)' "$evidence/helm-pods.json"
+done
+kubectl delete -f "$work/cluster.json" --timeout=5m
+helm uninstall rebalancer
+helm uninstall operator -n krabka-system
+helm list -A -o json > "$evidence/helm-after-uninstall.json"
+check helm-uninstall jq -e 'length == 0' "$evidence/helm-after-uninstall.json"
+"""
+
+_LIFECYCLE = r"""
+operator=$(source_repo krabka-operator)
+operator_image=$(image_ref krabka-operator)
+rebalancer_image=$(image_ref krabka-rebalancer)
+operator_chart=$(download krabka-operator chart)
+rebalancer_chart=$(download krabka-rebalancer chart)
+mkdir -p "$work/operator-chart" "$work/rebalancer-chart"
+tar -xzf "$operator_chart" -C "$work/operator-chart"
+tar -xzf "$rebalancer_chart" -C "$work/rebalancer-chart"
+# Use the published chart bytes. The existing script's source-chart location
+# is a mount point in this isolated copy, never a mutation of a user's tree.
+mv "$operator/charts/krabka-operator" "$work/unexercised-source-chart"
+cp -a "$work/operator-chart/krabka-operator" "$operator/charts/krabka-operator"
+# The pinned harness supports digest broker/rebalancer refs, but the operator
+# uses Never plus tag parsing. A private local alias names the pulled digest;
+# record and compare the actual image IDs before running it.
+alias=$scope-operator:verified
+docker tag "$operator_image" "$alias"
+check operator-alias test "$(docker image inspect "$alias" --format '{{.Id}}')" = "$(docker image inspect "$operator_image" --format '{{.Id}}')"
+export BROKER_IMAGE="$broker_image" OPERATOR_IMAGE="$alias" REBALANCER_IMAGE="$rebalancer_image"
+export REBALANCER_CHART="$work/rebalancer-chart/crabka-rebalancer"
+export OPERATOR_REVISION="$(revision krabka-operator)" BROKER_REVISION="$(revision krabka-broker)" REBALANCER_REVISION="$(revision krabka-rebalancer)"
+export EVIDENCE_DIR="$evidence/lifecycle" KIND_CLUSTER="$scope-lifecycle"
+bash "$operator/packaging/kind-lifecycle.sh" 2>&1 | tee "$evidence/lifecycle.log"
+check lifecycle-complete grep -F 'PASS: RF=3/minISR=2 survived upgrade, disruption, broker evacuation and leaf rotation;' "$evidence/lifecycle.log"
+check lifecycle-ledger test -s "$EVIDENCE_DIR/acknowledged-offsets.tsv"
+check lifecycle-no-missing-records test ! -s "$EVIDENCE_DIR/missing-acknowledged-records.txt"
+check lifecycle-exit jq -e '.exit_code == 0' "$EVIDENCE_DIR/revisions.json"
+"""
+
+_OBSERVABILITY = r"""
+demo=$(source_repo krabka-o11y-demo)
+compose=$(download krabka-o11y-demo compose)
+test "$(sha256sum "$demo/demo/observability/docker-compose.yml" | cut -d' ' -f1)" = "$(sha256sum "$compose" | cut -d' ' -f1)"
+export KRABKA_BROKER_IMAGE="$broker_image"
+export KRABKA_O11Y_IMAGE="$(image_ref krabka-o11y)"
+export KRABKA_QUALIFICATION_ARTIFACT_DIR="$evidence/recovery"
+export KRABKA_SMOKE_TARGETS='metrics logs traces cross-signal profiles demo-produce demo-stream demo-consume'
+export COMPOSE_PROJECT_NAME=$scope-recovery
+mkdir -p "$KRABKA_QUALIFICATION_ARTIFACT_DIR"
+cd "$demo/demo/observability"
+cleanup() { docker compose logs --no-color > "$evidence/compose.log" 2>&1; docker compose down -v; }
+trap cleanup EXIT
+docker compose config --format json > "$evidence/compose.json"
+check candidate-broker jq -e --arg image "$KRABKA_BROKER_IMAGE" '.services.broker.image == $image' "$evidence/compose.json"
+check candidate-o11y jq -e --arg image "$KRABKA_O11Y_IMAGE" '.services["metrics-distributor"].image == $image' "$evidence/compose.json"
+docker compose up -d --wait --wait-timeout 600 grafana cadvisor demo-produce demo-stream demo-consume metrics-distributor metrics-compactor metrics-querier traces-distributor traces-block-builder traces-metrics-generator traces-querier logs-distributor logs-compactor logs-querier profiles-distributor profiles-block-builder profiles-querier
+check observability-recovery bash -o pipefail ./qualify-failover.sh
+for file in reconciliation.txt alerts-firing.json alerts-resolved.json seed-log-before.json seed-log-after.json seed-trace-before.pb seed-trace-after.pb profiles-before.json profiles-after.json; do
+  check "retained-$file" test -s "$KRABKA_QUALIFICATION_ARTIFACT_DIR/$file"
+done
+"""
+
+_CLI = r"""
+cli=$(source_repo krabka-cli)
+cli_binary=$(download krabka-cli binary)
+chmod +x "$cli_binary"
+network=$scope-cli
+cleanup() {
+  for n in 1 2 3; do docker logs "$network-$n" > "$evidence/broker-$n.log" 2>&1 || true; docker rm -f "$network-$n" > /dev/null 2>&1 || true; done
+  docker network rm "$network" > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker network create "$network"
+cluster_id=3d70a78c-bb3a-4af5-a767-51e31f403c62
+for n in 1 2 3; do
+  mkdir -p "$work/node$n/data"
+  chmod 0777 "$work/node$n/data"
+  client_port=$((19093+n))
+  cat > "$work/node$n/broker.toml" <<EOF
+broker_id = $n
+log_dir = "/var/lib/krabka"
+controller_quorum_voters = ["1@$network-1:9093", "2@$network-2:9093", "3@$network-3:9093"]
+bootstrap_servers = ["$network-1:9093", "$network-2:9093", "$network-3:9093"]
+inter_broker_listener_name = "INTERNAL"
+controller_listener_protocol = "Plaintext"
+[[listeners]]
+name = "INTERNAL"
+bind_addr = "0.0.0.0:9092"
+advertised = "$network-$n:9092"
+protocol = "Plaintext"
+[[listeners]]
+name = "CLIENT"
+bind_addr = "0.0.0.0:9094"
+advertised = "127.0.0.1:$client_port"
+protocol = "SaslPlaintext"
+sasl_config = { enabled_mechanisms = ["PLAIN"] }
+[sasl_plain]
+credentials_path = "/etc/krabka/users"
+[authorization]
+type = "simple"
+super_users = ["admin"]
+[process]
+roles = ["controller", "broker"]
+EOF
+  printf 'admin=qualification-admin\ndenied=qualification-denied\n' > "$work/node$n/users"
+  docker run --rm --network "$network" -v "$work/node$n/data:/var/lib/krabka" --entrypoint /usr/bin/krabka-format "$broker_image" --cluster-id "$cluster_id" --node-id "$n" --log-dir /var/lib/krabka --release-version 3.9 --feature kraft.version=0 \
+    --add-acl 'principal=User:ANONYMOUS,host=*,operation=ClusterAction,permission=Allow,resource=Cluster:kafka-cluster' \
+    --add-acl 'principal=User:ANONYMOUS,host=*,operation=Read,permission=Allow,resource=Topic:*'
+  docker run -d --name "$network-$n" --network "$network" --log-opt max-size=10m --log-opt max-file=2 -p "127.0.0.1:$client_port:9094" -v "$work/node$n/data:/var/lib/krabka" -v "$work/node$n:/etc/krabka:ro" "$broker_image" --broker-id "$n" --config-file /etc/krabka/broker.toml
+done
+for user in admin denied; do
+  cat > "$work/$user.properties" <<EOF
+security.protocol=SASL_PLAINTEXT
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="$user" password="qualification-$user";
+EOF
+done
+export KRABKA_CANDIDATE_BOOTSTRAP=127.0.0.1:19094 KRABKA_CANDIDATE_IMAGE="$broker_image" KRABKA_CANDIDATE_REVISION="$(revision krabka-broker)" KRABKA_CLI_REVISION="$(revision krabka-cli)"
+export KRABKA_COMMAND_CONFIG="$work/admin.properties" KRABKA_DENIED_COMMAND_CONFIG="$work/denied.properties" KRABKA_DENIED_PRINCIPAL=User:denied
+for attempt in $(seq 1 90); do
+  if "$cli_binary" topics --list --bootstrap-server "$KRABKA_CANDIDATE_BOOTSTRAP" --command-config "$KRABKA_COMMAND_CONFIG" --timeout 2s; then break; fi
+  test "$attempt" -lt 90
+  sleep 2
+done
+# Give the denial principal its documented initially-authorized precondition.
+"$cli_binary" acls --add --topic '*' --allow-principal User:denied --operation all --bootstrap-server "$KRABKA_CANDIDATE_BOOTSTRAP" --command-config "$KRABKA_COMMAND_CONFIG"
+# The existing suite otherwise executes Cargo's freshly built binary. Override
+# that single invocation in the isolated harness; retain the patch as evidence.
+test_file="$cli/crates/krabka-cli/tests/candidate_broker.rs"
+test "$(grep -Fc 'env!("CARGO_BIN_EXE_krabka")' "$test_file")" = 1
+sed -i 's/env!("CARGO_BIN_EXE_krabka")/std::env::var("KRABKA_QUALIFICATION_CLI_BINARY").expect("qualified binary")/' "$test_file"
+git -C "$cli" diff -- crates/krabka-cli/tests/candidate_broker.rs > "$evidence/harness.patch"
+export KRABKA_QUALIFICATION_CLI_BINARY="$cli_binary"
+cd "$cli"
+cargo test --locked -p krabka-cli --test candidate_broker authenticated_admin_matrix_matches_real_broker_state -- --ignored --exact --nocapture 2>&1 | tee "$evidence/cli.log"
+check authenticated-admin-matrix grep -F 'test result: ok. 1 passed; 0 failed;' "$evidence/cli.log"
+check acl-denial-observed grep -F '"name":"acl-denied-request"' "$evidence/cli.log"
+check reassignment-completed grep -F '"name":"reassignment-complete-state"' "$evidence/cli.log"
+"""
+
+def gate_script(name):
+    """The exact commands retained beside each result and bound to the candidate."""
+    return _COMMON + {
+        "installation": _INSTALLATION,
+        "operator-lifecycle": _LIFECYCLE,
+        "cli-admin": _CLI,
+        "observability-recovery": _OBSERVABILITY,
+    }[name]
+
+def run_gate(ctx, document, identity, name, digest):
+    """Run one isolated gate and retain its receipt only after successful checks."""
+    root = ctx.std.env.bazel_root_dir()
+    output = root + "/" + ctx.args.output + "/" + name
+    created = ctx.std.process.command("mkdir").args(["-p", output]).spawn().wait()
+    if created.code != 0:
+        return created.code
+    # Refuse accidental mixing of reruns. Each GitHub attempt or local retry
+    # supplies its own output path; a failed attempt keeps its diagnostic log.
+    marker = ctx.std.process.command("test").args(["!", "-e", output + "/commands.txt"]).spawn().wait()
+    if marker.code != 0:
+        fail("qualification output already exists; select a fresh --output directory")
+    scratch = ctx.std.process.command("mktemp").args(["-d"]).stdout("piped").spawn().wait_with_output()
+    if scratch.status.code != 0:
+        return scratch.status.code
+    work = scratch.stdout.strip()
+    manifest = json.encode(document) + "\n"
+    commands = gate_script(name)
+    ctx.std.fs.write(output + "/candidate.json", manifest)
+    ctx.std.fs.write(output + "/commands.txt", commands)
+    # tee retains stdout and stderr even if the caller cancels the task. The
+    # external timeout also bounds hung helper processes outside Actions.
+    result = ctx.std.process.command("bash").args([
+        "-c", "set -o pipefail; timeout 150m bash \"$1\" \"$2\" \"$3\" \"$4\" 2>&1 | tee \"$3/run.log\"",
+        "qualification", output + "/commands.txt", output + "/candidate.json", output, work,
+    ]).spawn().wait()
+    if result.code != 0:
+        ctx.std.io.stderr.write("qualification failed; retained evidence in " + output + "; scratch " + work + "\n")
+        return result.code or 1
+    checks = ctx.std.fs.read_to_string(output + "/checks.txt").splitlines()
+    if not checks:
+        fail("qualification command executed zero checks")
+    receipt = {
+        "gate": name,
+        "candidate_sha256": identity,
+        "runner_sha256": document["runner_sha256"],
+        "exit_code": 0,
+        "tests_passed": len(checks),
+        "checks": checks,
+        "commands_sha256": digest(commands),
+        "log_sha256": digest(ctx.std.fs.read_to_string(output + "/run.log")),
+    }
+    ctx.std.fs.write(output + "/result.json", json.encode(receipt) + "\n")
+    return 0

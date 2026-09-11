@@ -1,7 +1,7 @@
 # krabka-remote-storage
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-remote-storage.svg)](https://crates.io/crates/krabka-remote-storage)
-[![Docs.rs](https://docs.rs/krabka-remote-storage/badge.svg)](https://docs.rs/krabka-remote-storage)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-remote-storage/krabka_remote_storage/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 KIP-405 tiered-storage SPI (RemoteStorageManager / RemoteLogMetadataManager) and reference implementations for Krabka.
@@ -184,7 +184,7 @@ On a versioned bucket an overwrite does not replace the locked original; it stac
 
 ## Documentation
 
-Read the API documentation at [docs.rs/krabka-remote-storage](https://docs.rs/krabka-remote-storage). The repository README contains the project-wide setup, development, and release notes.
+Read the [krabka-remote-storage API documentation](https://krabka-io.github.io/krabka-broker/krabka-remote-storage/krabka_remote_storage/index.html). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

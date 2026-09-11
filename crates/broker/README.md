@@ -1,7 +1,7 @@
 # krabka-broker
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-broker.svg)](https://crates.io/crates/krabka-broker)
-[![Docs.rs](https://docs.rs/krabka-broker/badge.svg)](https://docs.rs/krabka-broker)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-broker/krabka_broker/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Single-node Apache Kafka-compatible broker (MVP).
@@ -66,7 +66,7 @@ broker restart. Inbound validation uses the existing `[oauthbearer]` policy.
 
 ## Documentation
 
-Read the API documentation on [docs.rs/krabka-broker](https://docs.rs/krabka-broker). The repository README contains the project-wide setup, development, and release notes.
+Read the [krabka-broker API documentation](https://krabka-io.github.io/krabka-broker/krabka-broker/krabka_broker/index.html). The repository README contains the project-wide setup, development, and release notes.
 
 - [Configuration reference](../../docs/config-reference.md), generated from `krabka-broker --print-config-schema`; examples in [docs/examples/](../../docs/examples/).
 

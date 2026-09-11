@@ -1,7 +1,7 @@
 # krabka-authz
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-authz.svg)](https://crates.io/crates/krabka-authz)
-[![Docs.rs](https://docs.rs/krabka-authz/badge.svg)](https://docs.rs/krabka-authz)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-authz/krabka_authz/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Shared Kafka-ACL authorization evaluator for the Krabka broker and gateway.
@@ -49,7 +49,7 @@ println!("authorization decision: {decision:?}");
 
 ## Documentation
 
-Read the API documentation on [docs.rs/krabka-authz](https://docs.rs/krabka-authz). The repository README contains the project-wide setup, development, and release notes.
+Read the [krabka-authz API documentation](https://krabka-io.github.io/krabka-broker/krabka-authz/krabka_authz/index.html). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

@@ -1,7 +1,7 @@
 # krabka-log
 
 [![Crates.io](https://img.shields.io/crates/v/krabka-log.svg)](https://crates.io/crates/krabka-log)
-[![Docs.rs](https://docs.rs/krabka-log/badge.svg)](https://docs.rs/krabka-log)
+[API documentation](https://krabka-io.github.io/krabka-broker/krabka-log/krabka_log/index.html)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Byte-compatible reader and writer for Apache Kafka's on-disk log format.
@@ -80,7 +80,7 @@ println!("wrote at {base_offset:?}; read {} batches", output.batches.len());
 
 ## Documentation
 
-- [API documentation](https://docs.rs/krabka-log)
+- [API documentation](https://krabka-io.github.io/krabka-broker/krabka-log/krabka_log/index.html)
 - [Repository README](../../README.md)
 - [KIP compatibility matrix](../../docs/KIP_MATRIX.md), whose on-disk log
   contract rows this crate's `integration` suite establishes
