@@ -67,8 +67,8 @@ A test process exiting successfully is insufficient: adapters check named live
 test results or behavioral outcomes and record the checks that actually ran.
 Skipped or zero-test runs cannot produce a valid gate receipt. Historical M19
 recovery/CDC evidence remains historical; this workflow does not relabel those
-old runs as fresh candidate results. The workflow also runs monthly, creating a
-new schema-2 candidate from the historical component set.
+old runs as fresh candidate results. The monthly schedule is enabled only after
+the first schema-2 M22 manifest is checked in as the immutable baseline.
 
 ## Local execution and evidence
 

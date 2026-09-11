@@ -6,9 +6,9 @@ use std::{
 };
 
 use bytes::Bytes;
-use krabka_ids::{LeaderEpoch, Offset, ProducerId};
-use krabka_log::{Log, LogConfig, VerbatimBatch, name};
-use krabka_protocol::records::{Attributes, validate_one_v2_batch};
+use krabka_ids::Offset;
+use krabka_log::{Log, LogConfig, name};
+use krabka_protocol::records::{RecordBatchBorrowed, validate_one_v2_batch};
 use krabka_remote_storage::{
     ObjectEntry, Sha256Digest, TopicIdPartition, TrustedManifestKeys,
     diskless::{CAPTURE_HEAD_NAME, DisklessWalCapture, parse_wal_object},
@@ -17,6 +17,9 @@ use object_store::path::Path as ObjectPath;
 
 use crate::{
     ArchiveInventory, ArchiveStore, PartitionInventory, RestoreArgs, RestoreError,
+    args::PartitionRef,
+    bound::Predicates,
+    materialize::prepare::{BatchTally, PreparedBatch, prepare_batch},
     report::{DisklessPartitionReport, DisklessRestoreReport},
 };
 
@@ -111,6 +114,7 @@ pub(super) fn authenticate(
 pub(super) async fn materialize(
     store: &ArchiveStore,
     args: &RestoreArgs,
+    predicates: &Predicates,
     capture: &DisklessWalCapture,
     authenticated: Option<&std::collections::BTreeMap<String, ObjectEntry>>,
 ) -> Result<DisklessRestoreReport, RestoreError> {
@@ -132,38 +136,16 @@ pub(super) async fn materialize(
         let mut object_names = HashSet::new();
         let mut batches = 0u64;
         let mut records = 0u64;
+        let mut records_dropped = 0u64;
         let mut observed_end = partition.delete_floor;
+        let mut materialized_end = partition.delete_floor;
+        let partition_ref = PartitionRef {
+            topic: partition.topic.clone(),
+            partition: partition.partition,
+        };
         for range in &partition.ranges {
-            let object = if let Some(bytes) = objects.get(&range.object_key) {
-                bytes.clone()
-            } else {
-                let bytes = store
-                    .ops()
-                    .get(&ObjectPath::from(range.object_key.as_str()))
-                    .await?;
-                if let Some(authenticated) = authenticated {
-                    let expected = authenticated.get(&range.object_key).ok_or_else(|| {
-                        RestoreError::Authenticity {
-                            reason: format!(
-                                "diskless WAL object `{}` is not named by the signed capture",
-                                range.object_key
-                            ),
-                        }
-                    })?;
-                    if expected.size_bytes != bytes.len() as u64
-                        || expected.sha256 != Sha256Digest::of(&bytes)
-                    {
-                        return Err(RestoreError::Authenticity {
-                            reason: format!(
-                                "diskless WAL object `{}` changed after authentication",
-                                range.object_key
-                            ),
-                        });
-                    }
-                }
-                objects.insert(range.object_key.clone(), bytes.clone());
-                bytes
-            };
+            let object =
+                fetch_object(store, &mut objects, &range.object_key, authenticated).await?;
             object_names.insert(range.object_key.as_str());
             let manifests = parse_wal_object(&object).map_err(|reason| {
                 RestoreError::Integrity(format!("{}: {reason}", range.object_key))
@@ -226,30 +208,61 @@ pub(super) async fn materialize(
                 }
                 first.get_or_insert(header.base_offset.get());
                 last = Some(batch_last);
-                if let Some(log) = log.as_mut() {
-                    let base = Offset(header.base_offset.get());
-                    if log.log_end_offset() == Offset(0) && base != Offset(0) {
-                        log.reset_to(base)?;
-                    }
-                    log.reconcile_next_offset(base);
-                    log.append_verbatim_at(
-                        &VerbatimBatch {
-                            bytes: object.slice(cursor..batch_end),
-                            last_offset_delta: header.last_offset_delta.get(),
-                            max_timestamp: header.max_timestamp.get(),
-                            leader_epoch: LeaderEpoch(header.partition_leader_epoch.get()),
-                            producer_id: ProducerId(header.producer_id.get()),
-                            producer_epoch: header.producer_epoch.get(),
-                            base_sequence: header.base_sequence.get(),
-                            is_transactional: Attributes(header.attributes.get())
-                                .is_transactional(),
-                        },
-                        base,
+                let base = Offset(header.base_offset.get());
+                if !predicates.batch_past_offset_bound(&partition_ref, base) {
+                    let mut batch_cursor = &object[cursor..batch_end];
+                    let batch = RecordBatchBorrowed::decode_borrow_with_policy(
+                        &mut batch_cursor,
+                        <_>::default(),
                     )?;
+                    if !batch_cursor.is_empty() {
+                        return Err(RestoreError::Integrity(format!(
+                            "{}: decoded diskless batch left trailing bytes",
+                            range.object_key
+                        )));
+                    }
+                    let records_in_batch =
+                        u64::try_from(header.records_count.get().max(0)).unwrap_or(0);
+                    let (mut prepared, tally) = prepare_batch(
+                        &partition_ref,
+                        predicates,
+                        &batch,
+                        object.slice(cursor..batch_end),
+                        records_in_batch,
+                    )?;
+                    materialized_end = base
+                        .0
+                        .checked_add(i64::from(prepared.last_offset_delta()))
+                        .and_then(|last| last.checked_add(1))
+                        .ok_or_else(|| {
+                            RestoreError::Integrity("diskless WAL batch offset overflow".into())
+                        })?;
+                    if let Some(log) = log.as_mut() {
+                        if log.log_end_offset() == Offset(0) && base != Offset(0) {
+                            log.reset_to(base)?;
+                        }
+                        log.reconcile_next_offset(base);
+                        match &mut prepared {
+                            PreparedBatch::Verbatim(batch) => {
+                                log.append_verbatim_at(batch, base)?;
+                            }
+                            PreparedBatch::Owned { batch, .. } => {
+                                log.append_at(batch, base)?;
+                            }
+                        }
+                    }
+                    batches += 1;
+                    match tally {
+                        BatchTally::Kept => records = records.saturating_add(records_in_batch),
+                        BatchTally::Rewritten { kept, dropped } => {
+                            records = records.saturating_add(kept);
+                            records_dropped = records_dropped.saturating_add(dropped);
+                        }
+                        BatchTally::Emptied => {
+                            records_dropped = records_dropped.saturating_add(records_in_batch);
+                        }
+                    }
                 }
-                batches += 1;
-                records = records
-                    .saturating_add(u64::try_from(header.records_count.get().max(0)).unwrap_or(0));
                 cursor = batch_end;
             }
             if first != Some(range.entry.first_offset) || last != Some(range.entry.last_offset) {
@@ -269,16 +282,16 @@ pub(super) async fn materialize(
             )));
         }
         if let Some(log) = log.as_mut() {
-            if partition.ranges.is_empty() && partition.delete_floor != 0 {
-                log.reset_to(Offset(partition.delete_floor))?;
+            if log.log_end_offset() == Offset(0) && materialized_end != 0 {
+                log.reset_to(Offset(materialized_end))?;
             }
-            if log.log_end_offset().0 != partition.recovery_cutoff {
+            if log.log_end_offset().0 != materialized_end {
                 return Err(RestoreError::Integrity(format!(
-                    "{}-{} materialized through {}, capture declares cutoff {}",
+                    "{}-{} materialized through {}, expected {} after restore bounds",
                     partition.topic,
                     partition.partition,
                     log.log_end_offset(),
-                    partition.recovery_cutoff
+                    materialized_end
                 )));
             }
             log.set_log_start_offset(Offset(partition.delete_floor))?;
@@ -289,19 +302,52 @@ pub(super) async fn materialize(
             partition: partition.partition,
             topic_id: partition.topic_id,
             delete_floor: partition.delete_floor,
-            recovery_cutoff: partition.recovery_cutoff,
+            recovery_cutoff: materialized_end,
             objects: object_names.len() as u64,
             batches,
             records,
+            records_dropped,
         });
     }
     Ok(DisklessRestoreReport {
         captured_at_ms: capture.captured_at_ms,
         source_cutoffs: capture.source_cutoffs.clone(),
         partitions: reports,
-        limitations: vec![
-            "diskless records at or after each recovery cutoff were not archived and are unavailable".into(),
-            "in-flight transaction state is not restored".into(),
-        ],
+        limitations: limitations(),
     })
+}
+
+fn limitations() -> Vec<String> {
+    vec![
+        "diskless records at or after each recovery cutoff were not archived and are unavailable"
+            .into(),
+        "in-flight transaction state is not restored".into(),
+    ]
+}
+
+async fn fetch_object(
+    store: &ArchiveStore,
+    objects: &mut HashMap<String, Bytes>,
+    key: &str,
+    authenticated: Option<&std::collections::BTreeMap<String, ObjectEntry>>,
+) -> Result<Bytes, RestoreError> {
+    if let Some(bytes) = objects.get(key) {
+        return Ok(bytes.clone());
+    }
+    let bytes = store.ops().get(&ObjectPath::from(key)).await?;
+    if let Some(authenticated) = authenticated {
+        let expected = authenticated
+            .get(key)
+            .ok_or_else(|| RestoreError::Authenticity {
+                reason: format!("diskless WAL object `{key}` is not named by the signed capture"),
+            })?;
+        if expected.size_bytes != bytes.len() as u64 || expected.sha256 != Sha256Digest::of(&bytes)
+        {
+            return Err(RestoreError::Authenticity {
+                reason: format!("diskless WAL object `{key}` changed after authentication"),
+            });
+        }
+    }
+    objects.insert(key.to_owned(), bytes.clone());
+    Ok(bytes)
 }

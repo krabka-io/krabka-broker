@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use krabka_audit::FileEd25519Signer;
-use krabka_client_admin::AdminClient;
+use krabka_client_admin::{AdminClient, TopicMetadata};
 use krabka_client_core::{
     Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
     security::ClientSecurity,
@@ -199,23 +199,24 @@ async fn capture_diskless_index(
 ) -> Result<Option<Vec<u8>>, BackupError> {
     const TOPIC: &str = "__diskless_wal_index";
     let mut admin = connect_admin(bootstrap, security.clone()).await?;
+    let index_metadata = admin
+        .metadata(&[TOPIC])
+        .await
+        .map_err(|error| BackupError::Cluster(format!("diskless WAL index Metadata: {error}")))?;
+    if !diskless_index_present(&index_metadata, TOPIC)? {
+        return Ok(None);
+    }
     let metadata = admin
         .metadata(&[])
         .await
         .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    if !metadata
-        .topics
-        .iter()
-        .any(|topic| topic.name == TOPIC && topic.error.is_none())
-    {
-        return Ok(None);
-    }
     let names: std::collections::HashMap<_, _> = metadata
         .topics
         .into_iter()
         .filter_map(|topic| {
-            topic
-                .topic_id
+            (topic.error.is_none())
+                .then_some(topic.topic_id)
+                .flatten()
                 .map(|id| (uuid::Uuid::from_bytes(id.into_bytes()), topic.name))
         })
         .collect();
@@ -271,6 +272,81 @@ async fn capture_diskless_index(
             context: DISKLESS_WAL_INDEX.to_owned(),
             source,
         })
+}
+
+fn diskless_index_present(metadata: &TopicMetadata, name: &str) -> Result<bool, BackupError> {
+    let topic = metadata
+        .topics
+        .iter()
+        .find(|topic| topic.name == name)
+        .ok_or_else(|| {
+            BackupError::Cluster(format!(
+                "diskless WAL index Metadata omitted requested topic `{name}`"
+            ))
+        })?;
+    match &topic.error {
+        None => Ok(true),
+        Some(error) if error.code == 3 => Ok(false),
+        Some(error) => Err(BackupError::Cluster(format!(
+            "diskless WAL index Metadata: code={} ({}){}",
+            error.code,
+            error.name,
+            error
+                .message
+                .as_deref()
+                .map(|message| format!(" {message:?}"))
+                .unwrap_or_default()
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod diskless_tests {
+    use assert2::check;
+    use krabka_client_admin::{KafkaError, TopicMetadataEntry};
+
+    use super::*;
+
+    fn metadata(error: Option<KafkaError>) -> TopicMetadata {
+        TopicMetadata {
+            topics: vec![TopicMetadataEntry {
+                name: "__diskless_wal_index".into(),
+                topic_id: None,
+                partition_count: 0,
+                replication_factor: 0,
+                error,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn diskless_index_discovery_distinguishes_absence_from_denial() {
+        check!(diskless_index_present(&metadata(None), "__diskless_wal_index").unwrap());
+        check!(
+            !diskless_index_present(
+                &metadata(Some(KafkaError {
+                    code: 3,
+                    name: "UNKNOWN_TOPIC_OR_PARTITION",
+                    message: None,
+                })),
+                "__diskless_wal_index",
+            )
+            .unwrap()
+        );
+        check!(
+            diskless_index_present(
+                &metadata(Some(KafkaError {
+                    code: 29,
+                    name: "TOPIC_AUTHORIZATION_FAILED",
+                    message: None,
+                })),
+                "__diskless_wal_index",
+            )
+            .is_err()
+        );
+        check!(diskless_index_present(&TopicMetadata::default(), "__diskless_wal_index").is_err());
+    }
 }
 
 /// Put one artifact into the capture and record what was written.

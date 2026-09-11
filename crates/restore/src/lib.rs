@@ -173,39 +173,10 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         .partitions
         .iter()
         .any(|partition| !partition.segments.is_empty());
-    let mut authenticated = match (&trusted, has_classic) {
-        (Some((trusted, count)), true) => {
-            authenticate_source(&store, args, trusted, *count).await?
-        }
-        _ => None,
-    };
-    let diskless_claims = match (&diskless_capture, &trusted) {
+    let diskless_authentication = match (&diskless_capture, &trusted) {
         (Some(capture), Some((trusted, count))) => {
             let (claims, head) = diskless::authenticate(capture, trusted, args)?;
-            let report = authenticated.get_or_insert_with(|| {
-                (
-                    None,
-                    AuthenticationReport {
-                        partitions: 0,
-                        manifests: 0,
-                        objects: 0,
-                        trusted_keys: *count,
-                        chain_heads: std::collections::BTreeMap::new(),
-                        tail_truncation_protected: true,
-                    },
-                )
-            });
-            report.1.partitions += 1;
-            report.1.manifests += 1;
-            report.1.objects = report
-                .1
-                .objects
-                .saturating_add(u64::try_from(claims.len()).unwrap_or(u64::MAX));
-            report
-                .1
-                .chain_heads
-                .insert(CAPTURE_HEAD_NAME.to_owned(), head);
-            Some(claims)
+            Some((claims, head, *count))
         }
         (None, _) => {
             if args.worm_expect_head.iter().any(|value| {
@@ -221,6 +192,40 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         }
         (Some(_), None) => None,
     };
+    let diskless_claims = diskless_authentication
+        .as_ref()
+        .map(|(claims, _, _)| claims);
+    let mut authenticated = match (&trusted, has_classic) {
+        (Some((trusted, count)), true) => {
+            authenticate_source(&store, args, trusted, *count, diskless_claims).await?
+        }
+        _ => None,
+    };
+    if let Some((claims, head, count)) = &diskless_authentication {
+        let report = authenticated.get_or_insert_with(|| {
+            (
+                None,
+                AuthenticationReport {
+                    partitions: 0,
+                    manifests: 0,
+                    objects: 0,
+                    trusted_keys: *count,
+                    chain_heads: std::collections::BTreeMap::new(),
+                    tail_truncation_protected: true,
+                },
+            )
+        });
+        report.1.partitions += 1;
+        report.1.manifests += 1;
+        report.1.objects = report
+            .1
+            .objects
+            .saturating_add(u64::try_from(claims.len()).unwrap_or(u64::MAX));
+        report
+            .1
+            .chain_heads
+            .insert(CAPTURE_HEAD_NAME.to_owned(), head.clone());
+    }
     let predicates = Predicates::from_args(args)?;
     let format = format_target(args, &archive).await?;
 
@@ -272,7 +277,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
 
     let diskless = match diskless_capture {
         Some(capture) => {
-            Some(diskless::materialize(&store, args, &capture, diskless_claims.as_ref()).await?)
+            Some(diskless::materialize(&store, args, &predicates, &capture, diskless_claims).await?)
         }
         None => None,
     };
@@ -293,9 +298,16 @@ async fn authenticate_source(
     args: &RestoreArgs,
     trusted: &TrustedManifestKeys,
     trusted_keys: usize,
+    diskless_claims: Option<
+        &std::collections::BTreeMap<String, krabka_remote_storage::ObjectEntry>,
+    >,
 ) -> Result<Option<(Option<AuthenticatedArchive>, AuthenticationReport)>, RestoreError> {
     let request = VerifyRequest {
         prefix: store.prefix().map(str::to_owned),
+        externally_authenticated_objects: diskless_claims
+            .into_iter()
+            .flat_map(|claims| claims.keys().cloned())
+            .collect(),
         ..VerifyRequest::default()
     };
     let authenticated = authenticate_archive(store.store(), &request, trusted)

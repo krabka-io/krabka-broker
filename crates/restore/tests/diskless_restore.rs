@@ -120,6 +120,30 @@ fn args(
     .args
 }
 
+fn bounded_args(
+    archive: &std::path::Path,
+    target: &std::path::Path,
+    capture: &std::path::Path,
+) -> krabka_restore::RestoreArgs {
+    Cli::parse_from([
+        "restore",
+        "--archive-local",
+        &archive.display().to_string(),
+        "--log-dir",
+        &target.display().to_string(),
+        "--node-id",
+        "1",
+        "--standalone",
+        "--controller-listener",
+        "127.0.0.1:19093",
+        "--diskless-wal-capture",
+        &capture.display().to_string(),
+        "--to-offset",
+        "orders:0=0",
+    ])
+    .args
+}
+
 fn trusted_args(
     archive: &std::path::Path,
     target: &std::path::Path,
@@ -165,6 +189,26 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
     let log = Log::open(target.path().join("orders-0"), LogConfig::default()).unwrap();
     check!(log.log_start_offset() == Offset(1));
     check!(log.log_end_offset() == Offset(2));
+}
+
+#[tokio::test]
+async fn diskless_restore_applies_offset_bounds_and_reports_the_written_cutoff() {
+    let archive = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let capture_path = archive.path().join("capture.json");
+    let (capture, _) = fixture(archive.path(), true, false);
+    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+
+    let report = restore(&bounded_args(archive.path(), target.path(), &capture_path))
+        .await
+        .unwrap();
+    let partition = &report.diskless.as_ref().unwrap().partitions[0];
+    check!(partition.recovery_cutoff == 1);
+    check!(partition.batches == 1);
+    check!(partition.records == 1);
+    check!(partition.records_dropped == 0);
+    let log = Log::open(target.path().join("orders-0"), LogConfig::default()).unwrap();
+    check!(log.log_end_offset() == Offset(1));
 }
 
 #[tokio::test]

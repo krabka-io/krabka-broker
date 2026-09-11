@@ -334,22 +334,22 @@ pub async fn inventory(
             .cmp(&(b.partition.topic.as_str(), b.partition.partition))
     });
 
-    // Checked against the raw scan, before the RLMM reconciliation and the
-    // empty-archive check below: a bound that names a partition the scan
-    // never saw is a typo the operator needs to hear about specifically,
-    // not the more general "nothing selected" of `EmptyArchive`, and not
-    // masked by a `--rlmm-snapshot` disagreement on some other partition.
-    for partition in args
-        .to_offset
-        .iter()
-        .map(|bound| &bound.partition)
-        .chain(args.exclude_offset.iter().map(|range| &range.partition))
-    {
-        if !holds_partition(&partitions, &partition.topic, partition.partition) {
-            return Err(RestoreError::UnknownPartition {
-                topic: partition.topic.clone(),
-                partition: partition.partition,
-            });
+    // Checked against the raw scan before RLMM reconciliation. When a diskless
+    // capture is present, `diskless::add_partitions` performs this check after
+    // merging its partitions with this inventory.
+    if args.archive.diskless_wal_capture.is_none() {
+        for partition in args
+            .to_offset
+            .iter()
+            .map(|bound| &bound.partition)
+            .chain(args.exclude_offset.iter().map(|range| &range.partition))
+        {
+            if !holds_partition(&partitions, &partition.topic, partition.partition) {
+                return Err(RestoreError::UnknownPartition {
+                    topic: partition.topic.clone(),
+                    partition: partition.partition,
+                });
+            }
         }
     }
 

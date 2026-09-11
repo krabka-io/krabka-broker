@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// What one archived batch becomes when it is appended to the target log: the exact bytes the log's zero-copy path needs, or an owned batch for the log's decode-and-append path.
-pub(super) enum PreparedBatch {
+pub(crate) enum PreparedBatch {
     Verbatim(VerbatimBatch),
     Owned {
         batch: RecordBatch,
@@ -32,14 +32,14 @@ pub(super) enum PreparedBatch {
 }
 
 impl PreparedBatch {
-    pub(super) fn last_offset_delta(&self) -> i32 {
+    pub(crate) fn last_offset_delta(&self) -> i32 {
         match self {
             Self::Verbatim(batch) => batch.last_offset_delta,
             Self::Owned { batch, .. } => batch.last_offset_delta,
         }
     }
 
-    pub(super) fn encoded_len(&self) -> usize {
+    pub(crate) fn encoded_len(&self) -> usize {
         match self {
             Self::Verbatim(batch) => batch.bytes.len(),
             Self::Owned { encoded_len, .. } => *encoded_len,
@@ -49,14 +49,14 @@ impl PreparedBatch {
 
 /// How [`prepare_batch`]'s outcome folds into
 /// [`SegmentOutcome`](super::SegmentOutcome)'s counts.
-pub(super) enum BatchTally {
+pub(crate) enum BatchTally {
     Kept,
     Rewritten { kept: u64, dropped: u64 },
     Emptied,
 }
 
 /// Decide one archived batch's fate under `predicates`, and prepare what gets appended to the target log without touching the log itself, so `--dry-run` can share this exact path with a real run.
-pub(super) fn prepare_batch(
+pub(crate) fn prepare_batch(
     partition_ref: &PartitionRef,
     predicates: &Predicates,
     batch: &RecordBatchBorrowed<'_>,

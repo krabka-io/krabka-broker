@@ -70,6 +70,7 @@ pub struct DisklessPartitionReport {
     pub objects: u64,
     pub batches: u64,
     pub records: u64,
+    pub records_dropped: u64,
 }
 
 /// Signed WORM evidence applied to the bytes consumed by restore.
@@ -213,11 +214,16 @@ impl RestoreReport {
             for partition in &diskless.partitions {
                 writeln!(
                     out,
-                    "  {}-{}: floor {}, recoverable through offset {} (exclusive)",
+                    "  {}-{}: floor {}, restored through offset {} (exclusive); {} batch{}, {} record{} kept, {} dropped",
                     partition.topic,
                     partition.partition,
                     partition.delete_floor,
-                    partition.recovery_cutoff
+                    partition.recovery_cutoff,
+                    partition.batches,
+                    plural(partition.batches),
+                    partition.records,
+                    plural(partition.records),
+                    partition.records_dropped,
                 )
                 .expect("String writer is infallible");
             }

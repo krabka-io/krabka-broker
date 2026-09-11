@@ -92,6 +92,43 @@ fn retries_tombstones_and_delete_floors_capture_only_committed_live_state() {
 }
 
 #[test]
+fn keyed_values_and_tombstones_dominate_legacy_replay() {
+    let mut projection = WalCaptureProjection::default();
+    let live = entry(0, 3);
+    let deleted = entry(4, 7);
+    let live_key = WalIndexKey::from(&live).to_bytes();
+    let deleted_key = WalIndexKey::from(&deleted).to_bytes();
+
+    projection
+        .apply(None, Some(&value("legacy-first", live.clone())))
+        .unwrap();
+    projection
+        .apply(Some(&live_key), Some(&value("keyed", live.clone())))
+        .unwrap();
+    projection
+        .apply(None, Some(&value("legacy-last", live)))
+        .unwrap();
+    projection
+        .apply(Some(&deleted_key), Some(&value("deleted", deleted.clone())))
+        .unwrap();
+    projection.apply(Some(&deleted_key), None).unwrap();
+    projection
+        .apply(None, Some(&value("legacy-resurrected", deleted)))
+        .unwrap();
+    projection.finish_legacy_replay();
+
+    let capture = projection
+        .capture(
+            &HashMap::from([(Uuid::from_u128(7), "orders".to_owned())]),
+            vec![12],
+            0,
+        )
+        .unwrap();
+    check!(capture.partitions[0].ranges.len() == 1);
+    check!(capture.partitions[0].ranges[0].object_key == "keyed");
+}
+
+#[test]
 fn distinct_overlapping_ranges_fail_closed() {
     let mut projection = WalCaptureProjection::default();
     for (first, last) in [(0, 5), (3, 7)] {

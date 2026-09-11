@@ -517,7 +517,7 @@ negative_capture denied-acl denied.properties
 # Wait for both classic segment manifests and diskless WAL objects to settle.
 for attempt in $(seq 1 120); do
   listing=$(docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
-    "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc find local/$bucket/$data_prefix")
+    "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc find local/$bucket")
   classic_manifests=$(grep 'classic-0-' <<<"$listing" | grep -c '\.manifest$' || true)
   if [ "$classic_manifests" -ge 201 ] && grep -q 'diskless' <<<"$listing"; then break; fi
   test "$attempt" -lt 120

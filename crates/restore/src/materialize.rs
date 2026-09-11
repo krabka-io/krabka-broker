@@ -26,7 +26,7 @@
 //! same work and writes nothing.
 
 mod format;
-mod prepare;
+pub(crate) mod prepare;
 mod segment;
 #[cfg(test)]
 mod test_support;

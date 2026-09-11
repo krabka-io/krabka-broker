@@ -11,6 +11,24 @@ use crate::worm::{
     verify::test_support::{Archive, SEGMENT_SPAN, STRAY, Tamper},
 };
 
+#[tokio::test]
+async fn an_exact_externally_authenticated_object_is_not_an_orphan() {
+    let archive = Archive::build(&[1]).await;
+    Tamper::StrayObject.apply(&archive).await;
+    let request = VerifyRequest {
+        externally_authenticated_objects: std::collections::BTreeSet::from([format!(
+            "{}/{STRAY}",
+            archive.dir
+        )]),
+        ..Default::default()
+    };
+
+    let report = verify_archive(&archive.store, &request, &archive.trusted())
+        .await
+        .unwrap();
+    check!(report.ok());
+}
+
 /// The kind of break a row expects, matched against the reason text the
 /// report carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

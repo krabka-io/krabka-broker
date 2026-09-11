@@ -36,7 +36,7 @@
 //! panic.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -183,6 +183,12 @@ pub struct VerifyRequest {
     /// [`PartitionVerifyReport::ok`]: a restart is a hole in the attestation,
     /// not evidence of a rewrite.
     pub allow_epoch_restarts: bool,
+    /// Exact object keys authenticated by another signed boundary.
+    ///
+    /// Restore uses this for diskless WAL objects whose claims live in the
+    /// signed capture rather than a classic partition manifest. Every other
+    /// unreferenced object remains an orphan.
+    pub externally_authenticated_objects: BTreeSet<String>,
 }
 
 /// Verifies every partition the request selects.
@@ -243,7 +249,11 @@ async fn verify_archive_inner(
     request: &VerifyRequest,
     trusted: &TrustedManifestKeys,
 ) -> Result<(ArchiveVerifyReport, BTreeMap<String, ObjectEntry>), WormError> {
-    let listing = list_archive(store, request.prefix.as_deref()).await?;
+    let mut listing = list_archive(store, request.prefix.as_deref()).await?;
+    for entries in listing.values_mut() {
+        entries.retain(|key, _| !request.externally_authenticated_objects.contains(key));
+    }
+    listing.retain(|_, entries| !entries.is_empty());
     let mut partitions = Vec::new();
     let mut objects = BTreeMap::new();
     for (dir, entries) in &listing {

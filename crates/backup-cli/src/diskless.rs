@@ -70,5 +70,6 @@ pub async fn capture_projection<S: std::hash::BuildHasher>(
     })
     .await
     .map_err(|_| "diskless WAL index capture timed out".to_owned())??;
+    projection.finish_legacy_replay();
     projection.capture(topic_names, cutoffs, captured_at_ms)
 }
