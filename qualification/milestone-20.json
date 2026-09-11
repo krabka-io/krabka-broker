@@ -1,28 +1,122 @@
 {
   "schema": 1,
-  "status": "draft",
-  "captured_at": "2026-09-09T02:23:08Z",
+  "status": "qualified",
+  "captured_at": "2026-09-11T05:18:34Z",
   "architectures": ["linux/amd64"],
   "components": [
-    {"repository": "krabka-io/krabka-broker", "revision": "1bf03499f4d6bbd9ba4f5245fcce68b7fc7e9a6c", "default_branch": "main", "artifacts": [{"kind": "image", "reference": "ghcr.io/krabka-io/krabka-broker", "digest": ""}], "entrypoints": ["krabka-broker", "krabka-format"], "config": ["docs/config-reference.md"], "probes": ["/healthz", "/readyz"]},
-    {"repository": "krabka-io/krabka-protocol", "revision": "d252ed24df9eeeb092b9a7989da8667b3229e559", "default_branch": "main", "artifacts": []},
-    {"repository": "krabka-io/krabka-client-rs", "revision": "056e7e3eddb7da2ba21c7893993897e6169bc8f2", "default_branch": "main", "artifacts": []},
-    {"repository": "krabka-io/krabka-schema-registry", "revision": "ae9876d15da12e6123b77b4fc77f50bb9d162556", "default_branch": "claude/broker-schema-validation-registry-s451bp", "artifacts": []},
-    {"repository": "krabka-io/krabka-streams-rs", "revision": "5b0dd5511674b90db5dce9017904aede105704c8", "default_branch": "main", "artifacts": []},
-    {"repository": "krabka-io/krabka-streams-java", "revision": "85b0d7866e69c299611e60d2feca16754db202b6", "default_branch": "main", "artifacts": []},
-    {"repository": "krabka-io/krabka-streams-go", "revision": "a416d3a5e59eae7c2897228851c8d05e03a02b0f", "default_branch": "main", "artifacts": []},
-    {"repository": "krabka-io/krabka-connect", "revision": "54627bceca48c01bda5c44a49be172cb387695a1", "default_branch": "main", "artifacts": []},
-    {"repository": "krabka-io/krabka-operator", "revision": "ab416b99139a63ca0178f93dbb79250862dd2ef8", "default_branch": "main", "artifacts": [{"kind": "chart", "reference": "charts/krabka-operator", "digest": ""}], "entrypoints": ["krabka-operator"], "config": ["charts/krabka-operator/values.yaml"], "probes": []},
-    {"repository": "krabka-io/krabka-cli", "revision": "3f16c30a038b370af757992a709c15341e470728", "default_branch": "main", "artifacts": [{"kind": "binary", "reference": "https://github.com/krabka-io/krabka-cli/releases", "digest": ""}], "entrypoints": ["krabka"], "config": ["--command-config"], "probes": []},
-    {"repository": "krabka-io/krabka-o11y", "revision": "5d6fa5622a764108ebde0d1f5a6489c0306a1b6c", "default_branch": "main", "artifacts": [{"kind": "image", "reference": "ghcr.io/krabka-io/krabka-o11y", "digest": ""}]},
-    {"repository": "krabka-io/krabka-o11y-demo", "revision": "bfdfc598f1de57a4151143ffe2739472d6b17fa1", "default_branch": "main", "artifacts": [{"kind": "compose", "reference": "demo/observability/docker-compose.yml", "digest": ""}]},
-    {"repository": "krabka-io/krabka-io.github.io", "revision": "93515582c3c804556d1e24a6e85bfc8f46f16f8d", "default_branch": "main", "artifacts": []}
+    {
+      "repository": "krabka-io/krabka-broker",
+      "revision": "986cf6693eebf820c9088e4687a26e1934f50b9b",
+      "default_branch": "main",
+      "artifacts": [{
+        "kind": "image",
+        "reference": "ghcr.io/krabka-io/krabka-broker@sha256:82744b30f968b53c85545a6208aa4745e2acc12244344d0be6d84b953d61dcb0",
+        "digest": "sha256:82744b30f968b53c85545a6208aa4745e2acc12244344d0be6d84b953d61dcb0"
+      }],
+      "entrypoints": ["krabka-broker", "krabka-format"],
+      "config": ["docs/config-reference.md"],
+      "probes": ["/healthz", "/readyz"]
+    },
+    {"repository": "krabka-io/krabka-protocol", "revision": "b79bf4965075a96ab88f2612f0b7cb9c86d2097b", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-client-rs", "revision": "f0c86c1ccdecd1776e32349764d7d2efe5dae347", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-schema-registry", "revision": "d7cb5501ea57b0e8ee38953841a7b27762fedb77", "default_branch": "claude/broker-schema-validation-registry-s451bp", "artifacts": []},
+    {"repository": "krabka-io/krabka-streams-rs", "revision": "375faae45e895ca2afc0622904994a8538fc3593", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-streams-java", "revision": "d623cecec0fa59188390151110cb1c76c3a244af", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-streams-go", "revision": "f4b7124fd3612c84fac87df805b3bd9356ee2883", "default_branch": "main", "artifacts": []},
+    {"repository": "krabka-io/krabka-connect", "revision": "5cc1bfb806a5288afddc72c2da11510078acd262", "default_branch": "main", "artifacts": []},
+    {
+      "repository": "krabka-io/krabka-operator",
+      "revision": "0d08946add2ae2d4786f8b6b3ad91f0fb23cc588",
+      "default_branch": "main",
+      "artifacts": [
+        {"kind": "chart", "reference": "https://krabka-io.github.io/charts/krabka-operator-0.4.0.tgz", "digest": "sha256:bc7b1378be63676e546fa1e2c91e4633337176a69f9b0f6ac1909fb850aeff75"},
+        {"kind": "image", "reference": "ghcr.io/krabka-io/krabka-operator@sha256:861796f11b63798f07cd8cfbcb0fa41376259cb6fce07b1e80e15e93de3a377b", "digest": "sha256:861796f11b63798f07cd8cfbcb0fa41376259cb6fce07b1e80e15e93de3a377b"}
+      ],
+      "entrypoints": ["krabka-operator"],
+      "config": ["charts/krabka-operator/values.yaml"],
+      "probes": []
+    },
+    {
+      "repository": "krabka-io/krabka-cli",
+      "revision": "09edae1c0af58038c664b5d1d0fae9bd85f25257",
+      "default_branch": "main",
+      "artifacts": [{"kind": "binary", "reference": "https://github.com/krabka-io/krabka-cli/releases/download/v0.4.0/krabka-linux-amd64", "digest": "sha256:c39d85bd62bdf51a34f38e8f7b48a75d42cad0bc01281013b3d2432245dd60c9"}],
+      "entrypoints": ["krabka"],
+      "config": ["--command-config"],
+      "probes": []
+    },
+    {
+      "repository": "krabka-io/krabka-o11y",
+      "revision": "12bce8a0093208a1e49f0258ad23b848c19e6a8b",
+      "default_branch": "main",
+      "artifacts": [{"kind": "image", "reference": "ghcr.io/krabka-io/krabka-o11y@sha256:1f278b3e776feb246953ea6a4ed6474be11f392e4a3a3d41819a038b52b0b23a", "digest": "sha256:1f278b3e776feb246953ea6a4ed6474be11f392e4a3a3d41819a038b52b0b23a"}]
+    },
+    {
+      "repository": "krabka-io/krabka-o11y-demo",
+      "revision": "fadddcfb46da03a51792ab744cc8070e7fd8b779",
+      "default_branch": "main",
+      "artifacts": [{"kind": "compose", "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/fadddcfb46da03a51792ab744cc8070e7fd8b779/demo/observability/docker-compose.yml", "digest": "sha256:50b7c328fccc1c71a74164a5c9df57bb6629168b08f7ef0a617abf777d37af13"}]
+    },
+    {"repository": "krabka-io/krabka-io.github.io", "revision": "dd4a0f9dc90afd74879ee08bbc24b115dfae6137", "default_branch": "main", "artifacts": []},
+    {
+      "repository": "krabka-io/krabka-rebalancer",
+      "revision": "f932eab4004349417806eefec738ef0b20ad26f4",
+      "default_branch": "main",
+      "artifacts": [
+        {"kind": "chart", "reference": "https://krabka-io.github.io/charts/crabka-rebalancer-0.4.0.tgz", "digest": "sha256:6c924ea43772b77a92674a7825c71bb915d7621b9d15734f5eecaeb49e1ad700"},
+        {"kind": "image", "reference": "ghcr.io/krabka-io/krabka-rebalancer@sha256:706b3b51a521d97d4166d98a1f39e045b5dfa1508b155bce174161c4bc009b11", "digest": "sha256:706b3b51a521d97d4166d98a1f39e045b5dfa1508b155bce174161c4bc009b11"}
+      ],
+      "entrypoints": ["crabka-rebalancer"],
+      "config": ["charts/crabka-rebalancer/values.yaml"],
+      "probes": ["/healthz", "/readyz"]
+    }
   ],
   "gates": [
-    {"name": "installation", "issue": 523, "status": "pending", "evidence": []},
-    {"name": "operator-lifecycle", "issue": 524, "status": "pending", "evidence": []},
-    {"name": "cli-admin", "issue": 525, "status": "pending", "evidence": []},
-    {"name": "observability-recovery", "issue": 526, "status": "pending", "evidence": []}
+    {
+      "name": "installation",
+      "issue": 523,
+      "status": "passed",
+      "evidence": [
+        {"name": "compose", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-compose-qualified.log", "sha256": "sha256:7c442043e8ead35d95e61282070f550e42899d7be5c80f561294168c657ad1f6"},
+        {"name": "helm", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-helm-qualified.tar.gz", "sha256": "sha256:97a26c19055f19e3f4a298d4bf1e9977f5bd58b30d3b6628ff42996ed5a6ebd9"},
+        {"name": "m19", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-m19-final.tar.gz", "sha256": "sha256:32157f564e1efee6a52f27a66486b3ee8533160c2d1d59a821cc0084f11bfc99"},
+        {"name": "matrix", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-m19-final.tar.gz", "sha256": "sha256:32157f564e1efee6a52f27a66486b3ee8533160c2d1d59a821cc0084f11bfc99"},
+        {"name": "negative-compat", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-m19-final.tar.gz", "sha256": "sha256:32157f564e1efee6a52f27a66486b3ee8533160c2d1d59a821cc0084f11bfc99"}
+      ]
+    },
+    {
+      "name": "operator-lifecycle",
+      "issue": 524,
+      "status": "passed",
+      "evidence": [
+        {"name": "certificate-rotation", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-operator-lifecycle.tar.gz", "sha256": "sha256:41aa478aa60054d15d4038255afa0d101532a13e82b26d37b918fb95d63a04d6"},
+        {"name": "ledger", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-operator-lifecycle.tar.gz", "sha256": "sha256:41aa478aa60054d15d4038255afa0d101532a13e82b26d37b918fb95d63a04d6"},
+        {"name": "scale-down", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-operator-lifecycle.tar.gz", "sha256": "sha256:41aa478aa60054d15d4038255afa0d101532a13e82b26d37b918fb95d63a04d6"},
+        {"name": "upgrade", "url": "https://github.com/krabka-io/krabka-broker/releases/download/v0.5.4/milestone-20-operator-lifecycle.tar.gz", "sha256": "sha256:41aa478aa60054d15d4038255afa0d101532a13e82b26d37b918fb95d63a04d6"}
+      ]
+    },
+    {
+      "name": "cli-admin",
+      "issue": 525,
+      "status": "passed",
+      "evidence": [
+        {"name": "commands", "url": "https://github.com/krabka-io/krabka-cli/releases/download/v0.4.0/milestone-20-cli-admin-qualified.log", "sha256": "sha256:6e0924d98c63f3814f6be1e5e3819dc3e4bb84e63912be222e3138cd284f7b9d"},
+        {"name": "state", "url": "https://github.com/krabka-io/krabka-cli/releases/download/v0.4.0/milestone-20-cli-admin-qualified.log", "sha256": "sha256:6e0924d98c63f3814f6be1e5e3819dc3e4bb84e63912be222e3138cd284f7b9d"}
+      ]
+    },
+    {
+      "name": "observability-recovery",
+      "issue": 526,
+      "status": "passed",
+      "evidence": [
+        {"name": "alerts", "url": "https://github.com/krabka-io/krabka-o11y-demo/releases/download/m20-recovery-fadddcf/m20-observability-recovery-fadddcf.tar.gz", "sha256": "sha256:9a586958b30879b708431a460bed47ba7ba839076f1aff0191207490fb7a98c6"},
+        {"name": "ledger", "url": "https://github.com/krabka-io/krabka-o11y-demo/releases/download/m20-recovery-fadddcf/m20-observability-recovery-fadddcf.tar.gz", "sha256": "sha256:9a586958b30879b708431a460bed47ba7ba839076f1aff0191207490fb7a98c6"},
+        {"name": "logs", "url": "https://github.com/krabka-io/krabka-o11y-demo/releases/download/m20-recovery-fadddcf/m20-observability-recovery-fadddcf.tar.gz", "sha256": "sha256:9a586958b30879b708431a460bed47ba7ba839076f1aff0191207490fb7a98c6"},
+        {"name": "metrics", "url": "https://github.com/krabka-io/krabka-o11y-demo/releases/download/m20-recovery-fadddcf/m20-observability-recovery-fadddcf.tar.gz", "sha256": "sha256:9a586958b30879b708431a460bed47ba7ba839076f1aff0191207490fb7a98c6"},
+        {"name": "profiles", "url": "https://github.com/krabka-io/krabka-o11y-demo/releases/download/m20-recovery-fadddcf/m20-observability-recovery-fadddcf.tar.gz", "sha256": "sha256:9a586958b30879b708431a460bed47ba7ba839076f1aff0191207490fb7a98c6"},
+        {"name": "traces", "url": "https://github.com/krabka-io/krabka-o11y-demo/releases/download/m20-recovery-fadddcf/m20-observability-recovery-fadddcf.tar.gz", "sha256": "sha256:9a586958b30879b708431a460bed47ba7ba839076f1aff0191207490fb7a98c6"}
+      ]
+    }
   ],
-  "report": {"url": "", "sha256": ""}
+  "report": {"url": "https://krabka-io.github.io/docs/qualification/", "sha256": "sha256:163c30311375a54eb616b8fdc16866f922aa33fdcc5a5f852fa5fa56cb3fa04d"}
 }
