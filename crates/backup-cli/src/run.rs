@@ -77,7 +77,7 @@ pub async fn capture_configured(
     archive: &ArchiveArgs,
 ) -> Result<String, BackupError> {
     let client_security = match bootstrap_server {
-        Some(bootstrap) => security.load(bootstrap).await?,
+        Some(_) => security.load().await?,
         None => None,
     };
     capture_secured(log_dir, bootstrap_server, client_security, signing, archive).await
@@ -530,7 +530,7 @@ pub async fn restore_offsets_configured(
     restore_offsets_secured(
         capture,
         bootstrap_server,
-        security.load(bootstrap_server).await?,
+        security.load().await?,
         dry_run,
         archive,
     )

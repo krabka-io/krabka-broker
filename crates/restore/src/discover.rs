@@ -353,7 +353,9 @@ pub async fn inventory(
         }
     }
 
-    if let Some(snapshot_path) = &args.archive.rlmm_snapshot {
+    if !args.archive.worm_key_id.is_empty() && args.archive.rlmm_snapshot.is_some() {
+        tracing::warn!("ignoring unsigned --rlmm-snapshot during authenticated restore");
+    } else if let Some(snapshot_path) = &args.archive.rlmm_snapshot {
         reconcile_with_snapshot(&mut partitions, args, snapshot_path)?;
     }
 

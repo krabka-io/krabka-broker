@@ -21,13 +21,13 @@ pub struct SecurityArgs {
 }
 
 impl SecurityArgs {
-    /// Build the shared client security policy for a bootstrap address.
+    /// Build the shared client security policy.
     ///
     /// # Errors
     ///
     /// Returns [`BackupError::Io`] when the file cannot be read and
     /// [`BackupError::InvalidArgument`] when its security properties conflict.
-    pub async fn load(&self, bootstrap: &str) -> Result<Option<ClientSecurity>, BackupError> {
+    pub async fn load(&self) -> Result<Option<ClientSecurity>, BackupError> {
         let Some(path) = &self.command_config else {
             return Ok(None);
         };
@@ -38,17 +38,7 @@ impl SecurityArgs {
             ))
         })?;
         let properties = parse_properties(&text)?;
-        security(&properties, bootstrap_host(bootstrap))
-    }
-}
-
-fn bootstrap_host(address: &str) -> &str {
-    let address = address.split(',').next().unwrap_or(address).trim();
-    match address.strip_prefix('[') {
-        Some(bracketed) => bracketed
-            .split_once(']')
-            .map_or(bracketed, |(host, _)| host),
-        None => address.rsplit_once(':').map_or(address, |(host, _)| host),
+        security(&properties)
     }
 }
 
@@ -132,10 +122,7 @@ fn unescape(value: &str) -> Result<String, BackupError> {
     Ok(unescaped)
 }
 
-fn security(
-    properties: &BTreeMap<String, String>,
-    bootstrap_host: &str,
-) -> Result<Option<ClientSecurity>, BackupError> {
+fn security(properties: &BTreeMap<String, String>) -> Result<Option<ClientSecurity>, BackupError> {
     let protocol = match properties
         .get("security.protocol")
         .map_or("PLAINTEXT", String::as_str)
@@ -162,7 +149,7 @@ fn security(
 
     let tls = protocol
         .requires_tls()
-        .then(|| tls_config(properties, bootstrap_host))
+        .then(|| tls_config(properties))
         .transpose()?;
     let sasl = protocol
         .requires_sasl()
@@ -176,10 +163,7 @@ fn security(
     }))
 }
 
-fn tls_config(
-    properties: &BTreeMap<String, String>,
-    bootstrap_host: &str,
-) -> Result<TlsConnectorConfig, BackupError> {
+fn tls_config(properties: &BTreeMap<String, String>) -> Result<TlsConnectorConfig, BackupError> {
     for key in ["ssl.truststore.type", "ssl.keystore.type"] {
         if let Some(kind) = properties.get(key)
             && kind != "PEM"
@@ -202,7 +186,7 @@ fn tls_config(
         server_name: properties
             .get("ssl.server.name")
             .cloned()
-            .unwrap_or_else(|| bootstrap_host.to_owned()),
+            .unwrap_or_default(),
         client_identity,
     })
 }
@@ -330,7 +314,7 @@ mod tests {
              sasl.jaas.config=x required username=backup password=not-logged;\n",
         )
         .expect("valid properties");
-        let policy = security(&properties, "127.0.0.1")
+        let policy = security(&properties)
             .expect("valid policy")
             .expect("secured policy");
 
@@ -355,7 +339,7 @@ mod tests {
              sasl.jaas.config=x required password=hunter2;\n",
         )
         .expect("valid properties");
-        let error = security(&properties, "broker")
+        let error = security(&properties)
             .expect_err("missing username must fail")
             .to_string();
         check!(!error.contains("hunter2"), "got: {error}");
@@ -368,7 +352,7 @@ mod tests {
             "security.protocol=SSL\nssl.truststore.type=JKS\nssl.truststore.location=a.jks\n",
         )
         .expect("valid properties");
-        let error = security(&properties, "broker")
+        let error = security(&properties)
             .expect_err("the shared client reads PEM, not JKS")
             .to_string();
         check!(error.contains("expected PEM"), "got: {error}");
@@ -381,7 +365,7 @@ mod tests {
             ("ssl.truststore.location", "/etc/krabka/ca.pem"),
         ] {
             let properties = BTreeMap::from([(property.into(), value.into())]);
-            let error = security(&properties, "broker")
+            let error = security(&properties)
                 .expect_err("PLAINTEXT must reject secured-client properties")
                 .to_string();
             check!(error.contains(property), "got: {error}");
@@ -389,15 +373,13 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_hostname_drives_default_tls_sni() {
+    fn tls_sni_defaults_to_each_connection_target() {
         let properties =
             parse_properties("security.protocol=SSL\nssl.truststore.location=/etc/krabka/ca.pem\n")
                 .expect("valid properties");
-        let policy = security(&properties, bootstrap_host("[2001:db8::1]:9093"))
+        let policy = security(&properties)
             .expect("valid policy")
             .expect("secured policy");
-        check!(policy.tls.expect("TLS policy").server_name == "2001:db8::1");
-
-        check!(bootstrap_host("broker-1:9093,broker-2:9093") == "broker-1");
+        check!(policy.tls.expect("TLS policy").server_name.is_empty());
     }
 }

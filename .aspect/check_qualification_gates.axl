@@ -463,7 +463,7 @@ done
 # Least privilege for the account whose secured coordinator path is captured.
 kafka source acls --add --allow-principal User:backup --operation DESCRIBE --cluster
 for topic in classic diskless; do
-  kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --topic "$topic"
+  kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --operation DESCRIBE_CONFIGS --topic "$topic"
 done
 kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --group dr-group
 kafka source acls --add --allow-principal User:backup --operation READ --operation WRITE --operation DESCRIBE --topic __diskless_wal_index

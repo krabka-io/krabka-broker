@@ -11,7 +11,7 @@ use krabka_log::{Log, LogConfig, name};
 use krabka_protocol::records::{RecordBatchBorrowed, validate_one_v2_batch};
 use krabka_remote_storage::{
     ObjectEntry, TopicIdPartition, TrustedManifestKeys,
-    diskless::{CAPTURE_HEAD_NAME, DisklessWalCapture, parse_wal_object},
+    diskless::{CAPTURE_HEAD_NAME, CapturedWalRange, DisklessWalCapture, parse_wal_object},
 };
 use object_store::path::Path as ObjectPath;
 
@@ -40,6 +40,26 @@ pub(super) fn add_partitions(
     args: &RestoreArgs,
 ) -> Result<(), RestoreError> {
     let mut seen = HashSet::new();
+    let mut topic_ids = HashMap::new();
+    let mut named_partitions = HashSet::new();
+    for existing in &inventory.partitions {
+        if topic_ids
+            .insert(
+                existing.partition.topic.clone(),
+                existing.partition.topic_id,
+            )
+            .is_some_and(|topic_id| topic_id != existing.partition.topic_id)
+        {
+            return Err(RestoreError::Integrity(format!(
+                "topic {} has multiple topic ids in the restore inputs",
+                existing.partition.topic
+            )));
+        }
+        named_partitions.insert((
+            existing.partition.topic.clone(),
+            existing.partition.partition,
+        ));
+    }
     for partition in &capture.partitions {
         if !args.selects_topic(&partition.topic) {
             continue;
@@ -50,6 +70,21 @@ pub(super) fn add_partitions(
                 partition.topic, partition.partition
             )));
         }
+        if topic_ids
+            .insert(partition.topic.clone(), partition.topic_id)
+            .is_some_and(|topic_id| topic_id != partition.topic_id)
+        {
+            return Err(RestoreError::Integrity(format!(
+                "topic {} has multiple topic ids in the restore inputs",
+                partition.topic
+            )));
+        }
+        if !named_partitions.insert((partition.topic.clone(), partition.partition)) {
+            return Err(RestoreError::Integrity(format!(
+                "{}-{} is both classic and diskless in the restore inputs",
+                partition.topic, partition.partition
+            )));
+        }
         if inventory.partitions.iter().any(|existing| {
             existing.partition.topic_id == partition.topic_id
                 && existing.partition.partition == partition.partition
@@ -57,6 +92,16 @@ pub(super) fn add_partitions(
             return Err(RestoreError::Integrity(format!(
                 "{}-{} is both classic and diskless in the restore inputs",
                 partition.topic, partition.partition
+            )));
+        }
+        if args.to_offset.iter().any(|bound| {
+            bound.partition.topic == partition.topic
+                && bound.partition.partition == partition.partition
+                && bound.last_offset.0 < partition.delete_floor
+        }) {
+            return Err(RestoreError::InvalidArgument(format!(
+                "--to-offset for {}-{} precedes diskless delete floor {}",
+                partition.topic, partition.partition, partition.delete_floor
             )));
         }
         inventory.partitions.push(PartitionInventory {
@@ -148,22 +193,7 @@ pub(super) async fn materialize(
             let object =
                 fetch_object(store, &mut objects, &range.object_key, authenticated).await?;
             object_names.insert(range.object_key.as_str());
-            let manifests = parse_wal_object(&object).map_err(|reason| {
-                RestoreError::Integrity(format!("{}: {reason}", range.object_key))
-            })?;
-            if !manifests.iter().any(|run| {
-                run.topic_id == range.entry.topic_id
-                    && run.partition == range.entry.partition
-                    && run.first_offset == range.entry.first_offset
-                    && run.last_offset == range.entry.last_offset
-                    && run.byte_start == range.entry.byte_start
-                    && run.byte_len == range.entry.byte_len
-            }) {
-                return Err(RestoreError::Integrity(format!(
-                    "{}: capture range does not exactly match a CKWL footer run",
-                    range.object_key
-                )));
-            }
+            validate_footer_range(&object, range)?;
             let start = usize::try_from(range.entry.byte_start)
                 .map_err(|_| RestoreError::Integrity("diskless WAL byte start overflow".into()))?;
             let len = usize::try_from(range.entry.byte_len)
@@ -316,6 +346,35 @@ pub(super) async fn materialize(
         partitions: reports,
         limitations: limitations(),
     })
+}
+
+fn validate_footer_range(object: &Bytes, range: &CapturedWalRange) -> Result<(), RestoreError> {
+    let manifests = parse_wal_object(object)
+        .map_err(|reason| RestoreError::Integrity(format!("{}: {reason}", range.object_key)))?;
+    if manifests.iter().any(|run| {
+        run.topic_id == range.entry.topic_id
+            && run.partition == range.entry.partition
+            && run.first_offset <= range.entry.first_offset
+            && run.last_offset >= range.entry.last_offset
+            && run.byte_start <= range.entry.byte_start
+            && run
+                .byte_start
+                .checked_add(u64::from(run.byte_len))
+                .zip(
+                    range
+                        .entry
+                        .byte_start
+                        .checked_add(u64::from(range.entry.byte_len)),
+                )
+                .is_some_and(|(run_end, range_end)| range_end <= run_end)
+    }) {
+        Ok(())
+    } else {
+        Err(RestoreError::Integrity(format!(
+            "{}: capture range is not contained in a CKWL footer run",
+            range.object_key
+        )))
+    }
 }
 
 fn limitations() -> Vec<String> {

@@ -299,3 +299,13 @@ fn decoded_capture_rejects_unordered_duplicate_and_false_cutoff_ranges() {
         check!(DisklessWalCapture::from_slice(&encoded).is_err());
     }
 }
+
+#[test]
+fn decoded_capture_rejects_topic_names_that_can_escape_the_target() {
+    for topic in ["/tmp/escape", "../escape", "orders/escape"] {
+        let mut capture = signable_capture();
+        topic.clone_into(&mut capture.partitions[0].topic);
+        let encoded = serde_json::to_vec(&capture).unwrap();
+        check!(DisklessWalCapture::from_slice(&encoded).is_err(), "{topic}");
+    }
+}

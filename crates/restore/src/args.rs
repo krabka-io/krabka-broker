@@ -108,9 +108,9 @@ pub struct ArchiveArgs {
 
     /// A broker's `<log.dir>/remote-log-metadata/snapshot`.
     ///
-    /// The snapshot is authoritative about segment lifecycle state. Without it
-    /// a segment the old cluster had marked for deletion is indistinguishable
-    /// from a live one.
+    /// The snapshot is authoritative about segment lifecycle state for an
+    /// unauthenticated restore. Authenticated restore ignores this unsigned
+    /// input so it cannot remove WORM-authenticated segments.
     #[arg(long, value_name = "PATH")]
     pub rlmm_snapshot: Option<PathBuf>,
 

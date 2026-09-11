@@ -4,7 +4,7 @@ use clap::Parser as _;
 use krabka_audit::FileEd25519Signer;
 use krabka_ids::Offset;
 use krabka_log::{Log, LogConfig};
-use krabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::{Record, RecordBatch, validate_one_v2_batch};
 use krabka_remote_storage::{
     ObjectEntry, Sha256Digest,
     diskless::{
@@ -192,23 +192,62 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
 }
 
 #[tokio::test]
-async fn diskless_restore_applies_offset_bounds_and_reports_the_written_cutoff() {
+async fn diskless_restore_rejects_an_offset_bound_below_the_delete_floor() {
     let archive = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
     let capture_path = archive.path().join("capture.json");
     let (capture, _) = fixture(archive.path(), true, false);
     std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
 
-    let report = restore(&bounded_args(archive.path(), target.path(), &capture_path))
+    let error = restore(&bounded_args(archive.path(), target.path(), &capture_path))
+        .await
+        .unwrap_err();
+    check!(matches!(error, RestoreError::InvalidArgument(_)));
+}
+
+#[tokio::test]
+async fn diskless_restore_accepts_complete_batch_subranges_of_a_footer_run() {
+    let archive = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let capture_path = archive.path().join("capture.json");
+    let (mut capture, _) = fixture(archive.path(), true, false);
+    let range = &mut capture.partitions[0].ranges[0].entry;
+    let object = std::fs::read(archive.path().join("diskless-wal/1/a.ckwl")).unwrap();
+    let start = usize::try_from(range.byte_start).unwrap();
+    let first_len = validate_one_v2_batch(&object[start..]).unwrap().total_len;
+    range.first_offset = 1;
+    range.byte_start += u64::try_from(first_len).unwrap();
+    range.byte_len -= u32::try_from(first_len).unwrap();
+    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+
+    let report = restore(&args(archive.path(), target.path(), &capture_path))
         .await
         .unwrap();
-    let partition = &report.diskless.as_ref().unwrap().partitions[0];
-    check!(partition.recovery_cutoff == 1);
-    check!(partition.batches == 1);
-    check!(partition.records == 1);
-    check!(partition.records_dropped == 0);
+    check!(report.diskless.as_ref().unwrap().partitions[0].records == 1);
     let log = Log::open(target.path().join("orders-0"), LogConfig::default()).unwrap();
-    check!(log.log_end_offset() == Offset(1));
+    check!(log.log_start_offset() == Offset(1));
+    check!(log.log_end_offset() == Offset(2));
+}
+
+#[tokio::test]
+async fn diskless_restore_rejects_one_topic_name_with_multiple_ids() {
+    let archive = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let capture_path = archive.path().join("capture.json");
+    let (mut capture, _) = fixture(archive.path(), false, false);
+    capture.partitions[0].ranges.clear();
+    capture.partitions[0].delete_floor = 0;
+    capture.partitions[0].recovery_cutoff = 0;
+    let mut conflicting = capture.partitions[0].clone();
+    conflicting.topic_id = Uuid::from_u128(45);
+    conflicting.partition = 1;
+    capture.partitions.push(conflicting);
+    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+
+    let error = restore(&args(archive.path(), target.path(), &capture_path))
+        .await
+        .unwrap_err();
+    check!(matches!(error, RestoreError::Integrity(_)));
 }
 
 #[tokio::test]
@@ -349,7 +388,10 @@ async fn dry_run_rejects_a_capture_that_selects_only_part_of_a_footer_run() {
     let mut args = args(archive.path(), target.path(), &capture_path);
     args.dry_run = true;
     let error = restore(&args).await.unwrap_err();
-    check!(matches!(error, RestoreError::Integrity(_)));
+    check!(matches!(
+        error,
+        RestoreError::Integrity(_) | RestoreError::Records(_)
+    ));
 }
 
 #[tokio::test]

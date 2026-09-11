@@ -272,7 +272,8 @@ impl DisklessWalCapture {
         }
         let mut partitions = std::collections::HashSet::new();
         for partition in &self.partitions {
-            if partition.partition < 0
+            if !valid_topic_name(&partition.topic)
+                || partition.partition < 0
                 || partition.delete_floor < 0
                 || partition.recovery_cutoff < partition.delete_floor
                 || !partitions.insert((partition.topic_id, partition.partition))
@@ -472,6 +473,16 @@ impl DisklessWalCapture {
         }
         Ok(claims)
     }
+}
+
+fn valid_topic_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 249
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 /// Reducer for committed keyed index events.
