@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use krabka_audit::FileEd25519Signer;
-use krabka_client_admin::{AdminClient, TopicMetadata};
+use krabka_client_admin::{AdminClient, TopicConfigOverrides, TopicMetadata};
 use krabka_client_core::{
     Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
     security::ClientSecurity,
@@ -210,16 +210,17 @@ async fn capture_diskless_index(
         .metadata(&[])
         .await
         .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    let names: std::collections::HashMap<_, _> = metadata
+    let topic_names = metadata
         .topics
-        .into_iter()
-        .filter_map(|topic| {
-            (topic.error.is_none())
-                .then_some(topic.topic_id)
-                .flatten()
-                .map(|id| (uuid::Uuid::from_bytes(id.into_bytes()), topic.name))
-        })
-        .collect();
+        .iter()
+        .filter(|topic| topic.name != TOPIC)
+        .map(|topic| topic.name.as_str())
+        .collect::<Vec<_>>();
+    let configs = admin
+        .describe_configs(&topic_names)
+        .await
+        .map_err(|error| BackupError::Cluster(format!("DescribeConfigs: {error}")))?;
+    let topics = diskless_topic_topology(&metadata, &configs, TOPIC)?;
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
     "krabka-backup-diskless-capture".clone_into(&mut config.client_id);
@@ -228,7 +229,7 @@ async fn capture_diskless_index(
     let log = KafkaMetadataEventLog::start(config)
         .await
         .map_err(|error| BackupError::Cluster(format!("diskless WAL index: {error}")))?;
-    let mut capture = crate::diskless::capture_projection(log.clone(), &names, now_ms())
+    let mut capture = crate::diskless::capture_projection(log.clone(), &topics, now_ms())
         .await
         .map_err(BackupError::Integrity)?;
     log.shutdown().await;
@@ -272,6 +273,50 @@ async fn capture_diskless_index(
             context: DISKLESS_WAL_INDEX.to_owned(),
             source,
         })
+}
+
+fn diskless_topic_topology(
+    metadata: &TopicMetadata,
+    configs: &[TopicConfigOverrides],
+    index_topic: &str,
+) -> Result<std::collections::HashMap<uuid::Uuid, (String, i32)>, BackupError> {
+    let configs = configs
+        .iter()
+        .map(|config| (config.topic.as_str(), &config.overrides))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut topics = std::collections::HashMap::new();
+    for topic in metadata
+        .topics
+        .iter()
+        .filter(|topic| topic.name != index_topic)
+    {
+        if let Some(error) = &topic.error {
+            return Err(BackupError::Cluster(format!(
+                "Metadata for `{}`: code={} ({})",
+                topic.name, error.code, error.name
+            )));
+        }
+        let config = configs.get(topic.name.as_str()).ok_or_else(|| {
+            BackupError::Cluster(format!(
+                "DescribeConfigs omitted metadata topic `{}`",
+                topic.name
+            ))
+        })?;
+        if config
+            .get("krabka.diskless")
+            .is_none_or(|value| value != "true")
+        {
+            continue;
+        }
+        let topic_id = topic.topic_id.ok_or_else(|| {
+            BackupError::Cluster(format!("diskless topic `{}` has no topic id", topic.name))
+        })?;
+        topics.insert(
+            uuid::Uuid::from_bytes(topic_id.into_bytes()),
+            (topic.name.clone(), topic.partition_count),
+        );
+    }
+    Ok(topics)
 }
 
 fn diskless_index_present(metadata: &TopicMetadata, name: &str) -> Result<bool, BackupError> {
@@ -346,6 +391,32 @@ mod diskless_tests {
             .is_err()
         );
         check!(diskless_index_present(&TopicMetadata::default(), "__diskless_wal_index").is_err());
+    }
+
+    #[test]
+    fn diskless_topology_keeps_every_partition_including_empty_ones() {
+        let metadata = TopicMetadata {
+            topics: vec![TopicMetadataEntry {
+                name: "orders".into(),
+                topic_id: Some(uuid::Uuid::from_u128(7)),
+                partition_count: 3,
+                replication_factor: 1,
+                error: None,
+            }],
+            ..Default::default()
+        };
+        let configs = vec![TopicConfigOverrides {
+            topic: "orders".into(),
+            overrides: BTreeMap::from([("krabka.diskless".into(), "true".into())]),
+        }];
+
+        check!(
+            diskless_topic_topology(&metadata, &configs, "__diskless_wal_index").unwrap()
+                == std::collections::HashMap::from([(
+                    uuid::Uuid::from_u128(7),
+                    ("orders".to_owned(), 3)
+                )])
+        );
     }
 }
 

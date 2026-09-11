@@ -10,7 +10,7 @@ use krabka_ids::Offset;
 use krabka_log::{Log, LogConfig, name};
 use krabka_protocol::records::{RecordBatchBorrowed, validate_one_v2_batch};
 use krabka_remote_storage::{
-    ObjectEntry, Sha256Digest, TopicIdPartition, TrustedManifestKeys,
+    ObjectEntry, TopicIdPartition, TrustedManifestKeys,
     diskless::{CAPTURE_HEAD_NAME, DisklessWalCapture, parse_wal_object},
 };
 use object_store::path::Path as ObjectPath;
@@ -21,6 +21,7 @@ use crate::{
     bound::Predicates,
     materialize::prepare::{BatchTally, PreparedBatch, prepare_batch},
     report::{DisklessPartitionReport, DisklessRestoreReport},
+    verify::{MAX_LOG_BYTES, fetch_capped},
 };
 
 pub(super) async fn load(path: Option<&Path>) -> Result<Option<DisklessWalCapture>, RestoreError> {
@@ -334,20 +335,13 @@ async fn fetch_object(
     if let Some(bytes) = objects.get(key) {
         return Ok(bytes.clone());
     }
-    let bytes = store.ops().get(&ObjectPath::from(key)).await?;
-    if let Some(authenticated) = authenticated {
-        let expected = authenticated
-            .get(key)
-            .ok_or_else(|| RestoreError::Authenticity {
-                reason: format!("diskless WAL object `{key}` is not named by the signed capture"),
-            })?;
-        if expected.size_bytes != bytes.len() as u64 || expected.sha256 != Sha256Digest::of(&bytes)
-        {
-            return Err(RestoreError::Authenticity {
-                reason: format!("diskless WAL object `{key}` changed after authentication"),
-            });
-        }
-    }
+    let bytes = fetch_capped(
+        store.ops(),
+        &ObjectPath::from(key),
+        MAX_LOG_BYTES,
+        authenticated,
+    )
+    .await?;
     objects.insert(key.to_owned(), bytes.clone());
     Ok(bytes)
 }

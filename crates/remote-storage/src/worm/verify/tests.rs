@@ -3,7 +3,7 @@
 //! an empty archive produce.
 
 use assert2::check;
-use object_store::memory::InMemory;
+use object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path};
 
 use super::*;
 use crate::worm::{
@@ -27,6 +27,29 @@ async fn an_exact_externally_authenticated_object_is_not_an_orphan() {
         .await
         .unwrap();
     check!(report.ok());
+}
+
+#[tokio::test]
+async fn backup_capture_namespace_is_not_a_classic_partition() {
+    let archive = Archive::build(&[1]).await;
+    archive
+        .store
+        .put(
+            &Path::from("archive/restore-inputs/0001/manifest.json"),
+            PutPayload::from_static(b"capture"),
+        )
+        .await
+        .unwrap();
+
+    let report = verify_archive(
+        &archive.store,
+        &VerifyRequest::default(),
+        &archive.trusted(),
+    )
+    .await
+    .unwrap();
+    check!(report.ok());
+    check!(report.partitions.len() == 1);
 }
 
 /// The kind of break a row expects, matched against the reason text the

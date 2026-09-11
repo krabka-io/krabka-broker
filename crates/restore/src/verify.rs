@@ -83,7 +83,7 @@ pub struct VerifiedSegment {
 /// Kafka's default `segment.bytes` is 1 GiB, and an operator can raise it, so
 /// this cap is a generous multiple of that default rather than the exact
 /// configured value, which this offline tool never sees.
-const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub(super) const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Guard for the sparse `.index` and `.timeindex` sidecars. An entry lands
 /// only every `index.interval.bytes` (4 KiB by default), so even a segment at
@@ -259,13 +259,29 @@ fn require_artifact<'a>(
 /// reimplemented here because that helper takes the concrete
 /// `Arc<dyn object_store::ObjectStore>` rather than the [`ObjectOps`] surface
 /// [`ArchiveStore`] exposes.
-async fn fetch_capped(
+pub(super) async fn fetch_capped(
     ops: &dyn ObjectOps,
     key: &Path,
     max_bytes: u64,
     authenticated: Option<&BTreeMap<String, ObjectEntry>>,
 ) -> Result<Bytes, RestoreError> {
+    let expected = authenticated.and_then(|objects| objects.get(&key.to_string()));
+    if authenticated.is_some() && expected.is_none() {
+        return Err(RestoreError::Authenticity {
+            reason: format!("object `{key}` is not named by an authenticated manifest"),
+        });
+    }
     let meta = ops.head(key).await?;
+    if let Some(expected) = expected
+        && meta.size != expected.size_bytes
+    {
+        return Err(RestoreError::Authenticity {
+            reason: format!(
+                "object `{key}` changed after manifest verification: expected {} bytes, found {} bytes",
+                expected.size_bytes, meta.size
+            ),
+        });
+    }
     if meta.size > max_bytes {
         return Err(ObjectStoreError::TooLarge {
             key: key.clone(),
@@ -275,19 +291,13 @@ async fn fetch_capped(
         .into());
     }
     let bytes = ops.get(key).await?;
-    if let Some(objects) = authenticated {
-        let name = key.to_string();
-        let Some(expected) = objects.get(&name) else {
-            return Err(RestoreError::Authenticity {
-                reason: format!("object `{name}` is not named by an authenticated manifest"),
-            });
-        };
+    if let Some(expected) = expected {
         let actual_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         let actual_digest = Sha256Digest::of(&bytes);
         if expected.size_bytes != actual_size || expected.sha256 != actual_digest {
             return Err(RestoreError::Authenticity {
                 reason: format!(
-                    "object `{name}` changed after manifest verification: expected {} bytes with SHA-256 {}, fetched {actual_size} bytes with SHA-256 {actual_digest}",
+                    "object `{key}` changed after manifest verification: expected {} bytes with SHA-256 {}, fetched {actual_size} bytes with SHA-256 {actual_digest}",
                     expected.size_bytes, expected.sha256
                 ),
             });

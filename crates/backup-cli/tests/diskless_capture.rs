@@ -31,7 +31,7 @@ async fn capture_replays_only_committed_index_values_before_its_fences() {
 
     let capture = capture_projection(
         log,
-        &HashMap::from([(Uuid::from_u128(9), "orders".to_owned())]),
+        &HashMap::from([(Uuid::from_u128(9), ("orders".to_owned(), 1))]),
         42,
     )
     .await

@@ -269,6 +269,21 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     .unwrap();
     check!(report.authentication.unwrap().chain_heads[CAPTURE_HEAD_NAME] == head);
 
+    let target = tempfile::tempdir().unwrap();
+    let mut missing_classic = trusted_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &public_path,
+        &head,
+    );
+    missing_classic.worm_expect_head.push(format!(
+        "orders-0-AAAAAAAAAAAAAAAAAAAAAA={}",
+        "00".repeat(32)
+    ));
+    let error = restore(&missing_classic).await.unwrap_err();
+    check!(matches!(error, RestoreError::Authenticity { .. }));
+
     for (name, changed, expected_head, key_bytes) in [
         (
             "changed state",

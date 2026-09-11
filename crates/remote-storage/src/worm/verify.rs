@@ -63,6 +63,7 @@ pub use self::{
         VerifyBreak,
     },
 };
+use crate::storage_manager::parse_partition_dir_name;
 use crate::worm::{
     error::WormError,
     manifest::{ChainHead, ObjectEntry},
@@ -250,6 +251,12 @@ async fn verify_archive_inner(
     trusted: &TrustedManifestKeys,
 ) -> Result<(ArchiveVerifyReport, BTreeMap<String, ObjectEntry>), WormError> {
     let mut listing = list_archive(store, request.prefix.as_deref()).await?;
+    listing.retain(|dir, _| {
+        dir.rsplit('/')
+            .next()
+            .and_then(parse_partition_dir_name)
+            .is_some()
+    });
     for entries in listing.values_mut() {
         entries.retain(|key, _| !request.externally_authenticated_objects.contains(key));
     }

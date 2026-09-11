@@ -172,7 +172,12 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     let has_classic = archive
         .partitions
         .iter()
-        .any(|partition| !partition.segments.is_empty());
+        .any(|partition| !partition.segments.is_empty())
+        || args.worm_expect_head.iter().any(|value| {
+            value
+                .split_once('=')
+                .is_some_and(|(name, _)| name != CAPTURE_HEAD_NAME)
+        });
     let diskless_authentication = match (&diskless_capture, &trusted) {
         (Some(capture), Some((trusted, count))) => {
             let (claims, head) = diskless::authenticate(capture, trusted, args)?;

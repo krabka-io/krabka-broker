@@ -143,7 +143,8 @@ permissions because it contains the SASL password and private-key path.
 
 The backup principal needs `Describe` on every captured group and `Read` on its
 topics. A diskless capture also needs `Read`, `Write`, and `Describe` on
-`__diskless_wal_index`. Restoring offsets needs `Describe` and `Read` on each
+`__diskless_wal_index` plus `DescribeConfigs` on the captured topics so empty
+diskless partitions remain in the recovery topology. Restoring offsets needs `Describe` and `Read` on each
 captured group plus `Describe` and `Read` on each captured topic. Grant those
 operations only on the group and topic prefixes covered by the backup policy.
 

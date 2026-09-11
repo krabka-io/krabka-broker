@@ -599,15 +599,27 @@ impl WalCaptureProjection {
     /// Returns an error for unknown topic ids or inconsistent live ranges.
     pub fn capture<S: std::hash::BuildHasher>(
         &self,
-        topic_names: &HashMap<Uuid, String, S>,
+        topics: &HashMap<Uuid, (String, i32), S>,
         source_cutoffs: Vec<i64>,
         captured_at_ms: u64,
     ) -> Result<DisklessWalCapture, String> {
         let mut grouped: BTreeMap<(String, Uuid, i32), Vec<CapturedWalRange>> = BTreeMap::new();
+        for (topic_id, (topic, partition_count)) in topics {
+            if *partition_count < 0 {
+                return Err(format!(
+                    "negative partition count for diskless topic {topic}"
+                ));
+            }
+            for partition in 0..*partition_count {
+                grouped
+                    .entry((topic.clone(), *topic_id, partition))
+                    .or_default();
+            }
+        }
         for range in self.ranges.values() {
-            let topic = topic_names.get(&range.entry.topic_id).ok_or_else(|| {
+            let (topic, _) = topics.get(&range.entry.topic_id).ok_or_else(|| {
                 format!(
-                    "no live topic names diskless WAL topic id {}",
+                    "no live diskless topic names WAL topic id {}",
                     range.entry.topic_id
                 )
             })?;
@@ -617,9 +629,9 @@ impl WalCaptureProjection {
                 .push(range.clone());
         }
         for (topic_id, partition) in self.floors.keys() {
-            let topic = topic_names
+            let (topic, _) = topics
                 .get(topic_id)
-                .ok_or_else(|| format!("no live topic names diskless WAL topic id {topic_id}"))?;
+                .ok_or_else(|| format!("no live diskless topic names WAL topic id {topic_id}"))?;
             grouped
                 .entry((topic.clone(), *topic_id, *partition))
                 .or_default();

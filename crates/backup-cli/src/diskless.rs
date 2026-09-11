@@ -18,7 +18,7 @@ use uuid::Uuid;
 /// Returns an error when the index cannot be fenced, replayed, decoded, or projected.
 pub async fn capture_projection<S: std::hash::BuildHasher>(
     log: Arc<dyn MetadataEventLog>,
-    topic_names: &HashMap<Uuid, String, S>,
+    topics: &HashMap<Uuid, (String, i32), S>,
     captured_at_ms: u64,
 ) -> Result<DisklessWalCapture, String> {
     let starts = (0..log.partition_count())
@@ -71,5 +71,5 @@ pub async fn capture_projection<S: std::hash::BuildHasher>(
     .await
     .map_err(|_| "diskless WAL index capture timed out".to_owned())??;
     projection.finish_legacy_replay();
-    projection.capture(topic_names, cutoffs, captured_at_ms)
+    projection.capture(topics, cutoffs, captured_at_ms)
 }

@@ -76,7 +76,7 @@ fn retries_tombstones_and_delete_floors_capture_only_committed_live_state() {
 
     let capture = projection
         .capture(
-            &HashMap::from([(Uuid::from_u128(7), "orders".to_owned())]),
+            &HashMap::from([(Uuid::from_u128(7), ("orders".to_owned(), 1))]),
             vec![12],
             1_700_000_000_000,
         )
@@ -119,7 +119,7 @@ fn keyed_values_and_tombstones_dominate_legacy_replay() {
 
     let capture = projection
         .capture(
-            &HashMap::from([(Uuid::from_u128(7), "orders".to_owned())]),
+            &HashMap::from([(Uuid::from_u128(7), ("orders".to_owned(), 1))]),
             vec![12],
             0,
         )
@@ -141,7 +141,7 @@ fn distinct_overlapping_ranges_fail_closed() {
             .unwrap();
     }
     let result = projection.capture(
-        &HashMap::from([(Uuid::from_u128(7), "orders".to_owned())]),
+        &HashMap::from([(Uuid::from_u128(7), ("orders".to_owned(), 1))]),
         vec![2],
         0,
     );
@@ -167,7 +167,7 @@ fn adjacent_batches_from_one_footer_run_are_captured_as_one_range() {
     }
     let capture = projection
         .capture(
-            &HashMap::from([(Uuid::from_u128(7), "orders".to_owned())]),
+            &HashMap::from([(Uuid::from_u128(7), ("orders".to_owned(), 1))]),
             vec![2],
             0,
         )
@@ -176,6 +176,33 @@ fn adjacent_batches_from_one_footer_run_are_captured_as_one_range() {
     check!(capture.partitions[0].ranges[0].entry.first_offset == 0);
     check!(capture.partitions[0].ranges[0].entry.last_offset == 1);
     check!(capture.partitions[0].ranges[0].entry.byte_len == 50);
+}
+
+#[test]
+fn capture_preserves_empty_diskless_partitions() {
+    let capture = WalCaptureProjection::default()
+        .capture(
+            &HashMap::from([(Uuid::from_u128(7), ("orders".to_owned(), 3))]),
+            vec![0],
+            0,
+        )
+        .unwrap();
+
+    check!(capture.partitions.len() == 3);
+    check!(
+        capture
+            .partitions
+            .iter()
+            .all(|partition| partition.ranges.is_empty())
+    );
+    check!(
+        capture
+            .partitions
+            .iter()
+            .map(|partition| partition.partition)
+            .collect::<Vec<_>>()
+            == vec![0, 1, 2]
+    );
 }
 
 fn signable_capture() -> DisklessWalCapture {

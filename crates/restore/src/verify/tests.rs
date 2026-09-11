@@ -44,6 +44,35 @@ fn write_object(root: &std::path::Path, relative: &str, bytes: &[u8]) -> Archive
     }
 }
 
+#[tokio::test]
+async fn authenticated_size_mismatch_is_rejected_from_head_metadata() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = archive_at(dir.path());
+    let object = write_object(dir.path(), "wal.ckwl", b"oversized");
+    let authenticated = BTreeMap::from([(
+        object.key.to_string(),
+        ObjectEntry {
+            suffix: ".ckwl".into(),
+            key: object.key.to_string(),
+            size_bytes: 1,
+            sha256: Sha256Digest::of(b"x"),
+            e_tag: None,
+            version_id: None,
+            create_precondition: false,
+        },
+    )]);
+
+    let error = fetch_capped(
+        store.ops(),
+        &object.key,
+        MAX_LOG_BYTES,
+        Some(&authenticated),
+    )
+    .await
+    .expect_err("signed size mismatch");
+    check!(matches!(error, RestoreError::Authenticity { .. }));
+}
+
 fn record(offset_delta: i32, timestamp_delta: i64) -> Record {
     Record {
         offset_delta,
