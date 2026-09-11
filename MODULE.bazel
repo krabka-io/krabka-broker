@@ -128,7 +128,7 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         # //bazel/images:kcat_librdkafka_2x, built here from an apko lock,
         # because no published image carries a CLI on that line.
         # jvm_acceptance_tiered's cases back the remote tier with MinIO.
-        ("minio", "mirror.gcr.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z", "sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"),
+        ("minio", "quay.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z", "sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"),
         ("minio_mc", "mirror.gcr.io", "minio/mc", "RELEASE.2025-08-13T08-35-41Z", "sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780"),
     ]
 ]
