@@ -100,6 +100,11 @@ pub async fn format_target(
 
 /// Seed the restored broker's local RLMM cache while resetting its Kafka
 /// cursors for the new `__remote_log_metadata` topic.
+///
+/// # Errors
+/// Returns [`RestoreError`] when the source snapshot cannot be read, its
+/// authenticated chain tips cannot be established, or the target snapshot
+/// cannot be written.
 pub fn seed_rlmm_snapshot(
     args: &RestoreArgs,
     authenticated: Option<&ArchiveVerifyReport>,
