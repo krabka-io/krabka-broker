@@ -424,7 +424,16 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     avro.register_subject("avro");
     json.register_subject("json");
     protobuf.register_subject("protobuf");
-    cache.prewarm().await.unwrap();
+    let prewarm_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        match cache.prewarm().await {
+            Ok(()) => break,
+            Err(error) => {
+                assert!(tokio::time::Instant::now() < prewarm_deadline, "{error}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
     let avro_payload = avro.serialize("avro", &Order { id: "a".into() }).unwrap();
     let json_payload = json.serialize("json", &JsonOrder { id: 1 }).unwrap();
     let protobuf_payload = protobuf.serialize("protobuf", &ProtoOrder).unwrap();
@@ -516,7 +525,16 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         ("protobuf", protobuf_topic, protobuf_payload),
         ("referenced", referenced_topic, referenced_payload.clone()),
     ] {
-        let response = produce_when_ready(&leader_client, topic, topic_id, Some(value)).await;
+        let topic_leader_id = cluster[0]
+            .0
+            .partition_leader_for_test(topic, 0)
+            .expect("topic leader");
+        let topic_leader = cluster
+            .iter()
+            .find(|(broker, _, _)| broker.node_id() == topic_leader_id)
+            .unwrap();
+        let topic_client = client(&topic_leader.0.listen_addr().to_string()).await;
+        let response = produce_when_ready(&topic_client, topic, topic_id, Some(value)).await;
         check!(response.error_code == 0, "{topic}: {response:?}");
     }
 
@@ -530,8 +548,17 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
     )
     .await;
     check!(warm.error_code == 0, "{warm:?}");
+    let control_leader_id = cluster[0]
+        .0
+        .partition_leader_for_test("control", 0)
+        .expect("control leader");
+    let control_leader = cluster
+        .iter()
+        .find(|(broker, _, _)| broker.node_id() == control_leader_id)
+        .unwrap();
+    let control_client = client(&control_leader.0.listen_addr().to_string()).await;
     let control = produce_when_ready(
-        &leader_client,
+        &control_client,
         "control",
         control_topic,
         Some(Bytes::from_static(b"unframed-control")),
@@ -573,15 +600,6 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         .await
             == vec![Some(avro_payload.clone()), Some(avro_payload), None,]
     );
-    let control_leader_id = cluster[0]
-        .0
-        .partition_leader_for_test("control", 0)
-        .expect("control leader");
-    let control_leader = cluster
-        .iter()
-        .find(|(broker, _, _)| broker.node_id() == control_leader_id)
-        .unwrap();
-    let control_client = client(&control_leader.0.listen_addr().to_string()).await;
     check!(
         fetch_values(
             &control_leader.0,
