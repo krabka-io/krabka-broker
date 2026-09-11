@@ -143,7 +143,7 @@ A CRC proves that bytes did not rot. It does not prove that an attacker did not 
 
 The archive answers that separately. `krabka-remote-storage`'s WORM mode signs a per-segment manifest and hash-chains it per partition. Trusted-key restore reuses that verifier in deep mode, rejects unsigned, untrusted, broken, restarted, missing, or orphaned evidence, and requires an independently retained exact head for every chain. Each object is hashed again when restore consumes it, closing the replacement window between verification and materialization. Key rotation is a repeated trusted-key pair, not a relaxed signature policy.
 
-A signed diskless capture uses the same manifest primitives for a synthetic `diskless-capture` boundary. Its signature binds the exact projection state and a size and SHA-256 claim for every referenced absolute WAL object. A separate pinned head prevents a valid older capture from being substituted. Without trusted keys the original CRC-only integrity mode remains available and is reported without authenticated coverage.
+A signed diskless capture uses the same manifest primitives for a synthetic `diskless-capture` boundary. Its signature binds the exact projection state, the controller metadata checkpoint's SHA-256 when one was captured, and a size and SHA-256 claim for every referenced absolute WAL object. Authenticated restore rejects an unsigned or mismatched `--metadata-snapshot`. A separate pinned head prevents a valid older capture from being substituted. Without trusted keys the original CRC-only integrity mode remains available and is reported without authenticated coverage.
 
 ### Offsets Are the Contract
 

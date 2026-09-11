@@ -93,6 +93,7 @@ fn fixture_with_second_base(
                 },
             }],
         }],
+        metadata_snapshot_sha256: None,
         authentication: None,
     };
     (capture, topic_id)
@@ -206,6 +207,20 @@ async fn diskless_restore_rejects_an_offset_bound_below_the_delete_floor() {
 }
 
 #[tokio::test]
+async fn diskless_capture_that_selects_nothing_is_an_empty_archive() {
+    let archive = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let capture_path = archive.path().join("capture.json");
+    let (capture, _) = fixture(archive.path(), false, false);
+    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    let mut args = args(archive.path(), target.path(), &capture_path);
+    args.topic = vec!["payments".to_owned()];
+
+    let error = restore(&args).await.unwrap_err();
+    check!(matches!(error, RestoreError::EmptyArchive { .. }));
+}
+
+#[tokio::test]
 async fn diskless_restore_accepts_complete_batch_subranges_of_a_footer_run() {
     let archive = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
@@ -274,6 +289,7 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     let capture_path = archive.path().join("capture.json");
     let public_path = archive.path().join("capture.pub");
     let (mut capture, _) = fixture(archive.path(), true, false);
+    capture.metadata_snapshot_sha256 = Some(Sha256Digest::of(b"trusted metadata"));
     let wal_key = capture.partitions[0].ranges[0].object_key.clone();
     let wal = std::fs::read(archive.path().join(&wal_key)).unwrap();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
@@ -307,6 +323,20 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     .await
     .unwrap();
     check!(report.authentication.unwrap().chain_heads[CAPTURE_HEAD_NAME] == head);
+
+    let target = tempfile::tempdir().unwrap();
+    let metadata_path = archive.path().join("tampered-metadata.checkpoint");
+    std::fs::write(&metadata_path, b"tampered metadata").unwrap();
+    let mut tampered_metadata = trusted_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &public_path,
+        &head,
+    );
+    tampered_metadata.archive.metadata_snapshot = Some(metadata_path);
+    let error = restore(&tampered_metadata).await.unwrap_err();
+    check!(matches!(error, RestoreError::Authenticity { .. }));
 
     let target = tempfile::tempdir().unwrap();
     let mut missing_classic = trusted_args(

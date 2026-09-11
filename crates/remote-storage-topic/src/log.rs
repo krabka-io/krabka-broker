@@ -130,6 +130,14 @@ pub trait MetadataEventLog: Send + Sync {
         assignment: Vec<PartitionStart>,
     ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>);
 
+    /// Earliest retained offset for each partition, indexed by partition.
+    ///
+    /// Append-only implementations retain offset zero. Compacted transports
+    /// override this so a replay does not wait forever on deleted offsets.
+    async fn low_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+        Ok((0..self.partition_count()).map(|_| 0).collect())
+    }
+
     /// One past the highest written offset for each partition,
     /// indexed by partition.
     ///

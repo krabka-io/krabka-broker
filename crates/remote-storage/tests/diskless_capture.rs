@@ -221,6 +221,7 @@ fn signable_capture() -> DisklessWalCapture {
                 entry: entry(0, 0),
             }],
         }],
+        metadata_snapshot_sha256: None,
         authentication: None,
     }
 }
@@ -298,6 +299,18 @@ fn decoded_capture_rejects_unordered_duplicate_and_false_cutoff_ranges() {
         let encoded = serde_json::to_vec(&capture).unwrap();
         check!(DisklessWalCapture::from_slice(&encoded).is_err());
     }
+}
+
+#[test]
+fn decoded_capture_rejects_a_gap_in_the_live_range() {
+    let mut capture = signable_capture();
+    capture.partitions[0].delete_floor = 1;
+    capture.partitions[0].ranges[0].entry.first_offset = 2;
+    capture.partitions[0].ranges[0].entry.last_offset = 2;
+    capture.partitions[0].recovery_cutoff = 3;
+
+    let error = DisklessWalCapture::from_slice(&serde_json::to_vec(&capture).unwrap()).unwrap_err();
+    check!(error.contains("gap at 1"), "{error}");
 }
 
 #[test]

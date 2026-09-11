@@ -514,12 +514,19 @@ negative_capture invalid-credentials bad.properties
 negative_capture invalid-certificate wrong-ca.properties
 negative_capture denied-acl denied.properties
 
-# Wait for both classic segment manifests and diskless WAL objects to settle.
+# Wait until the archive covers the classic recovery boundary and has a
+# diskless WAL object. Producer batches may coalesce, so manifest count is not
+# an offset boundary.
 for attempt in $(seq 1 120); do
   listing=$(docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
     "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc find local/$bucket")
-  classic_manifests=$(grep 'classic-0-' <<<"$listing" | grep -c '\.manifest$' || true)
-  if [ "$classic_manifests" -ge 201 ] && grep -q 'diskless' <<<"$listing"; then break; fi
+  archive_status=$(AWS_ACCESS_KEY_ID=$access AWS_SECRET_ACCESS_KEY=$secret AWS_REGION=us-east-1 \
+    docker run --rm --network "$network" -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION \
+      -v "$work/worm:/worm:ro" --entrypoint /usr/bin/krabka-worm-verify "$broker_image" verify \
+      --bucket "$bucket" --region us-east-1 --endpoint "http://$scope-minio:9000" --allow-http \
+      --prefix "$data_prefix" --key-id qualification-worm --public-key /worm/signing.pub 2>/dev/null || true)
+  if awk '/classic-0-/ && /offsets/ {split($0,a,"offsets "); split(a[2],b,","); split(b[1],c,/\.\./); if (c[2] >= 200) ready=1} END {exit !ready}' <<<"$archive_status" && \
+    grep -q 'diskless-wal' <<<"$listing"; then break; fi
   test "$attempt" -lt 120
   sleep 2
 done
@@ -630,6 +637,11 @@ controller_quorum_voters = ["1@$scope-restored-1:9093"]
 bootstrap_servers = ["$scope-restored-1:9093"]
 inter_broker_listener_name = "INTERNAL"
 controller_listener_protocol = "Plaintext"
+remote_log_manager_interval = "1s"
+diskless_wal_flush_interval = "50ms"
+diskless_wal_flush_max_size = "1KiB"
+diskless_wal_local_replica_count = 1
+diskless_wal_trim_safety_lag = 0
 [[listeners]]
 name = "INTERNAL"
 bind_addr = "0.0.0.0:9092"
@@ -648,12 +660,29 @@ enabled_mechanisms = ["SCRAM-SHA-512"]
 [authorization]
 type = "simple"
 super_users = ["admin"]
+[remote_storage.s3]
+bucket = "$bucket"
+region = "us-east-1"
+prefix = "$data_prefix"
+endpoint = "http://$scope-minio:9000"
+access_key_id = "$access"
+secret_access_key = "$secret"
+allow_http = true
+[remote_storage.kafka_metadata]
+bootstrap = "$scope-restored-1:9092"
+num_partitions = 1
+replication = 1
+snapshot_interval = "1s"
+[remote_storage.worm]
+signing_key_path = "/etc/krabka/worm/signing.pk8"
+signing_key_id = "qualification-worm"
 [process]
 roles = ["controller", "broker"]
 EOF
 chmod -R a+rX "$work/restored-node1"
 docker run -d --name "$scope-restored-1" --network "$network" \
   -v "$work/restored-node1:/var/lib/krabka" -v "$work/tls:/etc/krabka/tls:ro" \
+  -v "$work/worm:/etc/krabka/worm:ro" \
   "$broker_image" --broker-id 1 --config-file /var/lib/krabka/broker.toml
 for attempt in $(seq 1 90); do
   if kafka restored topics --list; then break; fi

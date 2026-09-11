@@ -238,6 +238,9 @@ pub struct DisklessWalCapture {
     pub captured_at_ms: u64,
     pub source_cutoffs: Vec<i64>,
     pub partitions: Vec<DisklessPartitionCapture>,
+    /// Digest of the controller checkpoint captured beside this boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_snapshot_sha256: Option<Sha256Digest>,
     /// Optional signed WORM boundary covering this capture and its WAL objects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<SegmentManifest>,
@@ -284,6 +287,7 @@ impl DisklessWalCapture {
                 ));
             }
             let mut previous_last = None;
+            let mut covered_through = partition.delete_floor;
             for range in &partition.ranges {
                 if range.object_key.is_empty()
                     || range.object_key == CAPTURE_STATE_KEY
@@ -298,6 +302,19 @@ impl DisklessWalCapture {
                         "invalid or unordered diskless WAL range for {}-{}",
                         partition.topic, partition.partition
                     ));
+                }
+                if range.entry.last_offset >= partition.delete_floor {
+                    if range.entry.first_offset > covered_through {
+                        return Err(format!(
+                            "diskless WAL ranges for {}-{} have a gap at {covered_through}",
+                            partition.topic, partition.partition
+                        ));
+                    }
+                    covered_through = range
+                        .entry
+                        .last_offset
+                        .checked_add(1)
+                        .ok_or_else(|| "diskless WAL recovery cutoff overflow".to_owned())?;
                 }
                 previous_last = Some(range.entry.last_offset);
             }
@@ -715,6 +732,7 @@ impl WalCaptureProjection {
             captured_at_ms,
             source_cutoffs,
             partitions,
+            metadata_snapshot_sha256: None,
             authentication: None,
         })
     }

@@ -94,6 +94,7 @@ async fn capture_secured(
     let id = capture_id(now_ms());
     let mut artifacts: Vec<Artifact> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
+    let mut metadata_snapshot_sha256 = None;
 
     if let Some(log_dir) = log_dir {
         let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
@@ -119,6 +120,7 @@ async fn capture_secured(
         match newest_metadata_checkpoint(log_dir) {
             Some(path) => {
                 let bytes = tokio::fs::read(&path).await?;
+                metadata_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
                 artifacts.push(
                     upload(
                         &store,
@@ -144,8 +146,14 @@ async fn capture_secured(
             source,
         })?;
         artifacts.push(upload(&store, &id, GROUP_OFFSETS, bootstrap, bytes).await?);
-        if let Some(bytes) =
-            capture_diskless_index(&store, bootstrap, security.clone(), signing).await?
+        if let Some(bytes) = capture_diskless_index(
+            &store,
+            bootstrap,
+            security.clone(),
+            signing,
+            metadata_snapshot_sha256,
+        )
+        .await?
         {
             artifacts.push(upload(&store, &id, DISKLESS_WAL_INDEX, bootstrap, bytes).await?);
         }
@@ -196,6 +204,7 @@ async fn capture_diskless_index(
     bootstrap: &str,
     security: Option<ClientSecurity>,
     signing: &CaptureSigningArgs,
+    metadata_snapshot_sha256: Option<Sha256Digest>,
 ) -> Result<Option<Vec<u8>>, BackupError> {
     const TOPIC: &str = "__diskless_wal_index";
     let mut admin = connect_admin(bootstrap, security.clone()).await?;
@@ -232,6 +241,7 @@ async fn capture_diskless_index(
     let mut capture = crate::diskless::capture_projection(log.clone(), &topics, now_ms())
         .await
         .map_err(BackupError::Integrity)?;
+    capture.metadata_snapshot_sha256 = metadata_snapshot_sha256;
     log.shutdown().await;
     if let (Some(key_id), Some(key_path)) = (
         signing.worm_signing_key_id.as_ref(),

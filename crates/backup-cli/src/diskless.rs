@@ -21,12 +21,20 @@ pub async fn capture_projection<S: std::hash::BuildHasher>(
     topics: &HashMap<Uuid, (String, i32), S>,
     captured_at_ms: u64,
 ) -> Result<DisklessWalCapture, String> {
-    let starts = (0..log.partition_count())
-        .map(|partition| PartitionStart {
-            partition,
-            start_offset: 0,
+    let starts = log
+        .low_water_marks()
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .enumerate()
+        .map(|(partition, start_offset)| {
+            Ok(PartitionStart {
+                partition: i32::try_from(partition)
+                    .map_err(|_| "diskless WAL index partition overflow".to_owned())?,
+                start_offset,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     let (mut stream, _handle) = log.subscribe(starts);
     let mut cutoffs = Vec::with_capacity(usize::try_from(log.partition_count()).unwrap_or(0));
     for partition in 0..log.partition_count() {

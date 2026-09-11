@@ -154,6 +154,52 @@ impl KafkaMetadataEventLog {
             state.cancel_all();
         }
     }
+
+    async fn list_offsets(&self, timestamp: i64) -> Result<Vec<i64>, MetadataLogError> {
+        let partitions = (0..self.partition_count)
+            .map(|p| ListOffsetsPartition {
+                partition_index: p,
+                current_leader_epoch: -1,
+                timestamp,
+                ..Default::default()
+            })
+            .collect();
+        let req = ListOffsetsRequest {
+            replica_id: -1,
+            isolation_level: 0,
+            topics: vec![ListOffsetsTopic {
+                name: self.topic.clone(),
+                partitions,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let resp = self
+            .client
+            .send(req)
+            .await
+            .map_err(|e| MetadataLogError::Other(format!("ListOffsets failed: {e}")))?;
+        let mut offsets = vec![0i64; usize_count(self.partition_count)?];
+        for topic in &resp.topics {
+            if topic.name != self.topic {
+                continue;
+            }
+            for p in &topic.partitions {
+                if p.error_code != 0 {
+                    return Err(MetadataLogError::Other(format!(
+                        "ListOffsets partition {} error {}",
+                        p.partition_index, p.error_code
+                    )));
+                }
+                if let Ok(idx) = usize::try_from(p.partition_index)
+                    && idx < offsets.len()
+                {
+                    offsets[idx] = p.offset;
+                }
+            }
+        }
+        Ok(offsets)
+    }
 }
 
 impl Drop for KafkaMetadataEventLog {
@@ -223,6 +269,10 @@ impl MetadataEventLog for KafkaMetadataEventLog {
         (stream, handle)
     }
 
+    async fn low_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+        self.list_offsets(-2).await // EARLIEST
+    }
+
     #[instrument(
         level = "debug",
         skip_all,
@@ -230,49 +280,7 @@ impl MetadataEventLog for KafkaMetadataEventLog {
         err
     )]
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
-        let partitions = (0..self.partition_count)
-            .map(|p| ListOffsetsPartition {
-                partition_index: p,
-                current_leader_epoch: -1,
-                timestamp: -1, // LATEST
-                ..Default::default()
-            })
-            .collect();
-        let req = ListOffsetsRequest {
-            replica_id: -1,
-            isolation_level: 0,
-            topics: vec![ListOffsetsTopic {
-                name: self.topic.clone(),
-                partitions,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let resp = self
-            .client
-            .send(req)
-            .await
-            .map_err(|e| MetadataLogError::Other(format!("ListOffsets failed: {e}")))?;
-        let mut hwms = vec![0i64; usize_count(self.partition_count)?];
-        for topic in &resp.topics {
-            if topic.name != self.topic {
-                continue;
-            }
-            for p in &topic.partitions {
-                if p.error_code != 0 {
-                    return Err(MetadataLogError::Other(format!(
-                        "ListOffsets partition {} error {}",
-                        p.partition_index, p.error_code
-                    )));
-                }
-                if let Ok(idx) = usize::try_from(p.partition_index)
-                    && idx < hwms.len()
-                {
-                    hwms[idx] = p.offset;
-                }
-            }
-        }
-        Ok(hwms)
+        self.list_offsets(-1).await // LATEST
     }
 }
 

@@ -117,7 +117,8 @@ pub struct ArchiveArgs {
     /// A controller `<offset>-<epoch>.checkpoint` metadata snapshot.
     ///
     /// Topic configuration, ACLs, client quotas, SCRAM credentials, and
-    /// finalized feature levels are recovered from it.
+    /// finalized feature levels are recovered from it. Authenticated restore
+    /// requires its digest to be bound into the signed diskless capture.
     #[arg(long, value_name = "PATH")]
     pub metadata_snapshot: Option<PathBuf>,
 

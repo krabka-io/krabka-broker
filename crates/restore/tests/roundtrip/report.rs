@@ -3,13 +3,63 @@
 //! `--report json` path.
 
 use assert2::check;
+use krabka_audit::FileEd25519Signer;
 use krabka_ids::Offset;
+use krabka_remote_storage::MANIFEST_SUFFIX;
 use krabka_restore::{
     MetadataRestoreReport, PartitionReport, ReportFormat, RestoreReport, SegmentOutcome, restore,
 };
+use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use uuid::Uuid;
 
 use crate::{args::restore_args, fixture::build_fixture};
+
+#[tokio::test]
+async fn authenticated_object_count_covers_only_the_selected_topic() {
+    let fixture = build_fixture();
+    let keys = tempfile::tempdir().unwrap();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+    let signer = std::sync::Arc::new(
+        FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap(),
+    );
+    let public_key = keys.path().join("key.pub");
+    std::fs::write(&public_key, signer.public_key()).unwrap();
+    let heads = fixture.sign_worm(&[signer]);
+    let mut extra = vec![
+        "--topic".to_owned(),
+        "orders".to_owned(),
+        "--worm-key-id".to_owned(),
+        "key".to_owned(),
+        "--worm-public-key".to_owned(),
+        public_key.display().to_string(),
+    ];
+    for (partition, head) in heads {
+        extra.push("--worm-expect-head".to_owned());
+        extra.push(format!("{partition}={head}"));
+    }
+    let expected = std::fs::read_dir(fixture.archive_root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("orders-"))
+        .flat_map(|entry| {
+            std::fs::read_dir(entry.path())
+                .unwrap()
+                .filter_map(Result::ok)
+        })
+        .filter(|entry| {
+            !entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(MANIFEST_SUFFIX)
+        })
+        .count() as u64;
+    let target = tempfile::tempdir().unwrap();
+    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
+    let args = restore_args(fixture.archive_root.path(), target.path(), &refs);
+
+    let report = restore(&args).await.unwrap();
+    check!(report.authentication.unwrap().objects == expected);
+}
 
 /// 5. `restore()`'s report -- the structured value `--report json` renders --
 /// carries exactly the record and segment counts this fixture should

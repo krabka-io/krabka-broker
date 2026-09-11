@@ -45,7 +45,7 @@ use std::{ffi::OsString, path::Path};
 
 use clap::Parser;
 use krabka_remote_storage::{
-    AuthenticatedArchive, TrustedManifestKeys, VerifyRequest, authenticate_archive,
+    AuthenticatedArchive, Sha256Digest, TrustedManifestKeys, VerifyRequest, authenticate_archive,
     diskless::CAPTURE_HEAD_NAME,
 };
 
@@ -168,6 +168,11 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     if let Some(capture) = &diskless_capture {
         diskless::add_partitions(&mut archive, capture, args)?;
     }
+    if archive.partitions.is_empty() {
+        return Err(RestoreError::EmptyArchive {
+            prefix: store.prefix().unwrap_or("").to_owned(),
+        });
+    }
     let trusted = trusted_keys(args)?;
     let has_classic = archive
         .partitions
@@ -206,7 +211,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         }
         _ => None,
     };
-    if let Some((claims, head, count)) = &diskless_authentication {
+    if let Some((_, head, count)) = &diskless_authentication {
         let report = authenticated.get_or_insert_with(|| {
             (
                 None,
@@ -222,18 +227,20 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         });
         report.1.partitions += 1;
         report.1.manifests += 1;
-        report.1.objects = report
-            .1
-            .objects
-            .saturating_add(u64::try_from(claims.len()).unwrap_or(u64::MAX));
         report
             .1
             .chain_heads
             .insert(CAPTURE_HEAD_NAME.to_owned(), head.clone());
     }
+    let metadata_authenticated =
+        authenticate_metadata_snapshot(args, diskless_capture.as_ref(), trusted.is_some()).await?;
     let predicates = Predicates::from_args(args)?;
     let format = format_target(args, &archive).await?;
 
+    let mut consumed_authenticated_objects = std::collections::BTreeSet::new();
+    if metadata_authenticated {
+        consumed_authenticated_objects.insert("cluster-metadata.checkpoint".to_owned());
+    }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
     let mut skipped = Vec::new();
     for entry in &archive.partitions {
@@ -270,6 +277,21 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
                 }
                 Err(error) => return Err(error),
             };
+            if matches!(&authenticated, Some((Some(_), _))) {
+                consumed_authenticated_objects.extend(
+                    [
+                        segment.log.as_ref(),
+                        segment.offset_index.as_ref(),
+                        segment.time_index.as_ref(),
+                        segment.producer_snapshot.as_ref(),
+                        segment.leader_epoch.as_ref(),
+                        segment.transaction_index.as_ref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(|object| object.key.to_string()),
+                );
+            }
             segments.push(write_segment(args, &entry.partition, &verified, &predicates).await?);
         }
         partitions.push(PartitionReport {
@@ -282,10 +304,25 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
 
     let diskless = match diskless_capture {
         Some(capture) => {
-            Some(diskless::materialize(&store, args, &predicates, &capture, diskless_claims).await?)
+            let report =
+                diskless::materialize(&store, args, &predicates, &capture, diskless_claims).await?;
+            if diskless_claims.is_some() {
+                consumed_authenticated_objects.extend(
+                    capture
+                        .partitions
+                        .iter()
+                        .filter(|partition| args.selects_topic(&partition.topic))
+                        .flat_map(|partition| &partition.ranges)
+                        .map(|range| range.object_key.clone()),
+                );
+            }
+            Some(report)
         }
         None => None,
     };
+    if let Some((_, report)) = &mut authenticated {
+        report.objects = u64::try_from(consumed_authenticated_objects.len()).unwrap_or(u64::MAX);
+    }
     Ok(RestoreReport {
         dry_run: args.dry_run,
         log_dir: args.target.log_dir.clone(),
@@ -296,6 +333,34 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         partitions,
         skipped,
     })
+}
+
+async fn authenticate_metadata_snapshot(
+    args: &RestoreArgs,
+    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    authenticated_restore: bool,
+) -> Result<bool, RestoreError> {
+    let Some(path) = args.archive.metadata_snapshot.as_ref() else {
+        return Ok(false);
+    };
+    if !authenticated_restore {
+        return Ok(false);
+    }
+    let expected = capture
+        .and_then(|capture| capture.metadata_snapshot_sha256)
+        .ok_or_else(|| RestoreError::Authenticity {
+            reason: "--metadata-snapshot is not bound to the signed diskless capture".to_owned(),
+        })?;
+    let bytes = tokio::fs::read(path).await?;
+    let actual = Sha256Digest::of(&bytes);
+    if actual != expected {
+        return Err(RestoreError::Authenticity {
+            reason: format!(
+                "--metadata-snapshot differs from the signed capture: expected SHA-256 {expected}, found {actual}"
+            ),
+        });
+    }
+    Ok(true)
 }
 
 async fn authenticate_source(
