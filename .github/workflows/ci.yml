@@ -963,16 +963,16 @@ jobs:
 
   # The criterion benches, on the nightly schedule and on demand.
   #
-  # Each side runs three times, alternating on the same host. The verdict uses
+  # Each side runs four times, alternating on the same host. The verdict uses
   # medians and three times the larger median absolute deviation, with a 3%
   # floor. Missing or invalid samples fail. Raw output, exact commits and host
   # resources travel with the verdict artifact. Pull requests only compile the
-  # benches; this six-pass lane is nightly and manually dispatchable.
+  # benches; this eight-pass lane is nightly and manually dispatchable.
   bench:
     name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # Three alternating reference/candidate passes over all seven suites.
+    # Four alternating reference/candidate passes over all seven suites.
     timeout-minutes: 360
     permissions:
       contents: read
@@ -1033,8 +1033,12 @@ jobs:
             free -b
             df -B1 .
           } > benchmark-artifacts/environment.txt
-          for run in 1 2 3; do
-            for side in reference candidate; do
+          for run in 1 2 3 4; do
+            sides=(reference candidate)
+            if ((run % 2 == 0)); then
+              sides=(candidate reference)
+            fi
+            for side in "${sides[@]}"; do
               run_dir="benchmark-artifacts/${side}/run-${run}"
               mkdir -p "${run_dir}"
               if [ "${side}" = reference ]; then

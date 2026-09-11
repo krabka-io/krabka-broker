@@ -8,8 +8,8 @@ use std::{
 
 use assert2::assert;
 use krabka_parse_benches::{
-    Args, BenchmarkMetric, BenchmarkSummary, ParseBenchesError, compare_summaries,
-    format_rfc3339_utc, parse_bencher_line, parse_benchmark_dir, read_summaries,
+    Args, BenchmarkComparison, BenchmarkMetric, BenchmarkSummary, ParseBenchesError,
+    compare_summaries, format_rfc3339_utc, parse_bencher_line, parse_benchmark_dir, read_summaries,
     resolve_commit_sha, run_from_args,
 };
 use tempfile::tempdir;
@@ -328,6 +328,26 @@ fn a_deliberately_slowed_benchmark_fails_the_verdict() {
 
     assert!(!verdict.passed);
     assert!(!verdict.benchmarks["hot/path"].passed);
+}
+
+#[test]
+fn all_zero_samples_are_tied_below_output_resolution() {
+    let reference = repeated_summaries(&[0.0, 0.0, 0.0], "reference");
+    let candidate = repeated_summaries(&[0.0, 0.0, 0.0], "candidate");
+
+    let verdict = compare_summaries(&reference, &candidate, 0.03).unwrap();
+
+    assert!(verdict.passed);
+    assert!(
+        verdict.benchmarks["hot/path"]
+            == BenchmarkComparison {
+                reference_median_ns: 0.0,
+                candidate_median_ns: 0.0,
+                ratio: 1.0,
+                tolerance: 0.03,
+                passed: true,
+            }
+    );
 }
 
 #[test]
