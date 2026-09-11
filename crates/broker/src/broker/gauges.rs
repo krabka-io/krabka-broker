@@ -96,6 +96,10 @@ pub(super) fn spawn_broker_gauge_updater(
             metrics.set_offline_log_dirs(log_dir_status.offline().len());
             let image = controller.current_image();
             let alive = liveness.alive_snapshot().await;
+            let is_controller = controller
+                .watch_leader()
+                .borrow()
+                .is_some_and(|leader| leader == node_id);
             let minimum_isr: std::collections::HashMap<&str, i32> = image
                 .topics()
                 .map(|topic| {
@@ -120,9 +124,8 @@ pub(super) fn spawn_broker_gauge_updater(
                         i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) < minimum,
                     );
                 }
-                partition_health.2 += usize::from(
-                    partition.replicas.contains(&node_id) && !alive.contains(&partition.leader.0),
-                );
+                partition_health.2 +=
+                    usize::from(is_controller && !alive.contains(&partition.leader.0));
             }
             metrics
                 .under_replicated_partitions
@@ -139,10 +142,6 @@ pub(super) fn spawn_broker_gauge_updater(
             metrics.witness_role.set(i64::from(u8::from(
                 crate::config_keys::resolve_broker_witness(&image, node_id),
             )));
-            let is_controller = controller
-                .watch_leader()
-                .borrow()
-                .is_some_and(|leader| leader == node_id);
             metrics
                 .active_controller
                 .set(i64::from(u8::from(is_controller)));
@@ -336,6 +335,10 @@ mod tests {
         .expect("gauge observes configured minimum ISR");
 
         assert!(metrics.under_min_isr_partition_count.get() == 1);
+        assert!(
+            metrics.offline_partitions_count.get() == 0,
+            "a non-controller has no cluster liveness view and must not invent an offline partition"
+        );
         shutdown.cancel();
     }
 
