@@ -10,7 +10,7 @@
       "default_branch": "main",
       "artifacts": [{
         "kind": "image",
-        "reference": "ghcr.io/krabka-io/krabka-broker@sha256:82744b30f968b53c85545a6208aa4745e2acc12244344d0be6d84b953d61dcb0",
+        "reference": "ghcr.io/krabka-io/krabka-broker",
         "digest": "sha256:82744b30f968b53c85545a6208aa4745e2acc12244344d0be6d84b953d61dcb0"
       }],
       "entrypoints": ["krabka-broker", "krabka-format"],
@@ -30,7 +30,7 @@
       "default_branch": "main",
       "artifacts": [
         {"kind": "chart", "reference": "https://krabka-io.github.io/charts/krabka-operator-0.4.0.tgz", "digest": "sha256:bc7b1378be63676e546fa1e2c91e4633337176a69f9b0f6ac1909fb850aeff75"},
-        {"kind": "image", "reference": "ghcr.io/krabka-io/krabka-operator@sha256:861796f11b63798f07cd8cfbcb0fa41376259cb6fce07b1e80e15e93de3a377b", "digest": "sha256:861796f11b63798f07cd8cfbcb0fa41376259cb6fce07b1e80e15e93de3a377b"}
+        {"kind": "image", "reference": "ghcr.io/krabka-io/krabka-operator", "digest": "sha256:861796f11b63798f07cd8cfbcb0fa41376259cb6fce07b1e80e15e93de3a377b"}
       ],
       "entrypoints": ["krabka-operator"],
       "config": ["charts/krabka-operator/values.yaml"],
@@ -49,7 +49,7 @@
       "repository": "krabka-io/krabka-o11y",
       "revision": "12bce8a0093208a1e49f0258ad23b848c19e6a8b",
       "default_branch": "main",
-      "artifacts": [{"kind": "image", "reference": "ghcr.io/krabka-io/krabka-o11y@sha256:1f278b3e776feb246953ea6a4ed6474be11f392e4a3a3d41819a038b52b0b23a", "digest": "sha256:1f278b3e776feb246953ea6a4ed6474be11f392e4a3a3d41819a038b52b0b23a"}]
+      "artifacts": [{"kind": "image", "reference": "ghcr.io/krabka-io/krabka-o11y", "digest": "sha256:1f278b3e776feb246953ea6a4ed6474be11f392e4a3a3d41819a038b52b0b23a"}]
     },
     {
       "repository": "krabka-io/krabka-o11y-demo",
@@ -64,7 +64,7 @@
       "default_branch": "main",
       "artifacts": [
         {"kind": "chart", "reference": "https://krabka-io.github.io/charts/crabka-rebalancer-0.4.0.tgz", "digest": "sha256:6c924ea43772b77a92674a7825c71bb915d7621b9d15734f5eecaeb49e1ad700"},
-        {"kind": "image", "reference": "ghcr.io/krabka-io/krabka-rebalancer@sha256:706b3b51a521d97d4166d98a1f39e045b5dfa1508b155bce174161c4bc009b11", "digest": "sha256:706b3b51a521d97d4166d98a1f39e045b5dfa1508b155bce174161c4bc009b11"}
+        {"kind": "image", "reference": "ghcr.io/krabka-io/krabka-rebalancer", "digest": "sha256:706b3b51a521d97d4166d98a1f39e045b5dfa1508b155bce174161c4bc009b11"}
       ],
       "entrypoints": ["crabka-rebalancer"],
       "config": ["charts/crabka-rebalancer/values.yaml"],
