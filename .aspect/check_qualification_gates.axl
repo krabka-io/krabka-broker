@@ -76,7 +76,14 @@ trap cleanup EXIT
 recipe="$site/public/quickstart/docker-compose.yml"
 test -f "$recipe"
 docker compose -f "$recipe" config --format json > "$work/recipe.json"
-jq --arg image "$broker_image" '.services |= with_entries(if (.value.image // "" | contains("krabka-broker")) then .value.image=$image else . end)' "$work/recipe.json" > "$work/compose.json"
+# The pinned Java suite intentionally selects KIP-1071. Enable that optional
+# broker surface and finalize its feature in this isolated candidate volume.
+jq --arg image "$broker_image" '
+  .services |= with_entries(if (.value.image // "" | contains("krabka-broker")) then .value.image=$image else . end) |
+  .services["broker-format"].command += ["--feature=streams.version=1"] |
+  .services.broker.environment.KRABKA_STREAMS_GROUP_ENABLE="true" |
+  .services.broker.environment.KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS="1"
+' "$work/recipe.json" > "$work/compose.json"
 jq -e --arg image "$broker_image" 'any(.services[]; .image == $image)' "$work/compose.json" > /dev/null
 docker compose -p "$project" -f "$work/compose.json" up -d --wait --wait-timeout 180
 for attempt in $(seq 1 60); do

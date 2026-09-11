@@ -177,6 +177,15 @@ def _test_all_adapters_are_executable_shell(ctx):
         result = ctx.std.process.command("bash").args(["-n", "-c", gate_script(name)]).spawn().wait()
         check_eq(name, result.code, 0)
 
+def _test_installation_enables_the_streams_protocol(_ctx):
+    commands = gate_script("installation")
+    for setting in [
+        "--feature=streams.version=1",
+        "KRABKA_STREAMS_GROUP_ENABLE",
+        "KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS",
+    ]:
+        check_eq(setting, setting in commands, True)
+
 def _test_a_failed_smoke_pipeline_cannot_pass(ctx):
     script = "set -eu\nfalse | tee /dev/null\nexit 0\n"
     result = ctx.std.process.command("bash").args(["-o", "pipefail", "-c", script]).spawn().wait()
@@ -237,6 +246,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_receipts_reject_zero_skipped_failed_or_uncounted_checks,
     _test_final_candidate_requires_all_four_fresh_receipts,
     _test_all_adapters_are_executable_shell,
+    _test_installation_enables_the_streams_protocol,
     _test_a_failed_smoke_pipeline_cannot_pass,
     _test_retained_evidence_cannot_be_substituted,
     _test_assembly_writes_a_verified_manifest_and_real_bundles,
