@@ -26,6 +26,9 @@ pub const METADATA_CHECKPOINT: &str = "cluster-metadata.checkpoint";
 /// Object name of the captured committed group offsets.
 pub const GROUP_OFFSETS: &str = "group-offsets.json";
 
+/// Object name of the committed diskless-WAL projection.
+pub const DISKLESS_WAL_INDEX: &str = "diskless-wal-index.json";
+
 /// One captured artifact, as it was uploaded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {

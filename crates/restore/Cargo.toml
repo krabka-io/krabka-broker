@@ -72,6 +72,7 @@ assert2 = { workspace = true }
 # `large_archive` implements `object_store::ObjectStore` to synthesise a
 # listing far larger than any fixture could write to disk.
 async-trait = { workspace = true }
+krabka-audit = { workspace = true }
 # `dr_roundtrip` drives the operator's own backup tool: the capture it asserts
 # on is the one an operator runs, not a re-implementation of it.
 krabka-backup = { version = "0.5.4", path = "../backup-cli" }
@@ -80,4 +81,5 @@ krabka-broker = { version = "0.5.4", path = "../broker", features = ["test-helpe
 krabka-client-admin = { version = "0.4.0" }
 krabka-client-core = { version = "0.4.0" }
 krabka-security = { workspace = true }
+ring = { workspace = true }
 tempfile = { workspace = true }

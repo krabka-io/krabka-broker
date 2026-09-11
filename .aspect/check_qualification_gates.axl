@@ -1,4 +1,4 @@
-"""Installed-artifact adapters for the four existing ecosystem gates.
+"""Installed-artifact adapters for historical and candidate ecosystem gates.
 
 The shell runs inside the Aspect task: it is not another repository script.
 Each adapter uses an isolated directory and emits names only after behavioral
@@ -286,6 +286,467 @@ check acl-denial-observed grep -F '"name":"acl-denied-request"' "$evidence/cli.l
 check reassignment-completed grep -F '"name":"reassignment-complete-state"' "$evidence/cli.log"
 """
 
+_DISASTER_RECOVERY = r"""
+broker_source=$(source_repo krabka-broker)
+(cd "$broker_source" && bazel test //crates/restore:dr_roundtrip_test --test_output=all --nocache_test_results) \
+  2>&1 | tee "$evidence/hermetic-dr.log"
+check hermetic-dr grep -F 'test a_captured_cluster_restores_with_its_configuration_and_its_group_positions ... ok' "$evidence/hermetic-dr.log"
+minio_image=mirror.gcr.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+mc_image=mirror.gcr.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
+network=$scope-dr
+bucket=dr-archive
+data_prefix=candidate/data
+capture_prefix=candidate/capture
+access=minioadmin
+secret=minioadmin
+source_started_ms=$(date +%s%3N)
+
+cleanup() {
+  for cluster in source restored; do
+    for n in 1 2 3; do
+      docker logs "$scope-$cluster-$n" > "$evidence/$cluster-broker-$n.log" 2>&1 || true
+      docker rm -f "$scope-$cluster-$n" > /dev/null 2>&1 || true
+    done
+  done
+  docker logs "$scope-minio" > "$evidence/minio.log" 2>&1 || true
+  docker rm -f "$scope-minio" > /dev/null 2>&1 || true
+  docker network rm "$network" > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker network create "$network"
+mkdir -p "$work/tls" "$work/worm" "$work/capture" "$work/restored-node1"
+chmod 0777 "$work" "$work/capture" "$work/restored-node1"
+
+# One throwaway CA and one certificate naming every endpoint keep the drill's
+# TLS trust boundary explicit without introducing an external PKI dependency.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=qualification-ca' \
+  -keyout "$work/tls/ca.key" -out "$work/tls/ca.pem" >/dev/null 2>&1
+cat > "$work/tls/server.ext" <<EOF
+subjectAltName=DNS:$scope-source-1,DNS:$scope-source-2,DNS:$scope-source-3,DNS:$scope-restored-1
+extendedKeyUsage=serverAuth
+EOF
+openssl req -newkey rsa:2048 -nodes -subj '/CN=qualification-broker' \
+  -keyout "$work/tls/server.key" -out "$work/tls/server.csr" >/dev/null 2>&1
+openssl x509 -req -days 1 -in "$work/tls/server.csr" -CA "$work/tls/ca.pem" \
+  -CAkey "$work/tls/ca.key" -CAcreateserial -extfile "$work/tls/server.ext" \
+  -out "$work/tls/server.pem" >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=wrong-ca' \
+  -keyout "$work/tls/wrong-ca.key" -out "$work/tls/wrong-ca.pem" >/dev/null 2>&1
+openssl genpkey -algorithm ED25519 -outform DER -out "$work/worm/signing.pk8"
+openssl pkey -inform DER -in "$work/worm/signing.pk8" -pubout -outform DER | tail -c 32 > "$work/worm/signing.pub"
+openssl genpkey -algorithm ED25519 -outform DER -out "$work/worm/untrusted.pk8"
+openssl pkey -inform DER -in "$work/worm/untrusted.pk8" -pubout -outform DER | tail -c 32 > "$work/worm/untrusted.pub"
+chmod -R a+rX "$work/tls" "$work/worm"
+
+cat > "$work/admin.properties" <<EOF
+security.protocol=SASL_SSL
+ssl.truststore.type=PEM
+ssl.truststore.location=/work/tls/ca.pem
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="admin" password="qualification-admin";
+EOF
+cat > "$work/backup.properties" <<EOF
+security.protocol=SASL_SSL
+ssl.truststore.type=PEM
+ssl.truststore.location=/work/tls/ca.pem
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="backup" password="qualification-backup";
+EOF
+cat > "$work/bad.properties" <<EOF
+security.protocol=SASL_SSL
+ssl.truststore.type=PEM
+ssl.truststore.location=/work/tls/ca.pem
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="backup" password="qualification-wrong";
+EOF
+cat > "$work/denied.properties" <<EOF
+security.protocol=SASL_SSL
+ssl.truststore.type=PEM
+ssl.truststore.location=/work/tls/ca.pem
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="denied" password="qualification-denied";
+EOF
+sed 's#tls/ca.pem#tls/wrong-ca.pem#' "$work/backup.properties" > "$work/wrong-ca.properties"
+chmod a+r "$work"/*.properties
+
+docker run -d --name "$scope-minio" --network "$network" \
+  -e MINIO_ROOT_USER="$access" -e MINIO_ROOT_PASSWORD="$secret" \
+  "$minio_image" server /data
+docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
+  "until mc alias set local http://$scope-minio:9000 $access $secret >/dev/null 2>&1; do sleep 1; done; mc mb --with-lock local/$bucket; mc retention set --default COMPLIANCE 1d local/$bucket"
+
+cluster_id=3d70a78c-bb3a-4af5-a767-51e31f403c62
+for n in 1 2 3; do
+  mkdir -p "$work/source-node$n"
+  chmod 0777 "$work/source-node$n"
+  cat > "$work/source-node$n/broker.toml" <<EOF
+broker_id = $n
+log_dir = "/var/lib/krabka"
+controller_quorum_voters = ["1@$scope-source-1:9093", "2@$scope-source-2:9093", "3@$scope-source-3:9093"]
+bootstrap_servers = ["$scope-source-1:9092", "$scope-source-2:9092", "$scope-source-3:9092"]
+inter_broker_listener_name = "INTERNAL"
+controller_listener_protocol = "Plaintext"
+metadata_snapshot_interval_records = 1
+metadata_max_snapshot_interval = "1s"
+log_segment_bytes = "1KiB"
+log_retention_check_interval = "1s"
+remote_log_manager_interval = "1s"
+diskless_wal_flush_interval = "50ms"
+diskless_wal_flush_max_size = "1KiB"
+diskless_wal_local_replica_count = 3
+diskless_wal_trim_safety_lag = 0
+[[listeners]]
+name = "INTERNAL"
+bind_addr = "0.0.0.0:9092"
+advertised = "$scope-source-$n:9092"
+protocol = "Plaintext"
+[[listeners]]
+name = "CLIENT"
+bind_addr = "0.0.0.0:9094"
+advertised = "$scope-source-$n:9094"
+protocol = "SaslSsl"
+[listeners.tls_config]
+cert_path = "/etc/krabka/tls/server.pem"
+key_path = "/etc/krabka/tls/server.key"
+[listeners.sasl_config]
+enabled_mechanisms = ["SCRAM-SHA-512"]
+[authorization]
+type = "simple"
+super_users = ["admin"]
+[process]
+roles = ["controller", "broker"]
+[remote_storage.s3]
+bucket = "$bucket"
+region = "us-east-1"
+prefix = "$data_prefix"
+endpoint = "http://$scope-minio:9000"
+access_key_id = "$access"
+secret_access_key = "$secret"
+allow_http = true
+[remote_storage.kafka_metadata]
+bootstrap = "$scope-source-1:9092"
+num_partitions = 1
+replication = 3
+snapshot_interval = "1s"
+[remote_storage.worm]
+signing_key_path = "/etc/krabka/worm/signing.pk8"
+signing_key_id = "qualification-worm"
+EOF
+  chmod -R a+rX "$work/source-node$n"
+  docker run --rm --network "$network" -v "$work/source-node$n:/var/lib/krabka" \
+    --entrypoint /usr/bin/krabka-format "$broker_image" --cluster-id "$cluster_id" --node-id "$n" \
+    --log-dir /var/lib/krabka --release-version 3.9 --feature kraft.version=0 \
+    --add-scram 'SCRAM-SHA-512=[name=admin,password=qualification-admin]' \
+    --add-scram 'SCRAM-SHA-512=[name=backup,password=qualification-backup]' \
+    --add-scram 'SCRAM-SHA-512=[name=denied,password=qualification-denied]' \
+    --add-acl 'principal=User:ANONYMOUS,host=*,operation=ClusterAction,permission=Allow,resource=Cluster:kafka-cluster' \
+    --add-acl 'principal=User:ANONYMOUS,host=*,operation=Read,permission=Allow,resource=Topic:*'
+  docker run -d --name "$scope-source-$n" --network "$network" \
+    -v "$work/source-node$n:/var/lib/krabka" -v "$work/tls:/etc/krabka/tls:ro" \
+    -v "$work/worm:/etc/krabka/worm:ro" \
+    "$broker_image" --broker-id "$n" --config-file /var/lib/krabka/broker.toml
+done
+
+kafka() {
+  local cluster=$1 tool=$2
+  shift 2
+  docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
+    "/opt/kafka/bin/kafka-$tool.sh" --bootstrap-server "$scope-$cluster-1:9094" \
+    --command-config /work/admin.properties "$@"
+}
+for attempt in $(seq 1 90); do
+  if kafka source topics --list; then break; fi
+  test "$attempt" -lt 90
+  sleep 2
+done
+
+# Least privilege for the account whose secured coordinator path is captured.
+kafka source acls --add --allow-principal User:backup --operation DESCRIBE --cluster
+for topic in classic diskless; do
+  kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --topic "$topic"
+done
+kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --group dr-group
+kafka source acls --add --allow-principal User:backup --operation READ --operation WRITE --operation DESCRIBE --topic __diskless_wal_index
+kafka source topics --create --topic classic --partitions 1 --replication-factor 3 \
+  --config remote.storage.enable=true --config local.retention.bytes=1 \
+  --config retention.bytes=-1 --config retention.ms=604800000 --config segment.ms=1000
+kafka source topics --create --topic diskless --partitions 1 --replication-factor 3 \
+  --config krabka.diskless=true --config retention.ms=604800000
+
+for topic in classic diskless; do
+  seq 0 199 | awk -v topic="$topic" '{printf "%s-%04d-%01024d\n", topic, $1, $1}' | \
+    docker run --rm -i --network "$network" -v "$work:/work:ro" "$tools_image" \
+      /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server "$scope-source-1:9094" \
+      --producer.config /work/admin.properties --topic "$topic" \
+      --producer-property acks=all
+done
+sleep 2
+printf 'classic-roll-sentinel\n' | docker run --rm -i --network "$network" -v "$work:/work:ro" "$tools_image" \
+  /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server "$scope-source-1:9094" \
+  --producer.config /work/admin.properties --topic classic --producer-property acks=all
+sleep 2
+printf 'classic-boundary-trigger\n' | docker run --rm -i --network "$network" -v "$work:/work:ro" "$tools_image" \
+  /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server "$scope-source-1:9094" \
+  --producer.config /work/admin.properties --topic classic --producer-property acks=all
+docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
+  /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$scope-source-1:9094" \
+  --consumer.config /work/admin.properties --topic classic --group dr-group \
+  --from-beginning --max-messages 75 --timeout-ms 60000 > "$evidence/source-group-read.txt"
+
+negative_capture() {
+  local name=$1 config=$2 negative_prefix="candidate/negative/$1"
+  if docker run --rm --network "$network" -v "$work:/work:ro" \
+    --entrypoint /usr/bin/krabka-backup "$broker_image" capture \
+    --bootstrap-server "$scope-source-1:9094" --command-config "/work/$config" \
+    --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+    --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+    --archive-s3-secret-access-key "$secret" --archive-s3-allow-http \
+    --archive-prefix "$negative_prefix" > "$evidence/$name.log" 2>&1; then
+    echo "$name unexpectedly completed a capture" >&2
+    exit 1
+  fi
+  negative_listing=$(docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
+    "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc find local/$bucket/$negative_prefix --name manifest.json 2>/dev/null || true")
+  check "$name-no-manifest" test -z "$negative_listing"
+  check "$name-no-secret" bash -c '! grep -F -e qualification-admin -e qualification-backup -e qualification-denied -e qualification-wrong "$1"' qualification "$evidence/$name.log"
+}
+negative_capture invalid-credentials bad.properties
+negative_capture invalid-certificate wrong-ca.properties
+negative_capture denied-acl denied.properties
+
+# Wait for both classic segment manifests and diskless WAL objects to settle.
+for attempt in $(seq 1 120); do
+  listing=$(docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
+    "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc find local/$bucket/$data_prefix")
+  classic_manifests=$(grep 'classic-0-' <<<"$listing" | grep -c '\.manifest$' || true)
+  if [ "$classic_manifests" -ge 201 ] && grep -q 'diskless' <<<"$listing"; then break; fi
+  test "$attempt" -lt 120
+  sleep 2
+done
+printf '%s\n' "$listing" > "$evidence/archive-before.txt"
+for attempt in $(seq 1 60); do
+  if test -s "$work/source-node1/remote-log-metadata/snapshot" && \
+    find "$work/source-node1/__cluster_metadata" -name '*.checkpoint' -type f | grep -q .; then
+    break
+  fi
+  test "$attempt" -lt 60
+  sleep 1
+done
+check capture-source-files test -s "$work/source-node1/remote-log-metadata/snapshot"
+
+# The image's tool captures snapshots, group positions, and the committed WAL
+# projection over the real SASL/TLS coordinator paths.
+docker run --rm --network "$network" -v "$work:/work:ro" -v "$work/source-node1:/var/lib/krabka:ro" \
+  --entrypoint /usr/bin/krabka-backup "$broker_image" capture \
+  --log-dir /var/lib/krabka --bootstrap-server "$scope-source-1:9094" \
+  --command-config /work/backup.properties \
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
+  --worm-signing-key-id qualification-worm --worm-signing-key /work/worm/signing.pk8 \
+  2>&1 | tee "$evidence/capture.log"
+docker run --rm --network "$network" --entrypoint /usr/bin/krabka-backup "$broker_image" verify \
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
+  > "$evidence/capture-verify.txt"
+capture_id=$(docker run --rm --network "$network" --entrypoint /usr/bin/krabka-backup "$broker_image" list \
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" | tail -1 | awk '{print $1}')
+test -n "$capture_id"
+docker run --rm --network "$network" -v "$work/capture:/capture" --entrypoint /bin/sh "$mc_image" -c \
+  "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc cp --recursive local/$bucket/$capture_prefix/restore-inputs/$capture_id/ /capture/"
+check captured-inputs jq -e '
+  ([.artifacts[].name] | sort) == ["cluster-metadata.checkpoint","diskless-wal-index.json","group-offsets.json","rlmm-snapshot"]
+' "$work/capture/manifest.json"
+capture_ms=$(jq -er .captured_at_ms "$work/capture/manifest.json")
+kafka source get-offsets --topic classic > "$evidence/source-classic-offsets.txt"
+kafka source get-offsets --topic diskless > "$evidence/source-diskless-offsets.txt"
+kafka source configs --describe --topic classic > "$evidence/source-classic-config.txt"
+kafka source configs --describe --topic diskless > "$evidence/source-diskless-config.txt"
+kafka source consumer-groups --describe --group dr-group > "$evidence/source-group-offsets.txt"
+awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/source-group-offsets.txt" > "$evidence/source-group-positions.txt"
+for topic in classic diskless; do
+  messages=200
+  if [ "$topic" = classic ]; then messages=201; fi
+  docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
+    /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$scope-source-1:9094" \
+    --consumer.config /work/admin.properties --topic "$topic" --from-beginning \
+    --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/source-$topic-ledger.txt"
+done
+
+AWS_ACCESS_KEY_ID=$access AWS_SECRET_ACCESS_KEY=$secret AWS_REGION=us-east-1 \
+docker run --rm --network "$network" -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION \
+  -v "$work/worm:/worm:ro" --entrypoint /usr/bin/krabka-worm-verify "$broker_image" verify \
+  --bucket "$bucket" --region us-east-1 --endpoint "http://$scope-minio:9000" --allow-http \
+  --prefix "$data_prefix" --key-id qualification-worm --public-key /worm/signing.pub --deep \
+  > "$evidence/worm-verified.txt"
+check worm-authenticated grep -F 'OK:' "$evidence/worm-verified.txt"
+awk '/: tip / && $3 != "none," {sub(/:$/, "", $1); sub(/,$/, "", $3); print $1, $3}' "$evidence/worm-verified.txt" > "$evidence/worm-heads.txt"
+awk '/diskless-capture WORM head / {print $1, $4}' "$evidence/capture.log" >> "$evidence/worm-heads.txt"
+check worm-heads test -s "$evidence/worm-heads.txt"
+check diskless-worm-head grep -Eq '^diskless-capture [0-9a-f]{64}$' "$evidence/worm-heads.txt"
+jq -n --argjson captured_at_ms "$capture_ms" \
+  --rawfile classic "$evidence/source-classic-offsets.txt" \
+  --rawfile diskless "$evidence/source-diskless-offsets.txt" \
+  --rawfile heads "$evidence/worm-heads.txt" \
+  '{captured_at_ms:$captured_at_ms,classic_offsets:$classic,diskless_offsets:$diskless,worm_heads:$heads}' \
+  > "$evidence/capture-boundary.json"
+check capture-boundary jq -e '.captured_at_ms > 0 and (.classic_offsets|length)>0 and (.diskless_offsets|length)>0 and (.worm_heads|length)>0' "$evidence/capture-boundary.json"
+
+# Complete loss means no source log directory survives into materialization.
+for n in 1 2 3; do docker rm -f "$scope-source-$n" >/dev/null; done
+rm -rf "$work/source-node1" "$work/source-node2" "$work/source-node3"
+check source-volumes-destroyed test ! -e "$work/source-node1"
+disaster_ms=$(date +%s%3N)
+
+# The trusted tips are independently retained above and passed back during
+# authenticated restore; the diskless capture names committed cutoffs.
+restore_args=(
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access"
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$data_prefix"
+  --rlmm-snapshot /capture/rlmm-snapshot --metadata-snapshot /capture/cluster-metadata.checkpoint
+  --diskless-wal-capture /capture/diskless-wal-index.json
+  --worm-key-id qualification-worm --worm-public-key /worm/signing.pub
+  --log-dir /restored --node-id 1 --standalone --controller-listener "$scope-restored-1:9093" --report json
+)
+while read -r partition head; do restore_args+=(--worm-expect-head "$partition=$head"); done < "$evidence/worm-heads.txt"
+docker run --rm --network "$network" -v "$work/capture:/capture:ro" -v "$work/worm:/worm:ro" \
+  -v "$work/restored-node1:/restored" --entrypoint /usr/bin/krabka-restore "$broker_image" \
+  "${restore_args[@]}" > "$evidence/restore-report.json"
+check restore-boundary jq -e '
+  .authentication.tail_truncation_protected == true and
+  (.diskless.partitions | length) > 0 and
+  ([.diskless.partitions[] | .recovery_cutoff >= .delete_floor] | all)
+' "$evidence/restore-report.json"
+
+# The restored node is fresh and secured; no source directory is mounted.
+cat > "$work/restored-node1/broker.toml" <<EOF
+broker_id = 1
+log_dir = "/var/lib/krabka"
+controller_quorum_voters = ["1@$scope-restored-1:9093"]
+bootstrap_servers = ["$scope-restored-1:9093"]
+inter_broker_listener_name = "INTERNAL"
+controller_listener_protocol = "Plaintext"
+[[listeners]]
+name = "INTERNAL"
+bind_addr = "0.0.0.0:9092"
+advertised = "$scope-restored-1:9092"
+protocol = "Plaintext"
+[[listeners]]
+name = "CLIENT"
+bind_addr = "0.0.0.0:9094"
+advertised = "$scope-restored-1:9094"
+protocol = "SaslSsl"
+[listeners.tls_config]
+cert_path = "/etc/krabka/tls/server.pem"
+key_path = "/etc/krabka/tls/server.key"
+[listeners.sasl_config]
+enabled_mechanisms = ["SCRAM-SHA-512"]
+[authorization]
+type = "simple"
+super_users = ["admin"]
+[process]
+roles = ["controller", "broker"]
+EOF
+chmod -R a+rX "$work/restored-node1"
+docker run -d --name "$scope-restored-1" --network "$network" \
+  -v "$work/restored-node1:/var/lib/krabka" -v "$work/tls:/etc/krabka/tls:ro" \
+  "$broker_image" --broker-id 1 --config-file /var/lib/krabka/broker.toml
+for attempt in $(seq 1 90); do
+  if kafka restored topics --list; then break; fi
+  test "$attempt" -lt 90
+  sleep 2
+done
+docker run --rm --network "$network" -v "$work:/work:ro" --entrypoint /usr/bin/krabka-backup "$broker_image" restore-offsets \
+  --bootstrap-server "$scope-restored-1:9094" --command-config /work/backup.properties \
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix"
+
+for topic in classic diskless; do
+  messages=200
+  if [ "$topic" = classic ]; then messages=201; fi
+  kafka restored get-offsets --topic "$topic" > "$evidence/restored-$topic-offsets.txt"
+  kafka restored configs --describe --topic "$topic" > "$evidence/restored-$topic-config.txt"
+  check "$topic-original-offsets" grep -Eq "^$topic:[[:space:]]*0:[[:space:]]*[1-9][0-9]*$" "$evidence/restored-$topic-offsets.txt"
+  check "$topic-settings" cmp "$evidence/source-$topic-config.txt" "$evidence/restored-$topic-config.txt"
+  docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
+    /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$scope-restored-1:9094" \
+    --consumer.config /work/admin.properties --topic "$topic" --from-beginning \
+    --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/restored-$topic-ledger.txt"
+  check "$topic-ledger" cmp "$evidence/source-$topic-ledger.txt" "$evidence/restored-$topic-ledger.txt"
+done
+kafka restored consumer-groups --describe --group dr-group > "$evidence/restored-group-offsets.txt"
+awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/restored-group-offsets.txt" > "$evidence/restored-group-positions.txt"
+check consumer-positions cmp "$evidence/source-group-positions.txt" "$evidence/restored-group-positions.txt"
+restore_ready_ms=$(date +%s%3N)
+jq -n --argjson captured_at_ms "$capture_ms" --argjson source_started_ms "$source_started_ms" \
+  --argjson disaster_ms "$disaster_ms" --argjson restore_ready_ms "$restore_ready_ms" \
+  '{capture_boundary_ms:$captured_at_ms,disaster_ms:$disaster_ms,rpo_ms:($disaster_ms-$captured_at_ms),rto_ms:($restore_ready_ms-$disaster_ms),source_runtime_ms:($captured_at_ms-$source_started_ms)}' \
+  > "$evidence/rpo-rto.json"
+check measured-rpo-rto jq -e '.rpo_ms >= 0 and .rto_ms > 0' "$evidence/rpo-rto.json"
+
+# Failure copies are mutable by design: they prove the consumers of archive
+# evidence reject hostile bytes without weakening the locked source bucket.
+for bad in tampered missing; do
+  docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
+    "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc mb local/$bad; mc mirror local/$bucket local/$bad"
+done
+tamper_object=$(grep '\.log$' "$evidence/archive-before.txt" | head -1 | sed "s#local/$bucket#local/tampered#")
+missing_manifest=$(grep '\.manifest$' "$evidence/archive-before.txt" | tail -1 | sed "s#local/$bucket#local/missing#")
+test -n "$tamper_object" -a -n "$missing_manifest"
+docker run --rm -i --network "$network" --entrypoint /bin/sh "$mc_image" -c \
+  "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; printf hostile | mc pipe '$tamper_object'; mc rm '$missing_manifest'"
+for bad in tampered missing; do
+  if AWS_ACCESS_KEY_ID=$access AWS_SECRET_ACCESS_KEY=$secret AWS_REGION=us-east-1 \
+    docker run --rm --network "$network" -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION \
+      -v "$work/worm:/worm:ro" --entrypoint /usr/bin/krabka-worm-verify "$broker_image" verify \
+      --bucket "$bad" --region us-east-1 --endpoint "http://$scope-minio:9000" --allow-http \
+      --prefix "$data_prefix" --key-id qualification-worm --public-key /worm/signing.pub --deep --strict-orphans; then
+    echo "$bad archive unexpectedly verified" >&2
+    exit 1
+  fi
+  printf '%s\n' "$bad-rejected" >> "$evidence/checks.txt"
+  mkdir -p "$work/$bad-target"
+  chmod 0777 "$work/$bad-target"
+  bad_restore_args=()
+  for arg in "${restore_args[@]}"; do
+    if [ "$arg" = "$bucket" ]; then
+      bad_restore_args+=("$bad")
+    else
+      bad_restore_args+=("$arg")
+    fi
+  done
+  if docker run --rm --network "$network" -v "$work/capture:/capture:ro" -v "$work/worm:/worm:ro" \
+    -v "$work/$bad-target:/restored" --entrypoint /usr/bin/krabka-restore "$broker_image" \
+    "${bad_restore_args[@]}"; then
+    echo "$bad archive unexpectedly restored" >&2
+    exit 1
+  fi
+  printf '%s\n' "$bad-restore-rejected" >> "$evidence/checks.txt"
+done
+if docker run --rm --network "$network" --entrypoint /usr/bin/krabka-backup "$broker_image" list \
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id bad \
+  --archive-s3-secret-access-key bad --archive-s3-allow-http --archive-prefix "$capture_prefix"; then
+  echo 'bad credentials unexpectedly read the archive' >&2
+  exit 1
+fi
+printf 'bad-credentials\n' >> "$evidence/checks.txt"
+mkdir -p "$work/untrusted-target"
+chmod 0777 "$work/untrusted-target"
+if docker run --rm --network "$network" -v "$work/capture:/capture:ro" -v "$work/worm:/worm:ro" \
+  -v "$work/untrusted-target:/restored" --entrypoint /usr/bin/krabka-restore "$broker_image" \
+  "${restore_args[@]/\/worm\/signing.pub/\/worm\/untrusted.pub}"; then
+  echo 'untrusted WORM key unexpectedly restored' >&2
+  exit 1
+fi
+printf 'untrusted-worm-key\n' >> "$evidence/checks.txt"
+"""
+
 def gate_script(name):
     """The exact commands retained beside each result and bound to the candidate."""
     return _COMMON + {
@@ -293,6 +754,7 @@ def gate_script(name):
         "operator-lifecycle": _LIFECYCLE,
         "cli-admin": _CLI,
         "observability-recovery": _OBSERVABILITY,
+        "disaster-recovery": _DISASTER_RECOVERY,
     }[name]
 
 def run_gate(ctx, document, identity, name, digest):

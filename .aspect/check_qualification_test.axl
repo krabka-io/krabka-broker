@@ -27,6 +27,7 @@ _EVIDENCE = {
     "operator-lifecycle": ["certificate-rotation", "ledger", "scale-down", "upgrade"],
     "cli-admin": ["commands", "state"],
     "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
+    "disaster-recovery": ["capture-boundary", "classic", "credentials", "diskless", "ledger", "rpo-rto", "settings", "worm"],
 }
 _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
@@ -102,6 +103,7 @@ def _test_a_qualified_manifest_is_valid(_ctx):
 def _candidate():
     document = _manifest(artifact_digest = _DIGEST)
     document["schema"] = 2
+    document["gates"].append({"name": "disaster-recovery", "issue": 555, "status": "pending", "evidence": []})
     document["runner_sha256"] = runner_digest()
     return document
 
@@ -158,7 +160,7 @@ def _test_receipts_reject_zero_skipped_failed_or_uncounted_checks(_ctx):
         result.update({"tests_passed": count, "checks": checks, "exit_code": exit_code})
         check_eq("invalid execution evidence", bool(result_problems(document, "installation", result)), True)
 
-def _test_final_candidate_requires_all_four_fresh_receipts(_ctx):
+def _test_final_candidate_requires_all_five_fresh_receipts(_ctx):
     document = _candidate()
     document["status"] = "qualified"
     for gate in document["gates"]:
@@ -171,6 +173,16 @@ def _test_final_candidate_requires_all_four_fresh_receipts(_ctx):
     check_eq("historical evidence is insufficient", bool(manifest_problems(document, final = True)), True)
     document["gates"].pop()
     check_eq("missing gate", len([problem for problem in manifest_problems(document, final = True) if "exactly once" in problem]), 1)
+
+def _test_schema_one_stays_historical_and_schema_two_requires_disaster_recovery(_ctx):
+    historical = _manifest()
+    check_eq("historical M20", manifest_problems(historical), [])
+    historical["gates"].append({"name": "disaster-recovery", "issue": 555, "status": "pending", "evidence": []})
+    check_eq("schema one extra gate", bool(manifest_problems(historical)), True)
+
+    candidate = _candidate()
+    candidate["gates"].pop()
+    check_eq("schema two missing DR", len([problem for problem in manifest_problems(candidate) if "exactly once" in problem]), 1)
 
 def _test_all_adapters_are_executable_shell(ctx):
     for name in _EVIDENCE:
@@ -193,6 +205,34 @@ def _test_installation_finalizes_topics_before_the_cluster(_ctx):
     check_eq("topic delete exists", topic_delete >= 0, True)
     check_eq("cluster delete exists", cluster_delete >= 0, True)
     check_eq("topic first", topic_delete < cluster_delete, True)
+
+def _test_disaster_recovery_uses_the_packaged_secured_loss_path(_ctx):
+    commands = gate_script("disaster-recovery")
+    for requirement in [
+        "krabka-backup",
+        "krabka-restore",
+        "krabka-worm-verify",
+        "SaslSsl",
+        "SCRAM-SHA-512",
+        "--add-scram",
+        "--command-config",
+        "--archive-s3-endpoint",
+        "--worm-expect-head",
+        "--worm-signing-key-id",
+        "diskless-capture WORM head",
+        "--replication-factor 3",
+        "capture-boundary.json",
+        "rpo-rto.json",
+        "classic",
+        "diskless",
+        "__diskless_wal_index",
+        "messages=201",
+        "bad-credentials",
+        "invalid-certificate",
+        "denied-acl",
+        "no-manifest",
+    ]:
+        check_eq(requirement, requirement in commands, True)
 
 def _test_a_failed_smoke_pipeline_cannot_pass(ctx):
     script = "set -eu\nfalse | tee /dev/null\nexit 0\n"
@@ -252,10 +292,12 @@ check_qualification_tests = suite("check-qualification", [
     _test_candidate_identity_ignores_progress_but_binds_every_input,
     _test_receipts_reject_the_wrong_gate_candidate_and_runner,
     _test_receipts_reject_zero_skipped_failed_or_uncounted_checks,
-    _test_final_candidate_requires_all_four_fresh_receipts,
+    _test_final_candidate_requires_all_five_fresh_receipts,
+    _test_schema_one_stays_historical_and_schema_two_requires_disaster_recovery,
     _test_all_adapters_are_executable_shell,
     _test_installation_enables_the_streams_protocol,
     _test_installation_finalizes_topics_before_the_cluster,
+    _test_disaster_recovery_uses_the_packaged_secured_loss_path,
     _test_a_failed_smoke_pipeline_cannot_pass,
     _test_retained_evidence_cannot_be_substituted,
     _test_assembly_writes_a_verified_manifest_and_real_bundles,

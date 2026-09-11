@@ -6,20 +6,25 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use krabka_audit::FileEd25519Signer;
 use krabka_client_admin::AdminClient;
 use krabka_client_core::{
     Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
+    security::ClientSecurity,
 };
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
+use krabka_remote_storage::{ObjectEntry, Sha256Digest};
+use krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig};
 
 use crate::{
     archive::{Archive, ArchiveArgs},
     capture::{RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, newest_metadata_checkpoint},
-    cli::LATEST,
+    cli::{CaptureSigningArgs, LATEST},
+    connection::SecurityArgs,
     error::BackupError,
     manifest::{
-        Artifact, CAPTURE_ROOT, GROUP_OFFSETS, MANIFEST, METADATA_CHECKPOINT, Manifest,
-        RLMM_SNAPSHOT, artifact_problem, sha256_hex,
+        Artifact, CAPTURE_ROOT, DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, METADATA_CHECKPOINT,
+        Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
     },
     offsets::{GroupOffsetsFile, commit_refusals, commit_request, group_offsets},
 };
@@ -46,6 +51,43 @@ fn now_ms() -> u64 {
 pub async fn capture(
     log_dir: Option<&std::path::Path>,
     bootstrap_server: Option<&str>,
+    archive: &ArchiveArgs,
+) -> Result<String, BackupError> {
+    capture_secured(
+        log_dir,
+        bootstrap_server,
+        None,
+        &CaptureSigningArgs::default(),
+        archive,
+    )
+    .await
+}
+
+/// Load command-config security and capture this node's restore inputs.
+///
+/// # Errors
+///
+/// Returns the same errors as [`capture`], plus command-config read or parse
+/// failures.
+pub async fn capture_configured(
+    log_dir: Option<&std::path::Path>,
+    bootstrap_server: Option<&str>,
+    security: &SecurityArgs,
+    signing: &CaptureSigningArgs,
+    archive: &ArchiveArgs,
+) -> Result<String, BackupError> {
+    let client_security = match bootstrap_server {
+        Some(bootstrap) => security.load(bootstrap).await?,
+        None => None,
+    };
+    capture_secured(log_dir, bootstrap_server, client_security, signing, archive).await
+}
+
+async fn capture_secured(
+    log_dir: Option<&std::path::Path>,
+    bootstrap_server: Option<&str>,
+    security: Option<ClientSecurity>,
+    signing: &CaptureSigningArgs,
     archive: &ArchiveArgs,
 ) -> Result<String, BackupError> {
     let store = archive.open()?;
@@ -96,12 +138,17 @@ pub async fn capture(
     }
 
     if let Some(bootstrap) = bootstrap_server {
-        let offsets = fetch_group_offsets(bootstrap).await?;
+        let offsets = fetch_group_offsets(bootstrap, security.clone()).await?;
         let bytes = serde_json::to_vec_pretty(&offsets).map_err(|source| BackupError::Json {
             context: GROUP_OFFSETS.to_owned(),
             source,
         })?;
         artifacts.push(upload(&store, &id, GROUP_OFFSETS, bootstrap, bytes).await?);
+        if let Some(bytes) =
+            capture_diskless_index(&store, bootstrap, security.clone(), signing).await?
+        {
+            artifacts.push(upload(&store, &id, DISKLESS_WAL_INDEX, bootstrap, bytes).await?);
+        }
     }
 
     if artifacts.is_empty() {
@@ -142,6 +189,88 @@ pub async fn capture(
         println!("  WARNING: {missing}");
     }
     Ok(id)
+}
+
+async fn capture_diskless_index(
+    store: &Archive,
+    bootstrap: &str,
+    security: Option<ClientSecurity>,
+    signing: &CaptureSigningArgs,
+) -> Result<Option<Vec<u8>>, BackupError> {
+    const TOPIC: &str = "__diskless_wal_index";
+    let mut admin = connect_admin(bootstrap, security.clone()).await?;
+    let metadata = admin
+        .metadata(&[])
+        .await
+        .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
+    if !metadata
+        .topics
+        .iter()
+        .any(|topic| topic.name == TOPIC && topic.error.is_none())
+    {
+        return Ok(None);
+    }
+    let names: std::collections::HashMap<_, _> = metadata
+        .topics
+        .into_iter()
+        .filter_map(|topic| {
+            topic
+                .topic_id
+                .map(|id| (uuid::Uuid::from_bytes(id.into_bytes()), topic.name))
+        })
+        .collect();
+    let mut config = KafkaMetadataLogConfig::new(bootstrap);
+    TOPIC.clone_into(&mut config.topic);
+    "krabka-backup-diskless-capture".clone_into(&mut config.client_id);
+    config.compacted = true;
+    config.security = security;
+    let log = KafkaMetadataEventLog::start(config)
+        .await
+        .map_err(|error| BackupError::Cluster(format!("diskless WAL index: {error}")))?;
+    let mut capture = crate::diskless::capture_projection(log.clone(), &names, now_ms())
+        .await
+        .map_err(BackupError::Integrity)?;
+    log.shutdown().await;
+    if let (Some(key_id), Some(key_path)) = (
+        signing.worm_signing_key_id.as_ref(),
+        signing.worm_signing_key.as_ref(),
+    ) {
+        let signer = FileEd25519Signer::from_pkcs8_file(key_path, key_id.clone())
+            .map_err(|error| BackupError::InvalidArgument(error.to_string()))?;
+        let keys = capture
+            .partitions
+            .iter()
+            .flat_map(|partition| &partition.ranges)
+            .map(|range| range.object_key.clone())
+            .collect::<BTreeSet<_>>();
+        let mut claims = Vec::with_capacity(keys.len());
+        for key in keys {
+            let bytes = store.get_absolute(&key).await?;
+            claims.push(ObjectEntry {
+                suffix: std::path::Path::new(&key)
+                    .extension()
+                    .map_or_else(String::new, |extension| {
+                        format!(".{}", extension.to_string_lossy())
+                    }),
+                key,
+                size_bytes: bytes.len() as u64,
+                sha256: Sha256Digest::of(&bytes),
+                e_tag: None,
+                version_id: None,
+                create_precondition: false,
+            });
+        }
+        let head = capture
+            .seal(claims, &signer)
+            .map_err(BackupError::Integrity)?;
+        println!("  diskless-capture WORM head {head}");
+    }
+    serde_json::to_vec_pretty(&capture)
+        .map(Some)
+        .map_err(|source| BackupError::Json {
+            context: DISKLESS_WAL_INDEX.to_owned(),
+            source,
+        })
 }
 
 /// Put one artifact into the capture and record what was written.
@@ -235,6 +364,39 @@ pub async fn restore_offsets(
     dry_run: bool,
     archive: &ArchiveArgs,
 ) -> Result<usize, BackupError> {
+    restore_offsets_secured(capture, bootstrap_server, None, dry_run, archive).await
+}
+
+/// Load command-config security and restore one capture's group offsets.
+///
+/// # Errors
+///
+/// Returns the same errors as [`restore_offsets`], plus command-config read or
+/// parse failures.
+pub async fn restore_offsets_configured(
+    capture: &str,
+    bootstrap_server: &str,
+    security: &SecurityArgs,
+    dry_run: bool,
+    archive: &ArchiveArgs,
+) -> Result<usize, BackupError> {
+    restore_offsets_secured(
+        capture,
+        bootstrap_server,
+        security.load(bootstrap_server).await?,
+        dry_run,
+        archive,
+    )
+    .await
+}
+
+async fn restore_offsets_secured(
+    capture: &str,
+    bootstrap_server: &str,
+    security: Option<ClientSecurity>,
+    dry_run: bool,
+    archive: &ArchiveArgs,
+) -> Result<usize, BackupError> {
     let store = archive.open()?;
     let id = resolve_capture(&store, capture).await?;
     let manifest = read_manifest(&store, &id).await?;
@@ -263,10 +425,11 @@ pub async fn restore_offsets(
         return Ok(offsets.offset_count());
     }
 
-    let topic_ids = topic_ids(bootstrap_server, &offsets).await?;
+    let topic_ids = topic_ids(bootstrap_server, &offsets, security.clone()).await?;
     let client = Client::builder()
         .bootstrap(bootstrap_server)
         .client_id("krabka-backup")
+        .maybe_security(security)
         .build()
         .await
         .map_err(|error| {
@@ -318,6 +481,7 @@ pub async fn restore_offsets(
 async fn topic_ids(
     bootstrap_server: &str,
     offsets: &GroupOffsetsFile,
+    security: Option<ClientSecurity>,
 ) -> Result<BTreeMap<String, WireUuid>, BackupError> {
     let names: BTreeSet<&str> = offsets
         .groups
@@ -327,7 +491,7 @@ async fn topic_ids(
     if names.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let mut admin = connect_admin(bootstrap_server).await?;
+    let mut admin = connect_admin(bootstrap_server, security).await?;
     let wanted: Vec<&str> = names.into_iter().collect();
     let metadata = admin
         .metadata(&wanted)
@@ -345,8 +509,11 @@ async fn topic_ids(
 }
 
 /// Read every group's committed offsets from a live cluster.
-async fn fetch_group_offsets(bootstrap_server: &str) -> Result<GroupOffsetsFile, BackupError> {
-    let mut admin = connect_admin(bootstrap_server).await?;
+async fn fetch_group_offsets(
+    bootstrap_server: &str,
+    security: Option<ClientSecurity>,
+) -> Result<GroupOffsetsFile, BackupError> {
+    let mut admin = connect_admin(bootstrap_server, security).await?;
     let groups = admin
         .list_groups()
         .await
@@ -365,8 +532,11 @@ async fn fetch_group_offsets(bootstrap_server: &str) -> Result<GroupOffsetsFile,
     Ok(captured)
 }
 
-async fn connect_admin(bootstrap_server: &str) -> Result<AdminClient, BackupError> {
-    AdminClient::connect(&[bootstrap_server.to_owned()])
+async fn connect_admin(
+    bootstrap_server: &str,
+    security: Option<ClientSecurity>,
+) -> Result<AdminClient, BackupError> {
+    AdminClient::connect_secured(&[bootstrap_server.to_owned()], security)
         .await
         .map_err(|error| BackupError::Cluster(format!("cannot reach {bootstrap_server}: {error}")))
 }

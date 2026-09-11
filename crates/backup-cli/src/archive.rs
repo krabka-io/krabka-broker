@@ -221,6 +221,14 @@ impl Archive {
         Ok(self.client.get(&self.key(relative)).await?.to_vec())
     }
 
+    /// Read an exact object key without applying the backup-output prefix.
+    ///
+    /// # Errors
+    /// Returns [`BackupError::ObjectStore`] when the object cannot be read.
+    pub async fn get_absolute(&self, key: &str) -> Result<Vec<u8>, BackupError> {
+        Ok(self.client.get(&Path::from(key)).await?.to_vec())
+    }
+
     /// The distinct directory names one level below `relative`.
     ///
     /// Object stores have no directories, so this lists the keys under the

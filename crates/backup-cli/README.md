@@ -50,6 +50,7 @@ a cluster at once:
 krabka-backup capture \
   --log-dir /var/lib/krabka \
   --bootstrap-server broker-1:9092 \
+  --command-config /etc/krabka/backup-client.properties \
   --archive-s3-bucket krabka-tier \
   --archive-s3-region eu-west-1 \
   --archive-prefix prod/
@@ -67,6 +68,7 @@ After a restore, put the group positions back:
 ```sh
 krabka-backup restore-offsets \
   -b restored-broker:9092 \
+  --command-config /etc/krabka/backup-client.properties \
   --archive-s3-bucket krabka-tier --archive-prefix prod/
 ```
 
@@ -74,10 +76,10 @@ krabka-backup restore-offsets \
 
 | Subcommand | Flags | What it does |
 | --- | --- | --- |
-| `capture` | `--log-dir <dir>`, `--bootstrap-server <host:port>` (`-b`) | Copies the RLMM snapshot, the newest metadata checkpoint and every group's committed offsets into `restore-inputs/<capture-id>/`, with a `manifest.json`. Each source is optional; at least one has to give something. |
+| `capture` | `--log-dir <dir>`, `--bootstrap-server <host:port>` (`-b`), `--command-config <file>`, `--worm-signing-key-id <id> --worm-signing-key <path>` | Copies the RLMM snapshot, newest metadata checkpoint, committed group offsets, and committed diskless-WAL projection into `restore-inputs/<capture-id>/`, with a `manifest.json`. The signing pair authenticates the diskless capture boundary and every referenced WAL object. Each source is optional; at least one has to give something. |
 | `list` | none | Names every capture in the archive, oldest first, with the artifacts it holds. |
 | `verify` | `--capture <id\|latest>` | Re-reads each artifact and checks its size and SHA-256 against the manifest. |
-| `restore-offsets` | `--capture <id\|latest>`, `-b <host:port>`, `--dry-run` | Commits the captured offsets into a restored cluster. |
+| `restore-offsets` | `--capture <id\|latest>`, `-b <host:port>`, `--command-config <file>`, `--dry-run` | Commits the captured offsets into a restored cluster. |
 
 A capture id is the epoch millisecond, zero-padded, so the plain alphabetical
 order of the directory names is their time order and `latest` is a listing and a
@@ -115,6 +117,35 @@ The offsets a capture holds are as old as the capture. A group that committed
 after the last capture resumes at the older position and reads some records a
 second time, which is the at-least-once behaviour every Kafka consumer already
 has to be correct under.
+
+## Secured clusters
+
+`capture` and `restore-offsets` accept the same Kafka client-properties file as
+the JVM tools' `--command-config`. The backup tool reads `security.protocol`
+(`PLAINTEXT`, `SSL`, `SASL_PLAINTEXT` or `SASL_SSL`), `sasl.mechanism`
+(`PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512`) and `sasl.jaas.config`.
+TLS trust and client identity use PEM files:
+
+```properties
+security.protocol=SASL_SSL
+ssl.truststore.type=PEM
+ssl.truststore.location=/etc/krabka/ca.pem
+ssl.server.name=broker.example
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="backup" password="secret";
+```
+
+For mutual TLS, set `ssl.keystore.type=PEM`,
+`ssl.keystore.location=<client certificate PEM>` and
+`ssl.key.location=<client private-key PEM>`. The properties file is never
+copied into the archive or rendered in command output; restrict its filesystem
+permissions because it contains the SASL password and private-key path.
+
+The backup principal needs `Describe` on every captured group and `Read` on its
+topics. A diskless capture also needs `Read`, `Write`, and `Describe` on
+`__diskless_wal_index`. Restoring offsets needs `Describe` and `Read` on each
+captured group plus `Describe` and `Read` on each captured topic. Grant those
+operations only on the group and topic prefixes covered by the backup policy.
 
 ## Exit codes
 

@@ -120,6 +120,20 @@ pub struct ArchiveArgs {
     /// finalized feature levels are recovered from it.
     #[arg(long, value_name = "PATH")]
     pub metadata_snapshot: Option<PathBuf>,
+
+    /// Committed diskless-WAL projection captured by `krabka backup`.
+    #[arg(long, value_name = "PATH")]
+    pub diskless_wal_capture: Option<PathBuf>,
+
+    /// Trusted WORM manifest signing-key id. Repeat with
+    /// `--worm-public-key` to trust archives spanning a key rotation.
+    #[arg(long, value_name = "ID", requires = "worm_public_key")]
+    pub worm_key_id: Vec<String>,
+
+    /// Raw 32-byte Ed25519 public key paired by position with
+    /// `--worm-key-id`. Supplying a pair enables authenticated restore.
+    #[arg(long, value_name = "PATH", requires = "worm_key_id")]
+    pub worm_public_key: Vec<PathBuf>,
 }
 
 /// The cluster the restore writes.
@@ -174,6 +188,10 @@ pub struct RestoreArgs {
     /// Where the archive is.
     #[command(flatten)]
     pub archive: ArchiveArgs,
+
+    /// Independently pinned WORM chain head, `PARTITION_DIR=64_HEX`.
+    #[arg(long, value_name = "PARTITION_DIR=HEX", requires = "worm_key_id")]
+    pub worm_expect_head: Vec<String>,
 
     /// The cluster the restore writes.
     #[command(flatten)]

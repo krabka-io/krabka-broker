@@ -26,6 +26,7 @@ name = "krabka-backup"
 path = "src/main.rs"
 
 [dependencies]
+krabka-audit = { workspace = true }
 # `ListGroups` and `OffsetFetch` for the offsets capture. The tool speaks only
 # stock Kafka APIs, so it also runs against a cluster that is not krabka.
 krabka-client-admin = { version = "0.4.0" }
@@ -33,12 +34,16 @@ krabka-client-admin = { version = "0.4.0" }
 # `OffsetCommit` that puts offsets back is sent over.
 krabka-client-core = { version = "0.4.0" }
 krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-security = { workspace = true }
 # The archive the capture is written to is the archive `krabka restore` reads,
 # so the backend mapping is the object-store layer the restore uses, not the
 # broker's TOML config: a backup runs beside a broker, and a restore runs when
 # there is none.
 krabka-object-store = { version = "0.5.4", path = "../object-store" }
+krabka-remote-storage = { version = "0.5.4", path = "../remote-storage" }
+krabka-remote-storage-topic = { version = "0.5.4", path = "../remote-storage-topic" }
 
+bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 futures-util = { workspace = true }
 hex = { workspace = true }
@@ -52,6 +57,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }

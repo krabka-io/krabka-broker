@@ -106,6 +106,17 @@ pub enum RestoreError {
         artifact: String,
     },
 
+    /// Trusted WORM evidence did not authenticate an archive object or chain.
+    #[error("WORM authentication failed: {reason}")]
+    Authenticity {
+        /// The failed trust check.
+        reason: String,
+    },
+
+    /// Captured diskless-WAL state or a required object is inconsistent.
+    #[error("integrity failure: {0}")]
+    Integrity(String),
+
     /// The bucket scan and the `--rlmm-snapshot` do not agree about a
     /// partition. One of the two is stale, and a restore must not pick for the
     /// operator.
@@ -205,6 +216,8 @@ impl RestoreError {
             Self::ChecksumMismatch { .. }
             | Self::TruncatedSegment { .. }
             | Self::TornCopy { .. }
+            | Self::Authenticity { .. }
+            | Self::Integrity(_)
             | Self::MetadataDisagreement { .. }
             | Self::MetadataSnapshot { .. }
             | Self::MetadataSnapshotTopicMismatch { .. }

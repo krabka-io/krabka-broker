@@ -32,6 +32,8 @@ async fn json_report_matches_the_fixtures_exact_record_and_segment_counts() {
         dry_run: false,
         log_dir: log_dir.clone(),
         cluster_id,
+        authentication: None,
+        diskless: None,
         metadata: MetadataRestoreReport {
             snapshot: None,
             topic_configs: 0,

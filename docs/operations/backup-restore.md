@@ -160,6 +160,20 @@ sequence written out for the day it is not a rehearsal.
 `crates/restore/tests/dr_roundtrip.rs` runs the whole of it in CI on every
 change, so the path in the runbook is a path that is exercised.
 
+The reusable candidate drill is the `disaster-recovery` leg of the
+`ecosystem qualification` workflow. It uses a digest-pinned broker image, an
+RF=3 TLS and SASL/SCRAM-SHA-512 source cluster and a locked S3-compatible
+bucket. Its backup principal has only the cluster, group, user-topic and
+`__diskless_wal_index` permissions capture needs. It records the
+capture manifest, independently held WORM chain heads, source ledger, topic
+settings and consumer positions before deleting every source data directory.
+The fresh cluster must reproduce those values through the capture boundary and
+the evidence bundle records measured RPO and RTO. Separate copies of the
+archive prove that changed data, missing manifests or objects, an untrusted
+chain head, and unavailable credentials fail closed. Both classic and diskless
+topics are part of a schema-2 qualification; the fast hermetic roundtrip remains
+the per-change gate.
+
 ## What comes back
 
 The restore's contract is stated in full in
@@ -175,12 +189,16 @@ The restore's contract is stated in full in
   feature levels come back whole.
 - **Committed group offsets**, from `krabka-backup restore-offsets`, and only
   from it.
+- **Committed diskless WAL state**, from the capture's
+  `diskless-wal-index.json`, when the archive contains diskless WAL objects.
+  Its capture boundary, delete floors and unavailable uncommitted tail are
+  reported separately from classic KIP-405 segments.
 
 What does not come back at all: the cluster id, unless it is passed; the node
 identity and the replica assignment, which the restore rewrites to the target
 node; in-flight transaction state, which lives in the never-tiered
-`__transaction_state`; and the contents of any diskless topic, whose records
-live in WAL objects that the restore cannot read.
+`__transaction_state`; and any classic active-segment or diskless uncommitted
+tail beyond the reported capture boundary.
 
 ## Related
 

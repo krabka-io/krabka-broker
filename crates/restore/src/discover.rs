@@ -357,7 +357,7 @@ pub async fn inventory(
         reconcile_with_snapshot(&mut partitions, args, snapshot_path)?;
     }
 
-    if partitions.is_empty() {
+    if partitions.is_empty() && args.archive.diskless_wal_capture.is_none() {
         return Err(RestoreError::EmptyArchive {
             prefix: store.prefix().unwrap_or("").to_owned(),
         });

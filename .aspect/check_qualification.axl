@@ -20,11 +20,18 @@ _REPOSITORIES = [
     "krabka-io/krabka-streams-java",
     "krabka-io/krabka-streams-rs",
 ]
+_HISTORICAL_GATES = {
+    "installation": 523,
+    "operator-lifecycle": 524,
+    "cli-admin": 525,
+    "observability-recovery": 526,
+}
 _GATES = {
     "installation": 523,
     "operator-lifecycle": 524,
     "cli-admin": 525,
     "observability-recovery": 526,
+    "disaster-recovery": 555,
 }
 _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
@@ -39,6 +46,7 @@ _EVIDENCE = {
     "operator-lifecycle": ["certificate-rotation", "ledger", "scale-down", "upgrade"],
     "cli-admin": ["commands", "state"],
     "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
+    "disaster-recovery": ["capture-boundary", "classic", "credentials", "diskless", "ledger", "rpo-rto", "settings", "worm"],
 }
 
 def _hex(value, length):
@@ -228,11 +236,12 @@ def manifest_problems(document, final = False):
         problems.append("components must name each canonical repository exactly once")
 
     gates = []
+    expected_gates = _GATES if candidate else _HISTORICAL_GATES
     for gate in document.get("gates", []):
         name = gate.get("name", "")
         gates.append(name)
-        if name not in _GATES or gate.get("issue") != _GATES.get(name):
-            problems.append("%s: gate does not name its Milestone 20 issue" % name)
+        if name not in expected_gates or gate.get("issue") != expected_gates.get(name):
+            problems.append("%s: gate does not name its schema's qualification issue" % name)
         if gate.get("status") not in ["pending", "passed"]:
             problems.append("%s: status must be pending or passed" % name)
         claimed = strict or gate.get("status") == "passed"
@@ -250,8 +259,8 @@ def manifest_problems(document, final = False):
         for evidence in gate.get("evidence", []):
             if not evidence.get("name") or not evidence.get("url", "").startswith("https://") or not _digest(evidence.get("sha256", "")):
                 problems.append("%s: evidence needs a name, https URL and sha256 digest" % name)
-    if sorted(gates) != sorted(_GATES.keys()):
-        problems.append("gates must name each Milestone 20 acceptance gate exactly once")
+    if sorted(gates) != sorted(expected_gates.keys()):
+        problems.append("gates must name each schema acceptance gate exactly once")
 
     if strict:
         if document.get("status") != "qualified":
@@ -282,6 +291,8 @@ def _impl(ctx: TaskContext) -> int:
             gate["status"] = "pending"
             gate["evidence"] = []
             gate.pop("result", None)
+        if "disaster-recovery" not in [gate.get("name") for gate in document["gates"]]:
+            document["gates"].append({"name": "disaster-recovery", "issue": 555, "status": "pending", "evidence": []})
         ctx.std.fs.write(root + "/" + ctx.args.new_candidate, json.encode(document) + "\n")
         return 0
     problems = manifest_problems(document, final = ctx.args.final)
@@ -315,7 +326,7 @@ check_qualification = task(
         "new_candidate": args.string(default = "", description = "Copy the manifest into a fresh draft at this repository-relative path."),
         "gate": args.string(default = "", description = "Execute one candidate gate; each invocation uses an isolated work directory."),
         "output": args.string(default = ".qualification", description = "Repository-relative evidence directory."),
-        "assemble": args.boolean(default = False, description = "Assemble and validate the four retained gate receipts."),
+        "assemble": args.boolean(default = False, description = "Assemble and validate the retained gate receipts."),
         "publish_prefix": args.string(default = "", description = "Immutable release download URL used by assembled evidence."),
     },
 )

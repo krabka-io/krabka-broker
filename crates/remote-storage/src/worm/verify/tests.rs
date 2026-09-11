@@ -388,6 +388,27 @@ async fn verify_reports_a_clean_archive_in_full() {
 }
 
 #[tokio::test]
+async fn authentication_returns_the_signed_object_claims() {
+    let archive = Archive::build(&[2]).await;
+    let authenticated = authenticate_archive(
+        &archive.store,
+        &VerifyRequest::default(),
+        &archive.trusted(),
+    )
+    .await
+    .unwrap();
+
+    check!(authenticated.report().ok());
+    check!(authenticated.report().fully_attested());
+    check!(authenticated.objects().len() == 4);
+    for segment in &archive.segments {
+        for entry in &segment.entries {
+            check!(authenticated.objects().get(&entry.key) == Some(entry));
+        }
+    }
+}
+
+#[tokio::test]
 async fn verify_of_an_empty_archive_is_ok() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let report = verify_archive(

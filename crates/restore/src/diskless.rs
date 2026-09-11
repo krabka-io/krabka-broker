@@ -1,0 +1,307 @@
+//! Validation and materialization of captured committed diskless-WAL state.
+
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
+
+use bytes::Bytes;
+use krabka_ids::{LeaderEpoch, Offset, ProducerId};
+use krabka_log::{Log, LogConfig, VerbatimBatch, name};
+use krabka_protocol::records::{Attributes, validate_one_v2_batch};
+use krabka_remote_storage::{
+    ObjectEntry, Sha256Digest, TopicIdPartition, TrustedManifestKeys,
+    diskless::{CAPTURE_HEAD_NAME, DisklessWalCapture, parse_wal_object},
+};
+use object_store::path::Path as ObjectPath;
+
+use crate::{
+    ArchiveInventory, ArchiveStore, PartitionInventory, RestoreArgs, RestoreError,
+    report::{DisklessPartitionReport, DisklessRestoreReport},
+};
+
+pub(super) async fn load(path: Option<&Path>) -> Result<Option<DisklessWalCapture>, RestoreError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let bytes = tokio::fs::read(path).await?;
+    DisklessWalCapture::from_slice(&bytes)
+        .map(Some)
+        .map_err(RestoreError::Integrity)
+}
+
+pub(super) fn add_partitions(
+    inventory: &mut ArchiveInventory,
+    capture: &DisklessWalCapture,
+    args: &RestoreArgs,
+) -> Result<(), RestoreError> {
+    let mut seen = HashSet::new();
+    for partition in &capture.partitions {
+        if !args.selects_topic(&partition.topic) {
+            continue;
+        }
+        if !seen.insert((partition.topic_id, partition.partition)) {
+            return Err(RestoreError::Integrity(format!(
+                "duplicate diskless capture partition {}-{}",
+                partition.topic, partition.partition
+            )));
+        }
+        if inventory.partitions.iter().any(|existing| {
+            existing.partition.topic_id == partition.topic_id
+                && existing.partition.partition == partition.partition
+        }) {
+            return Err(RestoreError::Integrity(format!(
+                "{}-{} is both classic and diskless in the restore inputs",
+                partition.topic, partition.partition
+            )));
+        }
+        inventory.partitions.push(PartitionInventory {
+            partition: TopicIdPartition::new(
+                partition.topic_id,
+                partition.topic.clone(),
+                partition.partition,
+            ),
+            segments: Vec::new(),
+        });
+    }
+    inventory.partitions.sort_by(|a, b| {
+        (a.partition.topic.as_str(), a.partition.partition)
+            .cmp(&(b.partition.topic.as_str(), b.partition.partition))
+    });
+    for requested in args
+        .to_offset
+        .iter()
+        .map(|bound| &bound.partition)
+        .chain(args.exclude_offset.iter().map(|range| &range.partition))
+    {
+        if !inventory.holds(&requested.topic, requested.partition) {
+            return Err(RestoreError::UnknownPartition {
+                topic: requested.topic.clone(),
+                partition: requested.partition,
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn authenticate(
+    capture: &DisklessWalCapture,
+    trusted: &TrustedManifestKeys,
+    args: &RestoreArgs,
+) -> Result<(std::collections::BTreeMap<String, ObjectEntry>, String), RestoreError> {
+    let expected = args.worm_expect_head.iter().find_map(|value| {
+        value
+            .split_once('=')
+            .filter(|(name, _)| *name == CAPTURE_HEAD_NAME)
+            .map(|(_, head)| head)
+    });
+    let claims = capture
+        .authenticate(trusted, expected)
+        .map_err(|reason| RestoreError::Authenticity { reason })?;
+    let head = capture
+        .authentication
+        .as_ref()
+        .map(|manifest| krabka_remote_storage::manifest_head(&manifest.body).to_string())
+        .ok_or_else(|| RestoreError::Authenticity {
+            reason: "diskless capture has no signed WORM boundary".to_owned(),
+        })?;
+    Ok((claims, head))
+}
+
+pub(super) async fn materialize(
+    store: &ArchiveStore,
+    args: &RestoreArgs,
+    capture: &DisklessWalCapture,
+    authenticated: Option<&std::collections::BTreeMap<String, ObjectEntry>>,
+) -> Result<DisklessRestoreReport, RestoreError> {
+    capture.validate().map_err(RestoreError::Integrity)?;
+    let mut objects: HashMap<String, Bytes> = HashMap::new();
+    let mut reports = Vec::new();
+    for partition in capture
+        .partitions
+        .iter()
+        .filter(|partition| args.selects_topic(&partition.topic))
+    {
+        let mut log = None;
+        if !args.dry_run {
+            let dir =
+                name::partition_dir(&args.target.log_dir, &partition.topic, partition.partition);
+            std::fs::create_dir_all(&dir)?;
+            log = Some(Log::open(&dir, LogConfig::default())?);
+        }
+        let mut object_names = HashSet::new();
+        let mut batches = 0u64;
+        let mut records = 0u64;
+        let mut observed_end = partition.delete_floor;
+        for range in &partition.ranges {
+            let object = if let Some(bytes) = objects.get(&range.object_key) {
+                bytes.clone()
+            } else {
+                let bytes = store
+                    .ops()
+                    .get(&ObjectPath::from(range.object_key.as_str()))
+                    .await?;
+                if let Some(authenticated) = authenticated {
+                    let expected = authenticated.get(&range.object_key).ok_or_else(|| {
+                        RestoreError::Authenticity {
+                            reason: format!(
+                                "diskless WAL object `{}` is not named by the signed capture",
+                                range.object_key
+                            ),
+                        }
+                    })?;
+                    if expected.size_bytes != bytes.len() as u64
+                        || expected.sha256 != Sha256Digest::of(&bytes)
+                    {
+                        return Err(RestoreError::Authenticity {
+                            reason: format!(
+                                "diskless WAL object `{}` changed after authentication",
+                                range.object_key
+                            ),
+                        });
+                    }
+                }
+                objects.insert(range.object_key.clone(), bytes.clone());
+                bytes
+            };
+            object_names.insert(range.object_key.as_str());
+            let manifests = parse_wal_object(&object).map_err(|reason| {
+                RestoreError::Integrity(format!("{}: {reason}", range.object_key))
+            })?;
+            if !manifests.iter().any(|run| {
+                run.topic_id == range.entry.topic_id
+                    && run.partition == range.entry.partition
+                    && run.first_offset == range.entry.first_offset
+                    && run.last_offset == range.entry.last_offset
+                    && run.byte_start == range.entry.byte_start
+                    && run.byte_len == range.entry.byte_len
+            }) {
+                return Err(RestoreError::Integrity(format!(
+                    "{}: capture range does not exactly match a CKWL footer run",
+                    range.object_key
+                )));
+            }
+            let start = usize::try_from(range.entry.byte_start)
+                .map_err(|_| RestoreError::Integrity("diskless WAL byte start overflow".into()))?;
+            let len = usize::try_from(range.entry.byte_len)
+                .map_err(|_| RestoreError::Integrity("diskless WAL byte length overflow".into()))?;
+            let end = start
+                .checked_add(len)
+                .filter(|end| *end <= object.len())
+                .ok_or_else(|| {
+                    RestoreError::Integrity(format!(
+                        "{}: captured byte range is outside object",
+                        range.object_key
+                    ))
+                })?;
+            let mut cursor = start;
+            let mut first = None;
+            let mut last: Option<i64> = None;
+            while cursor < end {
+                let validated = validate_one_v2_batch(&object[cursor..end])?;
+                let header = validated.header;
+                let batch_end = cursor.checked_add(validated.total_len).ok_or_else(|| {
+                    RestoreError::Integrity("diskless WAL byte range overflow".into())
+                })?;
+                if validated.total_len == 0 || batch_end > end {
+                    return Err(RestoreError::Integrity(format!(
+                        "{}: captured range disagrees with batch framing",
+                        range.object_key
+                    )));
+                }
+                let batch_last = header
+                    .base_offset
+                    .get()
+                    .checked_add(i64::from(header.last_offset_delta.get()))
+                    .ok_or_else(|| {
+                        RestoreError::Integrity("diskless WAL batch offset overflow".into())
+                    })?;
+                if last.is_some_and(|previous| {
+                    previous.checked_add(1) != Some(header.base_offset.get())
+                }) {
+                    return Err(RestoreError::Integrity(format!(
+                        "{}: non-contiguous batch offsets inside captured run",
+                        range.object_key
+                    )));
+                }
+                first.get_or_insert(header.base_offset.get());
+                last = Some(batch_last);
+                if let Some(log) = log.as_mut() {
+                    let base = Offset(header.base_offset.get());
+                    if log.log_end_offset() == Offset(0) && base != Offset(0) {
+                        log.reset_to(base)?;
+                    }
+                    log.reconcile_next_offset(base);
+                    log.append_verbatim_at(
+                        &VerbatimBatch {
+                            bytes: object.slice(cursor..batch_end),
+                            last_offset_delta: header.last_offset_delta.get(),
+                            max_timestamp: header.max_timestamp.get(),
+                            leader_epoch: LeaderEpoch(header.partition_leader_epoch.get()),
+                            producer_id: ProducerId(header.producer_id.get()),
+                            producer_epoch: header.producer_epoch.get(),
+                            base_sequence: header.base_sequence.get(),
+                            is_transactional: Attributes(header.attributes.get())
+                                .is_transactional(),
+                        },
+                        base,
+                    )?;
+                }
+                batches += 1;
+                records = records
+                    .saturating_add(u64::try_from(header.records_count.get().max(0)).unwrap_or(0));
+                cursor = batch_end;
+            }
+            if first != Some(range.entry.first_offset) || last != Some(range.entry.last_offset) {
+                return Err(RestoreError::Integrity(format!(
+                    "{}: captured run disagrees with batch boundaries",
+                    range.object_key
+                )));
+            }
+            observed_end = range.entry.last_offset.checked_add(1).ok_or_else(|| {
+                RestoreError::Integrity("diskless WAL batch offset overflow".into())
+            })?;
+        }
+        if observed_end != partition.recovery_cutoff {
+            return Err(RestoreError::Integrity(format!(
+                "{}-{} validated through {observed_end}, capture declares cutoff {}",
+                partition.topic, partition.partition, partition.recovery_cutoff
+            )));
+        }
+        if let Some(log) = log.as_mut() {
+            if partition.ranges.is_empty() && partition.delete_floor != 0 {
+                log.reset_to(Offset(partition.delete_floor))?;
+            }
+            if log.log_end_offset().0 != partition.recovery_cutoff {
+                return Err(RestoreError::Integrity(format!(
+                    "{}-{} materialized through {}, capture declares cutoff {}",
+                    partition.topic,
+                    partition.partition,
+                    log.log_end_offset(),
+                    partition.recovery_cutoff
+                )));
+            }
+            log.set_log_start_offset(Offset(partition.delete_floor))?;
+            log.sync()?;
+        }
+        reports.push(DisklessPartitionReport {
+            topic: partition.topic.clone(),
+            partition: partition.partition,
+            topic_id: partition.topic_id,
+            delete_floor: partition.delete_floor,
+            recovery_cutoff: partition.recovery_cutoff,
+            objects: object_names.len() as u64,
+            batches,
+            records,
+        });
+    }
+    Ok(DisklessRestoreReport {
+        captured_at_ms: capture.captured_at_ms,
+        source_cutoffs: capture.source_cutoffs.clone(),
+        partitions: reports,
+        limitations: vec![
+            "diskless records at or after each recovery cutoff were not archived and are unavailable".into(),
+            "in-flight transaction state is not restored".into(),
+        ],
+    })
+}

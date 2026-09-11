@@ -24,7 +24,7 @@ use super::{
 };
 use crate::worm::{
     error::WormError,
-    manifest::{ChainHead, EpochId, ManifestSeq, SegmentManifest, manifest_head},
+    manifest::{ChainHead, EpochId, ManifestSeq, ObjectEntry, SegmentManifest, manifest_head},
 };
 
 /// Everything the chain walk accumulates for one partition.
@@ -42,6 +42,7 @@ pub(super) struct Walk {
     head: Option<ChainHead>,
     last: Option<(String, ManifestSeq)>,
     first_break: Option<VerifyBreak>,
+    authenticated_objects: BTreeMap<String, ObjectEntry>,
 }
 
 impl Walk {
@@ -53,6 +54,8 @@ impl Walk {
             .objects_checked
             .saturating_add(u64::try_from(body.objects.len()).unwrap_or(u64::MAX));
         for object in &body.objects {
+            self.authenticated_objects
+                .insert(object.key.clone(), object.clone());
             if body.format_version == 1 {
                 self.unknown_protection_objects.record(&object.key);
             } else if object.create_precondition {
@@ -73,7 +76,7 @@ impl Walk {
         dir: &str,
         orphan_objects: Vec<String>,
         request: &VerifyRequest,
-    ) -> PartitionVerifyReport {
+    ) -> (PartitionVerifyReport, BTreeMap<String, ObjectEntry>) {
         let first_break = self
             .first_break
             .take()
@@ -82,7 +85,7 @@ impl Walk {
             && self.unsigned == 0
             && self.untrusted == 0
             && orphan_objects.is_empty();
-        PartitionVerifyReport {
+        let report = PartitionVerifyReport {
             partition_dir: dir.to_string(),
             manifests: self.manifests,
             objects_checked: self.objects_checked,
@@ -97,7 +100,8 @@ impl Walk {
             head: self.head,
             ok,
             first_break,
-        }
+        };
+        (report, self.authenticated_objects)
     }
 
     /// The break that [`VerifyRequest::expect_head`] raises when the archive
@@ -268,7 +272,8 @@ mod tests {
         let mut walk = Walk::default();
         walk.accept("legacy.manifest", &manifest, manifest_head(&manifest.body));
 
-        let report = walk.into_report("archive/topic-0-id", Vec::new(), &VerifyRequest::default());
+        let (report, _) =
+            walk.into_report("archive/topic-0-id", Vec::new(), &VerifyRequest::default());
 
         check!(report.unknown_protection_objects.count == 2);
         check!(report.create_precondition_objects.count == 0);

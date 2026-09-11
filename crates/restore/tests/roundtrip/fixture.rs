@@ -8,12 +8,16 @@
 
 use assert2::assert;
 use bytes::Bytes;
+use krabka_audit::signing::FileEd25519Signer;
 use krabka_ids::LeaderEpoch;
 use krabka_log::Log;
 use krabka_protocol::records::RecordBatch;
 use krabka_remote_storage::{
-    LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
-    RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager as _, TopicIdPartition,
+    ChainHead, ChainStamp, EpochId, LocalTieredStorage, LogSegmentData, MANIFEST_SUFFIX,
+    ManifestSeq, ObjectEntry, RemoteLogSegmentDetails, RemoteLogSegmentId,
+    RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager as _, Sha256Digest,
+    TopicIdPartition, WormArchiver, WormChainRecord, parse_segment_file_name, partition_dir_name,
+    segment_file_name,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -232,6 +236,70 @@ impl Fixture {
             .into_iter()
             .find(|entry| entry.topic == topic && entry.partition == partition)
             .unwrap_or_else(|| panic!("this fixture holds no {topic}-{partition}"))
+    }
+
+    /// Seal every archived segment into a signed WORM chain. Signers rotate by
+    /// segment position, so two signers exercise trusted-key rotation.
+    pub(crate) fn sign_worm(
+        &self,
+        signers: &[std::sync::Arc<FileEd25519Signer>],
+    ) -> Vec<(String, String)> {
+        assert!(!signers.is_empty());
+        let mut heads = Vec::new();
+        for partition in self.partitions() {
+            let mut stamp = ChainStamp {
+                epoch_id: EpochId(partition.topic_id),
+                seq: ManifestSeq(0),
+                prev_head: ChainHead::GENESIS,
+            };
+            for (index, segment) in partition.segments.iter().enumerate() {
+                let metadata = segment
+                    .metadata
+                    .clone()
+                    .with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata());
+                let partition_dir = partition_dir_name(&metadata);
+                let objects = std::fs::read_dir(self.archive_root.path().join(&partition_dir))
+                    .expect("read archive partition")
+                    .filter_map(Result::ok)
+                    .filter_map(|entry| {
+                        let name = entry.file_name().into_string().ok()?;
+                        let parsed = parse_segment_file_name(&name)?;
+                        (parsed.base_offset == metadata.start_offset()
+                            && parsed.segment_id == metadata.remote_log_segment_id().id
+                            && parsed.suffix != MANIFEST_SUFFIX)
+                            .then(|| {
+                                let bytes = std::fs::read(entry.path()).expect("read artifact");
+                                ObjectEntry {
+                                    suffix: parsed.suffix.to_owned(),
+                                    key: format!("{partition_dir}/{name}"),
+                                    size_bytes: u64::try_from(bytes.len()).unwrap(),
+                                    sha256: Sha256Digest::of(&bytes),
+                                    e_tag: None,
+                                    version_id: None,
+                                    create_precondition: true,
+                                }
+                            })
+                    })
+                    .collect();
+                let sealed = WormArchiver::new(Some(signers[index % signers.len()].clone()))
+                    .seal(&metadata, objects)
+                    .expect("seal WORM manifest");
+                std::fs::write(
+                    self.archive_root
+                        .path()
+                        .join(&partition_dir)
+                        .join(segment_file_name(&metadata, MANIFEST_SUFFIX)),
+                    &sealed.bytes,
+                )
+                .expect("write WORM manifest");
+                stamp = sealed.receipt.next_stamp().expect("next chain stamp");
+            }
+            heads.push((
+                partition_dir_name(&partition.segments[0].metadata),
+                stamp.prev_head.to_string(),
+            ));
+        }
+        heads
     }
 }
 

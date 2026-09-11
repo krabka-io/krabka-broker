@@ -244,6 +244,53 @@ async fn a_clean_segment_verifies_and_reports_its_facts() {
 }
 
 #[tokio::test]
+async fn authenticated_fetch_rejects_object_replacement() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = archive_at(dir.path());
+    let partition = test_partition();
+    let fixture = valid_segment_bytes();
+    let segment = write_segment(dir.path(), &fixture, &[]);
+    let objects = [
+        segment.log.as_ref(),
+        segment.offset_index.as_ref(),
+        segment.time_index.as_ref(),
+        segment.producer_snapshot.as_ref(),
+        segment.leader_epoch.as_ref(),
+        segment.transaction_index.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|artifact| {
+        let key = artifact.key.to_string();
+        let bytes = std::fs::read(dir.path().join(&key)).expect("read object");
+        (
+            key.clone(),
+            krabka_remote_storage::ObjectEntry {
+                suffix: artifact
+                    .key
+                    .extension()
+                    .map_or_else(String::new, |suffix| format!(".{suffix}")),
+                key,
+                size_bytes: u64::try_from(bytes.len()).unwrap(),
+                sha256: krabka_remote_storage::Sha256Digest::of(&bytes),
+                e_tag: None,
+                version_id: None,
+                create_precondition: true,
+            },
+        )
+    })
+    .collect();
+
+    let replacement = vec![0x5a; fixture.log.len()];
+    std::fs::write(dir.path().join("orders-0/seg.log"), replacement).expect("replace log");
+
+    let error = verify_segment_authenticated(&store, &partition, &segment, &objects)
+        .await
+        .expect_err("replacement must fail authentication");
+    check!(matches!(error, RestoreError::Authenticity { .. }));
+}
+
+#[tokio::test]
 async fn missing_mandatory_artifacts_are_torn_copies_in_written_order() {
     let cases: [(&[&str], &str); 7] = [
         (&[".log"], ".log"),

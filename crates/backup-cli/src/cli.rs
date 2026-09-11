@@ -4,12 +4,24 @@
 //! group: a capture is written into the archive a restore reads, so the tool
 //! never introduces a second place to point at.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
-use crate::archive::ArchiveArgs;
+use crate::{archive::ArchiveArgs, connection::SecurityArgs};
 
 /// The capture selector that means "the newest capture in the archive".
 pub const LATEST: &str = "latest";
+
+/// Optional signing key for an authenticated diskless capture boundary.
+#[derive(Args, Debug, Default)]
+pub struct CaptureSigningArgs {
+    /// Stable id of the Ed25519 key that signs the diskless capture.
+    #[arg(long, value_name = "ID", requires = "worm_signing_key")]
+    pub worm_signing_key_id: Option<String>,
+
+    /// PKCS#8 Ed25519 private key used to sign the diskless capture.
+    #[arg(long, value_name = "PATH", requires = "worm_signing_key_id")]
+    pub worm_signing_key: Option<std::path::PathBuf>,
+}
 
 /// Captures the inputs a point-in-time restore needs, and puts committed group
 /// offsets back after one.
@@ -40,6 +52,14 @@ pub enum Command {
             env = "KRABKA_BOOTSTRAP_SERVER"
         )]
         bootstrap_server: Option<String>,
+
+        /// TLS and SASL properties for the broker connection.
+        #[command(flatten)]
+        security: SecurityArgs,
+
+        /// Optional authenticated boundary for diskless WAL recovery.
+        #[command(flatten)]
+        signing: CaptureSigningArgs,
 
         /// Where the capture goes.
         #[command(flatten)]
@@ -79,6 +99,10 @@ pub enum Command {
         )]
         bootstrap_server: String,
 
+        /// TLS and SASL properties for the restored cluster connection.
+        #[command(flatten)]
+        security: SecurityArgs,
+
         /// Report what would be committed and commit nothing.
         #[arg(long)]
         dry_run: bool,
@@ -117,6 +141,7 @@ mod tests {
             log_dir,
             bootstrap_server,
             archive,
+            ..
         } = cli.command
         else {
             unreachable!("the assertion above rejected every other command")
@@ -171,6 +196,67 @@ mod tests {
                 "restore-offsets",
                 "--archive-local",
                 "/mnt/backups",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cluster_commands_accept_kafka_command_config() {
+        let capture = Cli::try_parse_from([
+            "krabka-backup",
+            "capture",
+            "-b",
+            "broker-1:9093",
+            "--command-config",
+            "/etc/krabka/backup-client.properties",
+            "--archive-local",
+            "/mnt/backups",
+        ])
+        .expect("capture command config");
+        assert!(let Command::Capture { .. } = &capture.command);
+
+        let restore = Cli::try_parse_from([
+            "krabka-backup",
+            "restore-offsets",
+            "-b",
+            "broker-1:9093",
+            "--command-config",
+            "/etc/krabka/backup-client.properties",
+            "--archive-local",
+            "/mnt/backups",
+        ])
+        .expect("restore command config");
+        assert!(let Command::RestoreOffsets { .. } = &restore.command);
+    }
+
+    #[test]
+    fn diskless_capture_signing_key_is_an_explicit_pair() {
+        check!(
+            Cli::try_parse_from([
+                "krabka-backup",
+                "capture",
+                "-b",
+                "broker:9092",
+                "--archive-local",
+                "/archive",
+                "--worm-signing-key-id",
+                "capture-key",
+                "--worm-signing-key",
+                "/keys/capture.pk8",
+            ])
+            .is_ok()
+        );
+        check!(
+            Cli::try_parse_from([
+                "krabka-backup",
+                "capture",
+                "-b",
+                "broker:9092",
+                "--archive-local",
+                "/archive",
+                "--worm-signing-key-id",
+                "capture-key",
             ])
             .is_err()
         );
