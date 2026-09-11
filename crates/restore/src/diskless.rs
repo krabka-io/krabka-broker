@@ -240,7 +240,9 @@ pub(super) async fn materialize(
                 first.get_or_insert(header.base_offset.get());
                 last = Some(batch_last);
                 let base = Offset(header.base_offset.get());
-                if !predicates.batch_past_offset_bound(&partition_ref, base) {
+                if batch_last >= partition.delete_floor
+                    && !predicates.batch_past_offset_bound(&partition_ref, base)
+                {
                     let mut batch_cursor = &object[cursor..batch_end];
                     let batch = RecordBatchBorrowed::decode_borrow_with_policy(
                         &mut batch_cursor,
@@ -302,9 +304,14 @@ pub(super) async fn materialize(
                     range.object_key
                 )));
             }
-            observed_end = range.entry.last_offset.checked_add(1).ok_or_else(|| {
-                RestoreError::Integrity("diskless WAL batch offset overflow".into())
-            })?;
+            observed_end = range
+                .entry
+                .last_offset
+                .checked_add(1)
+                .ok_or_else(|| {
+                    RestoreError::Integrity("diskless WAL batch offset overflow".into())
+                })?
+                .max(partition.delete_floor);
         }
         if observed_end != partition.recovery_cutoff {
             return Err(RestoreError::Integrity(format!(

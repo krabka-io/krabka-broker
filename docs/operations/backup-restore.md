@@ -188,6 +188,10 @@ The restore's contract is stated in full in
   comes back for a topic the archive also holds; ACLs, quotas, credentials and
   feature levels come back whole. An authenticated restore accepts the
   checkpoint only when its digest is bound into the signed diskless capture.
+- **Remote-segment lifecycle and WORM chain receipts**, from `--rlmm-snapshot`.
+  Restore resets its metadata-topic cursors before seeding it into the new
+  broker. An authenticated restore accepts the snapshot only when its digest is
+  bound into the signed diskless capture.
 - **Committed group offsets**, from `krabka-backup restore-offsets`, and only
   from it.
 - **Committed diskless WAL state**, from the capture's

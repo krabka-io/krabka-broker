@@ -637,6 +637,7 @@ controller_quorum_voters = ["1@$scope-restored-1:9093"]
 bootstrap_servers = ["$scope-restored-1:9093"]
 inter_broker_listener_name = "INTERNAL"
 controller_listener_protocol = "Plaintext"
+log_segment_bytes = "1KiB"
 remote_log_manager_interval = "1s"
 diskless_wal_flush_interval = "50ms"
 diskless_wal_flush_max_size = "1KiB"
@@ -711,6 +712,34 @@ done
 kafka restored consumer-groups --describe --group dr-group > "$evidence/restored-group-offsets.txt"
 awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/restored-group-offsets.txt" > "$evidence/restored-group-positions.txt"
 check consumer-positions cmp "$evidence/source-group-positions.txt" "$evidence/restored-group-positions.txt"
+
+# Resume archival and prove the restored RLMM receipt continues the original
+# WORM chain instead of starting a second epoch.
+classic_partition=$(awk '$1 ~ /^classic-0-/ {print $1; exit}' "$evidence/worm-heads.txt")
+classic_old_head=$(awk -v partition="$classic_partition" '$1 == partition {print $2; exit}' "$evidence/worm-heads.txt")
+classic_new_head=
+test -n "$classic_partition" -a -n "$classic_old_head"
+printf 'post-restore-chain\n' | docker run --rm -i --network "$network" -v "$work:/work:ro" "$tools_image" \
+  /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server "$scope-restored-1:9094" \
+  --producer.config /work/admin.properties --topic classic --producer-property acks=all
+sleep 2
+printf 'post-restore-roll\n' | docker run --rm -i --network "$network" -v "$work:/work:ro" "$tools_image" \
+  /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server "$scope-restored-1:9094" \
+  --producer.config /work/admin.properties --topic classic --producer-property acks=all
+for attempt in $(seq 1 60); do
+  if AWS_ACCESS_KEY_ID=$access AWS_SECRET_ACCESS_KEY=$secret AWS_REGION=us-east-1 \
+    docker run --rm --network "$network" -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION \
+      -v "$work/worm:/worm:ro" --entrypoint /usr/bin/krabka-worm-verify "$broker_image" verify \
+      --bucket "$bucket" --region us-east-1 --endpoint "http://$scope-minio:9000" --allow-http \
+      --prefix "$data_prefix" --key-id qualification-worm --public-key /worm/signing.pub --deep \
+      > "$evidence/worm-after-resume.txt" 2>&1; then
+    classic_new_head=$(awk -v partition="$classic_partition:" '$1 == partition {sub(/,$/, "", $3); print $3; exit}' "$evidence/worm-after-resume.txt")
+    if test -n "$classic_new_head" -a "$classic_new_head" != "$classic_old_head"; then break; fi
+  fi
+  test "$attempt" -lt 60
+  sleep 2
+done
+check worm-chain-continued test -n "$classic_new_head" -a "$classic_new_head" != "$classic_old_head"
 restore_ready_ms=$(date +%s%3N)
 jq -n --argjson captured_at_ms "$capture_ms" --argjson source_started_ms "$source_started_ms" \
   --argjson disaster_ms "$disaster_ms" --argjson restore_ready_ms "$restore_ready_ms" \

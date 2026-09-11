@@ -20,7 +20,7 @@ use crate::{args::RestoreArgs, error::RestoreError};
 /// [`RestoreError::Io`]: the restore crate defines no dedicated snapshot-error
 /// variant, and an operator who passed the flag expects the file to be there
 /// and to be readable.
-fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreError> {
+pub(crate) fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreError> {
     match Snapshot::load(path) {
         Ok(Some(snapshot)) => Ok(snapshot),
         Ok(None) => Err(RestoreError::Io(std::io::Error::new(

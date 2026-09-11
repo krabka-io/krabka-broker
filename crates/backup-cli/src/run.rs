@@ -95,11 +95,13 @@ async fn capture_secured(
     let mut artifacts: Vec<Artifact> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
     let mut metadata_snapshot_sha256 = None;
+    let mut rlmm_snapshot_sha256 = None;
 
     if let Some(log_dir) = log_dir {
         let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
         match tokio::fs::read(&rlmm).await {
             Ok(bytes) => {
+                rlmm_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
                 artifacts.push(
                     upload(
                         &store,
@@ -152,6 +154,7 @@ async fn capture_secured(
             security.clone(),
             signing,
             metadata_snapshot_sha256,
+            rlmm_snapshot_sha256,
         )
         .await?
         {
@@ -205,8 +208,10 @@ async fn capture_diskless_index(
     security: Option<ClientSecurity>,
     signing: &CaptureSigningArgs,
     metadata_snapshot_sha256: Option<Sha256Digest>,
+    rlmm_snapshot_sha256: Option<Sha256Digest>,
 ) -> Result<Option<Vec<u8>>, BackupError> {
     const TOPIC: &str = "__diskless_wal_index";
+    const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
     let mut admin = connect_admin(bootstrap, security.clone()).await?;
     let index_metadata = admin
         .metadata(&[TOPIC])
@@ -242,6 +247,7 @@ async fn capture_diskless_index(
         .await
         .map_err(BackupError::Integrity)?;
     capture.metadata_snapshot_sha256 = metadata_snapshot_sha256;
+    capture.rlmm_snapshot_sha256 = rlmm_snapshot_sha256;
     log.shutdown().await;
     if let (Some(key_id), Some(key_path)) = (
         signing.worm_signing_key_id.as_ref(),
@@ -257,7 +263,9 @@ async fn capture_diskless_index(
             .collect::<BTreeSet<_>>();
         let mut claims = Vec::with_capacity(keys.len());
         for key in keys {
-            let bytes = store.get_absolute(&key).await?;
+            let bytes = store
+                .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
+                .await?;
             claims.push(ObjectEntry {
                 suffix: std::path::Path::new(&key)
                     .extension()

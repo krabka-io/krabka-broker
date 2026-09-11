@@ -32,6 +32,6 @@ mod segment;
 mod test_support;
 
 pub use self::{
-    format::{FormatTargetOutcome, format_target},
+    format::{FormatTargetOutcome, format_target, seed_rlmm_snapshot},
     segment::{SegmentOutcome, write_segment},
 };

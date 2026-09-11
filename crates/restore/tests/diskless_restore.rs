@@ -6,12 +6,13 @@ use krabka_ids::Offset;
 use krabka_log::{Log, LogConfig};
 use krabka_protocol::records::{Record, RecordBatch, validate_one_v2_batch};
 use krabka_remote_storage::{
-    ObjectEntry, Sha256Digest,
+    ObjectEntry, RlmmCacheDump, Sha256Digest,
     diskless::{
         CAPTURE_HEAD_NAME, CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
         WalIndexEntry, WalObjectBuilder,
     },
 };
+use krabka_remote_storage_topic::snapshot::Snapshot;
 use krabka_restore::{Cli, RestoreError, restore};
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use uuid::Uuid;
@@ -94,6 +95,7 @@ fn fixture_with_second_base(
             }],
         }],
         metadata_snapshot_sha256: None,
+        rlmm_snapshot_sha256: None,
         authentication: None,
     };
     (capture, topic_id)
@@ -245,6 +247,28 @@ async fn diskless_restore_accepts_complete_batch_subranges_of_a_footer_run() {
 }
 
 #[tokio::test]
+async fn diskless_restore_accepts_ranges_wholly_below_the_delete_floor() {
+    let archive = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let capture_path = archive.path().join("capture.json");
+    let (mut capture, _) = fixture(archive.path(), true, false);
+    capture.partitions[0].delete_floor = 2;
+    capture.partitions[0].recovery_cutoff = 2;
+    std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
+
+    let report = restore(&args(archive.path(), target.path(), &capture_path))
+        .await
+        .unwrap();
+
+    let diskless = &report.diskless.as_ref().unwrap().partitions[0];
+    check!(diskless.recovery_cutoff == 2);
+    check!(diskless.records == 0);
+    let log = Log::open(target.path().join("orders-0"), LogConfig::default()).unwrap();
+    check!(log.log_start_offset() == Offset(2));
+    check!(log.log_end_offset() == Offset(2));
+}
+
+#[tokio::test]
 async fn diskless_restore_rejects_one_topic_name_with_multiple_ids() {
     let archive = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
@@ -288,8 +312,17 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     let archive = tempfile::tempdir().unwrap();
     let capture_path = archive.path().join("capture.json");
     let public_path = archive.path().join("capture.pub");
+    let rlmm_path = archive.path().join("rlmm-snapshot");
+    Snapshot {
+        committed_offsets: vec![9],
+        dump: RlmmCacheDump::default(),
+    }
+    .write_atomic(&rlmm_path)
+    .unwrap();
+    let rlmm_bytes = std::fs::read(&rlmm_path).unwrap();
     let (mut capture, _) = fixture(archive.path(), true, false);
     capture.metadata_snapshot_sha256 = Some(Sha256Digest::of(b"trusted metadata"));
+    capture.rlmm_snapshot_sha256 = Some(Sha256Digest::of(&rlmm_bytes));
     let wal_key = capture.partitions[0].ranges[0].object_key.clone();
     let wal = std::fs::read(archive.path().join(&wal_key)).unwrap();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
@@ -313,16 +346,39 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     std::fs::write(&capture_path, serde_json::to_vec(&capture).unwrap()).unwrap();
 
     let target = tempfile::tempdir().unwrap();
-    let report = restore(&trusted_args(
+    let mut trusted = trusted_args(
         archive.path(),
         target.path(),
         &capture_path,
         &public_path,
         &head,
-    ))
-    .await
-    .unwrap();
+    );
+    trusted.archive.rlmm_snapshot = Some(rlmm_path.clone());
+    let report = restore(&trusted).await.unwrap();
     check!(report.authentication.unwrap().chain_heads[CAPTURE_HEAD_NAME] == head);
+    let restored_rlmm = Snapshot::load(
+        &target
+            .path()
+            .join("remote-log-metadata")
+            .join(krabka_remote_storage_topic::snapshot::SNAPSHOT_FILE_NAME),
+    )
+    .unwrap()
+    .unwrap();
+    check!(restored_rlmm.committed_offsets == vec![-1]);
+
+    let target = tempfile::tempdir().unwrap();
+    let tampered_rlmm_path = archive.path().join("tampered-rlmm-snapshot");
+    std::fs::write(&tampered_rlmm_path, b"tampered rlmm").unwrap();
+    let mut tampered_rlmm = trusted_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &public_path,
+        &head,
+    );
+    tampered_rlmm.archive.rlmm_snapshot = Some(tampered_rlmm_path);
+    let error = restore(&tampered_rlmm).await.unwrap_err();
+    check!(matches!(error, RestoreError::Authenticity { .. }));
 
     let target = tempfile::tempdir().unwrap();
     let metadata_path = archive.path().join("tampered-metadata.checkpoint");

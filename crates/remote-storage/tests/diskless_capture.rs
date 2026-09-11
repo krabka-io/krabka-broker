@@ -222,6 +222,7 @@ fn signable_capture() -> DisklessWalCapture {
             }],
         }],
         metadata_snapshot_sha256: None,
+        rlmm_snapshot_sha256: None,
         authentication: None,
     }
 }
@@ -237,6 +238,7 @@ fn signer() -> (FileEd25519Signer, Vec<u8>) {
 fn signed_capture_binds_state_objects_trust_and_external_head() {
     let (signer, public) = signer();
     let mut capture = signable_capture();
+    capture.rlmm_snapshot_sha256 = Some(Sha256Digest::of(b"rlmm snapshot"));
     let wal = b"exact wal bytes";
     let head = capture
         .seal(
@@ -262,6 +264,14 @@ fn signed_capture_binds_state_objects_trust_and_external_head() {
     changed_floor.partitions[0].delete_floor = 1;
     check!(
         changed_floor
+            .authenticate(&trusted, Some(&head.to_string()))
+            .is_err()
+    );
+
+    let mut changed_rlmm = capture.clone();
+    changed_rlmm.rlmm_snapshot_sha256 = Some(Sha256Digest::of(b"different snapshot"));
+    check!(
+        changed_rlmm
             .authenticate(&trusted, Some(&head.to_string()))
             .is_err()
     );

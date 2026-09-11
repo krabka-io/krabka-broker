@@ -241,6 +241,9 @@ pub struct DisklessWalCapture {
     /// Digest of the controller checkpoint captured beside this boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_snapshot_sha256: Option<Sha256Digest>,
+    /// Digest of the RLMM cache snapshot captured beside this boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rlmm_snapshot_sha256: Option<Sha256Digest>,
     /// Optional signed WORM boundary covering this capture and its WAL objects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<SegmentManifest>,
@@ -733,6 +736,7 @@ impl WalCaptureProjection {
             source_cutoffs,
             partitions,
             metadata_snapshot_sha256: None,
+            rlmm_snapshot_sha256: None,
             authentication: None,
         })
     }

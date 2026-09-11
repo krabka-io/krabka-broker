@@ -13,7 +13,9 @@ three things the archive does not hold:
 
 - `<log.dir>/remote-log-metadata/snapshot`, the RLMM snapshot. Without it a
   segment the old cluster had already released is indistinguishable from a live
-  one, and the restore includes it.
+  one, and the restore includes it. Restore also seeds its chain receipts into
+  the recovered broker with fresh metadata-topic cursors, so WORM archival can
+  continue without an unauthenticated epoch restart.
 - The controller's newest `<end-offset>-<epoch>.checkpoint`. Topic
   configuration, ACLs, client quotas, SCRAM credentials and finalized feature
   levels live there and nowhere else.
@@ -76,7 +78,7 @@ krabka-backup restore-offsets \
 
 | Subcommand | Flags | What it does |
 | --- | --- | --- |
-| `capture` | `--log-dir <dir>`, `--bootstrap-server <host:port>` (`-b`), `--command-config <file>`, `--worm-signing-key-id <id> --worm-signing-key <path>` | Copies the RLMM snapshot, newest metadata checkpoint, committed group offsets, and committed diskless-WAL projection into `restore-inputs/<capture-id>/`, with a `manifest.json`. The signing pair authenticates the diskless capture boundary, the metadata-checkpoint digest, and every referenced WAL object. Each source is optional; at least one has to give something. |
+| `capture` | `--log-dir <dir>`, `--bootstrap-server <host:port>` (`-b`), `--command-config <file>`, `--worm-signing-key-id <id> --worm-signing-key <path>` | Copies the RLMM snapshot, newest metadata checkpoint, committed group offsets, and committed diskless-WAL projection into `restore-inputs/<capture-id>/`, with a `manifest.json`. The signing pair authenticates the diskless capture boundary, both snapshot digests, and every referenced WAL object. Each source is optional; at least one has to give something. |
 | `list` | none | Names every capture in the archive, oldest first, with the artifacts it holds. |
 | `verify` | `--capture <id\|latest>` | Re-reads each artifact and checks its size and SHA-256 against the manifest. |
 | `restore-offsets` | `--capture <id\|latest>`, `-b <host:port>`, `--command-config <file>`, `--dry-run` | Commits the captured offsets into a restored cluster. |

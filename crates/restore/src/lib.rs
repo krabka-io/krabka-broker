@@ -73,7 +73,9 @@ pub use self::{
         EXIT_ARCHIVE_UNREADABLE, EXIT_BAD_ARGUMENTS, EXIT_DIRTY_LOG_DIR, EXIT_INTEGRITY,
         EXIT_MATERIALIZE, EXIT_OK, RestoreError,
     },
-    materialize::{FormatTargetOutcome, SegmentOutcome, format_target, write_segment},
+    materialize::{
+        FormatTargetOutcome, SegmentOutcome, format_target, seed_rlmm_snapshot, write_segment,
+    },
     report::{
         AuthenticationReport, DisklessPartitionReport, DisklessRestoreReport,
         MetadataRestoreReport, PartitionReport, ReportFormat, RestoreReport, SkippedSegment,
@@ -234,12 +236,24 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     }
     let metadata_authenticated =
         authenticate_metadata_snapshot(args, diskless_capture.as_ref(), trusted.is_some()).await?;
+    let rlmm_authenticated =
+        authenticate_rlmm_snapshot(args, diskless_capture.as_ref(), trusted.is_some()).await?;
     let predicates = Predicates::from_args(args)?;
     let format = format_target(args, &archive).await?;
+    seed_rlmm_snapshot(
+        args,
+        authenticated
+            .as_ref()
+            .and_then(|(archive, _)| archive.as_ref())
+            .map(AuthenticatedArchive::report),
+    )?;
 
     let mut consumed_authenticated_objects = std::collections::BTreeSet::new();
     if metadata_authenticated {
         consumed_authenticated_objects.insert("cluster-metadata.checkpoint".to_owned());
+    }
+    if rlmm_authenticated {
+        consumed_authenticated_objects.insert("rlmm-snapshot".to_owned());
     }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
     let mut skipped = Vec::new();
@@ -357,6 +371,34 @@ async fn authenticate_metadata_snapshot(
         return Err(RestoreError::Authenticity {
             reason: format!(
                 "--metadata-snapshot differs from the signed capture: expected SHA-256 {expected}, found {actual}"
+            ),
+        });
+    }
+    Ok(true)
+}
+
+async fn authenticate_rlmm_snapshot(
+    args: &RestoreArgs,
+    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    authenticated_restore: bool,
+) -> Result<bool, RestoreError> {
+    let Some(path) = args.archive.rlmm_snapshot.as_ref() else {
+        return Ok(false);
+    };
+    if !authenticated_restore {
+        return Ok(false);
+    }
+    let expected = capture
+        .and_then(|capture| capture.rlmm_snapshot_sha256)
+        .ok_or_else(|| RestoreError::Authenticity {
+            reason: "--rlmm-snapshot is not bound to the signed diskless capture".to_owned(),
+        })?;
+    let bytes = tokio::fs::read(path).await?;
+    let actual = Sha256Digest::of(&bytes);
+    if actual != expected {
+        return Err(RestoreError::Authenticity {
+            reason: format!(
+                "--rlmm-snapshot differs from the signed capture: expected SHA-256 {expected}, found {actual}"
             ),
         });
     }

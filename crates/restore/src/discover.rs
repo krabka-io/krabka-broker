@@ -39,6 +39,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::reconcile::load_snapshot;
 use self::reconcile::reconcile_with_snapshot;
 use crate::{args::RestoreArgs, backend::ArchiveStore, error::RestoreError};
 
@@ -354,7 +355,9 @@ pub async fn inventory(
     }
 
     if !args.archive.worm_key_id.is_empty() && args.archive.rlmm_snapshot.is_some() {
-        tracing::warn!("ignoring unsigned --rlmm-snapshot during authenticated restore");
+        tracing::info!(
+            "using WORM manifests for inventory; the bound RLMM snapshot only seeds restored chain receipts"
+        );
     } else if let Some(snapshot_path) = &args.archive.rlmm_snapshot {
         reconcile_with_snapshot(&mut partitions, args, snapshot_path)?;
     }
