@@ -212,7 +212,7 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
             deps = all_crate_deps(normal_dev = True),
         )
 
-def crate_bench(lib, benches = None, data = None, compile_data = None, env = {}, rustc_env = {}):
+def crate_bench(lib, benches = None, data = None, compile_data = None, env = {}, rustc_env = {}, rustc_flags = None):
     """`rust_binary` per `benches/*.rs`, so Bazel compiles and lints them.
 
     A criterion bench is declared `harness = false` and gets its `main` from
@@ -240,6 +240,9 @@ def crate_bench(lib, benches = None, data = None, compile_data = None, env = {},
       compile_data: files reachable from `include!`/`include_str!`.
       env: runtime environment for the bench binary.
       rustc_env: extra compile-time environment.
+      rustc_flags: replaces `WORKSPACE_RUSTC_FLAGS`. Only a crate whose
+        `Cargo.toml` opts out of the workspace lints needs it, so that Bazel
+        applies the same rules Cargo does. Leave it unset otherwise.
     """
     srcs = native.glob(["benches/*.rs"], allow_empty = True)
     if benches != None:
@@ -272,7 +275,7 @@ def crate_bench(lib, benches = None, data = None, compile_data = None, env = {},
             edition = edition(),
             env = env,
             rustc_env = rustc_env,
-            rustc_flags = WORKSPACE_RUSTC_FLAGS,
+            rustc_flags = WORKSPACE_RUSTC_FLAGS if rustc_flags == None else rustc_flags,
             visibility = ["//visibility:public"],
             # One call, not two concatenated: a bench links the crate's normal
             # *and* dev dependencies, and `all_crate_deps` dedupes a package

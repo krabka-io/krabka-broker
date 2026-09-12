@@ -1,4 +1,4 @@
-load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
+load("//bazel:defs.bzl", "crate_bench", "crate_binary", "crate_library", "crate_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -20,6 +20,10 @@ crate_binary(
     crate_root = "src/bin/broker.rs",
     lib = ":broker",
 )
+
+# The six criterion benches in `benches/`. `bazel build //...` compiles them and
+# `bazel test //...` lints them. `ci.yml`'s nightly `bench` job runs them.
+crate_bench(lib = "broker")
 
 crate_tests(
     # TLS certificates, Kerberos keytabs and captured Kafka frames. The TLS
