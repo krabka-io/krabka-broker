@@ -61,9 +61,14 @@ differential suites that drive it live in
 
 ## Bumping the upstream Kafka version
 
-The schema sync and the protocol code regeneration belong to
-[krabka-protocol](https://github.com/krabka-io/krabka-protocol). Do those steps
-in that repository first. Then, in this repository:
+A Kafka version bump is two changes, one in each of two repositories. Give both
+the same Kafka tag.
+
+The schema sync and the protocol code regeneration are the other half. They
+belong to
+[krabka-protocol](https://github.com/krabka-io/krabka-protocol), in that
+repository's `docs/CONTRIBUTING.md`. Do that half first. Then, in this
+repository:
 
 1. Update the image tag and digest for the new release in `MODULE.bazel` and in
    [`bazel/images/BUILD.bazel`](bazel/images/BUILD.bazel), and the oracle line
