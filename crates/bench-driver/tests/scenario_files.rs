@@ -9,6 +9,34 @@
 
 use std::path::Path;
 
+/// Where the scenario corpus is, under whichever runner started this test.
+///
+/// Cargo runs a test with the crate directory as the working directory and
+/// exports `CARGO_MANIFEST_DIR`, so the corpus is two levels up. Bazel does
+/// neither: it runs the test from the runfiles root and stages a target's
+/// `data` under `$TEST_SRCDIR/$TEST_WORKSPACE/<package>`, which for
+/// `//bench:scenarios` is `bench/scenarios`. A single relative path cannot be
+/// right for both, and the one that was right for Cargo failed the Bazel
+/// coverage run with `NotFound`.
+///
+/// `crates/broker/tests/support::manifest_dir` resolves the same pair for the
+/// container suites' fixtures.
+///
+/// # Panics
+///
+/// Panics when neither Cargo's variable nor Bazel's pair is set, which means
+/// the test was launched by something that stages data differently again.
+fn scenario_root() -> String {
+    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        return format!("{dir}/../../bench/scenarios");
+    }
+    let srcdir = std::env::var("TEST_SRCDIR")
+        .expect("CARGO_MANIFEST_DIR (cargo) or TEST_SRCDIR (bazel) must be set");
+    let workspace =
+        std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
+    format!("{srcdir}/{workspace}/bench/scenarios")
+}
+
 use assert2::{assert, check};
 use krabka_bench_driver::scenario::{LoadMode, Scenario};
 use krabka_units::prelude::*;
@@ -47,5 +75,5 @@ fn scenario_file(path: &Path) -> datatest_stable::Result<()> {
 }
 
 datatest_stable::harness! {
-    { test = scenario_file, root = "../../bench/scenarios", pattern = r".*\.yaml$" },
+    { test = scenario_file, root = scenario_root(), pattern = r".*\.yaml$" },
 }
