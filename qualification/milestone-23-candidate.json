@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "status": "draft",
-  "captured_at": "2026-09-12T00:42:47Z",
+  "captured_at": "2026-09-12T00:58:31Z",
   "architectures": [
     "linux/amd64"
   ],
@@ -226,5 +226,5 @@
     "url": "",
     "sha256": ""
   },
-  "runner_sha256": "sha256:fef1646c66e42611eaf777c378d95bf2ac629258b29d5f17e30e1f32e44914ba"
+  "runner_sha256": "sha256:faf7cfd11f31aea2c3a85a0766d4bc39f41e3d670e8be6ca2fe802914448e6be"
 }

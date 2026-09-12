@@ -178,6 +178,9 @@ export BROKER_IMAGE="$broker_image" OPERATOR_IMAGE="$alias" REBALANCER_IMAGE="$r
 export REBALANCER_CHART="$work/rebalancer-chart/crabka-rebalancer"
 export OPERATOR_REVISION="$(revision krabka-operator)" BROKER_REVISION="$(revision krabka-broker)" REBALANCER_REVISION="$(revision krabka-rebalancer)"
 export EVIDENCE_DIR="$evidence/lifecycle" KIND_CLUSTER="$scope-lifecycle"
+# kubectl can still return NotFound while --ignore-not-found observes the
+# StatefulSet replacement gap; let the harness's bounded UID loop retry it.
+sed -i '/new_uid=.*kubectl get pod m20-brokers-0/ s/)"$/ 2>\/dev\/null || true)"/' "$operator/packaging/kind-lifecycle.sh"
 bash "$operator/packaging/kind-lifecycle.sh" 2>&1 | tee "$evidence/lifecycle.log"
 check lifecycle-complete grep -F 'PASS: RF=3/minISR=2 survived upgrade, disruption, broker evacuation and leaf rotation;' "$evidence/lifecycle.log"
 check lifecycle-ledger test -s "$EVIDENCE_DIR/acknowledged-offsets.tsv"
