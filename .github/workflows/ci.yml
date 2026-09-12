@@ -426,15 +426,24 @@ jobs:
       # Absolute paths on both steps: `bazel run` puts the binary's own runfiles
       # tree on the working directory, not the workspace root, so a relative
       # `docs` would resolve against the wrong tree.
+      #
+      # `--symlink_prefix=/` on both steps: with the default prefix, `bazel run`
+      # drops `bazel-krabka-broker` and friends into the workspace root, and
+      # `bazel-krabka-broker/external` is a tree of third-party checkouts full of
+      # `.md` files. The `markdown links` step below globs `./**/*.md`, so those
+      # symlinks turned every broken relative link in zstd's and rules_rust's
+      # own READMEs into a failure of this job. A slash prefix creates no
+      # symlinks at all, which is what this job wants: it builds nothing a later
+      # step has to find by path.
       - name: generated reference tree
         run: |
           out="$(mktemp -d)"
           trap 'rm -rf "${out}"' EXIT
-          bazel run //crates/docgen:krabka-docgen -- all --out "${out}"
+          bazel run --symlink_prefix=/ //crates/docgen:krabka-docgen -- all --out "${out}"
       # The same tool rewrites every fenced block a page marks with `<!-- snippet: <path>#<anchor> -->` from the source region that carries the matching markers. It is idempotent, so a tree in sync does not change. A source edit that moved a quoted region does change it, and this fails.
       - name: quoted source snippets are current
         run: |
-          bazel run //crates/docgen:krabka-docgen -- \
+          bazel run --symlink_prefix=/ //crates/docgen:krabka-docgen -- \
             snippets --content "${PWD}/docs" --crates "${PWD}/crates"
           git diff --exit-code -- docs
       # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the `the tasks' own tests` step above runs the unit tests that prove the check fails on a missing heading or a status mismatch.
@@ -466,10 +475,13 @@ jobs:
       # slots and four evidence gates may not silently disappear or drift.
       - name: ecosystem qualification manifest
         run: aspect check-qualification
+      # `--exclude-path` on the Bazel convenience symlinks, belt and braces
+      # beside the `--symlink_prefix=/` above: this repository's markdown is the
+      # subject, and a third-party checkout under `bazel-*/external` is not.
       - name: markdown links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
-          args: --offline --no-progress --root-dir "${{ github.workspace }}" './**/*.md'
+          args: --offline --no-progress --root-dir "${{ github.workspace }}" --exclude-path bazel-krabka-broker --exclude-path bazel-out --exclude-path bazel-bin --exclude-path bazel-testlogs './**/*.md'
 
   # Re-discharge the Creusot proof sessions under `verif/`.
   #

@@ -7,7 +7,10 @@ use tokio::time::{Instant, interval_at};
 /// The slowest rate the pacer runs at. A scenario that asks for less, or for
 /// nothing at all, clamps to this rate and does not sleep for an unbounded
 /// period.
-const MIN_RATE: Frequency = per_sec(1);
+///
+/// Public because [`Pacer::new`] documents the clamp and a reader of that
+/// documentation has to be able to follow it to the number.
+pub const MIN_RATE: Frequency = per_sec(1);
 
 /// A simple steady-rate pacer. Every `await_token().await` returns after
 /// the bucket has accumulated one whole token. The schedule is pinned to

@@ -58,10 +58,13 @@ fn env<T: std::str::FromStr>(key: &str, default: T) -> T {
 ///
 /// `to_f64` rather than an `as` cast: the cast is lossy above 2^53 and says
 /// nothing about it, and this crate's lint set rejects it.
-fn as_f64<T: ToPrimitive>(value: T) -> f64 {
-    value
-        .to_f64()
-        .expect("a counter is representable as an f64")
+fn as_f64(value: u64) -> f64 {
+    value.to_f64().expect("a u64 below 2^53 is exact as an f64")
+}
+
+/// A byte count as a `u64`. `usize` is 64 bits on every target this runs on.
+fn bytes_as_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -122,7 +125,7 @@ async fn main() {
     let elapsed = start.elapsed().as_secs_f64();
     let acked = acked.load(Ordering::Relaxed);
     let sent = sent.load(Ordering::Relaxed);
-    let megabytes = as_f64(acked) * as_f64(value_bytes) / 1e6;
+    let megabytes = as_f64(acked) * as_f64(bytes_as_u64(value_bytes)) / 1e6;
     println!(
         "loadgen: acks={acks_name} producers={producers} value={value_bytes}B \
          parts={partitions} | sent={sent} acked={acked} | {:.0} msg/s | {:.1} MB/s \

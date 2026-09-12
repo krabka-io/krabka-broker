@@ -16,9 +16,9 @@
 //! Epoch timestamps (`wallclock_*_unix_ms`, `Disturbance::kill_at_ms`) stay raw
 //! integers, because they are coordinates and not magnitudes.
 //!
-//! [`bounded`] also range-checks every input magnitude as the driver reads it, so
-//! a scenario file that asks for something unrunnable fails at load and not at
-//! the far end of the driver.
+//! The private `bounded` module below also range-checks every input magnitude
+//! as the driver reads it, so a scenario file that asks for something
+//! unrunnable fails at load and not at the far end of the driver.
 
 use krabka_units::{prelude::*, serde_units};
 use serde::{Deserialize, Serialize};

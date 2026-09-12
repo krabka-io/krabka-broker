@@ -198,7 +198,11 @@ bytes = { workspace = true }
 rustls.workspace = true
 rustls-pki-types.workspace = true
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["test-util", "macros"] }
+# `process`: `diskless_jepsen` runs the JVM console consumer under a deadline,
+# and `tokio::process` is what gives the wait one. A blocking
+# `std::process::Command::output` has no deadline, so a stalled image pull would
+# hold the suite open until the CI job wall stopped it.
+tokio = { workspace = true, features = ["test-util", "macros", "process"] }
 tokio-rustls.workspace = true
 # Client-side PBKDF2 of the SCRAM password to build
 # `AlterUserScramCredentials` upsertions in tests.
