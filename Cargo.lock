@@ -833,12 +833,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "camino"
-version = "1.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb1307f12aa967b5a58416e87b3653360e0fd614a016b6e970db08fecbb1b80d"
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1480,18 +1474,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
-name = "datatest-stable"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a867d7322eb69cf3a68a5426387a25b45cb3b9c5ee41023ee6cea92e2afadd82"
-dependencies = [
- "camino",
- "fancy-regex 0.14.0",
- "libtest-mimic",
- "walkdir",
-]
-
-[[package]]
 name = "deadpool"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1922,17 +1904,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "020662aa57307d8884be79fca464cce073745cfe6ac70805770972113ca6ee95"
 dependencies = [
  "fastrand",
-]
-
-[[package]]
-name = "fancy-regex"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e24cb5a94bcae1e5408b0effca5cd7172ea3c5755049c5f3af4cd283a165298"
-dependencies = [
- "bit-set",
- "regex-automata",
- "regex-syntax",
 ]
 
 [[package]]
@@ -2998,7 +2969,7 @@ dependencies = [
  "bytecount",
  "data-encoding",
  "email_address",
- "fancy-regex 0.19.1",
+ "fancy-regex",
  "fraction 0.15.4",
  "getrandom 0.3.4",
  "idna",
@@ -3027,7 +2998,7 @@ dependencies = [
  "bytecount",
  "data-encoding",
  "email_address",
- "fancy-regex 0.19.1",
+ "fancy-regex",
  "fraction 0.17.0",
  "getrandom 0.3.4",
  "itoa",
@@ -3252,7 +3223,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "datatest-stable",
  "derive_more",
  "exponential-backoff",
  "futures",
@@ -3266,6 +3236,7 @@ dependencies = [
  "krabka-security",
  "krabka-units",
  "kube",
+ "libtest-mimic",
  "num-traits",
  "plotly",
  "refined_type",

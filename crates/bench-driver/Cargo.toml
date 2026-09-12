@@ -68,7 +68,7 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 # Runs bench/scenarios/*.yaml as one test case per file, so a scenario that
 # stops parsing names itself.
-datatest-stable = "0.3"
+libtest-mimic = "0.8"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 
