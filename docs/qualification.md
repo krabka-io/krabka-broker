@@ -4,14 +4,16 @@
 completed historical candidate. Keep its revisions, evidence and report intact.
 Schema 1 describes that historical four-gate result. Schema 2 also binds newly
 executed checks to a candidate and the exact qualification adapters, and
-requires the Milestone 22 disaster-recovery gate owned by issue 555.
+requires the Milestone 22 disaster-recovery gate owned by issue 555 and the
+Milestone 23 schema-evolution, registry-migration, and snapshot-retention gates
+owned by issues 556-558.
 
 ## Run a subsequent candidate
 
 The `ecosystem qualification` workflow accepts a repository-relative `manifest`
 and an `execute` switch. With `execute=false`, it verifies the existing published
 result and its hashes. With `execute=true`, it creates a fresh draft from that
-component set, runs five independent jobs, and publishes a qualification release
+component set, runs eight independent jobs, and publishes a qualification release
 only after every job succeeds.
 
 Supply both `broker_revision` and `broker_digest` to qualify a newly delivered
@@ -21,8 +23,8 @@ branch, and distributes that exact input to every job. This needs no candidate
 commit after the delivery image has been published. To change sibling revisions
 or artifacts, provide a reviewed manifest containing that full candidate set.
 
-Until the first M22 delivery and five-gate release exist, the historical M20
-manifest remains the bootstrap seed and a run must supply the delivered M22
+Until the first M23 delivery and eight-gate release exist, the historical M20
+manifest remains the bootstrap seed and a run must supply the delivered M23
 broker revision and digest. After that evidence is published, check in its
 qualified manifest and use it as the scheduled baseline; do not invent a draft
 manifest or mutable image tag to make the schedule appear green.
@@ -55,6 +57,9 @@ Kind. Their timeouts bound the run rather than turning a timeout into a pass.
 | Authenticated CLI | The pinned CLI's real `candidate_broker` test, against a disposable three-broker SASL cluster. Its one executable lookup is adapted in the isolated checkout to invoke the downloaded CLI binary instead of a rebuilt binary; the patch is retained. |
 | Observability recovery | The pinned demo Compose recipe with explicit candidate broker/o11y overrides, followed by its `qualify-failover.sh`; signal queries, WAL recovery, offset reconciliation and alert firing/resolution. |
 | Disaster recovery | A TLS and SASL/SCRAM-SHA-512 RF=3 cluster created from the candidate broker image, a locked MinIO archive, and the image's bundled backup, restore, and WORM verifier. The job captures offsets and configuration at an explicit boundary, destroys every source data directory, restores a fresh cluster, reconciles records at their original offsets, settings, and consumer positions, and records measured RPO/RTO. Tampered, missing, untrusted-head, invalid-certificate, invalid-credential, and denied-ACL probes must fail without a complete capture. Classic and diskless topics are both required. |
+| Schema evolution | Confluent-derived Avro, JSON Schema, and Protobuf compatibility matrices, serializer reference/cache tests, RF=3 broker validation, and an old/new record round trip across broker and registry restarts. |
+| Registry migration | Full compacted `_schemas` lifecycle replay plus forward and reverse handoff against the pinned Confluent Schema Registry image. |
+| Snapshot retention | Exact retained-epoch diagnostics, bounded reclamation, concurrent restore protection, and process-kill recovery during save and reclaim. |
 
 The lifecycle harness expects a local operator tag. Its private alias is checked
 against the pulled candidate image ID before execution. It packages source
@@ -68,7 +73,7 @@ test results or behavioral outcomes and record the checks that actually ran.
 Skipped or zero-test runs cannot produce a valid gate receipt. Historical M19
 recovery/CDC evidence remains historical; this workflow does not relabel those
 old runs as fresh candidate results. The monthly schedule is enabled only after
-the first schema-2 M22 manifest is checked in as the immutable baseline.
+the first schema-2 M23 manifest is checked in as the immutable baseline.
 
 ## Local execution and evidence
 
@@ -89,7 +94,7 @@ architecture, all repository revisions/default branches, and artifact
 references/digests. Reordering components or adding output evidence does not
 change that identity.
 
-Run all five gates into the same output directory, then assemble:
+Run all eight gates into the same output directory, then assemble:
 
 ```sh
 aspect check-qualification --manifest qualification/candidate.json \

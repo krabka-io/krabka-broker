@@ -178,6 +178,9 @@ export BROKER_IMAGE="$broker_image" OPERATOR_IMAGE="$alias" REBALANCER_IMAGE="$r
 export REBALANCER_CHART="$work/rebalancer-chart/crabka-rebalancer"
 export OPERATOR_REVISION="$(revision krabka-operator)" BROKER_REVISION="$(revision krabka-broker)" REBALANCER_REVISION="$(revision krabka-rebalancer)"
 export EVIDENCE_DIR="$evidence/lifecycle" KIND_CLUSTER="$scope-lifecycle"
+# kubectl can still return NotFound while --ignore-not-found observes the
+# StatefulSet replacement gap; let the harness's bounded UID loop retry it.
+sed -i '/new_uid=.*kubectl get pod m20-brokers-0/ s/)"$/ 2>\/dev\/null || true)"/' "$operator/packaging/kind-lifecycle.sh"
 bash "$operator/packaging/kind-lifecycle.sh" 2>&1 | tee "$evidence/lifecycle.log"
 check lifecycle-complete grep -F 'PASS: RF=3/minISR=2 survived upgrade, disruption, broker evacuation and leaf rotation;' "$evidence/lifecycle.log"
 check lifecycle-ledger test -s "$EVIDENCE_DIR/acknowledged-offsets.tsv"
@@ -807,6 +810,120 @@ fi
 printf 'untrusted-worm-key\n' >> "$evidence/checks.txt"
 """
 
+_SCHEMA_EVOLUTION = r"""
+registry=$(source_repo krabka-schema-registry)
+java=$(source_repo krabka-streams-java)
+broker=$(source_repo krabka-broker)
+site=$(source_repo krabka-io.github.io)
+(cd "$registry" && bazel test //crates/schema-registry:compat_conformance_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/compatibility.log"
+cp "$registry/crates/schema-registry/tests/fixtures/compat/"*_matrix.json "$evidence/"
+check avro-oracle jq -e 'length == 36' "$evidence/avro_matrix.json"
+check protobuf-oracle jq -e 'length == 108' "$evidence/protobuf_matrix.json"
+check json-oracle jq -e 'length == 152' "$evidence/json_matrix.json"
+(cd "$java" && bazel test //krabka-streams-schema-serde:tests --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/serializer.log"
+check serializer-cache grep -F 'jsonValidationResolvesRegistryReferences()' "$evidence/serializer.log"
+check serializer-avro-annotations grep -F 'avroRegistrationPreservesDefaultsAndDocumentation()' "$evidence/serializer.log"
+(cd "$broker" && bazel test //crates/broker:schema_validation_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/broker-validation.log"
+check broker-validation grep -F 'rf_three_validation_survives_registry_and_broker_failover ... ok' "$evidence/broker-validation.log"
+
+project=$scope-schema-evolution
+registry_pid=
+registry_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
+cleanup() {
+  if test -n "$registry_pid"; then kill "$registry_pid" > /dev/null 2>&1 || true; wait "$registry_pid" > /dev/null 2>&1 || true; fi
+  docker compose -p "$project" -f "$work/compose.json" down -v > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+cat > "$work/broker.toml" <<EOF
+broker_id = 1
+log_dir = "/data"
+inter_broker_listener_name = "INTERNAL"
+controller_listener_protocol = "Plaintext"
+[[listeners]]
+name = "INTERNAL"
+bind_addr = "0.0.0.0:9092"
+advertised = "localhost:9092"
+protocol = "Plaintext"
+[process]
+roles = ["controller", "broker"]
+[runtime]
+offsets_topic_replication_factor = 1
+transaction_state_replication_factor = 1
+default_min_insync_replicas = 1
+[schema_registry]
+url = "http://host.docker.internal:${registry_port}"
+fail_open = false
+EOF
+docker compose -f "$site/public/quickstart/docker-compose.yml" config --format json > "$work/recipe.json"
+jq --arg image "$broker_image" --arg work "$work" '
+  .services |= with_entries(if (.value.image // "" | contains("krabka-broker")) then .value.image=$image else . end) |
+  .services.broker.command=["--config-file=/work/broker.toml"] |
+  .services.broker.volumes += [$work + "/broker.toml:/work/broker.toml:ro"] |
+  .services.broker.extra_hosts=["host.docker.internal:host-gateway"]
+' "$work/recipe.json" > "$work/compose.json"
+docker compose -p "$project" -f "$work/compose.json" up -d --wait --wait-timeout 180
+(cd "$registry" && bazel build //crates/schema-registry:krabka-schema-registry)
+registry_binary=$(cd "$registry" && bazel cquery //crates/schema-registry:krabka-schema-registry --output=files | head -1)
+start_registry() {
+  "$registry/$registry_binary" --bootstrap-servers localhost:9092 --schemas-topic-rf 1 \
+    --listen-addr "0.0.0.0:${registry_port}" --admin-listen-addr=off \
+    --advertised-url "http://127.0.0.1:${registry_port}" > "$evidence/registry.log" 2>&1 &
+  registry_pid=$!
+  for attempt in $(seq 1 60); do
+    if curl --fail --silent --request PUT --header 'Content-Type: application/vnd.schemaregistry.v1+json' \
+      --data '{"mode":"READWRITE"}' "http://127.0.0.1:${registry_port}/mode" > /dev/null; then return; fi
+    test "$attempt" -lt 60
+    sleep 2
+  done
+}
+start_registry
+topic=m23-schema-evolution
+(cd "$java" && bazel test //krabka-streams-test-utils:schema_integration_test --strategy=TestRunner=local \
+  --test_env=KRABKA_INTEGRATION_BOOTSTRAP=localhost:9092 \
+  --test_env=KRABKA_INTEGRATION_SCHEMA_REGISTRY="http://127.0.0.1:${registry_port}" \
+  --test_env=KRABKA_INTEGRATION_SCHEMA_TOPIC="$topic" \
+  --test_env=KRABKA_INTEGRATION_SCHEMA_PHASE=write --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/writer.log"
+kill "$registry_pid"
+wait "$registry_pid" || true
+registry_pid=
+docker compose -p "$project" -f "$work/compose.json" restart broker
+for attempt in $(seq 1 60); do
+  if docker run --rm --network host "$tools_image" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null; then break; fi
+  test "$attempt" -lt 60
+  sleep 2
+done
+start_registry
+(cd "$java" && bazel test //krabka-streams-test-utils:schema_integration_test --strategy=TestRunner=local \
+  --test_env=KRABKA_INTEGRATION_BOOTSTRAP=localhost:9092 \
+  --test_env=KRABKA_INTEGRATION_SCHEMA_REGISTRY="http://127.0.0.1:${registry_port}" \
+  --test_env=KRABKA_INTEGRATION_SCHEMA_TOPIC="$topic" \
+  --test_env=KRABKA_INTEGRATION_SCHEMA_PHASE=read --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/reader.log"
+check serializer-broker-restart grep -F 'evolvesRecordsThroughBrokerWithWarmAndColdCaches()' "$evidence/reader.log"
+"""
+
+_REGISTRY_MIGRATION = r"""
+registry=$(source_repo krabka-schema-registry)
+(cd "$registry" && bazel test //crates/schema-registry:integration_test //crates/schema-registry:ha_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/lifecycle.log"
+check rf3 grep -F 'reader_routes_to_schema_partition_leader ... ok' "$evidence/lifecycle.log"
+check replay grep -F 'restarting_store_replays_the_complete_snapshot ... ok' "$evidence/lifecycle.log"
+check lifecycle grep -F 'facade_readonly_blocks_writes_import_allows_explicit_id ... ok' "$evidence/lifecycle.log"
+(cd "$registry" && bazel test //crates/schema-registry:interop_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/forward.log"
+check forward-handoff grep -F 'our_store_decodes_cp_schema_registry_records ... ok' "$evidence/forward.log"
+(cd "$registry" && bazel test //crates/schema-registry:interop_reverse_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/reverse.log"
+check reverse-handoff grep -F 'cp_replays_krabka_schema_registry_records ... ok' "$evidence/reverse.log"
+"""
+
+_SNAPSHOT_RETENTION = r"""
+java=$(source_repo krabka-streams-java)
+(cd "$java" && bazel test //krabka-streams-columnar:tests --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/retention.log"
+cp "$java/docs/barriers.md" "$evidence/barriers.md"
+check available-epochs grep -F 'reportsAvailableSnapshotsWhenACutWasReclaimed()' "$evidence/retention.log"
+check concurrent-restore grep -F 'fileStateStoreDoesNotReclaimAnEpochWhileItIsInUse' "$evidence/retention.log"
+check interrupted-save grep -F 'fileStateStoreRecoversFromKilledSaveAndReclaim' "$evidence/retention.log"
+check interrupted-reclaim grep -F 'fileStateStoreRecoversFromKilledSaveAndReclaim' "$evidence/retention.log"
+check bounded-files grep -F 'fileStateStoreReclaimsOldEpochsAndInterruptedTemporaryFiles' "$evidence/retention.log"
+"""
+
 def gate_script(name):
     """The exact commands retained beside each result and bound to the candidate."""
     return _COMMON + {
@@ -815,6 +932,9 @@ def gate_script(name):
         "cli-admin": _CLI,
         "observability-recovery": _OBSERVABILITY,
         "disaster-recovery": _DISASTER_RECOVERY,
+        "schema-evolution": _SCHEMA_EVOLUTION,
+        "registry-migration": _REGISTRY_MIGRATION,
+        "snapshot-retention": _SNAPSHOT_RETENTION,
     }[name]
 
 def run_gate(ctx, document, identity, name, digest):

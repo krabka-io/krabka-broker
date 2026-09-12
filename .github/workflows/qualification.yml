@@ -129,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [installation, operator-lifecycle, cli-admin, observability-recovery, disaster-recovery]
+        gate: [installation, operator-lifecycle, cli-admin, observability-recovery, disaster-recovery, schema-evolution, registry-migration, snapshot-retention]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -191,7 +191,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir qualification-results
-          for gate in installation operator-lifecycle cli-admin observability-recovery disaster-recovery; do
+          for gate in installation operator-lifecycle cli-admin observability-recovery disaster-recovery schema-evolution registry-migration snapshot-retention; do
             mv "qualification-downloads/qualification-${gate}" "qualification-results/${gate}"
           done
           aspect check-qualification --manifest .qualification-input.json --assemble \
