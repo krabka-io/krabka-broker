@@ -39,10 +39,10 @@ use std::{
 };
 
 use bytes::Bytes;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use krabka_log::{Log, LogConfig, Offset};
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _, kibibytes, mebibytes};
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use memmap2::Mmap;
 use tempfile::TempDir;
 

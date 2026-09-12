@@ -1,4 +1,3 @@
----
 # Builds and runs `krabka-broker` on every host in the `krabka` group.
 #
 # Bare-VM Krabka is single-broker-only today: the broker binary
@@ -15,9 +14,7 @@
     - name: Refuse to proceed with > 1 Krabka broker
       ansible.builtin.fail:
         msg: >-
-          Krabka bare-VM bring-up is single-broker only. Lower
-          num_instances.krabka_broker to 1 in your tfvars, or use
-          the operator-driven path under bench/justfile for RF>1.
+          Krabka bare-VM bring-up is single-broker only. Lower num_instances.krabka_broker to 1 in your tfvars, or use the operator-driven path under bench/justfile for RF>1.
       when: groups['krabka'] | length > 1
   tasks:
     - name: Install OS packages (build deps + util)
@@ -92,9 +89,9 @@
         state: present
         reload: true
       loop:
-        - { k: "vm.swappiness",      v: "1" }
-        - { k: "vm.dirty_ratio",     v: "60" }
-        - { k: "vm.dirty_background_ratio", v: "5" }
+        - {k: "vm.swappiness", v: "1"}
+        - {k: "vm.dirty_ratio", v: "60"}
+        - {k: "vm.dirty_background_ratio", v: "5",}
 
 - name: Build and install krabka-broker
   hosts: krabka

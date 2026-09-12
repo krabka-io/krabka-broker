@@ -22,7 +22,6 @@ crate_binary(
 )
 
 crate_tests(
-    lib = "bench-driver",
     # `scenario_files` loads every checked-in scenario through the driver's own
     # loader, and `report_cli` runs the report binary the way an operator does.
     data = [
@@ -30,6 +29,7 @@ crate_tests(
         "//bench:scenarios",
     ],
     env = {"CARGO_BIN_EXE_krabka-bench-report": "$(rootpath :krabka-bench-report)"},
+    lib = "bench-driver",
     # `scenario_files` is `harness = false`: datatest-stable supplies its own.
     no_harness = ["scenario_files"],
 )

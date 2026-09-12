@@ -1,4 +1,3 @@
----
 apiVersion: krabka.io/v1alpha1
 kind: Kafka
 metadata:
@@ -46,11 +45,11 @@ spec:
     affinity:
       podAntiAffinity:
         requiredDuringSchedulingIgnoredDuringExecution:
-        - labelSelector:
-            matchLabels:
-              app.kubernetes.io/name: krabka-broker
-              app.kubernetes.io/instance: demo
-          topologyKey: kubernetes.io/hostname
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: krabka-broker
+                app.kubernetes.io/instance: demo
+            topologyKey: kubernetes.io/hostname
     metadata:
       labels:
         bench-pool: beefy
@@ -87,11 +86,11 @@ spec:
     affinity:
       podAntiAffinity:
         requiredDuringSchedulingIgnoredDuringExecution:
-        - labelSelector:
-            matchLabels:
-              app.kubernetes.io/name: krabka-broker
-              app.kubernetes.io/instance: demo
-          topologyKey: kubernetes.io/hostname
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: krabka-broker
+                app.kubernetes.io/instance: demo
+            topologyKey: kubernetes.io/hostname
     metadata:
       labels:
         bench-pool: beefy
@@ -128,11 +127,11 @@ spec:
     affinity:
       podAntiAffinity:
         requiredDuringSchedulingIgnoredDuringExecution:
-        - labelSelector:
-            matchLabels:
-              app.kubernetes.io/name: krabka-broker
-              app.kubernetes.io/instance: demo
-          topologyKey: kubernetes.io/hostname
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: krabka-broker
+                app.kubernetes.io/instance: demo
+            topologyKey: kubernetes.io/hostname
     metadata:
       labels:
         bench-pool: beefy
@@ -169,11 +168,11 @@ spec:
     affinity:
       podAntiAffinity:
         requiredDuringSchedulingIgnoredDuringExecution:
-        - labelSelector:
-            matchLabels:
-              app.kubernetes.io/name: krabka-broker
-              app.kubernetes.io/instance: demo
-          topologyKey: kubernetes.io/hostname
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: krabka-broker
+                app.kubernetes.io/instance: demo
+            topologyKey: kubernetes.io/hostname
     metadata:
       labels:
         bench-pool: beefy
@@ -210,11 +209,11 @@ spec:
     affinity:
       podAntiAffinity:
         requiredDuringSchedulingIgnoredDuringExecution:
-        - labelSelector:
-            matchLabels:
-              app.kubernetes.io/name: krabka-broker
-              app.kubernetes.io/instance: demo
-          topologyKey: kubernetes.io/hostname
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: krabka-broker
+                app.kubernetes.io/instance: demo
+            topologyKey: kubernetes.io/hostname
     metadata:
       labels:
         bench-pool: beefy
@@ -251,11 +250,11 @@ spec:
     affinity:
       podAntiAffinity:
         requiredDuringSchedulingIgnoredDuringExecution:
-        - labelSelector:
-            matchLabels:
-              app.kubernetes.io/name: krabka-broker
-              app.kubernetes.io/instance: demo
-          topologyKey: kubernetes.io/hostname
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: krabka-broker
+                app.kubernetes.io/instance: demo
+            topologyKey: kubernetes.io/hostname
     metadata:
       labels:
         bench-pool: beefy

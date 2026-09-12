@@ -1,4 +1,3 @@
----
 # 3-broker RF=3 Strimzi cluster with a TLS data-path listener.
 #
 # Identical to kafka-cr-3broker-rf3.yaml except the Kafka CR declares a second

@@ -436,7 +436,7 @@ jobs:
         run: |
           bazel run //crates/docgen:krabka-docgen -- \
             snippets --content "${PWD}/docs" --crates "${PWD}/crates"
-          git diff --exit-code
+          git diff --exit-code -- docs
       # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the `the tasks' own tests` step above runs the unit tests that prove the check fails on a missing heading or a status mismatch.
       - name: KFC template
         run: aspect check-kfcs

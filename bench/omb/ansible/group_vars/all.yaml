@@ -1,4 +1,3 @@
----
 # ── Shared defaults for the OMB playbooks ──────────────────────────────────
 
 # Apache Kafka version (KRaft mode). The OMB AWS reference pins

@@ -17,6 +17,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use hdrhistogram::Histogram;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_core::{
     ClientFrameMax, ConnectionDispatchQueueCapacity,
@@ -25,8 +27,6 @@ use krabka_client_core::{
 use krabka_client_producer::{Producer, ProducerError, ProducerRecord, RecordMetadata};
 use krabka_security::ListenerProtocol;
 use krabka_units::prelude::*;
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
-use hdrhistogram::Histogram;
 use refined_type::rule::GreaterU32;
 use tokio::{task::JoinSet, time::Instant};
 use tracing::{info, warn};

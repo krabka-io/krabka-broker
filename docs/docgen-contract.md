@@ -97,12 +97,19 @@ entry point above still resolves and every renderer still produces a page. A
 signature change that the contract test does not reach fails here.
 
 The second runs `krabka-docgen snippets` in place over `docs/` and then
-`git diff --exit-code`. The `snippets` command rewrites each fenced block that
-a page marks with `<!-- snippet: <relpath>#<anchor> -->` from the source region
-that carries the matching `docs:begin` / `docs:end` markers. The command is
-idempotent, so a tree that is in sync does not change and the step passes. A
-source edit that moves a quoted region leaves the page stale, the rewrite
-changes the file, and the step fails.
+`git diff --exit-code -- docs`. The `snippets` command rewrites each fenced
+block that a page opens with an HTML comment naming a source path and an
+anchor, and closes with the matching end comment. The source region carries
+`docs:begin <anchor>` and `docs:end <anchor>` on two comment lines.
+[`crates/docgen/README.md`](../crates/docgen/README.md) shows the exact
+spelling of both. The command is idempotent, so a tree that is in sync does not
+change and the step passes. A source edit that moves a quoted region leaves the
+page stale, the rewrite changes the file, and the step fails.
+
+The spelling is not repeated on this page on purpose. The scan reads raw text,
+so a page under `docs/` that writes the opening marker out is read as a page
+that wants a snippet, and the scan then fails on the placeholder path. The
+`README` is under `crates/`, which the scan does not enter.
 
 The rendered reference tree itself is not checked in. Its consumer is the Zola
 site in

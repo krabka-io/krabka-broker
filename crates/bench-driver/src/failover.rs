@@ -9,12 +9,12 @@
 //! name-sort for backwards-compatible smoke runs.
 
 use anyhow::{Context, Result, anyhow};
+use k8s_openapi::api::core::v1::Pod;
 use krabka_client_core::{
     Client as KafkaClient, ClientFrameMax, ConnectionDispatchQueueCapacity,
     security::ClientSecurity,
 };
 use krabka_protocol::owned::metadata_response::MetadataResponse;
-use k8s_openapi::api::core::v1::Pod;
 use kube::{
     Client as KubeClient,
     api::{Api, DeleteParams, ListParams},

@@ -87,6 +87,21 @@ Strimzi cluster in turn, and aggregates the per-run JSON into one report. It
 needs a live cluster and a kubeconfig, so no CI job runs it; read that
 directory's README before you start one.
 
+## Profiling
+
+Two examples of `krabka-broker` make a CPU profile of the broker alone. Run
+them in two shells:
+
+```sh
+cargo run --release -p krabka-broker --example profile_server
+cargo run --release -p krabka-broker --example loadgen
+```
+
+`profile_server` boots one broker on `127.0.0.1:9092` and prints its process
+id. Attach `perf record -F 999 -g -p <pid>` to that id. `loadgen` makes the
+traffic from a second process, so no client work reaches the profile. Each
+example's module comment lists the environment variables it reads.
+
 ## Special Test Tiers
 
 The ignored integration tests need their external service or Kafka oracle.

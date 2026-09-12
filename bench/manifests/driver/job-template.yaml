@@ -1,4 +1,3 @@
----
 # Template — `run-scenario.sh` substitutes ${...} via `envsubst` before apply.
 #
 # Required env vars:

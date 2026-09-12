@@ -1,4 +1,3 @@
----
 # Brings up Apache Kafka in KRaft mode (combined controller+broker
 # roles) on every host in the `kafka` group. No Zookeeper — diverges
 # from OMB's AWS reference, which still uses ZK, but matches what
@@ -84,10 +83,10 @@
         state: present
         reload: true
       loop:
-        - { k: "vm.swappiness",      v: "1" }
-        - { k: "vm.max_map_count",   v: "262144" }
-        - { k: "vm.dirty_ratio",     v: "60" }
-        - { k: "vm.dirty_background_ratio", v: "5" }
+        - {k: "vm.swappiness", v: "1"}
+        - {k: "vm.max_map_count", v: "262144"}
+        - {k: "vm.dirty_ratio", v: "60"}
+        - {k: "vm.dirty_background_ratio", v: "5",}
 
 - name: Install and configure Kafka (KRaft)
   hosts: kafka

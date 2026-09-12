@@ -41,7 +41,7 @@ pub fn template(msg_size: ByteSize) -> BytesMut {
 /// first 24 bytes of `buf`. Returns the value as a `Bytes`, which the caller
 /// clones cheaply with a `BytesMut::freeze`-style copy.
 pub fn stamp_into(buf: &mut BytesMut, scenario_id: u64) -> Bytes {
-    debug_assert!(buf.len() >= HEADER_LEN, "buf too short for header");
+    assert2::debug_assert!(buf.len() >= HEADER_LEN, "buf too short for header");
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| saturating_u128_to_u64(d.as_nanos()));

@@ -6,8 +6,8 @@
 //! unit. [`record`] and [`percentiles`] are the seam that converts to and from
 //! the [`Time`] extents the rest of the driver passes around.
 
-use krabka_units::prelude::*;
 use hdrhistogram::Histogram;
+use krabka_units::prelude::*;
 
 use crate::scenario::LatencyPercentiles;
 

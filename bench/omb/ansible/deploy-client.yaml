@@ -1,4 +1,3 @@
----
 # Ships the OMB tarball to every client VM, starts a benchmark-worker
 # systemd service per host, and renders a `workers.yaml` (used by the
 # coordinator on the first client) plus per-stack driver YAMLs.
@@ -62,8 +61,8 @@
         dest: "{{ omb_install_dir }}/driver-kafka/kafka-{{ item.stack }}.yaml"
         mode: "0644"
       loop:
-        - { stack: kafka,  bootstrap: "{{ hostvars[groups['kafka'][0]].bootstrap_servers | default(groups['kafka'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':9092') | join(',')) }}", driver_name: "Kafka-OMB" }
-        - { stack: krabka, bootstrap: "{{ hostvars[groups['krabka'][0]].bootstrap_servers | default(groups['krabka'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':9092') | join(',')) }}", driver_name: "Krabka-OMB" }
+        - {stack: kafka, bootstrap: "{{ hostvars[groups['kafka'][0]].bootstrap_servers | default(groups['kafka'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':9092') | join(',')) }}", driver_name: "Kafka-OMB"}
+        - {stack: krabka, bootstrap: "{{ hostvars[groups['krabka'][0]].bootstrap_servers | default(groups['krabka'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':9092') | join(',')) }}", driver_name: "Krabka-OMB"}
       vars:
         driver_bootstrap_servers: "{{ item.bootstrap }}"
         driver_name: "{{ item.driver_name }}"
