@@ -72,8 +72,13 @@ BUILD_PREFIXES = ["bazel/", "packaging/", "tools/"]
 # The two directories are whole prefixes rather than the seven exact files, so
 # that a file added to one of those `data` attributes is covered before anyone
 # remembers this list exists.
+# `bench/scenarios/` is the same kind of input from outside `docs/`:
+# `crates/bench-driver/BUILD.bazel` names `//bench:scenarios` in the `data` of
+# its test targets, and `scenario_files` loads every one of those YAML files
+# through the driver's own `Scenario` type. A scenario edited alone would
+# otherwise skip the suite that is the only reader of it.
 DATA_FILES = ["docs/config-reference.md", "docs/config-schema.json"]
-DATA_PREFIXES = ["docs/examples/", "docs/operations/"]
+DATA_PREFIXES = ["bench/scenarios/", "docs/examples/", "docs/operations/"]
 
 # Where the code is. Everything under it counts except documentation: a crate's
 # README and changelog are checked by their own tasks, which do not need a

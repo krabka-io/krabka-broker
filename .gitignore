@@ -30,3 +30,19 @@ __pycache__/
 # Local Criterion benchmark output directory
 /bench-results/
 /performance-artifacts/
+
+# Gradle output from `tools/oracle`. Matched at any depth so a nested build
+# directory is covered too.
+build/
+.gradle/
+
+# The OpenMessaging Benchmark checkout `bench/omb/scripts/fetch-omb.sh` makes.
+# `bench/.gitignore` and `bench/omb/.gitignore` cover the rest of the harness
+# output; this one lands at the repository root.
+/.omb/
+
+# The local apk repository and signing key `bench/justfile`'s
+# `build-driver-image` recipe writes.
+/packages/
+melange.rsa
+melange.rsa.pub

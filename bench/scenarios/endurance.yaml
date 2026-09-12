@@ -1,0 +1,19 @@
+# 30-minute soak at 80 % of small-msg-saturate's measured rate. Catches
+# slow leaks (RSS growth, file-descriptor exhaustion, accumulator
+# pathologies). Cluster mode only — too slow for CI.
+name: endurance
+mode_tag: cluster
+msg_size: 1KiB
+partitions: 24
+replication_factor: 1
+producers: 4
+consumers: 4
+mode:
+  kind: fixed_rate
+  rate: 400000/s
+acks: leader
+compression: lz4
+linger: 5ms
+batch_size: 64KiB
+warmup: 60s
+duration: 1800s

@@ -109,7 +109,7 @@ num-traits.workspace = true
 # Zero-copy: cast remote-tier OffsetIndex/TimeIndex byte buffers
 # to typed entry slices instead of per-entry from_be_bytes() in a hot path.
 zerocopy.workspace = true
-# JSON Schema generation for FileConfig — consumed by crabka-docgen.
+# JSON Schema generation for FileConfig — consumed by krabka-docgen.
 schemars = { workspace = true }
 # KIP-714: stable subscription-id via CRC32C over sorted metric-prefix set.
 crc32c = { workspace = true }
@@ -159,7 +159,7 @@ stateright = { workspace = true }
 proptest = { workspace = true }
 krabka-broker = { path = ".", features = ["test-helpers"] }
 # `docgen_contract` links the `krabka_raft::scenarios` simulator that
-# `crabka-docgen` renders (see docs/docgen-contract.md). No production path
+# `krabka-docgen` renders (see docs/docgen-contract.md). No production path
 # enables the feature, so it is turned on here to keep the trace shape under
 # test. Bazel reads the feature off the same table.
 krabka-raft = { version = "0.5.4", path = "../raft", features = ["scenarios"] }

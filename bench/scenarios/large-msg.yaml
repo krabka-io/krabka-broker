@@ -1,0 +1,17 @@
+# Large records (100 KiB) at saturation with LZ4 compression. Pulls out
+# MB/s ceiling and shows CPU-per-MB ratio between the two stacks.
+name: large-msg
+mode_tag: cluster
+msg_size: 100KiB
+partitions: 6
+replication_factor: 1
+producers: 1
+consumers: 1
+mode:
+  kind: saturate
+acks: leader
+compression: lz4
+linger: 5ms
+batch_size: 1MiB
+warmup: 10s
+duration: 60s

@@ -1,0 +1,171 @@
+# Krabka vs Strimzi benchmark recipes. Run from the repo root via
+# `just -f bench/justfile <recipe>`, or `just <recipe>` after a `cd bench`.
+#
+# Two modes:
+#   bench-ci       lightweight KinD-friendly: 1 broker RF=1, short scenarios.
+#                  builds the bench-driver image with apko and loads
+#                  it into a `krabka-bench` kind cluster.
+#   bench-cluster  assumes kubeconfig points at a real cluster. Runs the
+#                  heavier matrix including 3-broker RF=3 and failover.
+#
+# Override the driver image with BENCH_DRIVER_IMAGE=... at the front.
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+# `just` runs each recipe from the justfile's own directory, which is
+# `bench/`. Every recipe below spells its paths from the repo root
+# (`bench/scripts/…`, `packaging/…`, `$PWD/packages`), so move the working
+# directory one level up. Without this, `just -f bench/justfile install-all`
+# looks for `bench/bench/scripts/install-strimzi.sh` and fails with exit 127.
+# The repo root holds no justfile, so a nested `just <recipe>` call inside a
+# recipe must name this file with `--justfile {{justfile()}}`.
+set working-directory := ".."
+
+repo_root := justfile_directory() / ".."
+results_dir := repo_root / "bench" / "results"
+
+# Default scenarios per mode (override by passing scenarios="a b c").
+ci_scenarios       := "small-msg-saturate fixed-rate-latency"
+cluster_scenarios  := "small-msg-saturate fixed-rate-latency large-msg fan-out mixed-acks failover high-partition-saturate high-partition-latency high-partition-fanout"
+
+bench_driver_image := env_var_or_default("BENCH_DRIVER_IMAGE", "krabka-bench-driver:e2e")
+strimzi_version    := env_var_or_default("STRIMZI_VERSION", "1.0.0")
+# How many times the averaged recipes repeat the matrix (each repeat is a
+# separate sample; the report averages them per (scenario, topology) cell).
+runs               := env_var_or_default("RUNS", "10")
+
+# ── Top-level ──────────────────────────────────────────────────────────────
+
+default:
+    @just --justfile {{justfile()}} --list
+
+# Full CI smoke: build images, kind-up, install both operators, run CI
+# scenarios on both stacks, tear down.
+bench-ci: build-driver-image kind-up install-all
+    just --justfile {{justfile()}} _run-matrix "1broker-rf1" "{{ci_scenarios}}"
+    just --justfile {{justfile()}} bench-report
+
+# Full cluster matrix. Assumes a kubeconfig context is already set.
+bench-cluster: install-all
+    just --justfile {{justfile()}} _run-matrix "3broker-rf3" "{{cluster_scenarios}}"
+    just --justfile {{justfile()}} bench-report-failover
+
+# 6-broker cluster matrix repeated `runs` times (default 10) for averaging.
+# Each repeat tags its output files `-runNN` so nothing is clobbered; the
+# report then averages every metric per (scenario, topology) cell. Assumes a
+# kubeconfig context is set and the broker pool has >=6 nodes (the brokers
+# anti-affinity one-per-node).
+bench-cluster-6broker: install-all
+    for i in $(seq 1 {{runs}}); do \
+      export BENCH_RUN_TAG="$(printf -- '-run%02d' "$i")"; \
+      echo "═══ repeat $i / {{runs}} (tag $BENCH_RUN_TAG) ═══"; \
+      just --justfile {{justfile()}} _run-matrix "6broker-rf3" "{{cluster_scenarios}}"; \
+    done
+    just --justfile {{justfile()}} bench-report-failover
+
+# Aggregate per-run JSON into a Markdown summary, graph-ready CSVs, a
+# standalone Plotly report, and the website charts fragment:
+#   SUMMARY.md      mean ± CV per (scenario, topology) cell
+#   results.csv     one row per run (wide) — bars with run-to-run error bars
+#   timeseries.csv  long format (run × time-offset × metric) — values over time
+#   report.html     self-contained interactive report (bars + averaged series)
+#   website fragment per-run + averaged throughput/CPU/memory, inlined by the
+#                   `benchmark_charts` Zola shortcode on the benchmarks page
+bench-report:
+    cargo run --release -p krabka-bench-driver --bin krabka-bench-report -- \
+        --input-dir {{results_dir}} \
+        --out {{results_dir}}/SUMMARY.md \
+        --csv {{results_dir}}/results.csv \
+        --timeseries-csv {{results_dir}}/timeseries.csv \
+        --html {{results_dir}}/report.html \
+        --web-fragment {{results_dir}}/charts.html
+
+# Aggregate and enforce failover quality. This exits non-zero unless failover
+# cells prove Krabka recovered no slower than Kafka, with comparable message
+# rate, drop, and latency-spike evidence.
+bench-report-failover:
+    cargo run --release -p krabka-bench-driver --bin krabka-bench-report -- \
+        --input-dir {{results_dir}} \
+        --out {{results_dir}}/SUMMARY.md \
+        --csv {{results_dir}}/results.csv \
+        --timeseries-csv {{results_dir}}/timeseries.csv \
+        --html {{results_dir}}/report.html \
+        --web-fragment {{results_dir}}/charts.html \
+        --failover-gate
+
+# Tear down operators and namespaces created by `just install-all`.
+bench-clean:
+    -kubectl delete namespace monitoring --ignore-not-found
+    -kubectl delete namespace krabka-operator --ignore-not-found
+    -kubectl delete namespace strimzi-system --ignore-not-found
+    -bench/scripts/teardown.sh krabka
+    -bench/scripts/teardown.sh kafka
+
+# ── Building blocks (callable directly when iterating) ─────────────────────
+
+install-all: install-strimzi install-krabka install-prometheus
+
+install-strimzi:
+    STRIMZI_VERSION={{strimzi_version}} bench/scripts/install-strimzi.sh
+
+install-krabka:
+    bench/scripts/install-krabka.sh
+
+install-prometheus:
+    bench/scripts/install-prometheus.sh
+
+# Run one scenario × one stack. Useful for iteration:
+#   just run krabka small-msg-saturate 1broker-rf1
+run STACK SCENARIO TOPOLOGY="1broker-rf1":
+    BENCH_DRIVER_IMAGE={{bench_driver_image}} \
+        bench/scripts/run-scenario.sh {{STACK}} {{SCENARIO}} {{TOPOLOGY}}
+
+# Build the bench-driver OCI image from packaging/apko/bench-driver.yaml.
+#
+# The recipe needs an apk named `krabka-bench-driver`. The melange recipe that
+# produced it built every binary of the old monorepo at once; it is a
+# reference recipe in `krabka-io/tooling` now and no pipeline runs it. Build an
+# apk yourself and put it in `packages/`, or set BENCH_DRIVER_IMAGE to an image
+# you already have and skip this recipe.
+build-driver-image:
+    @echo "→ building krabka-bench-driver OCI image"
+    test -d packages || { echo "no local apk repository at ./packages"; exit 1; }
+    test -f melange.rsa.pub || { echo "no melange.rsa.pub beside ./packages"; exit 1; }
+    apko build packaging/apko/bench-driver.yaml \
+        {{bench_driver_image}} krabka-bench-driver.tar \
+        --arch x86_64 \
+        --repository-append "$PWD/packages" \
+        --keyring-append "$PWD/melange.rsa.pub"
+
+# Bring up a local KinD cluster sized for the bench. No-op if one already
+# exists.
+kind-up:
+    @if kind get clusters 2>/dev/null | grep -q '^krabka-bench$'; then \
+      echo "kind cluster 'krabka-bench' already exists"; \
+    else \
+      kind create cluster --name krabka-bench --image mirror.gcr.io/kindest/node:v1.30.0 --wait 60s; \
+    fi
+    @echo "loading bench-driver image into kind"
+    docker load -i krabka-bench-driver.tar 2>&1 | tee /tmp/load.log
+    loaded=$(sed -n 's/^Loaded image: //p' /tmp/load.log | head -1); \
+        if [ "$loaded" != "{{bench_driver_image}}" ]; then \
+            docker tag "$loaded" "{{bench_driver_image}}"; \
+        fi; \
+        kind load docker-image "{{bench_driver_image}}" --name krabka-bench
+
+kind-down:
+    -kind delete cluster --name krabka-bench
+
+# ── Internal helpers ───────────────────────────────────────────────────────
+
+# Run a matrix of (stack × scenario) and append all outputs to results_dir.
+_run-matrix TOPOLOGY SCENARIOS:
+    mkdir -p {{results_dir}}
+    for scenario in {{SCENARIOS}}; do \
+      for stack in krabka kafka; do \
+        echo "═══ $stack / $scenario / {{TOPOLOGY}} ═══"; \
+        BENCH_DRIVER_IMAGE={{bench_driver_image}} \
+            bench/scripts/run-scenario.sh "$stack" "$scenario" "{{TOPOLOGY}}" \
+            || echo "WARN: $stack/$scenario failed (continuing)"; \
+        bench/scripts/teardown.sh "$stack"; \
+      done; \
+    done

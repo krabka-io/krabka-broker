@@ -1,0 +1,42 @@
+# The benchmark driver image, built from Wolfi packages by a standalone
+# `apko build`. `bench/manifests/driver/job-template.yaml` runs it as a
+# Kubernetes Job, and `BENCH_DRIVER_IMAGE` names the tag.
+#
+# The `krabka-bench-driver` package below has the same missing producer as the
+# `krabka-broker` package in `krabka-broker.yaml`: the melange recipe that made
+# both is a reference recipe in `krabka-io/tooling` and no pipeline runs it.
+# Point `--repository-append` at a local apk repository that holds one.
+#
+# The account, the architecture and the Wolfi base packages match
+# `../base.apko.yaml`. `busybox` is the one addition: the Job's container
+# command is a `/bin/sh -c` script that runs the driver and then prints the
+# result file.
+contents:
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  repositories:
+    - https://packages.wolfi.dev/os
+  packages:
+    - ca-certificates-bundle
+    - glibc
+    - wolfi-baselayout
+    - busybox
+    - tzdata
+    - krabka-bench-driver
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+      shell: /sbin/nologin
+  run-as: nonroot
+
+entrypoint:
+  command: /usr/bin/krabka-bench-driver
+
+archs:
+  - amd64

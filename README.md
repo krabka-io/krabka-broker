@@ -72,6 +72,9 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-telemetry` | OTLP pipeline, metrics registry, and the debug/pprof routes. |
 | `krabka-logfmt` | logfmt encoder for structured logs. |
 | `krabka-parse-benches` | Parses Criterion benchmark output into structured JSON summaries. |
+| `krabka-docgen` | Renders the broker reference pages from the broker's own in-process data. |
+| `krabka-bench-driver` | Load driver and report aggregator for the cluster benchmark harness under `bench/`. |
+| `krabka-log-iobench` | Bench-only crate: measures the log read path against mmap. |
 
 Rustdoc for every crate is published at
 [krabka-io.github.io/krabka-broker](https://krabka-io.github.io/krabka-broker/)
@@ -90,8 +93,9 @@ type, default, units, and description. It is generated from the schema that
 Two annotated examples, a [single node](docs/examples/broker-single-node.toml)
 and a [three-node quorum](docs/examples/broker-three-node-quorum.toml), are
 parsed and applied by the broker test suite. The
-[crabka-docgen contract](docs/docgen-contract.md) records what the external
-documentation generator reads from this crate and the revision it is pinned at.
+[krabka-docgen contract](docs/docgen-contract.md) records what
+[`crates/docgen`](crates/docgen/README.md) reads from this crate, and where CI
+renders it.
 
 ## Design documents
 
@@ -141,6 +145,21 @@ nightly schedule. It alternates three runs of a reference commit and the
 candidate on one host, then publishes raw output, exact commits, host resources
 and a variance-calibrated verdict in the `benchmark-regression-evidence`
 artifact. A performance figure quoted in a comment names that run.
+
+Those are microbenchmarks. [`bench/`](bench/README.md) is the other kind: a
+cluster harness that runs `krabka-bench-driver` as a Kubernetes Job against a
+Krabka cluster and a Strimzi cluster in turn, and aggregates the per-run JSON
+into one report. It needs a live cluster, so no CI job runs it.
+
+The JVM oracle is a separate build. It needs a JDK 17, and it is optional: no
+test in this repository runs it.
+
+```
+(cd tools/oracle && ./gradlew installDist)
+```
+
+[`tools/oracle/README.md`](tools/oracle/README.md) says what it does and who
+runs it.
 
 ### Everything CI does, locally
 

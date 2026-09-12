@@ -1,0 +1,14 @@
+load("//bazel:defs.bzl", "crate_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+# The library is an empty shell: this crate exists to host
+# `benches/mmap_read.rs`, which Cargo runs. `//bazel:defs.bzl` has no
+# `crate_bench` rule, so the bench itself has no target here, the same way
+# `crates/log`'s and `crates/broker`'s benches have none. The library target
+# still exists so `bazel build //...` compiles the crate and `aspect lint`
+# reaches it.
+crate_library(name = "log-iobench")

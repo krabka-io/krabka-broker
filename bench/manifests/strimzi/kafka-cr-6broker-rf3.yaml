@@ -1,0 +1,83 @@
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: kafka
+  namespace: default
+  labels:
+    strimzi.io/cluster: demo
+spec:
+  replicas: 6
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        class: premium-rwo
+        size: 200Gi
+        deleteClaim: true
+        kraftMetadata: shared
+  resources:
+    requests:
+      cpu: "2"
+      memory: 6Gi
+    limits:
+      cpu: "4"
+      memory: 12Gi
+  template:
+    pod:
+      metadata:
+        labels:
+          bench-pool: beefy
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: cloud.google.com/gke-nodepool
+                    operator: In
+                    values:
+                      - beefy-pool
+        # Spread the 6 Strimzi brokers across distinct nodes (parity with the
+        # krabka pool's anti-affinity) so the comparison is fair. Requires a
+        # 6-node beefy-pool.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  strimzi.io/cluster: demo
+                  strimzi.io/pool-name: kafka
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: demo
+  namespace: default
+spec:
+  kafka:
+    version: 4.2.0
+    metadataVersion: 4.2-IV1
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: strimzi-kafka-jmx-exporter
+          key: kafka-metrics-config.yml
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}

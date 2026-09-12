@@ -1,0 +1,37 @@
+[package]
+name = "krabka-log-iobench"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Bench-only crate: compares the log segment read path against mmap variants"
+repository = "https://github.com/robot-head/crabka"
+homepage = "https://github.com/robot-head/crabka"
+documentation = "https://docs.rs/krabka-log-iobench"
+readme = "README.md"
+keywords = ["kafka", "benchmark", "mmap", "krabka"]
+categories = ["development-tools::profiling"]
+
+# This crate does NOT enable `[lints] workspace = true`. The workspace forbids
+# `unsafe_code`, and `memmap2::Mmap::map` is `unsafe` by contract. The crate
+# exists only to measure mmap against the current read path, so it opts out of
+# the forbid rather than weakening the rule for everything else.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[dependencies]
+krabka-log = { version = "0.5.4", path = "../log" }
+krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-units = { workspace = true }
+bytes = { workspace = true }
+memmap2 = "0.9"
+
+[dev-dependencies]
+assert2 = { workspace = true }
+tempfile = { workspace = true }
+criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
+
+[[bench]]
+name = "mmap_read"
+harness = false

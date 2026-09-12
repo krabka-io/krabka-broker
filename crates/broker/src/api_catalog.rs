@@ -6,7 +6,7 @@
 //! of listener the request arrived on and the broker's KIP-714 setting, so a
 //! listener a client reaches advertises what a Kafka broker advertises. The
 //! dispatch registry calls [`dispatched_apis`] instead, because what the broker
-//! serves is wider than what any one listener names. `crabka-docgen` reads the
+//! serves is wider than what any one listener names. `krabka-docgen` reads the
 //! same list and does not spawn the broker binary.
 //!
 //! It is also the source of truth for the per-KIP rows of the generated

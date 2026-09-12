@@ -1,0 +1,19 @@
+# Pace producers at a fixed rate well below saturation so the latency
+# percentiles aren't dominated by coordinated omission. Default rate
+# (20k msgs/s on 1 KiB) is conservative — bump for cluster runs.
+name: fixed-rate-latency
+mode_tag: ci
+msg_size: 1KiB
+partitions: 6
+replication_factor: 1
+producers: 1
+consumers: 1
+mode:
+  kind: fixed_rate
+  rate: 20000/s
+acks: all
+compression: none
+linger: 5ms
+batch_size: 16KiB
+warmup: 15s
+duration: 120s

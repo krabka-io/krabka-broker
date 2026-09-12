@@ -422,6 +422,21 @@ jobs:
           trap 'rm -f "${generated}"' EXIT
           aspect generate-config-reference --output "${generated}"
           diff -u docs/config-reference.md "${generated}"
+      # `krabka-docgen` renders four pages out of the broker's own in-process data (docs/docgen-contract.md names each entry point). Render the whole tree into a temporary directory: a signature change that `crates/broker/tests/docgen_contract.rs` does not reach fails here instead of in the site build.
+      # Absolute paths on both steps: `bazel run` puts the binary's own runfiles
+      # tree on the working directory, not the workspace root, so a relative
+      # `docs` would resolve against the wrong tree.
+      - name: generated reference tree
+        run: |
+          out="$(mktemp -d)"
+          trap 'rm -rf "${out}"' EXIT
+          bazel run //crates/docgen:krabka-docgen -- all --out "${out}"
+      # The same tool rewrites every fenced block a page marks with `<!-- snippet: <path>#<anchor> -->` from the source region that carries the matching markers. It is idempotent, so a tree in sync does not change. A source edit that moved a quoted region does change it, and this fails.
+      - name: quoted source snippets are current
+        run: |
+          bazel run //crates/docgen:krabka-docgen -- \
+            snippets --content "${PWD}/docs" --crates "${PWD}/crates"
+          git diff --exit-code
       # Every docs/KFCs/KFC-*.md carries the README's seven headings in order and a Status that matches the README index; the `the tasks' own tests` step above runs the unit tests that prove the check fails on a missing heading or a status mismatch.
       - name: KFC template
         run: aspect check-kfcs
@@ -948,6 +963,41 @@ jobs:
   # deployment and nowhere else, and no run of this check can ever reach them.
   # They live here rather than in `.lycheeignore` so that file stays a record of
   # links this lane has actually proven unreachable.
+  # The JVM oracle compiles here and nowhere else.
+  #
+  # `tools/oracle` links `kafka-clients` and answers Kafka wire questions for
+  # the differential suites. Those suites live in `krabka-io/krabka-protocol`,
+  # so nothing in this repository executes the oracle. This lane still builds
+  # it: a `kafka-clients` bump that does not compile has to fail on the pull
+  # request that makes it, not in the other repository a week later.
+  oracle:
+    name: jvm oracle
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+          # A warm run downloads neither the Gradle distribution nor the
+          # oracle's Maven dependencies. `cache-dependency-path` scopes the key
+          # to `tools/oracle`, so an unrelated change does not rotate it.
+          cache: gradle
+          cache-dependency-path: |
+            tools/oracle/**/*.gradle*
+            tools/oracle/gradle/wrapper/gradle-wrapper.properties
+      - name: build the JVM oracle
+        # Maven Central rate-limits cold resolves (HTTP 429). Retry with
+        # backoff; Gradle keeps what it already downloaded.
+        run: |
+          for attempt in 1 2 3; do
+            if (cd tools/oracle && ./gradlew installDist --no-daemon); then exit 0; fi
+            if [ "$attempt" = 3 ]; then echo "::error::gradle installDist failed after 3 attempts"; exit 1; fi
+            echo "gradle attempt $attempt failed; backing off"; sleep $((attempt * 45))
+          done
+
   links:
     name: external links
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -1203,6 +1253,7 @@ jobs:
       - select
       - docker
       - kubernetes
+      - oracle
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

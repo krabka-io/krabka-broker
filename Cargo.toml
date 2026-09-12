@@ -29,6 +29,11 @@ debug = "none"
 split-debuginfo = "packed"
 
 [workspace.dependencies]
+# Error type for the two tool binaries -- `krabka-docgen` and
+# `krabka-bench-driver`. Library crates use `thiserror` enums, as the code
+# style guide requires; a binary that only prints the error and exits does not
+# need one.
+anyhow = "1"
 apache-avro = { version = "0.21", features = ["derive"] }
 arc-swap = "1"
 # Expressive test assertions: `assert!(a == b)` / `check!(..)` with

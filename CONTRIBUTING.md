@@ -42,6 +42,51 @@ that the change does not otherwise touch. The
 [style guides](docs/style_guides/README.md) contain the code and documentation
 rules.
 
+## JVM Oracle
+
+[`tools/oracle`](tools/oracle/README.md) is the JVM differential-test oracle.
+It answers Kafka wire questions with Apache Kafka's own `kafka-clients` code.
+You need a JDK 17 to build it. You do not need a system Gradle.
+
+```sh
+(cd tools/oracle && ./gradlew installDist)
+```
+
+Gradle installs the start script at
+`tools/oracle/build/install/krabka-oracle/bin/krabka-oracle`. The wire-level
+differential suites that drive it live in
+[krabka-protocol](https://github.com/krabka-io/krabka-protocol), not here. The
+`oracle` job of `ci.yml` builds the oracle on every pull request, so a
+`kafka-clients` bump that does not compile fails here.
+
+## Bumping the upstream Kafka version
+
+The schema sync and the protocol code regeneration belong to
+[krabka-protocol](https://github.com/krabka-io/krabka-protocol). Do those steps
+in that repository first. Then, in this repository:
+
+1. Update the image tag and digest for the new release in `MODULE.bazel` and in
+   [`bazel/images/BUILD.bazel`](bazel/images/BUILD.bazel), and the oracle line
+   in [`docs/KIP_MATRIX.md`](docs/KIP_MATRIX.md). `aspect check-images` holds
+   the first two in step.
+2. Update the `kafka-clients` version in
+   [`tools/oracle/build.gradle.kts`](tools/oracle/build.gradle.kts) to the same
+   release.
+3. Run `(cd tools/oracle && ./gradlew installDist)`.
+4. Run `bazel test --config=docker //crates/...`.
+5. Commit the image pins and the Gradle bump together.
+
+## Benchmarks
+
+`cargo bench -p krabka-broker` and `cargo bench -p krabka-log` are the
+microbenchmarks. There is no `crate_bench` rule, so Cargo runs them.
+
+[`bench/`](bench/README.md) is the cluster harness. It runs
+`krabka-bench-driver` as a Kubernetes Job against a Krabka cluster and a
+Strimzi cluster in turn, and aggregates the per-run JSON into one report. It
+needs a live cluster and a kubeconfig, so no CI job runs it; read that
+directory's README before you start one.
+
 ## Special Test Tiers
 
 The ignored integration tests need their external service or Kafka oracle.
