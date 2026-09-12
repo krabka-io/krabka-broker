@@ -10,9 +10,19 @@ use anyhow::{Context, Result};
 use krabka_units::{fmt::Human as _, prelude::*};
 
 use crate::{
+    aggregate::CellKey,
+    ids::{MessageCount, TimeOffsetMs},
     numeric::{mebibytes_f64, millis_f64, to_f64},
     scenario::{RunOutput, Stack},
 };
+
+/// The name a violation message calls a stack by.
+fn stack_label(stack: Stack) -> &'static str {
+    match stack {
+        Stack::Krabka => "krabka",
+        Stack::Kafka => "kafka",
+    }
+}
 
 fn push_fmt(output: &mut String, args: Arguments<'_>) {
     output
@@ -99,15 +109,15 @@ pub fn render_markdown(input_dir: &Path, strict: bool) -> Result<String> {
         }
     }
 
-    // Group by (scenario name, broker_count). Keying on broker_count keeps the
-    // same scenario run at two topologies (e.g. 3- vs 6-broker) in separate
-    // cells, and collects every repeated run of one cell together to average.
-    let mut by_group: BTreeMap<(String, u32), Vec<RunOutput>> = BTreeMap::new();
+    // Group by `CellKey`: the scenario name with the whole topology. That keeps
+    // the same scenario run at two topologies in separate cells, and collects
+    // every repeated run of one cell together to average. The key carries the
+    // partition count and the replication factor as well as the broker count,
+    // so a rerun after a topology change cannot be averaged into the old
+    // numbers.
+    let mut by_group: BTreeMap<CellKey, Vec<RunOutput>> = BTreeMap::new();
     for (_p, r) in runs {
-        by_group
-            .entry((r.scenario.name.clone(), r.topology.broker_count))
-            .or_default()
-            .push(r);
+        by_group.entry(CellKey::of(&r)).or_default().push(r);
     }
 
     let mut out = String::new();
@@ -118,14 +128,14 @@ pub fn render_markdown(input_dir: &Path, strict: bool) -> Result<String> {
     }
     out.push_str("Each cell is the **mean across all runs** of a (scenario, topology); `(±N%)` is the coefficient of variation (sample stddev ÷ mean), shown when a cell has more than one run. The `ratio` column is `krabka / kafka` for throughput / efficiency (higher is better for Krabka) and `kafka / krabka` for latency / resource (lower-is-better Krabka still > 1).\n\n");
 
-    for ((name, brokers), runs) in &by_group {
-        render_group(&mut out, name, *brokers, runs);
+    for (key, runs) in &by_group {
+        render_group(&mut out, key, runs);
     }
 
     Ok(out)
 }
 
-fn render_group(out: &mut String, name: &str, brokers: u32, runs: &[RunOutput]) {
+fn render_group(out: &mut String, key: &CellKey, runs: &[RunOutput]) {
     let krabka: Vec<&RunOutput> = runs
         .iter()
         .filter(|r| matches!(r.stack, Stack::Krabka))
@@ -135,7 +145,7 @@ fn render_group(out: &mut String, name: &str, brokers: u32, runs: &[RunOutput]) 
         .filter(|r| matches!(r.stack, Stack::Kafka))
         .collect();
 
-    push_fmt(out, format_args!("## `{name}` @ {brokers} broker(s)\n\n"));
+    push_fmt(out, format_args!("## {}\n\n", key.label()));
 
     if let Some(r) = runs.first() {
         push_fmt(
@@ -149,6 +159,26 @@ fn render_group(out: &mut String, name: &str, brokers: u32, runs: &[RunOutput]) 
                 r.scenario.warmup.human(),
                 krabka.len(),
                 kafka.len(),
+            ),
+        );
+    }
+
+    // A run whose Prometheus capture failed carries `Resource::default()`,
+    // which is all zeros. Zero CPU and zero memory read as an exceptionally
+    // good lower-is-better result, so say when a cell holds one instead of
+    // letting the reader take the resource rows at face value.
+    let unmeasured = runs
+        .iter()
+        .filter(|r| r.notes.iter().any(|n| n.starts_with("prometheus-")))
+        .count();
+    if unmeasured > 0 {
+        push_fmt(
+            out,
+            format_args!(
+                "> **Resource rows are incomplete.** {unmeasured} of {} run(s) captured no \
+                 broker CPU or memory. Their resource and efficiency figures are zeros and \
+                 not measurements.\n\n",
+                runs.len(),
             ),
         );
     }
@@ -494,27 +524,69 @@ fn render_failover_comparison(out: &mut String, krabka: &[&RunOutput], kafka: &[
     out.push('\n');
 }
 
+/// Why one failover run carries no usable evidence, or `None` when it does.
+///
+/// A run that errored, that recorded no disturbance, that stamped a recovery
+/// before the kill, or that moved no traffic is not a measurement. Admitting
+/// one is what let the gate report PASS over a workload that died: a recovery
+/// stamp below the kill stamp saturates to 0 ms in
+/// [`crate::ids::TimeOffsetMs::since`], and a zero-rate baseline reads as a
+/// stack that never slowed down. Each of these is a gate violation and not a
+/// reason to drop the run quietly.
+fn failover_evidence_defect(run: &RunOutput) -> Option<String> {
+    if !run.errors.is_empty() {
+        return Some(format!(
+            "the run reported errors: {}",
+            run.errors.join("; ")
+        ));
+    }
+    let Some(disturbance) = run.disturbance.as_ref() else {
+        return Some("the run recorded no disturbance".to_owned());
+    };
+    if disturbance.kill_at_ms == TimeOffsetMs(0) {
+        return Some("the run recorded no broker kill".to_owned());
+    }
+    if disturbance.recovery_at_ms < disturbance.kill_at_ms {
+        return Some(format!(
+            "the recovery stamp {} is before the kill stamp {}",
+            disturbance.recovery_at_ms, disturbance.kill_at_ms
+        ));
+    }
+    if disturbance.recovery_at_ms == TimeOffsetMs(0) {
+        return Some("the run never acknowledged a record after the kill".to_owned());
+    }
+    if run.throughput.msgs_produced == MessageCount(0) {
+        return Some("the run produced no messages".to_owned());
+    }
+    if run.throughput.producer_rate <= Frequency::ZERO {
+        return Some("the run measured a zero producer rate".to_owned());
+    }
+    None
+}
+
 fn failover_gate_violations_for_runs(runs: &[RunOutput]) -> Vec<String> {
-    let mut by_group: BTreeMap<(String, u32, i32, i16), Vec<&RunOutput>> = BTreeMap::new();
+    let mut violations = Vec::new();
+    let mut by_group: BTreeMap<CellKey, Vec<&RunOutput>> = BTreeMap::new();
     for r in runs.iter().filter(|r| r.scenario.failover.is_some()) {
-        by_group
-            .entry((
-                r.scenario.name.clone(),
-                r.topology.broker_count,
-                r.topology.partitions,
-                r.topology.replication_factor,
-            ))
-            .or_default()
-            .push(r);
+        // Validate before grouping. A run with no usable evidence never
+        // reaches the comparison, and it fails the gate on its own account.
+        if let Some(defect) = failover_evidence_defect(r) {
+            violations.push(format!(
+                "{}: {} failover run is not a measurement: {defect}",
+                CellKey::of(r).label(),
+                stack_label(r.stack),
+            ));
+            continue;
+        }
+        by_group.entry(CellKey::of(r)).or_default().push(r);
     }
 
-    let mut violations = Vec::new();
     if by_group.is_empty() {
         violations.push("missing failover results".into());
         return violations;
     }
 
-    for ((scenario, brokers, partitions, rf), group) in by_group {
+    for (key, group) in by_group {
         let krabka: Vec<&RunOutput> = group
             .iter()
             .copied()
@@ -525,7 +597,7 @@ fn failover_gate_violations_for_runs(runs: &[RunOutput]) -> Vec<String> {
             .copied()
             .filter(|r| r.stack == Stack::Kafka)
             .collect();
-        let label = format!("{scenario} @ {brokers} broker(s), {partitions} partitions, RF={rf}");
+        let label = key.label();
 
         let Some(c_recovery) = mean_failover_recovery(&krabka) else {
             violations.push(format!(
@@ -1096,7 +1168,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ids::{MessageCount, TimeOffsetMs, WallclockMs},
+        ids::WallclockMs,
         numeric::{event_rate, nonnegative_i64_to_u64},
         scenario::{
             Acks, Compression, Disturbance, LoadMode, ModeTag, Sample, Scenario, Throughput,
@@ -1343,6 +1415,103 @@ mod tests {
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 
         assert2::assert!(violations.is_empty());
+    }
+
+    /// Write one krabka run and one kafka run into `dir`, so a gate test only
+    /// has to say how it damaged the krabka half.
+    fn write_failover_pair(dir: &Path, krabka: &RunOutput) {
+        std::fs::write(
+            dir.join("krabka-failover-3broker-rf3-run01.json"),
+            serde_json::to_string(krabka).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("kafka-failover-3broker-rf3-run01.json"),
+            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
+                .unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A run whose producer tasks failed still writes a `RunOutput`. Its
+    /// recovery stamp is meaningless, so the gate must refuse it rather than
+    /// compare it.
+    #[test]
+    fn failover_gate_rejects_a_run_that_reported_errors() {
+        let dir = tempdir().unwrap();
+        let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
+        krabka.errors = vec!["producer-0-build: connection refused".into()];
+        write_failover_pair(dir.path(), &krabka);
+
+        let violations = failover_gate_violations(dir.path(), true).unwrap();
+
+        assert2::assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("krabka failover run is not a measurement")
+                    && v.contains("reported errors")),
+            "{violations:?}"
+        );
+    }
+
+    /// A transient error before the kill used to stamp recovery earlier than
+    /// the kill. `TimeOffsetMs::since` saturates that to 0 ms, which reads as
+    /// an instant recovery and wins the comparison.
+    #[test]
+    fn failover_gate_rejects_a_recovery_before_the_kill() {
+        let dir = tempdir().unwrap();
+        let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
+        if let Some(disturbance) = krabka.disturbance.as_mut() {
+            disturbance.recovery_at_ms = TimeOffsetMs(3_000);
+        }
+        write_failover_pair(dir.path(), &krabka);
+
+        let violations = failover_gate_violations(dir.path(), true).unwrap();
+
+        assert2::assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("is before the kill stamp")),
+            "{violations:?}"
+        );
+    }
+
+    /// A workload that moved nothing has a zero baseline, and a zero baseline
+    /// never shows a drop after the kill.
+    #[test]
+    fn failover_gate_rejects_a_run_with_no_traffic() {
+        let dir = tempdir().unwrap();
+        let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
+        krabka.throughput.msgs_produced = MessageCount(0);
+        krabka.throughput.producer_rate = Frequency::ZERO;
+        write_failover_pair(dir.path(), &krabka);
+
+        let violations = failover_gate_violations(dir.path(), true).unwrap();
+
+        assert2::assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("produced no messages")),
+            "{violations:?}"
+        );
+    }
+
+    /// A kill that never landed leaves `kill_at_ms` at zero.
+    #[test]
+    fn failover_gate_rejects_a_run_with_no_recorded_kill() {
+        let dir = tempdir().unwrap();
+        let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
+        krabka.disturbance = None;
+        write_failover_pair(dir.path(), &krabka);
+
+        let violations = failover_gate_violations(dir.path(), true).unwrap();
+
+        assert2::assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("recorded no disturbance")),
+            "{violations:?}"
+        );
     }
 
     #[test]
@@ -1605,12 +1774,22 @@ mod tests {
         for needle in [
             "<html",
             "Bench",
-            "cdn.plot.ly/plotly-3.0.1",
             "small-msg-saturate",
             "Producer throughput",
         ] {
             assert2::assert!(html.contains(needle));
         }
+        // The standalone report is an artifact people open offline, so it
+        // carries plotly.js rather than a link to it. `Plotly.newPlot` is the
+        // call the inline figures make, and it is in the bundle, not in a
+        // `<script src>`.
+        // The bundle's own text mentions the CDN, so the check is on the
+        // `<script src>` tag and not on the host name.
+        assert2::assert!(!html.contains("<script src=\"https://cdn.plot.ly"));
+        assert2::assert!(html.contains("Plotly.newPlot"));
+        // The bundle is megabytes. A page that lost it would still contain
+        // every string above.
+        assert2::assert!(html.len() > 1_000_000, "page is {} bytes", html.len());
     }
 
     #[test]
@@ -1629,7 +1808,9 @@ mod tests {
         )
         .unwrap();
         let frag = render_web_fragment(dir.path(), true).unwrap();
-        // A fragment, not a full page (no <html> wrapper) but loads plotly.
+        // A fragment, not a full page (no `<html>` wrapper). It is inlined into
+        // a page the site serves online, so it keeps the CDN reference that the
+        // standalone report drops.
         for (needle, want) in [
             ("<html", false),
             ("cdn.plot.ly/plotly-3.0.1", true),

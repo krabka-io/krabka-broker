@@ -2,7 +2,7 @@ apiVersion: krabka.io/v1alpha1
 kind: Kafka
 metadata:
   name: demo
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
 spec:
   kafkaVersion: "3.7.0"
   config:
@@ -15,7 +15,7 @@ apiVersion: krabka.io/v1alpha1
 kind: KafkaNodePool
 metadata:
   name: brokers
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
   labels:
     krabka.io/cluster: demo
 spec:

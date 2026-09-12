@@ -45,11 +45,31 @@ impl PromClient {
     /// # Errors
     /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
     pub async fn query_scalar_sum(&self, query: &str) -> Result<Option<f64>> {
+        self.query_scalar_sum_at(query, None).await
+    }
+
+    /// [`Self::query_scalar_sum`], evaluated at an explicit instant.
+    ///
+    /// `at_unix_s` is the Prometheus `time` parameter. A range selector inside
+    /// the query then looks back from that instant and not from now, which is
+    /// what lets a caller name the window it measured rather than the window
+    /// that happens to end when the client got round to asking.
+    /// # Errors
+    /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
+    pub async fn query_scalar_sum_at(
+        &self,
+        query: &str,
+        at_unix_s: Option<f64>,
+    ) -> Result<Option<f64>> {
         let url = format!("{}/api/v1/query", self.base_url);
+        let mut params: Vec<(&str, String)> = vec![("query", query.to_owned())];
+        if let Some(at) = at_unix_s {
+            params.push(("time", format!("{at}")));
+        }
         let body: PromResp = self
             .http
             .get(&url)
-            .query(&[("query", query)])
+            .query(&params)
             .send()
             .await
             .with_context(|| format!("GET {url} query={query}"))?
@@ -206,11 +226,20 @@ impl PromClient {
     /// duration, so the `rate()` window does not tail off.
     /// # Errors
     /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
+    /// `measured_until_unix_s` is the instant the measurement window closed.
+    /// The queries are evaluated there rather than at call time, so the
+    /// `window`-long lookback covers the window that was measured. Without it,
+    /// the time the driver spends joining its tasks and draining its producers
+    /// shifts the lookback forward by that much: the start of the measurement
+    /// falls out of the window and the drain falls into it, while the
+    /// efficiency figure still divides the measurement-only message count by
+    /// that shifted CPU interval.
     pub async fn capture_resource(
         &self,
         stack: Stack,
         namespace: &str,
         window: Time,
+        measured_until_unix_s: f64,
         msgs_produced: MessageCount,
     ) -> Result<Resource> {
         // `broker_pod_regex()` returns a `^`-anchored *prefix* (e.g.
@@ -244,10 +273,26 @@ impl PromClient {
             "max_over_time(sum(container_memory_working_set_bytes{{namespace=\"{namespace}\",pod=~\"{pod_re}\",id=~\".*slice\"}})[{win}s:15s])"
         );
 
-        let broker_cpu =
-            Time::from_secs_f64(self.query_scalar_sum(&cpu_query).await?.unwrap_or(0.0));
-        let mem_working =
-            nonnegative_f64_to_u64(self.query_scalar_sum(&rss_query).await?.unwrap_or(0.0));
+        // An empty result vector is not a zero. It means the selector matched
+        // no series: a scrape that had not started, a renamed label, a wrong
+        // namespace. Recording it as zero publishes 0 bytes of memory as a
+        // real and exceptionally good result, and derives an efficiency figure
+        // from a CPU measurement that does not exist. Both queries below have
+        // already been wrong in exactly that way, as the comments above say, and
+        // the only symptom was a run of suspiciously good numbers. Fail instead:
+        // `workload::capture_resources` turns this into a
+        // `prometheus-capture-failed` note on the run.
+        let at = Some(measured_until_unix_s);
+        let broker_cpu = Time::from_secs_f64(require_series(
+            self.query_scalar_sum_at(&cpu_query, at).await?,
+            "broker CPU",
+            &cpu_query,
+        )?);
+        let mem_working = nonnegative_f64_to_u64(require_series(
+            self.query_scalar_sum_at(&rss_query, at).await?,
+            "broker memory",
+            &rss_query,
+        )?);
 
         let mut res = Resource {
             broker_cpu,
@@ -274,17 +319,35 @@ impl PromClient {
             let nonheap_q = format!(
                 "max_over_time(sum(jvm_memory_used_bytes{{namespace=\"{namespace}\",pod=~\"{pod_re}\",area=\"nonheap\"}})[{win}s:15s])"
             );
-            let heap = nonnegative_f64_to_u64(self.query_scalar_sum(&heap_q).await?.unwrap_or(0.0));
-            let nonheap =
-                nonnegative_f64_to_u64(self.query_scalar_sum(&nonheap_q).await?.unwrap_or(0.0));
-            res.jvm_heap_used = Some(ByteSize::from_bytes(heap));
-            res.jvm_nonheap_used = Some(ByteSize::from_bytes(nonheap));
-            let page_cache = mem_working.saturating_sub(heap).saturating_sub(nonheap);
-            res.kafka_page_cache_approx = Some(ByteSize::from_bytes(page_cache));
+            // These three are already `Option`, so an empty vector has a way to
+            // say "not measured" without inventing a zero. A JVM that exports
+            // no heap series is a real state -- a metrics port that is not
+            // scraped yet, or a collector under another name -- and the page
+            // cache figure is derived from both, so it is unavailable whenever
+            // either half is.
+            let heap = self.query_scalar_sum_at(&heap_q, at).await?;
+            let nonheap = self.query_scalar_sum_at(&nonheap_q, at).await?;
+            res.jvm_heap_used = heap.map(|v| ByteSize::from_bytes(nonnegative_f64_to_u64(v)));
+            res.jvm_nonheap_used = nonheap.map(|v| ByteSize::from_bytes(nonnegative_f64_to_u64(v)));
+            res.kafka_page_cache_approx = heap.zip(nonheap).map(|(heap, nonheap)| {
+                let page_cache = mem_working
+                    .saturating_sub(nonnegative_f64_to_u64(heap))
+                    .saturating_sub(nonnegative_f64_to_u64(nonheap));
+                ByteSize::from_bytes(page_cache)
+            });
         }
 
         Ok(res)
     }
+}
+
+/// The value of a query that must have matched a series, or an error naming
+/// the query that matched none.
+///
+/// This is the seam that keeps "no series" from becoming a zero. It is a free
+/// function so its rule is testable without an HTTP server.
+fn require_series(value: Option<f64>, what: &str, query: &str) -> Result<f64> {
+    value.ok_or_else(|| anyhow!("no series matched the {what} query: {query}"))
 }
 
 // ── Prometheus HTTP API types (minimal) ─────────────────────────────────────
@@ -324,6 +387,27 @@ mod tests {
     #[test]
     fn prometheus_request_timeout_constructs_prom_client() {
         assert!(PromClient::new("http://prometheus.example", secs(1)).is_ok());
+    }
+
+    /// A matched series keeps its value, whatever that value is. A real zero
+    /// is a measurement and passes through.
+    #[test]
+    fn require_series_passes_a_matched_value_through() {
+        for value in [12.5_f64, 0.0_f64] {
+            let kept = require_series(Some(value), "broker CPU", "q").expect("a matched series");
+            assert!((kept - value).abs() < f64::EPSILON);
+        }
+    }
+
+    /// An empty vector is not a zero. The error names the query, because the
+    /// cause is nearly always the selector.
+    #[test]
+    fn require_series_rejects_an_empty_vector() {
+        let error = require_series(None, "broker memory", "sum(container_memory{pod=~\"x.*\"})")
+            .expect_err("an empty vector is an error");
+        let message = format!("{error}");
+        assert!(message.contains("no series matched the broker memory query"));
+        assert!(message.contains("container_memory"));
     }
 
     #[test]

@@ -2,7 +2,7 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaNodePool
 metadata:
   name: kafka
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
   labels:
     strimzi.io/cluster: demo
 spec:
@@ -55,7 +55,7 @@ apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
   name: demo
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
 spec:
   kafka:
     version: 4.2.0

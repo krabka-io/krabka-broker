@@ -2,7 +2,7 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: bench-topic
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
   labels:
     strimzi.io/cluster: demo
 spec:

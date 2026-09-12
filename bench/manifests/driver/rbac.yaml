@@ -1,8 +1,15 @@
+# The driver's identity and the one privileged Role it can be granted.
+#
+# Applying this grants nothing. The RoleBinding that ties the Role to the
+# ServiceAccount is `rbac-failover.yaml`, and `run-scenario.sh` applies that one
+# only for a scenario that declares a `failover` block. Every other scenario
+# runs under a ServiceAccount with no permissions, so a non-failover benchmark
+# image cannot list or delete a pod.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: bench-driver
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
 ---
 # Only required for the `failover` scenario. CI scenarios run with a
 # no-RBAC ServiceAccount so they can't accidentally delete pods.
@@ -10,22 +17,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: bench-driver-failover
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
 rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, delete]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: bench-driver-failover
-  namespace: default
-subjects:
-  - kind: ServiceAccount
-    name: bench-driver
-    namespace: default
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: bench-driver-failover

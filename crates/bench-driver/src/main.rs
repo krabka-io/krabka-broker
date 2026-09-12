@@ -346,8 +346,8 @@ fn hash_str(s: &str) -> u64 {
 mod tests {
     use assert2::{assert, check};
     use clap::Parser;
-    use krabka_units::prelude::*;
 
+    // `use super::*` already carries this module's `krabka_units` prelude.
     use super::*;
 
     fn required_args(stack: &'static str) -> Vec<&'static str> {

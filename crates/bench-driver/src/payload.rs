@@ -37,6 +37,34 @@ pub fn template(msg_size: ByteSize) -> BytesMut {
     b
 }
 
+/// Builds a record key of exactly `key_size` bytes, distinct per `sequence`.
+///
+/// A scenario that sets `key_size` asks for a keyed workload, and a keyed
+/// workload is not a keyless one: the partitioner hashes the key instead of
+/// round-robining, and the key adds its own bytes to the wire. The key has to
+/// vary, or every record hashes to one partition and the run measures a single
+/// partition rather than the scenario's partition count.
+///
+/// The first eight bytes are the big-endian sequence, so keys are distinct and
+/// spread. The rest is the same repeating ramp the value filler uses, so a
+/// compressed batch is not dominated by a run of zeros. A `key_size` below
+/// eight bytes is honoured as given and takes a prefix of the sequence.
+#[must_use]
+pub fn key(key_size: ByteSize, sequence: u64) -> Option<Bytes> {
+    let len = key_size.bytes_usize();
+    if len == 0 {
+        return None;
+    }
+    let mut buf = BytesMut::with_capacity(len);
+    buf.resize(len, 0u8);
+    let stamped = len.min(8);
+    buf[..stamped].copy_from_slice(&sequence.to_be_bytes()[..stamped]);
+    for (index, byte) in buf.iter_mut().enumerate().skip(stamped) {
+        *byte = u8::try_from(index & 0xff).unwrap_or_default();
+    }
+    Some(buf.freeze())
+}
+
 /// Stamps the magic, the `scenario_id`, and the current `unix_nanos` into the
 /// first 24 bytes of `buf`. Returns the value as a `Bytes`, which the caller
 /// clones cheaply with a `BytesMut::freeze`-style copy.
@@ -71,6 +99,28 @@ pub fn read_send_nanos(value: &[u8], scenario_id: u64) -> Option<u64> {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn a_zero_key_size_means_a_keyless_record() {
+        assert2::assert!(key(ByteSize::ZERO, 7).is_none());
+    }
+
+    #[test]
+    fn a_key_has_the_configured_size_and_varies_per_record() {
+        let first = key(bytes(16), 1).expect("a sized key");
+        let second = key(bytes(16), 2).expect("a sized key");
+        assert2::assert!(first.len() == 16);
+        assert2::assert!(second.len() == 16);
+        assert2::assert!(first != second);
+        assert2::assert!(first[..8] == 1u64.to_be_bytes());
+    }
+
+    #[test]
+    fn a_key_shorter_than_the_sequence_is_still_the_configured_size() {
+        let short = key(bytes(4), 0x0102_0304_0506_0708).expect("a sized key");
+        assert2::assert!(short.len() == 4);
+        assert2::assert!(short[..] == [0x01, 0x02, 0x03, 0x04]);
+    }
 
     #[test]
     fn round_trip_send_nanos() {

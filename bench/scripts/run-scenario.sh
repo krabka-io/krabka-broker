@@ -107,14 +107,45 @@ KAFKA_CR_PATH="$REPO_ROOT/bench/manifests/$manifest_stack/kafka-cr-${TOPOLOGY}${
 TOPIC_PATH="$REPO_ROOT/bench/manifests/$manifest_stack/kafkatopic-bench.yaml"
 JOB_TEMPLATE="$REPO_ROOT/bench/manifests/driver/job-template.yaml"
 RBAC_PATH="$REPO_ROOT/bench/manifests/driver/rbac.yaml"
+RBAC_FAILOVER_PATH="$REPO_ROOT/bench/manifests/driver/rbac-failover.yaml"
 
 [[ -f "$KAFKA_CR_PATH" ]] || { log "missing Kafka CR manifest $KAFKA_CR_PATH"; exit 2; }
 
+# A scenario the cluster cannot host is skipped HERE, before anything is
+# applied. Creating an RF=3 KafkaTopic on a one-broker cluster leaves a topic
+# that never becomes Ready, and the wait below exits the script, so the driver
+# never runs and never writes the skip result it is documented to write. Write
+# that result here instead.
+if (( BENCH_REPLICATION_FACTOR > BENCH_BROKER_COUNT )); then
+  # The marker is `.skipped`, not `.json`. The report aggregator reads every
+  # `*.json` in the results directory as a `RunOutput` and fails in strict mode
+  # on one it cannot parse, so a skip must not land there.
+  skip_file="${BENCH_RESULTS_DIR}/${STACK}-${SCENARIO}-${TOPOLOGY}${BENCH_RUN_TAG:-}.skipped"
+  log "[$STACK/$SCENARIO/$TOPOLOGY] skipped:topology-mismatch (rf=$BENCH_REPLICATION_FACTOR brokers=$BENCH_BROKER_COUNT)"
+  printf 'skipped:topology-mismatch (rf=%s brokers=%s)\n' \
+    "$BENCH_REPLICATION_FACTOR" "$BENCH_BROKER_COUNT" > "$skip_file"
+  exit 0
+fi
+
+# The failover scenario deletes a broker pod, so it needs the privileged
+# RoleBinding. Every other scenario must NOT have it: the driver image is the
+# same one, and an unbound Role is what keeps an ordinary run from being able
+# to delete any pod in the namespace.
+scenario_wants_failover() {
+  grep -Eq '^failover:[[:space:]]*$' "$SCEN_PATH"
+}
+
 log "[$STACK/$SCENARIO/$TOPOLOGY] applying RBAC + Kafka CR"
-kubectl apply -f "$RBAC_PATH"
+envsubst < "$RBAC_PATH" | kubectl apply -f -
+if scenario_wants_failover; then
+  log "[$STACK/$SCENARIO/$TOPOLOGY] granting pod deletion for the failover scenario"
+  envsubst < "$RBAC_FAILOVER_PATH" | kubectl apply -f -
+else
+  kubectl delete rolebinding bench-driver-failover -n "$BENCH_NAMESPACE" --ignore-not-found
+fi
 
 T0=$(date +%s%N)
-kubectl apply -f "$KAFKA_CR_PATH"
+envsubst < "$KAFKA_CR_PATH" | kubectl apply -f -
 
 log "[$STACK/$SCENARIO/$TOPOLOGY] waiting for Kafka Ready"
 elapsed=$(wait_kafka_ready "$STACK" 600)

@@ -1,0 +1,19 @@
+# Pod deletion for the failover scenario, and for nothing else.
+#
+# `run-scenario.sh` applies this before a scenario that declares a `failover`
+# block, and deletes it before every other scenario. Keeping the binding out of
+# `rbac.yaml` is what stops an ordinary benchmark run from carrying the
+# permission to delete any pod in the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bench-driver-failover
+  namespace: ${BENCH_NAMESPACE}
+subjects:
+  - kind: ServiceAccount
+    name: bench-driver
+    namespace: ${BENCH_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bench-driver-failover

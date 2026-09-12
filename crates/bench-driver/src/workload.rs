@@ -216,6 +216,13 @@ pub const fn default_consumer_poll_error_backoff() -> Time {
 struct Grid {
     /// When the measurement window starts, which is the end of warmup.
     meas_start: Instant,
+    /// The same instant as an epoch nanosecond, and the close of the window.
+    ///
+    /// A consumer classifies a record by the epoch stamp the producer wrote
+    /// into it, not by the monotonic clock at poll time, so it needs the window
+    /// on the same scale the payload carries.
+    meas_start_ns: u64,
+    meas_end_ns: u64,
     interval_ms: u64,
     /// Number of slices covering the measurement window.
     n: usize,
@@ -226,14 +233,42 @@ impl Grid {
     /// after its warmup has elapsed from `started_at`. The grid is always at
     /// least one slice wide, so a run shorter than a slice still has somewhere
     /// to tally into.
-    fn new(started_at: Instant, scenario: &Scenario, interval: Time) -> Self {
+    ///
+    /// `started_ns` is the epoch nanosecond that `started_at` was read at. The
+    /// two are one instant on two clocks.
+    fn new(started_at: Instant, started_ns: u64, scenario: &Scenario, interval: Time) -> Self {
         let interval_ms = nonnegative_i64_to_u64(interval.millis_i64());
         let duration_ms = nonnegative_i64_to_u64(scenario.duration.millis_i64());
+        let warmup = nonnegative_i64_to_u64(scenario.warmup.nanos_i64());
+        let width = nonnegative_i64_to_u64(scenario.duration.nanos_i64());
+        let meas_start_ns = started_ns.saturating_add(warmup);
         Self {
             meas_start: started_at + scenario.warmup.to_std(),
+            meas_start_ns,
+            meas_end_ns: meas_start_ns.saturating_add(width),
             interval_ms,
             n: usize::try_from(duration_ms.div_ceil(interval_ms).max(1)).unwrap_or(usize::MAX),
         }
+    }
+
+    /// Whether a record sent at epoch nanosecond `send_ns` belongs to the
+    /// measurement window.
+    ///
+    /// A saturating consumer can still be draining warmup backlog when the
+    /// window opens. Counting those records would report warmup throughput and
+    /// warmup-aged latency as measurement, which is what the scenario
+    /// discarded the warmup to avoid.
+    fn sent_in_measurement(&self, send_ns: u64) -> bool {
+        send_ns >= self.meas_start_ns && send_ns < self.meas_end_ns
+    }
+
+    /// Slice index for a record sent at epoch nanosecond `send_ns`, clamped
+    /// into `[0, n-1]`. Callers check [`Self::sent_in_measurement`] first.
+    fn idx_for_send_ns(&self, send_ns: u64) -> usize {
+        let elapsed_ms = send_ns.saturating_sub(self.meas_start_ns) / 1_000_000;
+        usize::try_from(elapsed_ms / self.interval_ms)
+            .unwrap_or(usize::MAX)
+            .min(self.n.saturating_sub(1))
     }
 
     /// Slice index for an event observed at `now`, clamped into `[0, n-1]`.
@@ -328,13 +363,16 @@ impl TlsParams {
 /// # Panics
 /// Panics if synchronized state is poisoned or validated input is missing a field required to produce the output.
 pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
-    let wallclock_start = Utc::now().timestamp_millis();
+    // One reading of the wall clock, kept at both scales. The nanosecond form
+    // is what a consumer compares a record's embedded send stamp against.
+    let started_ns = nonnegative_i64_to_u64(Utc::now().timestamp_nanos_opt().unwrap_or_default());
+    let wallclock_start = saturating_u64_to_i64(started_ns / 1_000_000);
     let t_start = Instant::now();
 
     // Time-series sampling grid: split the measurement window into fixed
     // slices. Computed up front (meas_start is t_start + warmup) so it can be
     // handed to each task at spawn time.
-    let grid = Grid::new(t_start, &scenario, cfg.sample_interval);
+    let grid = Grid::new(t_start, started_ns, &scenario, cfg.sample_interval);
     let n_intervals = grid.n;
 
     let mut notes: Vec<String> = Vec::new();
@@ -351,58 +389,30 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     let mut prod_set: JoinSet<ProducerOut> = JoinSet::new();
     let stop = Arc::new(AtomicU8::new(STATE_RUN));
     let first_ack_unix_ms = Arc::new(AtomicU64::new(0));
+    // The one marker every producer reads to learn that the broker is gone.
+    // It stays zero until the delete succeeds, so it is created before the
+    // producers start and not beside `spawn_failover`.
+    let kill_at_ms = Arc::new(AtomicU64::new(0));
 
-    for i in 0..scenario.producers {
-        let s = scenario.clone();
-        let bootstrap = cfg.bootstrap.clone();
-        let topic = cfg.topic.clone();
-        let stop = stop.clone();
-        let first_ack = first_ack_unix_ms.clone();
-        let sec = security.clone();
-        prod_set.spawn(run_producer(ProducerTask {
-            idx: i,
-            scenario: s,
-            bootstrap,
-            topic,
-            scenario_id: cfg.scenario_id,
-            stop,
-            first_ack,
-            security: sec,
-            grid,
-            request_timeout: cfg.producer_request_timeout,
-            final_drain_timeout: cfg.producer_final_drain_timeout,
-            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
-            frame_max: cfg.client_frame_max,
-        }));
-    }
+    spawn_producers(
+        &mut prod_set,
+        &scenario,
+        &cfg,
+        security.as_ref(),
+        grid,
+        (&stop, &first_ack_unix_ms, &kill_at_ms),
+    );
 
     let mut cons_set: JoinSet<ConsumerOut> = JoinSet::new();
-    for i in 0..scenario.consumers {
-        let s = scenario.clone();
-        let bootstrap = cfg.bootstrap.clone();
-        let topic = cfg.topic.clone();
-        let stop = stop.clone();
-        let sid = cfg.scenario_id;
-        let sec = security.clone();
-        cons_set.spawn(run_consumer(ConsumerTask {
-            idx: i,
-            scenario: s,
-            bootstrap,
-            topic,
-            scenario_id: sid,
-            stop,
-            security: sec,
-            grid,
-            request_timeout: cfg.consumer_request_timeout,
-            build_retry_policy: cfg.consumer_build_retry_policy,
-            poll_timeout: cfg.consumer_poll_timeout,
-            poll_error_backoff: cfg.consumer_poll_error_backoff,
-            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
-            frame_max: cfg.client_frame_max,
-        }));
-    }
+    spawn_consumers(
+        &mut cons_set,
+        &scenario,
+        &cfg,
+        security.as_ref(),
+        grid,
+        &stop,
+    );
 
-    let kill_at_ms = Arc::new(AtomicU64::new(0));
     spawn_failover(
         failover_active,
         &scenario,
@@ -498,6 +508,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         &scenario,
         &cfg,
         (wallclock_start, wallclock_end),
+        grid.meas_end_ns,
         prod_msgs,
         &mut notes,
     )
@@ -513,6 +524,12 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         ),
         first_ack_unix_ms.load(Ordering::SeqCst),
         wallclock_start,
+    );
+    note_missing_disturbance(
+        failover_active,
+        disturbance.as_ref(),
+        kill_at_ms.load(Ordering::SeqCst),
+        &mut notes,
     );
 
     Ok(RunOutput {
@@ -593,13 +610,104 @@ fn build_samples(
         .collect()
 }
 
+/// The disturbance a failover run measured, and the run's first-ack extent.
+///
+/// A disturbance is written only when the delete actually landed and a record
+/// was acknowledged after it. `failover.0` is the shared kill marker, which
+/// stays zero when the pod delete failed; `failover.1` is the first ack at or
+/// after that marker. Either one at zero means the run has no failover
+/// evidence, and an empty disturbance is the honest answer. The report's gate
+/// reads that as a violation rather than as an instant recovery.
+/// Say in the artifact why a failover run carries no disturbance.
+///
+/// Without this the JSON looks like an ordinary run and the reader has to
+/// guess whether the schedule ran at all.
+/// Spawn one producer task per `scenario.producers`.
+///
+/// The three shared handles travel as a tuple because they are one thing: the
+/// run-phase signal, the first-ack stamp, and the kill marker every task reads.
+fn spawn_producers(
+    tasks: &mut JoinSet<ProducerOut>,
+    scenario: &Scenario,
+    cfg: &DriverConfig,
+    security: Option<&ClientSecurity>,
+    grid: Grid,
+    shared: (&Arc<AtomicU8>, &Arc<AtomicU64>, &Arc<AtomicU64>),
+) {
+    let (stop, first_ack, kill_at) = shared;
+    for idx in 0..scenario.producers {
+        tasks.spawn(run_producer(ProducerTask {
+            idx,
+            scenario: scenario.clone(),
+            bootstrap: cfg.bootstrap.clone(),
+            topic: cfg.topic.clone(),
+            scenario_id: cfg.scenario_id,
+            stop: Arc::clone(stop),
+            first_ack: Arc::clone(first_ack),
+            kill_at: Arc::clone(kill_at),
+            security: security.cloned(),
+            grid,
+            request_timeout: cfg.producer_request_timeout,
+            final_drain_timeout: cfg.producer_final_drain_timeout,
+            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
+            frame_max: cfg.client_frame_max,
+        }));
+    }
+}
+
+/// Spawn one consumer task per `scenario.consumers`.
+fn spawn_consumers(
+    tasks: &mut JoinSet<ConsumerOut>,
+    scenario: &Scenario,
+    cfg: &DriverConfig,
+    security: Option<&ClientSecurity>,
+    grid: Grid,
+    stop: &Arc<AtomicU8>,
+) {
+    for idx in 0..scenario.consumers {
+        tasks.spawn(run_consumer(ConsumerTask {
+            idx,
+            scenario: scenario.clone(),
+            bootstrap: cfg.bootstrap.clone(),
+            topic: cfg.topic.clone(),
+            scenario_id: cfg.scenario_id,
+            stop: Arc::clone(stop),
+            security: security.cloned(),
+            grid,
+            request_timeout: cfg.consumer_request_timeout,
+            build_retry_policy: cfg.consumer_build_retry_policy,
+            poll_timeout: cfg.consumer_poll_timeout,
+            poll_error_backoff: cfg.consumer_poll_error_backoff,
+            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
+            frame_max: cfg.client_frame_max,
+        }));
+    }
+}
+
+fn note_missing_disturbance(
+    failover_active: bool,
+    disturbance: Option<&Disturbance>,
+    kill_at_ms: u64,
+    notes: &mut Vec<String>,
+) {
+    if !failover_active || disturbance.is_some() {
+        return;
+    }
+    notes.push(if kill_at_ms == 0 {
+        "failover:no-broker-deleted".to_owned()
+    } else {
+        "failover:no-ack-after-kill".to_owned()
+    });
+}
+
 fn finalize_timing(
     failover_active: bool,
     failover: (u64, u64, u64, Time),
     first_ack: u64,
     wallclock_start: i64,
 ) -> (Option<Disturbance>, Time) {
-    let disturbance = failover_active.then_some(Disturbance {
+    let measured_kill = failover.0 > 0 && failover.1 >= failover.0;
+    let disturbance = (failover_active && measured_kill).then_some(Disturbance {
         kill_at_ms: TimeOffsetMs(failover.0),
         recovery_at_ms: TimeOffsetMs(failover.1),
         dropped: MessageCount(failover.2),
@@ -651,10 +759,18 @@ fn validate_topology(
     (failover_active, Some(output))
 }
 
+/// Capture broker CPU and memory for the window the run measured.
+///
+/// `measured_until_ns` is the epoch nanosecond at which the measurement window
+/// closed, which is not the same instant as this call: joining the tasks and
+/// draining the producers happens in between, and a failover run can wait out
+/// its final-drain timeout there. The queries are evaluated at the close of the
+/// window, so the lookback covers what was measured.
 async fn capture_resources(
     scenario: &Scenario,
     cfg: &DriverConfig,
     wallclock: (i64, i64),
+    measured_until_ns: u64,
     produced: u64,
     notes: &mut Vec<String>,
 ) -> (Resource, Vec<BrokerSample>) {
@@ -674,6 +790,7 @@ async fn capture_resources(
             cfg.stack,
             &cfg.namespace,
             scenario.duration,
+            to_f64(measured_until_ns) / 1e9,
             MessageCount(produced),
         )
         .await
@@ -718,10 +835,6 @@ fn spawn_failover(
     let frame_max = cfg.client_frame_max;
     tokio::spawn(async move {
         tokio::time::sleep_until(started_at + spec.kill_after.to_std()).await;
-        kill_at.store(
-            nonnegative_i64_to_u64(Utc::now().timestamp_millis()),
-            Ordering::SeqCst,
-        );
         let client = match crate::failover::try_client().await {
             Ok(client) => client,
             Err(error) => {
@@ -749,7 +862,19 @@ fn spawn_failover(
             None
         };
         match crate::failover::kill_broker_pod(&client, stack, &namespace, leader_id).await {
-            Ok(name) => info!(pod = %name, "failover: killed broker"),
+            Ok(name) => {
+                // The marker goes up only now. Everything above it -- client
+                // discovery, the leader lookup, the delete itself -- can fail,
+                // and a marker published before them would make a producer
+                // error that had nothing to do with a kill look like the kill.
+                // A run whose delete failed leaves the marker at zero, and
+                // `finalize_timing` then records no disturbance at all.
+                kill_at.store(
+                    nonnegative_i64_to_u64(Utc::now().timestamp_millis()),
+                    Ordering::SeqCst,
+                );
+                info!(pod = %name, "failover: killed broker");
+            }
             Err(error) => warn!(%error, "failover: broker kill failed"),
         }
     });
@@ -823,6 +948,10 @@ struct ProducerTask {
     scenario_id: u64,
     stop: Arc<AtomicU8>,
     first_ack: Arc<AtomicU64>,
+    /// Epoch millisecond at which the failover task deleted the broker pod, or
+    /// zero while no delete has succeeded. This is the only thing that says a
+    /// kill happened. A producer error says the send failed and nothing more.
+    kill_at: Arc<AtomicU64>,
     security: Option<ClientSecurity>,
     grid: Grid,
     request_timeout: Time,
@@ -840,6 +969,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         scenario_id,
         stop,
         first_ack,
+        kill_at,
         security,
         grid,
         request_timeout,
@@ -897,6 +1027,9 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     };
 
     let mut tmpl = payload::template(scenario.msg_size);
+    // Counter behind each record key, so keys vary within this task. The task
+    // index is folded in, so two tasks never mint the same key.
+    let mut sent_records = (idx as u64) << 40;
     let mut meas_hist = hist::new();
     let mut iv_msgs = vec![0u64; grid.n];
     let mut iv_hist: Vec<Histogram<u64>> = (0..grid.n).map(|_| hist::new()).collect();
@@ -905,7 +1038,6 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     let mut dropped = 0u64;
     let mut recovery_unix_ms = 0u64;
     let mut latency_spike_max = Time::ZERO;
-    let mut kill_observed = false;
     let mut error = String::new();
 
     let mut pacer = match scenario.mode {
@@ -938,12 +1070,20 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
                         let iv = grid.idx(Instant::now());
                         iv_msgs[iv] += 1;
                         hist::record(&mut iv_hist[iv], latency);
-                        if kill_observed && recovery_unix_ms == 0 {
-                            recovery_unix_ms =
-                                nonnegative_i64_to_u64(Utc::now().timestamp_millis());
-                        }
-                        if kill_observed && latency > latency_spike_max {
-                            latency_spike_max = latency;
+                        // Recovery and the spike are measured against the
+                        // shared kill marker, not against this task's own
+                        // errors. The marker is published only after the pod
+                        // delete succeeds, so an ack before it belongs to the
+                        // healthy cluster and is not a recovery.
+                        let killed_at = kill_at.load(Ordering::Relaxed);
+                        if killed_at > 0 {
+                            let now_ms = nonnegative_i64_to_u64(Utc::now().timestamp_millis());
+                            if recovery_unix_ms == 0 && now_ms >= killed_at {
+                                recovery_unix_ms = now_ms;
+                            }
+                            if latency > latency_spike_max {
+                                latency_spike_max = latency;
+                            }
                         }
                     }
                     if first_ack.load(Ordering::Relaxed) == 0 {
@@ -960,7 +1100,6 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
                     if stop.load(Ordering::Relaxed) == STATE_MEASURING {
                         dropped += 1;
                     }
-                    kill_observed = true;
                     if dropped == 1 && error.is_empty() {
                         error = format!("producer-{idx}-err: {e}");
                     }
@@ -974,7 +1113,6 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             if stop.load(Ordering::Relaxed) == STATE_MEASURING {
                 dropped += 1;
             }
-            kill_observed = true;
             if dropped == 1 && error.is_empty() {
                 error = format!("producer-{idx}-rx-closed");
             }
@@ -1011,8 +1149,15 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             p.await_token().await;
         }
         let value = payload::stamp_into(&mut tmpl, scenario_id);
+        // A scenario that sets `key_size` gets keyed records. The key changes
+        // per record, so the partitioner spreads them the way a real keyed
+        // workload spreads, and the key's bytes are on the wire the way the
+        // scenario asked for. `key_size: 0` stays keyless.
+        let key = payload::key(scenario.key_size, sent_records);
+        sent_records += 1;
         let rec = ProducerRecord {
             topic: topic.clone(),
+            key,
             value: Some(value),
             ..Default::default()
         };
@@ -1147,7 +1292,6 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
                 let now_ns =
                     nonnegative_i64_to_u64(Utc::now().timestamp_nanos_opt().unwrap_or_default());
                 let phase = stop.load(Ordering::Relaxed);
-                let iv = grid.idx(Instant::now());
                 for r in records {
                     if let Some(val) = &r.value {
                         let bytes = val.len() as u64;
@@ -1157,16 +1301,24 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
                             let latency = Time::from_nanos(saturating_u64_to_i64(
                                 now_ns.saturating_sub(send_nanos),
                             ));
-                            if phase == STATE_MEASURING {
+                            // Classify by when the producer SENT the record,
+                            // not by the phase this poll returned in. A lagging
+                            // consumer drains warmup backlog after the window
+                            // opens, and counting it reports warmup throughput
+                            // and warmup-aged latency as measurement.
+                            if grid.sent_in_measurement(send_nanos) {
+                                let slice = grid.idx_for_send_ns(send_nanos);
                                 hist::record(&mut meas_hist, latency);
                                 meas_msgs += 1;
                                 meas_bytes += bytes;
-                                iv_msgs[iv] += 1;
-                                hist::record(&mut iv_hist[iv], latency);
+                                iv_msgs[slice] += 1;
+                                hist::record(&mut iv_hist[slice], latency);
                             }
                         } else if phase == STATE_MEASURING {
-                            // Non-bench record (e.g. left over from a prior
-                            // run). Count bytes but not E2E latency.
+                            // Non-bench record, left over from an earlier run.
+                            // It carries no send stamp, so the poll phase is
+                            // the only thing that can place it. Count bytes and
+                            // not end-to-end latency.
                             meas_bytes += bytes;
                         }
                     }
@@ -1415,6 +1567,59 @@ mod tests {
         assert2::assert!(c.tls.is_none());
         let security: Option<ClientSecurity> = c.tls.as_ref().map(TlsParams::to_security);
         assert2::assert!(security.is_none());
+    }
+
+    /// A record produced during warmup but polled after the window opens
+    /// belongs to the warmup. The grid says so from the record's own send
+    /// stamp, whatever the consumer's lag was.
+    #[test]
+    fn grid_places_a_record_by_its_send_stamp() {
+        let mut s = scenario(1);
+        s.warmup = secs(10);
+        s.duration = secs(60);
+        let started_ns = 1_000_000_000_000u64;
+        let grid = Grid::new(Instant::now(), started_ns, &s, secs(2));
+
+        let warmup_send = started_ns + nonnegative_i64_to_u64(secs(5).nanos_i64());
+        let first_slice = started_ns + nonnegative_i64_to_u64(secs(11).nanos_i64());
+        let last_slice = started_ns + nonnegative_i64_to_u64(secs(69).nanos_i64());
+        let after_window = started_ns + nonnegative_i64_to_u64(secs(71).nanos_i64());
+
+        check!(!grid.sent_in_measurement(warmup_send));
+        check!(grid.sent_in_measurement(first_slice));
+        check!(grid.sent_in_measurement(last_slice));
+        check!(!grid.sent_in_measurement(after_window));
+
+        // 1s into a 2s-slice grid is slice 0; 59s in is the last slice.
+        check!(grid.idx_for_send_ns(first_slice) == 0);
+        check!(grid.idx_for_send_ns(last_slice) == grid.n - 1);
+    }
+
+    /// A failover run whose pod delete failed leaves the shared marker at
+    /// zero. No marker means no measured kill, so the run carries no
+    /// disturbance and the gate treats it as missing evidence.
+    #[test]
+    fn finalize_timing_records_no_disturbance_without_a_kill() {
+        let (disturbance, _) = finalize_timing(true, (0, 5_000, 3, millis(9)), 1_000, 0);
+        check!(disturbance.is_none());
+    }
+
+    /// An ack before the marker is not a recovery. The producer only stamps a
+    /// recovery at or after the marker, so a zero here means no ack followed
+    /// the kill at all.
+    #[test]
+    fn finalize_timing_records_no_disturbance_without_an_ack_after_the_kill() {
+        let (disturbance, _) = finalize_timing(true, (5_000, 0, 3, millis(9)), 1_000, 0);
+        check!(disturbance.is_none());
+    }
+
+    #[test]
+    fn finalize_timing_records_a_measured_kill() {
+        let (disturbance, _) = finalize_timing(true, (5_000, 7_500, 3, millis(9)), 1_000, 0);
+        let disturbance = disturbance.expect("a measured kill gives a disturbance");
+        check!(disturbance.kill_at_ms == TimeOffsetMs(5_000));
+        check!(disturbance.recovery_at_ms == TimeOffsetMs(7_500));
+        check!(disturbance.dropped == MessageCount(3));
     }
 
     #[test]

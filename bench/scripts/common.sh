@@ -3,7 +3,10 @@
 
 set -euo pipefail
 
+# Every bench manifest is namespaced by `${BENCH_NAMESPACE}` and applied through
+# `envsubst`, so this has to be exported and not only set.
 : "${BENCH_NAMESPACE:=default}"
+export BENCH_NAMESPACE
 
 # Print to stderr so command substitutions (`x=$(... | log)`) stay clean.
 log() {

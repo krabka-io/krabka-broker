@@ -1,6 +1,7 @@
 //! Cross-run aggregation, the "accurate averages" layer.
 //!
-//! A benchmark *cell* is one `(scenario name, broker_count)`. The harness runs
+//! A benchmark *cell* is one [`CellKey`]: a scenario name with the whole
+//! topology it ran at. The harness runs
 //! each cell `N` times per stack. This module reduces those `N` [`RunOutput`]s
 //! into a mean ± sample-stddev per metric, and averages the per-interval time
 //! series across runs at each time offset. Both the Markdown summary and the
@@ -140,34 +141,65 @@ pub struct StackAgg {
     pub metrics: BTreeMap<&'static str, Stat>,
 }
 
+/// What makes two runs comparable: one scenario at one topology.
+///
+/// The key carries the whole topology and not only the broker count. A
+/// scenario rerun after a partition-count or replication-factor change leaves
+/// both sets of JSON in `bench/results`, and averaging those two together
+/// reports a number that no single experiment produced. Every grouping in the
+/// report, the graphs and the CSVs keys on this, so a cell holds one
+/// experiment.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CellKey {
+    pub scenario: String,
+    pub broker_count: u32,
+    pub partitions: i32,
+    pub replication_factor: i16,
+}
+
+impl CellKey {
+    /// The cell one run belongs to.
+    #[must_use]
+    pub fn of(run: &RunOutput) -> Self {
+        Self {
+            scenario: run.scenario.name.clone(),
+            broker_count: run.topology.broker_count,
+            partitions: run.topology.partitions,
+            replication_factor: run.topology.replication_factor,
+        }
+    }
+
+    /// The heading a report, a chart or a violation message names the cell by.
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!(
+            "{} @ {} broker(s), {} partitions, RF={}",
+            self.scenario, self.broker_count, self.partitions, self.replication_factor
+        )
+    }
+}
+
 /// One benchmark cell. It holds a `(scenario, topology)` with the krabka and
 /// kafka aggregates side by side.
 #[derive(Debug, Clone)]
 pub struct CellAgg {
-    pub scenario: String,
-    pub partitions: i32,
-    pub broker_count: u32,
+    pub key: CellKey,
     pub krabka: StackAgg,
     pub kafka: StackAgg,
 }
 
-/// Groups runs by `(scenario, broker_count)` and reduces each stack's runs to a
-/// per-metric [`Stat`]. This returns the cells in `(scenario, broker_count)`
-/// order.
+/// Groups runs by [`CellKey`] and reduces each stack's runs to a per-metric
+/// [`Stat`]. This returns the cells in key order.
 #[must_use]
 pub fn aggregate_cells(runs: &[RunOutput]) -> Vec<CellAgg> {
     let metrics = scalar_metrics();
-    let mut by_cell: BTreeMap<(String, u32), Vec<&RunOutput>> = BTreeMap::new();
+    let mut by_cell: BTreeMap<CellKey, Vec<&RunOutput>> = BTreeMap::new();
     for r in runs {
-        by_cell
-            .entry((r.scenario.name.clone(), r.topology.broker_count))
-            .or_default()
-            .push(r);
+        by_cell.entry(CellKey::of(r)).or_default().push(r);
     }
 
     let mut out = Vec::with_capacity(by_cell.len());
-    for ((scenario, broker_count), cell_runs) in by_cell {
-        let partitions = cell_runs.first().map_or(0, |r| r.topology.partitions);
+    for (key, cell_runs) in by_cell {
         let agg_stack = |stack: Stack| -> StackAgg {
             let stack_runs: Vec<&RunOutput> = cell_runs
                 .iter()
@@ -185,9 +217,7 @@ pub fn aggregate_cells(runs: &[RunOutput]) -> Vec<CellAgg> {
             }
         };
         out.push(CellAgg {
-            scenario,
-            partitions,
-            broker_count,
+            key,
             krabka: agg_stack(Stack::Krabka),
             kafka: agg_stack(Stack::Kafka),
         });
@@ -207,8 +237,7 @@ pub struct TsPoint {
 /// An across-run-averaged time series for one `(cell, stack, metric)`.
 #[derive(Debug, Clone)]
 pub struct TsSeries {
-    pub scenario: String,
-    pub broker_count: u32,
+    pub key: CellKey,
     pub stack: Stack,
     pub metric: &'static str,
     pub points: Vec<TsPoint>,
@@ -235,25 +264,25 @@ fn broker_ts_metrics() -> Vec<(&'static str, BrokerExtract)> {
     ]
 }
 
-/// For each `(scenario, broker_count, stack, metric)`, averages the per-interval
-/// samples across all runs at each shared time offset. A ragged run that ended
-/// early gives fewer points to the tail offsets. `TsPoint::n` records how many
-/// runs backed each averaged point.
+/// For each `(cell, stack, metric)`, averages the per-interval samples across
+/// all runs at each shared time offset. A ragged run that ended early gives
+/// fewer points to the tail offsets. `TsPoint::n` records how many runs backed
+/// each averaged point.
+///
+/// The cell is a [`CellKey`], so two runs of one scenario at different
+/// partition counts stay in separate series.
 #[must_use]
 pub fn averaged_timeseries(runs: &[RunOutput]) -> Vec<TsSeries> {
     let client_metrics = client_ts_metrics();
     let broker_metrics = broker_ts_metrics();
 
-    let mut by_cell: BTreeMap<(String, u32), Vec<&RunOutput>> = BTreeMap::new();
+    let mut by_cell: BTreeMap<CellKey, Vec<&RunOutput>> = BTreeMap::new();
     for r in runs {
-        by_cell
-            .entry((r.scenario.name.clone(), r.topology.broker_count))
-            .or_default()
-            .push(r);
+        by_cell.entry(CellKey::of(r)).or_default().push(r);
     }
 
     let mut out = Vec::new();
-    for ((scenario, broker_count), cell_runs) in by_cell {
+    for (key, cell_runs) in by_cell {
         for stack in [Stack::Krabka, Stack::Kafka] {
             let stack_runs: Vec<&RunOutput> = cell_runs
                 .iter()
@@ -264,30 +293,26 @@ pub fn averaged_timeseries(runs: &[RunOutput]) -> Vec<TsSeries> {
                 continue;
             }
 
-            for &(key, extract) in &client_metrics {
+            for &(metric, extract) in &client_metrics {
                 let mut buckets: BTreeMap<TimeOffsetMs, Vec<f64>> = BTreeMap::new();
                 for r in &stack_runs {
                     for s in &r.samples {
                         buckets.entry(s.t_offset_ms).or_default().push(extract(s));
                     }
                 }
-                if let Some(series) =
-                    series_from_buckets(&scenario, broker_count, stack, key, buckets)
-                {
+                if let Some(series) = series_from_buckets(&key, stack, metric, buckets) {
                     out.push(series);
                 }
             }
 
-            for &(key, extract) in &broker_metrics {
+            for &(metric, extract) in &broker_metrics {
                 let mut buckets: BTreeMap<TimeOffsetMs, Vec<f64>> = BTreeMap::new();
                 for r in &stack_runs {
                     for b in &r.broker_samples {
                         buckets.entry(b.t_offset_ms).or_default().push(extract(b));
                     }
                 }
-                if let Some(series) =
-                    series_from_buckets(&scenario, broker_count, stack, key, buckets)
-                {
+                if let Some(series) = series_from_buckets(&key, stack, metric, buckets) {
                     out.push(series);
                 }
             }
@@ -299,8 +324,7 @@ pub fn averaged_timeseries(runs: &[RunOutput]) -> Vec<TsSeries> {
 /// Averages each time-offset bucket across runs into a [`TsSeries`]. Returns
 /// `None` when no run in the group produced any sample for this metric.
 fn series_from_buckets(
-    scenario: &str,
-    broker_count: u32,
+    key: &CellKey,
     stack: Stack,
     metric: &'static str,
     buckets: BTreeMap<TimeOffsetMs, Vec<f64>>,
@@ -320,8 +344,7 @@ fn series_from_buckets(
         })
         .collect();
     Some(TsSeries {
-        scenario: scenario.to_string(),
-        broker_count,
+        key: key.clone(),
         stack,
         metric,
         points,
@@ -347,14 +370,36 @@ mod tests {
         samples: Vec<Sample>,
         broker_samples: Vec<BrokerSample>,
     ) -> RunOutput {
+        run_at(
+            stack,
+            scenario,
+            Topology {
+                partitions: 100,
+                replication_factor: 3,
+                broker_count,
+            },
+            producer_rate,
+            samples,
+            broker_samples,
+        )
+    }
+
+    fn run_at(
+        stack: Stack,
+        scenario: &str,
+        topology: Topology,
+        producer_rate: Frequency,
+        samples: Vec<Sample>,
+        broker_samples: Vec<BrokerSample>,
+    ) -> RunOutput {
         RunOutput {
             scenario: Scenario {
                 name: scenario.into(),
                 mode_tag: ModeTag::Cluster,
                 msg_size: bytes(100),
                 key_size: ByteSize::ZERO,
-                partitions: 100,
-                replication_factor: 3,
+                partitions: topology.partitions,
+                replication_factor: topology.replication_factor,
                 producers: 1,
                 consumers: 1,
                 mode: LoadMode::Saturate,
@@ -367,11 +412,7 @@ mod tests {
                 failover: None,
             },
             stack,
-            topology: Topology {
-                partitions: 100,
-                replication_factor: 3,
-                broker_count,
-            },
+            topology,
             wallclock_start_unix_ms: WallclockMs(0),
             wallclock_end_unix_ms: WallclockMs(60_000),
             throughput: Throughput {
@@ -440,9 +481,15 @@ mod tests {
         let cells = aggregate_cells(&runs);
         assert2::assert!(cells.len() == 1);
         let c = &cells[0];
-        assert2::assert!(c.scenario.as_str() == "sat");
-        assert2::assert!(c.broker_count == 6);
-        assert2::assert!(c.partitions == 100);
+        assert2::assert!(
+            c.key
+                == CellKey {
+                    scenario: "sat".into(),
+                    broker_count: 6,
+                    partitions: 100,
+                    replication_factor: 3,
+                }
+        );
         assert2::assert!(c.krabka.n_runs == 3);
         assert2::assert!(c.kafka.n_runs == 2);
         let cm = c.krabka.metrics["producer_msgs_per_sec"];
@@ -462,8 +509,98 @@ mod tests {
         ];
         let cells = aggregate_cells(&runs);
         assert2::assert!(cells.len() == 2);
-        assert2::assert!(cells[0].broker_count == 3);
-        assert2::assert!(cells[1].broker_count == 6);
+        assert2::assert!(cells[0].key.broker_count == 3);
+        assert2::assert!(cells[1].key.broker_count == 6);
+    }
+
+    /// A rerun after a partition-count or replication-factor change leaves both
+    /// sets of JSON in the results directory. The two are different
+    /// experiments, so they must not average into one cell.
+    #[test]
+    fn aggregate_cells_separates_partition_and_replication_changes() {
+        let topology = |partitions, replication_factor| Topology {
+            partitions,
+            replication_factor,
+            broker_count: 6,
+        };
+        let runs = vec![
+            run_at(
+                Stack::Krabka,
+                "sat",
+                topology(12, 3),
+                per_sec(10),
+                vec![],
+                vec![],
+            ),
+            run_at(
+                Stack::Krabka,
+                "sat",
+                topology(100, 3),
+                per_sec(1000),
+                vec![],
+                vec![],
+            ),
+            run_at(
+                Stack::Krabka,
+                "sat",
+                topology(100, 1),
+                per_sec(5000),
+                vec![],
+                vec![],
+            ),
+        ];
+        let cells = aggregate_cells(&runs);
+        assert2::assert!(cells.len() == 3);
+        let means: Vec<f64> = cells
+            .iter()
+            .map(|c| c.krabka.metrics["producer_msgs_per_sec"].mean)
+            .collect();
+        // Each cell holds exactly its own run, so no mean is the average of
+        // two topologies.
+        assert2::assert!(cells.iter().all(|c| c.krabka.n_runs == 1));
+        assert2::assert!(means.contains(&10.0));
+        assert2::assert!(means.contains(&1000.0));
+        assert2::assert!(means.contains(&5000.0));
+    }
+
+    /// `averaged_timeseries` keys on the same cell, so two partition counts
+    /// give two series and neither point is the mean of both.
+    #[test]
+    fn averaged_timeseries_separates_partition_changes() {
+        let topology = |partitions| Topology {
+            partitions,
+            replication_factor: 3,
+            broker_count: 6,
+        };
+        let runs = vec![
+            run_at(
+                Stack::Krabka,
+                "sat",
+                topology(12),
+                Frequency::ZERO,
+                vec![sample(0, per_sec(100))],
+                vec![],
+            ),
+            run_at(
+                Stack::Krabka,
+                "sat",
+                topology(100),
+                Frequency::ZERO,
+                vec![sample(0, per_sec(900))],
+                vec![],
+            ),
+        ];
+        let series = averaged_timeseries(&runs);
+        let producer: Vec<&TsSeries> = series
+            .iter()
+            .filter(|s| s.metric == "producer_msgs_per_sec")
+            .collect();
+        assert2::assert!(producer.len() == 2);
+        let mut means: Vec<f64> = producer.iter().map(|s| s.points[0].mean).collect();
+        means.sort_by(f64::total_cmp);
+        assert2::assert!((means[0] - 100.0).abs() < f64::EPSILON);
+        assert2::assert!((means[1] - 900.0).abs() < f64::EPSILON);
+        assert2::assert!(producer.iter().all(|s| s.points[0].n == 1));
     }
 
     #[test]

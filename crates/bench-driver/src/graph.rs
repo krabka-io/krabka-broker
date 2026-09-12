@@ -27,7 +27,8 @@ use plotly::{
 
 use crate::{
     aggregate::{
-        CellAgg, ScalarMetric, TsSeries, aggregate_cells, averaged_timeseries, scalar_metrics,
+        CellAgg, CellKey, ScalarMetric, TsSeries, aggregate_cells, averaged_timeseries,
+        scalar_metrics,
     },
     ids::TimeOffsetMs,
     numeric::mebibytes_f64,
@@ -41,8 +42,12 @@ fn push_fmt(output: &mut String, args: Arguments<'_>) {
 }
 
 /// The plotly.js version that the `plotly` crate (0.14) renders against. Pin the
-/// same one in the page `<head>`, so the inline figures find a compatible
-/// global.
+/// same one, so the inline figures find a compatible global.
+///
+/// This is for the website fragment alone. The fragment is inlined into a page
+/// the site serves, that page is read online, and a second copy of a 4.5 MB
+/// bundle in every build of the site is not worth it. The standalone report
+/// carries the bundle instead: see [`wrap_page`].
 const PLOTLY_CDN: &str = "https://cdn.plot.ly/plotly-3.0.1.min.js";
 
 /// Renders every run into one self-contained HTML report with the title
@@ -109,21 +114,21 @@ pub fn render_web_fragment(tagged: &[(String, RunOutput)]) -> String {
         "<h2 id=\"per-run\">Per run &amp; averaged — throughput, CPU and memory over the run</h2>\n",
     );
     // Group runs into cells, preserving each run's tag for the faint per-run lines.
-    let mut by_cell: BTreeMap<(&str, u32), Vec<(&str, &RunOutput)>> = BTreeMap::new();
+    let mut by_cell: BTreeMap<CellKey, Vec<(&str, &RunOutput)>> = BTreeMap::new();
     for (tag, r) in tagged {
         by_cell
-            .entry((r.scenario.name.as_str(), r.topology.broker_count))
+            .entry(CellKey::of(r))
             .or_default()
             .push((tag.as_str(), r));
     }
-    for (&(scenario, brokers), cell_runs) in &by_cell {
+    for (key, cell_runs) in &by_cell {
         push_fmt(
             &mut out,
-            format_args!("<h3>{} @ {brokers} brokers</h3>\n", escape(scenario)),
+            format_args!("<h3>{}</h3>\n", escape(&key.label())),
         );
         for wm in &web_metrics() {
-            let plot = per_run_chart(scenario, brokers, cell_runs, wm, &ts);
-            let id = sanitize_id(&format!("bench-ts-{scenario}-{brokers}-{}", wm.avg_key));
+            let plot = per_run_chart(key, cell_runs, wm, &ts);
+            let id = sanitize_id(&format!("bench-ts-{}-{}", key.label(), wm.avg_key));
             out.push_str("<div class=\"bench-plot\">");
             out.push_str(&plot.to_inline_html(Some(&id)));
             out.push_str("</div>\n");
@@ -187,8 +192,7 @@ fn stack_colors(s: Stack) -> (&'static str, &'static str) {
 /// One chart for `wm` in one cell. Every run is a faint line that the legend
 /// hides, and each stack also gets a bold across-run mean line.
 fn per_run_chart(
-    scenario: &str,
-    brokers: u32,
+    key: &CellKey,
     cell_runs: &[(&str, &RunOutput)],
     wm: &WebMetric,
     ts: &[TsSeries],
@@ -214,12 +218,10 @@ fn per_run_chart(
             );
         }
 
-        if let Some(series) = ts.iter().find(|s| {
-            s.scenario == scenario
-                && s.broker_count == brokers
-                && s.stack == stack
-                && s.metric == wm.avg_key
-        }) {
+        if let Some(series) = ts
+            .iter()
+            .find(|s| &s.key == key && s.stack == stack && s.metric == wm.avg_key)
+        {
             let x: Vec<f64> = series
                 .points
                 .iter()
@@ -238,7 +240,7 @@ fn per_run_chart(
     }
     plot.set_layout(
         Layout::new()
-            .title(Title::with_text(format!("{scenario} — {}", wm.label)))
+            .title(Title::with_text(format!("{} — {}", key.label(), wm.label)))
             .height(360)
             .x_axis(Axis::new().title(Title::with_text("seconds into run")))
             .y_axis(Axis::new().title(Title::with_text(wm.label))),
@@ -250,7 +252,7 @@ fn per_run_chart(
 /// bar, and each bar carries the across-run sample-stddev as a symmetric error
 /// bar.
 fn bar_chart(cells: &[CellAgg], m: &ScalarMetric) -> Plot {
-    let labels: Vec<String> = cells.iter().map(|c| c.scenario.clone()).collect();
+    let labels: Vec<String> = cells.iter().map(|c| c.key.label()).collect();
 
     let stack_series = |pick: fn(&CellAgg) -> &crate::aggregate::StackAgg| {
         let mut means = Vec::with_capacity(cells.len());
@@ -289,16 +291,13 @@ fn bar_chart(cells: &[CellAgg], m: &ScalarMetric) -> Plot {
 /// One line chart per `(scenario, metric)`. Each chart holds a krabka line and a
 /// kafka line of the across-run-averaged value over the run.
 fn timeseries_charts(ts: &[TsSeries]) -> String {
-    let mut groups: BTreeMap<(&str, u32, &'static str), Vec<&TsSeries>> = BTreeMap::new();
+    let mut groups: BTreeMap<(&CellKey, &'static str), Vec<&TsSeries>> = BTreeMap::new();
     for s in ts {
-        groups
-            .entry((s.scenario.as_str(), s.broker_count, s.metric))
-            .or_default()
-            .push(s);
+        groups.entry((&s.key, s.metric)).or_default().push(s);
     }
 
     let mut out = String::new();
-    for (&(scenario, brokers, metric), series) in &groups {
+    for (&(key, metric), series) in &groups {
         let label = ts_metric_label(metric);
         let mut plot = Plot::new();
         for s in series {
@@ -316,12 +315,12 @@ fn timeseries_charts(ts: &[TsSeries]) -> String {
         }
         plot.set_layout(
             Layout::new()
-                .title(Title::with_text(format!("{scenario} — {label}")))
+                .title(Title::with_text(format!("{} — {label}", key.label())))
                 .height(340)
                 .x_axis(Axis::new().title(Title::with_text("seconds into run")))
                 .y_axis(Axis::new().title(Title::with_text(label))),
         );
-        let id = sanitize_id(&format!("ts-{scenario}-{brokers}-{metric}"));
+        let id = sanitize_id(&format!("ts-{}-{metric}", key.label()));
         out.push_str("<div class=\"plot\">");
         out.push_str(&plot.to_inline_html(Some(&id)));
         out.push_str("</div>\n");
@@ -357,11 +356,21 @@ fn sanitize_id(s: &str) -> String {
         .collect()
 }
 
+/// Wrap the rendered charts in a page that carries everything it needs.
+///
+/// The report is handed around as an artifact: attached to a run, opened weeks
+/// later, read on a machine behind a proxy. A `<script src>` to a CDN makes
+/// every chart in it depend on that host still serving that file, so an
+/// artifact that is otherwise complete opens with no plots at all.
+/// [`plotly::Plot::offline_js_sources`] returns the same plotly.js the crate
+/// renders against, as inline script tags. The page grows by about 6 MB and
+/// stops depending on anything.
 fn wrap_page(title: &str, body: &str) -> String {
     let t = escape(title);
+    let scripts = Plot::offline_js_sources();
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
-<title>{t}</title>\n<script src=\"{PLOTLY_CDN}\" charset=\"utf-8\"></script>\n\
+<title>{t}</title>\n{scripts}\n\
 <style>body{{font-family:system-ui,sans-serif;margin:24px;max-width:1100px}}\
 h1{{font-size:1.6rem}}h2{{margin-top:2rem;border-bottom:1px solid #ddd;padding-bottom:4px}}\
 .plot{{margin:10px 0}}</style>\n</head>\n<body>\n<h1>{t}</h1>\n{body}\n</body>\n</html>\n"
@@ -474,12 +483,11 @@ mod tests {
         ];
         let html = render_html(&runs, "Krabka vs Strimzi");
 
-        // Valid page that loads the matching plotly.js and embeds real figures,
-        // represents both scenarios and both stacks, and carries a headline bar
-        // metric plus a time-series chart.
+        // Valid page that embeds real figures, represents both scenarios and
+        // both stacks, and carries a headline bar metric plus a time-series
+        // chart.
         for needle in [
             "<html",
-            "cdn.plot.ly/plotly-3.0.1",
             "Plotly.newPlot",
             "Krabka vs Strimzi",
             "small-msg",
@@ -491,6 +499,11 @@ mod tests {
         ] {
             assert2::assert!(html.contains(needle));
         }
+        // The page carries plotly.js rather than a link to it, so it renders
+        // with no network. The bundle's own text mentions the CDN, so the check
+        // is on the `<script src>` tag and not on the host name.
+        assert2::assert!(!html.contains("<script src=\"https://cdn.plot.ly"));
+        assert2::assert!(html.len() > 1_000_000, "page is {} bytes", html.len());
     }
 
     #[test]
@@ -544,10 +557,12 @@ mod tests {
             ),
         ];
         let html = render_web_fragment(&tagged);
-        // Loads plotly, charts throughput/CPU/memory per run for both stacks,
-        // and labels the bold mean line with the run count ("mean of 2").
+        // The fragment is inlined into a page the site serves online, so it
+        // keeps the CDN reference the standalone report drops. It charts
+        // throughput/CPU/memory per run for both stacks, and labels the bold
+        // mean line with the run count ("mean of 2").
         for needle in [
-            "cdn.plot.ly/plotly-3.0.1",
+            "<script src=\"https://cdn.plot.ly/plotly-3.0.1",
             "Plotly.newPlot",
             "Per run",
             "small-msg",

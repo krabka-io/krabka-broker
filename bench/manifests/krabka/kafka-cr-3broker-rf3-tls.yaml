@@ -11,7 +11,7 @@ apiVersion: krabka.io/v1alpha1
 kind: Kafka
 metadata:
   name: demo
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
 spec:
   kafkaVersion: "3.7.0"
   # Use the plaintext listener for inter-broker replication + the operator's
@@ -45,7 +45,7 @@ apiVersion: krabka.io/v1alpha1
 kind: KafkaNodePool
 metadata:
   name: broker-0
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
   labels:
     krabka.io/cluster: demo
 spec:
@@ -86,7 +86,7 @@ apiVersion: krabka.io/v1alpha1
 kind: KafkaNodePool
 metadata:
   name: broker-1
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
   labels:
     krabka.io/cluster: demo
 spec:
@@ -127,7 +127,7 @@ apiVersion: krabka.io/v1alpha1
 kind: KafkaNodePool
 metadata:
   name: broker-2
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
   labels:
     krabka.io/cluster: demo
 spec:

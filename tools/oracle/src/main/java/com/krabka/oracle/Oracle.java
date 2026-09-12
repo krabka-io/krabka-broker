@@ -212,6 +212,56 @@ public final class Oracle {
         throw new IllegalArgumentException("unknown header kind: " + kind);
     }
 
+    /** Batch header, plus generous slack for the varint fields the builder writes. */
+    private static final int BATCH_HEADER_BYTES = 1024;
+
+    /** Per-record slack: length, attributes, the two deltas, and the two length prefixes. */
+    private static final int RECORD_OVERHEAD_BYTES = 64;
+
+    /** Per-header slack: the key length prefix, the value length prefix, and rounding. */
+    private static final int HEADER_OVERHEAD_BYTES = 32;
+
+    /** The floor, so a small batch allocates the same 1 MiB it always did. */
+    private static final int MIN_BATCH_CAPACITY = 1024 * 1024;
+
+    /**
+     * The buffer size one encode request needs.
+     *
+     * {@code MemoryRecordsBuilder} writes into the buffer it is given and does not grow it,
+     * so a fixed 1 MiB was a hidden cap: a valid batch above it failed to build, and neither
+     * Kafka nor this oracle's protocol says a batch may not be larger. The estimate sums the
+     * bytes the request actually carries and adds slack. Compression only shrinks the result,
+     * so sizing from the uncompressed sum is always enough.
+     */
+    private static int batchCapacity(com.fasterxml.jackson.databind.node.ArrayNode records) {
+        long total = BATCH_HEADER_BYTES;
+        for (JsonNode r : records) {
+            total += RECORD_OVERHEAD_BYTES;
+            total += hexByteCount(r, "key");
+            total += hexByteCount(r, "value");
+            if (r.has("headers")) {
+                for (JsonNode h : r.get("headers")) {
+                    total += HEADER_OVERHEAD_BYTES;
+                    total += h.get("key").asText().length();
+                    total += hexByteCount(h, "value");
+                }
+            }
+        }
+        total = Math.max(total, MIN_BATCH_CAPACITY);
+        if (total > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("record batch does not fit in one buffer: " + total);
+        }
+        return (int) total;
+    }
+
+    /** The decoded byte count of a hex field, or zero when it is absent or null. */
+    private static int hexByteCount(JsonNode node, String field) {
+        if (!node.has(field) || node.get(field).isNull()) {
+            return 0;
+        }
+        return node.get(field).asText().length() / 2;
+    }
+
     private static ObjectNode encodeRecordBatch(JsonNode value) throws Exception {
         long baseOffset = value.get("base_offset").asLong();
         short producerEpoch = (short) value.get("producer_epoch").asInt();
@@ -234,7 +284,10 @@ public final class Oracle {
         org.apache.kafka.common.record.TimestampType timestampType =
             org.apache.kafka.common.record.TimestampType.valueOf(tsName);
 
-        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(1024 * 1024);
+        com.fasterxml.jackson.databind.node.ArrayNode records =
+            (com.fasterxml.jackson.databind.node.ArrayNode) value.get("records");
+
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(batchCapacity(records));
         org.apache.kafka.common.record.internal.MemoryRecordsBuilder mrb =
             org.apache.kafka.common.record.internal.MemoryRecords.builder(
                 buffer,
@@ -250,8 +303,6 @@ public final class Oracle {
                 isControl,
                 partitionLeaderEpoch);
 
-        com.fasterxml.jackson.databind.node.ArrayNode records =
-            (com.fasterxml.jackson.databind.node.ArrayNode) value.get("records");
         for (JsonNode r : records) {
             long ts = baseTimestamp + r.get("timestamp_delta").asLong();
             long offset = baseOffset + r.get("offset_delta").asLong();

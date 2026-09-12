@@ -38,7 +38,7 @@ metadata:
   # BENCH_RUN_SUFFIX is "" for plaintext, "-tls" for the TLS cell, so the two
   # cells get distinct Job names and never collide.
   name: bench-driver-${BENCH_STACK}-${BENCH_SCENARIO_NAME}${BENCH_RUN_SUFFIX}
-  namespace: default
+  namespace: ${BENCH_NAMESPACE}
   labels:
     app.kubernetes.io/name: bench-driver
     bench/stack: ${BENCH_STACK}
@@ -81,7 +81,7 @@ spec:
             - name: BENCH_TOPIC
               value: bench-topic
             - name: BENCH_NAMESPACE
-              value: default
+              value: ${BENCH_NAMESPACE}
             - name: BENCH_PROMETHEUS_URL
               value: http://prometheus.monitoring.svc.cluster.local:9090
             - name: BENCH_PROMETHEUS_REQUEST_TIMEOUT

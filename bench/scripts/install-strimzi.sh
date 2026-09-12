@@ -89,7 +89,9 @@ roleRef:
 EOF
 
 # Apply the JMX-exporter ConfigMap our Kafka CR references for /metrics.
-kubectl apply -f "$SCRIPT_DIR/../manifests/strimzi/jmx-exporter-configmap.yaml"
+# `envsubst`, because the manifest is namespaced by `${BENCH_NAMESPACE}` the
+# same way every other bench manifest is. `common.sh` defaults it to `default`.
+envsubst < "$SCRIPT_DIR/../manifests/strimzi/jmx-exporter-configmap.yaml" | kubectl apply -f -
 
 log "waiting for strimzi-cluster-operator rollout"
 kubectl rollout status -n strimzi-system deploy/strimzi-cluster-operator --timeout=300s
