@@ -382,6 +382,14 @@ cluster_id=3d70a78c-bb3a-4af5-a767-51e31f403c62
 for n in 1 2 3; do
   mkdir -p "$work/source-node$n"
   chmod 0777 "$work/source-node$n"
+  docker run --rm --network "$network" -v "$work/source-node$n:/var/lib/krabka" \
+    --entrypoint /usr/bin/krabka-format "$broker_image" --cluster-id "$cluster_id" --node-id "$n" \
+    --log-dir /var/lib/krabka --release-version 3.9 --feature kraft.version=0 \
+    --add-scram 'SCRAM-SHA-512=[name=admin,password=qualification-admin]' \
+    --add-scram 'SCRAM-SHA-512=[name=backup,password=qualification-backup]' \
+    --add-scram 'SCRAM-SHA-512=[name=denied,password=qualification-denied]' \
+    --add-acl 'principal=User:ANONYMOUS,host=*,operation=ClusterAction,permission=Allow,resource=Cluster:kafka-cluster' \
+    --add-acl 'principal=User:ANONYMOUS,host=*,operation=Read,permission=Allow,resource=Topic:*'
   cat > "$work/source-node$n/broker.toml" <<EOF
 broker_id = $n
 log_dir = "/var/lib/krabka"
@@ -436,14 +444,6 @@ signing_key_path = "/etc/krabka/worm/signing.pk8"
 signing_key_id = "qualification-worm"
 EOF
   chmod -R a+rX "$work/source-node$n"
-  docker run --rm --network "$network" -v "$work/source-node$n:/var/lib/krabka" \
-    --entrypoint /usr/bin/krabka-format "$broker_image" --cluster-id "$cluster_id" --node-id "$n" \
-    --log-dir /var/lib/krabka --release-version 3.9 --feature kraft.version=0 \
-    --add-scram 'SCRAM-SHA-512=[name=admin,password=qualification-admin]' \
-    --add-scram 'SCRAM-SHA-512=[name=backup,password=qualification-backup]' \
-    --add-scram 'SCRAM-SHA-512=[name=denied,password=qualification-denied]' \
-    --add-acl 'principal=User:ANONYMOUS,host=*,operation=ClusterAction,permission=Allow,resource=Cluster:kafka-cluster' \
-    --add-acl 'principal=User:ANONYMOUS,host=*,operation=Read,permission=Allow,resource=Topic:*'
   docker run -d --name "$scope-source-$n" --network "$network" \
     -v "$work/source-node$n:/var/lib/krabka" -v "$work/tls:/etc/krabka/tls:ro" \
     -v "$work/worm:/etc/krabka/worm:ro" \
