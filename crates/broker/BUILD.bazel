@@ -139,6 +139,10 @@ crate_tests(
         # One image, used twice: as the client that reads krabka's advertised
         # table and as the Kafka broker that table is compared against.
         "api_versions_differential": ["apache_kafka_4_3_1"],
+        # The JVM console consumer that reads the acknowledged ledger back at
+        # the end of the fault schedule, for the byte differential against a
+        # client this project does not write.
+        "diskless_jepsen": ["cp_kafka_7_4_0"],
         # The `fetch.min.bytes` floor, sent as identical bytes to krabka and to
         # a stock broker of the newest pinned release. The hermetic half of the
         # same exchange is `fetch_min_bytes`, which needs no image.
