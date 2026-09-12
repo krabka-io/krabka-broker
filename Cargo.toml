@@ -29,7 +29,9 @@ debug = "none"
 split-debuginfo = "packed"
 
 [workspace.dependencies]
-apache-avro = { version = "0.22", features = ["derive"] }
+# Keep this aligned with krabka-schema-serde: its public Avro API crosses the
+# crate boundary, so two apache-avro versions produce incompatible Rust types.
+apache-avro = { version = "=0.21.0", features = ["derive"] }
 arc-swap = "1"
 # Expressive test assertions: `assert!(a == b)` / `check!(..)` with
 # captured-expression diagnostics. Used for all test assertions workspace-wide.
