@@ -291,7 +291,7 @@ broker_source=$(source_repo krabka-broker)
 (cd "$broker_source" && bazel test //crates/restore:dr_roundtrip_test --test_output=all --nocache_test_results) \
   2>&1 | tee "$evidence/hermetic-dr.log"
 check hermetic-dr grep -F 'test a_captured_cluster_restores_with_its_configuration_and_its_group_positions ... ok' "$evidence/hermetic-dr.log"
-minio_image=mirror.gcr.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+minio_image=quay.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
 mc_image=mirror.gcr.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
 network=$scope-dr
 bucket=dr-archive

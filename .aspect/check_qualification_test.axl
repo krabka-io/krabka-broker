@@ -212,6 +212,7 @@ def _test_disaster_recovery_uses_the_packaged_secured_loss_path(_ctx):
         "krabka-backup",
         "krabka-restore",
         "krabka-worm-verify",
+        "quay.io/minio/minio@sha256:",
         "SaslSsl",
         "SCRAM-SHA-512",
         "--add-scram",
