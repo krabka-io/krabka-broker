@@ -15,7 +15,7 @@ dependencies {
     // Compression codec libraries. The `compress` and `decompress` ops need
     // them at compile time.
     implementation("org.xerial.snappy:snappy-java:1.1.10.8")
-    implementation("com.github.luben:zstd-jni:1.5.7-15")
+    implementation("com.github.luben:zstd-jni:1.5.7-16")
 }
 
 java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
