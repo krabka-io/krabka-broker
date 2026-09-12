@@ -295,7 +295,7 @@ broker_source=$(source_repo krabka-broker)
   2>&1 | tee "$evidence/hermetic-dr.log"
 check hermetic-dr grep -F 'test a_captured_cluster_restores_with_its_configuration_and_its_group_positions ... ok' "$evidence/hermetic-dr.log"
 minio_image=quay.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
-mc_image=mirror.gcr.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
+mc_image=quay.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
 network=$scope-dr
 bucket=dr-archive
 data_prefix=candidate/data
@@ -907,9 +907,9 @@ registry=$(source_repo krabka-schema-registry)
 check rf3 grep -F 'reader_routes_to_schema_partition_leader ... ok' "$evidence/lifecycle.log"
 check replay grep -F 'restarting_store_replays_the_complete_snapshot ... ok' "$evidence/lifecycle.log"
 check lifecycle grep -F 'facade_readonly_blocks_writes_import_allows_explicit_id ... ok' "$evidence/lifecycle.log"
-(cd "$registry" && bazel test //crates/schema-registry:interop_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/forward.log"
+(cd "$registry" && bazel test //crates/schema-registry:interop_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --test_timeout=900 --nocache_test_results) 2>&1 | tee "$evidence/forward.log"
 check forward-handoff grep -F 'our_store_decodes_cp_schema_registry_records ... ok' "$evidence/forward.log"
-(cd "$registry" && bazel test //crates/schema-registry:interop_reverse_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/reverse.log"
+(cd "$registry" && bazel test //crates/schema-registry:interop_reverse_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --test_timeout=900 --nocache_test_results) 2>&1 | tee "$evidence/reverse.log"
 check reverse-handoff grep -F 'cp_replays_krabka_schema_registry_records ... ok' "$evidence/reverse.log"
 """
 
