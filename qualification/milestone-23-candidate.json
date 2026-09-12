@@ -1,0 +1,230 @@
+{
+  "schema": 2,
+  "status": "draft",
+  "captured_at": "2026-09-12T00:42:47Z",
+  "architectures": [
+    "linux/amd64"
+  ],
+  "components": [
+    {
+      "repository": "krabka-io/krabka-broker",
+      "revision": "c4f6d060d3da3a9dcc7beb0d7b75ecc9d1876e98",
+      "default_branch": "main",
+      "artifacts": [
+        {
+          "kind": "image",
+          "reference": "ghcr.io/krabka-io/krabka-broker",
+          "digest": "sha256:6a93a9e3092dd5abba6f225f3ba58dc0e1ed27538008ab46659e1832a681d010"
+        }
+      ],
+      "entrypoints": [
+        "krabka-broker",
+        "krabka-format"
+      ],
+      "config": [
+        "docs/config-reference.md"
+      ],
+      "probes": [
+        "/healthz",
+        "/readyz"
+      ]
+    },
+    {
+      "repository": "krabka-io/krabka-protocol",
+      "revision": "b79bf4965075a96ab88f2612f0b7cb9c86d2097b",
+      "default_branch": "main",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-client-rs",
+      "revision": "f0c86c1ccdecd1776e32349764d7d2efe5dae347",
+      "default_branch": "main",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-schema-registry",
+      "revision": "cc618c9c52e5be5607ec850d2f7629ac31cd4e1e",
+      "default_branch": "claude/broker-schema-validation-registry-s451bp",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-streams-rs",
+      "revision": "375faae45e895ca2afc0622904994a8538fc3593",
+      "default_branch": "main",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-streams-java",
+      "revision": "e3bd6ce69a6d7420dd80038e01127f474834868f",
+      "default_branch": "main",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-streams-go",
+      "revision": "f4b7124fd3612c84fac87df805b3bd9356ee2883",
+      "default_branch": "main",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-connect",
+      "revision": "5cc1bfb806a5288afddc72c2da11510078acd262",
+      "default_branch": "main",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-operator",
+      "revision": "0d08946add2ae2d4786f8b6b3ad91f0fb23cc588",
+      "default_branch": "main",
+      "artifacts": [
+        {
+          "kind": "chart",
+          "reference": "https://krabka-io.github.io/charts/krabka-operator-0.4.0.tgz",
+          "digest": "sha256:bc7b1378be63676e546fa1e2c91e4633337176a69f9b0f6ac1909fb850aeff75"
+        },
+        {
+          "kind": "image",
+          "reference": "ghcr.io/krabka-io/krabka-operator",
+          "digest": "sha256:861796f11b63798f07cd8cfbcb0fa41376259cb6fce07b1e80e15e93de3a377b"
+        }
+      ],
+      "entrypoints": [
+        "krabka-operator"
+      ],
+      "config": [
+        "charts/krabka-operator/values.yaml"
+      ],
+      "probes": []
+    },
+    {
+      "repository": "krabka-io/krabka-cli",
+      "revision": "09edae1c0af58038c664b5d1d0fae9bd85f25257",
+      "default_branch": "main",
+      "artifacts": [
+        {
+          "kind": "binary",
+          "reference": "https://github.com/krabka-io/krabka-cli/releases/download/v0.4.0/krabka-linux-amd64",
+          "digest": "sha256:c39d85bd62bdf51a34f38e8f7b48a75d42cad0bc01281013b3d2432245dd60c9"
+        }
+      ],
+      "entrypoints": [
+        "krabka"
+      ],
+      "config": [
+        "--command-config"
+      ],
+      "probes": []
+    },
+    {
+      "repository": "krabka-io/krabka-o11y",
+      "revision": "12bce8a0093208a1e49f0258ad23b848c19e6a8b",
+      "default_branch": "main",
+      "artifacts": [
+        {
+          "kind": "image",
+          "reference": "ghcr.io/krabka-io/krabka-o11y",
+          "digest": "sha256:1f278b3e776feb246953ea6a4ed6474be11f392e4a3a3d41819a038b52b0b23a"
+        }
+      ]
+    },
+    {
+      "repository": "krabka-io/krabka-o11y-demo",
+      "revision": "fadddcfb46da03a51792ab744cc8070e7fd8b779",
+      "default_branch": "main",
+      "artifacts": [
+        {
+          "kind": "compose",
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/fadddcfb46da03a51792ab744cc8070e7fd8b779/demo/observability/docker-compose.yml",
+          "digest": "sha256:50b7c328fccc1c71a74164a5c9df57bb6629168b08f7ef0a617abf777d37af13"
+        }
+      ]
+    },
+    {
+      "repository": "krabka-io/krabka-io.github.io",
+      "revision": "dd4a0f9dc90afd74879ee08bbc24b115dfae6137",
+      "default_branch": "main",
+      "artifacts": []
+    },
+    {
+      "repository": "krabka-io/krabka-rebalancer",
+      "revision": "f932eab4004349417806eefec738ef0b20ad26f4",
+      "default_branch": "main",
+      "artifacts": [
+        {
+          "kind": "chart",
+          "reference": "https://krabka-io.github.io/charts/crabka-rebalancer-0.4.0.tgz",
+          "digest": "sha256:6c924ea43772b77a92674a7825c71bb915d7621b9d15734f5eecaeb49e1ad700"
+        },
+        {
+          "kind": "image",
+          "reference": "ghcr.io/krabka-io/krabka-rebalancer",
+          "digest": "sha256:706b3b51a521d97d4166d98a1f39e045b5dfa1508b155bce174161c4bc009b11"
+        }
+      ],
+      "entrypoints": [
+        "crabka-rebalancer"
+      ],
+      "config": [
+        "charts/crabka-rebalancer/values.yaml"
+      ],
+      "probes": [
+        "/healthz",
+        "/readyz"
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "name": "installation",
+      "issue": 523,
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "name": "operator-lifecycle",
+      "issue": 524,
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "name": "cli-admin",
+      "issue": 525,
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "name": "observability-recovery",
+      "issue": 526,
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "name": "disaster-recovery",
+      "issue": 555,
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "name": "schema-evolution",
+      "issue": 556,
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "name": "registry-migration",
+      "issue": 557,
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "name": "snapshot-retention",
+      "issue": 558,
+      "status": "pending",
+      "evidence": []
+    }
+  ],
+  "report": {
+    "url": "",
+    "sha256": ""
+  },
+  "runner_sha256": "sha256:fef1646c66e42611eaf777c378d95bf2ac629258b29d5f17e30e1f32e44914ba"
+}

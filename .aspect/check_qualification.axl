@@ -32,6 +32,9 @@ _GATES = {
     "cli-admin": 525,
     "observability-recovery": 526,
     "disaster-recovery": 555,
+    "schema-evolution": 556,
+    "registry-migration": 557,
+    "snapshot-retention": 558,
 }
 _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
@@ -47,6 +50,9 @@ _EVIDENCE = {
     "cli-admin": ["commands", "state"],
     "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
     "disaster-recovery": ["capture-boundary", "classic", "credentials", "diskless", "ledger", "rpo-rto", "settings", "worm"],
+    "schema-evolution": ["avro-oracle", "broker-validation", "json-oracle", "protobuf-oracle", "serializer-cache"],
+    "registry-migration": ["forward-handoff", "lifecycle", "replay", "reverse-handoff", "rf3"],
+    "snapshot-retention": ["available-epochs", "bounded-files", "concurrent-restore", "interrupted-reclaim", "interrupted-save"],
 }
 
 def _hex(value, length):
@@ -291,8 +297,10 @@ def _impl(ctx: TaskContext) -> int:
             gate["status"] = "pending"
             gate["evidence"] = []
             gate.pop("result", None)
-        if "disaster-recovery" not in [gate.get("name") for gate in document["gates"]]:
-            document["gates"].append({"name": "disaster-recovery", "issue": 555, "status": "pending", "evidence": []})
+        present = [gate.get("name") for gate in document["gates"]]
+        for name, issue in _GATES.items():
+            if name not in present:
+                document["gates"].append({"name": name, "issue": issue, "status": "pending", "evidence": []})
         ctx.std.fs.write(root + "/" + ctx.args.new_candidate, json.encode(document) + "\n")
         return 0
     problems = manifest_problems(document, final = ctx.args.final)

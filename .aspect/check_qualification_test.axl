@@ -28,6 +28,9 @@ _EVIDENCE = {
     "cli-admin": ["commands", "state"],
     "observability-recovery": ["alerts", "ledger", "logs", "metrics", "profiles", "traces"],
     "disaster-recovery": ["capture-boundary", "classic", "credentials", "diskless", "ledger", "rpo-rto", "settings", "worm"],
+    "schema-evolution": ["avro-oracle", "broker-validation", "json-oracle", "protobuf-oracle", "serializer-cache"],
+    "registry-migration": ["forward-handoff", "lifecycle", "replay", "reverse-handoff", "rf3"],
+    "snapshot-retention": ["available-epochs", "bounded-files", "concurrent-restore", "interrupted-reclaim", "interrupted-save"],
 }
 _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
@@ -104,6 +107,9 @@ def _candidate():
     document = _manifest(artifact_digest = _DIGEST)
     document["schema"] = 2
     document["gates"].append({"name": "disaster-recovery", "issue": 555, "status": "pending", "evidence": []})
+    document["gates"].append({"name": "schema-evolution", "issue": 556, "status": "pending", "evidence": []})
+    document["gates"].append({"name": "registry-migration", "issue": 557, "status": "pending", "evidence": []})
+    document["gates"].append({"name": "snapshot-retention", "issue": 558, "status": "pending", "evidence": []})
     document["runner_sha256"] = runner_digest()
     return document
 
