@@ -1,4 +1,4 @@
-load("//bazel:defs.bzl", "crate_library")
+load("//bazel:defs.bzl", "crate_bench", "crate_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -6,9 +6,19 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["Cargo.toml"])
 
 # The library is an empty shell: this crate exists to host
-# `benches/mmap_read.rs`, which Cargo runs. `//bazel:defs.bzl` has no
-# `crate_bench` rule, so the bench itself has no target here, the same way
-# `crates/log`'s and `crates/broker`'s benches have none. The library target
-# still exists so `bazel build //...` compiles the crate and `aspect lint`
-# reaches it.
+# `benches/mmap_read.rs`. The library target still exists so `crate_bench` has
+# a crate to link.
 crate_library(name = "log-iobench")
+
+# `bazel build //...` compiles the bench and `bazel test //...` lints it.
+#
+# `Cargo.toml` opts this crate out of the workspace lints on purpose: the
+# workspace forbids `unsafe_code`, and `memmap2::Mmap::map` is `unsafe` by
+# contract. The bench exists to measure mmap reads. `WORKSPACE_RUSTC_FLAGS` is
+# `-Funsafe_code`, so Bazel would refuse a bench that Cargo builds. These flags
+# are this crate's own `[lints.rust]` table, so both runners apply the same
+# rules.
+crate_bench(
+    lib = "log-iobench",
+    rustc_flags = ["-Wunsafe_op_in_unsafe_fn"],
+)
