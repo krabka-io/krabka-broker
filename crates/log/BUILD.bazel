@@ -1,4 +1,4 @@
-load("//bazel:defs.bzl", "crate_library", "crate_tests")
+load("//bazel:defs.bzl", "crate_bench", "crate_library", "crate_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -6,6 +6,10 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["Cargo.toml"])
 
 crate_library(name = "log")
+
+# `benches/log.rs`, which `ci.yml`'s nightly `bench` job runs under Cargo.
+# This target compiles and lints it in `bazel build //...`.
+crate_bench(lib = "log")
 
 crate_tests(
     docker = {"integration": ["cp_kafka_6_1_1"]},

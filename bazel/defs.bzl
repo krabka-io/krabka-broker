@@ -212,6 +212,79 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
             deps = all_crate_deps(normal_dev = True),
         )
 
+def crate_bench(lib, benches = None, data = None, compile_data = None, env = {}, rustc_env = {}):
+    """`rust_binary` per `benches/*.rs`, so Bazel compiles and lints them.
+
+    A criterion bench is declared `harness = false` and gets its `main` from
+    `criterion_main!`, so it is a binary, not a test. rules_rust has no
+    benchmark rule -- neither the pinned fork nor upstream defines one -- so
+    `rust_binary` is the primitive, the same one `crates/parse-benches` uses
+    for the benchmark it ships as a runnable target.
+
+    Without this the bench sources are built by nothing: `crate_library`
+    globs `src/**`, `crate_tests` globs `tests/*.rs`, and neither reaches
+    `benches/`. They still compile under `cargo bench`, which `ci.yml` runs
+    nightly, so a break there surfaces a day late and only on that job. Here
+    `bazel build //...` compiles them and `clippy_test` gates them the way it
+    gates every other target in the workspace.
+
+    The benches are not run by `bazel test`. A criterion run measures
+    wall-clock time over many iterations, which is neither hermetic nor quick,
+    and the nightly `bench` job already runs them. `bazel run
+    //crates/<x>:<stem>_bench` runs one on demand.
+
+    Args:
+      lib: the `crate_library` target name in this package.
+      benches: bench stems to wire, defaulting to every `benches/*.rs`.
+      data: runtime files the bench needs.
+      compile_data: files reachable from `include!`/`include_str!`.
+      env: runtime environment for the bench binary.
+      rustc_env: extra compile-time environment.
+    """
+    srcs = native.glob(["benches/*.rs"], allow_empty = True)
+    if benches != None:
+        wanted = {stem: True for stem in benches}
+        srcs = [s for s in srcs if s[len("benches/"):-len(".rs")] in wanted]
+
+    # A bench too large for one file puts its modules alongside it, the way an
+    # integration suite puts helpers under `tests/`. Name them for Bazel; Cargo
+    # finds them from the `mod` declarations alone.
+    helpers = native.glob(
+        ["benches/**/*.rs"],
+        exclude = ["benches/*.rs"],
+        allow_empty = True,
+    )
+
+    for src in srcs:
+        stem = src[len("benches/"):-len(".rs")]
+        name = stem + "_bench"
+        rust_binary(
+            name = name,
+            srcs = [src] + helpers,
+            crate_root = src,
+            # Dev dependencies, because criterion is one. This crate reaches it
+            # under a renamed key -- `codspeed-criterion-compat` published as
+            # `criterion` -- which is exactly what the alias map carries.
+            aliases = _aliases(["deps", "dev_deps"]),
+            compile_data = compile_data or [],
+            crate_features = _features(),
+            data = data or [],
+            edition = edition(),
+            env = env,
+            rustc_env = rustc_env,
+            rustc_flags = WORKSPACE_RUSTC_FLAGS,
+            visibility = ["//visibility:public"],
+            # One call, not two concatenated: a bench links the crate's normal
+            # *and* dev dependencies, and `all_crate_deps` dedupes a package
+            # listed in both tables.
+            deps = all_crate_deps(normal = True, normal_dev = True) + [":" + lib],
+        )
+
+        clippy_test(
+            name = name + "_clippy",
+            srcs = [":" + name],
+        )
+
 def crate_tests(
         lib,
         data = None,
