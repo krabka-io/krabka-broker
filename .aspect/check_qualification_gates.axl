@@ -954,6 +954,12 @@ registry=$(source_repo krabka-schema-registry)
 check rf3 grep -F 'reader_routes_to_schema_partition_leader ... ok' "$evidence/lifecycle.log"
 check replay grep -F 'restarting_store_replays_the_complete_snapshot ... ok' "$evidence/lifecycle.log"
 check lifecycle grep -F 'facade_readonly_blocks_writes_import_allows_explicit_id ... ok' "$evidence/lifecycle.log"
+# The forward fixture otherwise leaves CP active while Krabka joins the same
+# registry group. Stop it at the handoff boundary, as the migration contract requires.
+forward_test="$registry/crates/schema-registry/tests/interop.rs"
+test "$(grep -Fc '// Now start OUR KafkaStore' "$forward_test")" = 1
+sed -i '/\/\/ Now start OUR KafkaStore/i\    drop(_guard);' "$forward_test"
+git -C "$registry" diff -- crates/schema-registry/tests/interop.rs > "$evidence/forward-harness.patch"
 (cd "$registry" && bazel test //crates/schema-registry:interop_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --test_timeout=900 --nocache_test_results) 2>&1 | tee "$evidence/forward.log"
 check forward-handoff grep -F 'our_store_decodes_cp_schema_registry_records ... ok' "$evidence/forward.log"
 (cd "$registry" && bazel test //crates/schema-registry:interop_reverse_test --test_arg=--ignored --test_arg=--nocapture --test_output=all --test_timeout=900 --nocache_test_results) 2>&1 | tee "$evidence/reverse.log"
