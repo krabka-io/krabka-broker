@@ -1,4 +1,4 @@
-//! The shape `crabka-docgen` consumes from this crate.
+//! The shape `krabka-docgen` consumes from this crate.
 //!
 //! `docs/docgen-contract.md` names the tool, its pinned revision, and the
 //! entry points it reads in process. Each one is asserted below. The
@@ -98,7 +98,7 @@ fn topic_config_docs_carry_the_columns_docgen_prints() {
     }
 }
 
-/// The one scenario `crabka-docgen` special-cases by id.
+/// The one scenario `krabka-docgen` special-cases by id.
 const SPECIAL_CASED_SCENARIO: &str = "split_brain_prevented";
 
 #[test]

@@ -4,7 +4,7 @@
 //! the cluster, and returns a [`ScenarioTrace`]. The three scenarios show
 //! split-brain prevention under a leader partition, log convergence under
 //! reordered delivery, and idempotent handling of a duplicated message.
-//! `crabka-docgen` renders the traces into the sequence-diagram slideshow.
+//! `krabka-docgen` renders the traces into the sequence-diagram slideshow.
 
 use super::{Sim, trace::ScenarioTrace};
 use crate::types::NodeId;

@@ -5,7 +5,7 @@
 //! simulator into the library behind the `scenarios` feature. The simulator
 //! uses no tokio, and it is the same scheduler the integration tests use
 //! (`crates/raft/tests/sim_harness/mod.rs`). This module also instruments it to
-//! RECORD a serializable [`ScenarioTrace`] of every step. `crabka-docgen` runs
+//! RECORD a serializable [`ScenarioTrace`] of every step. `krabka-docgen` runs
 //! [`scenarios`] in process and renders the traces into a Mermaid
 //! sequence-diagram slideshow, so the diagrams show the real algorithm.
 //!

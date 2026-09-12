@@ -1,0 +1,14 @@
+"""The benchmark harness. Only its scenario corpus is a Bazel input.
+
+`crates/bench-driver`'s `scenario_files` suite loads every file below through
+the driver's own `Scenario` type, so a scenario that stops parsing names
+itself. Everything else here -- the manifests, the Terraform, the scripts and
+the justfile -- drives a live Kubernetes cluster and has no Bazel target.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "scenarios",
+    srcs = glob(["scenarios/*.yaml"]),
+)

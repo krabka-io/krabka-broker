@@ -1,0 +1,197 @@
+# Builds and runs `krabka-broker` on every host in the `krabka` group.
+#
+# Bare-VM Krabka is single-broker-only today: the broker binary
+# hardcodes `controller_quorum_voters: vec![(self_id, self_addr)]`
+# and there's no admin RPC to drive `change_membership` across
+# the network. See bench/omb/README.md and the validation block
+# in terraform/gcp/variables.tf.
+
+- name: System prep for Krabka broker hosts
+  hosts: krabka
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - name: Refuse to proceed with > 1 Krabka broker
+      ansible.builtin.fail:
+        msg: >-
+          Krabka bare-VM bring-up is single-broker only. Lower num_instances.krabka_broker to 1 in your tfvars, or use the operator-driven path under bench/justfile for RF>1.
+      when: groups['krabka'] | length > 1
+  tasks:
+    - name: Install OS packages (build deps + util)
+      ansible.builtin.apt:
+        name:
+          - build-essential
+          - pkg-config
+          - libssl-dev
+          - cmake
+          - git
+          - curl
+          - xfsprogs
+          - chrony
+          - sysstat
+          - jq
+          - ca-certificates
+        state: present
+        update_cache: true
+
+    - name: Detect local-SSD block devices
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ls -1 /dev/nvme0n* 2>/dev/null | sort
+      register: nvme_devices
+      changed_when: false
+
+    - name: Fail loudly if no local SSDs were attached
+      ansible.builtin.fail:
+        msg: "Expected ≥1 local SSD via nvme0n*; got none. Check terraform `local_ssd_count`."
+      when: nvme_devices.stdout_lines | length == 0
+
+    - name: Format local SSDs as XFS
+      community.general.filesystem:
+        fstype: xfs
+        dev: "{{ item }}"
+        force: "{{ force_format | default(false) | bool }}"
+      loop: "{{ nvme_devices.stdout_lines }}"
+
+    - name: Create mount points
+      ansible.builtin.file:
+        path: "/mnt/data-{{ idx + 1 }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ nvme_devices.stdout_lines }}"
+      loop_control:
+        index_var: idx
+
+    - name: Mount local SSDs
+      ansible.posix.mount:
+        path: "/mnt/data-{{ idx + 1 }}"
+        src: "{{ item }}"
+        fstype: xfs
+        opts: "defaults,noatime,nodiscard"
+        state: mounted
+      loop: "{{ nvme_devices.stdout_lines }}"
+      loop_control:
+        index_var: idx
+
+    - name: Raise nofile limits
+      community.general.pam_limits:
+        domain: "*"
+        limit_type: "{{ item }}"
+        limit_item: nofile
+        value: "500000"
+      loop: ["soft", "hard"]
+
+    - name: Tune sysctl
+      ansible.posix.sysctl:
+        name: "{{ item.k }}"
+        value: "{{ item.v }}"
+        sysctl_set: true
+        state: present
+        reload: true
+      loop:
+        - {k: "vm.swappiness", v: "1"}
+        - {k: "vm.dirty_ratio", v: "60"}
+        - {k: "vm.dirty_background_ratio", v: "5",}
+
+- name: Build and install krabka-broker
+  hosts: krabka
+  become: true
+  vars:
+    krabka_log_dirs: "{{ ansible_facts.mounts | selectattr('mount', 'match', '^/mnt/data-') | map(attribute='mount') | map('regex_replace', '$', '/krabka-logs') | list }}"
+    krabka_primary_log_dir: "{{ krabka_log_dirs[0] }}"
+    krabka_extra_log_dirs: "{{ krabka_log_dirs[1:] }}"
+  tasks:
+    - name: Install rustup as the build user
+      become: false
+      ansible.builtin.shell: |
+        set -eu
+        if ! [ -x "$HOME/.cargo/bin/cargo" ]; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --default-toolchain {{ krabka_rust_channel }} --profile minimal
+        fi
+        "$HOME/.cargo/bin/rustup" toolchain install {{ krabka_rust_channel }} --profile minimal
+        "$HOME/.cargo/bin/rustup" default {{ krabka_rust_channel }}
+      args:
+        creates: "/home/{{ ansible_user }}/.cargo/bin/cargo"
+
+    - name: Wipe install dir
+      ansible.builtin.file:
+        path: "{{ krabka_install_dir }}"
+        state: absent
+      when: force_format | default(false) | bool
+
+    - name: Create install dir
+      ansible.builtin.file:
+        path: "{{ krabka_install_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Clone the Krabka source
+      become: false
+      ansible.builtin.git:
+        repo: "{{ krabka_git_repo }}"
+        version: "{{ krabka_git_ref }}"
+        dest: "{{ krabka_install_dir }}/src"
+        depth: 1
+        force: true
+
+    - name: Build krabka-broker (release)
+      become: false
+      ansible.builtin.shell: |
+        set -eu
+        export PATH="$HOME/.cargo/bin:$PATH"
+        cd {{ krabka_install_dir }}/src
+        cargo build --release -p krabka-broker --bin krabka-broker
+      args:
+        executable: /bin/bash
+        creates: "{{ krabka_install_dir }}/src/target/release/krabka-broker"
+
+    - name: Install binary
+      ansible.builtin.copy:
+        src: "{{ krabka_install_dir }}/src/target/release/krabka-broker"
+        dest: /usr/local/bin/krabka-broker
+        remote_src: true
+        mode: "0755"
+
+    - name: Create data dirs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      loop: "{{ krabka_log_dirs }}"
+
+    - name: Render broker config
+      ansible.builtin.template:
+        src: krabka-broker.toml.j2
+        dest: /etc/krabka-broker.toml
+        mode: "0644"
+
+    - name: Install systemd unit
+      ansible.builtin.template:
+        src: krabka-broker.service.j2
+        dest: /etc/systemd/system/krabka-broker.service
+        mode: "0644"
+      notify: restart krabka
+
+    - name: Enable + start krabka-broker
+      ansible.builtin.systemd:
+        name: krabka-broker
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    - name: Wait for broker port
+      ansible.builtin.wait_for:
+        host: "{{ private_ip }}"
+        port: 9092
+        timeout: 120
+
+  handlers:
+    - name: restart krabka
+      ansible.builtin.systemd:
+        name: krabka-broker
+        state: restarted

@@ -1,0 +1,25 @@
+# Kill the first broker pod 60 s into the run. Driver records:
+#   - kill_at_ms (wallclock of the kubectl-equivalent delete)
+#   - recovery_at_ms (first successful Ok ack post-kill)
+#   - dropped (records whose ack-receiver returned Err)
+#   - latency_spike_max (max latency sample during the disturbance)
+# Auto-skipped at runtime if replication_factor < 3 or broker_count < 3.
+name: failover
+mode_tag: cluster
+msg_size: 1KiB
+partitions: 12
+replication_factor: 3
+producers: 2
+consumers: 1
+mode:
+  kind: fixed_rate
+  rate: 10000/s
+acks: all
+compression: none
+linger: 5ms
+batch_size: 16KiB
+warmup: 30s
+duration: 180s
+failover:
+  kill_after: 60s
+  target: partition0_leader

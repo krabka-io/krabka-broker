@@ -1,0 +1,42 @@
+[package]
+name = "krabka-docgen"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Renders the Krabka broker reference pages from the broker's own in-process data"
+repository = "https://github.com/robot-head/crabka"
+homepage = "https://github.com/robot-head/crabka"
+documentation = "https://docs.rs/krabka-docgen"
+readme = "README.md"
+keywords = ["kafka", "documentation", "reference", "krabka"]
+categories = ["development-tools"]
+
+[lints]
+workspace = true
+
+# A library as well as a binary: the renderers carry their own unit tests, and
+# `docs/docgen-contract.md` names them as the contract's consumer side.
+[lib]
+name = "krabka_docgen"
+path = "src/lib.rs"
+
+# `bazel run //crates/docgen:krabka-docgen -- all --out out/reference`
+[[bin]]
+name = "krabka-docgen"
+path = "src/main.rs"
+
+[dependencies]
+assert2 = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+krabka-broker = { version = "0.5.4", path = "../broker" }
+# The simulator the failure-scenario page renders. No production build turns
+# this feature on; the page is its one consumer.
+krabka-raft = { version = "0.5.4", path = "../raft", features = ["scenarios"] }
+krabka-protocol = { version = "0.4.0", default-features = false }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,77 @@
+[package]
+name = "krabka-bench-driver"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Load driver and report aggregator for the Krabka vs Strimzi benchmark harness"
+repository = "https://github.com/robot-head/crabka"
+homepage = "https://github.com/robot-head/crabka"
+documentation = "https://docs.rs/krabka-bench-driver"
+readme = "README.md"
+keywords = ["kafka", "benchmark", "load-test", "krabka"]
+categories = ["development-tools::profiling"]
+
+[lints]
+workspace = true
+
+# The in-cluster Job runs this one. `bench/manifests/driver/job-template.yaml`
+# names it as the container command.
+[[bin]]
+name = "krabka-bench-driver"
+path = "src/main.rs"
+
+# The aggregator. It reads the per-run JSON the driver wrote and renders the
+# summary, the CSVs and the HTML report.
+[[bin]]
+name = "krabka-bench-report"
+path = "src/report_main.rs"
+
+[dependencies]
+assert2 = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+clap = { workspace = true, features = ["env"] }
+krabka-client-admin = { version = "0.4.0" }
+krabka-client-consumer = { version = "0.4.0" }
+krabka-client-core = { version = "0.4.0" }
+krabka-client-producer = { version = "0.4.0" }
+krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-security = { workspace = true }
+krabka-units = { workspace = true }
+derive_more = { workspace = true }
+exponential-backoff = "2.1.0"
+futures = "0.3"
+hdrhistogram = { version = "7.6", default-features = false }
+# The failover scenario deletes a broker Pod and watches the cluster recover,
+# so the driver talks to the Kubernetes API directly.
+k8s-openapi = { version = "0.28", default-features = false, features = ["v1_32"] }
+kube = { version = "4.0", default-features = false, features = ["client", "runtime", "derive", "rustls-tls"] }
+num-traits = { workspace = true }
+# HTML/Plotly.js graph rendering for the benchmark report. Default features
+# only. `kaleido` and static export pull a native browser binary this does not
+# need: the report emits self-contained HTML that loads Plotly from the CDN.
+plotly = { version = "0.14", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
+refined_type = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# Runs bench/scenarios/*.yaml as one test case per file, so a scenario that
+# stops parsing names itself.
+libtest-mimic = "0.8"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+
+[[test]]
+name = "scenario_files"
+harness = false

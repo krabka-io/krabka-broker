@@ -1,36 +1,27 @@
-# The crabka-docgen contract
+# The krabka-docgen contract
 
-`crabka-docgen` is the reference-page generator in
-[`robot-head/crabka`](https://github.com/robot-head/crabka), under
-`crates/docgen`. It links this broker as a library and renders three pages
-from values it builds in process. It does not spawn the broker binary and it
-does not read Rust source. This document names what it reads, so a change here
-that breaks the tool fails a test in this repository first.
+`krabka-docgen` is the reference-page generator in
+[`crates/docgen`](../crates/docgen/README.md). It links this broker as a
+library and renders four pages from values it builds in process. It does not
+spawn the broker binary and it does not read Rust source. This document names
+what it reads, so a change here that breaks the tool fails a test in this
+repository first.
 
-## Pinned revision
+The tool came from [`robot-head/crabka`](https://github.com/robot-head/crabka),
+where it was pinned by revision and the crates were still named `crabka-*`.
+It is a workspace member now, so there is no pin to move: a rename in the
+broker breaks the tool's own build.
 
-| Item | Value |
-| :--- | :--- |
-| Repository | `https://github.com/robot-head/crabka` |
-| Crate | `crates/docgen` |
-| Revision | `c412017b2ba63b325d985ecbb8fd7d18faed859a` |
-| Committed | 2026-08-22 |
-
-The pin is a record, not a dependency. This repository does not build the
-tool, and `crabka-docgen` pins the broker by path inside its own workspace,
-where the crates are still named `crabka-*`. Its source therefore spells the
-entry points below as `crabka_broker::...` and `crabka_raft::scenarios`; this
-document uses the `krabka_` names the code here carries. To move the pin, read
-`crates/docgen/src/` at the new revision, compare the entry points below,
-update this table, and update `crates/broker/tests/docgen_contract.rs` if a
-shape changed.
+The operator CRD pages are not rendered here. The operator crate lives in
+[`krabka-io/krabka-operator`](https://github.com/krabka-io/krabka-operator), so
+its reference pages are rendered in that repository.
 
 ## What the tool reads
 
 ### The `FileConfig` JSON Schema
 
-`crates/docgen/src/broker.rs` calls `schemars::schema_for!(FileConfig)` and
-hands the value to `render_sectioned_field_table` in `schema_md.rs`. That
+`crates/docgen/src/broker.rs` calls `krabka_broker::file_config::config_schema`
+and hands the value to `render_sectioned_field_table` in `schema_md.rs`. That
 renderer depends on this shape:
 
 - The root is an object with `properties`, one per top-level TOML key, and a
@@ -49,10 +40,14 @@ its units column.
 
 ### `api_catalog::supported_apis`
 
-`protocol_apis_md` calls `krabka_broker::api_catalog::supported_apis()`,
-sorts the result by `api_key`, and prints one row per entry with the name
-`krabka_protocol::ApiKey::from_i16` gives it. The tool expects a non-empty
-list with no repeated key, and a name for every key.
+`protocol_apis_md` calls
+`krabka_broker::api_catalog::supported_apis(ListenerKind::Client,
+ClientMetricsReceiver::Configured)`, sorts the result by `api_key`, and prints
+one row per entry with the name `krabka_protocol::ApiKey::from_i16` gives it.
+That argument pair is the widest client-facing set: it leaves out the
+inter-broker-only keys, which no Kafka client sends, and it keeps the two
+KIP-714 telemetry keys. The tool expects a non-empty list with no repeated key,
+and a name for every key.
 
 ### `topic_config_docs`
 
@@ -69,7 +64,8 @@ matches every `TraceAction` variant: `Deliver`, `Partition`, `Heal`, `Timeout`,
 `split_brain_prevented`.
 
 The module is `krabka_kraft_core::sim`, re-exported by `krabka-raft` under the
-`scenarios` feature. No production build enables that feature;
+`scenarios` feature. No production build enables that feature. Two consumers
+turn it on: `crates/docgen/Cargo.toml` names it on its own dependency, and
 `crates/broker/Cargo.toml` turns it on through a dev-dependency on
 `krabka-raft`, so the broker's test build links the simulator and
 `docgen_contract.rs` destructures every field and matches every variant above.
@@ -90,3 +86,35 @@ for every key. `crates/broker/tests/example_broker_toml.rs` parses the example
 configs and checks every key they set against the schema. The docs CI job
 regenerates the reference page with `aspect generate-config-reference` and
 diffs it.
+
+## Where the rendering is checked
+
+The `checks` job in [`ci.yml`](../.github/workflows/ci.yml) runs the tool
+itself, in two steps.
+
+The first renders the whole tree into a temporary directory. That proves every
+entry point above still resolves and every renderer still produces a page. A
+signature change that the contract test does not reach fails here.
+
+The second runs `krabka-docgen snippets` in place over `docs/` and then
+`git diff --exit-code -- docs`. The `snippets` command rewrites each fenced
+block that a page opens with an HTML comment naming a source path and an
+anchor, and closes with the matching end comment. The source region carries
+`docs:begin <anchor>` and `docs:end <anchor>` on two comment lines.
+[`crates/docgen/README.md`](../crates/docgen/README.md) shows the exact
+spelling of both. The command is idempotent, so a tree that is in sync does not
+change and the step passes. A source edit that moves a quoted region leaves the
+page stale, the rewrite changes the file, and the step fails.
+
+The spelling is not repeated on this page on purpose. The scan reads raw text,
+so a page under `docs/` that writes the opening marker out is read as a page
+that wants a snippet, and the scan then fails on the placeholder path. The
+`README` is under `crates/`, which the scan does not enter.
+
+The rendered reference tree itself is not checked in. Its consumer is the Zola
+site in
+[`krabka-io/krabka-io.github.io`](https://github.com/krabka-io/krabka-io.github.io),
+which pulls the pages at build time; a second copy here would be one more
+generated tree to keep in step. `docs/config-reference.md` is the page this
+repository does keep, and `aspect generate-config-reference` is what regenerates
+it.

@@ -45,6 +45,28 @@ ALLOWED = {
     "tools/creusot/build-layer.sh": "the cmd of the //tools/creusot:installed_toolchain_tar genrule; it runs inside a Bazel action",
     "tools/creusot/install-creusot.sh": "the proof builder image's entrypoint; it runs inside that container",
     "tools/creusot/prove.sh": "the proof image's entrypoint; it runs inside that container",
+    "tools/oracle/gradlew": "the Gradle wrapper of the JVM oracle; it runs inside a Gradle build on a machine with a JDK, which the Aspect CLI does not drive",
+    # The cluster benchmark harness. Every one of these drives a live
+    # Kubernetes cluster or a live cloud project through kubectl, helm,
+    # terraform, ansible or ssh. An AXL task cannot go there: the Aspect CLI is
+    # not the thing holding the kubeconfig, and none of this runs on a runner
+    # in this repository -- no CI job invokes `bench/`.
+    "bench/run-matrix.sh": "the whole-matrix runner; it runs inside an operator shell pointed at a live Kubernetes cluster",
+    "bench/scripts/common.sh": "the shared shell library the five scripts beside it source; it runs inside each of them",
+    "bench/scripts/install-krabka.sh": "installs the operator with kubectl and helm; it runs inside an operator shell pointed at a live cluster",
+    "bench/scripts/install-prometheus.sh": "installs Prometheus with kubectl; it runs inside an operator shell pointed at a live cluster",
+    "bench/scripts/install-strimzi.sh": "installs the Strimzi operator with helm; it runs inside an operator shell pointed at a live cluster",
+    "bench/scripts/run-scenario.sh": "applies the CRs and the driver Job and collects the result; it runs inside an operator shell pointed at a live cluster",
+    "bench/scripts/teardown.sh": "deletes one stack's CRs and PVCs; it runs inside an operator shell pointed at a live cluster",
+    "bench/omb/ansible/inventory.py": "the dynamic inventory Ansible calls; it runs inside an ansible-playbook process",
+    "bench/omb/scripts/common.sh": "the shared shell library the seven scripts beside it source; it runs inside each of them",
+    "bench/omb/scripts/aggregate-results.sh": "aggregates the OpenMessaging results; it runs inside an operator shell beside the fetched result files",
+    "bench/omb/scripts/deploy-stack.sh": "drives ansible-playbook; it runs inside an operator shell that can reach the provisioned benchmark hosts",
+    "bench/omb/scripts/fetch-omb.sh": "clones the pinned OpenMessaging Benchmark checkout; it runs inside an operator shell before the deploy",
+    "bench/omb/scripts/fetch-results.sh": "copies the result files over ssh; it runs inside an operator shell that can reach the benchmark hosts",
+    "bench/omb/scripts/run-workload.sh": "starts one OpenMessaging workload over ssh; it runs inside an operator shell that can reach the benchmark hosts",
+    "bench/omb/scripts/tf-apply.sh": "drives terraform apply; it runs inside an operator shell holding the cloud credentials",
+    "bench/omb/scripts/tf-destroy.sh": "drives terraform destroy; it runs inside an operator shell holding the cloud credentials",
 }
 
 def has_script_suffix(path):

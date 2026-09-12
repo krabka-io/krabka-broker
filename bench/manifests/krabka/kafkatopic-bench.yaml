@@ -1,0 +1,13 @@
+apiVersion: krabka.io/v1alpha1
+kind: KafkaTopic
+metadata:
+  name: bench-topic
+  namespace: ${BENCH_NAMESPACE}
+  labels:
+    krabka.io/cluster: demo
+spec:
+  partitions: ${BENCH_PARTITIONS}
+  replicas: ${BENCH_REPLICATION_FACTOR}
+  config:
+    retention.ms: "3600000"
+    cleanup.policy: "delete"

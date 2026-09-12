@@ -1,0 +1,19 @@
+# Saturate a 100-partition topic with small (100 B) records across 4
+# producers, RF=3 so every write replicates across the 6-broker cluster.
+# Topline metric: aggregate producer msgs/sec at high partition fan-out;
+# stresses leader distribution + per-partition append throughput at scale.
+name: high-partition-saturate
+mode_tag: cluster
+msg_size: 100B
+partitions: 100
+replication_factor: 3
+producers: 4
+consumers: 4
+mode:
+  kind: saturate
+acks: leader
+compression: none
+linger: 5ms
+batch_size: 16KiB
+warmup: 15s
+duration: 60s
