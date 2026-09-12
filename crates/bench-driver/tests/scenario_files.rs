@@ -9,37 +9,47 @@
 
 use std::path::Path;
 
-/// Where the scenario corpus is, under whichever runner started this test.
-///
-/// Cargo runs a test with the crate directory as the working directory and
-/// exports `CARGO_MANIFEST_DIR`, so the corpus is two levels up. Bazel does
-/// neither: it runs the test from the runfiles root and stages a target's
-/// `data` under `$TEST_SRCDIR/$TEST_WORKSPACE/<package>`, which for
-/// `//bench:scenarios` is `bench/scenarios`. A single relative path cannot be
-/// right for both, and the one that was right for Cargo failed the Bazel
-/// coverage run with `NotFound`.
-///
-/// `crates/broker/tests/support::manifest_dir` resolves the same pair for the
-/// container suites' fixtures.
-///
-/// # Panics
-///
-/// Panics when neither Cargo's variable nor Bazel's pair is set, which means
-/// the test was launched by something that stages data differently again.
-fn scenario_root() -> String {
-    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        return format!("{dir}/../../bench/scenarios");
-    }
-    let srcdir = std::env::var("TEST_SRCDIR")
-        .expect("CARGO_MANIFEST_DIR (cargo) or TEST_SRCDIR (bazel) must be set");
-    let workspace =
-        std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
-    format!("{srcdir}/{workspace}/bench/scenarios")
-}
-
 use assert2::{assert, check};
 use krabka_bench_driver::scenario::{LoadMode, Scenario};
 use krabka_units::prelude::*;
+
+/// Where the scenario corpus is, under whichever runner started this test.
+///
+/// Bazel is asked first, and that order is the whole point. Both runners export
+/// `CARGO_MANIFEST_DIR`, so reading it first answers for Bazel too, and under
+/// Bazel it holds the package-relative `crates/bench-driver` rather than an
+/// absolute path. Walking `..` out of that lands somewhere that depends on the
+/// working directory and on whether the runfiles entry is a symlink, and in the
+/// sandbox it found an empty directory:
+///
+/// ```text
+/// no test cases found for test 'scenario_file' -- scanned directory:
+///   `crates/bench-driver/../../bench/scenarios`
+/// ```
+///
+/// `TEST_SRCDIR` is set by Bazel alone and is absolute. Joined with
+/// `TEST_WORKSPACE` it is the runfiles root, and Bazel stages a target's `data`
+/// under it by package path, so `//bench:scenarios` is exactly
+/// `bench/scenarios` there. No `..`, and no dependence on the working
+/// directory.
+///
+/// Cargo sets no `TEST_SRCDIR`, and it runs a test with the crate directory as
+/// the working directory, so the relative form is right there.
+///
+/// # Panics
+///
+/// Panics when neither Bazel's pair nor Cargo's variable is set, which means
+/// the test was launched by something that stages data differently again.
+fn scenario_root() -> String {
+    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
+        let workspace =
+            std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
+        return format!("{srcdir}/{workspace}/bench/scenarios");
+    }
+    let manifest = std::env::var("CARGO_MANIFEST_DIR")
+        .expect("TEST_SRCDIR (bazel) or CARGO_MANIFEST_DIR (cargo) must be set");
+    format!("{manifest}/../../bench/scenarios")
+}
 
 /// Loads one scenario file and checks it describes a runnable benchmark.
 fn scenario_file(path: &Path) -> datatest_stable::Result<()> {
