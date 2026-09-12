@@ -34,7 +34,7 @@ split-debuginfo = "packed"
 # style guide requires; a binary that only prints the error and exits does not
 # need one.
 anyhow = "1"
-apache-avro = { version = "0.21", features = ["derive"] }
+apache-avro = { version = "0.22", features = ["derive"] }
 arc-swap = "1"
 # Expressive test assertions: `assert!(a == b)` / `check!(..)` with
 # captured-expression diagnostics. Used for all test assertions workspace-wide.
