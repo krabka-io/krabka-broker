@@ -352,8 +352,9 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=wrong-ca' \
   -keyout "$work/tls/wrong-ca.key" -out "$work/tls/wrong-ca.pem" >/dev/null 2>&1
 # OpenSSL emits PKCS#8 v1 without the public key; ring requires v2.
 for key in signing untrusted; do
-  openssl genpkey -algorithm ED25519 -outform DER -out "$work/worm/$key.private" \
-    -outpubkey "$work/worm/$key.spki"
+  openssl genpkey -algorithm ED25519 -outform DER -out "$work/worm/$key.private"
+  openssl pkey -inform DER -in "$work/worm/$key.private" -pubout -outform DER \
+    -out "$work/worm/$key.spki"
   tail -c 32 "$work/worm/$key.spki" > "$work/worm/$key.pub"
   {
     printf '\x30\x53\x02\x01\x01'
