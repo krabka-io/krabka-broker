@@ -141,6 +141,10 @@ apk.translate_lock(
     lock = "//packaging:base.apko.lock.json",
 )
 apk.translate_lock(
+    name = "broker_base_arm64_lock",
+    lock = "//packaging:base.arm64.apko.lock.json",
+)
+apk.translate_lock(
     name = "bench_driver_base_lock",
     lock = "//bench:driver.apko.lock.json",
 )
@@ -160,7 +164,7 @@ apk.translate_lock(
     name = "kdc_base_lock",
     lock = "//crates/broker/tests/fixtures/security/kdc:image.apko.lock.json",
 )
-use_repo(apk, "bench_driver_base_lock", "broker_base_lock", "creusot_base_lock", "kaf_sarama_lock", "kcat_librdkafka_2x_lock", "kdc_base_lock")
+use_repo(apk, "bench_driver_base_lock", "broker_base_arm64_lock", "broker_base_lock", "creusot_base_lock", "kaf_sarama_lock", "kcat_librdkafka_2x_lock", "kdc_base_lock")
 
 # ---------------------------------------------------------------------------
 # Format and lint. See //tools/format and //tools/lint.

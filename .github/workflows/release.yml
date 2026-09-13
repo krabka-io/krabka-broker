@@ -135,7 +135,7 @@ jobs:
       # Bind promotion to the digest recorded by the successful main push run.
       # A commit tag alone is mutable, and a rebuild is not delivery's image.
       - name: resolve the tested delivery image
-        id: image
+        id: delivery-image
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DELIVERY_RUN: ${{ needs.verify.outputs.delivery_run }}
@@ -149,13 +149,53 @@ jobs:
             --image "${IMAGE}@${digest}"
           source="promoted from CI run ${DELIVERY_RUN}: ${IMAGE}@${digest}"
           echo "Releasing ${digest}, ${source}."
-          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+          echo "amd64_digest=${digest}" >>"${GITHUB_OUTPUT}"
           echo "source=${source}" >>"${GITHUB_OUTPUT}"
+
+      # The ARM64 half is release-only. PR and main CI continue to build and
+      # publish the tested AMD64 delivery image; a v* tag builds both platform
+      # manifests, verifies the AMD64 child is exactly that tested digest, and
+      # pushes one index for release consumers.
+      - name: build and verify the release image index
+        id: image
+        env:
+          AMD64_DIGEST: ${{ steps.delivery-image.outputs.amd64_digest }}
+        run: |
+          bazel build -c opt //packaging:image_multiarch_index_blob
+          index="$(bazel cquery -c opt //packaging:image_multiarch_index_blob --output=files)"
+          built_amd64="$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' "${index}")"
+          test "${built_amd64}" = "${AMD64_DIGEST}"
+          echo "digest=sha256:$(sha256sum "${index}" | cut -d ' ' -f 1)" >>"${GITHUB_OUTPUT}"
+
+      - name: publish release image index
+        env:
+          EXPECTED_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          git fetch --tags --force origin
+          newest="$(git tag --list 'v*' | sort -V | tail -1)"
+          tags=("${GITHUB_REF_NAME}")
+          if [ "${newest}" = "${GITHUB_REF_NAME}" ]; then
+            tags+=(latest)
+          else
+            echo "::notice::${GITHUB_REF_NAME} is not the newest v* tag (${newest}); leaving :latest where it is"
+          fi
+
+          arguments=()
+          for tag in "${tags[@]}"; do
+            arguments+=(--tag "${tag}")
+          done
+          bazel run -c opt //packaging:push_multiarch -- "${arguments[@]}"
+
+          for tag in "${tags[@]}"; do
+            actual="$(docker buildx imagetools inspect "${IMAGE}:${tag}" |
+              awk '$1 == "Digest:" { print $2; exit }')"
+            test "${actual}" = "${EXPECTED_DIGEST}"
+          done
 
       - name: create provenance predicate
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
-          SOURCE: ${{ steps.image.outputs.source }}
+          SOURCE: ${{ steps.delivery-image.outputs.source }}
         run: |
           jq -n \
             --arg commit "${GITHUB_SHA}" \
@@ -168,7 +208,7 @@ jobs:
                 buildType: "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@v1",
                 externalParameters: {ref: $ref},
                 internalParameters: {
-                  bazelTarget: "//packaging:image",
+                  bazelTarget: "//packaging:image_multiarch",
                   compilationMode: "opt",
                   imageSource: $source
                 },
@@ -215,39 +255,6 @@ jobs:
             --certificate-identity "${identity}" \
             --certificate-oidc-issuer "${issuer}" \
             "${reference}"
-
-      - name: publish release tags
-        env:
-          DIGEST: ${{ steps.image.outputs.digest }}
-        run: |
-          # `fetch-tags` defaults off on `actions/checkout`, so ask for the
-          # tags explicitly rather than relying on what the tag checkout left.
-          git fetch --tags --force origin
-
-          # `latest` means the newest release, and a patch cut after a later
-          # minor is not that: without this, a v0.5.4 tagged after v0.6.0 moved
-          # `latest` backwards onto it. `sort -V` orders the tags the way a
-          # version is read rather than the way a string is.
-          newest="$(git tag --list 'v*' | sort -V | tail -1)"
-          tags=("${GITHUB_REF_NAME}")
-          if [ "${newest}" = "${GITHUB_REF_NAME}" ]; then
-            tags+=(latest)
-          else
-            echo "::notice::${GITHUB_REF_NAME} is not the newest v* tag (${newest}); leaving :latest where it is"
-          fi
-
-          arguments=()
-          for tag in "${tags[@]}"; do
-            arguments+=(--tag "${IMAGE}:${tag}")
-          done
-          docker buildx imagetools create --prefer-index=false \
-            "${arguments[@]}" "${IMAGE}@${DIGEST}"
-
-          for tag in "${tags[@]}"; do
-            actual="$(docker buildx imagetools inspect "${IMAGE}:${tag}" |
-              awk '$1 == "Digest:" { print $2; exit }')"
-            test "${actual}" = "${DIGEST}"
-          done
 
       - name: publish GitHub release and SBOM
         env:

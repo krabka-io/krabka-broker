@@ -126,6 +126,16 @@ Run the broker:
 bazel run //:broker_bin -- --help
 ```
 
+Build and load a native Linux ARM64 container image (for example, on an Apple
+Silicon Mac running Docker Desktop):
+
+```
+bazel run -c opt --platforms=//:linux_arm64 //packaging:image_arm64_load
+```
+
+The loaded image is tagged `krabka-io/krabka-broker:dev-arm64`.
+Release tags and `latest` on GHCR contain both Linux AMD64 and ARM64 images.
+
 `cargo` works the same way it always did:
 
 ```
