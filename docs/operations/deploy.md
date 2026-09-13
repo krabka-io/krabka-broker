@@ -17,14 +17,18 @@ tools ride beside the broker under `/usr/bin`: `krabka-format`,
 `krabka-backup` and `krabka-restore`. A tool that is not in the image cannot run in a container,
 because there is no shell to fetch one with.
 
-The image is **linux/amd64 only**. `packaging/base.apko.yaml` builds the Wolfi
-base for `amd64`, the manifest declares `linux/amd64`, and the tags CI pushes
-to `ghcr.io/krabka-io/krabka-broker` are bare amd64 manifests rather than a
-multi-architecture index. There is no arm64 image. On an aarch64 host
-`bazel run -c opt //packaging:image_load` does not produce a runnable image: the
-manifest still says amd64 while the broker binary in it is an aarch64 ELF, so
-the container fails to exec. Bazel refuses to build `//packaging:image` off
-x86_64 for that reason. Multi-architecture images are a separate piece of work.
+The image published to `ghcr.io/krabka-io/krabka-broker` is **linux/amd64
+only**. Its tags are bare amd64 manifests rather than a multi-architecture
+index. On an ARM64 host, build and load the separate native image locally:
+
+```
+bazel run -c opt --platforms=//:linux_arm64 //packaging:image_arm64_load
+```
+
+That target uses the locked ARM64 Wolfi base and loads the image as
+`docker.io/krabka-io/krabka-broker:dev-arm64`. It is not published by CI.
+The default `//packaging:image` and `//packaging:image_load` targets remain
+AMD64-only.
 
 To run the binary directly on another architecture, build it with Bazel and
 copy it out. That path builds for the host it runs on, so it works anywhere the
