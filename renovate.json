@@ -90,7 +90,7 @@
       "automerge": false
     },
     {
-      "description": "Both carry something a version bump can break quietly. rules_rs is patched by //bazel/patches/rules-rs-target-has-atomic.patch and //bazel/patches/rules_rs_zlib_url.patch, and a patch that still applies with fuzz can land on lines that no longer mean what they did -- a build that succeeds while generating something else. llvm is a registered toolchain, so it is the C++ compiler every cc dependency in the graph is built with. Neither is a merge to wake up to.",
+      "description": "Both carry something a version bump can break quietly. rules_rs is patched by //bazel/patches/rules-rs-target-has-atomic.patch, and a patch that still applies with fuzz can land on lines that no longer mean what they did -- a build that succeeds while generating something else. llvm is a registered toolchain, so it is the C++ compiler every cc dependency in the graph is built with. Neither is a merge to wake up to.",
       "matchManagers": [
         "bazel-module"
       ],
