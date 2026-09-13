@@ -17,18 +17,18 @@ tools ride beside the broker under `/usr/bin`: `krabka-format`,
 `krabka-backup` and `krabka-restore`. A tool that is not in the image cannot run in a container,
 because there is no shell to fetch one with.
 
-The image published to `ghcr.io/krabka-io/krabka-broker` is **linux/amd64
-only**. Its tags are bare amd64 manifests rather than a multi-architecture
-index. On an ARM64 host, build and load the separate native image locally:
+Release tags and `latest` at `ghcr.io/krabka-io/krabka-broker` are image indexes
+for `linux/amd64` and `linux/arm64`. The per-commit delivery tag remains an
+AMD64 manifest used to verify the release's AMD64 child. On an ARM64 host, a
+native image can also be built and loaded locally:
 
 ```
 bazel run -c opt --platforms=//:linux_arm64 //packaging:image_arm64_load
 ```
 
 That target uses the locked ARM64 Wolfi base and loads the image as
-`docker.io/krabka-io/krabka-broker:dev-arm64`. It is not published by CI.
-The default `//packaging:image` and `//packaging:image_load` targets remain
-AMD64-only.
+`docker.io/krabka-io/krabka-broker:dev-arm64`. ARM64 is built by CI only for a
+`v*` release tag; pull requests and main-branch delivery remain AMD64-only.
 
 To run the binary directly on another architecture, build it with Bazel and
 copy it out. That path builds for the host it runs on, so it works anywhere the

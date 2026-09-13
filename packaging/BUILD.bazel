@@ -18,7 +18,7 @@ already carries a broker.
 
 load("@rules_apko//apko:defs.bzl", "apko_image")
 load("@rules_img//img:convert.bzl", "image_manifest_from_oci_layout")
-load("@rules_img//img:image.bzl", "image_manifest")
+load("@rules_img//img:image.bzl", "image_index", "image_manifest")
 load("@rules_img//img:layer.bzl", "file_metadata", "image_layer")
 load("@rules_img//img:load.bzl", "image_load")
 load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
@@ -34,11 +34,13 @@ package(default_visibility = ["//visibility:public"])
 # the Rust suites that run brokers out of this image.
 IMAGE_TAG = KRABKA_IMAGE_TAG
 
-# The one architecture this image is built and published for. `base.apko.yaml`
-# names it too, and `image_binaries_test` holds the layers to it, so a broker
-# built for a different CPU cannot be wrapped in a manifest that claims this
-# one. Multi-architecture images are separate work.
-IMAGE_ARCH = "amd64"
+config_setting(
+    name = "linux_arm64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
 
 # Owned by `nonroot` in the apko base. The broker needs no privilege: it binds
 # 9092/9093, both above 1024, and writes only its data directory.
@@ -65,7 +67,7 @@ apko_image(
 image_manifest_from_oci_layout(
     name = "base",
     src = ":base_oci",
-    architecture = IMAGE_ARCH,
+    architecture = "amd64",
     layers = [GZIP_LAYER],
     os = "linux",
 )
@@ -105,42 +107,43 @@ image_layer(
     include_runfiles = False,
 )
 
-# The layers carry whatever the host toolchain built, with no platform
-# transition, while the manifest says linux/amd64 unconditionally. Off x86_64
-# that pairing is a lie the daemon only discovers when it fails to exec, so say
-# it at analysis time instead: `bazel build //packaging:image` on an aarch64
-# host reports the target as incompatible, and `bazel build //...` skips it
-# along with `image_load`, `push` and the two container tests that depend on it.
+# Platform selection chooses both the Rust binaries and their matching locked
+# Wolfi base. The release index applies that transition once per architecture.
 image_manifest(
     name = "image",
-    base = ":base",
+    base = select({
+        ":linux_arm64": ":base_arm64",
+        "//conditions:default": ":base",
+    }),
     entrypoint = ["/usr/bin/krabka-broker"],
     layers = [
         ":broker_layer",
         ":tools_layer",
     ],
     target_compatible_with = [
-        "@platforms//cpu:x86_64",
         "@platforms//os:linux",
     ],
     user = "65532:65532",
     working_dir = "/var/lib/krabka",
 )
 
-image_manifest(
-    name = "image_arm64",
-    base = ":base_arm64",
-    entrypoint = ["/usr/bin/krabka-broker"],
-    layers = [
-        ":broker_layer",
-        ":tools_layer",
+# Built only by the v* release workflow. The split transition produces one
+# manifest per architecture and combines them in a single OCI image index.
+image_index(
+    name = "image_multiarch",
+    manifests = [":image"],
+    platforms = [
+        "//:linux_amd64",
+        "//:linux_arm64",
     ],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:linux",
-    ],
-    user = "65532:65532",
-    working_dir = "/var/lib/krabka",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "image_multiarch_index_blob",
+    srcs = [":image_multiarch"],
+    output_group = "root_blob",
+    tags = ["manual"],
 )
 
 # `image` puts both the manifest and the config in its default outputs, and
@@ -160,12 +163,20 @@ sh_test(
     name = "image_binaries_test",
     size = "small",
     srcs = ["image_binaries_test.sh"],
-    args = [
-        IMAGE_ARCH,
-        "$(rootpath :image_manifest_blob)",
-        "$(rootpath :broker_layer)",
-        "$(rootpath :tools_layer)",
-    ],
+    args = select({
+        ":linux_arm64": [
+            "arm64",
+            "$(rootpath :image_manifest_blob)",
+            "$(rootpath :broker_layer)",
+            "$(rootpath :tools_layer)",
+        ],
+        "//conditions:default": [
+            "amd64",
+            "$(rootpath :image_manifest_blob)",
+            "$(rootpath :broker_layer)",
+            "$(rootpath :tools_layer)",
+        ],
+    }),
     data = [
         ":broker_layer",
         ":image_manifest_blob",
@@ -181,7 +192,7 @@ image_load(
 
 image_load(
     name = "image_arm64_load",
-    image = ":image_arm64",
+    image = ":image",
     tag = "krabka-io/krabka-broker:dev-arm64",
 )
 
@@ -250,4 +261,12 @@ image_push(
     image = ":image",
     registry = "ghcr.io",
     repository = "krabka-io/krabka-broker",
+)
+
+image_push(
+    name = "push_multiarch",
+    image = ":image_multiarch",
+    registry = "ghcr.io",
+    repository = "krabka-io/krabka-broker",
+    tags = ["manual"],
 )

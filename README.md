@@ -134,6 +134,7 @@ bazel run -c opt --platforms=//:linux_arm64 //packaging:image_arm64_load
 ```
 
 The loaded image is tagged `krabka-io/krabka-broker:dev-arm64`.
+Release tags and `latest` on GHCR contain both Linux AMD64 and ARM64 images.
 
 `cargo` works the same way it always did:
 
