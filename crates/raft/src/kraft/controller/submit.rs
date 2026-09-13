@@ -5,7 +5,8 @@
 use krabka_ids::Offset;
 use krabka_metadata::{
     BreakGlassProposalRecord, DelegationToken, DelegationTokenRecord, DeleteDelegationTokenRecord,
-    MetadataImage, MetadataRecord, TopicFreezeRecord, to_kraft_values,
+    MetadataImage, MetadataRecord, PartitionRecord, TopicFreezeRecord, from_kraft_value,
+    to_kraft_values,
 };
 use tokio::sync::oneshot;
 
@@ -360,9 +361,17 @@ impl Engine {
         let assign_base = self.log.log_end_offset();
 
         let mut scratch = self.image.clone();
+        // What a replica sees when it replays this batch: each value blob
+        // decoded against the image the blobs before it produced. A blob that
+        // does not decode here would be dropped by every replica, and a Kafka
+        // replica would fail on it, so the batch is refused before it reaches
+        // the log.
+        let mut replica_view = self.image.clone();
         let mut result = SubmitChangeResult::default();
         let mut value_blobs: Vec<bytes::Bytes> = Vec::new();
         for r in records {
+            let rebased = rebase_partition_directories(&scratch, r);
+            let r = rebased.as_ref().unwrap_or(r);
             // Stamp the registration epoch = its committed offset.
             let stamped;
             let r: &MetadataRecord = match r {
@@ -432,7 +441,13 @@ impl Engine {
                 });
             }
             match to_kraft_values(r, &scratch) {
-                Ok(mut blobs) => value_blobs.append(&mut blobs),
+                Ok(mut blobs) => {
+                    if let Err(e) = replay_value_blobs(&blobs, &mut replica_view) {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                    value_blobs.append(&mut blobs);
+                }
                 Err(e) => {
                     let _ = reply.send(Err(RaftError::ChangeRejected(format!("encode: {e}"))));
                     return;
@@ -575,4 +590,63 @@ impl Engine {
         }
         self.commit_waiters = still;
     }
+}
+
+/// KIP-858: while a partition keeps its replica list, only
+/// `AssignReplicasToDirs` moves its `directories`.
+///
+/// A caller that writes a whole partition record (an election, an ISR change)
+/// copies `directories` from the image it read. That image can predate a
+/// directory assignment that has since committed. Written as it is, the record
+/// would revert the assignment, and a stale empty list would encode a
+/// `PartitionChangeRecord` whose directory count does not match its replicas,
+/// which no replica can apply. So a record that keeps the replica list takes
+/// the directories of the image it is encoded against. Kafka's controller
+/// behaves the same way. `PartitionChangeBuilder` never takes directories from
+/// the caller of an election or an ISR change: it derives them from the
+/// partition's current directories, keyed by replica, and only the
+/// `AssignReplicasToDirs` handler calls `setDirectory`.
+///
+/// Returns `None` when the record needs no change.
+fn rebase_partition_directories(
+    image: &MetadataImage,
+    record: &MetadataRecord,
+) -> Option<MetadataRecord> {
+    let rebase = |partition: &PartitionRecord| -> Option<PartitionRecord> {
+        let current = image.partition(&partition.topic, partition.partition)?;
+        (current.replicas == partition.replicas && current.directories != partition.directories)
+            .then(|| PartitionRecord {
+                directories: current.directories.clone(),
+                ..partition.clone()
+            })
+    };
+    match record {
+        MetadataRecord::V1Partition(partition) => {
+            rebase(partition).map(MetadataRecord::V1Partition)
+        }
+        MetadataRecord::V1PartitionUpdate(update) => rebase(&update.partition).map(|partition| {
+            MetadataRecord::V1PartitionUpdate(krabka_metadata::PartitionUpdateRecord {
+                partition,
+                ..update.clone()
+            })
+        }),
+        _ => None,
+    }
+}
+
+/// Decode `blobs` the way a replica replays them, each against the image the
+/// blobs before it produced, and apply each to `image`.
+///
+/// # Errors
+///
+/// Returns [`RaftError::ChangeRejected`] for the first blob that does not
+/// decode.
+fn replay_value_blobs(blobs: &[bytes::Bytes], image: &mut MetadataImage) -> Result<(), RaftError> {
+    for blob in blobs {
+        let decoded = from_kraft_value(blob, image).map_err(|e| {
+            RaftError::ChangeRejected(format!("encoded record would not replay: {e}"))
+        })?;
+        image.apply(&decoded);
+    }
+    Ok(())
 }

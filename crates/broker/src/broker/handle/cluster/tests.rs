@@ -278,3 +278,50 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
 
     handle.shutdown().await;
 }
+
+/// A wait whose predicate never holds times out and names the line that
+/// started it, so a failing suite says which of its waits stuck.
+#[tokio::test(start_paused = true)]
+async fn an_image_wait_that_never_holds_names_its_caller() {
+    let (_tx, rx) =
+        tokio::sync::watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
+    let line = line!() + 1;
+    let waiting = image_awaiter(rx, |_| false);
+
+    let timeout = waiting
+        .await
+        .expect_err("a predicate that never holds times out");
+
+    assert!(timeout.caller.file() == file!());
+    assert!(timeout.caller.line() == line);
+    assert!(
+        timeout.message(17)
+            == format!(
+                "wait_for_image called at {}:{line}:{} timed out after 30s; the image is at \
+                 metadata offset 17",
+                file!(),
+                timeout.caller.column()
+            )
+    );
+}
+
+/// A wait ends as soon as a published image satisfies the predicate, and a
+/// closed channel ends it too: the sender goes away only at broker shutdown.
+#[tokio::test(start_paused = true)]
+async fn an_image_wait_ends_on_a_matching_image_or_a_closed_channel() {
+    let (tx, rx) = tokio::sync::watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
+    let awaited = Arc::new(krabka_metadata::MetadataImage::default());
+    let awaited_addr = Arc::as_ptr(&awaited).addr();
+    let waiting = tokio::spawn(image_awaiter(rx, move |image| {
+        std::ptr::from_ref(image).addr() == awaited_addr
+    }));
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    tx.send(awaited).expect("the wait holds the receiver");
+    assert!(waiting.await.expect("the wait task") == Ok(()));
+
+    let (tx, rx) = tokio::sync::watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
+    let waiting = tokio::spawn(image_awaiter(rx, |_| false));
+    drop(tx);
+    assert!(waiting.await.expect("the wait task") == Ok(()));
+}

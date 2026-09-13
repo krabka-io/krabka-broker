@@ -1175,7 +1175,7 @@ jobs:
           path: benchmark-artifacts/
           retention-days: 90
 
-  # Push the broker image.
+  # Push the broker image and the benchmark driver image.
   #
   # Not `aspect delivery`: its "only what changed" tracking needs
   # `ASPECT_WORKFLOWS_DELIVERY_API_ENDPOINT`, a state backend that comes with
@@ -1226,6 +1226,12 @@ jobs:
         run: bazel test -c opt --config=docker //packaging:image_docker_test
       - name: push
         run: bazel run -c opt //packaging:push -- --tag "${GITHUB_SHA}"
+
+      # The benchmark driver image, built the same way. `bench/manifests/driver`
+      # runs it as a Kubernetes Job, and `BENCH_DRIVER_IMAGE` names the tag.
+      # The `ci` job's `build` step builds it on every pull request.
+      - name: push the benchmark driver image
+        run: bazel run -c opt //bench:driver_push -- --tag "${GITHUB_SHA}"
 
       - name: record the delivery image digest
         run: |
