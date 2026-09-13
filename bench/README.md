@@ -46,7 +46,7 @@ just -f bench/justfile bench-ci
 ```
 
 This recipe does the following:
-1. Builds the bench-driver OCI image with melange and apko.
+1. Builds the bench-driver OCI image with Bazel (`//bench:driver_image`).
 2. Creates a `krabka-bench` KinD cluster (`mirror.gcr.io/kindest/node:v1.30.0`).
 3. Installs Strimzi (`1.0.0`, running Apache Kafka `4.2.0`) + Krabka + a minimal Prometheus.
 4. Runs `small-msg-saturate` and `fixed-rate-latency` against both
@@ -215,4 +215,4 @@ does not show that.
 - `bench/justfile`: top-level orchestration.
 - `bench/terraform/gke/`: Terraform for the GKE benchmark cluster, plus the end-to-end provision → install → run → aggregate README.
 - `crates/log-iobench/`: the log read-path microbenchmark that compares `pread` against mmap.
-- `packaging/apko/bench-driver.yaml`: the driver image recipe. The apk it installs has no producer in this repository; read the header of that file.
+- `bench/BUILD.bazel` and `bench/driver.apko.yaml`: the driver image. apko builds the locked Wolfi base, and rules_img adds the Bazel-built driver binary.

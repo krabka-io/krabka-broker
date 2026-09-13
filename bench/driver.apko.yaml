@@ -1,0 +1,34 @@
+# The Wolfi base of the benchmark driver image. `//bench:driver_image` adds the
+# Bazel-built `krabka-bench-driver` binary to it as a layer.
+#
+# The account and the architecture match `//packaging:base.apko.yaml`. The one
+# addition is `busybox`: `bench/manifests/driver/job-template.yaml` runs the
+# driver from a `/bin/sh -c` script that then prints the result file.
+#
+# `driver.apko.lock.json` pins every package. After a change here, run
+# `apko lock bench/driver.apko.yaml` from the repository root.
+contents:
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  repositories:
+    - https://packages.wolfi.dev/os
+  packages:
+    - busybox
+    - ca-certificates-bundle
+    - glibc
+    - tzdata
+    - wolfi-baselayout
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+      shell: /sbin/nologin
+  run-as: nonroot
+
+archs:
+  - amd64
