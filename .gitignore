@@ -41,8 +41,6 @@ build/
 # output; this one lands at the repository root.
 /.omb/
 
-# The local apk repository and signing key `bench/justfile`'s
-# `build-driver-image` recipe writes.
-/packages/
-melange.rsa
-melange.rsa.pub
+# The image tarball `bench/justfile`'s `build-driver-image` recipe copies out
+# of `bazel-out` for `kind-up` to load.
+/krabka-bench-driver.tar
