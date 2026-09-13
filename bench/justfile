@@ -3,7 +3,7 @@
 #
 # Two modes:
 #   bench-ci       lightweight KinD-friendly: 1 broker RF=1, short scenarios.
-#                  builds the bench-driver image with apko and loads
+#                  builds the bench-driver image with Bazel and loads
 #                  it into a `krabka-bench` kind cluster.
 #   bench-cluster  assumes kubeconfig points at a real cluster. Runs the
 #                  heavier matrix including 3-broker RF=3 and failover.
@@ -13,7 +13,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 # `just` runs each recipe from the justfile's own directory, which is
 # `bench/`. Every recipe below spells its paths from the repo root
-# (`bench/scripts/…`, `packaging/…`, `$PWD/packages`), so move the working
+# (`bench/scripts/…`, `//bench:…`), so move the working
 # directory one level up. Without this, `just -f bench/justfile install-all`
 # looks for `bench/bench/scripts/install-strimzi.sh` and fails with exit 127.
 # The repo root holds no justfile, so a nested `just <recipe>` call inside a
@@ -119,22 +119,18 @@ run STACK SCENARIO TOPOLOGY="1broker-rf1":
     BENCH_DRIVER_IMAGE={{bench_driver_image}} \
         bench/scripts/run-scenario.sh {{STACK}} {{SCENARIO}} {{TOPOLOGY}}
 
-# Build the bench-driver OCI image from packaging/apko/bench-driver.yaml.
+# Build the bench-driver OCI image with Bazel (//bench:driver_image) and copy
+# its `docker load` tarball to ./krabka-bench-driver.tar, which `kind-up`
+# loads. The image is tagged `krabka-bench-driver:e2e`; `kind-up` retags it
+# when BENCH_DRIVER_IMAGE names another tag.
 #
-# The recipe needs an apk named `krabka-bench-driver`. The melange recipe that
-# produced it built every binary of the old monorepo at once; it is a
-# reference recipe in `krabka-io/tooling` now and no pipeline runs it. Build an
-# apk yourself and put it in `packages/`, or set BENCH_DRIVER_IMAGE to an image
-# you already have and skip this recipe.
+# CI publishes the same image as ghcr.io/krabka-io/krabka-bench-driver:<sha>
+# on every push to main. Set BENCH_DRIVER_IMAGE to that and skip this recipe
+# if you do not want to build it.
 build-driver-image:
     @echo "→ building krabka-bench-driver OCI image"
-    test -d packages || { echo "no local apk repository at ./packages"; exit 1; }
-    test -f melange.rsa.pub || { echo "no melange.rsa.pub beside ./packages"; exit 1; }
-    apko build packaging/apko/bench-driver.yaml \
-        {{bench_driver_image}} krabka-bench-driver.tar \
-        --arch x86_64 \
-        --repository-append "$PWD/packages" \
-        --keyring-append "$PWD/melange.rsa.pub"
+    bazel build -c opt //bench:driver_image_tar
+    install -m 0644 "$(bazel cquery -c opt --output=files //bench:driver_image_tar)" krabka-bench-driver.tar
 
 # Bring up a local KinD cluster sized for the bench. No-op if one already
 # exists.

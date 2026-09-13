@@ -38,8 +38,9 @@ and this module enables it. You do not have to apply anything more for storage.
   `e2-standard-2` nodes, and 3 × 200 GiB pd-ssd.
 - `terraform` ≥ 1.5, `kubectl`, `helm`, [`just`](https://github.com/casey/just).
 - A container registry that the cluster can pull from, such as Artifact Registry
-  or GHCR, for the `krabka-bench-driver` image. Use `melange` and `apko` to build
-  the image, or use a published image.
+  or GHCR, for the `krabka-bench-driver` image. Build the image with Bazel, or
+  use `ghcr.io/krabka-io/krabka-bench-driver:<sha>`, which CI publishes for
+  every commit on `main`.
 - A Rust toolchain to run the report aggregator (`krabka-bench-report`).
 
 ## 1. Provision the cluster
@@ -63,7 +64,7 @@ and push it to a registry that the cluster can pull from. Do this from the repo
 root:
 
 ```bash
-# Build the bench-driver OCI image (melange + apko):
+# Build the bench-driver OCI image with Bazel:
 just -f bench/justfile build-driver-image
 
 # Tag + push it to your registry, e.g. Artifact Registry:
