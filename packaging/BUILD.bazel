@@ -55,10 +55,25 @@ apko_image(
     tag = "krabka-broker-base:locked",
 )
 
+apko_image(
+    name = "base_arm64_oci",
+    config = "base.arm64.apko.yaml",
+    contents = "@broker_base_arm64_lock//:contents",
+    tag = "krabka-broker-base:arm64-locked",
+)
+
 image_manifest_from_oci_layout(
     name = "base",
     src = ":base_oci",
     architecture = IMAGE_ARCH,
+    layers = [GZIP_LAYER],
+    os = "linux",
+)
+
+image_manifest_from_oci_layout(
+    name = "base_arm64",
+    src = ":base_arm64_oci",
+    architecture = "arm64",
     layers = [GZIP_LAYER],
     os = "linux",
 )
@@ -112,6 +127,22 @@ image_manifest(
     working_dir = "/var/lib/krabka",
 )
 
+image_manifest(
+    name = "image_arm64",
+    base = ":base_arm64",
+    entrypoint = ["/usr/bin/krabka-broker"],
+    layers = [
+        ":broker_layer",
+        ":tools_layer",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+    user = "65532:65532",
+    working_dir = "/var/lib/krabka",
+)
+
 # `image` puts both the manifest and the config in its default outputs, and
 # `$(rootpath)` needs exactly one file. `root_blob` is the manifest alone, which
 # is the half that names the layer digests.
@@ -146,6 +177,12 @@ image_load(
     name = "image_load",
     image = ":image",
     tag = IMAGE_TAG,
+)
+
+image_load(
+    name = "image_arm64_load",
+    image = ":image_arm64",
+    tag = "krabka-io/krabka-broker:dev-arm64",
 )
 
 # The tarball `image_load` produces, in the same shape //bazel/images gives the
