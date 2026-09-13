@@ -819,3 +819,131 @@ async fn rejection_scoped_to_owning_waiter_range() {
     );
     ctrl.shutdown().await;
 }
+
+/// A two-replica partition whose second replica has reported its directory,
+/// and the partition record as a caller read it before that report: the
+/// directory list is still empty.
+fn partition_with_reported_directory(
+    engine: &mut super::Engine,
+) -> (krabka_metadata::PartitionRecord, uuid::Uuid) {
+    use krabka_metadata::{
+        LeaderEpoch, MetadataRecord, PartitionDirAssignmentRecord, PartitionRecord, TopicRecord,
+    };
+
+    let stale = PartitionRecord {
+        topic: "dirs".to_string(),
+        partition: 0,
+        leader: NodeId(1),
+        replicas: vec![NodeId(1), NodeId(2)],
+        isr: vec![NodeId(1), NodeId(2)],
+        leader_epoch: LeaderEpoch(0),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories: vec![],
+        partition_epoch: 0,
+    };
+    let directory = uuid::Uuid::from_u128(0xd1);
+    for records in [
+        vec![
+            MetadataRecord::V1Topic(TopicRecord {
+                name: "dirs".to_string(),
+                topic_id: uuid::Uuid::from_u128(0x70),
+                partitions: 1,
+                replication_factor: 2,
+            }),
+            MetadataRecord::V1Partition(stale.clone()),
+        ],
+        vec![MetadataRecord::V1PartitionDirAssignment(
+            PartitionDirAssignmentRecord {
+                topic: "dirs".to_string(),
+                partition: 0,
+                replica: NodeId(2),
+                directory,
+            },
+        )],
+    ] {
+        let (reply, mut rx) = oneshot::channel();
+        engine.on_submit_change(&records, reply);
+        assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    }
+    (stale, directory)
+}
+
+/// An election computed from an image that predates a directory assignment
+/// still takes effect, and keeps the assignment. Before the rebase, the stale
+/// empty directory list encoded a `PartitionChangeRecord` with zero directories
+/// for two replicas: the leader appended it, reported success, and every
+/// replica dropped it on replay (#579).
+#[test]
+fn a_stale_partition_update_keeps_the_committed_directories() {
+    use krabka_metadata::{
+        LeaderEpoch, LeaderRecoveryState, MetadataRecord, PartitionUpdateRecord,
+    };
+
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let (stale, directory) = partition_with_reported_directory(&mut engine);
+
+    let elected = krabka_metadata::PartitionRecord {
+        leader: NodeId(2),
+        isr: vec![NodeId(2)],
+        leader_epoch: LeaderEpoch(1),
+        partition_epoch: 1,
+        ..stale
+    };
+    let (reply, mut rx) = oneshot::channel();
+    engine.on_submit_change(
+        &[MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
+            partition: elected,
+            eligible_leader_replicas: Some(vec![]),
+            last_known_elr: Some(vec![]),
+            recovery_state: Some(LeaderRecoveryState::Recovering),
+        })],
+        reply,
+    );
+
+    assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    let partition = engine.image.partition("dirs", 0).expect("partition");
+    check!(partition.leader == NodeId(2));
+    check!(partition.isr == vec![NodeId(2)]);
+    check!(partition.directories == vec![uuid::Uuid::nil(), directory]);
+}
+
+/// A record whose `KRaft` encoding no replica could decode is refused before it
+/// reaches the log. A replica change that carries a directory list of the
+/// wrong length is one: replay rejects a `PartitionChangeRecord` whose
+/// directory count differs from its replica count.
+#[test]
+fn a_record_that_would_not_replay_is_refused_and_not_appended() {
+    use krabka_metadata::MetadataRecord;
+
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let (stale, _directory) = partition_with_reported_directory(&mut engine);
+    let log_end = engine.log.log_end_offset();
+    let before = engine.image.partition("dirs", 0).cloned();
+
+    let reassigned = krabka_metadata::PartitionRecord {
+        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+        directories: vec![uuid::Uuid::nil()],
+        ..stale
+    };
+    let (reply, mut rx) = oneshot::channel();
+    engine.on_submit_change(
+        &[MetadataRecord::V1PartitionUpdate(
+            krabka_metadata::PartitionUpdateRecord {
+                partition: reassigned,
+                eligible_leader_replicas: None,
+                last_known_elr: None,
+                recovery_state: None,
+            },
+        )],
+        reply,
+    );
+
+    let refused = rx.try_recv().expect("an immediate reply");
+    assert!(let Err(RaftError::ChangeRejected(message)) = refused);
+    check!(message.contains("would not replay"), "{message}");
+    check!(engine.log.log_end_offset() == log_end);
+    check!(engine.image.partition("dirs", 0).cloned() == before);
+}
