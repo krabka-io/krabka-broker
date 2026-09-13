@@ -37,12 +37,11 @@ jobs:
   # a 145 GB disk and filled it, which surfaced as a linker `Bus error` partway
   # through coverage. On two runners each configuration gets its own disk.
   #
-  # `coverage`'s `--test_tag_filters=-docker,-timing-sensitive` (`.bazelrc`)
-  # skips eight suites whose wall-clock assertions the profiling instrumentation
-  # trips, and `bazel coverage //crates/...` never reaches
-  # `//packaging:image_binaries_test`, which lives outside `//crates`. The
-  # `test` step below is what actually executes those nine targets on every
-  # pull request; nothing else in this workflow does.
+  # The `daemon-free tests` and `test` steps below run every test target that
+  # needs no Docker daemon, uninstrumented.
+  # `coverage` runs most of the same targets again under instrumentation, but
+  # only to measure. A target that fails under Bazel therefore fails here, in a
+  # job whose log names it, and not only in the instrumented run.
   ci:
     name: build · lint · format · test · docgen
     if: github.event_name != 'schedule'
@@ -98,14 +97,33 @@ jobs:
             --bazel-flag=--build_tag_filters=-docker \
             //...
 
-      # The eight suites `coverage` excludes as timing-sensitive, plus
-      # `//packaging:image_binaries_test`, which sits outside `//crates` and so
-      # is never reached by `bazel coverage //crates/...` either. Narrowed to
-      # just those rather than a full `bazel test //...`, which would rerun the
-      # ~140 suites `coverage` already executes and roughly double this job's
-      # wall clock for no new signal.
-      # No `--config=rbe`, and this step is why the config is applied per step
-      # rather than per job: `timing-sensitive` is exactly the tag for suites
+      # Every test target that needs no Docker daemon and asserts on no wall
+      # clock. `build` above has already linked these binaries, so this step
+      # only runs them.
+      #
+      # `coverage` runs the same set under instrumentation, to measure. Before
+      # this step, `coverage` was the only place most of these targets ran
+      # under Bazel. On #571, `//crates/bench-driver:scenario_files_test`
+      # failed under Bazel twice, and only `coverage` reported it.
+      #
+      # The remote cache holds test results too. A pull request that does not
+      # change a target's inputs reads its result from the cache and does not
+      # run it again.
+      #
+      # The tag filter is named in full because `--test_tag_filters` is
+      # last-wins: `-timing-sensitive` alone would drop the `-docker` that
+      # `.bazelrc` sets for `test`.
+      #
+      # No `--config=rbe`, and the steps below are why the config is applied
+      # per step rather than per job.
+      - name: daemon-free tests
+        run: bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...
+
+      # The eight suites tagged timing-sensitive, plus
+      # `//packaging:image_binaries_test`, which sits outside `//crates`. They
+      # run in an invocation of their own so that the ~140 suites above do not
+      # compete with them for the runner's four cores.
+      # No `--config=rbe`: `timing-sensitive` is exactly the tag for suites
       # that assert on wall clock, and `cpu:4` -- which stops Bazel starving
       # them locally -- means nothing to a remote executor, which sizes actions
       # from `exec_properties`. //crates/raft records `kraft_engine_sim` failing
