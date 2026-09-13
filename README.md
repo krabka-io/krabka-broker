@@ -178,11 +178,13 @@ equivalent, so the CLI is a convenience rather than a requirement:
 | Docs | — | `bazel build //crates/audit:audit_doc` |
 | Delivery | `aspect delivery` | `bazel run -c opt //packaging:push -- --tag dev` |
 
-\* No single CI job runs this command. `coverage` executes `bazel coverage
-//crates/...` (`--test_tag_filters=-docker,-timing-sensitive`), and the `ci`
-job's `test` step covers the rest: the six suites that filter excludes as
-timing-sensitive, plus `//packaging:image_binaries_test`, which sits outside
-`//crates`. Together they are what `bazel test //...` runs locally.
+\* The `ci` job runs this set in two steps. `daemon-free tests` runs
+`bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...`.
+`test` runs the timing-sensitive suites, plus
+`//packaging:image_binaries_test`, which sits outside `//crates`, in an
+invocation of their own. Together they are what `bazel test //...` runs
+locally. `coverage` runs the first set again under instrumentation, for the
+report.
 
 Formatting and linting are Bazel targets rather than a separate `cargo fmt`
 pass, so they see exactly the files and crates the build sees. A file in a
