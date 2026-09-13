@@ -193,26 +193,25 @@ impl BrokerHandle {
     /// Test-only: await until `pred` holds for the controller metadata image.
     /// Subscribes to the image watch channel and `.await`s changes. There is no
     /// polling sleep. A 30s bound makes a stuck condition fail the test.
+    ///
+    /// The timeout message names the caller and the metadata offset the image
+    /// had applied, so a failure says which wait stuck and how far the image
+    /// got. The method is `#[track_caller]`, and so it is a plain `fn` that
+    /// returns the future: an `async fn` cannot capture its caller.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_for_image<F>(&self, pred: F)
+    #[track_caller]
+    pub fn wait_for_image<F>(&self, pred: F) -> impl std::future::Future<Output = ()>
     where
         F: Fn(&krabka_metadata::MetadataImage) -> bool,
     {
-        let mut rx = self.broker.controller.watch_image();
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
-            loop {
-                // Scope the borrow so it is dropped before the await.
-                if pred(&rx.borrow_and_update()) {
-                    return;
-                }
-                if rx.changed().await.is_err() {
-                    return; // sender dropped (broker shutting down)
-                }
+        let waiting = image_awaiter(self.broker.controller.watch_image(), pred);
+        async move {
+            if let Err(timeout) = waiting.await {
+                let offset = self.broker.controller.current_metadata_offset();
+                panic!("{}", timeout.message(offset));
             }
-        })
-        .await;
-        assert2::assert!(res.is_ok(), "wait_for_image timed out after 30s");
+        }
     }
 
     /// Test-only: borrow this broker's live [`crate::metrics::BrokerMetrics`]
@@ -291,8 +290,9 @@ impl BrokerHandle {
     /// Test-only: await until this node's metadata image sees `>= n` brokers.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_until_brokers_registered(&self, n: usize) {
-        self.wait_for_image(|img| img.brokers().count() >= n).await;
+    #[track_caller]
+    pub fn wait_until_brokers_registered(&self, n: usize) -> impl std::future::Future<Output = ()> {
+        self.wait_for_image(move |img| img.brokers().count() >= n)
     }
 
     /// Test-only: whether this node's controller liveness registry currently
@@ -391,40 +391,102 @@ impl BrokerHandle {
     /// Test-only: await until `topic-partition` is present in the metadata image.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_until_partition_present(&self, topic: &str, partition: i32) {
-        self.wait_for_image(|img| img.partition(topic, partition).is_some())
-            .await;
+    #[track_caller]
+    pub fn wait_until_partition_present(
+        &self,
+        topic: &str,
+        partition: i32,
+    ) -> impl std::future::Future<Output = ()> {
+        self.wait_for_image(move |img| img.partition(topic, partition).is_some())
     }
 
     /// Test-only: await until `topic-partition`'s leader is some non-`exclude`
     /// node with a non-zero epoch.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_until_partition_leader_changed(
+    #[track_caller]
+    pub fn wait_until_partition_leader_changed(
         &self,
         topic: &str,
         partition: i32,
         exclude: krabka_raft::NodeId,
-    ) {
-        self.wait_for_image(|img| {
+    ) -> impl std::future::Future<Output = ()> {
+        self.wait_for_image(move |img| {
             img.partition(topic, partition).is_some_and(|p| {
                 p.leader != krabka_raft::NodeId(0)
                     && p.leader != exclude
                     && p.leader_epoch > krabka_metadata::LeaderEpoch(0)
             })
         })
-        .await;
     }
 
     /// Test-only: await until `topic-partition`'s ISR has exactly `len` members.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_until_isr_len(&self, topic: &str, partition: i32, len: usize) {
-        self.wait_for_image(|img| {
+    #[track_caller]
+    pub fn wait_until_isr_len(
+        &self,
+        topic: &str,
+        partition: i32,
+        len: usize,
+    ) -> impl std::future::Future<Output = ()> {
+        self.wait_for_image(move |img| {
             img.partition(topic, partition)
                 .is_some_and(|p| p.isr.len() == len)
         })
-        .await;
+    }
+}
+
+/// A [`BrokerHandle::wait_for_image`] that ran out of time, and the call site
+/// that started it.
+#[cfg(any(test, feature = "test-helpers"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImageWaitTimeout {
+    caller: &'static std::panic::Location<'static>,
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl ImageWaitTimeout {
+    /// The panic message, given the metadata offset the image had applied when
+    /// the wait gave up.
+    fn message(self, metadata_offset: i64) -> String {
+        format!(
+            "wait_for_image called at {} timed out after {TEST_AWAITER_TIMEOUT:?}; \
+             the image is at metadata offset {metadata_offset}",
+            self.caller
+        )
+    }
+}
+
+/// Wait on `rx` until `pred` holds, for at most [`TEST_AWAITER_TIMEOUT`].
+///
+/// A closed channel ends the wait as a success: the sender goes away only when
+/// the broker shuts down. The caller location is taken when this function is
+/// called, not when the future first runs.
+#[cfg(any(test, feature = "test-helpers"))]
+#[track_caller]
+fn image_awaiter<F>(
+    mut rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    pred: F,
+) -> impl std::future::Future<Output = Result<(), ImageWaitTimeout>>
+where
+    F: Fn(&krabka_metadata::MetadataImage) -> bool,
+{
+    let caller = std::panic::Location::caller();
+    async move {
+        tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+            loop {
+                // Scope the borrow so it is dropped before the await.
+                if pred(&rx.borrow_and_update()) {
+                    return;
+                }
+                if rx.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .await
+        .map_err(|_| ImageWaitTimeout { caller })
     }
 }
 
