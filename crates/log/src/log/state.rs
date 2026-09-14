@@ -268,6 +268,15 @@ impl Log {
         )
     }
 
+    /// The producer state this log holds for `producer_id`, if any.
+    ///
+    /// Append and recovery update the same entry with the same rule, so the
+    /// value after a live append equals the value that a reopen rebuilds.
+    #[must_use]
+    pub fn producer_state_entry(&self, producer_id: ProducerId) -> Option<ProducerSnapshotEntry> {
+        self.producer_state.get(&producer_id).copied()
+    }
+
     /// Producer state restored from the newest valid Kafka-compatible
     /// snapshot and the uncovered local log tail.
     #[must_use]

@@ -1,15 +1,15 @@
-(* #"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 74 0 74 94 *)
+(* #"/workspace/crates/verified/src/producer.rs" 80 0 80 94 *)
 
-let%span sproducer = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 76 15 76 20
-let%span sproducer'0 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 78 21 78 76
-let%span sproducer'1 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 79 11 79 63
-let%span sproducer'2 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 78 4 79 85
-let%span sproducer'3 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 72 12 72 86
-let%span sproducer'4 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 49 28 49 83
-let%span sproducer'5 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 36 28 36 83
-let%span sproducer'6 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 63 8 66 95
-let%span sproducer'7 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 45 16 45 49
-let%span sproducer'8 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 32 16 32 49
+let%span sproducer = "/workspace/crates/verified/src/producer.rs" 82 15 82 20
+let%span sproducer'0 = "/workspace/crates/verified/src/producer.rs" 84 21 84 76
+let%span sproducer'1 = "/workspace/crates/verified/src/producer.rs" 85 11 85 63
+let%span sproducer'2 = "/workspace/crates/verified/src/producer.rs" 84 4 85 85
+let%span sproducer'3 = "/workspace/crates/verified/src/producer.rs" 78 12 78 86
+let%span sproducer'4 = "/workspace/crates/verified/src/producer.rs" 53 28 53 83
+let%span sproducer'5 = "/workspace/crates/verified/src/producer.rs" 38 28 38 83
+let%span sproducer'6 = "/workspace/crates/verified/src/producer.rs" 69 8 72 95
+let%span sproducer'7 = "/workspace/crates/verified/src/producer.rs" 49 16 49 49
+let%span sproducer'8 = "/workspace/crates/verified/src/producer.rs" 34 16 34 49
 
 use creusot.int.Int16
 use creusot.int.Int32
@@ -30,7 +30,7 @@ let elim_Some (_x: t_Option_i32) (return (f0: Int32.t)) = any
 
 constant const_MAX: Int32.t = (2147483647: Int32.t)
 
-function decrement_sequence_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 44 0 44 65] (sequence: Int32.t) (decrement: Int32.t) : Int32.t
+function decrement_sequence_model [#"/workspace/crates/verified/src/producer.rs" 48 0 48 65] (sequence: Int32.t) (decrement: Int32.t) : Int32.t
  = [%#sproducer'7] Int32.bw_and (Int32.sub sequence decrement) const_MAX
 
 let decrement_sequence (sequence: Int32.t) (decrement: Int32.t) (return (x: Int32.t)) = any
@@ -38,7 +38,7 @@ let decrement_sequence (sequence: Int32.t) (decrement: Int32.t) (return (x: Int3
     = decrement_sequence_model sequence decrement}
     (! return {result}) ]
 
-function increment_sequence_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 31 0 31 65] (sequence: Int32.t) (increment: Int32.t) : Int32.t
+function increment_sequence_model [#"/workspace/crates/verified/src/producer.rs" 33 0 33 65] (sequence: Int32.t) (increment: Int32.t) : Int32.t
  = [%#sproducer'8] Int32.bw_and (Int32.add sequence increment) const_MAX
 
 let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any
@@ -46,7 +46,7 @@ let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int3
     = increment_sequence_model sequence increment}
     (! return {result}) ]
 
-predicate matches_last_batch_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 57 0 61 9] (last: t_ProducerBatch) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t) =
+predicate matches_last_batch_model [#"/workspace/crates/verified/src/producer.rs" 63 0 67 9] (last: t_ProducerBatch) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t) =
   [%#sproducer'6] exists committed_delta: Int32.t. last.last_offset_delta = Some committed_delta
     /\ base_sequence = decrement_sequence_model last.last_sequence committed_delta
     /\ increment_sequence_model base_sequence last_offset_delta'0 = last.last_sequence
@@ -55,7 +55,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let matches_last_batch [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 74 0 74 94]
+let matches_last_batch [#"/workspace/crates/verified/src/producer.rs" 80 0 80 94]
   (last: t_ProducerBatch) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t) (return (x: bool)) = (! bb0
   [ bb0 = any
     [ br0 -> {last.last_offset_delta = None} (! bb1) | br1 (x0: Int32.t) -> {last.last_offset_delta = Some x0} (! bb3) ]

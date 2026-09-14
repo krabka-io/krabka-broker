@@ -95,8 +95,8 @@ impl Model for ProducerModel {
                     );
                 } else if last.initialized {
                     assert2::assert!(
-                        epoch > last.epoch,
-                        "Append epoch not fresh: {epoch} <= {}",
+                        epoch > last.epoch && base_seq == 0,
+                        "Append at a new epoch not fresh at 0: {epoch} <= {} or seq {base_seq}",
                         last.epoch
                     );
                 }
@@ -113,11 +113,13 @@ impl Model for ProducerModel {
                 None
             }
             Decision::OutOfOrder => {
+                let same_epoch_gap = epoch == last.epoch
+                    && base_seq != last.last_sequence
+                    && base_seq != last.last_sequence + 1;
+                let new_epoch_not_at_zero = epoch > last.epoch && base_seq != 0;
+                let out_of_order = same_epoch_gap || new_epoch_not_at_zero;
                 assert2::assert!(
-                    last.initialized
-                        && epoch == last.epoch
-                        && base_seq != last.last_sequence
-                        && base_seq != last.last_sequence + 1,
+                    last.initialized && out_of_order,
                     "OutOfOrder misclassified: epoch={epoch} base_seq={base_seq} state={last:?}"
                 );
                 None

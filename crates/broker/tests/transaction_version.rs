@@ -32,11 +32,14 @@
 //! 5. **prepared transaction recovery**: a transaction whose `Prepare*`
 //!    record is durable completes after a restart or a failed marker write,
 //!    and `InitProducerId` does not overwrite it.
+//! 6. **first sequence at a new epoch**: a batch at a new producer epoch whose
+//!    first sequence is not 0 gets `OUT_OF_ORDER_SEQUENCE_NUMBER` before and
+//!    after a restart, for `TV_2`, `TV_1`, and an idempotent producer.
 //!
 //! Cases 1 and 2 live in `txnver_full_cycle`, case 3 in `txnver_verify_only`,
-//! case 4 in `txnver_restart_recovery`, and case 5 in
-//! `txnver_prepare_recovery`; `txnver_harness` carries the broker
-//! boot, topic creation, and feature-downgrade fixtures they share.
+//! case 4 in `txnver_restart_recovery`, case 5 in `txnver_prepare_recovery`,
+//! and case 6 in `txnver_sequence_epoch_bump`; `txnver_harness` carries the
+//! broker boot, topic creation, and feature-downgrade fixtures they share.
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
@@ -50,5 +53,7 @@ mod txnver_harness;
 mod txnver_prepare_recovery;
 #[path = "transaction_version/txnver_restart_recovery.rs"]
 mod txnver_restart_recovery;
+#[path = "transaction_version/txnver_sequence_epoch_bump.rs"]
+mod txnver_sequence_epoch_bump;
 #[path = "transaction_version/txnver_verify_only.rs"]
 mod txnver_verify_only;

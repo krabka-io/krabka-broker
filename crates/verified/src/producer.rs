@@ -86,13 +86,22 @@ fn matches_last_batch(last: ProducerBatch, base_sequence: i32, last_offset_delta
 }
 
 /// Classify an incoming batch against the last accepted producer batch.
+///
+/// A batch at a higher epoch than `last` must start at sequence 0. Any other
+/// first sequence is out of order. This is Kafka's
+/// `ProducerAppendInfo.checkSequence`, which throws
+/// `OutOfOrderSequenceException` when the epoch changes and the first
+/// sequence is not 0. A producer with no entry can start at any sequence.
 #[cfg_attr(creusot, ensures(last == None ==> result == ProducerDecision::Append))]
 #[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
     last == Some(accepted) && producer_epoch@ < accepted.epoch@
         ==> result == ProducerDecision::Fenced))]
 #[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
-    last == Some(accepted) && producer_epoch@ > accepted.epoch@
+    last == Some(accepted) && producer_epoch@ > accepted.epoch@ && base_sequence == 0i32
         ==> result == ProducerDecision::Append))]
+#[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
+    last == Some(accepted) && producer_epoch@ > accepted.epoch@ && base_sequence != 0i32
+        ==> result == ProducerDecision::OutOfOrder))]
 #[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
     last == Some(accepted) && producer_epoch@ == accepted.epoch@
         && base_sequence == increment_sequence_model(accepted.last_sequence, 1i32)
@@ -121,7 +130,10 @@ pub fn producer_decision(
         return ProducerDecision::Fenced;
     }
     if producer_epoch > last.epoch {
-        return ProducerDecision::Append;
+        if base_sequence == 0 {
+            return ProducerDecision::Append;
+        }
+        return ProducerDecision::OutOfOrder;
     }
     if base_sequence == increment_sequence(last.last_sequence, 1) {
         return ProducerDecision::Append;
@@ -155,13 +167,71 @@ mod tests {
             last_offset_delta: Some(2),
             base_offset: 10,
         };
-        assert!(producer_decision(Some(last), 1, 4, 2) == ProducerDecision::Fenced);
-        assert!(producer_decision(Some(last), 3, 0, 0) == ProducerDecision::Append);
-        assert!(producer_decision(Some(last), 2, 7, 0) == ProducerDecision::Append);
-        assert!(
-            producer_decision(Some(last), 2, 4, 2)
-                == ProducerDecision::Duplicate { base_offset: 10 }
-        );
-        assert!(producer_decision(Some(last), 2, 5, 2) == ProducerDecision::OutOfOrder);
+        // (label, last, epoch, base sequence, last offset delta, decision)
+        let cases = [
+            (
+                "no entry, any sequence",
+                None,
+                0,
+                17,
+                0,
+                ProducerDecision::Append,
+            ),
+            ("lower epoch", Some(last), 1, 4, 2, ProducerDecision::Fenced),
+            (
+                "higher epoch at 0",
+                Some(last),
+                3,
+                0,
+                0,
+                ProducerDecision::Append,
+            ),
+            (
+                "higher epoch continues the sequence",
+                Some(last),
+                3,
+                7,
+                0,
+                ProducerDecision::OutOfOrder,
+            ),
+            (
+                "higher epoch repeats the last batch",
+                Some(last),
+                3,
+                4,
+                2,
+                ProducerDecision::OutOfOrder,
+            ),
+            (
+                "same epoch, next sequence",
+                Some(last),
+                2,
+                7,
+                0,
+                ProducerDecision::Append,
+            ),
+            (
+                "same epoch, last batch again",
+                Some(last),
+                2,
+                4,
+                2,
+                ProducerDecision::Duplicate { base_offset: 10 },
+            ),
+            (
+                "same epoch, gap",
+                Some(last),
+                2,
+                5,
+                2,
+                ProducerDecision::OutOfOrder,
+            ),
+        ];
+        for (label, last, epoch, base_sequence, delta, expected) in cases {
+            assert!(
+                producer_decision(last, epoch, base_sequence, delta) == expected,
+                "case: {label}"
+            );
+        }
     }
 }

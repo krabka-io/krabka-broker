@@ -134,7 +134,7 @@ pub async fn run_with_sequencer(
                     (first, max_produce_group),
                     &mut rx,
                     &mut pending,
-                    (&log, &log_dir, &log_dir_status),
+                    (&log, &log_dir, &log_dir_status, &producer_state),
                     (&append_notify, &replica_state, &hw_advance_notify),
                     (wal.as_ref(), sequencer.as_ref()),
                 )

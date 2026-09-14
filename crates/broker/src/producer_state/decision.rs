@@ -79,8 +79,8 @@ mod fuzz {
         /// Large-N randomized submit sequences over `check_pure`.
         ///
         /// The accepted-append log per epoch is a contiguous, duplicate-free,
-        /// monotonic prefix. A lower epoch is fenced. A higher epoch resets
-        /// the baseline. This test complements the exhaustive
+        /// monotonic prefix. A lower epoch is fenced. A higher epoch starts a
+        /// new prefix at sequence 0 and rejects any other sequence. This test complements the exhaustive
         /// `producer_state_model` at a scale the BFS cannot reach: epoch 0..6,
         /// base_seq 0..200, and up to 400 ops.
         #[test]
@@ -107,6 +107,7 @@ mod fuzz {
                                 );
                             } else {
                                 prop_assert!(epoch > e.epoch, "Append epoch must be fresh");
+                                prop_assert_eq!(base_seq, 0, "a new epoch must start at 0");
                             }
                         }
                         // Per-epoch contiguity: an accepted seq for a fresh epoch
@@ -139,11 +140,17 @@ mod fuzz {
                     }
                     Decision::OutOfOrder => {
                         let e = entry.as_ref().expect("OutOfOrder implies an entry");
-                        prop_assert_eq!(epoch, e.epoch);
-                        prop_assert!(
-                            base_seq != e.last_sequence && base_seq != e.last_sequence + 1,
-                            "OutOfOrder must be neither a retry nor the next sequence"
-                        );
+                        if epoch == e.epoch {
+                            prop_assert!(
+                                base_seq != e.last_sequence && base_seq != e.last_sequence + 1,
+                                "OutOfOrder must be neither a retry nor the next sequence"
+                            );
+                        } else {
+                            prop_assert!(
+                                epoch > e.epoch && base_seq != 0,
+                                "a new epoch is out of order only when it does not start at 0"
+                            );
+                        }
                     }
                     Decision::Fenced => {
                         let e = entry.as_ref().expect("Fenced implies an entry");

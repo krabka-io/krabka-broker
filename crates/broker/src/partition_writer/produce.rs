@@ -17,11 +17,12 @@ use tokio::sync::{Notify, mpsc};
 
 use super::{
     append::{run_produce_append_batch, run_produce_append_batch_at},
-    storage::{flag_storage_failure, storage_failure_error},
+    storage::{flag_storage_failure, lock_log, storage_failure_error},
 };
 use crate::{
     log_dir_status::LogDirRegistry,
     partition::{ProduceData, ProduceJob, WriterMessage},
+    producer_state::ProducerState,
     replica_state::ReplicaState,
 };
 
@@ -30,7 +31,12 @@ pub(super) async fn handle_produce(
     group: (ProduceJob, usize),
     rx: &mut mpsc::Receiver<WriterMessage>,
     pending: &mut Option<WriterMessage>,
-    storage: (&Arc<Mutex<Log>>, &Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
+    storage: (
+        &Arc<Mutex<Log>>,
+        &Arc<ArcSwap<PathBuf>>,
+        &LogDirRegistry,
+        &ProducerState,
+    ),
     signals: (
         &Arc<Notify>,
         &Arc<tokio::sync::Mutex<ReplicaState>>,
@@ -43,7 +49,7 @@ pub(super) async fn handle_produce(
 ) {
     let (first, max_produce_group) = group;
     let (wal, sequencer) = diskless;
-    let (log, log_dir, log_dir_status) = storage;
+    let (log, log_dir, log_dir_status, producer_state) = storage;
     let (append_notify, replica_state, hw_advance_notify) = signals;
     let mut jobs = vec![first];
     while jobs.len() < max_produce_group {
@@ -59,8 +65,10 @@ pub(super) async fn handle_produce(
 
     let mut acks = Vec::with_capacity(jobs.len());
     let mut datas = Vec::with_capacity(jobs.len());
+    let mut control_producers = Vec::with_capacity(jobs.len());
     for ProduceJob { data, ack } in jobs {
         acks.push(ack);
+        control_producers.push(data.control_producer_id());
         datas.push(data);
     }
 
@@ -104,6 +112,8 @@ pub(super) async fn handle_produce(
         }
     };
 
+    mirror_control_batches(identity, log, producer_state, &control_producers, &results).await;
+
     let mut any_ok = false;
     for (ack, result) in acks.into_iter().zip(results) {
         match &result {
@@ -138,4 +148,34 @@ pub(super) async fn handle_produce(
             hw_advance_notify.notify_waiters();
         }
     }
+}
+
+/// Copy the log's producer entry for each appended control batch into the
+/// produce-path tracker, before the writer acknowledges the append.
+///
+/// A transaction marker changes the producer state in the log. Without this
+/// copy the tracker keeps the state from before the marker until a restart
+/// rebuilds it from the log, and a produce gets a different answer before and
+/// after that restart.
+async fn mirror_control_batches(
+    identity: (&str, PartitionIndex),
+    log: &Mutex<Log>,
+    producer_state: &ProducerState,
+    control_producers: &[Option<krabka_log::ProducerId>],
+    results: &[Result<crate::partition::AppendedBatch, crate::error::BrokerError>],
+) {
+    let entries: Vec<_> = {
+        let guard = lock_log(log);
+        control_producers
+            .iter()
+            .zip(results)
+            .filter_map(|(producer, result)| match (producer, result) {
+                (Some(producer_id), Ok(_)) => guard.producer_state_entry(*producer_id),
+                _ => None,
+            })
+            .collect()
+    };
+    producer_state
+        .mirror_log_entries(identity.0, identity.1, entries)
+        .await;
 }

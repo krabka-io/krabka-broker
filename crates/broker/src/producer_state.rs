@@ -20,6 +20,8 @@ mod entry;
 mod expiry;
 mod recovery;
 #[cfg(test)]
+mod restart_agreement;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

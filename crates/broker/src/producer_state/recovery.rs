@@ -79,6 +79,34 @@ impl ProducerState {
             })),
         );
     }
+
+    /// Copy the log's producer entries into the tracker after the partition
+    /// writer appended a control batch for those producers.
+    ///
+    /// The log applies a transaction marker to its own producer state. A
+    /// marker at a new producer epoch (transaction version 2) clears the
+    /// retained batch, so the next batch at that epoch must start at sequence
+    /// 0. The tracker takes the same projection that recovery takes, so a
+    /// produce after the marker gets the same decision before and after a
+    /// restart.
+    pub(crate) async fn mirror_log_entries(
+        &self,
+        topic: &str,
+        partition: PartitionIndex,
+        entries: Vec<krabka_log::ProducerSnapshotEntry>,
+    ) {
+        if entries.is_empty() {
+            return;
+        }
+        let now = crate::txn::util::now_millis();
+        let handle = self.handle(topic, partition);
+        let mut state = handle.lock().await;
+        for entry in entries {
+            state
+                .entries
+                .insert(entry.producer_id, entry_from_snapshot(entry, now));
+        }
+    }
 }
 
 fn entries_from_snapshot(
@@ -87,24 +115,24 @@ fn entries_from_snapshot(
     let recovered_at = crate::txn::util::now_millis();
     snapshot
         .into_iter()
-        .map(|entry| {
-            let base_offset = if entry.last_offset >= 0 {
-                entry.last_offset.0 - i64::from(entry.offset_delta)
-            } else {
-                // A marker-only producer has no retained data batch.
-                -1
-            };
-            (
-                entry.producer_id,
-                ProducerEntry {
-                    epoch: entry.producer_epoch,
-                    last_sequence: entry.last_sequence,
-                    last_offset: entry.last_offset.0,
-                    base_offset,
-                    last_timestamp: entry.timestamp,
-                    last_activity_ms: recovered_at,
-                },
-            )
-        })
+        .map(|entry| (entry.producer_id, entry_from_snapshot(entry, recovered_at)))
         .collect()
+}
+
+/// The tracker entry for one log producer entry.
+fn entry_from_snapshot(entry: krabka_log::ProducerSnapshotEntry, now_ms: i64) -> ProducerEntry {
+    let base_offset = if entry.last_offset >= 0 {
+        entry.last_offset.0 - i64::from(entry.offset_delta)
+    } else {
+        // A marker-only producer has no retained data batch.
+        -1
+    };
+    ProducerEntry {
+        epoch: entry.producer_epoch,
+        last_sequence: entry.last_sequence,
+        last_offset: entry.last_offset.0,
+        base_offset,
+        last_timestamp: entry.timestamp,
+        last_activity_ms: now_ms,
+    }
 }

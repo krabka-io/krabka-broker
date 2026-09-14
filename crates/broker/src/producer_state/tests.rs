@@ -214,34 +214,32 @@ async fn higher_epoch_at_seq_zero_appends() {
     assert!(d == Decision::Append);
 }
 
-/// A bumped epoch that CONTINUES the sequence (`base_sequence > 0`) also
-/// appends. This is the KIP-890 (`TV_2`) per-`EndTxn` epoch-bump path. The
-/// broker bumps the epoch on every commit or abort within the SAME
-/// producer session, and the client keeps its sequence counter going. The
-/// first batch at the new epoch is the baseline whatever its
-/// `base_sequence` is. Same-epoch ordering resumes once that batch
-/// commits.
+/// A bumped epoch that continues the sequence (`base_sequence > 0`) is out
+/// of order. Kafka's `ProducerAppendInfo.checkSequence` requires sequence 0
+/// for the first batch at a new epoch. That includes the KIP-890
+/// (transaction version 2) epoch bump on every commit or abort, after which
+/// the Java client calls `resetSequenceNumbers()`. The rejected batch changes
+/// nothing, so the batch at sequence 0 still appends, and same-epoch dedup
+/// resumes after it commits.
 #[tokio::test]
-async fn higher_epoch_continuing_sequence_appends() {
+async fn higher_epoch_continuing_sequence_is_out_of_order() {
     let s = ProducerState::new();
     commit!(s, "t", PartitionIndex(0), 1000, 5, 0, 2, 0, 1).await;
-    // Epoch 6 (KIP-890 bump), sequence continues at 3 — still a fresh append.
-    let d = s.check("t", PartitionIndex(0), 1000, 6, 3, 0).await;
-    assert!(d == Decision::Append);
-    // After committing the new epoch's batch, same-epoch dedup resumes.
+    check!(s.check("t", PartitionIndex(0), 1000, 6, 3, 0).await == Decision::OutOfOrder);
+    check!(s.check("t", PartitionIndex(0), 1000, 6, 0, 0).await == Decision::Append);
     commit!(
         s,
         "t",
         PartitionIndex(0),
         1000,
         6,
-        3,
+        0,
         0,
         /* base_offset */ 10,
         2,
     )
     .await;
-    let dup = s.check("t", PartitionIndex(0), 1000, 6, 3, 0).await;
+    let dup = s.check("t", PartitionIndex(0), 1000, 6, 0, 0).await;
     assert!(dup == Decision::Duplicate { base_offset: 10 });
 }
 
