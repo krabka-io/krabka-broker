@@ -108,23 +108,38 @@ async fn process_topics(
     let mut responses = Vec::with_capacity(req.topics.len());
     for topic in &req.topics {
         let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let topic_name = mgr.topic_name_for(topic_id);
-
-        let denied = match topic_name.as_deref() {
-            Some(name) => {
-                broker.config.authorizer.authorize(
-                    &*image,
-                    &AuthorizationRequest {
-                        principal: ctx.principal,
-                        host: ctx.peer,
-                        resource_type: ResourceType::Topic,
-                        resource_name: name,
-                        operation: AclOperation::Read,
-                    },
-                ) == AuthorizationResult::Deny
-            }
-            None => true,
+        // Kafka's `KafkaApis.getAcknowledgeBatchesFromShareAcknowledgeRequest`
+        // answers UNKNOWN_TOPIC_ID on every partition of a topic id that
+        // `metadataCache.topicIdsToNames()` does not hold, the zero id
+        // included. `handleAcknowledgements` checks `Read` only for the
+        // partitions that resolved.
+        let Some(topic_name) = mgr.topic_name_for(topic_id) else {
+            responses.push(ShareAcknowledgeTopicResponse {
+                topic_id: topic.topic_id,
+                partitions: topic
+                    .partitions
+                    .iter()
+                    .map(|ap| PartitionData {
+                        partition_index: ap.partition_index,
+                        error_code: codes::UNKNOWN_TOPIC_ID,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+            continue;
         };
+
+        let denied = broker.config.authorizer.authorize(
+            &*image,
+            &AuthorizationRequest {
+                principal: ctx.principal,
+                host: ctx.peer,
+                resource_type: ResourceType::Topic,
+                resource_name: &topic_name,
+                operation: AclOperation::Read,
+            },
+        ) == AuthorizationResult::Deny;
 
         let mut parts: Vec<PartitionData> = Vec::with_capacity(topic.partitions.len());
         for ap in &topic.partitions {
@@ -134,11 +149,7 @@ async fn process_topics(
             };
 
             if denied {
-                out.error_code = if topic_name.is_some() {
-                    codes::TOPIC_AUTHORIZATION_FAILED
-                } else {
-                    codes::UNKNOWN_TOPIC_OR_PARTITION
-                };
+                out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
                 parts.push(out);
                 continue;
             }
@@ -223,6 +234,7 @@ mod tests {
     use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
+            create_topics_request::{CreatableTopic, CreateTopicsRequest},
             share_acknowledge_request::{AcknowledgePartition, AcknowledgeTopic},
             share_acknowledge_response,
         },
@@ -320,78 +332,183 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn handle_unknown_topic_preserves_topic_and_partition_rows() {
-        let version = share_acknowledge_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
+    /// Denies `Read` on every topic and allows everything else, so that topic
+    /// creation still works and only the per-topic gate refuses.
+    #[derive(Debug)]
+    struct DenyTopicRead;
+
+    impl crate::authorizer::Authorizer for DenyTopicRead {
+        fn authorize(
+            &self,
+            _source: &dyn crate::authorizer::AclSource,
+            request: &AuthorizationRequest<'_>,
+        ) -> AuthorizationResult {
+            if request.resource_type == ResourceType::Topic
+                && request.operation == AclOperation::Read
+            {
+                AuthorizationResult::Deny
+            } else {
+                AuthorizationResult::Allow
+            }
+        }
+    }
+
+    /// The topic id that one request row carries.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TopicRef {
+        /// The id of a topic that exists.
+        Known,
+        /// A non-zero id that no topic has.
+        Unknown,
+        /// The zero id.
+        Zero,
+    }
+
+    async fn create_topic(broker: &crate::broker::BrokerHandle, name: &str) -> ProtoUuid {
+        let client = krabka_client_core::Client::builder()
+            .bootstrap(broker.listen_addr().to_string())
+            .client_id("share-acknowledge-resolution-test")
+            .build()
+            .await
+            .expect("client build");
+        let response = client
+            .send(CreateTopicsRequest {
+                topics: vec![CreatableTopic {
+                    name: name.to_string(),
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    ..Default::default()
+                }],
+                timeout_ms: 5_000,
+                ..Default::default()
+            })
+            .await
+            .expect("CreateTopics");
+        assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
+        broker.wait_until_partition_present(name, 0).await;
+        let image = broker.controller_image_for_test();
+        let topic = image.topic(name).expect("created topic in the image");
+        ProtoUuid(topic.topic_id.into_bytes())
+    }
+
+    /// Open a share session for `member` on partition 0 of `topic_id`,
+    /// acknowledge it at epoch 1 with no batch, and return the decoded
+    /// response. Kafka answers `NONE` for a partition that it may acknowledge
+    /// and that carries no batch.
+    async fn acknowledge(
+        broker: &crate::broker::BrokerHandle,
+        version: i16,
+        member: &str,
+        topic_id: ProtoUuid,
+    ) -> ShareAcknowledgeResponse {
+        let shared = broker.broker_arc_for_test();
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
-        let topic_id = ProtoUuid([8; 16]);
-        let session_partitions = maplit::hashset! {
-            (uuid::Uuid::from_bytes(topic_id.0), 3),
-            (uuid::Uuid::from_bytes(topic_id.0), 5),
-        };
-        broker
+        let ctx = crate::test_support::request_context(&principal, &peer, "client-a");
+        let id = uuid::Uuid::from_bytes(topic_id.0);
+        shared
             .share_partition_leaders
             .update_fetch_session(
                 "g1",
-                "member-1",
+                member,
                 ctx.connection_id,
                 0,
-                &session_partitions,
+                &maplit::hashset! {(id, 0)},
                 &std::collections::HashSet::new(),
                 false,
                 false,
             )
             .expect("open share session");
-        let mut request = request(topic_id, &[3, 5]);
+        let mut request = request(topic_id, &[0]);
+        request.member_id = Some(member.into());
         request.share_session_epoch = 1;
-        let req_bytes = encode_request(&request);
-
-        let resp = handle(&broker, version, 1, &req_bytes, &ctx)
+        let req_bytes = crate::test_support::encode_request(&request, version);
+        let resp = handle(&shared, version, 1, &req_bytes, &ctx)
             .await
             .expect("handle");
-        let resp = decode_response(&resp);
+        crate::test_support::decode_response(&resp, version)
+    }
 
-        let expected = ShareAcknowledgeResponse {
-            throttle_time_ms: 0,
-            error_code: codes::NONE,
-            error_message: None,
-            acquisition_lock_timeout_ms: 30_000,
-            responses: vec![ShareAcknowledgeTopicResponse {
-                topic_id,
-                partitions: vec![
-                    PartitionData {
-                        partition_index: 3,
-                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                        error_message: None,
-                        current_leader: LeaderIdAndEpoch {
-                            leader_id: 0,
-                            leader_epoch: 0,
-                            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                        },
-                        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    /// Run one case per (version, topic reference) on `broker`, each in its
+    /// own share session. `known_error` is the code for a topic that exists.
+    async fn drive(
+        broker: &crate::broker::BrokerHandle,
+        known: ProtoUuid,
+        known_error: i16,
+    ) -> (
+        Vec<(i16, TopicRef, ShareAcknowledgeResponse)>,
+        Vec<(i16, TopicRef, ShareAcknowledgeResponse)>,
+    ) {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for version in [
+            share_acknowledge_response::MIN_VERSION,
+            share_acknowledge_response::MAX_VERSION,
+        ] {
+            for (topic, topic_id, error_code) in [
+                (TopicRef::Known, known, known_error),
+                (
+                    TopicRef::Unknown,
+                    ProtoUuid([8; 16]),
+                    codes::UNKNOWN_TOPIC_ID,
+                ),
+                (TopicRef::Zero, ProtoUuid::ZERO, codes::UNKNOWN_TOPIC_ID),
+            ] {
+                let member = format!("member-{version}-{topic:?}");
+                let response = acknowledge(broker, version, &member, topic_id).await;
+                actual.push((version, topic, response));
+                let row = PartitionData {
+                    partition_index: 0,
+                    error_code,
+                    ..Default::default()
+                };
+                expected.push((
+                    version,
+                    topic,
+                    ShareAcknowledgeResponse {
+                        // The wire carries the lock timeout from v2 on. An
+                        // older version decodes the field's default, 0.
+                        acquisition_lock_timeout_ms: if version >= 2 { 30_000 } else { 0 },
+                        responses: vec![ShareAcknowledgeTopicResponse {
+                            topic_id,
+                            partitions: vec![row],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
                     },
-                    PartitionData {
-                        partition_index: 5,
-                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                        error_message: None,
-                        current_leader: LeaderIdAndEpoch {
-                            leader_id: 0,
-                            leader_epoch: 0,
-                            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                        },
-                        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                    },
-                ],
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            }],
-            node_endpoints: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
+                ));
+            }
+        }
+        (actual, expected)
+    }
+
+    #[tokio::test]
+    async fn partition_row_error_follows_topic_id() {
+        let (broker_handle, _dir) = start_broker(true).await;
+        let known = create_topic(&broker_handle, "ack-resolution").await;
+
+        let (actual, expected) = drive(&broker_handle, known, codes::NONE).await;
+
+        assert!(actual == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka answers `UNKNOWN_TOPIC_ID` before it authorizes the topic. A
+    /// principal with no topic `Read` grant sees 29 for a topic that exists and
+    /// 100 for an id that does not resolve.
+    #[tokio::test]
+    async fn unresolved_id_answers_before_topic_authorization() {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.share_group.enable = true;
+            cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
+        })
+        .await;
+        let known = create_topic(&broker_handle, "ack-resolution").await;
+
+        let (actual, expected) =
+            drive(&broker_handle, known, codes::TOPIC_AUTHORIZATION_FAILED).await;
+
+        assert!(actual == expected);
         broker_handle.shutdown().await;
     }
 }
