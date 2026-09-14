@@ -89,6 +89,7 @@ pub(super) async fn handle_groups(
                 group_named_topics(
                     broker,
                     ctx,
+                    version,
                     &image,
                     req_topics,
                     &offsets,
@@ -187,36 +188,48 @@ pub(super) async fn handle_groups(
     crate::handlers::encode_response(&resp, version)
 }
 
+/// The first `OffsetFetch` version that names each topic by `topic_id` only.
+/// The request schema carries `name` at versions 8-9 and `topic_id` from this
+/// version on (Kafka's `OffsetFetchRequest.TOPIC_ID_MIN_VERSION`).
+const FIRST_TOPIC_ID_VERSION: i16 = 10;
+
 /// Builds one group's rows for an explicit topic list on the KIP-516 shape.
 ///
-/// The per-partition precedence is the same one Kafka applies: an unknown
-/// topic id or a denied `Read` replaces the whole topic's rows, and within an
-/// allowed topic a partition an unresolved transaction has written reports
-/// `UNSTABLE_OFFSET_COMMIT` under `require_stable` before any offset is read.
+/// The precedence is the one in Kafka's `KafkaApis.fetchOffsetsForGroup`. At
+/// v10 each `topic_id` resolves to a name, and a row whose name stays empty
+/// answers `UNKNOWN_TOPIC_ID` on every partition. The zero id is such a row.
+/// A topic without a `Read` grant then answers `TOPIC_AUTHORIZATION_FAILED`.
+/// Within an allowed topic, a partition that an unresolved transaction has
+/// written reports `UNSTABLE_OFFSET_COMMIT` under `require_stable` before any
+/// offset is read.
+///
+/// The allowed topics come first, in request order, and the refused topics
+/// follow them, as Kafka appends `errorTopics` after the coordinator's rows.
 fn group_named_topics(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
+    version: i16,
     image: &krabka_metadata::MetadataImage,
     requested: &[krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopics],
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopics> {
+    let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
     let resolved: Vec<_> = requested
         .iter()
         .map(|topic| {
-            let name = if topic.topic_id == WireUuid::ZERO {
-                Some(topic.name.clone())
+            let name = if !use_topic_ids {
+                topic.name.clone()
+            } else if topic.topic_id == WireUuid::ZERO {
+                String::new()
             } else {
                 image
                     .topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0))
                     .map(str::to_string)
+                    .unwrap_or_default()
             };
             (topic, name)
         })
-        .collect();
-    let names: Vec<_> = resolved
-        .iter()
-        .filter_map(|(_, name)| name.clone())
         .collect();
     let decisions = authorize_topics(
         broker.config.authorizer.as_ref(),
@@ -224,52 +237,83 @@ fn group_named_topics(
         context.principal,
         context.peer,
         AclOperation::Read,
-        names.iter().map(String::as_str),
+        resolved
+            .iter()
+            .filter(|(_, name)| !(use_topic_ids && name.is_empty()))
+            .map(|(_, name)| name.as_str()),
     );
-    resolved
-        .into_iter()
-        .map(|(topic, name)| {
-            let error = match name.as_deref() {
-                None => codes::UNKNOWN_TOPIC_ID,
-                Some(name) if decisions.get(name).copied() != Some(AuthorizationResult::Allow) => {
-                    codes::TOPIC_AUTHORIZATION_FAILED
-                }
-                Some(_) => codes::NONE,
-            };
-            let partitions = topic
-                .partition_indexes
-                .iter()
-                .map(|partition| {
-                    let key = name.as_ref().map(|name| (name.clone(), *partition));
-                    if error == codes::NONE
-                        && require_stable
-                        && key
-                            .as_ref()
-                            .is_some_and(|key| offsets.pending_txn.contains(key))
-                    {
-                        return unstable::group_row(*partition);
-                    }
-                    let entry = if error == codes::NONE {
-                        key.as_ref().and_then(|key| offsets.committed.get(key))
-                    } else {
-                        None
-                    };
-                    OffsetFetchResponsePartitions {
-                        partition_index: *partition,
-                        committed_offset: entry.map_or(-1, |value| value.offset.0),
-                        committed_leader_epoch: entry.map_or(-1, |value| value.leader_epoch),
-                        metadata: entry.map(|value| value.metadata.clone()),
-                        error_code: error,
-                        ..Default::default()
-                    }
-                })
-                .collect();
-            OffsetFetchResponseTopics {
-                name: name.unwrap_or_default(),
-                topic_id: topic.topic_id,
-                partitions,
-                ..Default::default()
-            }
-        })
-        .collect()
+
+    let mut allowed = Vec::with_capacity(resolved.len());
+    let mut refused = Vec::new();
+    for (topic, name) in &resolved {
+        let refusal = if use_topic_ids && name.is_empty() {
+            Some(codes::UNKNOWN_TOPIC_ID)
+        } else if decisions.get(name.as_str()).copied() == Some(AuthorizationResult::Allow) {
+            None
+        } else {
+            Some(codes::TOPIC_AUTHORIZATION_FAILED)
+        };
+        let partitions = topic
+            .partition_indexes
+            .iter()
+            .map(|&partition| match refusal {
+                Some(error_code) => missing_offset_row(partition, error_code),
+                None => committed_row(name, partition, offsets, require_stable),
+            });
+        let row = OffsetFetchResponseTopics {
+            name: name.clone(),
+            topic_id: topic.topic_id,
+            partitions: partitions.collect(),
+            ..Default::default()
+        };
+        if refusal.is_some() {
+            refused.push(row);
+        } else {
+            allowed.push(row);
+        }
+    }
+    allowed.extend(refused);
+    allowed
+}
+
+/// The row of one partition of an allowed topic.
+fn committed_row(
+    topic: &str,
+    partition_index: i32,
+    offsets: &GroupOffsets,
+    require_stable: bool,
+) -> OffsetFetchResponsePartitions {
+    let key = (topic.to_string(), partition_index);
+    if require_stable && offsets.pending_txn.contains(&key) {
+        return unstable::group_row(partition_index);
+    }
+    offsets.committed.get(&key).map_or_else(
+        || missing_offset_row(partition_index, codes::NONE),
+        |entry| OffsetFetchResponsePartitions {
+            partition_index,
+            committed_offset: entry.offset.0,
+            committed_leader_epoch: entry.leader_epoch,
+            metadata: Some(entry.metadata.clone()),
+            error_code: codes::NONE,
+            ..Default::default()
+        },
+    )
+}
+
+/// A partition row that carries no committed offset.
+///
+/// Kafka's `OffsetMetadataManager.fetchOffsets` builds this row for a
+/// partition with no offset, and `KafkaApis.fetchOffsetsForGroup` builds it
+/// for a refused topic: offset -1, leader epoch -1, and the empty metadata
+/// string. The empty string is the schema default of `Metadata`, so the row
+/// carries it, not null.
+fn missing_offset_row(partition_index: i32, error_code: i16) -> OffsetFetchResponsePartitions {
+    OffsetFetchResponsePartitions {
+        partition_index,
+        committed_offset: -1,
+        committed_leader_epoch: -1,
+        metadata: Some(String::new()),
+        error_code,
+        ..Default::default()
+    }
 }
