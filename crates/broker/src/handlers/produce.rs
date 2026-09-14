@@ -58,6 +58,9 @@ mod topic_settings;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(test)]
+mod topic_resolution_tests;
+
 /// Kafka `acks` sentinel `-1`, which is producer `acks=all`. The leader must
 /// hold the response until the high watermark covers the append, that is,
 /// until every in-sync replica has it.
@@ -75,6 +78,11 @@ fn durability_frontier(base_offset: i64, last_offset_delta: i32) -> Option<krabk
 /// the frame it parsed; the handler labels its phases from the same number.
 pub(super) const PRODUCE_API_KEY: crate::handlers::ApiKeyCode =
     krabka_protocol::api_key::ApiKey::Produce as i16;
+
+/// The first `Produce` version that names each topic by `topic_id` only
+/// (KIP-516). The request schema carries `name` at versions 0-12 and
+/// `topic_id` from this version on.
+const FIRST_TOPIC_ID_VERSION: i16 = 13;
 
 /// Wire sentinel "no offset assigned", which is
 /// `ProduceResponse.INVALID_OFFSET`. The handler stamps it on partition rows
@@ -185,11 +193,14 @@ pub(crate) async fn handle(
 
     for topic in req.topic_data {
         // v ≤ 12 sends the topic name; v ≥ 13 sends only topic_id and
-        // we look it up in the metadata image. KIP-516: an explicit
-        // non-zero id that is unknown returns UNKNOWN_TOPIC_ID (100) on
-        // every partition row; a mismatched name+id returns
-        // INCONSISTENT_TOPIC_ID (103). Only name-only misses fall through
-        // to the legacy UNKNOWN_TOPIC_OR_PARTITION path.
+        // we look it up in the metadata image. Kafka's
+        // `KafkaApis.handleProduceRequest` answers UNKNOWN_TOPIC_ID (100) on
+        // every partition row when an id-only version names a topic that
+        // does not resolve. That includes the zero id, which the resolver
+        // sends down the name path with an empty name. At v ≤ 12 a name
+        // that does not resolve continues to the ACL and partition gates,
+        // which answer TOPIC_AUTHORIZATION_FAILED or
+        // UNKNOWN_TOPIC_OR_PARTITION.
         // The metric label sets hold an `Arc<str>`, and this loop body builds
         // one per partition, so take the registry's own copy of the name: for
         // a topic this broker hosts — which is every topic that gets past the
@@ -198,7 +209,13 @@ pub(crate) async fn handle(
         let topic_name: Arc<str> =
             match crate::topic_resolve::resolve(&image, &topic.name, topic.topic_id) {
                 Ok(rec) => partitions.shared_topic_name(&rec.name),
-                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => partitions.shared_topic_name(&topic.name),
+                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) if version < FIRST_TOPIC_ID_VERSION => {
+                    partitions.shared_topic_name(&topic.name)
+                }
+                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => {
+                    topic_results.push(build_topic_error_response(&topic, codes::UNKNOWN_TOPIC_ID));
+                    continue;
+                }
                 Err(code) => {
                     topic_results.push(build_topic_error_response(&topic, code));
                     continue;
@@ -239,10 +256,7 @@ pub(crate) async fn handle(
 
         // If the topic was denied by the ACL preamble, every
         // partition row for it gets TOPIC_AUTHORIZATION_FAILED and the
-        // real append is skipped. An empty topic_name (v ≥ 13 with an
-        // unknown topic_id) maps to "" in the denied set if and only if
-        // its authorize result was Deny; the no-ACL compat shim returns
-        // Allow uniformly, so existing tests are unaffected.
+        // real append is skipped.
         let topic_denied = denied_topics.contains(&*topic_name);
 
         // Resolve the topic's broker-side `compression.type` once. `None`

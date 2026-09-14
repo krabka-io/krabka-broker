@@ -86,8 +86,12 @@ async fn produce_assigns_base_offsets() {
     p.broker.shutdown().await;
 }
 
+/// The test client negotiates Produce v13, which carries only the topic id.
+/// A request with no id names no topic, so Kafka's
+/// `KafkaApis.handleProduceRequest` answers `UNKNOWN_TOPIC_ID` (100). The name
+/// path and its `UNKNOWN_TOPIC_OR_PARTITION` (3) belong to v12 and earlier.
 #[tokio::test]
-async fn produce_to_unknown_topic_returns_3() {
+async fn produce_without_a_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     let req = ProduceRequest {
         acks: 1,
@@ -104,7 +108,7 @@ async fn produce_to_unknown_topic_returns_3() {
         ..Default::default()
     };
     let resp = p.client.send(req).await.expect("Produce unknown");
-    assert!(resp.responses[0].partition_responses[0].error_code == 3);
+    assert!(resp.responses[0].partition_responses[0].error_code == 100);
     p.broker.shutdown().await;
 }
 

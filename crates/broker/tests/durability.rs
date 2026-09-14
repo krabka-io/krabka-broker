@@ -30,7 +30,7 @@ mod support;
 ///
 /// Produce and Fetch at v ≥ 13 carry only `topic_id` on the wire (KIP-516).
 /// Without this lookup, the broker decodes the request with an empty name and
-/// a ZERO `topic_id`, and returns `UNKNOWN_TOPIC_OR_PARTITION`. This mirrors
+/// a ZERO `topic_id`, and returns `UNKNOWN_TOPIC_ID`. This mirrors
 /// the helper in `crates/client-consumer/tests/integration.rs`.
 async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
     let resp = client
