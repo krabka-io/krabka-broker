@@ -36,10 +36,10 @@ use crate::batches::{text_batch, tiny_segment_config};
 
 /// The `MinIO` server image, pinned by the same digest table the broker's
 /// container suites load from (`//bazel/images`).
-const MINIO_IMAGE: &str = "mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
+const MINIO_IMAGE: &str = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
 
 /// The `mc` client image, used only to create the bucket.
-const MINIO_CLIENT_IMAGE: &str = "mirror.gcr.io/minio/mc:RELEASE.2025-08-13T08-35-41Z";
+const MINIO_CLIENT_IMAGE: &str = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z";
 
 const MINIO_ACCESS_KEY: &str = "minioadmin";
 
