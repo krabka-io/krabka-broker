@@ -131,6 +131,22 @@ impl Engine {
             return;
         };
 
+        // KIP-595: a response from a newer epoch names the leader of that
+        // epoch, and a voter or an observer follows it. Kafka's
+        // `KafkaRaftClient.maybeHandleCommonResponse` does the same. The fence
+        // below accepts only a response that matches this node's own leader and
+        // epoch, so without this step a node whose leader lost the epoch keeps
+        // fetching from it, rejects every answer, and stops replicating. A voter
+        // learns the new leader from `BeginQuorumEpoch` too, but an observer
+        // learns it only here.
+        if leader_epoch > self.core.quorum_state().leader_epoch {
+            self.on_event(Event::ReceiveBeginQuorumEpoch {
+                leader_id,
+                leader_epoch,
+            });
+            return;
+        }
+
         // Decode is side-effect free. Fence the response against both the
         // live role and durable leader view before remembering its peer or
         // performing any response-derived mutation.

@@ -134,6 +134,60 @@ fn snapshot_fetch_response_is_invalid_unless_success_from_active_leader() {
     }
 }
 
+/// A Fetch response from a newer epoch moves a follower or an observer to the
+/// leader it names, as `KafkaRaftClient.maybeHandleCommonResponse` does.
+///
+/// Node 1 was the leader at epoch 1 and lost the epoch. It now answers a Fetch
+/// with the new leader, node 3 at epoch 7. The response fence accepts only a
+/// response that matches this node's own leader and epoch, so a node that
+/// ignored the newer epoch would keep fetching from node 1 and reject every
+/// answer. An observer hears of a new leader in no other way.
+#[tokio::test]
+async fn a_fetch_response_from_a_newer_epoch_moves_the_node_to_that_leader() {
+    for (case, me) in [
+        ("an observer that joins later", NodeId(4)),
+        ("a voter that follows", NodeId(2)),
+    ] {
+        let (mut engine, _dir) = build_engine_only(me, &[NodeId(1), NodeId(2), NodeId(3)]);
+        engine.on_event(Event::ReceiveBeginQuorumEpoch {
+            leader_id: NodeId(1),
+            leader_epoch: 1,
+        });
+
+        engine.on_fetch_response(
+            NodeId(1),
+            &wire::PeerResponse::Fetch {
+                leader_id: NodeId(3),
+                leader_epoch: 7,
+                diverging: None,
+                snapshot_id: None,
+                hwm: 0,
+                records: bytes::Bytes::new(),
+            }
+            .encode(),
+        );
+
+        let state = engine.core.quorum_state();
+        assert!(
+            (state.leader_id, state.leader_epoch) == (Some(NodeId(3)), 7),
+            "{case}"
+        );
+        assert!(
+            matches!(
+                engine.core.role(),
+                Role::Follower {
+                    leader_id: NodeId(3),
+                    ..
+                } | Role::Observer {
+                    leader_id: Some(NodeId(3)),
+                    ..
+                }
+            ),
+            "{case}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn follower_fetch_redirects_to_current_leader() {
     let (mut follower, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
