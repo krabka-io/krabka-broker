@@ -37,6 +37,14 @@ use crate::{
     handlers::{authorized_operations::authorized_operations_bits, offline_replicas::NO_LEADER_ID},
 };
 
+#[cfg(test)]
+mod topic_resolution_tests;
+
+/// The first `Metadata` version whose topic rows may carry a null name or a
+/// non-zero topic id. Versions 10 and 11 have both fields on the wire, but
+/// Kafka refuses a request that uses them.
+const FIRST_TOPIC_ID_VERSION: i16 = 12;
+
 // ACL preamble + asymmetric loop.
 #[tracing::instrument(
     name = "handle_metadata",
@@ -60,6 +68,13 @@ pub(crate) async fn handle(
 
     let image = controller.current_image();
 
+    let requested = match lookup_requested_topics(&image, &req, version) {
+        Ok(requested) => requested,
+        Err(error_code) => {
+            return crate::handlers::encode_response(&error_response(&req, error_code), version);
+        }
+    };
+
     // ── ACL preamble ────────────────────────────────────────
     // Metadata has asymmetric authorization semantics for `Describe`:
     //   • Named-topic request (`req.topics = Some([...])`): every
@@ -70,43 +85,19 @@ pub(crate) async fn handle(
     //     in the response. Deny topics are silently omitted so the
     //     broker doesn't leak their existence to unauthorized clients.
     //
-    // For a named request we resolve each requested `(name, topic_id)`
-    // pair up front via the KIP-516 strict resolver, carrying the outcome
-    // (`Ok(record)` or an error wire code) per request entry so the
-    // response loop below can echo errors without collapsing an unknown
-    // id to an empty name. The set of names we authorize is sourced from
-    // the *resolved* records (plus the requested name for the
-    // name-only-miss case), so a topic requested by id is still
-    // ACL-checked under its real name.
-    let resolved: Vec<(
-        &krabka_protocol::owned::metadata_request::MetadataRequestTopic,
-        Result<&krabka_metadata::TopicRecord, i16>,
-    )> = match &req.topics {
-        Some(list) => list
+    // The names to authorize are the real names of the topics that resolved,
+    // plus the requested name of a name-only miss, so that the
+    // UNKNOWN_TOPIC_OR_PARTITION row still respects a Deny. An id that does
+    // not resolve has no name and is answered without authorization.
+    let candidate_topics: Vec<String> = match &requested {
+        Some(requested) => requested
             .iter()
-            .map(|t| {
-                let name_str = t.name.as_deref().unwrap_or("");
-                (
-                    t,
-                    crate::topic_resolve::resolve(&image, name_str, t.topic_id),
-                )
-            })
-            .collect(),
-        None => Vec::new(),
-    };
-    // Names to batch-authorize: resolved records' real names, plus the
-    // requested name for a name-only miss (so the UNKNOWN_TOPIC_OR_PARTITION
-    // row still respects Deny → omit / auth-failed semantics). Topic-id
-    // errors carry no trustworthy name and are surfaced unconditionally.
-    let candidate_topics: Vec<String> = match &req.topics {
-        Some(_) => resolved
-            .iter()
-            .filter_map(|(t, r)| match r {
-                Ok(rec) => Some(rec.name.clone()),
-                Err(code) if *code == codes::UNKNOWN_TOPIC_OR_PARTITION => {
-                    t.name.clone().filter(|n| !n.is_empty())
+            .filter_map(|topic| match topic {
+                RequestedTopic::Id(_, Some(record)) | RequestedTopic::Name(_, Some(record)) => {
+                    Some(record.name.clone())
                 }
-                Err(_) => None,
+                RequestedTopic::Name(name, None) => Some(name.clone()).filter(|n| !n.is_empty()),
+                RequestedTopic::Id(_, None) => None,
             })
             .collect(),
         None => image.topics().map(|t| t.name.clone()).collect(),
@@ -144,7 +135,7 @@ pub(crate) async fn handle(
         ctx,
         &TopicRowInputs {
             request: &req,
-            resolved: &resolved,
+            requested: requested.as_deref(),
             candidates: &candidate_topics,
             authorization: &acl_by_name,
             unavailable: &unavailable,
@@ -194,16 +185,98 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
-type ResolvedTopic<'a> = (
-    &'a krabka_protocol::owned::metadata_request::MetadataRequestTopic,
-    Result<&'a krabka_metadata::TopicRecord, i16>,
-);
+/// One topic that a named-topic request asks for, with the record it
+/// resolved to.
+enum RequestedTopic<'a> {
+    /// A topic that the request names by a non-zero id.
+    Id(WireUuid, Option<&'a krabka_metadata::TopicRecord>),
+    /// A topic that the request names by name.
+    Name(String, Option<&'a krabka_metadata::TopicRecord>),
+}
+
+/// Applies Kafka's version rules for topic ids to a named-topic request.
+///
+/// It gives `Ok(None)` for an all-topics request. The rules come from
+/// `KafkaApis.handleTopicMetadataRequest`:
+///
+/// - Versions 10 and 11: a null name or a non-zero id throws
+///   `InvalidRequestException`, so the whole request fails with
+///   `INVALID_REQUEST`.
+/// - Version 12 and later: when any row has a non-zero id, Kafka describes the
+///   set of those ids and ignores every name, and every row with the zero id.
+/// - Version 12 and later with only zero ids: Kafka describes the set of names.
+///   A null name among them makes Kafka throw a `NullPointerException`, so the
+///   whole request fails with `UNKNOWN_SERVER_ERROR`. A `cp-kafka` 8.3.1 broker
+///   answers that way.
+fn lookup_requested_topics<'a>(
+    image: &'a krabka_metadata::MetadataImage,
+    request: &MetadataRequest,
+    version: i16,
+) -> Result<Option<Vec<RequestedTopic<'a>>>, i16> {
+    let Some(topics) = &request.topics else {
+        return Ok(None);
+    };
+    let uses_ids = topics
+        .iter()
+        .any(|topic| topic.name.is_none() || topic.topic_id != WireUuid::ZERO);
+    if version < FIRST_TOPIC_ID_VERSION && uses_ids {
+        return Err(codes::INVALID_REQUEST);
+    }
+    let mut ids: Vec<WireUuid> = Vec::new();
+    for topic in topics {
+        if topic.topic_id != WireUuid::ZERO && !ids.contains(&topic.topic_id) {
+            ids.push(topic.topic_id);
+        }
+    }
+    if !ids.is_empty() {
+        return Ok(Some(
+            ids.into_iter()
+                .map(|id| RequestedTopic::Id(id, image.topic_by_id(&uuid::Uuid::from_bytes(id.0))))
+                .collect(),
+        ));
+    }
+    topics
+        .iter()
+        .map(|topic| {
+            let name = topic.name.clone().ok_or(codes::UNKNOWN_SERVER_ERROR)?;
+            let record = image.topic(&name);
+            Ok(RequestedTopic::Name(name, record))
+        })
+        .collect::<Result<Vec<_>, i16>>()
+        .map(Some)
+}
+
+/// The response that Kafka's `MetadataRequest.getErrorResponse` builds when
+/// the handler throws.
+///
+/// Every requested topic gets a row with `error_code`, its requested name (an
+/// empty name for a null one) and its requested id. The response carries no
+/// broker, no cluster id and no controller.
+fn error_response(request: &MetadataRequest, error_code: i16) -> MetadataResponse {
+    MetadataResponse {
+        topics: request
+            .topics
+            .iter()
+            .flatten()
+            .map(|topic| MetadataResponseTopic {
+                error_code,
+                name: Some(topic.name.clone().unwrap_or_default()),
+                topic_id: topic.topic_id,
+                is_internal: false,
+                ..Default::default()
+            })
+            .collect(),
+        error_code,
+        ..Default::default()
+    }
+}
 
 /// The per-request inputs every topic row shares. They travel as one struct so
 /// the row builders keep a readable arity as the response gains fields.
 struct TopicRowInputs<'a> {
     request: &'a MetadataRequest,
-    resolved: &'a [ResolvedTopic<'a>],
+    /// The resolved rows of a named-topic request, or `None` for all topics.
+    requested: Option<&'a [RequestedTopic<'a>]>,
     candidates: &'a [String],
     authorization: &'a std::collections::HashMap<&'a str, AuthorizationResult>,
     /// Brokers the controller currently treats as fenced or dead, from
@@ -225,7 +298,7 @@ fn build_topic_rows(
             .unwrap_or(AuthorizationResult::Deny)
             == AuthorizationResult::Allow
     };
-    if inputs.request.topics.is_none() {
+    let Some(requested) = inputs.requested else {
         return inputs
             .candidates
             .iter()
@@ -236,37 +309,45 @@ fn build_topic_rows(
                     .map(|record| success_topic_row(broker, image, context, inputs, name, record))
             })
             .collect();
-    }
-    inputs
-        .resolved
+    };
+    requested
         .iter()
-        .map(|(topic, outcome)| match outcome {
-            Ok(record) if allowed(&record.name) => {
+        .map(|topic| match topic {
+            RequestedTopic::Id(_, Some(record)) | RequestedTopic::Name(_, Some(record))
+                if allowed(&record.name) =>
+            {
                 success_topic_row(broker, image, context, inputs, &record.name, record)
             }
-            Ok(record) => MetadataResponseTopic {
+            // Kafka does not treat a topic id as secret, so a denied id row
+            // carries the real id and a null name.
+            RequestedTopic::Id(_, Some(record)) => MetadataResponseTopic {
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                name: None,
+                topic_id: WireUuid(record.topic_id.into_bytes()),
+                ..Default::default()
+            },
+            // A denied name row carries the zero id, so it does not disclose
+            // the id.
+            RequestedTopic::Name(_, Some(record)) => MetadataResponseTopic {
                 error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                 name: Some(record.name.clone()),
                 topic_id: WireUuid::ZERO,
                 ..Default::default()
             },
-            Err(code) if *code == codes::UNKNOWN_TOPIC_OR_PARTITION => {
-                let name = topic.name.as_deref().unwrap_or("");
-                MetadataResponseTopic {
-                    error_code: if !name.is_empty() && !allowed(name) {
-                        codes::TOPIC_AUTHORIZATION_FAILED
-                    } else {
-                        codes::UNKNOWN_TOPIC_OR_PARTITION
-                    },
-                    name: topic.name.clone(),
-                    topic_id: topic.topic_id,
-                    ..Default::default()
-                }
-            }
-            Err(code) => MetadataResponseTopic {
-                error_code: *code,
-                name: topic.name.clone(),
-                topic_id: topic.topic_id,
+            RequestedTopic::Id(id, None) => MetadataResponseTopic {
+                error_code: codes::UNKNOWN_TOPIC_ID,
+                name: None,
+                topic_id: *id,
+                ..Default::default()
+            },
+            RequestedTopic::Name(name, None) => MetadataResponseTopic {
+                error_code: if !name.is_empty() && !allowed(name) {
+                    codes::TOPIC_AUTHORIZATION_FAILED
+                } else {
+                    codes::UNKNOWN_TOPIC_OR_PARTITION
+                },
+                name: Some(name.clone()),
+                topic_id: WireUuid::ZERO,
                 ..Default::default()
             },
         })
