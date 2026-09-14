@@ -174,7 +174,16 @@ pub async fn run_with_sequencer(
                 let _ = ack.send(result);
             }
             WriterMessage::Replicate { batch, ack } => {
-                handle_replicate(&log, &log_dir, &log_dir_status, batch, ack, &append_notify).await;
+                handle_replicate(
+                    (&topic, partition),
+                    &log,
+                    (&log_dir, &log_dir_status),
+                    &producer_state,
+                    batch,
+                    ack,
+                    &append_notify,
+                )
+                .await;
             }
             WriterMessage::ReplicateVerbatim {
                 batch,

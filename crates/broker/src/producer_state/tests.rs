@@ -40,6 +40,49 @@ async fn duplicate_returns_cached_offset() {
     assert!(d == Decision::Duplicate { base_offset: 0 });
 }
 
+/// A deferred `acks=all` commit for a pre-marker batch must not undo a
+/// marker's epoch bump.
+///
+/// `AppendCommit::record` waits on the high-watermark gate for its own
+/// append, so it can resolve long after a later transaction marker mirrored
+/// a bumped epoch into the tracker. `commit` must skip a write that would
+/// regress the tracked epoch, or the tracker would fence the wrong epoch, or
+/// accept a first sequence at the new epoch that is not 0, until the next
+/// restart.
+#[tokio::test]
+async fn a_late_commit_at_an_older_epoch_does_not_undo_a_marker() {
+    let s = ProducerState::new();
+    // The marker's mirror lands first, well before the older batch's deferred
+    // acks=all commit resolves.
+    s.mirror_log_entries(
+        "t",
+        PartitionIndex(0),
+        vec![krabka_log::ProducerSnapshotEntry {
+            producer_id: krabka_log::ProducerId(1000),
+            producer_epoch: 4,
+            last_sequence: -1,
+            last_offset: krabka_log::Offset(-1),
+            offset_delta: 0,
+            timestamp: -1,
+            coordinator_epoch: 0,
+            current_txn_first_offset: None,
+        }],
+    )
+    .await;
+
+    // The stale, pre-marker commit for epoch 3 resolves after the marker.
+    commit!(s, "t", PartitionIndex(0), 1000, 3, 0, 2, 10, 1).await;
+
+    assert!(
+        s.check("t", PartitionIndex(0), 1000, 4, 0, 0).await == Decision::Append,
+        "the marker's epoch must still be the tracked one"
+    );
+    assert!(
+        s.check("t", PartitionIndex(0), 1000, 3, 0, 2).await == Decision::Fenced,
+        "the stale commit must not have reopened the pre-marker epoch"
+    );
+}
+
 #[tokio::test]
 async fn only_an_exact_retry_of_the_last_batch_is_duplicate() {
     let s = ProducerState::new();
@@ -164,6 +207,40 @@ async fn truncate_unknown_partition_is_noop() {
     let s = ProducerState::new();
     s.truncate("never-seen", PartitionIndex(7), 0).await; // must not panic or create state
     assert!(s.snapshot("never-seen", PartitionIndex(7)).await.is_empty());
+}
+
+/// A marker-only entry (a transaction-version-2 marker cleared the retained
+/// batch, so `last_offset` is the Kafka `-1` sentinel) carries no offset of
+/// its own, so it cannot be placed relative to a truncation cut. `truncate`
+/// must drop it regardless of `offset`, or a KIP-320 divergent-tail
+/// truncation that removes the marker itself would leave the tracker fencing
+/// or accepting sequences at an epoch the log no longer has. See
+/// `ProducerState::truncate`'s doc comment.
+#[tokio::test]
+async fn truncate_drops_every_marker_only_entry_regardless_of_offset() {
+    for offset in [0, 1, i64::MAX] {
+        let s = ProducerState::new();
+        s.mirror_log_entries(
+            "t",
+            PartitionIndex(0),
+            vec![krabka_log::ProducerSnapshotEntry {
+                producer_id: krabka_log::ProducerId(1000),
+                producer_epoch: 4,
+                last_sequence: -1,
+                last_offset: krabka_log::Offset(-1),
+                offset_delta: 0,
+                timestamp: -1,
+                coordinator_epoch: 0,
+                current_txn_first_offset: None,
+            }],
+        )
+        .await;
+        s.truncate("t", PartitionIndex(0), offset).await;
+        assert!(
+            s.snapshot("t", PartitionIndex(0)).await.is_empty(),
+            "offset={offset}"
+        );
+    }
 }
 
 #[tokio::test]
