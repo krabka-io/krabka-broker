@@ -12,7 +12,7 @@ use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
+        fetch_response::{FetchableTopicResponse, PartitionData},
     },
     primitives::uuid::Uuid as WireUuid,
     records::RecordsPayload,
