@@ -11,8 +11,8 @@
 //!
 //! This file holds the leader check and the request-to-controller flow. The
 //! two pure halves live beside it: `changes` maps a reported directory onto a
-//! metadata delta, and `response` builds and encodes what goes back on the
-//! wire.
+//! metadata delta and a per-partition error code, and `response` builds the
+//! fixed responses and encodes what goes back on the wire.
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -31,8 +31,10 @@ mod response;
 #[cfg(test)]
 mod test_support;
 
-use self::response::{encode_resp, not_controller_response};
-pub(crate) use self::{changes::collect_assignment_changes, response::build_echo_response};
+use self::{
+    changes::{AssignmentPlan, plan_assignments},
+    response::{encode_resp, not_controller_response},
+};
 
 pub(crate) fn handle(
     broker: &Broker,
@@ -70,7 +72,7 @@ pub(crate) fn handle(
                 },
             );
         }
-        let changes = collect_assignment_changes(&image, broker_slot_id, &req);
+        let AssignmentPlan { changes, response } = plan_assignments(&image, broker_slot_id, &req);
 
         if !changes.is_empty()
             && let Err(e) = controller.submit_change(changes).await
@@ -78,7 +80,7 @@ pub(crate) fn handle(
             return Err(BrokerError::Replication(format!("submit_change: {e}")));
         }
 
-        encode_resp(version, &build_echo_response(&req))
+        encode_resp(version, &response)
     })
 }
 
@@ -109,41 +111,112 @@ mod tests {
         }
     }
 
+    /// The topic reference and the partition that one request row reports.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Report {
+        /// Partition 0 of the seeded topic, which broker 1 replicates.
+        KnownPartition,
+        /// Partition 7 of the seeded topic, which does not exist.
+        UnknownPartition,
+        /// A non-zero topic id that names no topic.
+        UnknownTopicId,
+        /// The zero topic id.
+        ZeroTopicId,
+    }
+
+    /// Kafka's `ReplicationControlManager.handleAssignReplicasToDirs` answers
+    /// `UNKNOWN_TOPIC_ID` for a topic id that names no topic, the zero id
+    /// included, and `UNKNOWN_TOPIC_OR_PARTITION` for a partition that the
+    /// topic does not have.
     #[tokio::test]
-    async fn handle_leader_echoes_request_shape() {
+    async fn handle_answers_each_partition_with_kafkas_error_code() {
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         wait_for_leader(&broker).await;
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
-        let req = request(dir_uuid, topic_uuid, 7);
+        seed_topic(&broker, topic_uuid).await;
 
-        let bytes = handle(&broker, VERSION, 9, &req)
+        let cases = [
+            (Report::KnownPartition, codes::NONE),
+            (Report::UnknownPartition, codes::UNKNOWN_TOPIC_OR_PARTITION),
+            (Report::UnknownTopicId, codes::UNKNOWN_TOPIC_ID),
+            (Report::ZeroTopicId, codes::UNKNOWN_TOPIC_ID),
+        ];
+        let mut actual = Vec::with_capacity(cases.len());
+        let mut expected = Vec::with_capacity(cases.len());
+        for (report, error_code) in cases {
+            let (topic_id, partition_index) = match report {
+                Report::KnownPartition => (topic_uuid, 0),
+                Report::UnknownPartition => (topic_uuid, 7),
+                Report::UnknownTopicId => (uuid::Uuid::from_u128(0xCC), 0),
+                Report::ZeroTopicId => (uuid::Uuid::nil(), 0),
+            };
+            let bytes = handle(
+                &broker,
+                VERSION,
+                9,
+                &request(dir_uuid, topic_id, partition_index),
+            )
             .await
             .expect("AssignReplicasToDirs handler");
-        let resp = decode_response(&bytes);
-
-        let expected = AssignReplicasToDirsResponse {
-            throttle_time_ms: 0,
-            error_code: codes::NONE,
-            directories: vec![RespDirData {
-                id: ProtocolUuid(dir_uuid.into_bytes()),
-                topics: vec![RespTopicData {
-                    topic_id: ProtocolUuid(topic_uuid.into_bytes()),
-                    partitions: vec![RespPartData {
-                        partition_index: 7,
-                        error_code: codes::NONE,
+            actual.push((report, decode_response(&bytes)));
+            expected.push((
+                report,
+                AssignReplicasToDirsResponse {
+                    throttle_time_ms: 0,
+                    error_code: codes::NONE,
+                    directories: vec![RespDirData {
+                        id: ProtocolUuid(dir_uuid.into_bytes()),
+                        topics: vec![RespTopicData {
+                            topic_id: ProtocolUuid(topic_id.into_bytes()),
+                            partitions: vec![RespPartData {
+                                partition_index,
+                                error_code,
+                                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                            }],
+                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                        }],
                         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     }],
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
-        assert!(resp == expected, "{resp:?}");
+                },
+            ));
+        }
+        assert!(actual == expected);
+        let image = broker.controller.current_image();
+        let partition = image.partition("t", 0).expect("partition");
+        assert!(partition.directories == vec![dir_uuid]);
 
         broker_handle.shutdown().await;
+    }
+
+    /// Seed topic "t" with id `topic_uuid` and partition 0 on broker 1.
+    async fn seed_topic(broker: &Broker, topic_uuid: uuid::Uuid) {
+        broker
+            .controller
+            .submit_change(vec![
+                MetadataRecord::V1Topic(TopicRecord {
+                    name: "t".into(),
+                    topic_id: topic_uuid,
+                    partitions: 1,
+                    replication_factor: 1,
+                }),
+                MetadataRecord::V1Partition(PartitionRecord {
+                    topic: "t".into(),
+                    partition: 0,
+                    leader: krabka_audit::NodeId(1),
+                    replicas: vec![krabka_audit::NodeId(1)],
+                    isr: vec![krabka_audit::NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![uuid::Uuid::nil()],
+                    partition_epoch: 0,
+                }),
+            ])
+            .await
+            .expect("seed partition");
     }
 
     #[tokio::test]
