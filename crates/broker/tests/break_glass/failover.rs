@@ -19,7 +19,7 @@ use crate::{
     principals::{BOB, CAROL, principal},
     proposals::{ACTION_DELETE_TOPIC, now_ms, open, stored},
     support,
-    topics::{create_topic, delete_topic},
+    topics::{create_topic, delete_topic_as_admin_client},
 };
 
 /// An approved proposal outlives the controller that recorded it.
@@ -92,8 +92,11 @@ async fn an_approved_proposal_survives_a_controller_failover() {
         stored(&after_client, id).await == before,
         "the proposal crossed the failover unchanged"
     );
+    // The new leader refuses the consume with `NOT_CONTROLLER` until it
+    // commits a record from its own epoch. A Kafka admin client retries that
+    // code, so the case retries it the same way.
     check!(
-        delete_topic(&after_client, "doomed").await == codes::NONE,
+        delete_topic_as_admin_client(&after_client, "doomed").await == codes::NONE,
         "the surviving controller spends the approval"
     );
     cluster[elected_index]

@@ -243,7 +243,9 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
     )
     .await
     .expect("a concurrent consume must be rejected before append");
-    assert2::assert!(matches!(concurrent, Err(RaftError::ChangeRejected(_))));
+    // The first consume is appended but not committed. The refusal is the
+    // transient one that a caller retries once the tail commits.
+    assert2::assert!(matches!(concurrent, Err(RaftError::UncommittedTail)));
 
     let qs = ctrl.quorum_state().await.unwrap();
     ctrl.inject_event(Event::ReceiveFetch {
@@ -264,6 +266,98 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
         .submit_change(vec![MetadataRecord::V1BreakGlassProposal(consumed)])
         .await;
     assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
+    ctrl.shutdown().await;
+}
+
+/// A new leader refuses a break-glass consume with the retriable
+/// `UncommittedTail` until it commits a record from its own epoch.
+///
+/// Raft and `KRaft` both require a new leader to commit in its own epoch
+/// before it exposes the committed state of earlier epochs. The proposal
+/// committed under the first leadership, but the new leader's epoch-start
+/// record is its uncommitted tail, so the consume must wait. Kafka's
+/// controller answers `NOT_CONTROLLER` in the same window.
+#[tokio::test]
+async fn a_new_leader_refuses_a_consume_until_its_own_epoch_commits() {
+    use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
+    use uuid::Uuid;
+
+    async fn commit_tail(ctrl: &crate::kraft::KraftController) {
+        let quorum = ctrl.quorum_state().await.unwrap();
+        ctrl.inject_event(Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: quorum.leader_epoch,
+            fetch_offset: quorum.log_end_offset,
+        })
+        .await
+        .unwrap();
+    }
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    commit_tail(&ctrl).await;
+    let proposal = BreakGlassProposalRecord {
+        proposal_id: Uuid::from_u128(0x591),
+        action: BreakGlassAction::DeleteTopic,
+        target: "doomed".to_owned(),
+        proposer: "User:alice".to_owned(),
+        reason: "incident".to_owned(),
+        created_at_ms: 1,
+        expires_at_ms: i64::MAX,
+        approvals: Vec::new(),
+        consumed_at_ms: 0,
+        withdrawn: false,
+    };
+    let create_ctrl = ctrl.clone();
+    let proposed = proposal.clone();
+    let create = tokio::spawn(async move {
+        create_ctrl
+            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(proposed)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    commit_tail(&ctrl).await;
+    create.await.unwrap().unwrap();
+
+    // Node 2 takes over at epoch 5. Node 1 then wins the election for epoch 6
+    // and appends its epoch-start record, which nothing has committed yet.
+    ctrl.inject_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(2),
+        leader_epoch: 5,
+    })
+    .await
+    .unwrap();
+    await_leader(&ctrl, Some(NodeId(2))).await;
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    for epoch in [5, 6] {
+        ctrl.inject_event(Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch,
+            vote_granted: true,
+        })
+        .await
+        .unwrap();
+    }
+    await_leader(&ctrl, Some(NodeId(1))).await;
+    let quorum = ctrl.quorum_state().await.unwrap();
+    check!(quorum.leader_epoch == 6);
+    check!(quorum.high_watermark < quorum.log_end_offset);
+
+    let consumed = MetadataRecord::V1BreakGlassProposal(BreakGlassProposalRecord {
+        consumed_at_ms: 10,
+        ..proposal
+    });
+    let refused = ctrl.submit_change(vec![consumed.clone()]).await;
+    assert!(matches!(refused, Err(RaftError::UncommittedTail)));
+    check!(ctrl.quorum_state().await.unwrap().log_end_offset == quorum.log_end_offset);
+
+    // Once the epoch-start record commits, the same consume appends.
+    commit_tail(&ctrl).await;
+    let consume_ctrl = ctrl.clone();
+    let consume = tokio::spawn(async move { consume_ctrl.submit_change(vec![consumed]).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    commit_tail(&ctrl).await;
+    consume.await.unwrap().unwrap();
     ctrl.shutdown().await;
 }
 
@@ -353,7 +447,7 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     )
     .await
     .expect("a concurrent replacement must be rejected before append");
-    assert2::assert!(matches!(concurrent, Err(RaftError::ChangeRejected(_))));
+    assert2::assert!(matches!(concurrent, Err(RaftError::UncommittedTail)));
 
     let qs = ctrl.quorum_state().await.unwrap();
     ctrl.inject_event(Event::ReceiveFetch {

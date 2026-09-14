@@ -121,6 +121,11 @@ impl MetadataWriter for QuorumForwarder {
                         krabka_metadata::MetadataError::TopicExists(String::new()),
                     ));
                 }
+                // The leader answered, and it refused until its tail commits.
+                // Another voter is not the leader, so stop here.
+                Ok(resp) if resp.error_code == krabka_raft::SUBMIT_CHANGE_UNCOMMITTED_TAIL => {
+                    return Err(RaftError::UncommittedTail);
+                }
                 Ok(resp) => {
                     last_err = RaftError::NotLeader {
                         current_leader: (resp.leader_hint >= 0)

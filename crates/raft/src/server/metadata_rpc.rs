@@ -11,7 +11,7 @@ use crate::{
     kraft::KraftController,
     wire::{
         KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
-        KrabkaSubmitChangeResponse,
+        KrabkaSubmitChangeResponse, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
     },
 };
 
@@ -65,30 +65,35 @@ pub(super) async fn dispatch_submit_change(
                 <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Serialize>::serialize(&result)?,
             ),
         },
-        Err(RaftError::Metadata(_)) => KrabkaSubmitChangeResponse {
-            error_code: SUBMIT_CHANGE_REJECTED,
-            leader_hint: LEADER_HINT_UNKNOWN,
-            result: Bytes::new(),
-        },
-        Err(RaftError::NotLeader { current_leader }) => KrabkaSubmitChangeResponse {
-            error_code: SUBMIT_CHANGE_NOT_LEADER,
-            leader_hint: current_leader
-                .and_then(|l| i64::try_from(l.0).ok())
-                .unwrap_or(LEADER_HINT_UNKNOWN),
-            result: Bytes::new(),
-        },
-        Err(e) => {
-            tracing::warn!(error = ?e, "submit-change failed");
-            KrabkaSubmitChangeResponse {
-                error_code: SUBMIT_CHANGE_FAILED,
-                leader_hint: LEADER_HINT_UNKNOWN,
-                result: Bytes::new(),
-            }
-        }
+        Err(e) => submit_change_failure(&e),
     };
     let mut out = Vec::with_capacity(16);
     resp.encode_v0(&mut out)?;
     Ok(Bytes::from(out))
+}
+
+/// The forwarded `submit_change` response for a local submit that failed with
+/// `error`.
+fn submit_change_failure(error: &RaftError) -> KrabkaSubmitChangeResponse {
+    let (error_code, leader_hint) = match error {
+        RaftError::Metadata(_) => (SUBMIT_CHANGE_REJECTED, LEADER_HINT_UNKNOWN),
+        RaftError::NotLeader { current_leader } => (
+            SUBMIT_CHANGE_NOT_LEADER,
+            current_leader
+                .and_then(|l| i64::try_from(l.0).ok())
+                .unwrap_or(LEADER_HINT_UNKNOWN),
+        ),
+        RaftError::UncommittedTail => (SUBMIT_CHANGE_UNCOMMITTED_TAIL, LEADER_HINT_UNKNOWN),
+        other => {
+            tracing::warn!(error = ?other, "submit-change failed");
+            (SUBMIT_CHANGE_FAILED, LEADER_HINT_UNKNOWN)
+        }
+    };
+    KrabkaSubmitChangeResponse {
+        error_code,
+        leader_hint,
+        result: Bytes::new(),
+    }
 }
 
 /// Handle a generation-bound delegation-token mutation forwarded to the
@@ -300,6 +305,48 @@ mod tests {
         let duplicate = decode_submit_change_response(&duplicate);
         assert2::assert!(duplicate.error_code == 2);
         assert2::assert!(duplicate.leader_hint == -1);
+    }
+
+    #[test]
+    fn a_failed_submit_encodes_the_code_the_forwarding_node_translates() {
+        for (case, error, error_code, leader_hint) in [
+            (
+                "metadata rejection",
+                RaftError::Metadata(krabka_metadata::MetadataError::TopicExists("t".into())),
+                SUBMIT_CHANGE_REJECTED,
+                LEADER_HINT_UNKNOWN,
+            ),
+            (
+                "not the leader",
+                RaftError::NotLeader {
+                    current_leader: Some(crate::types::NodeId(3)),
+                },
+                SUBMIT_CHANGE_NOT_LEADER,
+                3,
+            ),
+            (
+                "uncommitted tail",
+                RaftError::UncommittedTail,
+                SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                LEADER_HINT_UNKNOWN,
+            ),
+            (
+                "other failure",
+                RaftError::ChangeRejected("no".into()),
+                SUBMIT_CHANGE_FAILED,
+                LEADER_HINT_UNKNOWN,
+            ),
+        ] {
+            check!(
+                submit_change_failure(&error)
+                    == KrabkaSubmitChangeResponse {
+                        error_code,
+                        leader_hint,
+                        result: Bytes::new(),
+                    },
+                "{case}"
+            );
+        }
     }
 
     #[tokio::test]

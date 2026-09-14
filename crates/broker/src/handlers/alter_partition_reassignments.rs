@@ -53,7 +53,7 @@ use self::{
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
-    codes::{CLUSTER_AUTHORIZATION_FAILED, POLICY_VIOLATION},
+    codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, POLICY_VIOLATION},
     freeze::resolve::resolve_freeze_mutation,
     handlers::RequestContext,
 };
@@ -131,7 +131,11 @@ pub(crate) async fn handle(
                 {
                     let message = format!("submit failed: {error}");
                     tracing::warn!(%error, "alter-reassignment submit failed");
-                    mark_submit_failed(&mut by_topic, &message);
+                    mark_submit_failed(
+                        &mut by_topic,
+                        crate::handlers::submit_failure_code(&error, COORDINATOR_NOT_AVAILABLE),
+                        &message,
+                    );
                     submit_failure = Some(message);
                 }
             }

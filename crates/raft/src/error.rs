@@ -35,6 +35,18 @@ pub enum RaftError {
     #[error("change rejected: {0}")]
     ChangeRejected(String),
 
+    /// The leader refused a compare-and-set because its log holds records
+    /// that are not committed yet.
+    ///
+    /// A break-glass consume and a topic-freeze replacement check the
+    /// committed image, so the leader decides them only when its whole log is
+    /// committed. A newly elected leader is in this state until it commits a
+    /// record from its own epoch. Kafka's controller is not active in the same
+    /// window, and it answers `NOT_CONTROLLER`. The refusal clears when the
+    /// tail commits, so a caller can retry.
+    #[error("the controller leader has uncommitted metadata records")]
+    UncommittedTail,
+
     #[error("reconfiguration rejected: {0}")]
     ReconfigRejected(String),
 

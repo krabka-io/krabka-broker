@@ -28,6 +28,11 @@ const NO_SNAPSHOT: i64 = -1;
 /// not-leader or metadata-validation.
 pub const API_KEY_SUBMIT_CHANGE: i16 = 1003;
 
+/// `KrabkaSubmitChangeResponse::error_code`: the leader refused a
+/// compare-and-set until its uncommitted tail commits. The forwarding node
+/// turns it back into [`crate::RaftError::UncommittedTail`].
+pub const SUBMIT_CHANGE_UNCOMMITTED_TAIL: i16 = 4;
+
 /// Observer metadata fetch.
 ///
 /// The body carries a `fetch_offset`, which is a `KraftLog` offset, and
@@ -98,7 +103,8 @@ impl KrabkaSubmitChangeRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KrabkaSubmitChangeResponse {
     /// 0 means success. Any other value is an opaque transport-level error
-    /// code: 1 is not leader, 2 is metadata validation, and 3 is other.
+    /// code: 1 is not leader, 2 is metadata validation, 3 is other, and 4
+    /// ([`SUBMIT_CHANGE_UNCOMMITTED_TAIL`]) is an uncommitted leader tail.
     pub error_code: i16,
     /// The leader id the responder believes is current, when the responder
     /// cannot apply the change itself. -1 means "unknown".

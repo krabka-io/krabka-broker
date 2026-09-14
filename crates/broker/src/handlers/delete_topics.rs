@@ -292,7 +292,7 @@ pub(crate) async fn handle(
             Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => codes::NOT_CONTROLLER,
             Err(e) => {
                 tracing::error!(topic = %name, error = %e, "DeleteTopics submit_change failed");
-                codes::UNKNOWN_SERVER_ERROR
+                crate::handlers::submit_failure_code(&e, codes::UNKNOWN_SERVER_ERROR)
             }
         };
 

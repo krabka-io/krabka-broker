@@ -23,6 +23,7 @@ mod admin_audit;
 mod coordinator_routing;
 mod private_api_keys;
 mod response_encoding;
+mod submit_failure;
 mod wire_types;
 
 pub(crate) use self::{
@@ -39,6 +40,7 @@ pub(crate) use self::{
         TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
     },
     response_encoding::{encode_response, encode_response_with_context},
+    submit_failure::submit_failure_code,
     wire_types::{ApiKeyCode, ApiVersion, CorrelationId, ErrorCode},
 };
 

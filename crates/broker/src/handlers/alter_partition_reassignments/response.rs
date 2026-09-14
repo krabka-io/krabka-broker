@@ -19,8 +19,6 @@ use krabka_protocol::{
     },
 };
 
-use crate::codes::COORDINATOR_NOT_AVAILABLE;
-
 pub(super) fn ok_row(partition_index: i32) -> ReassignablePartitionResponse {
     ReassignablePartitionResponse {
         partition_index,
@@ -43,12 +41,13 @@ pub(super) fn err_row(
 
 pub(super) fn mark_submit_failed(
     by_topic: &mut HashMap<String, Vec<ReassignablePartitionResponse>>,
+    code: i16,
     msg: &str,
 ) {
     for rows in by_topic.values_mut() {
         for r in rows.iter_mut() {
             if r.error_code == 0 {
-                r.error_code = COORDINATOR_NOT_AVAILABLE;
+                r.error_code = code;
                 r.error_message = Some(msg.to_string());
             }
         }
@@ -100,7 +99,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codes::{CLUSTER_AUTHORIZATION_FAILED, UNKNOWN_TOPIC_OR_PARTITION},
+        codes::{CLUSTER_AUTHORIZATION_FAILED, NOT_CONTROLLER, UNKNOWN_TOPIC_OR_PARTITION},
         handlers::alter_partition_reassignments::test_support::{decode_response, request},
     };
 
@@ -162,13 +161,17 @@ mod tests {
             err_row(8, UNKNOWN_TOPIC_OR_PARTITION, "unknown partition".into()),
         ]};
 
-        mark_submit_failed(&mut by_topic, "submit failed: not controller");
+        mark_submit_failed(
+            &mut by_topic,
+            NOT_CONTROLLER,
+            "submit failed: not controller",
+        );
         let rows = by_topic.get("orders").expect("topic rows");
 
         let expected = vec![
             ReassignablePartitionResponse {
                 partition_index: 7,
-                error_code: COORDINATOR_NOT_AVAILABLE,
+                error_code: NOT_CONTROLLER,
                 error_message: Some("submit failed: not controller".into()),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },

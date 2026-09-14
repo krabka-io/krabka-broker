@@ -164,7 +164,7 @@ pub(crate) async fn handle(
     // idempotent (the `apply` arm calls `brokers.remove`).
     if let Err(e) = broker.controller.submit_change(records).await {
         let resp = response(
-            codes::UNKNOWN_SERVER_ERROR,
+            crate::handlers::submit_failure_code(&e, codes::UNKNOWN_SERVER_ERROR),
             Some(format!("controller submit failed: {e}")),
         );
         return encode_resp(version, &resp);
