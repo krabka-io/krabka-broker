@@ -42,6 +42,24 @@ pub(super) fn refused_topic_result(
     }
 }
 
+/// An `INVALID_REQUEST` row from the request validation, with Kafka's message.
+///
+/// `name` and `topic_id` are the ones that Kafka's `ControllerApis.deleteTopics`
+/// puts on the row, which differ per rule.
+pub(super) fn invalid_topic_result(
+    name: Option<String>,
+    topic_id: WireUuid,
+    message: &str,
+) -> DeletableTopicResult {
+    DeletableTopicResult {
+        name,
+        topic_id,
+        error_code: crate::codes::INVALID_REQUEST,
+        error_message: Some(message.to_string()),
+        ..Default::default()
+    }
+}
+
 /// Builds the response envelope over the per-topic rows.
 pub(super) fn delete_topics_response(
     responses: Vec<DeletableTopicResult>,
