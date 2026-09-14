@@ -24,8 +24,6 @@ use wiremock::{
     matchers::{method, path},
 };
 
-use crate::support;
-
 /// Kafka error 87. KIP-467 added it for "one or more records in the batch were
 /// invalid", which is what a schema rejection is.
 pub const INVALID_RECORD: i16 = 87;
@@ -182,7 +180,14 @@ pub async fn create_topic(
     create_topic_rf(broker, client, name, configs, 1).await
 }
 
-/// Create `name` with an explicit replication factor.
+/// Create `name` with an explicit replication factor, wait until `broker`
+/// has its partition, and answer the topic id.
+///
+/// The id comes from the `CreateTopics` response, which the broker sends only
+/// after the topic record commits. A `Metadata` read is not safe here: `client`
+/// can bootstrap to a broker other than `broker`, and that broker can still be
+/// one fetch behind the commit. It then answers the topic as unknown with a
+/// zero id, and a `Produce` at version 13 or later carries only that zero id.
 pub async fn create_topic_rf(
     broker: &BrokerHandle,
     client: &Client,
@@ -217,8 +222,12 @@ pub async fn create_topic_rf(
         "create {name}: {:?}",
         created.error_message
     );
+    assert!(
+        created.topic_id != WireUuid::ZERO,
+        "create {name} answered no topic id"
+    );
     broker.wait_until_partition_present(name, 0).await;
-    support::topic_id_for(client, name).await
+    created.topic_id
 }
 
 /// Produce one batch and return the whole partition response, so a case can
