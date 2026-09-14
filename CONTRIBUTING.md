@@ -42,44 +42,23 @@ that the change does not otherwise touch. The
 [style guides](docs/style_guides/README.md) contain the code and documentation
 rules.
 
-## JVM Oracle
-
-[`tools/oracle`](tools/oracle/README.md) is the JVM differential-test oracle.
-It answers Kafka wire questions with Apache Kafka's own `kafka-clients` code.
-You need a JDK 17 to build it. You do not need a system Gradle.
-
-```sh
-(cd tools/oracle && ./gradlew installDist)
-```
-
-Gradle installs the start script at
-`tools/oracle/build/install/krabka-oracle/bin/krabka-oracle`. The wire-level
-differential suites that drive it live in
-[krabka-protocol](https://github.com/krabka-io/krabka-protocol), not here. The
-`oracle` job of `ci.yml` builds the oracle on every pull request, so a
-`kafka-clients` bump that does not compile fails here.
-
 ## Bumping the upstream Kafka version
 
 A Kafka version bump is two changes, one in each of two repositories. Give both
 the same Kafka tag.
 
-The schema sync and the protocol code regeneration are the other half. They
-belong to
-[krabka-protocol](https://github.com/krabka-io/krabka-protocol), in that
-repository's `docs/CONTRIBUTING.md`. Do that half first. Then, in this
+The schema sync, the protocol code regeneration and the JVM differential-test
+oracle (`tools/oracle`, with its `kafka-clients` version) are in
+[krabka-protocol](https://github.com/krabka-io/krabka-protocol). Follow the
+procedure in that repository's `docs/CONTRIBUTING.md` first. Then, in this
 repository:
 
 1. Update the image tag and digest for the new release in `MODULE.bazel` and in
    [`bazel/images/BUILD.bazel`](bazel/images/BUILD.bazel), and the oracle line
    in [`docs/KIP_MATRIX.md`](docs/KIP_MATRIX.md). `aspect check-images` holds
    the first two in step.
-2. Update the `kafka-clients` version in
-   [`tools/oracle/build.gradle.kts`](tools/oracle/build.gradle.kts) to the same
-   release.
-3. Run `(cd tools/oracle && ./gradlew installDist)`.
-4. Run `bazel test --config=docker //crates/...`.
-5. Commit the image pins and the Gradle bump together.
+2. Run `bazel test --config=docker //crates/...`.
+3. Commit the image pins.
 
 ## Benchmarks
 

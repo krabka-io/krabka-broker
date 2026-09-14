@@ -161,16 +161,6 @@ cluster harness that runs `krabka-bench-driver` as a Kubernetes Job against a
 Krabka cluster and a Strimzi cluster in turn, and aggregates the per-run JSON
 into one report. It needs a live cluster, so no CI job runs it.
 
-The JVM oracle is a separate build. It needs a JDK 17, and it is optional: no
-test in this repository runs it.
-
-```
-(cd tools/oracle && ./gradlew installDist)
-```
-
-[`tools/oracle/README.md`](tools/oracle/README.md) says what it does and who
-runs it.
-
 ### Everything CI does, locally
 
 The [Aspect CLI](https://github.com/aspect-build/aspect-cli) narrows each task to
