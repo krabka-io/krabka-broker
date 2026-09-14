@@ -1,6 +1,6 @@
 //! Projection of a `Fetch` request, or of the partitions its session
 //! already caches, into the per-topic shape the read path walks, together
-//! with the session classification and topic authorization that run before
+//! with the session classification and the authorization that run before
 //! any partition is read.
 
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     fetch_session::{CachedPartitionState, FetchSessionKey, SessionDecision},
+    handlers::cluster_action_denied,
 };
 
 /// Projection of `FetchRequest::topics` or of the cached session partitions.
@@ -35,11 +36,48 @@ pub(super) struct EffectivePartition {
     pub(super) partition_max_bytes: i32,
 }
 
+/// The authorization decision for the partition rows of one fetch.
+///
+/// Kafka's `KafkaApis.handleFetchRequest` authorizes a follower fetch and a
+/// consumer fetch in different ways. A follower fetch needs `ClusterAction` on
+/// the cluster resource, and then no topic ACL. A consumer fetch needs `Read`
+/// on each topic.
+pub(super) enum FetchAuthorization {
+    /// A follower fetch whose principal holds `ClusterAction`.
+    Follower,
+    /// A follower fetch whose principal does not hold `ClusterAction`. Kafka
+    /// answers `TOPIC_AUTHORIZATION_FAILED` on every partition row, also on a
+    /// row whose topic does not resolve, and reads nothing.
+    FollowerDenied,
+    /// A consumer fetch, with the names of the topics whose `Read` the
+    /// authorizer denied.
+    Consumer {
+        denied_topics: std::collections::HashSet<String>,
+    },
+}
+
+impl FetchAuthorization {
+    /// Reports whether every partition row is refused before its topic
+    /// resolves.
+    pub(super) const fn refuses_every_row(&self) -> bool {
+        matches!(self, Self::FollowerDenied)
+    }
+
+    /// Reports whether the rows of the resolved topic `topic_name` are refused.
+    pub(super) fn refuses_topic(&self, topic_name: &str) -> bool {
+        match self {
+            Self::Follower => false,
+            Self::FollowerDenied => true,
+            Self::Consumer { denied_topics } => denied_topics.contains(topic_name),
+        }
+    }
+}
+
 pub(super) struct FetchPreparation {
     pub(super) decision: SessionDecision,
     pub(super) effective_topics: Vec<EffectiveTopic>,
     pub(super) image: Arc<krabka_metadata::MetadataImage>,
-    pub(super) denied_topics: std::collections::HashSet<String>,
+    pub(super) authorization: FetchAuthorization,
     pub(super) effective_replica_id: i32,
     pub(super) is_follower_fetch: bool,
     pub(super) read_committed: bool,
@@ -85,6 +123,37 @@ pub(super) fn prepare_fetch(
             .collect(),
     };
     let image = broker.controller.current_image();
+    let authorization = if is_follower_fetch {
+        if cluster_action_denied(broker.config.authorizer.as_ref(), &image, context) {
+            FetchAuthorization::FollowerDenied
+        } else {
+            FetchAuthorization::Follower
+        }
+    } else {
+        FetchAuthorization::Consumer {
+            denied_topics: consumer_denied_topics(broker, &image, &effective_topics, context),
+        }
+    };
+    Ok(FetchPreparation {
+        decision,
+        effective_topics,
+        image,
+        authorization,
+        effective_replica_id,
+        is_follower_fetch,
+        read_committed: !is_follower_fetch && request.isolation_level == 1,
+    })
+}
+
+/// The names of the topics whose `Read` the authorizer denies to a consumer.
+///
+/// A topic id that does not resolve gives the empty name.
+fn consumer_denied_topics(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    effective_topics: &[EffectiveTopic],
+    context: &crate::handlers::RequestContext<'_>,
+) -> std::collections::HashSet<String> {
     let names: Vec<String> = effective_topics
         .iter()
         .map(|topic| {
@@ -100,9 +169,9 @@ pub(super) fn prepare_fetch(
             }
         })
         .collect();
-    let denied_topics = authorize_topics(
+    authorize_topics(
         broker.config.authorizer.as_ref(),
-        &*image,
+        image,
         context.principal,
         context.peer,
         AclOperation::Read,
@@ -111,16 +180,7 @@ pub(super) fn prepare_fetch(
     .into_iter()
     .filter(|(_, result)| *result == AuthorizationResult::Deny)
     .map(|(name, _)| name.to_owned())
-    .collect();
-    Ok(FetchPreparation {
-        decision,
-        effective_topics,
-        image,
-        denied_topics,
-        effective_replica_id,
-        is_follower_fetch,
-        read_committed: !is_follower_fetch && request.isolation_level == 1,
-    })
+    .collect()
 }
 
 /// Re-group the flat `(key, state)` list that `FetchSessionCache::classify`

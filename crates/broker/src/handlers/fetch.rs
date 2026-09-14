@@ -37,6 +37,8 @@ mod session;
 mod throttle;
 
 #[cfg(test)]
+mod follower_authorization_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 pub(crate) use self::plan::PendingRead;
@@ -51,7 +53,7 @@ use self::{
 };
 use crate::{
     broker::Broker, error::BrokerError, fetch_session::INVALID_SESSION_ID,
-    handlers::cluster_action_denied, network::fetch_writer::records_to_serve,
+    network::fetch_writer::records_to_serve,
 };
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
@@ -127,7 +129,7 @@ pub(crate) async fn handle(
         decision,
         effective_topics,
         image,
-        denied_topics,
+        authorization,
         effective_replica_id,
         is_follower_fetch,
         read_committed,
@@ -136,7 +138,9 @@ pub(crate) async fn handle(
     if version >= crate::wal::quorum::wire::KIP_595_FETCH_VERSION
         && crate::wal::quorum::wire::decode_fetch_request(&req).is_some()
     {
-        if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        // A KIP-595 fetch always names a replica, so `prepare_fetch` has
+        // already checked `ClusterAction` for it.
+        if authorization.refuses_every_row() {
             return Ok((cluster_authorization_failed(), version));
         }
         let on_inter_broker_listener =
@@ -148,10 +152,9 @@ pub(crate) async fn handle(
             return Ok((cluster_authorization_failed(), version));
         };
         let routing_start = std::time::Instant::now();
-        if denied_topics.is_empty()
-            && let Some(response) = broker
-                .wal_shards
-                .route_fetch_request(&req, authenticated_node)
+        if let Some(response) = broker
+            .wal_shards
+            .route_fetch_request(&req, authenticated_node)
         {
             // A routed WAL fetch is served straight out of this broker's own
             // shard engine, so the round trip is local work like any other
@@ -167,7 +170,7 @@ pub(crate) async fn handle(
     let plan_context = PendingPlanContext {
         broker,
         image: &image,
-        denied_topics: &denied_topics,
+        authorization: &authorization,
         rack_id: &req.rack_id,
         version,
         mode: (read_committed, is_follower_fetch),
