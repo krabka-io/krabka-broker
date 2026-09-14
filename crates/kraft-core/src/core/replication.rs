@@ -281,7 +281,14 @@ impl QuorumStateMachine {
 
     /// The fetch timer fired: a follower or observer lost contact with the leader.
     ///
-    /// A voter starts an election. An observer continues to look for a leader.
+    /// A voter starts an election. An observer has no vote, so it forgets the
+    /// leader that stopped answering and looks for the current one: it becomes
+    /// a discovering observer and arms the fetch timer, and the next Fetch goes
+    /// to a configured voter. Kafka's observer does the same: when its Fetch to
+    /// the leader times out, `KafkaRaftClient.maybeSendFetchToBestNode` sends
+    /// the next Fetch to a bootstrap server. An observer that kept the silent
+    /// leader would send nothing more after the timer fired, and a leader
+    /// change during that time would leave it behind for good.
     #[tracing::instrument(
         level = "debug",
         skip_all,
@@ -295,7 +302,20 @@ impl QuorumStateMachine {
         if self.is_voter() {
             self.start_election(log, now)
         } else {
-            Vec::new()
+            self.state.leader_id = None;
+            let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+            self.role = Role::Observer {
+                leader_id: None,
+                fetch_deadline,
+            };
+            vec![
+                Action::PersistQuorumState,
+                Action::TransitionedTo(self.role.name()),
+                Action::ResetTimer {
+                    kind: TimerKind::Fetch,
+                    deadline: fetch_deadline,
+                },
+            ]
         }
     }
 }

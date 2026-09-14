@@ -768,3 +768,48 @@ fn a_removed_leader_resigns_into_observer_discovery() {
             )
     );
 }
+
+/// An observer whose leader stops answering looks for the current leader.
+///
+/// Node 4 observes a three-voter quorum and attached to node 1 at epoch 1.
+/// When its fetch timer fires, it forgets node 1 and arms the fetch timer
+/// again, so its next Fetch discovers whichever voter leads now.
+#[test]
+fn an_observer_whose_fetches_time_out_looks_for_the_current_leader() {
+    let mut m = machine(NodeId(4), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    m.on_event(
+        Event::ReceiveBeginQuorumEpoch {
+            leader_id: NodeId(1),
+            leader_epoch: 1,
+        },
+        &log,
+        SimInstant(1_000),
+    );
+
+    let actions = m.on_event(Event::FetchTimeout, &log, SimInstant(2_000));
+
+    let deadline = SimInstant(2_000).saturating_add_ms(1_000);
+    assert2::assert!(
+        actions
+            == vec![
+                Action::PersistQuorumState,
+                Action::TransitionedTo("Observer"),
+                Action::ResetTimer {
+                    kind: TimerKind::Fetch,
+                    deadline,
+                },
+            ]
+    );
+    assert2::assert!(
+        *m.role()
+            == Role::Observer {
+                leader_id: None,
+                fetch_deadline: deadline,
+            }
+    );
+    assert2::assert!((m.quorum_state().leader_id, m.quorum_state().leader_epoch) == (None, 1));
+}

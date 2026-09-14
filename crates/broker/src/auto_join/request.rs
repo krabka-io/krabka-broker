@@ -67,6 +67,41 @@ pub(super) fn select_bootstrap_server(bootstrap_servers: &[String], attempt: usi
     &bootstrap_servers[attempt % bootstrap_servers.len()]
 }
 
+/// The controller endpoint that a join request goes to: the current leader's
+/// `CONTROLLER` endpoint, or a bootstrap server while no leader is known.
+///
+/// Kafka's observer sends `AddRaftVoter` to the leader that it fetches from
+/// (`KafkaRaftClient.maybeSendAddVoterRequest` uses `state.leaderNode`). A
+/// bootstrap server only helps to find that leader. After the leadership moves
+/// away from it, a bootstrap server answers `NOT_LEADER_OR_FOLLOWER` to every
+/// join, so a join that always dialed it would never finish.
+///
+/// `attempt` rotates across the bootstrap servers, and the second value says
+/// whether the target is a bootstrap server.
+pub(super) fn join_target(
+    quorum: &krabka_raft::QuorumState,
+    bootstrap_servers: &[String],
+    attempt: usize,
+) -> (String, bool) {
+    let leader_endpoint = quorum
+        .current_leader
+        .and_then(|leader| quorum.voter_nodes.get(&leader))
+        .and_then(|leader| {
+            leader
+                .endpoints
+                .iter()
+                .find(|endpoint| endpoint.name.eq_ignore_ascii_case("CONTROLLER"))
+                .or_else(|| leader.endpoints.first())
+        });
+    match leader_endpoint {
+        Some(endpoint) => (format!("{}:{}", endpoint.host, endpoint.port), false),
+        None => (
+            select_bootstrap_server(bootstrap_servers, attempt).to_owned(),
+            true,
+        ),
+    }
+}
+
 pub(super) fn build_add_raft_voter_request(
     cluster_id: Option<uuid::Uuid>,
     voter_id: i32,
@@ -163,6 +198,87 @@ mod tests {
         assert2::assert!((select_bootstrap_server(&servers, 2)) == (servers[2].as_str()));
         assert2::assert!((select_bootstrap_server(&servers, 3)) == (servers[0].as_str()));
         assert2::assert!((select_bootstrap_server(&servers, 5)) == (servers[2].as_str()));
+    }
+
+    #[test]
+    fn a_join_goes_to_the_known_leader_and_to_a_bootstrap_server_otherwise() {
+        fn quorum(
+            leader: Option<u64>,
+            voters: &[(u64, &[(&str, u16)])],
+        ) -> krabka_raft::QuorumState {
+            krabka_raft::QuorumState {
+                current_term: 3,
+                last_applied_index: 0,
+                current_leader: leader.map(krabka_raft::NodeId),
+                voters: voters
+                    .iter()
+                    .map(|(id, _)| krabka_raft::NodeId(*id))
+                    .collect(),
+                voter_nodes: voters
+                    .iter()
+                    .map(|(id, endpoints)| {
+                        (
+                            krabka_raft::NodeId(*id),
+                            krabka_raft::Node {
+                                directory_id: uuid::Uuid::from_u128(u128::from(*id)),
+                                endpoints: endpoints
+                                    .iter()
+                                    .map(|(name, port)| krabka_metadata::VoterEndpoint {
+                                        name: (*name).to_owned(),
+                                        host: "127.0.0.1".to_owned(),
+                                        port: *port,
+                                    })
+                                    .collect(),
+                                kraft_version: krabka_metadata::KRaftVersionRange::default(),
+                            },
+                        )
+                    })
+                    .collect(),
+                per_voter_matched_index: std::collections::BTreeMap::new(),
+                per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
+                per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
+                observer_directory_ids: std::collections::BTreeMap::new(),
+                is_leader: false,
+            }
+        }
+
+        let bootstrap: Vec<String> = ["127.0.0.1:9001", "127.0.0.1:9002"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let leader_two_voters: &[(u64, &[(&str, u16)])] = &[
+            (1, &[("CONTROLLER", 9001)]),
+            (2, &[("REPLICATION", 9102), ("CONTROLLER", 9002)]),
+        ];
+        for (case, quorum, attempt, expected) in [
+            (
+                "the leader moved off the first bootstrap server",
+                quorum(Some(2), leader_two_voters),
+                0,
+                ("127.0.0.1:9002", false),
+            ),
+            (
+                "the leader has no CONTROLLER endpoint",
+                quorum(Some(1), &[(1, &[("REPLICATION", 9101)])]),
+                0,
+                ("127.0.0.1:9101", false),
+            ),
+            (
+                "no leader is known",
+                quorum(None, leader_two_voters),
+                1,
+                ("127.0.0.1:9002", true),
+            ),
+            (
+                "the leader is not in the voter set this node knows",
+                quorum(Some(7), leader_two_voters),
+                2,
+                ("127.0.0.1:9001", true),
+            ),
+        ] {
+            let (target, from_bootstrap) = join_target(&quorum, &bootstrap, attempt);
+            assert!((target.as_str(), from_bootstrap) == expected, "{case}");
+        }
     }
 
     #[test]

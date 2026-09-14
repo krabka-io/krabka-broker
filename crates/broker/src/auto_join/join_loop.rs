@@ -12,15 +12,14 @@ use krabka_units::convert::TimeExt as _;
 use super::{
     AutoJoinParams,
     outcome::{JoinOutcome, log_join_outcome},
-    request::{
-        advertised_controller_listener, build_add_raft_voter_request, select_bootstrap_server,
-    },
+    request::{advertised_controller_listener, build_add_raft_voter_request, join_target},
     rpc::{send_add_raft_voter, send_remove_raft_voter},
 };
 
 /// Drive the auto-join loop. Returns immediately (without touching the
 /// network) when `auto_join` is disabled. Otherwise loops until this broker
-/// appears in the committed voter set, rotating across `bootstrap_servers`.
+/// appears in the committed voter set. Each request goes to the current leader,
+/// or rotates across `bootstrap_servers` while no leader is known.
 /// Intended to be spawned as a detached background task during `Broker::start`.
 pub(crate) async fn run(params: AutoJoinParams) {
     if !params.auto_join {
@@ -73,8 +72,12 @@ pub(crate) async fn run(params: AutoJoinParams) {
             return;
         }
 
-        let target = select_bootstrap_server(&bootstrap_servers, next_server);
-        next_server = next_server.wrapping_add(1);
+        let (target, from_bootstrap) =
+            join_target(&controller.quorum_state(), &bootstrap_servers, next_server);
+        if from_bootstrap {
+            next_server = next_server.wrapping_add(1);
+        }
+        let target = target.as_str();
 
         if let Some(existing) = controller.current_image().voters().get(self_id)
             && existing.directory_id != params.directory_id
