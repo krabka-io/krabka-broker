@@ -288,8 +288,7 @@ async fn all_log_dirs_offline_triggers_self_shutdown() {
 /// the request back with `error_code=0` on every partition.
 ///
 /// This exercises the real async `handle` path: decode, the leader gate,
-/// `collect_assignment_changes`, `submit_change`, `build_echo_response`, and
-/// encode.
+/// `plan_assignments`, `submit_change`, and encode.
 #[tokio::test]
 async fn assign_replicas_to_dirs_reports_and_echoes() {
     const VERSION: i16 = 0; // AssignReplicasToDirs only has version 0
