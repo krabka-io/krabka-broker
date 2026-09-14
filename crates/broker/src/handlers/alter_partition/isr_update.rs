@@ -11,40 +11,35 @@ use krabka_metadata::{
     LeaderRecoveryState, MetadataRecord, PartitionRecord, PartitionRecoveryRecord,
 };
 use krabka_protocol::{
-    UnknownTaggedFields, owned::alter_partition_response::PartitionData as RespPartitionData,
+    UnknownTaggedFields,
+    owned::{
+        alter_partition_request::PartitionData as ReqPartitionData,
+        alter_partition_response::PartitionData as RespPartitionData,
+    },
 };
 use krabka_verified::isr::{IsrAdmission, isr_admission};
 
 use crate::codes;
 
-/// Validates and applies the ISR proposal of one partition. It returns the
-/// per-partition response data, and on success it appends to `changes`.
+/// Validates and applies the ISR proposal of one partition of the known topic
+/// `topic_name`. It returns the per-partition response data, and on success it
+/// appends to `changes`.
 ///
-/// `new_isr_i32` carries the v2 `new_isr` field, and `new_isr_with_epochs`
-/// carries the v3 field. A v3 request leaves `new_isr` empty and fills
+/// The request row carries the v2 `new_isr` field or the v3
+/// `new_isr_with_epochs` field. A v3 request leaves `new_isr` empty and fills
 /// `new_isr_with_epochs`. When `new_isr` is empty, this function therefore
 /// takes the broker IDs from `new_isr_with_epochs`.
-#[allow(clippy::too_many_arguments)] // Mirrors one AlterPartition request row plus output batch.
 pub(super) fn handle_partition_with_recovery(
     image: &krabka_metadata::MetadataImage,
-    topic_name: Option<&str>,
-    partition_index: i32,
-    req_leader_epoch: i32,
-    req_recovery_state: i8,
-    new_isr_i32: &[i32],
-    new_isr_with_epochs: &[krabka_protocol::owned::alter_partition_request::BrokerState],
+    topic_name: &str,
+    request: &ReqPartitionData,
     changes: &mut Vec<MetadataRecord>,
 ) -> RespPartitionData {
-    let Some(topic_name) = topic_name else {
-        return error_part(
-            partition_index,
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            0,
-            0,
-            &[],
-            0,
-        );
-    };
+    let partition_index = request.partition_index;
+    let req_leader_epoch = request.leader_epoch;
+    let req_recovery_state = request.leader_recovery_state;
+    let new_isr_i32 = request.new_isr.as_slice();
+    let new_isr_with_epochs = request.new_isr_with_epochs.as_slice();
     let Some(part_rec) = image.partition(topic_name, partition_index) else {
         return error_part(
             partition_index,
@@ -211,10 +206,12 @@ pub(super) fn handle_partition_with_recovery(
     }
 }
 
+/// Runs [`handle_partition_with_recovery`] for one row that asks for the
+/// `Recovered` state.
 #[cfg(test)]
 fn handle_partition(
     image: &krabka_metadata::MetadataImage,
-    topic_name: Option<&str>,
+    topic_name: &str,
     partition_index: i32,
     req_leader_epoch: i32,
     new_isr_i32: &[i32],
@@ -224,11 +221,14 @@ fn handle_partition(
     handle_partition_with_recovery(
         image,
         topic_name,
-        partition_index,
-        req_leader_epoch,
-        LeaderRecoveryState::Recovered as i8,
-        new_isr_i32,
-        new_isr_with_epochs,
+        &ReqPartitionData {
+            partition_index,
+            leader_epoch: req_leader_epoch,
+            new_isr: new_isr_i32.to_vec(),
+            new_isr_with_epochs: new_isr_with_epochs.to_vec(),
+            leader_recovery_state: LeaderRecoveryState::Recovered as i8,
+            ..Default::default()
+        },
         changes,
     )
 }
@@ -262,7 +262,7 @@ mod tests {
         let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
         let mut changes = Vec::new();
         let isr = vec![bs(1, 10), bs(2, 20), bs(3, 30)];
-        let resp = handle_partition(&image, Some("t"), 0, 5, &[], &isr, &mut changes);
+        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
         assert!(resp.error_code == codes::NONE, "got {}", resp.error_code);
         assert!(changes.len() == 1);
     }
@@ -281,7 +281,7 @@ mod tests {
             &[(2, 20), (4, 40), (6, 60)],
         );
         let mut changes = Vec::new();
-        let resp = handle_partition(&image, Some("t"), 7, 9, &[2, 4], &[], &mut changes);
+        let resp = handle_partition(&image, "t", 7, 9, &[2, 4], &[], &mut changes);
 
         let expected = RespPartitionData {
             partition_index: 7,
@@ -317,7 +317,7 @@ mod tests {
         );
         let mut changes = Vec::new();
 
-        let response = handle_partition(&image, Some("t"), 0, 5, &[1, 2], &[], &mut changes);
+        let response = handle_partition(&image, "t", 0, 5, &[1, 2], &[], &mut changes);
 
         assert!(response.error_code == codes::INVALID_REQUEST);
         assert!(changes.is_empty());
@@ -337,7 +337,7 @@ mod tests {
             &[(2, 20), (4, 40), (6, 60)],
         );
         let mut changes = Vec::new();
-        let resp = handle_partition(&image, Some("t"), 7, 8, &[2, 4], &[], &mut changes);
+        let resp = handle_partition(&image, "t", 7, 8, &[2, 4], &[], &mut changes);
 
         let expected = RespPartitionData {
             partition_index: 7,
@@ -352,7 +352,7 @@ mod tests {
     fn explicit_v2_isr_wins_when_epoch_states_are_also_present() {
         let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
         let mut changes = Vec::new();
-        let resp = handle_partition(&image, Some("t"), 0, 5, &[1, 2], &[bs(3, 30)], &mut changes);
+        let resp = handle_partition(&image, "t", 0, 5, &[1, 2], &[bs(3, 30)], &mut changes);
         let expected = RespPartitionData {
             partition_index: 0,
             error_code: codes::NONE,
@@ -376,7 +376,7 @@ mod tests {
         let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
         let mut changes = Vec::new();
         let isr = vec![bs(1, 10), bs(2, 20), bs(3, 29)]; // 29 != image 30
-        let resp = handle_partition(&image, Some("t"), 0, 5, &[], &isr, &mut changes);
+        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
         assert!(
             resp.error_code == codes::INELIGIBLE_REPLICA,
             "got {}",
@@ -390,7 +390,7 @@ mod tests {
         let image = image_with(&[(1, 10), (2, 20)]); // broker 3 never registered
         let mut changes = Vec::new();
         let isr = vec![bs(1, 10), bs(2, 20), bs(3, -1)];
-        let resp = handle_partition(&image, Some("t"), 0, 5, &[], &isr, &mut changes);
+        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
         assert!(
             resp.error_code == codes::INELIGIBLE_REPLICA,
             "got {}",
@@ -404,7 +404,7 @@ mod tests {
         let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
         let mut changes = Vec::new();
         let isr = vec![bs(1, -1), bs(2, -1), bs(3, -1)]; // -1 = don't check
-        let resp = handle_partition(&image, Some("t"), 0, 5, &[], &isr, &mut changes);
+        let resp = handle_partition(&image, "t", 0, 5, &[], &isr, &mut changes);
         assert!(resp.error_code == codes::NONE, "got {}", resp.error_code);
         assert!(changes.len() == 1);
     }
@@ -414,7 +414,7 @@ mod tests {
         let image = image_with(&[(1, 10), (2, 20)]);
         let mut changes = Vec::new();
         // v2: new_isr populated, new_isr_with_epochs empty -> no epoch fencing.
-        let resp = handle_partition(&image, Some("t"), 0, 5, &[1, 2, 3], &[], &mut changes);
+        let resp = handle_partition(&image, "t", 0, 5, &[1, 2, 3], &[], &mut changes);
         assert!(resp.error_code == codes::NONE, "got {}", resp.error_code);
         assert!(changes.len() == 1);
     }
@@ -433,7 +433,7 @@ mod tests {
             &[(0, 0), (1, 10)],
         );
         let mut changes = Vec::new();
-        let resp = handle_partition(&image, Some("t"), 0, 5, &[-1], &[], &mut changes);
+        let resp = handle_partition(&image, "t", 0, 5, &[-1], &[], &mut changes);
 
         assert!(resp.error_code == codes::INVALID_REQUEST);
         assert!(changes.is_empty());
@@ -453,12 +453,14 @@ mod tests {
 
         let rejected = handle_partition_with_recovery(
             &image,
-            Some("t"),
-            0,
-            5,
-            LeaderRecoveryState::Recovering as i8,
-            &[1, 2],
-            &[],
+            "t",
+            &ReqPartitionData {
+                partition_index: 0,
+                leader_epoch: 5,
+                new_isr: vec![1, 2],
+                leader_recovery_state: LeaderRecoveryState::Recovering as i8,
+                ..Default::default()
+            },
             &mut changes,
         );
         assert!(rejected.error_code == codes::INVALID_REQUEST);
@@ -467,12 +469,14 @@ mod tests {
 
         let recovered = handle_partition_with_recovery(
             &image,
-            Some("t"),
-            0,
-            5,
-            LeaderRecoveryState::Recovered as i8,
-            &[1],
-            &[],
+            "t",
+            &ReqPartitionData {
+                partition_index: 0,
+                leader_epoch: 5,
+                new_isr: vec![1],
+                leader_recovery_state: LeaderRecoveryState::Recovered as i8,
+                ..Default::default()
+            },
             &mut changes,
         );
         assert!(recovered.error_code == codes::NONE);

@@ -16,6 +16,7 @@ use krabka_protocol::{
             AlterPartitionResponse, PartitionData as RespPartitionData, TopicData as RespTopicData,
         },
     },
+    primitives::uuid::Uuid as WireUuid,
 };
 
 mod authorization;
@@ -91,26 +92,31 @@ pub(crate) async fn handle(
         let mut resp_topics: Vec<RespTopicData> = Vec::new();
 
         for req_topic in &req.topics {
-            // Find the topic name via topic_id from the metadata image.
-            let topic_name_opt = image
-                .topics()
-                .find(|t| t.topic_id.as_bytes() == &req_topic.topic_id.0)
-                .map(|t| t.name.clone());
-
-            let mut resp_partitions: Vec<RespPartitionData> = Vec::new();
-            for req_part in &req_topic.partitions {
-                let resp_part = handle_partition_with_recovery(
-                    &image,
-                    topic_name_opt.as_deref(),
-                    req_part.partition_index,
-                    req_part.leader_epoch,
-                    req_part.leader_recovery_state,
-                    &req_part.new_isr,
-                    &req_part.new_isr_with_epochs,
-                    &mut changes,
-                );
-                resp_partitions.push(resp_part);
-            }
+            // Kafka's `ReplicationControlManager.alterPartition` answers
+            // UNKNOWN_TOPIC_ID on every partition row when the topic id is
+            // zero or names no topic. An unknown partition of a known topic
+            // answers UNKNOWN_TOPIC_OR_PARTITION in `isr_update`.
+            let topic_name = (req_topic.topic_id != WireUuid::ZERO)
+                .then(|| image.topic_name_by_id(&uuid::Uuid::from_bytes(req_topic.topic_id.0)))
+                .flatten();
+            let resp_partitions: Vec<RespPartitionData> = match topic_name {
+                None => req_topic
+                    .partitions
+                    .iter()
+                    .map(|req_part| RespPartitionData {
+                        partition_index: req_part.partition_index,
+                        error_code: codes::UNKNOWN_TOPIC_ID,
+                        ..Default::default()
+                    })
+                    .collect(),
+                Some(topic_name) => req_topic
+                    .partitions
+                    .iter()
+                    .map(|req_part| {
+                        handle_partition_with_recovery(&image, topic_name, req_part, &mut changes)
+                    })
+                    .collect(),
+            };
 
             resp_topics.push(RespTopicData {
                 topic_id: req_topic.topic_id,
