@@ -23,9 +23,9 @@ use super::ports::minio_port;
 // from the remote tier through `RemoteReader`.
 // ---------------------------------------------------------------------------
 
-pub(crate) const MINIO_IMAGE: &str = "mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
+pub(crate) const MINIO_IMAGE: &str = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
 
-pub(crate) const MINIO_CLIENT_IMAGE: &str = "mirror.gcr.io/minio/mc:RELEASE.2025-08-13T08-35-41Z";
+pub(crate) const MINIO_CLIENT_IMAGE: &str = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z";
 
 pub(crate) const MINIO_ACCESS_KEY: &str = "minioadmin";
 
