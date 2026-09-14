@@ -24,7 +24,7 @@ use crate::{
 };
 
 impl TxnCoordinator {
-    pub(super) async fn lock_state_partition_for(
+    pub(crate) async fn lock_state_partition_for(
         &self,
         tid: &str,
     ) -> tokio::sync::MutexGuard<'_, ()> {
@@ -65,7 +65,7 @@ impl TxnCoordinator {
     /// Persists one entry while the caller holds its state-partition write
     /// lock. The reaper uses this form to make its exact recheck and append one
     /// serialized operation.
-    pub(super) async fn put_under_state_partition_lock(
+    pub(crate) async fn put_under_state_partition_lock(
         &self,
         entry: TxnEntry,
         txnv: crate::txn::version::TxnVersion,
@@ -256,19 +256,30 @@ impl TxnCoordinator {
                 return Err(error);
             }
         };
-        let _pid_install = self
+        let pid_install = self
             .pid_install
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.state.clear();
         self.pid_to_tid.clear();
+        let mut prepared = Vec::new();
         for (tid, entry) in recovered.state {
+            if super::completion::completion_for(entry.state).is_some() {
+                prepared.push(tid.clone());
+            }
             self.state.insert(tid, Arc::new(Mutex::new(entry)));
         }
         for (pid, tid) in recovered.pid_to_tid {
             self.pid_to_tid.insert(pid, tid);
         }
         self.recovery_valid.store(true, Ordering::Release);
+        drop(pid_install);
+        // Kafka's `TransactionStateManager` hands every loaded `Prepare*`
+        // transaction to the marker channel, which writes its markers and its
+        // `Complete*` record.
+        for tid in &prepared {
+            self.request_completion(tid);
+        }
 
         info!(
             tids_loaded = self.state.len(),

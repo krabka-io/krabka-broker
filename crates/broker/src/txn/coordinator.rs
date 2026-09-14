@@ -6,7 +6,7 @@
 //! On `Broker::start` it recovers the state by replaying those partitions.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
@@ -19,7 +19,7 @@ use krabka_log::ProducerId;
 use krabka_metadata::MetadataImage;
 use krabka_security::ListenerProtocol;
 use krabka_units::ByteSize;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::{
     partition_registry::PartitionRegistry,
@@ -28,7 +28,11 @@ use crate::{
 
 /// KIP-98 transactional-id expiry: the decision core and the sweep over the
 /// tids this broker coordinates. [`crate::txn::id_expiration`] ticks it.
+/// Completion of transactions whose `Prepare*` record is durable.
+pub(crate) mod completion;
 pub(crate) mod expiry;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fanout_gate;
 mod markers;
 mod persistence;
 mod pid_index;
@@ -63,8 +67,17 @@ pub(crate) struct TxnCoordinator {
     /// Latches a recovery failure so later metadata refreshes cannot restore
     /// coordinator ownership over a partial or rejected replay image.
     recovery_valid: AtomicBool,
+    /// Transactional ids whose `Prepare*` record is durable, queued for
+    /// [`crate::txn::completion`] by recovery or by a failed request.
+    pending_completions: StdMutex<BTreeSet<String>>,
+    /// Wakes [`crate::txn::completion`] when an id joins
+    /// `pending_completions`.
+    completion_requested: Notify,
     marker_transport: Option<MarkerTransport>,
     group_coordinator: Option<Arc<crate::coordinator::GroupCoordinator>>,
+    /// Test gate in front of every transaction-marker fan-out.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(crate) marker_fanout_gate: fanout_gate::MarkerFanoutGate,
 }
 
 struct MarkerTransport {
@@ -97,8 +110,12 @@ impl TxnCoordinator {
             pid_to_tid: DashMap::new(),
             pid_install: StdMutex::new(()),
             recovery_valid: AtomicBool::new(true),
+            pending_completions: StdMutex::new(BTreeSet::new()),
+            completion_requested: Notify::new(),
             marker_transport: None,
             group_coordinator: None,
+            #[cfg(any(test, feature = "test-helpers"))]
+            marker_fanout_gate: fanout_gate::MarkerFanoutGate::default(),
         }
     }
 
@@ -157,6 +174,15 @@ impl TxnCoordinator {
     /// unknown.
     pub(crate) fn get(&self, tid: &str) -> Option<Arc<Mutex<TxnEntry>>> {
         self.state.get(tid).map(|e| e.value().clone())
+    }
+
+    /// Returns `true` if `handle` is still the entry registered for `tid`.
+    ///
+    /// Every durable append publishes a new handle, so a caller that read a
+    /// handle before it waited on a lock checks this before it acts.
+    pub(crate) fn is_current_entry(&self, tid: &str, handle: &Arc<Mutex<TxnEntry>>) -> bool {
+        self.get(tid)
+            .is_some_and(|current| Arc::ptr_eq(&current, handle))
     }
 
     /// Returns the `transactional_id` that `producer_id` was registered

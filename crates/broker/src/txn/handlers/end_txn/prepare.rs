@@ -25,23 +25,35 @@ pub(super) async fn prepare_transaction(
     } else {
         MarkerType::Abort
     };
-    let (prepare, complete, snapshot) = {
-        let mut state = entry.lock().await;
-        let (prepare, complete) = decide_phase1_transition(&mut state, committed)?;
-        prepare_completion_identities(&mut state, version, &coordinator.producer_ids)
-            .await
-            .map_err(|error| {
-                tracing::error!(
-                    tid = transactional_id,
-                    %error,
-                    "EndTxn: failed to allocate completion producer identity"
-                );
-                codes::UNKNOWN_SERVER_ERROR
-            })?;
-        state.last_update_ms = now_millis();
-        (prepare, complete, state.clone())
-    };
-    if let Err(error) = coordinator.put(snapshot.clone(), version).await {
+    // Lock order: the state-partition write lock, then the entry lock. The
+    // reaper and the completion task take them in the same order.
+    let _state_partition_write = coordinator.lock_state_partition_for(transactional_id).await;
+    let mut state = entry.lock().await;
+    if !coordinator.is_current_entry(transactional_id, entry) {
+        // Another request persisted this transaction after validation read
+        // it. Kafka answers a transition in progress the same way, and the
+        // client retries.
+        return Err(codes::CONCURRENT_TRANSACTIONS);
+    }
+    // Stage on a clone. Until the Prepare record is durable, every other
+    // caller must still see the state before it.
+    let mut staged = state.clone();
+    let (prepare, complete) = decide_phase1_transition(&mut staged, committed)?;
+    prepare_completion_identities(&mut staged, version, &coordinator.producer_ids)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                tid = transactional_id,
+                %error,
+                "EndTxn: failed to allocate completion producer identity"
+            );
+            codes::UNKNOWN_SERVER_ERROR
+        })?;
+    staged.last_update_ms = now_millis();
+    if let Err(error) = coordinator
+        .put_under_state_partition_lock(staged.clone(), version)
+        .await
+    {
         tracing::error!(
             tid = transactional_id,
             state = ?prepare,
@@ -50,5 +62,8 @@ pub(super) async fn prepare_transaction(
         );
         return Err(codes::UNKNOWN_SERVER_ERROR);
     }
-    Ok((marker_type, prepare, complete, snapshot))
+    // The append published a new handle. A caller that already waits on this
+    // one sees the durable Prepare state too.
+    *state = staged.clone();
+    Ok((marker_type, prepare, complete, staged))
 }
