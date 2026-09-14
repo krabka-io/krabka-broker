@@ -166,7 +166,10 @@ pub(crate) async fn handle(
                 .err()
                 .map(|error| {
                     (
-                        codes::COORDINATOR_NOT_AVAILABLE,
+                        crate::handlers::submit_failure_code(
+                            &error,
+                            codes::COORDINATOR_NOT_AVAILABLE,
+                        ),
                         format!("submit failed: {error}"),
                     )
                 }),

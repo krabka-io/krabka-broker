@@ -406,7 +406,10 @@ async fn trim_one(
                 %topic, partition = index, %error,
                 "DeleteRecords could not spend the break-glass approval"
             );
-            return refused(codes::COORDINATOR_NOT_AVAILABLE);
+            return refused(crate::handlers::submit_failure_code(
+                &error,
+                codes::COORDINATOR_NOT_AVAILABLE,
+            ));
         }
     };
 

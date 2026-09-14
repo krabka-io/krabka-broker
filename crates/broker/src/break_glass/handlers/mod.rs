@@ -102,6 +102,10 @@ pub(crate) fn submit_error(error: &RaftError) -> (i16, String) {
             codes::NOT_CONTROLLER,
             "this broker is not the active controller".to_owned(),
         ),
+        RaftError::UncommittedTail => (
+            codes::NOT_CONTROLLER,
+            "the controller has not committed its metadata log yet".to_owned(),
+        ),
         other => (
             codes::COORDINATOR_NOT_AVAILABLE,
             format!("the metadata quorum did not take the record: {other}"),
@@ -293,6 +297,11 @@ pub(crate) mod tests {
             (
                 "no leader known",
                 RaftError::LeaderUnknown,
+                codes::NOT_CONTROLLER,
+            ),
+            (
+                "the leader has an uncommitted tail",
+                RaftError::UncommittedTail,
                 codes::NOT_CONTROLLER,
             ),
             (

@@ -248,6 +248,86 @@ impl Engine {
         })
     }
 
+    /// Refuse a batch whose compare-and-set records the committed image does
+    /// not admit.
+    ///
+    /// A break-glass consume, a topic-freeze replacement, and an unguarded
+    /// delegation-token write are checked against the committed image before
+    /// append.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RaftError::UncommittedTail`] when only the uncommitted log
+    /// tail stops a consume or a freeze replacement, and
+    /// [`RaftError::ChangeRejected`] for every other refusal.
+    fn check_compare_and_set_records(
+        &self,
+        records: &[MetadataRecord],
+        delegation_token_guarded: bool,
+    ) -> Result<(), RaftError> {
+        let mut freeze_in_batch = false;
+        let mut token_create_in_batch = std::collections::HashSet::new();
+        for record in records {
+            match record {
+                MetadataRecord::V1BreakGlassProposal(consumed) if consumed.consumed_at_ms != 0 => {
+                    match self.break_glass_consumption_decision(consumed) {
+                        krabka_verified::BreakGlassConsumptionDecision::Append => {}
+                        // Only an uncommitted tail gives `InFlight`. It clears
+                        // when the tail commits, so the caller can retry.
+                        krabka_verified::BreakGlassConsumptionDecision::InFlight => {
+                            return Err(RaftError::UncommittedTail);
+                        }
+                        decision => {
+                            return Err(RaftError::ChangeRejected(format!(
+                                "break-glass consume {} rejected: {decision:?}",
+                                consumed.proposal_id
+                            )));
+                        }
+                    }
+                }
+                MetadataRecord::V1TopicFreeze(freeze) => {
+                    match self.freeze_replacement_decision(freeze, freeze_in_batch) {
+                        krabka_verified::FreezeReplacementDecision::Append => {}
+                        // A second freeze in the same batch also gives
+                        // `InFlight`. That batch fails again on every retry,
+                        // so only the uncommitted tail is a transient refusal.
+                        krabka_verified::FreezeReplacementDecision::InFlight
+                            if !freeze_in_batch =>
+                        {
+                            return Err(RaftError::UncommittedTail);
+                        }
+                        decision => {
+                            return Err(RaftError::ChangeRejected(format!(
+                                "topic-freeze mutation {:?}:{} rejected: {decision:?}",
+                                freeze.pattern_type, freeze.scope
+                            )));
+                        }
+                    }
+                    freeze_in_batch = true;
+                }
+                MetadataRecord::V1DelegationToken(token) if !delegation_token_guarded => {
+                    let create_is_unique =
+                        self.image.delegation_token_by_id(&token.token_id).is_none()
+                            && token_create_in_batch.insert(token.token_id.clone());
+                    if !create_is_unique || self.log.hwm() < self.log.log_end_offset() {
+                        return Err(RaftError::ChangeRejected(format!(
+                            "delegation-token create {} rejected: replacement requires a guarded mutation",
+                            token.token_id
+                        )));
+                    }
+                }
+                MetadataRecord::V1DeleteDelegationToken(token) if !delegation_token_guarded => {
+                    return Err(RaftError::ChangeRejected(format!(
+                        "delegation-token delete {} rejected: mutation is not generation-bound",
+                        token.token_id
+                    )));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Handle a `submit_change`: leader appends + parks a waiter; non-leader
     /// rejects immediately with the leader hint.
     #[tracing::instrument(
@@ -300,52 +380,9 @@ impl Engine {
             return;
         }
 
-        let mut freeze_in_batch = false;
-        let mut token_create_in_batch = std::collections::HashSet::new();
-        for record in records {
-            match record {
-                MetadataRecord::V1BreakGlassProposal(consumed) if consumed.consumed_at_ms != 0 => {
-                    let decision = self.break_glass_consumption_decision(consumed);
-                    if decision != krabka_verified::BreakGlassConsumptionDecision::Append {
-                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
-                            "break-glass consume {} rejected: {decision:?}",
-                            consumed.proposal_id
-                        ))));
-                        return;
-                    }
-                }
-                MetadataRecord::V1TopicFreeze(freeze) => {
-                    let decision = self.freeze_replacement_decision(freeze, freeze_in_batch);
-                    if decision != krabka_verified::FreezeReplacementDecision::Append {
-                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
-                            "topic-freeze mutation {:?}:{} rejected: {decision:?}",
-                            freeze.pattern_type, freeze.scope
-                        ))));
-                        return;
-                    }
-                    freeze_in_batch = true;
-                }
-                MetadataRecord::V1DelegationToken(token) if !delegation_token_guarded => {
-                    let create_is_unique =
-                        self.image.delegation_token_by_id(&token.token_id).is_none()
-                            && token_create_in_batch.insert(token.token_id.clone());
-                    if !create_is_unique || self.log.hwm() < self.log.log_end_offset() {
-                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
-                            "delegation-token create {} rejected: replacement requires a guarded mutation",
-                            token.token_id
-                        ))));
-                        return;
-                    }
-                }
-                MetadataRecord::V1DeleteDelegationToken(token) if !delegation_token_guarded => {
-                    let _ = reply.send(Err(RaftError::ChangeRejected(format!(
-                        "delegation-token delete {} rejected: mutation is not generation-bound",
-                        token.token_id
-                    ))));
-                    return;
-                }
-                _ => {}
-            }
+        if let Err(error) = self.check_compare_and_set_records(records, delegation_token_guarded) {
+            let _ = reply.send(Err(error));
+            return;
         }
 
         // Pre-validate and translate to KIP-631 value blobs in ONE pass against

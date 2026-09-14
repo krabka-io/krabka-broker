@@ -291,6 +291,8 @@ fn encode_delegation_token_mutation_body(
 /// - `0` → applied (`Ok`).
 /// - `2` → the leader rejected at apply-time (topic already exists). The wire
 ///   carries only a code; the topic name is what the caller had in hand.
+/// - [`crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL`] → the leader refused a
+///   compare-and-set until its tail commits ([`RaftError::UncommittedTail`]).
 /// - anything else → collapse to `NotLeader` (`CreateTopics` maps that to the
 ///   retryable `NOT_CONTROLLER`), preferring the response's `leader_hint` when
 ///   non-negative and falling back to the dialed `leader`.
@@ -308,6 +310,7 @@ fn translate_submit_change_response(
         2 => Err(RaftError::Metadata(
             krabka_metadata::MetadataError::TopicExists(String::new()),
         )),
+        crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
         _ => Err(RaftError::NotLeader {
             current_leader: (resp.leader_hint >= 0)
                 .then(|| NodeId(u64::try_from(resp.leader_hint).unwrap_or(leader.0))),
@@ -426,6 +429,14 @@ mod tests {
             err,
             RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
         ));
+
+        // The uncommitted-tail code keeps its meaning across the forward.
+        let err = translate_submit_change_response(
+            &submit_change_response_bytes(crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL, -1),
+            NodeId(5),
+        )
+        .expect_err("an uncommitted tail is an error");
+        assert2::assert!(matches!(err, RaftError::UncommittedTail));
 
         // Any other code collapses to NotLeader, taking the response's
         // leader_hint when non-negative.

@@ -78,10 +78,10 @@ pub(super) async fn run_offset_aware_recovery(
     }
     let proposal = match spend_before_recovery(broker, batch, consumed, &target).await {
         Ok(proposal) => proposal,
-        Err(message) => {
+        Err((error_code, message)) => {
             return PartitionResult {
                 partition_id: partition,
-                error_code: codes::COORDINATOR_NOT_AVAILABLE,
+                error_code,
                 error_message: Some(message),
                 ..Default::default()
             };
@@ -149,15 +149,15 @@ pub(super) async fn run_offset_aware_recovery(
 ///
 /// # Errors
 ///
-/// Returns the submit failure text when the quorum did not take the consume. No
-/// recovery starts in that case, so the approval stays unspent and the operator
-/// can retry.
+/// Returns the error code and the submit failure text when the quorum did not
+/// take the consume. No recovery starts in that case, so the approval stays
+/// unspent and the operator can retry.
 async fn spend_before_recovery(
     broker: &Broker,
     batch: &mut ElectionBatch,
     consumed: Option<MetadataRecord>,
     target: &str,
-) -> Result<Option<Uuid>, String> {
+) -> Result<Option<Uuid>, (i16, String)> {
     match spend_before_local_action(
         broker,
         &mut batch.spent,
@@ -171,7 +171,10 @@ async fn spend_before_recovery(
         Ok(proposal_id) => Ok(proposal_id),
         Err(error) => {
             tracing::warn!(%error, "elect-leaders could not spend the break-glass approval");
-            Err(format!("submit failed: {error}"))
+            Err((
+                crate::handlers::submit_failure_code(&error, codes::COORDINATOR_NOT_AVAILABLE),
+                format!("submit failed: {error}"),
+            ))
         }
     }
 }
