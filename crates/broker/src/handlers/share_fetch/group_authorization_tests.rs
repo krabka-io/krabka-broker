@@ -19,10 +19,16 @@ use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        share_acknowledge_request::{AcknowledgePartition, AcknowledgeTopic, ShareAcknowledgeRequest},
-        share_acknowledge_response::{self, ShareAcknowledgeResponse, ShareAcknowledgeTopicResponse},
+        share_acknowledge_request::{
+            AcknowledgePartition, AcknowledgeTopic, ShareAcknowledgeRequest,
+        },
+        share_acknowledge_response::{
+            self, ShareAcknowledgeResponse, ShareAcknowledgeTopicResponse,
+        },
         share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
-        share_fetch_response::{self, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse},
+        share_fetch_response::{
+            self, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
+        },
     },
     primitives::uuid::Uuid as WireUuid,
     records::RecordsPayload,

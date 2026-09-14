@@ -25,8 +25,8 @@
 //!
 //! `network::dispatch` intercepts this request inline, not through the
 //! `&Broker`-only handler table, so that the handler receives the
-//! per-connection principal and the peer `SocketAddr` for the per-topic `Read`
-//! ACL gate.
+//! per-connection principal and the peer `SocketAddr` for the group `Read` and
+//! per-topic `Read` ACL gates.
 
 use std::collections::{HashMap, HashSet};
 
@@ -61,7 +61,7 @@ use self::{
         not_leader_response, partition_response,
     },
 };
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes, error::BrokerError, handlers::group_read_denied};
 
 #[tracing::instrument(
     name = "handle_share_fetch",
@@ -84,10 +84,18 @@ pub(crate) async fn handle(
     let lock_timeout_ms = acquisition_timeout_ms(&cfg);
 
     if !cfg.enable {
-        return encode_error_response(version, codes::UNSUPPORTED_VERSION, lock_timeout_ms);
+        return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
     let group = req.group_id.clone().unwrap_or_default();
     let member = req.member_id.clone().unwrap_or_default();
+    let image = broker.controller.current_image();
+
+    // Kafka's `KafkaApis.handleShareFetchRequest` checks `Read` on the group
+    // after the feature gate, and before the member, the share session and the
+    // topic checks.
+    if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
+        return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
+    }
 
     // Best-effort membership check: if the group has a live share actor, the
     // member must be present in its describe view. When no actor exists yet
@@ -95,11 +103,10 @@ pub(crate) async fn handle(
     // the Task-7 tests always join via `ShareGroupHeartbeat` first, so a
     // present actor with an absent member is the only hard failure.
     if !member_is_valid(broker, &group, &member).await {
-        return encode_error_response(version, codes::UNKNOWN_MEMBER_ID, lock_timeout_ms);
+        return encode_error_response(version, codes::UNKNOWN_MEMBER_ID);
     }
 
     let mgr = broker.share_partition_leaders.clone();
-    let image = broker.controller.current_image();
 
     let mut requested = HashSet::new();
     let mut requested_order = Vec::new();
@@ -138,7 +145,7 @@ pub(crate) async fn handle(
         final_has_additions,
     ) {
         Ok(session) => session,
-        Err(code) => return encode_error_response(version, code, lock_timeout_ms),
+        Err(code) => return encode_error_response(version, code),
     };
     let (release_before_acquire, release_after_acquire) =
         session_release_phases(session.final_request);
