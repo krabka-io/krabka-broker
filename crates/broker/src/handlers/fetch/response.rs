@@ -13,6 +13,11 @@ use crate::broker::Broker;
 /// Group the resolved `PendingRead`s back into per-topic response entries, and
 /// keep the order in which the topics first appeared in the request.
 ///
+/// The grouping key is the topic's whole identity: the id and the name. A v13
+/// request names topics by id only, so every topic whose id does not resolve
+/// carries the empty name. A key of the name alone would fold those topics
+/// into one entry under the first id.
+///
 /// The function also returns the per-topic `cpu_micros` accumulators. They
 /// line up by position with the returned `Vec`, so `cpu_micros[ti][pi]`
 /// matches `responses[ti].partitions[pi]`. The caller can then attribute CPU
@@ -20,25 +25,27 @@ use crate::broker::Broker;
 pub(super) type GroupedResponses = (Vec<FetchableTopicResponse>, Vec<Vec<u64>>);
 
 pub(super) fn group_into_topic_responses(pending: Vec<PendingRead>) -> GroupedResponses {
-    let mut topic_order: Vec<String> = Vec::new();
-    // Value: (topic_id, partitions, cpu_micros) — the trailing Vec mirrors
-    // `partitions` positionally.
-    let mut by_topic: std::collections::HashMap<String, (WireUuid, Vec<PartitionData>, Vec<u64>)> =
+    /// A topic's whole identity: the KIP-516 id, and the name.
+    type TopicIdentity = (WireUuid, String);
+    let mut topic_order: Vec<TopicIdentity> = Vec::new();
+    // Value: (partitions, cpu_micros). The second `Vec` mirrors `partitions`
+    // by position.
+    let mut by_topic: std::collections::HashMap<TopicIdentity, (Vec<PartitionData>, Vec<u64>)> =
         std::collections::HashMap::new();
     for p in pending {
-        let entry = by_topic
-            .entry(p.topic_name.clone())
-            .or_insert_with(|| (p.topic_id, Vec::new(), Vec::new()));
-        entry.1.push(p.out);
-        entry.2.push(p.cpu_micros);
-        if !topic_order.iter().any(|t| t == &p.topic_name) {
-            topic_order.push(p.topic_name);
-        }
+        let identity = (p.topic_id, p.topic_name);
+        let entry = by_topic.entry(identity.clone()).or_insert_with(|| {
+            topic_order.push(identity);
+            (Vec::new(), Vec::new())
+        });
+        entry.0.push(p.out);
+        entry.1.push(p.cpu_micros);
     }
     let mut responses = Vec::with_capacity(topic_order.len());
     let mut cpu_micros = Vec::with_capacity(topic_order.len());
-    for name in topic_order {
-        let (topic_id, parts, micros) = by_topic.remove(&name).expect("topic order populated");
+    for identity in topic_order {
+        let (parts, micros) = by_topic.remove(&identity).expect("topic order populated");
+        let (topic_id, name) = identity;
         responses.push(FetchableTopicResponse {
             topic: name,
             topic_id,
