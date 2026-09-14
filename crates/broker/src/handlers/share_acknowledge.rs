@@ -13,8 +13,8 @@
 //! fails that partition row with `INVALID_RECORD_STATE`.
 //!
 //! `network::dispatch` intercepts this request inline, so the handler receives
-//! the per-connection principal and the peer `SocketAddr` for the per-topic
-//! `Read` ACL gate.
+//! the per-connection principal and the peer `SocketAddr` for the group `Read`
+//! and per-topic `Read` ACL gates.
 
 use std::time::Instant;
 
@@ -37,7 +37,7 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::share_fetch::apply_one_ack,
+    handlers::{group_read_denied, share_fetch::apply_one_ack},
 };
 
 #[tracing::instrument(
@@ -61,11 +61,19 @@ pub(crate) async fn handle(
     let lock_timeout_ms = i32::try_from(cfg.record_lock_duration.as_millis()).unwrap_or(i32::MAX);
 
     if !cfg.enable {
-        return encode_error_response(version, codes::UNSUPPORTED_VERSION, lock_timeout_ms);
+        return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
 
     let group = req.group_id.clone().unwrap_or_default();
     let member = req.member_id.clone().unwrap_or_default();
+
+    // Kafka's `KafkaApis.handleShareAcknowledgeRequest` checks `Read` on the
+    // group after the feature gate, and before the member, the share session
+    // and the topic checks.
+    let image = broker.controller.current_image();
+    if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
+        return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
+    }
 
     let released = match broker.share_partition_leaders.update_acknowledge_session(
         &group,
@@ -73,7 +81,7 @@ pub(crate) async fn handle(
         req.share_session_epoch,
     ) {
         Ok(released) => released,
-        Err(code) => return encode_error_response(version, code, lock_timeout_ms),
+        Err(code) => return encode_error_response(version, code),
     };
 
     let now = Instant::now();
@@ -209,17 +217,18 @@ async fn process_topics(
 }
 
 /// Encodes a `ShareAcknowledgeResponse` that carries a top-level error and no
-/// per-partition row. The error is a feature-gate or session failure.
-fn encode_error_response(
-    version: i16,
-    error_code: i16,
-    lock_timeout_ms: i32,
-) -> Result<Bytes, BrokerError> {
+/// per-partition row. The error is a feature-gate, authorization, or session
+/// failure.
+///
+/// This is Kafka's `ShareAcknowledgeRequest.getErrorResponse`, which sets only
+/// the throttle time and the error code. So the acquisition lock timeout keeps
+/// its default, 0.
+fn encode_error_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
     let resp = ShareAcknowledgeResponse {
         throttle_time_ms: 0,
         error_code,
         error_message: None,
-        acquisition_lock_timeout_ms: lock_timeout_ms,
+        acquisition_lock_timeout_ms: 0,
         responses: Vec::new(),
         ..Default::default()
     };
@@ -287,7 +296,6 @@ mod tests {
         let resp = encode_error_response(
             share_acknowledge_response::MAX_VERSION,
             codes::UNSUPPORTED_VERSION,
-            12_345,
         )
         .expect("encode");
         let resp = decode_response(&resp);
@@ -296,7 +304,7 @@ mod tests {
             throttle_time_ms: 0,
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: None,
-            acquisition_lock_timeout_ms: 12_345,
+            acquisition_lock_timeout_ms: 0,
             responses: Vec::new(),
             node_endpoints: Vec::new(),
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
@@ -323,7 +331,7 @@ mod tests {
             throttle_time_ms: 0,
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: None,
-            acquisition_lock_timeout_ms: 30_000,
+            acquisition_lock_timeout_ms: 0,
             responses: Vec::new(),
             node_endpoints: Vec::new(),
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
