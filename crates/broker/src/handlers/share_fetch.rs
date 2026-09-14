@@ -45,6 +45,9 @@ mod records;
 mod request;
 mod response;
 
+#[cfg(test)]
+mod topic_resolution_tests;
+
 pub(crate) use self::acknowledge::apply_one_ack;
 use self::{
     acquire::{AcquireContext, acquire_records},
@@ -160,19 +163,40 @@ pub(crate) async fn handle(
         let request_row = request_rows.get(&(topic_id, partition_index));
         let fetchable = session.partitions.contains(&(topic_id, partition_index));
 
-        // Per-topic `Read` ACL — mirrors `fetch::handle`'s authorize call.
-        let denied = topic_read_denied(broker, &image, ctx, topic_name.as_deref());
-
         let mut out = partition_response(partition_index);
         let ack_batches = request_row.map_or_else(Vec::new, collect_ack_batches);
         let partition_max_bytes = request_row.map_or(0, |row| row.partition_max_bytes);
 
-        if denied {
-            out.error_code = if topic_name.is_some() {
-                codes::TOPIC_AUTHORIZATION_FAILED
-            } else {
-                codes::UNKNOWN_TOPIC_OR_PARTITION
-            };
+        let Some(name) = topic_name.as_deref() else {
+            // Kafka's `ErroneousAndValidPartitionData` answers UNKNOWN_TOPIC_ID
+            // for every partition of the share session whose topic id does not
+            // resolve, the zero id included, before the `Read` gate. When the
+            // request carries acknowledgements,
+            // `KafkaApis.getAcknowledgeBatchesFromShareFetchRequest` also
+            // answers UNKNOWN_TOPIC_ID as the acknowledge error of every
+            // request partition of that topic.
+            if fetchable {
+                out.error_code = codes::UNKNOWN_TOPIC_ID;
+            }
+            if has_acknowledgements && request_row.is_some() {
+                out.acknowledge_error_code = codes::UNKNOWN_TOPIC_ID;
+            }
+            pending.push(PendingPartition {
+                topic_id,
+                topic_name,
+                partition_index,
+                partition_max_bytes,
+                leadable: false,
+                fetchable,
+                ack_batches,
+                out,
+            });
+            continue;
+        };
+
+        // Per-topic `Read` ACL — mirrors `fetch::handle`'s authorize call.
+        if topic_read_denied(broker, &image, ctx, name) {
+            out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
             pending.push(PendingPartition {
                 topic_id,
                 topic_name,

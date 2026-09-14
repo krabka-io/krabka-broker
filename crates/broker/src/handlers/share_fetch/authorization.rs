@@ -41,23 +41,16 @@ pub(super) fn topic_read_denied(
     broker: &Broker,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
-    topic_name: Option<&str>,
+    topic_name: &str,
 ) -> bool {
-    match topic_name {
-        Some(name) => {
-            broker.config.authorizer.authorize(
-                image,
-                &AuthorizationRequest {
-                    principal: ctx.principal,
-                    host: ctx.peer,
-                    resource_type: ResourceType::Topic,
-                    resource_name: name,
-                    operation: AclOperation::Read,
-                },
-            ) == AuthorizationResult::Deny
-        }
-        // Unknown topic_id: no name to key the ACL by; treated as denied so
-        // we never serve data for an unresolvable topic.
-        None => true,
-    }
+    broker.config.authorizer.authorize(
+        image,
+        &AuthorizationRequest {
+            principal: ctx.principal,
+            host: ctx.peer,
+            resource_type: ResourceType::Topic,
+            resource_name: topic_name,
+            operation: AclOperation::Read,
+        },
+    ) == AuthorizationResult::Deny
 }
