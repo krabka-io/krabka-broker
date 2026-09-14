@@ -18,7 +18,7 @@ use crate::{
     codes,
     error::BrokerError,
     txn::{
-        coordinator::TxnCoordinator,
+        coordinator::{TxnCoordinator, completion::completion_for},
         state::{TxnEntry, TxnState},
         util::now_millis,
     },
@@ -80,6 +80,9 @@ pub(super) async fn handle_transactional(
             if keep_prepared_txn {
                 let recovery = {
                     let mut entry = existing.lock().await;
+                    if let Some(response) = pending_completion_response(&entry, request_identity) {
+                        return Ok(response);
+                    }
                     if is_fenced(&entry, request_identity) {
                         return Ok(fenced_response());
                     }
@@ -116,18 +119,11 @@ pub(super) async fn handle_transactional(
                     });
                 }
                 let entry = existing.lock().await;
+                if let Some(response) = pending_completion_response(&entry, request_identity) {
+                    return Ok(response);
+                }
                 if is_fenced(&entry, request_identity) {
                     return Ok(fenced_response());
-                }
-                let state = entry.state;
-                drop(entry);
-                if matches!(state, TxnState::PrepareCommit | TxnState::PrepareAbort) {
-                    return Ok(InitProducerIdResponse {
-                        error_code: codes::CONCURRENT_TRANSACTIONS,
-                        producer_id: -1,
-                        producer_epoch: -1,
-                        ..Default::default()
-                    });
                 }
             }
 
@@ -135,7 +131,16 @@ pub(super) async fn handle_transactional(
             // Ongoing, write PrepareAbort + dispatch abort markers before
             // responding.
             let aborted_ongoing = {
-                let mut e = existing.lock().await;
+                // Lock order: the state-partition write lock, then the entry
+                // lock, as `EndTxn`, the reaper and the completion task take
+                // them. Every append takes the partition lock, so the entry
+                // read under it is the published one.
+                let state_partition_write = coord.lock_state_partition_for(tid).await;
+                let current = coord.get(tid).unwrap_or_else(|| Arc::clone(&existing));
+                let mut e = current.lock().await;
+                if let Some(response) = pending_completion_response(&e, request_identity) {
+                    return Ok(response);
+                }
                 if is_fenced(&e, request_identity) {
                     return Ok(fenced_response());
                 }
@@ -143,23 +148,29 @@ pub(super) async fn handle_transactional(
                     // Transition to PrepareAbort; persist; dispatch markers.
                     let (request_pid, fenced_from_epoch) =
                         crate::txn::handlers::end_txn::client_producer_identity(&e);
-                    e.state = TxnState::PrepareAbort;
+                    // Stage on a clone: until the PrepareAbort record is
+                    // durable, other callers must still see Ongoing.
+                    let mut prepared = e.clone();
+                    prepared.state = TxnState::PrepareAbort;
                     crate::txn::handlers::end_txn::prepare_completion_identities(
-                        &mut e,
+                        &mut prepared,
                         txnv,
                         &coord.producer_ids,
                     )
                     .await?;
-                    e.last_update_ms = now_ms;
-                    let entry_clone = e.clone();
-                    drop(e); // release lock while we fan out markers
-                    coord.put(entry_clone.clone(), txnv).await?;
+                    prepared.last_update_ms = now_ms;
+                    coord
+                        .put_under_state_partition_lock(prepared.clone(), txnv)
+                        .await?;
+                    *e = prepared.clone();
+                    drop(e);
+                    drop(state_partition_write);
                     // `put` republishes the tid under a fresh handle, so the
                     // one this call started from is no longer the entry a
                     // concurrent `coord.get` finds. Everything below must act
                     // on the published entry.
-                    let published = coord.get(tid).unwrap_or_else(|| Arc::clone(&existing));
-                    if let Err(error) = dispatch_abort_markers(coord, &entry_clone).await {
+                    let published = coord.get(tid).unwrap_or(current);
+                    if let Err(error) = dispatch_abort_markers(coord, &prepared).await {
                         // KIP-360: the epoch fence is persisted but the abort
                         // it was prepared for did not complete. The producer
                         // that owns the transaction still holds
@@ -172,25 +183,43 @@ pub(super) async fn handle_transactional(
                         fenced.last_producer_epoch = fenced_from_epoch;
                         fenced.has_failed_epoch_fence = true;
                         drop(fenced);
-                        return Err(error);
+                        // The PrepareAbort record is durable. Kafka answers
+                        // the fence with CONCURRENT_TRANSACTIONS and finishes
+                        // the abort in its marker channel; the producer
+                        // retries.
+                        tracing::warn!(
+                            tid,
+                            %error,
+                            "InitProducerId: abort marker fan-out failed; queued for completion"
+                        );
+                        coord.request_completion(tid);
+                        return Ok(concurrent_transactions_response());
                     }
-                    // Re-acquire + transition to CompleteAbort.
-                    let mut e2 = published.lock().await;
-                    e2.state = TxnState::CompleteAbort;
-                    e2.last_update_ms = now_millis();
+                    // Re-acquire + transition to CompleteAbort, staged on a
+                    // clone so a failed append leaves PrepareAbort for the
+                    // completion task.
+                    let mut completed = published.lock().await.clone();
+                    completed.state = TxnState::CompleteAbort;
+                    completed.last_update_ms = now_millis();
                     let (completed_pid, completed_epoch) =
-                        crate::txn::handlers::end_txn::completion_producer_identity(&e2);
+                        crate::txn::handlers::end_txn::completion_producer_identity(&completed);
                     if completed_pid != request_pid {
-                        e2.prev_producer_id = request_pid;
+                        completed.prev_producer_id = request_pid;
                     }
-                    e2.producer_id = completed_pid;
-                    e2.producer_epoch = completed_epoch;
-                    e2.next_producer_id = krabka_log::ProducerId(-1);
-                    e2.next_producer_epoch = -1;
-                    e2.partitions.clear();
-                    let snap = e2.clone();
-                    drop(e2);
-                    coord.put(snap, txnv).await?;
+                    completed.producer_id = completed_pid;
+                    completed.producer_epoch = completed_epoch;
+                    completed.next_producer_id = krabka_log::ProducerId(-1);
+                    completed.next_producer_epoch = -1;
+                    completed.partitions.clear();
+                    if let Err(error) = coord.put(completed, txnv).await {
+                        tracing::warn!(
+                            tid,
+                            %error,
+                            "InitProducerId: CompleteAbort append failed; queued for completion"
+                        );
+                        coord.request_completion(tid);
+                        return Ok(concurrent_transactions_response());
+                    }
                     true
                 } else {
                     false
@@ -217,12 +246,10 @@ pub(super) async fn handle_transactional(
             // by admitting freshly created metadata, and the retry this answer
             // asks for finds no entry and allocates.
             if e3.state == TxnState::Dead {
-                return Ok(InitProducerIdResponse {
-                    error_code: codes::CONCURRENT_TRANSACTIONS,
-                    producer_id: -1,
-                    producer_epoch: -1,
-                    ..Default::default()
-                });
+                return Ok(concurrent_transactions_response());
+            }
+            if let Some(response) = pending_completion_response(&e3, request_identity) {
+                return Ok(response);
             }
             // The abort above already advanced the entry past the identity
             // this call named, so only a call that has changed nothing yet
@@ -264,6 +291,44 @@ fn is_fenced(entry: &TxnEntry, request_identity: (i64, i16)) -> bool {
         request_identity.0,
         request_identity.1,
     ) == InitProducerIdFencingDecision::Fenced
+}
+
+/// Kafka `prepareInitProducerIdTransit` for an entry whose `Prepare*` record
+/// is durable and not yet complete.
+///
+/// Kafka checks only the producer ID here, not the epoch
+/// (`isValidProducerId`): a caller that names no producer ID, the entry's
+/// producer ID, or the prior producer ID at an exhausted epoch gets
+/// `CONCURRENT_TRANSACTIONS` and retries after the completion. Any other
+/// producer ID is `PRODUCER_FENCED`. Returns `None` for any other state.
+///
+/// Before this check, `keepPreparedTxn=false` overwrote a `PrepareCommit` with
+/// a new empty entry, which erased a commit decision whose markers some
+/// partitions may already hold.
+fn pending_completion_response(
+    entry: &TxnEntry,
+    (request_pid, request_epoch): (i64, i16),
+) -> Option<InitProducerIdResponse> {
+    completion_for(entry.state)?;
+    let names_this_transaction = request_pid < 0
+        || request_pid == entry.producer_id.get()
+        || (entry.has_staged_producer_identity() && request_pid == entry.next_producer_id.get())
+        || (request_pid == entry.prev_producer_id.get() && request_epoch >= i16::MAX - 1);
+    Some(if names_this_transaction {
+        concurrent_transactions_response()
+    } else {
+        fenced_response()
+    })
+}
+
+/// Kafka's `initTransactionError(Errors.CONCURRENT_TRANSACTIONS)`.
+fn concurrent_transactions_response() -> InitProducerIdResponse {
+    InitProducerIdResponse {
+        error_code: codes::CONCURRENT_TRANSACTIONS,
+        producer_id: -1,
+        producer_epoch: -1,
+        ..Default::default()
+    }
 }
 
 /// Kafka's `initTransactionError(Errors.PRODUCER_FENCED)`.
@@ -536,25 +601,28 @@ mod tests {
         check!((entry.producer_id, entry.producer_epoch) == (ProducerId(1000), 4));
     }
 
-    /// A failed abort-marker fan-out must leave the failed-epoch fence on the
-    /// entry the coordinator publishes, not on the handle this call started
-    /// from: `put` republishes the tid under a fresh `Arc`, so a write to the
-    /// superseded handle is invisible to the retry that comes to read it.
+    /// A failed abort fan-out records the epoch fence on the entry the
+    /// coordinator publishes, not on the handle this call started from: `put`
+    /// republishes the tid under a fresh `Arc`, so a write to the superseded
+    /// handle is invisible to the retry that comes to read it.
     ///
-    /// KIP-360 lets exactly the producer that still holds the pre-fence epoch
-    /// retry, and that allowance is what the retry below exercises. Without
-    /// it the producer is answered `PRODUCER_FENCED` and its transaction is
-    /// stuck in `PrepareAbort`.
+    /// The `PrepareAbort` record is durable, so the call answers
+    /// `CONCURRENT_TRANSACTIONS` and queues the abort for completion, as
+    /// Kafka's fence abort does. While the abort is pending, every caller
+    /// that names the transaction's producer ID gets the same answer. Once
+    /// the abort completes, KIP-360 lets exactly the producer that still holds
+    /// the pre-fence epoch retry, and a zombie that names any other epoch is
+    /// fenced.
     #[tokio::test]
-    async fn a_failed_abort_fan_out_records_the_fence_on_the_published_entry() {
+    async fn a_failed_abort_fan_out_records_the_fence_and_completes_before_a_retry() {
         const TID: &str = "tid-failed-fence";
 
         let dir = tempfile::tempdir().expect("tempdir");
         let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
 
-        // An ongoing transaction over a partition this broker does not host:
-        // the abort marker cannot be delivered, so the fan-out fails after
-        // the epoch fence is already persisted.
+        // An ongoing transaction over a partition this broker does not host
+        // yet: the abort marker cannot be delivered, so the fan-out fails
+        // after the epoch fence is already persisted.
         let mut ongoing = TxnEntry::new_empty(TID.to_string(), ProducerId(1000), 3, 60_000, 0);
         ongoing.state = TxnState::Ongoing;
         ongoing.partitions.insert(TopicPartition {
@@ -563,50 +631,65 @@ mod tests {
         });
         seed(&coordinator, ongoing).await;
 
-        let failed = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 3),
-        )
-        .await;
-        check!(failed.is_err());
+        let init = |identity| {
+            let coordinator = Arc::clone(&coordinator);
+            async move {
+                handle_transactional(
+                    &coordinator,
+                    TID,
+                    TxnVersion::Verified,
+                    60_000,
+                    false,
+                    false,
+                    identity,
+                )
+                .await
+                .expect("InitProducerId responds")
+            }
+        };
+        let concurrent = InitProducerIdResponse {
+            error_code: codes::CONCURRENT_TRANSACTIONS,
+            producer_id: -1,
+            producer_epoch: -1,
+            ..Default::default()
+        };
 
+        check!(init((1000, 3)).await == concurrent);
         let published = coordinator.get(TID).expect("entry").lock().await.clone();
         check!(published.has_failed_epoch_fence);
         check!(published.last_producer_epoch == 3);
         check!(published.state == TxnState::PrepareAbort);
 
-        // The owner of the fenced-from epoch retries and is admitted; a
-        // zombie that names any other epoch is not.
-        let zombie = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 2),
-        )
-        .await
-        .expect("zombie responds");
-        check!(zombie.error_code == codes::PRODUCER_FENCED);
+        // While the abort is pending, the producer ID decides, not the epoch.
+        for identity in [(1000, 2), (1000, 3), (-1, -1)] {
+            check!(init(identity).await == concurrent, "{identity:?}");
+        }
+        check!(init((2000, 0)).await == fenced_response());
 
-        let retry = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
+        // The partition appears, and the completion task finishes the abort.
+        let ghost_dir = crate::log_dir::partition_dir(dir.path(), "ghost", 0);
+        std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
+        let ghost = crate::broker::spawn_partition(
+            "ghost".to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"),
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(crate::producer_state::ProducerState::new()),
             false,
-            false,
-            (1000, 3),
-        )
-        .await
-        .expect("retry responds");
-        check!(retry.error_code == codes::NONE);
+        );
+        coordinator
+            .partitions
+            .insert("ghost".into(), PartitionIndex(0), ghost);
+        check!(
+            coordinator
+                .complete_prepared_transaction(TID, TxnVersion::Verified)
+                .await
+                == crate::txn::coordinator::completion::CompletionAttempt::Completed
+        );
+
+        check!(init((1000, 2)).await.error_code == codes::PRODUCER_FENCED);
+        check!(init((1000, 3)).await.error_code == codes::NONE);
     }
 
     /// The KIP-98 expiry sweep and an `InitProducerId` already parked on the

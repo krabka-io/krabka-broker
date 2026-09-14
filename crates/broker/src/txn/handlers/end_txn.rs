@@ -13,6 +13,12 @@
 //! 4. `PrepareCommit` → `CompleteCommit` (or `PrepareAbort` → `CompleteAbort`); persist.
 //! 5. Return `NONE` to the producer.
 //!
+//! After step 2 the answer is `NONE`, as in Kafka. When step 3 or step 4
+//! fails, the handler hands the transaction to
+//! [`crate::txn::completion`], which retries both steps until the `Complete*`
+//! record is durable. A broker that stops after step 2 finishes the
+//! transaction when recovery loads it.
+//!
 //! Wire format: v0-2 non-flexible, v3-5 flexible (tagged fields).
 //! Request fields: `transactional_id`, `producer_id`, `producer_epoch`, `committed`.
 //! Response fields: `throttle_time_ms`, `error_code`.
@@ -27,7 +33,6 @@ use crate::{
     error::BrokerError,
     txn::{
         decision::{CompletionDecision, decide_end_txn_completion},
-        state::TxnEntry,
         util::now_millis,
     },
 };
@@ -88,7 +93,7 @@ pub(crate) async fn handle(
     coord.refresh_leader_partitions(&image).await;
 
     let tid = req.transactional_id.as_str();
-    let entry_mutex = match validate_end_txn(&coord, authorizer, &image, ctx, &req).await {
+    let entry_mutex = match validate_end_txn(&coord, authorizer, &image, ctx, &req, txnv).await {
         Ok(EndTxnValidation::Proceed(entry)) => entry,
         Ok(EndTxnValidation::AlreadyComplete(pid, epoch)) => {
             return encode_ok(version, pid.get(), epoch);
@@ -104,10 +109,22 @@ pub(crate) async fn handle(
             Err(code) => return encode_err(version, code),
         };
 
+    // The Prepare record is durable. From here Kafka answers NONE with the
+    // completion identity whatever happens to the markers: its
+    // `TransactionMarkerChannelManager` finishes the work. A failure below
+    // hands the transaction to the completion task, which retries it.
+    let (prepared_completion_pid, prepared_completion_epoch) =
+        completion_producer_identity(&prepare_snap);
+
     // ── Phase 2: Fan out WriteTxnMarkers ──────────────────────────────
 
-    if let Err(code) = dispatch_transaction_markers(broker, &prepare_snap, marker_type, tid).await {
-        return encode_err(version, code);
+    if !dispatch_transaction_markers(broker, &prepare_snap, marker_type, tid).await {
+        coord.request_completion(tid);
+        return encode_ok(
+            version,
+            prepared_completion_pid.get(),
+            prepared_completion_epoch,
+        );
     }
 
     // ── Phase 3: Prepare{Commit,Abort} → Complete{Commit,Abort} ───────
@@ -115,19 +132,21 @@ pub(crate) async fn handle(
     // The entry lock was *intentionally* dropped before the Phase-2 marker
     // fan-out (network I/O to remote brokers); holding it across the fan-out
     // would serialize/deadlock the coordinator. That window lets a concurrent
-    // caller (another EndTxn, an AddPartitionsToTxn, or an InitProducerId that
-    // bumps the epoch) interleave on this same transactional-id.
+    // caller (the completion task, or an `AddPartitionsToTxn`) interleave on
+    // this same transactional-id.
     //
     // We must NOT re-lock the original `entry_mutex` captured at the top of the
-    // handler: `coord.put` replaces the coordinator's map slot with a *fresh*
-    // `Arc<Mutex<TxnEntry>>` on every persist (see `TxnCoordinator::put`), so a
-    // concurrent caller operates on a different Arc than the one we hold. The
-    // only authoritative view is the entry currently registered under `tid`.
+    // handler: every persist publishes a *fresh* `Arc<Mutex<TxnEntry>>` (see
+    // `TxnCoordinator::put`), so a concurrent caller operates on a different
+    // Arc than the one we hold. The only authoritative view is the entry
+    // currently registered under `tid`.
     //
-    // Re-fetch it and re-validate that nothing advanced underneath us BEFORE
-    // writing Complete. If the producer was fenced (epoch bumped) or the state
-    // was advanced by another caller, abort this handler's Complete write and
-    // return the matching Kafka error instead of blindly overwriting.
+    // Take the state-partition write lock and then the current entry lock, in
+    // the order the reaper and the completion task use, and re-validate that
+    // nothing advanced underneath us BEFORE writing Complete. The locks stay
+    // held through the append, so no other caller completes the transaction
+    // in between.
+    let _state_partition_write = coord.lock_state_partition_for(tid).await;
     let Some(current_mutex) = coord.get(tid) else {
         // The entry vanished (e.g. expired/deleted) while markers were in
         // flight. Treat as a producer-mapping loss.
@@ -137,87 +156,81 @@ pub(crate) async fn handle(
     // The completion identity was selected and persisted with the Prepare
     // state. Phase 3 adopts that identity after marker fan-out; it does not
     // allocate or increment it again.
-    let response_pid;
-    let response_epoch;
-    let (prepared_completion_pid, prepared_completion_epoch) =
-        completion_producer_identity(&prepare_snap);
-
-    let complete_snap: TxnEntry = {
-        let mut entry = current_mutex.lock().await;
-        // The Prepare record already contains both identities: the marker uses
-        // the incremented epoch of the producer that wrote the transaction,
-        // while the staged completion identity is returned to the client. This
-        // revalidation prevents Phase 3 from adopting a stale staged identity.
-        match decide_end_txn_completion(
-            &entry,
-            prepare_snap.producer_id,
-            prepare_snap.producer_epoch,
-            prepared_completion_pid,
-            prepared_completion_epoch,
-            prepare,
-            complete,
-        ) {
-            CompletionDecision::Proceed {
-                next_state,
-                response_pid: new_pid,
-                response_epoch: new_epoch,
-            } => {
-                if new_pid != ProducerId(req.producer_id) {
-                    // Epoch rolled over to a new producer_id: record the prior id
-                    // so the transition is traceable (KIP-890 PreviousProducerId).
-                    entry.prev_producer_id = ProducerId(req.producer_id);
-                }
-                entry.state = next_state;
-                entry.last_update_ms = now_millis();
-                entry.producer_id = new_pid;
-                entry.producer_epoch = new_epoch;
-                entry.next_producer_id = ProducerId(-1);
-                entry.next_producer_epoch = -1;
-                entry.partitions.clear();
-                response_pid = new_pid;
-                response_epoch = new_epoch;
-                entry.clone()
+    let entry = current_mutex.lock().await;
+    // The Prepare record already contains both identities: the marker uses
+    // the incremented epoch of the producer that wrote the transaction, while
+    // the staged completion identity is returned to the client. This
+    // revalidation prevents Phase 3 from adopting a stale staged identity.
+    let (complete_snap, response_pid, response_epoch) = match decide_end_txn_completion(
+        &entry,
+        prepare_snap.producer_id,
+        prepare_snap.producer_epoch,
+        prepared_completion_pid,
+        prepared_completion_epoch,
+        prepare,
+        complete,
+    ) {
+        CompletionDecision::Proceed {
+            next_state,
+            response_pid: new_pid,
+            response_epoch: new_epoch,
+        } => {
+            // Stage on a clone: until the Complete record is durable, other
+            // callers must still see the Prepare state.
+            let mut staged = entry.clone();
+            if new_pid != ProducerId(req.producer_id) {
+                // Epoch rolled over to a new producer_id: record the prior id
+                // so the transition is traceable (KIP-890 PreviousProducerId).
+                staged.prev_producer_id = ProducerId(req.producer_id);
             }
-            CompletionDecision::AlreadyComplete {
-                response_pid: pid,
-                response_epoch: epoch,
-            } => {
-                // Another caller already drove this exact transition to
-                // completion (or we are an idempotent EndTxn retry that lost the
-                // race). Report success without re-writing, returning the
-                // persisted (possibly already-bumped) identity so a KIP-890
-                // client that retried picks up the authoritative value.
-                return encode_ok(version, pid.get(), epoch);
-            }
-            CompletionDecision::Reject(code) => {
-                tracing::warn!(
-                    tid,
-                    expected_epoch = req.producer_epoch,
-                    found_epoch = entry.producer_epoch,
-                    expected_state = ?prepare,
-                    found_state = ?entry.state,
-                    error_code = code,
-                    "EndTxn: entry changed underneath the marker fan-out; \
-                     aborting Complete write"
-                );
-                return encode_err(version, code);
-            }
+            staged.state = next_state;
+            staged.last_update_ms = now_millis();
+            staged.producer_id = new_pid;
+            staged.producer_epoch = new_epoch;
+            staged.next_producer_id = ProducerId(-1);
+            staged.next_producer_epoch = -1;
+            staged.partitions.clear();
+            (staged, new_pid, new_epoch)
         }
-        // Lock dropped here.
+        CompletionDecision::AlreadyComplete {
+            response_pid: pid,
+            response_epoch: epoch,
+        } => {
+            // Another caller already drove this exact transition to
+            // completion (or we are an idempotent EndTxn retry that lost the
+            // race). Report success without re-writing, returning the
+            // persisted (possibly already-bumped) identity so a KIP-890
+            // client that retried picks up the authoritative value.
+            return encode_ok(version, pid.get(), epoch);
+        }
+        CompletionDecision::Reject(code) => {
+            tracing::warn!(
+                tid,
+                expected_epoch = req.producer_epoch,
+                found_epoch = entry.producer_epoch,
+                expected_state = ?prepare,
+                found_state = ?entry.state,
+                error_code = code,
+                "EndTxn: entry changed underneath the marker fan-out; \
+                 aborting Complete write"
+            );
+            return encode_err(version, code);
+        }
     };
 
-    // FINAL put: move `complete_snap` in (no use-after-move below) to avoid the
-    // redundant full `TxnEntry` clone (incl. the partition / offset-commit-group
-    // sets) that the intermediate phases pay.
-    if let Err(e) = coord.put(complete_snap, txnv).await {
+    if let Err(e) = coord
+        .put_under_state_partition_lock(complete_snap, txnv)
+        .await
+    {
         tracing::error!(
             tid,
             state = ?complete,
             error = %e,
-            "EndTxn: failed to persist CompleteCommit/CompleteAbort"
+            "EndTxn: failed to persist CompleteCommit/CompleteAbort; queued for completion"
         );
-        return encode_err(version, codes::UNKNOWN_SERVER_ERROR);
+        coord.request_completion(tid);
     }
+    drop(entry);
 
     // Unwrap the post-completion `ProducerId` into the raw-`i64` wire response.
     encode_ok(version, response_pid.get(), response_epoch)

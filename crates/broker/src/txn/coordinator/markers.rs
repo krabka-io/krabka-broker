@@ -28,6 +28,8 @@ impl TxnCoordinator {
         entry: &TxnEntry,
         marker_type: MarkerType,
     ) -> Result<(), BrokerError> {
+        #[cfg(any(test, feature = "test-helpers"))]
+        self.marker_fanout_gate.pass().await?;
         let Some(transport) = &self.marker_transport else {
             return self.dispatch_local_markers(entry, marker_type).await;
         };

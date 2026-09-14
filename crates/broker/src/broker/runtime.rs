@@ -146,6 +146,11 @@ fn start_runtime_watchers(
         metrics.clone(),
         shutdown.child_token(),
     );
+    tokio::spawn(crate::txn::completion::run(
+        Arc::clone(txn_coordinator),
+        Arc::clone(controller),
+        shutdown.child_token(),
+    ));
     if config.txn_abort_cleanup_interval > <Time as TimeExt>::ZERO {
         tokio::spawn(crate::txn::expiration::run(
             Arc::clone(txn_coordinator),

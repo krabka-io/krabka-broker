@@ -13,7 +13,10 @@ use krabka_log::ProducerId;
 use krabka_verified::transaction::TransactionReaperCompletionDecision as CompletionDecision;
 use tracing::{info, warn};
 
-use super::TxnCoordinator;
+use super::{
+    TxnCoordinator,
+    completion::{apply_completion, completion_decision},
+};
 use crate::txn::{
     handlers::end_txn::{completion_producer_identity, prepare_completion_identities},
     marker::MarkerType,
@@ -99,40 +102,17 @@ fn apply_prepare_abort(entry: &mut TxnEntry, now_ms: i64) {
 /// is, when the allocator gave out a fresh pid. The function is pure, so a
 /// unit test can kill the transition.
 fn apply_complete_abort(entry: &mut TxnEntry, new_pid: ProducerId, new_epoch: i16, now_ms: i64) {
-    if new_pid != entry.producer_id {
-        entry.prev_producer_id = entry.producer_id;
-    }
-    entry.state = TxnState::CompleteAbort;
-    entry.producer_id = new_pid;
-    entry.producer_epoch = new_epoch;
-    entry.next_producer_id = ProducerId(-1);
-    entry.next_producer_epoch = -1;
-    entry.partitions.clear();
-    entry.last_update_ms = now_ms;
+    apply_completion(entry, TxnState::CompleteAbort, (new_pid, new_epoch), now_ms);
 }
 
 /// Recheck the complete prepared snapshot after marker dispatch. Comparing
 /// every persisted field prevents a concurrent registration, recovery-identity
 /// change, timeout change, or generation change from being overwritten.
 fn complete_abort_decision(entry: &TxnEntry, prepared: &TxnEntry) -> CompletionDecision {
-    let (completion_pid, completion_epoch) = completion_producer_identity(prepared);
-    krabka_verified::transaction_reaper_completion_decision(
-        (
-            entry.producer_id.get(),
-            entry.producer_epoch,
-            entry.state.to_kafka_status(),
-        ),
-        (
-            prepared.producer_id.get(),
-            prepared.producer_epoch,
-            TxnState::PrepareAbort.to_kafka_status(),
-        ),
-        (
-            completion_pid.get(),
-            completion_epoch,
-            TxnState::CompleteAbort.to_kafka_status(),
-        ),
-        entry == prepared,
+    completion_decision(
+        entry,
+        prepared,
+        (TxnState::PrepareAbort, TxnState::CompleteAbort),
     )
 }
 
@@ -143,9 +123,7 @@ fn handle_is_current(
     tid: &str,
     handle: &Arc<tokio::sync::Mutex<TxnEntry>>,
 ) -> bool {
-    coordinator
-        .get(tid)
-        .is_some_and(|current| Arc::ptr_eq(&current, handle))
+    coordinator.is_current_entry(tid, handle)
 }
 
 /// Runs the reaper orchestration loop.
@@ -292,8 +270,11 @@ impl ReaperBackend for TxnCoordinator {
                 warn!(
                     tid = %entry.transactional_id,
                     %error,
-                    "txn reaper: abort marker fan-out failed; will retry"
+                    "txn reaper: abort marker fan-out failed; queued for completion"
                 );
+                // The PrepareAbort record is durable. The completion task
+                // retries it without waiting for the next sweep.
+                self.request_completion(&entry.transactional_id);
                 false
             }
         }

@@ -11,7 +11,6 @@ use krabka_security::ListenerProtocol;
 use super::marker_rpc::send_write_txn_markers;
 use crate::{
     broker::Broker,
-    codes,
     error::BrokerError,
     network::client::InterBrokerClient,
     txn::{
@@ -21,24 +20,30 @@ use crate::{
     },
 };
 
+/// Write the markers for a prepared transaction. Returns `false` when the
+/// fan-out failed. The `Prepare*` record is durable, so the caller hands the
+/// transaction to the completion task.
 pub(super) async fn dispatch_transaction_markers(
     broker: &Broker,
     snapshot: &TxnEntry,
     marker_type: MarkerType,
     transactional_id: &str,
-) -> Result<(), i16> {
-    broker
+) -> bool {
+    match broker
         .txn_coordinator
         .dispatch_transaction_markers(snapshot, marker_type)
         .await
-        .map_err(|error| {
-            tracing::error!(
+    {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(
                 tid = transactional_id,
                 error = %error,
-                "EndTxn: WriteTxnMarkers fan-out failed; returning retriable error"
+                "EndTxn: WriteTxnMarkers fan-out failed; queued for completion"
             );
-            codes::UNKNOWN_SERVER_ERROR
-        })
+            false
+        }
+    }
 }
 
 /// Dispatch `WriteTxnMarkers` to every partition leader involved in the

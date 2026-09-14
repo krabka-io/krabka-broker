@@ -1,6 +1,9 @@
 //! Transaction subsystem for the Krabka broker.
 
 pub(crate) mod bootstrap;
+/// The background task that completes transactions whose `Prepare*` record is
+/// durable.
+pub(crate) mod completion;
 pub(crate) mod coordinator;
 pub(crate) mod decision;
 /// Compositional end-to-end model of the exactly-once read guarantee. It

@@ -22,6 +22,8 @@ mod log_waiters;
 mod partition;
 #[cfg(any(test, feature = "test-helpers"))]
 mod share_state;
+#[cfg(any(test, feature = "test-helpers"))]
+mod transactions;
 
 fn take_partition_writer_tasks(partitions: &PartitionRegistry) -> Vec<JoinHandle<()>> {
     partitions

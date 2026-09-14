@@ -268,6 +268,8 @@ pub use broker::{Broker, BrokerHandle};
 pub use config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
 pub use config_keys::{TopicConfigDoc, topic_config_docs};
 pub use error::BrokerError;
+#[cfg(any(test, feature = "test-helpers"))]
+pub use txn::coordinator::fanout_gate::MarkerFanoutMode;
 /// Benchmark seam over the zero-copy fetch drain, driven by
 /// `benches/fetch_drain.rs`. It is the drain the connection writer calls, with
 /// the two records resolvers that decide whether a records region reaches the

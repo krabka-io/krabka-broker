@@ -1,0 +1,274 @@
+//! Tests for the completion of prepared transactions: the pure state and
+//! decision helpers, and one completion attempt against a coordinator whose
+//! `__transaction_state-0` partition and data partition are real logs.
+
+use std::{path::Path, sync::Arc};
+
+use assert2::{assert, check};
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, LogConfig, ProducerId};
+use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use tempfile::TempDir;
+use uuid::Uuid;
+
+use super::*;
+use crate::{
+    partition::Partition,
+    partition_registry::PartitionRegistry,
+    txn::{bootstrap, state::TopicPartition},
+};
+
+const TID: &str = "tid-completion";
+const DATA_TOPIC: &str = "orders";
+
+#[test]
+fn only_a_prepare_state_has_a_completion() {
+    let cases = [
+        (
+            TxnState::PrepareCommit,
+            Some((MarkerType::Commit, TxnState::CompleteCommit)),
+        ),
+        (
+            TxnState::PrepareAbort,
+            Some((MarkerType::Abort, TxnState::CompleteAbort)),
+        ),
+        (TxnState::Empty, None),
+        (TxnState::Ongoing, None),
+        (TxnState::CompleteCommit, None),
+        (TxnState::CompleteAbort, None),
+        (TxnState::Dead, None),
+    ];
+    for (state, expected) in cases {
+        check!(completion_for(state) == expected, "{state:?}");
+    }
+}
+
+fn prepared_entry(state: TxnState) -> TxnEntry {
+    let mut entry = TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), 4, 60_000, 0);
+    entry.state = state;
+    entry.partitions.insert(TopicPartition {
+        topic: DATA_TOPIC.to_owned(),
+        partition: PartitionIndex(0),
+    });
+    entry
+}
+
+#[test]
+fn completion_adopts_the_staged_identity_and_clears_the_transaction() {
+    // (label, completion identity, expected prior producer ID)
+    let cases = [
+        ("same producer ID", (ProducerId(1000), 5), ProducerId(-1)),
+        (
+            "rotated producer ID",
+            (ProducerId(2000), 0),
+            ProducerId(1000),
+        ),
+    ];
+    for (label, identity, prev_producer_id) in cases {
+        let mut entry = prepared_entry(TxnState::PrepareCommit);
+        apply_completion(&mut entry, TxnState::CompleteCommit, identity, 77);
+        let expected = TxnEntry {
+            producer_id: identity.0,
+            producer_epoch: identity.1,
+            state: TxnState::CompleteCommit,
+            prev_producer_id,
+            last_update_ms: 77,
+            ..TxnEntry::new_empty(TID.to_owned(), identity.0, identity.1, 60_000, 0)
+        };
+        check!(entry == expected, "{label}");
+    }
+}
+
+#[test]
+fn completion_decision_accepts_only_the_exact_prepared_snapshot() {
+    let prepared = prepared_entry(TxnState::PrepareCommit);
+    let pair = (TxnState::PrepareCommit, TxnState::CompleteCommit);
+
+    check!(completion_decision(&prepared, &prepared, pair) == CompletionDecision::Proceed);
+
+    let mut grown = prepared.clone();
+    grown.partitions.insert(TopicPartition {
+        topic: "payments".to_owned(),
+        partition: PartitionIndex(1),
+    });
+    check!(
+        completion_decision(&grown, &prepared, pair)
+            == CompletionDecision::RejectChangedPreparedState
+    );
+
+    let mut completed = prepared.clone();
+    completed.state = TxnState::CompleteCommit;
+    check!(completion_decision(&completed, &prepared, pair) == CompletionDecision::AlreadyComplete);
+
+    let mut other_result = prepared.clone();
+    other_result.state = TxnState::CompleteAbort;
+    check!(
+        completion_decision(&other_result, &prepared, pair) != CompletionDecision::AlreadyComplete
+    );
+}
+
+fn image(leader: NodeId) -> MetadataImage {
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: bootstrap::TOPIC.to_owned(),
+        topic_id: Uuid::from_u128(1),
+        partitions: 1,
+        replication_factor: 1,
+    }));
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        topic: bootstrap::TOPIC.to_owned(),
+        partition: 0,
+        leader,
+        replicas: vec![leader],
+        isr: vec![leader],
+        ..Default::default()
+    }));
+    image
+}
+
+fn open_partition(dir: &Path, topic: &str) -> Arc<Partition> {
+    let part_dir = crate::log_dir::partition_dir(dir, topic, 0);
+    std::fs::create_dir_all(&part_dir).expect("create partition dir");
+    crate::broker::spawn_partition(
+        topic.to_owned(),
+        PartitionIndex(0),
+        dir.to_path_buf(),
+        Log::open(&part_dir, LogConfig::default()).expect("open log"),
+        crate::log_dir_status::LogDirRegistry::default(),
+        Arc::new(crate::producer_state::ProducerState::new()),
+        false,
+    )
+}
+
+/// A coordinator that leads `__transaction_state-0` when `leader` is this
+/// broker, with `entry` persisted. `with_data_partition` hosts the data
+/// partition locally, so a local marker fan-out can succeed.
+async fn coordinator(
+    entry: TxnEntry,
+    leader: NodeId,
+    with_data_partition: bool,
+) -> (TxnCoordinator, TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let partitions = Arc::new(PartitionRegistry::new());
+    partitions.insert(
+        bootstrap::TOPIC.into(),
+        PartitionIndex(0),
+        open_partition(dir.path(), bootstrap::TOPIC),
+    );
+    if with_data_partition {
+        partitions.insert(
+            DATA_TOPIC.into(),
+            PartitionIndex(0),
+            open_partition(dir.path(), DATA_TOPIC),
+        );
+    }
+    let coordinator = TxnCoordinator::new(
+        NodeId(1),
+        partitions,
+        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+        1,
+        krabka_units::mebibytes(1),
+    );
+    coordinator
+        .refresh_leader_partitions(&image(NodeId(1)))
+        .await;
+    coordinator
+        .put(entry, TxnVersion::Verified)
+        .await
+        .expect("seed __transaction_state");
+    coordinator.refresh_leader_partitions(&image(leader)).await;
+    (coordinator, dir)
+}
+
+async fn current(coordinator: &TxnCoordinator) -> TxnEntry {
+    coordinator.get(TID).expect("entry").lock().await.clone()
+}
+
+#[tokio::test]
+async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
+    struct Case {
+        name: &'static str,
+        entry: TxnEntry,
+        leader: NodeId,
+        with_data_partition: bool,
+        attempt: CompletionAttempt,
+        /// The state after the attempt.
+        state: TxnState,
+    }
+    let cases = [
+        Case {
+            name: "prepared commit completes",
+            entry: prepared_entry(TxnState::PrepareCommit),
+            leader: NodeId(1),
+            with_data_partition: true,
+            attempt: CompletionAttempt::Completed,
+            state: TxnState::CompleteCommit,
+        },
+        Case {
+            name: "prepared abort completes",
+            entry: prepared_entry(TxnState::PrepareAbort),
+            leader: NodeId(1),
+            with_data_partition: true,
+            attempt: CompletionAttempt::Completed,
+            state: TxnState::CompleteAbort,
+        },
+        Case {
+            name: "a failed marker fan-out retries",
+            entry: prepared_entry(TxnState::PrepareCommit),
+            leader: NodeId(1),
+            with_data_partition: false,
+            attempt: CompletionAttempt::Retry,
+            state: TxnState::PrepareCommit,
+        },
+        Case {
+            name: "another coordinator owns it",
+            entry: prepared_entry(TxnState::PrepareCommit),
+            leader: NodeId(2),
+            with_data_partition: true,
+            attempt: CompletionAttempt::NothingToComplete,
+            state: TxnState::PrepareCommit,
+        },
+        Case {
+            name: "an ongoing transaction is not prepared",
+            entry: prepared_entry(TxnState::Ongoing),
+            leader: NodeId(1),
+            with_data_partition: true,
+            attempt: CompletionAttempt::NothingToComplete,
+            state: TxnState::Ongoing,
+        },
+    ];
+    for case in cases {
+        let (coordinator, _dir) =
+            coordinator(case.entry.clone(), case.leader, case.with_data_partition).await;
+        let attempt = coordinator
+            .complete_prepared_transaction(TID, TxnVersion::Verified)
+            .await;
+        check!(attempt == case.attempt, "{}", case.name);
+        let after = current(&coordinator).await;
+        check!(after.state == case.state, "{}", case.name);
+        if case.state == case.entry.state {
+            check!(after == case.entry, "{}: entry unchanged", case.name);
+        }
+    }
+}
+
+#[tokio::test]
+async fn recovery_queues_every_prepared_transaction_for_completion() {
+    let (coordinator, _dir) =
+        coordinator(prepared_entry(TxnState::PrepareCommit), NodeId(1), true).await;
+    let mut ongoing = TxnEntry::new_empty("tid-ongoing".to_owned(), ProducerId(3000), 0, 60_000, 0);
+    ongoing.state = TxnState::Ongoing;
+    coordinator
+        .put(ongoing, TxnVersion::Verified)
+        .await
+        .expect("persist an ongoing transaction");
+    assert!(coordinator.take_completion_requests().is_empty());
+
+    coordinator
+        .recover(&image(NodeId(1)))
+        .await
+        .expect("replay __transaction_state");
+
+    check!(coordinator.take_completion_requests() == vec![TID.to_owned()]);
+    check!(coordinator.take_completion_requests().is_empty());
+}

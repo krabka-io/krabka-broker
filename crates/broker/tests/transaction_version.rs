@@ -29,8 +29,13 @@
 //! runner, openraft and tokio scheduling cause intermittent
 //! `INVALID_TXN_STATE` during `InitProducerId`.
 //!
+//! 5. **prepared transaction recovery**: a transaction whose `Prepare*`
+//!    record is durable completes after a restart or a failed marker write,
+//!    and `InitProducerId` does not overwrite it.
+//!
 //! Cases 1 and 2 live in `txnver_full_cycle`, case 3 in `txnver_verify_only`,
-//! and case 4 in `txnver_restart_recovery`; `txnver_harness` carries the broker
+//! case 4 in `txnver_restart_recovery`, and case 5 in
+//! `txnver_prepare_recovery`; `txnver_harness` carries the broker
 //! boot, topic creation, and feature-downgrade fixtures they share.
 
 // Cargo compiles this file as its own test binary, so the crate root's module
@@ -41,6 +46,8 @@
 mod txnver_full_cycle;
 #[path = "transaction_version/txnver_harness.rs"]
 mod txnver_harness;
+#[path = "transaction_version/txnver_prepare_recovery.rs"]
+mod txnver_prepare_recovery;
 #[path = "transaction_version/txnver_restart_recovery.rs"]
 mod txnver_restart_recovery;
 #[path = "transaction_version/txnver_verify_only.rs"]
