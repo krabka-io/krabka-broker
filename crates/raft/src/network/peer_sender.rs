@@ -177,6 +177,22 @@ impl PeerSender for RealPeerSender {
 
     fn update_voters(&self, voters: &VoterSet) {
         if let Ok(mut current) = self.voters.write() {
+            // A voter that leaves the set can still lead. A leader that appends
+            // its own removal serves Fetch until the removal commits, and only
+            // then resigns. Kafka's followers address the leader by the
+            // endpoints that the leader announced, and not by the voter set.
+            // Keep the departing voter's controller address as an alias, so
+            // that a follower can still fetch from it. A voter set that names
+            // the node again takes precedence in `connect`.
+            if let Ok(mut aliases) = self.aliases.write() {
+                for id in current.ids() {
+                    if !voters.contains(id)
+                        && let Some(address) = controller_addr(&current, id)
+                    {
+                        aliases.insert(id, address);
+                    }
+                }
+            }
             *current = voters.clone();
             // Endpoint updates must force the next request through DNS/dialing.
             self.connections.clear();

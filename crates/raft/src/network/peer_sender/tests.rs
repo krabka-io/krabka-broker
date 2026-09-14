@@ -19,8 +19,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::*;
 use crate::{kraft::transport::api_key, network::dialer::PlaintextDialer};
 
-fn voter_set_with_controller(id: NodeId, host: &str, port: u16) -> VoterSet {
-    VoterSet::from_voters([krabka_metadata::Voter {
+fn voter_with_controller(id: NodeId, host: &str, port: u16) -> krabka_metadata::Voter {
+    krabka_metadata::Voter {
         id,
         directory_id: uuid::Uuid::nil(),
         endpoints: vec![krabka_metadata::VoterEndpoint {
@@ -29,7 +29,11 @@ fn voter_set_with_controller(id: NodeId, host: &str, port: u16) -> VoterSet {
             port,
         }],
         kraft_version: krabka_metadata::KRaftVersionRange::default(),
-    }])
+    }
+}
+
+fn voter_set_with_controller(id: NodeId, host: &str, port: u16) -> VoterSet {
+    VoterSet::from_voters([voter_with_controller(id, host, port)])
 }
 
 fn api_versions_response_v0() -> Vec<u8> {
@@ -283,4 +287,80 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
     );
 
     server.await.unwrap();
+}
+
+/// A controller that leaves the voter set must stay reachable. A leader that
+/// appends its own removal keeps its leadership until the removal commits, and
+/// the followers commit it only by fetching from that leader. Kafka's
+/// followers address the leader by its announced endpoints, which do not
+/// depend on the voter set.
+#[tokio::test]
+async fn a_peer_stays_reachable_after_it_leaves_the_voter_set() {
+    // (what it is, whether the new voter set still holds the peer)
+    let cases = [
+        ("a voter that stays in the set", true),
+        ("a voter that the new set removes", false),
+    ];
+    for (what, stays) in cases {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let api_versions = read_frame(&mut stream).await;
+            let (_, _, corr, _, _) = parse_request_header(&api_versions);
+            write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
+            let request = read_frame(&mut stream).await;
+            let (_, _, corr, _, _) = parse_request_header(&request);
+            write_response_frame(&mut stream, corr, true, b"fetch-response").await;
+        });
+
+        let host = addr.ip().to_string();
+        let leader = voter_with_controller(NodeId(1), &host, addr.port());
+        // The other voter's port is never dialed.
+        let follower = voter_with_controller(NodeId(2), &host, 1);
+        let sender = RealPeerSender::new(
+            VoterSet::from_voters([leader.clone(), follower.clone()]),
+            &[],
+            "raft-client".into(),
+            Arc::new(PlaintextDialer),
+            krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            krabka_client_core::ClientFrameMax::default(),
+        );
+        let next = if stays {
+            VoterSet::from_voters([leader, follower])
+        } else {
+            VoterSet::from_voters([follower])
+        };
+        sender.update_voters(&next);
+
+        let response = sender
+            .send(NodeId(1), api_key::FETCH, Bytes::from_static(b"fetch-body"))
+            .await
+            .map_err(|error| format!("{error:?}"));
+        if response.is_ok() {
+            server.await.expect("fake peer");
+        } else {
+            // No dial reached the fake peer, so it still waits to accept.
+            server.abort();
+        }
+        assert2::check!(
+            response == Ok(Bytes::from_static(b"fetch-response")),
+            "{what}"
+        );
+    }
+
+    // A node that no voter set and no bootstrap server ever named has no
+    // address.
+    let sender = RealPeerSender::new(
+        VoterSet::default(),
+        &[],
+        "raft-client".into(),
+        Arc::new(PlaintextDialer),
+        krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+        krabka_client_core::ClientFrameMax::default(),
+    );
+    let response = sender
+        .send(NodeId(9), api_key::FETCH, Bytes::from_static(b"fetch-body"))
+        .await;
+    assert2::assert!(let Err(RaftError::NotLeader { current_leader: None }) = response);
 }
