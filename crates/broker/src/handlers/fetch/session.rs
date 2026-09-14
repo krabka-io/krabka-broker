@@ -10,6 +10,7 @@ use krabka_protocol::{
 use super::request::{EffectivePartition, EffectiveTopic};
 use crate::{
     broker::Broker,
+    codes,
     fetch_session::{CachedPartitionState, FetchSessionKey, INVALID_SESSION_ID, SessionDecision},
 };
 
@@ -215,8 +216,12 @@ fn filter_incremental_response(
             let aborted_hash = hash_aborted_transactions(p.aborted_transactions.as_ref());
             let records_present = p.records.as_ref().is_some_and(|b| b.payload_len() > 0);
             let changed = match entry {
+                // Kafka's `CachedPartition.maybeUpdateResponseData` always
+                // includes a partition with an error, so an incremental
+                // response repeats the error on every fetch until it clears.
                 Some((_, prev)) => {
                     records_present
+                        || p.error_code != codes::NONE
                         || p.error_code != prev.last_error_code
                         || p.high_watermark != prev.last_high_watermark
                         || p.last_stable_offset != prev.last_last_stable_offset
@@ -396,6 +401,39 @@ mod tests {
 
         assert!(responses.is_empty());
         assert!(sent.is_empty());
+    }
+
+    /// Kafka's `CachedPartition.maybeUpdateResponseData` always includes a
+    /// partition with an error. A row whose error and offsets match the cached
+    /// state goes out again, and the cache records it again.
+    #[test]
+    fn an_unchanged_error_row_is_resent() {
+        let row = PartitionData {
+            error_code: codes::UNKNOWN_TOPIC_ID,
+            ..partition_data(-1)
+        };
+        let state = CachedPartitionState {
+            last_error_code: codes::UNKNOWN_TOPIC_ID,
+            ..sent_state(-1)
+        };
+        let key = FetchSessionKey {
+            topic_name: String::new(),
+            topic_id: WireUuid([9; 16]),
+            partition: 0,
+        };
+        let cached: std::collections::HashMap<_, _> =
+            [(key.clone(), state.clone())].into_iter().collect();
+        let topic = FetchableTopicResponse {
+            topic: String::new(),
+            topic_id: WireUuid([9; 16]),
+            partitions: vec![row],
+            ..FetchableTopicResponse::default()
+        };
+        let mut responses = vec![topic.clone()];
+
+        let sent = filter_incremental_response(&mut responses, &cached);
+
+        assert!((responses, sent) == (vec![topic], vec![(key, state)]));
     }
 
     /// Two topics cached by id alone are two partitions, not one: the filter

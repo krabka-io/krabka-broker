@@ -170,11 +170,33 @@ pub(super) fn apply_epoch_checks(
     true
 }
 
+/// The partition row that Kafka's `FetchResponse.partitionResponse` builds.
+///
+/// `KafkaApis.handleFetchRequest` uses it for a row that it refuses before the
+/// read: `UNKNOWN_TOPIC_ID`, `TOPIC_AUTHORIZATION_FAILED` and
+/// `UNKNOWN_TOPIC_OR_PARTITION`. Every offset is -1, and the aborted
+/// transactions are an empty list, not a null one.
+pub(super) fn refused_partition(partition_index: i32, error_code: i16) -> PartitionData {
+    PartitionData {
+        partition_index,
+        error_code,
+        high_watermark: -1,
+        last_stable_offset: -1,
+        log_start_offset: -1,
+        aborted_transactions: Some(Vec::new()),
+        preferred_read_replica: -1,
+        ..Default::default()
+    }
+}
+
 pub(super) struct PendingPlanContext<'a> {
     pub(super) broker: &'a Broker,
     pub(super) image: &'a krabka_metadata::MetadataImage,
     pub(super) denied_topics: &'a std::collections::HashSet<String>,
     pub(super) rack_id: &'a str,
+    /// The negotiated `Fetch` version. It decides whether a topic row names
+    /// its topic by name or by id.
+    pub(super) version: i16,
     pub(super) mode: (bool, bool),
     pub(super) follower_id: i32,
 }
@@ -186,18 +208,21 @@ pub(super) async fn plan_partition_read(
     topic_error: Option<i16>,
     request: &EffectivePartition,
 ) -> PendingRead {
+    // Kafka's `KafkaApis.handleFetchRequest` answers a topic that does not
+    // resolve before it authorizes the rest, on the consumer path and on the
+    // follower path. So the topic error comes before the `Read` gate.
+    if let Some(error_code) = topic_error {
+        let output = refused_partition(request.partition, error_code);
+        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+    }
+    if context.denied_topics.contains(topic_name) {
+        let output = refused_partition(request.partition, codes::TOPIC_AUTHORIZATION_FAILED);
+        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+    }
     let mut output = PartitionData {
         partition_index: request.partition,
         ..Default::default()
     };
-    if context.denied_topics.contains(topic_name) {
-        output.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
-    }
-    if let Some(error_code) = topic_error {
-        output.error_code = error_code;
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
-    }
     // A witness replicates the partition and counts toward
     // `min.insync.replicas`, but it serves no client traffic. A consumer that
     // reaches one gets NOT_LEADER_OR_FOLLOWER, the partition-level code that
@@ -255,7 +280,7 @@ pub(super) async fn plan_partition_read(
         update_follower_progress(partition, context.follower_id, request.fetch_offset).await;
     }
     if partition.is_none() || topic_name.is_empty() {
-        output.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
+        let output = refused_partition(request.partition, codes::UNKNOWN_TOPIC_OR_PARTITION);
         return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
     }
     if !context.mode.1 {
@@ -283,6 +308,15 @@ pub(super) async fn build_pending_reads(
 ) -> Vec<PendingRead> {
     let mut pending = Vec::new();
     for topic in topics {
+        // Versions 12 and earlier name the topic. A name that does not resolve
+        // goes on to the `Read` gate and then to the partition gate, which
+        // answer TOPIC_AUTHORIZATION_FAILED or UNKNOWN_TOPIC_OR_PARTITION.
+        // Version 13 and later name the topic by id only. Kafka's
+        // `KafkaApis.handleFetchRequest` resolves the id through
+        // `metadataCache.topicIdsToNames()` and answers UNKNOWN_TOPIC_ID on
+        // every partition row when that gives no name. The zero id gives no
+        // name, and the resolver sends it down the name path with an empty
+        // name.
         let (name, id, error) =
             match crate::topic_resolve::resolve(context.image, &topic.topic, topic.topic_id) {
                 Ok(record) => (
@@ -290,9 +324,16 @@ pub(super) async fn build_pending_reads(
                     WireUuid(record.topic_id.into_bytes()),
                     None,
                 ),
-                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => {
+                Err(codes::UNKNOWN_TOPIC_OR_PARTITION)
+                    if context.version < super::FIRST_TOPIC_ID_VERSION =>
+                {
                     (topic.topic.clone(), topic.topic_id, None)
                 }
+                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => (
+                    topic.topic.clone(),
+                    topic.topic_id,
+                    Some(codes::UNKNOWN_TOPIC_ID),
+                ),
                 Err(error_code) => (topic.topic.clone(), topic.topic_id, Some(error_code)),
             };
         for partition in &topic.partitions {
@@ -413,6 +454,7 @@ mod tests {
                 image: &image,
                 denied_topics: &denied_topics,
                 rack_id: "",
+                version: super::super::FIRST_TOPIC_ID_VERSION,
                 mode: (false, is_follower_fetch),
                 follower_id,
             };

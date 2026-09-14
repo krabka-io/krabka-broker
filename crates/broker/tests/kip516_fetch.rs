@@ -1,17 +1,28 @@
 //! KIP-516: Fetch by `topic_id` error semantics.
+//!
+//! The test client negotiates the broker's highest `Fetch` version, which
+//! carries only the topic id. Kafka's `KafkaApis.handleFetchRequest` answers
+//! `UNKNOWN_TOPIC_ID` on every partition row of a topic whose id does not
+//! resolve to a name. The zero id is such an id.
 use assert2::assert;
 mod support;
 
+use bytes::Bytes;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_response::{FetchableTopicResponse, PartitionData},
     },
     primitives::uuid::Uuid as WireUuid,
+    records::RecordsPayload,
 };
 
+/// Kafka's `UNKNOWN_TOPIC_ID` error code.
+const UNKNOWN_TOPIC_ID: i16 = 100;
+
 #[tokio::test]
-async fn fetch_unknown_topic_id_returns_unknown_topic_id() {
+async fn fetch_unresolved_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     p.client
         .send(CreateTopicsRequest {
@@ -27,35 +38,59 @@ async fn fetch_unknown_topic_id_returns_unknown_topic_id() {
         .await
         .expect("create topic");
 
-    // A random UUID the cluster has never assigned.
-    let bogus = WireUuid(uuid::Uuid::from_u128(0xdead_beef).into_bytes());
-    let resp = p
-        .client
-        .send(FetchRequest {
-            max_wait_ms: 100,
-            min_bytes: 1,
-            topics: vec![FetchTopic {
-                topic: String::new(), // v13+: name absent, id-only on the wire
-                topic_id: bogus,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1_048_576,
+    let cases = [
+        (
+            "non-zero id",
+            WireUuid(uuid::Uuid::from_u128(0xdead_beef).into_bytes()),
+        ),
+        ("zero id", WireUuid::ZERO),
+    ];
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, topic_id) in cases {
+        let partition = |partition| FetchPartition {
+            partition,
+            fetch_offset: 0,
+            partition_max_bytes: 1_048_576,
+            ..Default::default()
+        };
+        let resp = p
+            .client
+            .send(FetchRequest {
+                max_wait_ms: 100,
+                min_bytes: 1,
+                topics: vec![FetchTopic {
+                    topic: String::new(), // v13+: name absent, id-only on the wire
+                    topic_id,
+                    partitions: vec![partition(0), partition(1)],
                     ..Default::default()
                 }],
                 ..Default::default()
-            }],
+            })
+            .await
+            .expect("fetch");
+        // Kafka's `FetchResponse.partitionResponse`.
+        let refused = |partition_index| PartitionData {
+            partition_index,
+            error_code: UNKNOWN_TOPIC_ID,
+            high_watermark: -1,
+            last_stable_offset: -1,
+            log_start_offset: -1,
+            aborted_transactions: Some(Vec::new()),
+            preferred_read_replica: -1,
+            records: Some(RecordsPayload::Legacy(Bytes::new())),
             ..Default::default()
-        })
-        .await
-        .expect("fetch");
-
-    let code = resp
-        .responses
-        .iter()
-        .flat_map(|t| t.partitions.iter())
-        .map(|pp| pp.error_code)
-        .next()
-        .expect("a partition row");
-    assert!(code == 100); // UNKNOWN_TOPIC_ID
+        };
+        actual.push((label, resp.responses));
+        expected.push((
+            label,
+            vec![FetchableTopicResponse {
+                topic: String::new(),
+                topic_id,
+                partitions: vec![refused(0), refused(1)],
+                ..Default::default()
+            }],
+        ));
+    }
+    assert!(actual == expected);
 }

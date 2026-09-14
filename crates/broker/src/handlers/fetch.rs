@@ -36,6 +36,9 @@ mod response;
 mod session;
 mod throttle;
 
+#[cfg(test)]
+mod topic_resolution_tests;
+
 pub(crate) use self::plan::PendingRead;
 use self::{
     node_endpoints::fetch_node_endpoints,
@@ -59,6 +62,11 @@ const FETCH_API_KEY: crate::handlers::ApiKeyCode = krabka_protocol::api_key::Api
 /// First `Fetch` response version that carries the KIP-951 `CurrentLeader`
 /// hint and its `NodeEndpoints` companion. Both are tagged fields at v16+.
 const KIP_951_FETCH_VERSION: i16 = 16;
+
+/// The first `Fetch` version that names each topic by `topic_id` only
+/// (KIP-516). The request schema carries `Topic` at versions 0-12 and
+/// `TopicId` from this version on.
+const FIRST_TOPIC_ID_VERSION: i16 = 13;
 
 /// Handle a `Fetch` request and return the not-yet-encoded response
 /// **struct** with the negotiated `version`.
@@ -161,6 +169,7 @@ pub(crate) async fn handle(
         image: &image,
         denied_topics: &denied_topics,
         rack_id: &req.rack_id,
+        version,
         mode: (read_committed, is_follower_fetch),
         follower_id: effective_replica_id,
     };
