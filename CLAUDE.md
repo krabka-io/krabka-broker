@@ -61,8 +61,6 @@ in one place -- the `[patch.crates-io]` block at the bottom of the root
 `krabka-x = "0.4.0"` requirements; the patch is what redirects them at the git
 checkouts. To move to a newer sibling, change the revision there, re-run
 `cargo generate-lockfile`, and commit both files.
-`.github/workflows/sync-siblings.yml` proposes those bumps on a schedule, one
-matrix leg per sibling.
 
 `MODULE.bazel` additionally names each sibling crate's directory. rules_rs finds
 a git crate's path by matching the crate name against the workspace `members`
