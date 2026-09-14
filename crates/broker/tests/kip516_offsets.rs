@@ -12,6 +12,10 @@ use krabka_protocol::{
         offset_fetch_request::{
             OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
         },
+        offset_fetch_response::{
+            OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartitions,
+            OffsetFetchResponseTopics,
+        },
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -107,34 +111,68 @@ async fn offset_commit_and_fetch_by_topic_id_round_trip() {
     check!(t.topic_id == id); // id echoed
 }
 
+/// `OffsetFetch` v10 with a `topic_id` that does not resolve answers
+/// `UNKNOWN_TOPIC_ID` with offset -1 and the id echoed. The zero id is such an
+/// id.
 #[tokio::test]
-async fn offset_fetch_unknown_topic_id_returns_unknown_topic_id() {
+async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
+    /// Kafka's `UNKNOWN_TOPIC_ID` error code.
+    const UNKNOWN_TOPIC_ID: i16 = 100;
+
     let p = support::start().await;
-    let bogus = WireUuid(uuid::Uuid::from_u128(0xabad_1dea).into_bytes());
-    let resp = p
-        .client
-        .send(OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: "g2".into(),
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: String::new(),
-                    topic_id: bogus,
-                    partition_indexes: vec![0],
+    let cases = [
+        (
+            "non-zero id",
+            WireUuid(uuid::Uuid::from_u128(0xabad_1dea).into_bytes()),
+        ),
+        ("zero id", WireUuid::ZERO),
+    ];
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, topic_id) in cases {
+        let resp = p
+            .client
+            .send(OffsetFetchRequest {
+                groups: vec![OffsetFetchRequestGroup {
+                    group_id: "g2".into(),
+                    topics: Some(vec![OffsetFetchRequestTopics {
+                        name: String::new(),
+                        topic_id,
+                        partition_indexes: vec![0],
+                        ..Default::default()
+                    }]),
                     ..Default::default()
-                }]),
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("offset fetch");
-    let grp = resp
-        .groups
-        .iter()
-        .find(|g| g.group_id == "g2")
-        .expect("group g2");
-    let t = grp.topics.first().expect("a topic row");
-    assert!(t.partitions.first().expect("a partition").error_code == 100);
+            })
+            .await
+            .expect("offset fetch");
+        actual.push((label, resp));
+        expected.push((
+            label,
+            OffsetFetchResponse {
+                groups: vec![OffsetFetchResponseGroup {
+                    group_id: "g2".into(),
+                    topics: vec![OffsetFetchResponseTopics {
+                        name: String::new(),
+                        topic_id,
+                        partitions: vec![OffsetFetchResponsePartitions {
+                            partition_index: 0,
+                            committed_offset: -1,
+                            committed_leader_epoch: -1,
+                            metadata: Some(String::new()),
+                            error_code: UNKNOWN_TOPIC_ID,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ));
+    }
+    assert!(actual == expected);
 }
 
 /// `OffsetCommit` v10 with a mix of a known `topic_id` and an unknown one. The
