@@ -29,6 +29,7 @@ use krabka_protocol::{
 };
 use tokio::sync::oneshot;
 
+use self::response::ResponseBuilder;
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
     broker::Broker,
@@ -44,7 +45,34 @@ use crate::{
     error::BrokerError,
 };
 
-// ACL preamble (group + per-topic) + commit pipeline; splitting hurts readability
+mod response;
+
+#[cfg(test)]
+mod topic_resolution_tests;
+
+/// The first `OffsetCommit` version that names each topic by `topic_id` only
+/// (KIP-848). The request schema carries `name` at versions 0-9 and
+/// `topic_id` from this version on.
+const FIRST_TOPIC_ID_VERSION: i16 = 10;
+
+/// Serves one `OffsetCommit` request.
+///
+/// The order of the checks is the order of Kafka's
+/// `KafkaApis.handleOffsetCommitRequest`:
+///
+/// 1. `Read` on `Group(group_id)`. A denial answers
+///    `GROUP_AUTHORIZATION_FAILED` on every partition row.
+/// 2. At v10 and later, each `topic_id` resolves to a name. A row whose name
+///    stays empty answers `UNKNOWN_TOPIC_ID` on every partition row. The zero
+///    id is such a row.
+/// 3. `Read` on each `Topic(name)`. A denied topic answers
+///    `TOPIC_AUTHORIZATION_FAILED` on every partition row.
+/// 4. The group coordinator commits the rows that remain, and a coordinator
+///    error goes on those rows only.
+///
+/// The error rows come first in the response and the committed rows follow,
+/// as `OffsetCommitResponse.Builder.merge` puts them. The handler writes no
+/// offset for a row that steps 2 or 3 refuse.
 #[tracing::instrument(
     name = "handle_offset_commit",
     level = "info",
@@ -61,53 +89,97 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
     let mut req = OffsetCommitRequest::decode(&mut cur, version)?;
+    let image = broker.controller.current_image();
 
-    // ── KIP-516 (v10+): topic_id → name normalization ───────────
-    // At v10 the client sends `name` empty + `topic_id` set. The internal
-    // commit pipeline (and the `__consumer_offsets` record key) is
-    // name-keyed, so resolve id→name in place. Topics whose id is unknown
-    // are split off: they get UNKNOWN_TOPIC_ID on every partition and are
-    // not committed. `finalize` appends those rows to every response, and
-    // the response echoes each topic's `topic_id`.
-    let unknown_id_topics = normalize_topic_ids(&mut req, &broker.controller.current_image());
-
-    // ── ACL preamble ────────────────────────────────────────────
-    // Step 1: `Read` on `Group(group_id)`. On Deny → whole-response
-    // `error_code = GROUP_AUTHORIZATION_FAILED (30)` (with per-topic/
-    // per-partition rows reflecting the error too).
-    {
-        let image = broker.controller.current_image();
-        let acl_req = AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Group,
-            resource_name: req.group_id.as_str(),
-            operation: AclOperation::Read,
-        };
-        if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
-            let resp = build_response_all(&req, codes::GROUP_AUTHORIZATION_FAILED);
-            return finalize(version, resp, unknown_id_topics.clone());
-        }
+    let group_request = AuthorizationRequest {
+        principal: ctx.principal,
+        host: ctx.peer,
+        resource_type: ResourceType::Group,
+        resource_name: req.group_id.as_str(),
+        operation: AclOperation::Read,
+    };
+    if broker.config.authorizer.authorize(&*image, &group_request) == AuthorizationResult::Deny {
+        return encode(
+            version,
+            &build_response_all(&req, codes::GROUP_AUTHORIZATION_FAILED),
+        );
     }
 
+    let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
+    if use_topic_ids {
+        resolve_topic_names(&mut req, &image);
+    }
+
+    let allowed: Vec<bool> = {
+        let decisions = authorize_topics(
+            broker.config.authorizer.as_ref(),
+            &*image,
+            ctx.principal,
+            ctx.peer,
+            AclOperation::Read,
+            req.topics
+                .iter()
+                .filter(|topic| !(use_topic_ids && topic.name.is_empty()))
+                .map(|topic| topic.name.as_str()),
+        );
+        req.topics
+            .iter()
+            .map(|topic| {
+                decisions.get(topic.name.as_str()).copied() == Some(AuthorizationResult::Allow)
+            })
+            .collect()
+    };
+
+    let mut response = ResponseBuilder::new(use_topic_ids);
+    let mut accepted = Vec::with_capacity(req.topics.len());
+    for (topic, allowed) in std::mem::take(&mut req.topics).into_iter().zip(allowed) {
+        if use_topic_ids && topic.name.is_empty() {
+            response.add_topic(&topic, codes::UNKNOWN_TOPIC_ID);
+        } else if !allowed {
+            response.add_topic(&topic, codes::TOPIC_AUTHORIZATION_FAILED);
+        } else {
+            accepted.push(topic);
+        }
+    }
+    if accepted.is_empty() {
+        return encode(version, &response.build());
+    }
+
+    req.topics = accepted;
+    let error_code = commit(broker, &req).await;
+    response.merge(build_response_all(&req, error_code).topics);
+    encode(version, &response.build())
+}
+
+/// Sets the name of each topic row whose `topic_id` the image knows.
+///
+/// A row whose id the image does not know keeps its empty name. That includes
+/// the zero id, which names no topic.
+fn resolve_topic_names(request: &mut OffsetCommitRequest, image: &krabka_metadata::MetadataImage) {
+    for topic in &mut request.topics {
+        if topic.topic_id == WireUuid::ZERO {
+            continue;
+        }
+        if let Some(name) = image.topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0)) {
+            topic.name = name.to_string();
+        }
+    }
+}
+
+/// Commits every row of `req` through the group coordinator, and returns the
+/// error code that goes on each of those rows.
+///
+/// The group routing, the membership and epoch check, and the append each
+/// answer with one code for the whole commit, as Kafka's
+/// `GroupCoordinatorService.commitOffsets` does with
+/// `OffsetCommitRequest.getErrorResponse`.
+async fn commit(broker: &Broker, req: &OffsetCommitRequest) -> i16 {
     {
         let image = broker.controller.current_image();
         match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
             Ok(_) => {}
-            Err(GroupRoutingError::Unavailable) => {
-                return finalize(
-                    version,
-                    build_response_all(&req, codes::COORDINATOR_NOT_AVAILABLE),
-                    unknown_id_topics,
-                );
-            }
-            Err(GroupRoutingError::NotCoordinator) => {
-                return finalize(
-                    version,
-                    build_response_all(&req, codes::NOT_COORDINATOR),
-                    unknown_id_topics,
-                );
-            }
+            Err(GroupRoutingError::Unavailable) => return codes::COORDINATOR_NOT_AVAILABLE,
+            Err(GroupRoutingError::NotCoordinator) => return codes::NOT_COORDINATOR,
         }
     }
 
@@ -127,183 +199,18 @@ pub(crate) async fn handle(
         });
 
     // Validate membership/epoch through the actor (kind-specific).
-    if let Some(code) = validate(&handle, &req).await {
-        let resp = build_response_all(&req, code);
-        return finalize(version, resp, unknown_id_topics.clone());
+    if let Some(code) = validate(&handle, req).await {
+        return code;
     }
 
-    // ── ACL preamble ────────────────────────────────────────────
-    // Step 2: `Read` on each `Topic(topic_name)`. On Deny → per-partition
-    // `error_code = TOPIC_AUTHORIZATION_FAILED (29)` on the affected rows.
-    let topic_decisions = {
-        let image = broker.controller.current_image();
-        let topic_names: Vec<&str> = req.topics.iter().map(|t| t.name.as_str()).collect();
-        authorize_topics(
-            broker.config.authorizer.as_ref(),
-            &*image,
-            ctx.principal,
-            ctx.peer,
-            AclOperation::Read,
-            topic_names,
-        )
-    };
-
-    // Check if all topics are allowed — if any are denied we need per-topic handling.
-    let any_denied = topic_decisions
-        .values()
-        .any(|r| *r == AuthorizationResult::Deny);
-
-    if any_denied {
-        // Build a mixed response: denied topics get TOPIC_AUTHORIZATION_FAILED,
-        // allowed topics proceed normally but we need to do the real work for them.
-        let topics_out = mixed_response_topics(&req, &topic_decisions, codes::NONE);
-
-        // Only proceed with allowed topics (append + update).
-        let allowed_req = allowed_request(&req, &topic_decisions);
-        if !allowed_req.topics.is_empty()
-            && let Err(code) = commit_through_actor(
-                &handle,
-                &allowed_req,
-                Commit {
-                    now_ms,
-                    expire_timestamp_ms,
-                },
-            )
-            .await
-        {
-            // If the commit fails, overwrite allowed topics with the error code.
-            let topics_out_err = mixed_response_topics(&req, &topic_decisions, code);
-            let resp = OffsetCommitResponse {
-                topics: topics_out_err,
-                throttle_time_ms: 0,
-                ..Default::default()
-            };
-            return finalize(version, resp, unknown_id_topics.clone());
-        }
-
-        let resp = OffsetCommitResponse {
-            topics: topics_out,
-            throttle_time_ms: 0,
-            ..Default::default()
-        };
-        return finalize(version, resp, unknown_id_topics.clone());
-    }
-
-    // 2. Append this commit's RecordBatch and apply it, inside the actor.
     let commit = Commit {
         now_ms,
         expire_timestamp_ms,
     };
-    if let Err(code) = commit_through_actor(&handle, &req, commit).await {
-        let resp = build_response_all(&req, code);
-        return finalize(version, resp, unknown_id_topics.clone());
+    match commit_through_actor(&handle, req, commit).await {
+        Ok(()) => codes::NONE,
+        Err(code) => code,
     }
-
-    // 3. Uniform per-(topic, partition) success.
-    let resp = build_response_all(&req, codes::NONE);
-    finalize(version, resp, unknown_id_topics)
-}
-
-fn topic_allowed(
-    decisions: &std::collections::HashMap<&str, AuthorizationResult>,
-    name: &str,
-) -> bool {
-    decisions.get(name).copied() == Some(AuthorizationResult::Allow)
-}
-
-fn allowed_request(
-    request: &OffsetCommitRequest,
-    decisions: &std::collections::HashMap<&str, AuthorizationResult>,
-) -> OffsetCommitRequest {
-    OffsetCommitRequest {
-        topics: request
-            .topics
-            .iter()
-            .filter(|topic| topic_allowed(decisions, &topic.name))
-            .cloned()
-            .collect(),
-        ..request.clone()
-    }
-}
-
-fn mixed_response_topics(
-    request: &OffsetCommitRequest,
-    decisions: &std::collections::HashMap<&str, AuthorizationResult>,
-    allowed_error_code: i16,
-) -> Vec<OffsetCommitResponseTopic> {
-    request
-        .topics
-        .iter()
-        .map(|topic| {
-            let error_code = if topic_allowed(decisions, &topic.name) {
-                allowed_error_code
-            } else {
-                codes::TOPIC_AUTHORIZATION_FAILED
-            };
-            OffsetCommitResponseTopic {
-                name: topic.name.clone(),
-                topic_id: topic.topic_id,
-                partitions: topic
-                    .partitions
-                    .iter()
-                    .map(|partition| OffsetCommitResponsePartition {
-                        partition_index: partition.partition_index,
-                        error_code,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }
-        })
-        .collect()
-}
-
-fn normalize_topic_ids(
-    request: &mut OffsetCommitRequest,
-    image: &krabka_metadata::MetadataImage,
-) -> Vec<OffsetCommitResponseTopic> {
-    let mut unknown = Vec::new();
-    let mut resolved = Vec::with_capacity(request.topics.len());
-    for mut topic in request.topics.drain(..) {
-        if topic.name.is_empty() && topic.topic_id != WireUuid::ZERO {
-            if let Some(name) = image.topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0)) {
-                topic.name = name.to_string();
-                resolved.push(topic);
-            } else {
-                unknown.push(OffsetCommitResponseTopic {
-                    name: String::new(),
-                    topic_id: topic.topic_id,
-                    partitions: topic
-                        .partitions
-                        .iter()
-                        .map(|partition| OffsetCommitResponsePartition {
-                            partition_index: partition.partition_index,
-                            error_code: codes::UNKNOWN_TOPIC_ID,
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                });
-            }
-        } else {
-            resolved.push(topic);
-        }
-    }
-    request.topics = resolved;
-    unknown
-}
-
-/// Append any KIP-516 unknown-`topic_id` rows to the response and encode it.
-///
-/// Every return path in `handle` goes through this function, so unknown-id
-/// topics get `UNKNOWN_TOPIC_ID` even when the rest of the commit errors.
-fn finalize(
-    version: i16,
-    mut resp: OffsetCommitResponse,
-    unknown: Vec<OffsetCommitResponseTopic>,
-) -> Result<Bytes, BrokerError> {
-    resp.topics.extend(unknown);
-    encode(version, &resp)
 }
 
 /// The wire value of `retention_time_ms` that asks for the broker's own

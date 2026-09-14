@@ -9,12 +9,18 @@ use krabka_protocol::{
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
+        offset_commit_response::{
+            OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
+        },
         offset_fetch_request::{
             OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
         },
     },
     primitives::uuid::Uuid as WireUuid,
 };
+
+/// Kafka's `UNKNOWN_TOPIC_ID` error code.
+const UNKNOWN_TOPIC_ID: i16 = 100;
 
 async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUuid {
     let resp = client
@@ -137,11 +143,13 @@ async fn offset_fetch_unknown_topic_id_returns_unknown_topic_id() {
     assert!(t.partitions.first().expect("a partition").error_code == 100);
 }
 
-/// `OffsetCommit` v10 with a mix of a known `topic_id` and an unknown one. The
-/// known topic commits and returns error 0. The unknown `topic_id` does not
-/// commit and comes back as `UNKNOWN_TOPIC_ID` with its id echoed.
+/// `OffsetCommit` v10 with a known `topic_id` and a `topic_id` that does not
+/// resolve. The known topic commits and answers 0. The other row commits
+/// nothing and answers `UNKNOWN_TOPIC_ID` with its id echoed. The zero id is
+/// such an id. Kafka's `OffsetCommitResponse.Builder` puts the refused row
+/// ahead of the committed row.
 #[tokio::test]
-async fn offset_commit_unknown_topic_id_returns_unknown_topic_id() {
+async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     p.client
         .send(CreateTopicsRequest {
@@ -157,51 +165,56 @@ async fn offset_commit_unknown_topic_id_returns_unknown_topic_id() {
         .await
         .expect("create topic");
     let known = topic_id_for(&p.client, "oc_known").await;
-    let bogus = WireUuid(uuid::Uuid::from_u128(0x0bad_0bad).into_bytes());
 
-    let resp = p
-        .client
-        .send(OffsetCommitRequest {
-            group_id: "gc".into(),
-            topics: vec![
-                OffsetCommitRequestTopic {
-                    name: String::new(),
-                    topic_id: known,
-                    partitions: vec![OffsetCommitRequestPartition {
-                        partition_index: 0,
-                        committed_offset: 5,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-                OffsetCommitRequestTopic {
-                    name: String::new(),
-                    topic_id: bogus,
-                    partitions: vec![OffsetCommitRequestPartition {
-                        partition_index: 0,
-                        committed_offset: 9,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-            ],
+    let cases = [
+        (
+            "non-zero id",
+            WireUuid(uuid::Uuid::from_u128(0x0bad_0bad).into_bytes()),
+        ),
+        ("zero id", WireUuid::ZERO),
+    ];
+    let row = |topic_id, committed_offset| OffsetCommitRequestTopic {
+        name: String::new(),
+        topic_id,
+        partitions: vec![OffsetCommitRequestPartition {
+            partition_index: 0,
+            committed_offset,
             ..Default::default()
-        })
-        .await
-        .expect("offset commit");
-
-    let ok = resp
-        .topics
-        .iter()
-        .find(|t| t.topic_id == known)
-        .expect("known topic row");
-    assert!(ok.partitions[0].error_code == 0);
-    let bad = resp
-        .topics
-        .iter()
-        .find(|t| t.topic_id == bogus)
-        .expect("unknown topic row echoing its id");
-    assert!(bad.partitions[0].error_code == 100); // UNKNOWN_TOPIC_ID
+        }],
+        ..Default::default()
+    };
+    let answer = |topic_id, error_code| OffsetCommitResponseTopic {
+        name: String::new(),
+        topic_id,
+        partitions: vec![OffsetCommitResponsePartition {
+            partition_index: 0,
+            error_code,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, unresolved) in cases {
+        let resp = p
+            .client
+            .send(OffsetCommitRequest {
+                group_id: "gc".into(),
+                topics: vec![row(known, 5), row(unresolved, 9)],
+                ..Default::default()
+            })
+            .await
+            .expect("offset commit");
+        actual.push((label, resp));
+        expected.push((
+            label,
+            OffsetCommitResponse {
+                topics: vec![answer(unresolved, UNKNOWN_TOPIC_ID), answer(known, 0)],
+                ..Default::default()
+            },
+        ));
+    }
+    assert!(actual == expected);
 }
 
 /// A fetch-all with null `topics` at v10 must echo each topic's `topic_id`,
