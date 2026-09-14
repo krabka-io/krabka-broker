@@ -166,9 +166,19 @@ topic_create_timeout = "30s"
 # Open Policy Agent authorization. The URL is the decision endpoint. The
 # broker calls it per request and caches decisions; `allow_on_error = false`
 # fails closed while OPA is unreachable.
+#
+# A broker replicates as the principal of its inter-broker connection. A
+# follower Fetch needs `ClusterAction` on the cluster, as in Apache Kafka, so
+# every broker principal is a super user here. The OPA policy can grant
+# `ClusterAction` to them instead.
 [authorization]
 type = "opa"
-super_users = ["User:admin", "CN=krabka-0.krabka.default.svc"]
+super_users = [
+  "User:admin",
+  "CN=krabka-0.krabka.default.svc",
+  "CN=krabka-1.krabka.default.svc",
+  "CN=krabka-2.krabka.default.svc",
+]
 
 [authorization.opa]
 url = "http://opa.default.svc:8181/v1/data/kafka/authz/allow"

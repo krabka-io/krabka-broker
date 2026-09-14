@@ -11,7 +11,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use super::request::{EffectivePartition, EffectiveTopic};
+use super::request::{EffectivePartition, EffectiveTopic, FetchAuthorization};
 use crate::{broker::Broker, codes, partition::Partition};
 
 /// Resolved read for a single requested (topic, partition) tuple.
@@ -192,7 +192,7 @@ pub(super) fn refused_partition(partition_index: i32, error_code: i16) -> Partit
 pub(super) struct PendingPlanContext<'a> {
     pub(super) broker: &'a Broker,
     pub(super) image: &'a krabka_metadata::MetadataImage,
-    pub(super) denied_topics: &'a std::collections::HashSet<String>,
+    pub(super) authorization: &'a FetchAuthorization,
     pub(super) rack_id: &'a str,
     /// The negotiated `Fetch` version. It decides whether a topic row names
     /// its topic by name or by id.
@@ -208,14 +208,21 @@ pub(super) async fn plan_partition_read(
     topic_error: Option<i16>,
     request: &EffectivePartition,
 ) -> PendingRead {
-    // Kafka's `KafkaApis.handleFetchRequest` answers a topic that does not
-    // resolve before it authorizes the rest, on the consumer path and on the
-    // follower path. So the topic error comes before the `Read` gate.
+    // Kafka's `KafkaApis.handleFetchRequest` refuses every row of a follower
+    // fetch without `ClusterAction` before it resolves any topic. So that
+    // refusal comes first, and the fetch never reaches
+    // `update_follower_progress`.
+    if context.authorization.refuses_every_row() {
+        let output = refused_partition(request.partition, codes::TOPIC_AUTHORIZATION_FAILED);
+        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+    }
+    // A topic that does not resolve is answered before the consumer `Read`
+    // gate, on the consumer path and on the follower path.
     if let Some(error_code) = topic_error {
         let output = refused_partition(request.partition, error_code);
         return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
     }
-    if context.denied_topics.contains(topic_name) {
+    if context.authorization.refuses_topic(topic_name) {
         let output = refused_partition(request.partition, codes::TOPIC_AUTHORIZATION_FAILED);
         return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
     }
@@ -431,7 +438,9 @@ mod tests {
             ),
         );
         let image = broker.controller.current_image();
-        let denied_topics = std::collections::HashSet::new();
+        let consumer = super::FetchAuthorization::Consumer {
+            denied_topics: std::collections::HashSet::new(),
+        };
         let request = super::EffectivePartition {
             partition: 0,
             current_leader_epoch: -1,
@@ -452,7 +461,11 @@ mod tests {
             let context = super::PendingPlanContext {
                 broker: &broker,
                 image: &image,
-                denied_topics: &denied_topics,
+                authorization: if is_follower_fetch {
+                    &super::FetchAuthorization::Follower
+                } else {
+                    &consumer
+                },
                 rack_id: "",
                 version: super::super::FIRST_TOPIC_ID_VERSION,
                 mode: (false, is_follower_fetch),
