@@ -30,6 +30,7 @@ use uuid::Uuid;
 mod authorization;
 mod materialize;
 mod mutation_quota;
+mod name;
 mod placement;
 mod records;
 mod response;
@@ -42,6 +43,7 @@ use self::{
     authorization::{cluster_create_denied, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
     mutation_quota::mutation_count,
+    name::topic_name_error,
     placement::resolve_assignments,
     records::{topic_config_overrides, topic_records},
     response::{
@@ -171,6 +173,14 @@ pub(crate) async fn handle(
     for topic_req in req.topics {
         let name = topic_req.name.clone();
         let partition_count = topic_req.num_partitions;
+
+        // Kafka checks the name before anything else. The name becomes part
+        // of the partition directory path, so no later step may see a name
+        // that this check refuses.
+        if let Some((code, message)) = topic_name_error(&image, &name) {
+            results.push(topic_error_result(name, code, Some(message)));
+            continue;
+        }
 
         // Kafka validates a topic's configs before it looks at placement, so a
         // rejected config wins over INVALID_PARTITIONS on the same topic.
