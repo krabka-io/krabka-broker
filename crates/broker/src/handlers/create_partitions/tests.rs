@@ -320,10 +320,11 @@ async fn seed_remote_topic(handle: &crate::broker::BrokerHandle) {
 /// controller makes a broker unavailable, as a real fenced broker is.
 #[tokio::test]
 async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
-    /// One row: the fenced brokers, the replica list of each new partition,
-    /// and the expected error code, error message and `(leader, isr)` per new
-    /// partition.
+    /// One row: the fenced brokers, the witness brokers, the replica list of
+    /// each new partition, and the expected error code, error message and
+    /// `(leader, isr)` per new partition.
     type Row = (
+        &'static [u64],
         &'static [u64],
         &'static [&'static [i32]],
         i16,
@@ -331,8 +332,9 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         Vec<(krabka_raft::NodeId, Vec<krabka_raft::NodeId>)>,
     );
     let n = krabka_raft::NodeId;
-    let rows: [Row; 4] = [
+    let rows: [Row; 6] = [
         (
+            &[],
             &[],
             &[&[2, 3]],
             codes::NONE,
@@ -341,6 +343,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         ),
         (
             &[2],
+            &[],
             &[&[2, 3]],
             codes::NONE,
             None,
@@ -348,6 +351,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         ),
         (
             &[2],
+            &[],
             &[&[4, 2], &[2, 3]],
             codes::NONE,
             None,
@@ -355,6 +359,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         ),
         (
             &[2, 3],
+            &[],
             &[&[2, 3]],
             codes::INVALID_REPLICA_ASSIGNMENT,
             Some(
@@ -363,15 +368,37 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             ),
             vec![],
         ),
+        (
+            &[2],
+            &[3],
+            &[&[2, 3]],
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(
+                "All active brokers specified in the manual partition assignment for partition \
+                 1 are witnesses, and a witness cannot lead.",
+            ),
+            vec![],
+        ),
+        (
+            &[],
+            &[3],
+            &[&[3, 4]],
+            codes::NONE,
+            None,
+            vec![(n(4), vec![n(3), n(4)])],
+        ),
     ];
 
-    for (fenced, lists, error_code, error_message, partitions) in rows {
+    for (fenced, witnesses, lists, error_code, error_message, partitions) in rows {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         for node_id in [2, 3, 4] {
             crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
         }
         seed_remote_topic(&broker_handle).await;
+        for &node_id in witnesses {
+            crate::test_support::make_witness(&broker_handle, node_id).await;
+        }
         for &node_id in fenced {
             crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
         }
