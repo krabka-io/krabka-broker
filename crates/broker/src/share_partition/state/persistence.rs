@@ -138,7 +138,7 @@ mod tests {
     fn to_persist_batches_maps_acquired_to_available() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(5), 100);
-        let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         let (start, dcc, batches) = s.to_persist_batches();
         check!(start == 0);
         check!(dcc == 0); // nothing terminal yet
@@ -159,7 +159,7 @@ mod tests {
         // Build a state, acquire part of it, persist, reload into a fresh one.
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(10), 100);
-        let _ = s.acquire("m1", 4, i32::MAX, t0(), LOCK, 5); // [0,3] Acquired, [4,9] Available
+        let _ = s.acquire("m1", 4, krabka_log::Offset(i64::MAX), t0(), LOCK, 5); // [0,3] Acquired, [4,9] Available
         s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, t0())
             .unwrap(); // SPSO -> 4
         let (start, _dcc, batches) = s.to_persist_batches();
@@ -173,7 +173,7 @@ mod tests {
         check!(reloaded.leader_epoch == 3);
         check!(!reloaded.dirty);
         // The remaining records are Available again and re-acquirable.
-        let acq = reloaded.acquire("m2", 100, i32::MAX, t0(), LOCK, 5);
+        let acq = reloaded.acquire("m2", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(
             acq == vec![AcquiredRange {
                 first: Offset(4),

@@ -278,7 +278,7 @@ mod tests {
             let acquired = state.acquire(
                 "member-1",
                 3,
-                i32::MAX,
+                krabka_log::Offset(i64::MAX),
                 std::time::Instant::now(),
                 std::time::Duration::from_secs(30),
                 i16::MAX,

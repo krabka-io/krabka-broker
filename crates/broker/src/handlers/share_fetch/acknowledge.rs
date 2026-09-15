@@ -83,7 +83,7 @@ mod tests {
                 .acquire(
                     "member",
                     200,
-                    i32::MAX,
+                    krabka_log::Offset(i64::MAX),
                     Instant::now(),
                     Duration::from_secs(30),
                     5
@@ -100,7 +100,7 @@ mod tests {
                 .acquire(
                     "other",
                     200,
-                    i32::MAX,
+                    krabka_log::Offset(i64::MAX),
                     Instant::now(),
                     Duration::from_secs(30),
                     5

@@ -94,7 +94,7 @@ mod tests {
     fn acquire_then_accept_advances_spso() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(5), 100); // [0,4] Available
-        let acq = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let acq = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(
             acq == vec![AcquiredRange {
                 first: Offset(0),
@@ -111,10 +111,10 @@ mod tests {
     fn release_redelivers_with_incremented_count() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(3), 100);
-        let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         s.acknowledge("m1", Offset(0), Offset(2), AckType::Release, t0())
             .unwrap();
-        let acq2 = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let acq2 = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq2[0].delivery_count == 2);
         // Released records stay in the window; SPSO did not advance.
         assert!(s.start_offset == 0);
@@ -124,7 +124,7 @@ mod tests {
     fn partial_acknowledge_splits_a_batch() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(10), 100); // [0,9] Available
-        let acq = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let acq = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq.len() == 1);
         // Accept only [0,3]; [4,9] remain Acquired.
         s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, t0())
@@ -140,11 +140,11 @@ mod tests {
     fn reject_archives_and_advances_spso() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(3), 100);
-        let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         s.acknowledge("m1", Offset(0), Offset(2), AckType::Reject, t0())
             .unwrap();
         assert!(s.start_offset == 3); // archived prefix dropped
-        let acq = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let acq = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq.is_empty()); // nothing left
     }
 
@@ -152,7 +152,7 @@ mod tests {
     fn gap_archives() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(2), 100);
-        let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         s.acknowledge("m1", Offset(0), Offset(1), AckType::Gap, t0())
             .unwrap();
         assert!(s.start_offset == 2);
@@ -165,7 +165,7 @@ mod tests {
     fn acknowledge_wrong_member_is_invalid_record_state() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(3), 100);
-        let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         let err = s.acknowledge("m2", Offset(0), Offset(2), AckType::Accept, t0());
         assert!(err == Err(crate::codes::INVALID_RECORD_STATE));
     }

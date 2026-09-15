@@ -92,17 +92,20 @@ mod tests {
     fn only_available_records_defer_and_promotion_is_the_way_back() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(6), 100); // [0,5] Available
-        let _ = s.acquire("m1", 2, i32::MAX, t0(), LOCK, 5); // [0,1] Acquired
+        let _ = s.acquire("m1", 2, krabka_log::Offset(i64::MAX), t0(), LOCK, 5); // [0,1] Acquired
         s.acknowledge("m1", Offset(0), Offset(1), AckType::Accept, t0())
             .unwrap(); // SPSO -> 2
-        let _ = s.acquire("m1", 1, i32::MAX, t0(), LOCK, 5); // [2,2] Acquired
+        let _ = s.acquire("m1", 1, krabka_log::Offset(i64::MAX), t0(), LOCK, 5); // [2,2] Acquired
         s.archive_internal(Offset(3), Offset(3));
 
         s.defer_internal(Offset(2), Offset(5));
 
         // Only [4,5] was Available, so only [4,5] deferred.
         check!(s.deferred_records() == 2);
-        check!(s.acquire("m2", 100, i32::MAX, t0(), LOCK, 5).is_empty());
+        check!(
+            s.acquire("m2", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5)
+                .is_empty()
+        );
         // The acquired record is still m1's, which proves defer left it alone.
         s.acknowledge("m1", Offset(2), Offset(2), AckType::Accept, t0())
             .unwrap();
@@ -111,7 +114,7 @@ mod tests {
 
         check!(s.deferred_records() == 0);
         check!(
-            s.acquire("m2", 100, i32::MAX, t0(), LOCK, 5)
+            s.acquire("m2", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5)
                 == vec![AcquiredRange {
                     first: Offset(4),
                     last: Offset(5),
@@ -131,7 +134,7 @@ mod tests {
 
         check!(s.end_offset == 4);
         check!(
-            s.acquire("m1", 100, i32::MAX, t0(), LOCK, 5)
+            s.acquire("m1", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5)
                 == vec![AcquiredRange {
                     first: Offset(2),
                     last: Offset(3),
@@ -179,7 +182,7 @@ mod tests {
         check!(reloaded.end_offset == 4);
         check!(reloaded.deferred_records() == 0);
         check!(
-            reloaded.acquire("m1", 100, i32::MAX, t0(), LOCK, 5)
+            reloaded.acquire("m1", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5)
                 == vec![AcquiredRange {
                     first: Offset(0),
                     last: Offset(3),
@@ -194,12 +197,15 @@ mod tests {
         s.materialize(Offset(2), 100);
         // Burn both delivery attempts, so the record is at the archive limit.
         for _ in 0..2 {
-            let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 2);
+            let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 2);
             s.expire_locks(t0() + Duration::from_secs(31));
         }
         s.defer_internal(Offset(0), Offset(1));
 
-        check!(s.acquire("m1", 10, i32::MAX, t0(), LOCK, 2).is_empty());
+        check!(
+            s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 2)
+                .is_empty()
+        );
         // Still deferred, not archived: nobody made a third attempt.
         check!(s.deferred_records() == 2);
         check!(s.start_offset == 0);
