@@ -311,3 +311,103 @@ fn consumer_classic_leave_resolves_batch_and_static_identities() {
     check!(responses[0].error_code == codes::NONE);
     check!(removed == vec!["m1".to_string()]);
 }
+
+/// A `TxnOffsetCommit` reserves its keys before its durable append and marks
+/// them after it. A `DeleteGroups` that runs between the two must still
+/// tombstone those keys: the transactional record is already in the log, and
+/// its commit marker would otherwise bring the deleted group back. A released
+/// reservation (a failed append) is not tombstoned, and a reservation sent
+/// after the delete finds the actor stopped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
+    use crate::coordinator::unified::{
+        actor::TxnOffsetReservation,
+        persistence::{Key, parse_key},
+    };
+
+    struct Row {
+        name: &'static str,
+        reserve: &'static [i32],
+        release: &'static [i32],
+        tombstoned: &'static [i32],
+    }
+
+    async fn reservation(
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
+        keys: Vec<(String, i32)>,
+        reserve: bool,
+    ) -> bool {
+        let (reply, ack) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::TxnOffsetReservation(
+                TxnOffsetReservation {
+                    producer_id: 7,
+                    keys,
+                    reserve,
+                    reply,
+                },
+            ))
+            .await
+            .is_ok()
+            && ack.await.is_ok()
+    }
+
+    let keys = |partitions: &[i32]| -> Vec<(String, i32)> {
+        partitions
+            .iter()
+            .map(|partition| ("orders".to_string(), *partition))
+            .collect()
+    };
+    let rows = [
+        Row {
+            name: "reserved, not marked",
+            reserve: &[1],
+            release: &[],
+            tombstoned: &[1],
+        },
+        Row {
+            name: "reserved, then released",
+            reserve: &[1],
+            release: &[1],
+            tombstoned: &[],
+        },
+        Row {
+            name: "two reserved, one released",
+            reserve: &[1, 2],
+            release: &[2],
+            tombstoned: &[1],
+        },
+    ];
+    for Row {
+        name,
+        reserve,
+        release,
+        tombstoned: expected,
+    } in rows
+    {
+        let (coord, log) = make_coordinator();
+        let handle = coord.get_or_create_classic("g");
+        coord.mark_classic("g");
+        check!(reservation(&handle, keys(reserve), true).await, "{name}");
+        if !release.is_empty() {
+            check!(reservation(&handle, keys(release), false).await, "{name}");
+        }
+
+        check!(coord.delete_group("g").await == Ok(()), "{name}");
+
+        let tombstoned: Vec<i32> = log
+            .batches()
+            .await
+            .iter()
+            .flat_map(|batch| &batch.records)
+            .filter_map(|record| match parse_key(record.key.as_ref().unwrap()) {
+                Ok(Key::OffsetCommit { partition, .. }) => Some(partition),
+                _ => None,
+            })
+            .collect();
+        check!(tombstoned == expected, "{name}");
+        await_until("deleted group actor stops", || handle.tx.is_closed()).await;
+        check!(!reservation(&handle, keys(&[3]), true).await, "{name}");
+    }
+}

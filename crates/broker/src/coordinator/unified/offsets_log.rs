@@ -68,6 +68,7 @@ impl OffsetsLog for ProductionOffsetsLog {
             .send(WriterMessage::Produce(ProduceJob {
                 data: ProduceData::Owned(batch),
                 ack: ack_tx,
+                producer_check: None,
             }))
             .await
             .is_err()

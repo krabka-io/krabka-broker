@@ -98,6 +98,10 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
                 principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             }],
             inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
+            // The controllers authorize each raft request for the peer
+            // principal. Over SASL that principal is the `admin` super user;
+            // over PLAINTEXT it would be `ANONYMOUS`, which holds nothing.
+            controller_listener_protocol: ListenerProtocol::SaslPlaintext,
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
             super_users: maplit::hashset! {admin.to_string()},
             inter_broker_credentials: Some(InterBrokerCredentials::Plain {
@@ -265,6 +269,10 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
                 principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             }],
             inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
+            // The controllers authorize each raft request for the peer
+            // principal. Over SASL that principal is the `admin` super user;
+            // over PLAINTEXT it would be `ANONYMOUS`, which holds nothing.
+            controller_listener_protocol: ListenerProtocol::SaslPlaintext,
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
             super_users: maplit::hashset! {admin.to_string()},
             inter_broker_credentials: Some(InterBrokerCredentials::Plain {

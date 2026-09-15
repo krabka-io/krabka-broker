@@ -75,8 +75,9 @@ pub enum GroupActorMessage {
         version: i16,
         reply: oneshot::Sender<LeaveResult>,
     },
-    /// Atomically verify that a classic group is empty and append its k2
-    /// tombstone. A successful delete stops the actor.
+    /// Atomically verify that a classic group is empty and append the
+    /// tombstones of its offsets and its k2 record. A successful delete stops
+    /// the actor.
     ClassicDelete {
         reply: oneshot::Sender<Result<(), DeleteGroupError>>,
     },
@@ -148,6 +149,16 @@ pub enum GroupActorMessage {
         reply: oneshot::Sender<ReapOutcome>,
     },
 
+    /// Tombstone the committed offsets and the open transactional offsets of
+    /// `topics`, which the metadata image no longer holds. The reply names
+    /// the `(topic, partition)` keys that the actor tombstoned, sorted, and is
+    /// empty when the append fails.
+    DeleteTopicOffsets {
+        /// The name and the topic id of each deleted topic.
+        topics: Vec<(String, uuid::Uuid)>,
+        reply: oneshot::Sender<Vec<(String, i32)>>,
+    },
+
     // ── in-flight transactional offsets (KIP-447) ──
     /// Record that `producer_id`'s open transaction has durably written
     /// offset commits for `keys` at offsets-log position `written_at`. Until
@@ -164,6 +175,8 @@ pub enum GroupActorMessage {
         keys: Vec<(String, i32)>,
         reply: oneshot::Sender<()>,
     },
+    /// Reserve or release the keys a `TxnOffsetCommit` is about to append.
+    TxnOffsetReservation(TxnOffsetReservation),
     /// Resolve `producer_id`'s transaction, whose marker is at offsets-log
     /// position `resolved_through`: publish `committed` and drop the
     /// producer's pending marks in the same turn. An abort marker sends an
@@ -200,6 +213,36 @@ pub enum GroupActorMessage {
     TestEmptySinceMs {
         reply: oneshot::Sender<Option<i64>>,
     },
+}
+
+/// A `TxnOffsetCommit` reservation: the keys of `producer_id` that the handler
+/// reserves before its transactional append, or releases after a failed one.
+///
+/// The reservation is what orders the append against `DeleteGroups` on the
+/// actor: a delete that runs after the reservation tombstones the keys, and a
+/// delete that runs before it stops the actor, so the reservation fails and
+/// nothing is appended.
+#[derive(Debug)]
+pub struct TxnOffsetReservation {
+    pub producer_id: i64,
+    pub keys: Vec<(String, i32)>,
+    /// `true` reserves the keys, `false` releases them.
+    pub reserve: bool,
+    pub reply: oneshot::Sender<()>,
+}
+
+impl TxnOffsetReservation {
+    /// Applies the reservation and replies. Returns the actor's keep-running
+    /// flag, which is always `true`.
+    pub(super) fn apply(self, group: &mut CoordinatorGroup) -> bool {
+        if self.reserve {
+            group.reserve_txn_offsets(self.producer_id, self.keys);
+        } else {
+            group.release_txn_offsets(self.producer_id, &self.keys);
+        }
+        let _ = self.reply.send(());
+        true
+    }
 }
 
 /// Structured `JoinGroup` result for the handler, which encodes it for the

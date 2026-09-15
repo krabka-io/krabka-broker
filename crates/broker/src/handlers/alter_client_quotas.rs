@@ -1,6 +1,6 @@
 //! `AlterClientQuotas` (`api_key` 49, KIP-13/124/257).
 //!
-//! This file holds the wire entry point: the cluster `Alter` authorization
+//! This file holds the wire entry point: the cluster `AlterConfigs` authorization
 //! preamble, the loop that validates each entry, and the single metadata
 //! submit that carries every accepted entry. Entry validation and the records
 //! it produces live in `entries`; the response rows live in `response`.
@@ -46,6 +46,10 @@ pub(crate) async fn handle(
     api_version: i16,
 ) -> Result<Bytes, crate::error::BrokerError> {
     let image = broker.controller.current_image();
+    // Kafka's `ControllerApis.handleAlterClientQuotas` authorizes
+    // `AlterConfigs` on the cluster. `Alter` does not imply it. A denial
+    // answers `AlterClientQuotasRequest.getErrorResponse`: every entry
+    // carries the error code and the default message of the error.
     let allow = broker.config.authorizer.authorize(
         &*image,
         &AuthorizationRequest {
@@ -53,14 +57,14 @@ pub(crate) async fn handle(
             host: ctx.peer,
             resource_type: ResourceType::Cluster,
             resource_name: CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Alter,
+            operation: AclOperation::AlterConfigs,
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
         return encode_whole_request_error(
             &req,
             CLUSTER_AUTHORIZATION_FAILED,
-            "alter-client-quotas denied",
+            "Cluster authorization failed.",
             api_version,
         );
     }

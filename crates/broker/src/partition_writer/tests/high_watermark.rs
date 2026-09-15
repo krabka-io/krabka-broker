@@ -55,6 +55,7 @@ async fn writer_fires_hw_notify_after_produce_when_rf_one() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(2)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");
@@ -111,6 +112,7 @@ async fn writer_does_not_notify_hw_when_append_leaves_hw_unchanged() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(1)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");
@@ -174,6 +176,7 @@ async fn writer_does_not_advance_hw_when_followers_lagging() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(3)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");

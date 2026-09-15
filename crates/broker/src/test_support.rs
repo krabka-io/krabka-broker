@@ -200,7 +200,6 @@ pub(crate) fn request_context<'a>(
         sendfile_capable: false,
         connection_listener_name: "PLAINTEXT",
         throttle: crate::quota::ThrottleSlot::default(),
-        listener_authorized_cluster_action: false,
     }
 }
 
@@ -247,6 +246,34 @@ impl crate::authorizer::Authorizer for GrantsInPrincipalName {
             crate::authorizer::AuthorizationResult::Deny
         }
     }
+}
+
+/// Commit one literal `Allow` ACL for `User:<user>` on the cluster resource.
+///
+/// A test that starts its broker with a [`crate::authorizer::SimpleAclAuthorizer`]
+/// uses it to check a handler against Kafka's operation-implication table
+/// (for example, `AlterConfigs` implies `DescribeConfigs`, `Alter` does not).
+pub(crate) async fn grant_cluster_operation(
+    handle: &BrokerHandle,
+    user: &str,
+    operation: krabka_metadata::AclOperation,
+) {
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Cluster,
+                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME.to_string(),
+                pattern_type: krabka_metadata::PatternType::Literal,
+                principal: format!("User:{user}"),
+                host: "*".to_string(),
+                operation,
+                permission_type: krabka_metadata::PermissionType::Allow,
+            },
+        )])
+        .await
+        .expect("commit cluster acl");
 }
 
 /// Serve one request through the broker's dispatch registry, as the connection

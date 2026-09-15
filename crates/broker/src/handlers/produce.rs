@@ -14,6 +14,7 @@ use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse};
+use krabka_units::convert::TimeExt as _;
 use krabka_verified::FreezeMutationKind;
 
 use self::{
@@ -23,6 +24,7 @@ use self::{
     framing::decode_produce_request,
     leadership::BrokerProducePolicy,
     pipeline::{PartitionInput, PartitionOutcome, PartitionServices, process_partition},
+    producer_checks::TransactionRequest,
     response::build_topic_error_response,
     throttle::{finish_produce_response, produce_bytes_by_qos_tier},
     topic_settings::{
@@ -342,6 +344,14 @@ pub(crate) async fn handle(
                     topic_name: topic_name.clone(),
                     freeze,
                     txn_id_denied,
+                    transaction: TransactionRequest {
+                        transactional_id: req.transactional_id.as_deref(),
+                        version,
+                        producer_id_expiration_ms: broker
+                            .config
+                            .producer_id_expiration
+                            .millis_i64(),
+                    },
                     acks: req.acks,
                     timeout,
                 },

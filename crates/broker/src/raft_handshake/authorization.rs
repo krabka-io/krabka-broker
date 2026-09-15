@@ -1,102 +1,67 @@
-//! Post-authentication authorization of a controller-listener peer (H-1).
+//! The per-request cluster grants of a controller-listener connection.
 //!
-//! Authentication proves *who* the peer is; these methods decide what that
-//! principal may drive. `authorize_cluster_action` is the gate the raft and
-//! controller RPCs sit behind, and `authorize_cluster_alter` records whether
-//! the peer may also drive the `Alter` operations that the connection carries
-//! forward. Both evaluate against the controller's current metadata image, so
-//! an ACL change takes effect for the next connection.
+//! Kafka's `ControllerApis` authorizes every request against the connection
+//! principal. [`ControllerPeerGrants`] holds that principal and asks the
+//! broker authorizer for each request, against the controller's current
+//! metadata image, so an ACL change applies to the next request of an open
+//! connection.
+
+use std::sync::Arc;
 
 use krabka_metadata::{AclOperation, ResourceType};
-use krabka_raft::RaftHandshakeError;
+use krabka_raft::{ClusterGrants, ClusterOperation};
 
-use super::BrokerRaftHandshake;
-use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
+use super::ControllerHandleArc;
+use crate::authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer};
 
-impl BrokerRaftHandshake {
-    /// H-1: authorizes an authenticated controller-listener peer for
-    /// controller and raft RPCs.
-    ///
-    /// Authentication established *who* the peer is. This method enforces that
-    /// the principal holds `CLUSTER_ACTION` on `Cluster("kafka-cluster")`.
-    /// That is the same gate the inter-broker control-plane RPCs use, such as
-    /// `BrokerHeartbeat`. The method evaluates it against the controller's
-    /// *current* metadata image, so ACL changes take effect for new
-    /// connections. On Deny, the broker drops the connection.
-    pub(super) fn authorize_cluster_action(
-        &self,
-        principal: &krabka_security::Principal,
-        peer: &std::net::SocketAddr,
-    ) -> Result<(), RaftHandshakeError> {
-        // The image is reached through the late-bound controller handle
-        // (the same cell used for SCRAM lookup). If it is not yet wired the
-        // controller cannot be operating, so fail closed.
-        let controller = self.controller.get().ok_or_else(|| {
-            RaftHandshakeError::Sasl(
-                "controller handle not initialised for CLUSTER_ACTION authorization".into(),
-            )
-        })?;
+/// The cluster grants of one controller-listener connection.
+pub(super) struct ControllerPeerGrants {
+    pub(super) authorizer: Arc<dyn Authorizer>,
+    pub(super) controller: ControllerHandleArc,
+    /// The SASL principal, the mTLS principal, or `ANONYMOUS`.
+    pub(super) principal: krabka_security::Principal,
+    pub(super) peer: std::net::SocketAddr,
+}
+
+impl ClusterGrants for ControllerPeerGrants {
+    fn allows(&self, operation: ClusterOperation) -> bool {
+        // The controller handle is late-bound. Before it is set the
+        // controller cannot serve, so deny.
+        let Some(controller) = self.controller.get() else {
+            return false;
+        };
+        let operation = match operation {
+            ClusterOperation::ClusterAction => AclOperation::ClusterAction,
+            ClusterOperation::Alter => AclOperation::Alter,
+            ClusterOperation::Describe => AclOperation::Describe,
+        };
         let image = controller.current_image();
-        let decision = self.authorizer.authorize(
+        self.authorizer.authorize(
             &*image,
             &AuthorizationRequest {
-                principal,
-                host: peer,
+                principal: &self.principal,
+                host: &self.peer,
                 resource_type: ResourceType::Cluster,
                 resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-                operation: AclOperation::ClusterAction,
+                operation,
             },
-        );
-        if decision == AuthorizationResult::Deny {
-            tracing::warn!(
-                principal = %principal.name,
-                peer = %peer,
-                "denying controller-listener peer: principal lacks CLUSTER_ACTION on kafka-cluster"
-            );
-            return Err(RaftHandshakeError::Sasl(
-                "principal not authorized for CLUSTER_ACTION on the controller listener".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn authorize_cluster_alter(
-        &self,
-        principal: &krabka_security::Principal,
-        peer: &std::net::SocketAddr,
-    ) -> Result<bool, RaftHandshakeError> {
-        let controller = self.controller.get().ok_or_else(|| {
-            RaftHandshakeError::Sasl(
-                "controller handle not initialised for Alter authorization".into(),
-            )
-        })?;
-        let image = controller.current_image();
-        Ok(self.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
-                principal,
-                host: peer,
-                resource_type: ResourceType::Cluster,
-                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-                operation: AclOperation::Alter,
-            },
-        ) == AuthorizationResult::Allow)
+        ) == AuthorizationResult::Allow
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
-
-    use assert2::assert;
-    use krabka_security::{ListenerProtocol, SaslMechanism};
+    use assert2::check;
     use tokio::sync::OnceCell;
 
     use super::*;
-    use crate::test_support::DenyAll;
+    use crate::test_support::GrantsInPrincipalName;
 
+    /// Each cluster operation maps to the ACL operation of the same name, the
+    /// principal and peer of the connection reach the authorizer, and a
+    /// connection that arrives before the controller handle is set is denied.
     #[tokio::test]
-    async fn authorize_cluster_action_denies_when_authorizer_denies() {
+    async fn grants_ask_the_authorizer_for_each_operation() {
         let dir = tempfile::tempdir().expect("tempdir");
         let controller = Arc::new(
             krabka_raft::Controller::start(krabka_raft::ControllerConfig::for_tests(
@@ -106,36 +71,45 @@ mod tests {
             .await
             .expect("controller"),
         );
-        let controller_cell = Arc::new(OnceCell::new());
-        assert!(controller_cell.set(controller.clone()).is_ok());
-
-        let cfg = BrokerRaftHandshake {
-            tls_acceptor: None,
-            plain_credentials: HashMap::new(),
-            enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-            gssapi: None,
-            oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            controller: controller_cell,
-            audit_log: Arc::new(OnceCell::new()),
-            max_frame_bytes: 4096,
-            authorizer: Arc::new(DenyAll),
+        let bound: ControllerHandleArc = Arc::new(OnceCell::new());
+        check!(bound.set(Arc::clone(&controller)).is_ok());
+        let grants = |controller: &ControllerHandleArc, name: &str| ControllerPeerGrants {
+            authorizer: Arc::new(GrantsInPrincipalName),
+            controller: Arc::clone(controller),
+            principal: crate::test_support::principal(name),
+            peer: crate::test_support::peer(),
         };
-        let principal = krabka_security::Principal {
-            name: "broker".to_string(),
-            auth_method: krabka_security::AuthMethod::SaslPlain,
-            groups: Vec::new(),
-        };
-        let peer = "127.0.0.1:9092".parse().expect("peer");
 
-        let err = cfg
-            .authorize_cluster_action(&principal, &peer)
-            .expect_err("deny must reject");
-        assert!(matches!(err, RaftHandshakeError::Sasl(msg) if msg.contains("not authorized")));
+        let operations = [
+            ClusterOperation::ClusterAction,
+            ClusterOperation::Alter,
+            ClusterOperation::Describe,
+        ];
+        let cases = [
+            ("none", [false, false, false]),
+            ("Cluster:ClusterAction", [true, false, false]),
+            ("Cluster:Alter", [false, true, false]),
+            ("Cluster:Describe", [false, false, true]),
+            ("Topic:ClusterAction+Group:Alter", [false, false, false]),
+        ];
+        for (name, expected) in cases {
+            let connection = grants(&bound, name);
+            check!(
+                operations.map(|operation| connection.allows(operation)) == expected,
+                "{name}"
+            );
+        }
 
-        drop(cfg);
+        let unbound: ControllerHandleArc = Arc::new(OnceCell::new());
+        let early = grants(
+            &unbound,
+            "Cluster:ClusterAction+Cluster:Alter+Cluster:Describe",
+        );
+        check!(operations.map(|operation| early.allows(operation)) == [false, false, false]);
+
+        drop(bound);
         let controller = Arc::try_unwrap(controller)
-            .unwrap_or_else(|_| panic!("controller handle still shared after auth test"));
+            .unwrap_or_else(|_| panic!("controller handle still shared after the test"));
         controller.shutdown().await;
     }
 }
