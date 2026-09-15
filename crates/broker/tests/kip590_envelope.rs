@@ -473,9 +473,6 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
         // carries, and `ApiKeys.ENVELOPE.clusterAction` gates the envelope on
         // it. Making it a super-user holds that outer gate open so the inner
         // host check is the only thing this test moves.
-        // `BrokerConfig.super_users` stays empty: `BrokerConfig::validate`
-        // rejects `"ANONYMOUS"` there, and the authorizer's own super-user
-        // set is what this gate reads.
         config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
             std::iter::once("ANONYMOUS".to_owned()).collect(),
         ));
@@ -582,9 +579,9 @@ async fn an_unparseable_client_host_address_is_an_invalid_request() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {
     let (broker, _dir) = start_broker_with(|config| {
-        // `BrokerConfig::validate` rejects `"ANONYMOUS"` in
-        // `BrokerConfig.super_users`, and the authorizer's own super-user set
-        // is what the outer `Envelope` gate reads.
+        // The plaintext controller connection is `ANONYMOUS`. As a super user
+        // it passes the outer `Envelope` gate, so only the embedded principal
+        // decides.
         config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
             std::iter::once("ANONYMOUS".to_owned()).collect(),
         ));

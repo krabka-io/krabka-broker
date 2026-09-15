@@ -38,7 +38,11 @@ pub(super) fn apply_config_tail(
     cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     if let Some(authorization) = tail.authorization.as_ref() {
-        let super_users = authorization.super_users.iter().cloned().collect();
+        let super_users = authorization
+            .super_users
+            .iter()
+            .map(|entry| super::authorization::super_user_name(entry))
+            .collect();
         cfg.super_users.clone_from(&super_users);
         cfg.authorizer = match authorization.authz_type {
             AuthzType::AllowAll => Arc::new(crate::authorizer::AllowAllAuthorizer),

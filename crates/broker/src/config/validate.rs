@@ -30,7 +30,6 @@ impl BrokerConfig {
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
     /// - The role set or the [`stretch`][Self::stretch] profile is incoherent.
     /// - `audit_topic` is named outside the internal-topic convention.
-    /// - `super_users` lists `"ANONYMOUS"`.
     pub fn validate(&self) -> Result<(), BrokerError> {
         self.validate_log_io_policy()?;
         crate::internal_topics::validate_audit_topic_name(&self.audit_topic)?;
@@ -38,14 +37,6 @@ impl BrokerConfig {
             return Err(BrokerError::EmptyRoles);
         }
         self.validate_witness_roles()?;
-        // A PLAINTEXT or one-way-TLS connection authenticates as ANONYMOUS,
-        // so listing it here grants every unauthenticated client every
-        // operation — and still does not unlock the delegation-token RPCs,
-        // which Kafka's `KafkaApis.allowTokenRequests` gates on a real SASL
-        // or mTLS identity.
-        if self.super_users.contains("ANONYMOUS") {
-            return Err(BrokerError::SuperUserAnonymous);
-        }
         if !self.is_controller()
             && self
                 .controller_quorum_voters
@@ -334,18 +325,26 @@ mod tests {
     use super::*;
     use crate::config::test_support::{RuntimeInvalidator, assert_invalid_runtime};
 
-    /// Kafka gates the delegation-token RPCs on a SASL- or mTLS-authenticated
-    /// principal, so `"ANONYMOUS"` as a super-user is never the fix for a
-    /// rejected token request — only a cluster-wide authorization hole.
+    /// Kafka's `super.users` accepts any principal, `User:ANONYMOUS`
+    /// included. A cluster with a `PLAINTEXT` controller listener and a
+    /// deny-capable authorizer needs it: the controllers and the node's own
+    /// broker heartbeats reach that listener as `ANONYMOUS`, and every request
+    /// there needs `ClusterAction`.
     #[test]
-    fn rejects_anonymous_super_user() {
-        let mut config = BrokerConfig::default();
-        config.super_users.insert("ANONYMOUS".to_string());
-        assert!(let Err(BrokerError::SuperUserAnonymous) = config.validate());
-
-        let mut config = BrokerConfig::default();
-        config.super_users.insert("operator".to_string());
-        assert!(config.validate().is_ok());
+    fn accepts_every_super_user_set_kafka_accepts() {
+        let cases: [&[&str]; 4] = [
+            &[],
+            &["operator"],
+            &["ANONYMOUS"],
+            &["ANONYMOUS", "operator"],
+        ];
+        for super_users in cases {
+            let mut config = BrokerConfig::default();
+            config
+                .super_users
+                .extend(super_users.iter().map(|user| (*user).to_string()));
+            assert!(config.validate().is_ok(), "{super_users:?}");
+        }
     }
 
     /// PLAIN has no dynamic credential path, so an enabled-but-empty table is

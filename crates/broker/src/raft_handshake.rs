@@ -74,14 +74,18 @@ pub struct BrokerRaftHandshake {
     pub audit_log: AuditLogArc,
     /// Maximum Kafka handshake frame body accepted before authentication.
     pub max_frame_bytes: usize,
-    /// Authorizer that gates controller RPCs after authentication (H-1).
+    /// Authorizer that the controller listener asks for each request.
     ///
-    /// Authentication proves *who* the peer is. This authorizer enforces that
-    /// the authenticated principal may drive controller and raft RPCs, that
-    /// is, `CLUSTER_ACTION` on `Cluster("kafka-cluster")`. The default
-    /// `AllowAllAuthorizer` allows every principal, so it does not change
-    /// dev and single-node setups. `SimpleAclAuthorizer` grants super-users.
+    /// Authentication proves *who* the peer is: the SASL principal, the mTLS
+    /// principal, or `ANONYMOUS`. The listener then checks the cluster
+    /// operation that each api needs, as Kafka's `ControllerApis` does. The
+    /// default `AllowAllAuthorizer` allows every principal.
+    /// `SimpleAclAuthorizer` allows super-users and ACL grants.
     pub authorizer: Arc<dyn crate::authorizer::Authorizer>,
+    /// KIP-371 `ssl.principal.mapping.rules` from the top-level
+    /// `[tls_config]`, which map the Subject DN of a peer certificate to the
+    /// connection principal.
+    pub principal_mapper: crate::SslPrincipalMapper,
 }
 
 #[async_trait::async_trait]
@@ -93,7 +97,10 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
             .peer_addr()
             .map_err(|e| RaftHandshakeError::Tls(e.to_string()))?;
 
-        // 1. TLS termination (if the listener protocol requires it).
+        // 1. TLS termination (if the listener protocol requires it). A
+        //    client certificate names the principal of an `SSL` connection,
+        //    as on a broker listener.
+        let mut certificate_principal = None;
         let mut stream: Box<dyn ClientDuplex> = if self.protocol.requires_tls() {
             let acceptor = self.tls_acceptor.clone().ok_or_else(|| {
                 RaftHandshakeError::Tls("tls_config required for TLS controller listener".into())
@@ -102,37 +109,84 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
                 .accept(stream)
                 .await
                 .map_err(|e| RaftHandshakeError::Tls(e.to_string()))?;
+            certificate_principal = peer_certificate_principal(&tls, &self.principal_mapper)?;
             Box::new(tls)
         } else {
             Box::new(stream)
         };
 
-        // 2. SASL termination (if the listener protocol requires it).
-        //    The SASL exchange authenticates the peer and yields its
-        //    `Principal`; H-1 then authorizes that principal for
-        //    controller RPCs before the connection is handed to the raft
-        //    engine. A non-SASL listener (Plaintext is short-circuited to
-        //    `None` upstream, so here that's TLS-only `Ssl`) has no
-        //    authenticated identity to authorize at this layer — we do not
-        //    extract an mTLS client-cert principal here — so the
-        //    CLUSTER_ACTION gate is skipped for it (an unusual config).
-        let mut principal = None;
+        // 2. SASL termination (if the listener protocol requires it). The
+        //    SASL principal replaces the certificate principal, as Kafka's
+        //    `SaslServerAuthenticator` does on `SASL_SSL`.
+        let mut principal = certificate_principal;
         let mut authenticated_via_token = false;
-        let mut cluster_alter_authorized = true;
         if self.protocol.requires_sasl() {
             let (authenticated, via_token) = run_inbound_sasl(&mut *stream, self, &peer).await?;
-            self.authorize_cluster_action(&authenticated, &peer)?;
-            cluster_alter_authorized = self.authorize_cluster_alter(&authenticated, &peer)?;
             principal = Some(authenticated);
             authenticated_via_token = via_token;
         }
+
+        // 3. Authorization runs for each request, not here. A principal
+        //    without `ClusterAction` keeps its connection and can still run
+        //    the KIP-919 Admin apis that its own grants allow.
+        let grants = Arc::new(authorization::ControllerPeerGrants {
+            authorizer: Arc::clone(&self.authorizer),
+            controller: Arc::clone(&self.controller),
+            principal: principal.clone().unwrap_or_else(anonymous),
+            peer,
+        });
         Ok(RaftConnection {
             stream,
             principal,
             authenticated_via_token,
-            cluster_alter_authorized,
+            grants,
         })
     }
+}
+
+/// The principal of a connection without a certificate or SASL: Kafka's
+/// `KafkaPrincipal.ANONYMOUS`.
+fn anonymous() -> krabka_security::Principal {
+    krabka_security::Principal {
+        name: "ANONYMOUS".to_string(),
+        auth_method: krabka_security::AuthMethod::Anonymous,
+        groups: Vec::new(),
+    }
+}
+
+/// The mTLS principal of a controller-listener connection, or `None` when the
+/// peer presented no certificate.
+fn peer_certificate_principal<S>(
+    stream: &tokio_rustls::server::TlsStream<S>,
+    mapper: &crate::SslPrincipalMapper,
+) -> Result<Option<krabka_security::Principal>, RaftHandshakeError> {
+    let (_, server_connection) = stream.get_ref();
+    server_connection
+        .peer_certificates()
+        .and_then(<[_]>::first)
+        .and_then(|certificate| krabka_security::extract_principal_from_cert(certificate.as_ref()))
+        .map(|distinguished_name| certificate_principal(mapper, &distinguished_name))
+        .transpose()
+}
+
+/// The principal of a certificate with `distinguished_name` as its Subject
+/// DN, mapped with the configured `ssl.principal.mapping.rules`, as a broker
+/// listener maps it. A DN that no rule matches fails the handshake, as
+/// Kafka's `SslPrincipalMapper` does.
+fn certificate_principal(
+    mapper: &crate::SslPrincipalMapper,
+    distinguished_name: &str,
+) -> Result<krabka_security::Principal, RaftHandshakeError> {
+    let name = mapper.apply(distinguished_name).ok_or_else(|| {
+        RaftHandshakeError::Tls(format!(
+            "no ssl.principal.mapping.rules rule matched {distinguished_name}"
+        ))
+    })?;
+    Ok(krabka_security::Principal {
+        name,
+        auth_method: krabka_security::AuthMethod::MTls,
+        groups: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -163,11 +217,42 @@ mod tests {
             audit_log: Arc::new(OnceCell::new()),
             max_frame_bytes: 4096,
             authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         // `upgrade(TcpStream)` requires a real TCP socket, so we
         // exercise the short-circuit predicates directly here. The full
         // upgrade-path is exercised end-to-end in integration tests.
         assert!(!cfg.protocol.requires_tls());
         assert!(!cfg.protocol.requires_sasl());
+    }
+
+    /// The controller listener maps a certificate DN with the configured
+    /// rules. A DN that no rule matches fails the handshake.
+    #[test]
+    fn a_certificate_principal_follows_the_configured_mapping_rules() {
+        let dn = "CN=node-1,OU=brokers,O=krabka";
+        let cases = [
+            ("DEFAULT", vec!["DEFAULT"], Some(dn)),
+            (
+                "a rule that matches",
+                vec!["RULE:^CN=(.*?),OU=brokers,.*$/$1/L"],
+                Some("node-1"),
+            ),
+            (
+                "a rule that does not match",
+                vec!["RULE:^CN=(.*?),OU=clients,.*$/$1/"],
+                None,
+            ),
+        ];
+        for (name, rules, expected) in cases {
+            let mapper = crate::SslPrincipalMapper::parse(&rules).expect("rules parse");
+            let actual = certificate_principal(&mapper, dn).ok();
+            let expected = expected.map(|principal| krabka_security::Principal {
+                name: principal.to_owned(),
+                auth_method: krabka_security::AuthMethod::MTls,
+                groups: Vec::new(),
+            });
+            assert!(actual == expected, "{name}");
+        }
     }
 }
