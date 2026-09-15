@@ -60,7 +60,8 @@ impl AcquisitionState {
     /// Transaction control batches occupy offsets in the partition log but
     /// are broker metadata, not user records. The `ShareFetch` handler calls
     /// this after materialization for every control-batch range in the live
-    /// window.
+    /// window. Under `read_committed` it also calls it for the data batches
+    /// of aborted transactions.
     pub fn archive_internal(&mut self, first: Offset, last: Offset) {
         if first > last {
             return;

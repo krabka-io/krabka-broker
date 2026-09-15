@@ -14,7 +14,7 @@ use super::{
     acknowledge::apply_one_ack,
     long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
-    records::{control_batch_ranges, pending_activation_ranges, populate_acquired_response},
+    records::{pending_activation_ranges, populate_acquired_response, unreadable_batch_ranges},
 };
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -98,7 +98,8 @@ fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
 ///
 /// Under a `ReadCommitted` isolation level, this function clamps the
 /// materialize and read window to the partition's last stable offset, so it
-/// never acquires an uncommitted record. It returns the total number of
+/// never acquires an uncommitted record, and it archives the data batches of
+/// aborted transactions in the window. It returns the total number of
 /// offsets that it acquired across all partitions in this pass.
 ///
 /// On a KFC-1 scheduled topic it also re-derives which ranges of the window
@@ -201,8 +202,13 @@ async fn acquire_pass(
         materialize_within_deferral_bound(&mut st, upper, cfg.max_inflight_records);
         // Transaction markers occupy log offsets but are broker metadata, not
         // user records. Archive them before acquisition so their encoded
-        // coordinator epoch can never appear in a ShareFetch response.
-        for (first, last) in control_batch_ranges(&part, st.start_offset, st.end_offset).await? {
+        // coordinator epoch can never appear in a ShareFetch response. Under
+        // read_committed, also archive the data of aborted transactions, as
+        // Kafka's `SharePartition` does: the share consumer has no aborted
+        // transaction list to filter them with.
+        for (first, last) in
+            unreadable_batch_ranges(&part, st.start_offset, st.end_offset, read_committed).await?
+        {
             st.archive_internal(first, last);
         }
         // KFC-1: re-derive the deferral from the log and this partition's own
