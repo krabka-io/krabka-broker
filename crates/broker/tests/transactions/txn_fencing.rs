@@ -12,8 +12,19 @@ use krabka_client_producer::Producer;
 
 use crate::txn_harness::{boot_single, create_topic, init_transaction, rec};
 
+/// Kafka's `INVALID_PRODUCER_EPOCH`, which a partition leader answers to a
+/// `Produce` from a fenced producer.
+const INVALID_PRODUCER_EPOCH: i16 = 47;
+
 /// Producer B with the same `transactional_id` fences Producer A. Producer A's
-/// `Transaction::commit` must return `ProducerError::FencedProducer`.
+/// `Transaction::commit` must fail with `INVALID_PRODUCER_EPOCH` (47).
+///
+/// The commit flushes the pending record first, as Kafka's
+/// `KafkaProducer.commitTransaction` does. The partition leader answers that
+/// `Produce` with `INVALID_PRODUCER_EPOCH`, and Kafka's
+/// `TransactionManager.maybeTransitionToErrorState` keeps that code out of its
+/// fatal set. The transaction therefore ends on the produce error, and no
+/// `EndTxn` reaches the coordinator.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fenced_producer_cannot_commit() {
     let (broker, bootstrap, _dir) = boot_single().await;
@@ -47,9 +58,9 @@ async fn fenced_producer_cannot_commit() {
     assert!(
         matches!(
             err.source,
-            krabka_client_producer::ProducerError::FencedProducer
+            krabka_client_producer::ProducerError::Server(INVALID_PRODUCER_EPOCH)
         ),
-        "expected FencedProducer, got: {err:?}"
+        "expected INVALID_PRODUCER_EPOCH, got: {err:?}"
     );
 
     broker.shutdown().await;

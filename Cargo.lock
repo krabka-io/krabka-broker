@@ -3929,7 +3929,7 @@ dependencies = [
 [[package]]
 name = "krabka-schema-registry"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-schema-registry?rev=d7cb5501ea57b0e8ee38953841a7b27762fedb77#d7cb5501ea57b0e8ee38953841a7b27762fedb77"
+source = "git+https://github.com/krabka-io/krabka-schema-registry?rev=e579a2ecaae11ab3b0b082e6534eac445e33e531#e579a2ecaae11ab3b0b082e6534eac445e33e531"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3960,6 +3960,7 @@ dependencies = [
  "prost-reflect",
  "protox-parse",
  "refined_type",
+ "regex",
  "reqwest 0.13.5",
  "rustls",
  "serde",
@@ -3977,7 +3978,7 @@ dependencies = [
 [[package]]
 name = "krabka-schema-serde"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-schema-registry?rev=d7cb5501ea57b0e8ee38953841a7b27762fedb77#d7cb5501ea57b0e8ee38953841a7b27762fedb77"
+source = "git+https://github.com/krabka-io/krabka-schema-registry?rev=e579a2ecaae11ab3b0b082e6534eac445e33e531#e579a2ecaae11ab3b0b082e6534eac445e33e531"
 dependencies = [
  "apache-avro",
  "assert2",
@@ -5822,7 +5823,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
