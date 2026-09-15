@@ -1,4 +1,9 @@
 //! `ControllerRegistration` (`api_key=70`). KIP-919 controller registration.
+//!
+//! As Kafka's `ClusterControlManager.registerController` does, this registers
+//! any controller id the request names (a KIP-853 controller joins the voter
+//! set after it registers), refuses a `metadata.version` below 3.7-IV0 (level
+//! 15) with `UNSUPPORTED_VERSION`, and writes `zkMigrationReady` false.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -46,6 +51,22 @@ pub(crate) async fn handle(
     if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
         return response(version, codes::NOT_CONTROLLER, None);
     }
+    // Kafka's `MetadataVersion.isControllerRegistrationSupported`. An image
+    // with no finalized level runs at the latest level, as a bootstrap does.
+    if image
+        .finalized_metadata_version()
+        .unwrap_or(krabka_metadata::metadata_version::METADATA_VERSION_MAX)
+        < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL
+    {
+        return response(
+            version,
+            codes::UNSUPPORTED_VERSION,
+            Some(
+                "The current MetadataVersion is too old to support controller registrations."
+                    .into(),
+            ),
+        );
+    }
 
     let node_id = match u64::try_from(req.controller_id) {
         Ok(id) => NodeId(id),
@@ -57,16 +78,6 @@ pub(crate) async fn handle(
             );
         }
     };
-    if !broker.controller.quorum_state().voters.contains(&node_id) {
-        return response(
-            version,
-            codes::UNKNOWN_CONTROLLER_ID,
-            Some(format!(
-                "controller {} is not a quorum voter",
-                req.controller_id
-            )),
-        );
-    }
 
     let endpoints = match decode_listeners(&req.listeners) {
         Ok(endpoints) => endpoints,
@@ -96,7 +107,9 @@ pub(crate) async fn handle(
     let record = ControllerRegistrationRecord {
         node_id,
         incarnation_id: uuid::Uuid::from_bytes(req.incarnation_id.0),
-        zk_migration_ready: req.zk_migration_ready,
+        // ZooKeeper migration is gone. Kafka writes false whatever the request
+        // says.
+        zk_migration_ready: false,
         endpoints,
         features,
     };
@@ -180,6 +193,12 @@ mod tests {
 
     use super::*;
 
+    crate::test_support::wire_helpers!(
+        ControllerRegistrationRequest,
+        ControllerRegistrationResponse,
+        client_id = "controller"
+    );
+
     #[test]
     fn controller_listener_validation_is_strict() {
         let listener = Listener {
@@ -191,5 +210,73 @@ mod tests {
         };
         assert2::assert!(decode_listeners(std::slice::from_ref(&listener)).is_ok());
         assert2::assert!(decode_listeners(&[listener.clone(), listener]).is_err());
+    }
+
+    /// A controller that is not a voter registers, with `zkMigrationReady`
+    /// false whatever it sent.
+    #[tokio::test]
+    async fn a_controller_that_is_not_a_voter_registers() {
+        use std::{net::SocketAddr, sync::Arc};
+
+        use krabka_security::{AuthMethod, Principal};
+
+        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = Principal {
+            name: "controller".into(),
+            auth_method: AuthMethod::Anonymous,
+            groups: Vec::new(),
+        };
+        let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
+        let ctx = test_context(&principal, &peer);
+        let version = krabka_protocol::owned::controller_registration_request::MAX_VERSION;
+        let listener = Listener {
+            name: "CONTROLLER".into(),
+            host: "controller-7".into(),
+            port: 9093,
+            security_protocol: 0,
+            ..Default::default()
+        };
+        let body = encode_request(
+            &ControllerRegistrationRequest {
+                controller_id: 7,
+                incarnation_id: krabka_protocol::primitives::uuid::Uuid([7; 16]),
+                zk_migration_ready: true,
+                listeners: vec![listener],
+                ..Default::default()
+            },
+            version,
+        );
+
+        let answer = handle(&broker, version, 1, &body, &ctx)
+            .await
+            .expect("an answer");
+
+        assert2::check!(
+            decode_response(&answer, version) == ControllerRegistrationResponse::default()
+        );
+        assert2::check!(
+            broker
+                .controller
+                .current_image()
+                .controller(NodeId(7))
+                .cloned()
+                == Some(ControllerRegistrationRecord {
+                    node_id: NodeId(7),
+                    incarnation_id: uuid::Uuid::from_bytes([7; 16]),
+                    zk_migration_ready: false,
+                    endpoints: vec![BrokerEndpoint {
+                        name: "CONTROLLER".into(),
+                        host: "controller-7".into(),
+                        port: 9093,
+                        protocol: ListenerProtocol::Plaintext,
+                    }],
+                    features: BTreeMap::new(),
+                })
+        );
+        broker_handle.shutdown().await;
     }
 }
