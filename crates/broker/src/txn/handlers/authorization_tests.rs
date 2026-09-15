@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use assert2::check;
-use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_protocol::owned::{
     add_offsets_to_txn_request::{self, AddOffsetsToTxnRequest},
@@ -100,11 +99,12 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    super::write_txn_markers::test_support::open_partition(&broker, dir.path(), TOPIC, 1);
-    let local = broker
-        .partitions
-        .get(TOPIC, PartitionIndex(1))
-        .expect("the partition this test opened");
+    let local =
+        super::write_txn_markers::test_support::open_partition(&broker, dir.path(), TOPIC, 1);
+    // A marker appends only to a partition this broker leads.
+    local
+        .install_replication_target(None, broker.config.node_id.0, 0)
+        .await;
 
     let request = |producer_id| WriteTxnMarkersRequest {
         markers: vec![
@@ -176,20 +176,20 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
 
     let refused = codes::CLUSTER_AUTHORIZATION_FAILED;
     // (grants, the local row, the rows of partitions this broker does not
-    // lead, whether one marker reaches the local log)
+    // host, whether one marker reaches the local log)
     let cases = [
         ("none", refused, refused, false),
         ("Topic:Write+TransactionalId:Write", refused, refused, false),
         (
             "Cluster:Alter",
             codes::NONE,
-            codes::NOT_LEADER_OR_FOLLOWER,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
             true,
         ),
         (
             "Cluster:ClusterAction",
             codes::NONE,
-            codes::NOT_LEADER_OR_FOLLOWER,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
             true,
         ),
     ];
