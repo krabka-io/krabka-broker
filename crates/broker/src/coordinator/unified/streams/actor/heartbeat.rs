@@ -257,22 +257,16 @@ pub(super) async fn handle_heartbeat(
     ))
 }
 
-/// The tasks and the user endpoint of a member before a heartbeat changed
-/// them. A joining member starts from none.
+/// The user endpoint of a member before a heartbeat changed it. A joining
+/// member starts from none.
 #[derive(Default)]
 struct MemberBefore {
-    tasks: [BTreeMap<String, Vec<i32>>; 3],
     user_endpoint: Option<(String, u16)>,
 }
 
 impl MemberBefore {
     fn of(member: &crate::coordinator::unified::streams::state::StreamsMemberState) -> Self {
         Self {
-            tasks: [
-                member.active.clone(),
-                member.standby.clone(),
-                member.warmup.clone(),
-            ],
             user_endpoint: member.user_endpoint.clone(),
         }
     }
@@ -283,7 +277,11 @@ impl MemberBefore {
 ///
 /// The task lists go out when the member joins or its tasks changed. The
 /// group's endpoint information epoch goes up when the member's endpoint
-/// changed, or its tasks changed and it has an endpoint. A member whose last
+/// changed, or its tasks changed and it has an endpoint. Kafka compares the
+/// tasks before and after the heartbeat, because only the member's own
+/// heartbeat changes them. Here a new target also trims the tasks of the
+/// other members, so the comparison is with the tasks that the last response
+/// sent. A member whose last
 /// seen epoch differs from the group's gets the endpoint information of the
 /// whole group. A group that this heartbeat creates keeps epoch 0.
 fn accepted_response(
@@ -296,12 +294,12 @@ fn accepted_response(
     group_existed: bool,
 ) -> StreamsGroupHeartbeatResponse {
     let member = &actor.state.members[member_id];
-    let tasks_changed = before.tasks
-        != [
-            member.active.clone(),
-            member.standby.clone(),
-            member.warmup.clone(),
-        ];
+    let tasks = [
+        member.active.clone(),
+        member.standby.clone(),
+        member.warmup.clone(),
+    ];
+    let tasks_changed = member.sent_tasks != tasks;
     let endpoint_changed = before.user_endpoint != member.user_endpoint;
     let mut endpoint_epoch = actor.state.endpoint_information_epoch;
     if endpoint_changed || (tasks_changed && member.user_endpoint.is_some()) {
@@ -324,6 +322,9 @@ fn accepted_response(
         });
     if group_existed {
         actor.state.endpoint_information_epoch = endpoint_epoch;
+    }
+    if let Some(member) = actor.state.members.get_mut(member_id) {
+        member.sent_tasks = tasks;
     }
     build_assignment_resp(
         &actor.state,

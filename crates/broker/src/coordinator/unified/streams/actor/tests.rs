@@ -1267,8 +1267,8 @@ async fn the_heartbeat_status_list_follows_kafka() {
 /// epoch and the status: the task lists only on a join or a change, the
 /// endpoint information for Interactive Queries, the leave response and the
 /// error response. Each row runs its heartbeats on a fresh group with a
-/// one-partition source topic and compares the whole response of the last
-/// one.
+/// source topic of the given partition count and compares the whole response
+/// of the last one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_heartbeat_response_carries_what_kafka_sends() {
     use std::collections::HashMap;
@@ -1335,6 +1335,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         (
             "the joining member of a new group gets its endpoint information",
             1,
+            1,
             vec![Beat::Join("m1", Some(1))],
             StreamsGroupHeartbeatResponse {
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
@@ -1344,6 +1345,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         (
             "two members with endpoints",
             10,
+            1,
             vec![Beat::Join("m1", Some(1)), Beat::Join("m2", Some(2))],
             StreamsGroupHeartbeatResponse {
                 endpoint_information_epoch: 1,
@@ -1352,14 +1354,42 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             },
         ),
         (
+            "a member whose tasks another member's join changed gets its tasks",
+            10,
+            2,
+            vec![
+                Beat::Join("m1", None),
+                Beat::Join("m2", None),
+                Beat::Heartbeat("m1", None),
+            ],
+            accepted("m1", 2, Some(vec![0])),
+        ),
+        (
+            "a member with an endpoint whose tasks another member's join changed",
+            10,
+            2,
+            vec![
+                Beat::Join("m1", Some(1)),
+                Beat::Join("m2", None),
+                Beat::Heartbeat("m1", None),
+            ],
+            StreamsGroupHeartbeatResponse {
+                endpoint_information_epoch: 1,
+                partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
+                ..accepted("m1", 2, Some(vec![0]))
+            },
+        ),
+        (
             "a heartbeat with an unchanged assignment",
             10,
+            1,
             vec![Beat::Join("m1", None), Beat::Heartbeat("m1", None)],
             accepted("m1", 1, None),
         ),
         (
             "a leave",
             10,
+            1,
             vec![Beat::Join("m1", None), Beat::Leave("m1")],
             StreamsGroupHeartbeatResponse {
                 member_id: "m1".into(),
@@ -1371,6 +1401,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         (
             "a full group",
             1,
+            1,
             vec![Beat::Join("m1", None), Beat::Join("m2", None)],
             super::response::error_resp(
                 codes::GROUP_MAX_SIZE_REACHED,
@@ -1380,6 +1411,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         (
             "an unknown member",
             10,
+            1,
             vec![Beat::Join("m1", None), Beat::Heartbeat("m9", Some(3))],
             super::response::error_resp(
                 codes::UNKNOWN_MEMBER_ID,
@@ -1388,10 +1420,10 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         ),
     ];
 
-    for (name, max_size, beats, expected) in rows {
+    for (name, max_size, partitions, beats, expected) in rows {
         let source = Arc::new(
             FakeMetadataSource::builder()
-                .image(image_of(None, &[("in", 1, 1)]))
+                .image(image_of(None, &[("in", 1, partitions)]))
                 .build(),
         );
         let coord = Arc::new(GroupCoordinator::new(
