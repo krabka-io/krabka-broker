@@ -116,7 +116,13 @@ impl TxnEntry {
         self.next_producer_epoch >= 0
     }
 
-    /// Fresh entry for a tid that's never been seen.
+    /// Fresh entry for a tid that's never been seen, or the entry after an
+    /// epoch bump.
+    ///
+    /// The transaction start time is `-1` until a partition joins the
+    /// transaction, as Kafka's `TransactionMetadata` keeps
+    /// `txnStartTimestamp` (`prepareIncrementProducerEpoch` and
+    /// `prepareProducerIdRotation` reset it to `-1`).
     pub fn new_empty(
         transactional_id: String,
         producer_id: ProducerId,
@@ -137,7 +143,7 @@ impl TxnEntry {
             last_producer_epoch: -1,
             has_failed_epoch_fence: false,
             last_update_ms: now_ms,
-            start_ms: now_ms,
+            start_ms: -1,
         }
     }
 }
