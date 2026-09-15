@@ -4,19 +4,55 @@
 //! `ShareAcknowledge` applies the same batches without a fetch, so this step
 //! is shared and not folded into the acquire pass.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use krabka_log::Offset;
+use krabka_metadata::MetadataImage;
 
 use crate::{codes, share_partition::state::AckType};
+
+/// The KIP-1222 acknowledge type `Renew`.
+const ACK_RENEW: i8 = 4;
+
+/// The group config that allows `Renew` acknowledgements.
+const KEY_SHARE_RENEW_ACKNOWLEDGE_ENABLE: &str = "share.renew.acknowledge.enable";
+
+/// How an acknowledgement request treats the acknowledge type `Renew`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Renewal {
+    /// The request set `IsRenewAck`.
+    pub(crate) requested: bool,
+    /// The group allows renewals: `share.renew.acknowledge.enable`.
+    pub(crate) enabled: bool,
+    /// The new lock length of a renewed record.
+    pub(crate) lock_duration: Duration,
+}
+
+/// Whether `group` allows `Renew` acknowledgements.
+///
+/// Kafka's `GroupConfig` defines `share.renew.acknowledge.enable` as a
+/// boolean with the default `true`, and parses it without regard to case.
+pub(crate) fn renew_acknowledge_enabled(image: &MetadataImage, group: &str) -> bool {
+    image
+        .group_config(group)
+        .and_then(|configs| configs.get(KEY_SHARE_RENEW_ACKNOWLEDGE_ENABLE))
+        .is_none_or(|value| !value.eq_ignore_ascii_case("false"))
+}
 
 /// Applies one acknowledgement batch to the state machine.
 ///
 /// A singleton `acknowledge_types` applies that type across the whole range;
 /// otherwise each entry maps to one offset, starting at `first`. This function
-/// merges a run of the same type into one `acknowledge` call. An empty array
-/// applies `Accept` across `[first, last]`. It returns the first error code that
-/// it met.
+/// merges a run of the same type into one call. An empty array applies
+/// `Accept` across `[first, last]`. It returns the last error code that it
+/// met.
+///
+/// The type `Renew` (4) renews the lock of its offsets and leaves their
+/// state as it is. The other types take their normal transition in the same
+/// batch, as in Kafka's `SharePartition.acknowledgePerOffsetBatchRecords` and
+/// `acknowledgeCompleteBatch`. A `Renew` in a request without `IsRenewAck`
+/// is `INVALID_REQUEST`, and a `Renew` for a group that does not allow it is
+/// `INVALID_RECORD_STATE`.
 pub(crate) fn apply_one_ack(
     st: &mut crate::share_partition::state::AcquisitionState,
     member: &str,
@@ -24,14 +60,35 @@ pub(crate) fn apply_one_ack(
     last: i64,
     types: &[i8],
     now: Instant,
+    renewal: Renewal,
 ) -> Result<(), i16> {
+    let apply = |st: &mut crate::share_partition::state::AcquisitionState,
+                 run_first: i64,
+                 run_last: i64,
+                 ack_type: i8| {
+        if ack_type == ACK_RENEW {
+            if !renewal.requested {
+                return Err(codes::INVALID_REQUEST);
+            }
+            if !renewal.enabled {
+                return Err(codes::INVALID_RECORD_STATE);
+            }
+            return st.renew(
+                member,
+                Offset(run_first),
+                Offset(run_last),
+                now,
+                renewal.lock_duration,
+            );
+        }
+        let ack = AckType::from_i8(ack_type).ok_or(codes::INVALID_RECORD_STATE)?;
+        st.acknowledge(member, Offset(run_first), Offset(run_last), ack, now)
+    };
     if types.is_empty() {
-        let ack = AckType::Accept;
-        return st.acknowledge(member, Offset(first), Offset(last), ack, now);
+        return apply(st, first, last, 1);
     }
     if types.len() == 1 {
-        let ack = AckType::from_i8(types[0]).ok_or(codes::INVALID_RECORD_STATE)?;
-        return st.acknowledge(member, Offset(first), Offset(last), ack, now);
+        return apply(st, first, last, types[0]);
     }
     let range_len = last
         .checked_sub(first)
@@ -52,13 +109,8 @@ pub(crate) fn apply_one_ack(
             run_end += 1;
             j += 1;
         }
-        if let Some(ack) = AckType::from_i8(t) {
-            if let Err(code) = st.acknowledge(member, Offset(run_start), Offset(run_end), ack, now)
-            {
-                result = Err(code);
-            }
-        } else {
-            result = Err(codes::INVALID_RECORD_STATE);
+        if let Err(code) = apply(st, run_start, run_end, t) {
+            result = Err(code);
         }
         run_start = run_end + 1;
         idx = j;
@@ -68,8 +120,6 @@ pub(crate) fn apply_one_ack(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use assert2::assert;
 
     use super::*;
@@ -83,7 +133,7 @@ mod tests {
                 .acquire(
                     "member",
                     200,
-                    i32::MAX,
+                    krabka_log::Offset(i64::MAX),
                     Instant::now(),
                     Duration::from_secs(30),
                     5
@@ -92,7 +142,13 @@ mod tests {
                 == 1
         );
 
-        apply_one_ack(&mut state, "member", 0, 199, &[1], Instant::now()).expect("acknowledge");
+        let renewal = Renewal {
+            requested: false,
+            enabled: true,
+            lock_duration: Duration::from_secs(30),
+        };
+        apply_one_ack(&mut state, "member", 0, 199, &[1], Instant::now(), renewal)
+            .expect("acknowledge");
 
         assert!(state.start_offset == Offset(200));
         assert!(
@@ -100,7 +156,7 @@ mod tests {
                 .acquire(
                     "other",
                     200,
-                    i32::MAX,
+                    krabka_log::Offset(i64::MAX),
                     Instant::now(),
                     Duration::from_secs(30),
                     5

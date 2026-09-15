@@ -91,11 +91,8 @@ impl Harness {
 /// their effect on the authorized-operations bitfield for a principal name that
 /// the authorizer evaluates separately.
 ///
-/// The name goes to the authorizer only. `BrokerConfig.super_users` stays
-/// empty because `BrokerConfig::validate` rejects `"ANONYMOUS"` there: a
-/// cluster-wide super-user list naming the unauthenticated principal is a
-/// misconfiguration, while an authorizer that allows it is exactly what this
-/// suite needs to drive metadata over a PLAINTEXT listener.
+/// The name goes to the authorizer only, which is all this suite needs to
+/// drive metadata over a PLAINTEXT listener.
 fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = Harness> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut cfg = BrokerConfig::for_tests(tempdir.path().to_path_buf());

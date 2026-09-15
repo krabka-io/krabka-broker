@@ -51,6 +51,8 @@ mod txnver_full_cycle;
 mod txnver_harness;
 #[path = "transaction_version/txnver_prepare_recovery.rs"]
 mod txnver_prepare_recovery;
+#[path = "transaction_version/txnver_produce_verification.rs"]
+mod txnver_produce_verification;
 #[path = "transaction_version/txnver_restart_recovery.rs"]
 mod txnver_restart_recovery;
 #[path = "transaction_version/txnver_sequence_epoch_bump.rs"]

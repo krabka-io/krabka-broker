@@ -40,6 +40,10 @@ pub(crate) fn handle(
     api_version: i16,
 ) -> Result<Bytes, crate::error::BrokerError> {
     let image = broker.controller.current_image();
+    // Kafka's `KafkaApis.handleDescribeClientQuotasRequest` authorizes
+    // `DescribeConfigs` on the cluster. A denial goes through
+    // `ApiError.fromThrowable`, which drops the default message, so the
+    // response carries a null `error_message`.
     let allow = broker.config.authorizer.authorize(
         &*image,
         &AuthorizationRequest {
@@ -47,14 +51,14 @@ pub(crate) fn handle(
             host: ctx.peer,
             resource_type: ResourceType::Cluster,
             resource_name: CLUSTER_RESOURCE_NAME,
-            operation: krabka_metadata::AclOperation::Describe,
+            operation: krabka_metadata::AclOperation::DescribeConfigs,
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
         let resp = DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("describe-client-quotas denied".into()),
+            error_message: None,
             entries: None,
             ..Default::default()
         };
@@ -255,11 +259,97 @@ mod tests {
         let expected = DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("describe-client-quotas denied".into()),
+            error_message: None,
             entries: None,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `KafkaApis.handleDescribeClientQuotasRequest` authorizes
+    /// `DescribeConfigs` on the cluster (#663). `AlterConfigs` and `All`
+    /// imply it. `Describe`, and `Alter` (which implies `Describe`), do not.
+    /// A denial carries the default message, which Kafka sends as null.
+    #[tokio::test]
+    async fn cluster_describe_configs_gates_the_quota_read() {
+        let (broker_handle, _dir) = start_broker(Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        ))
+        .await;
+        seed_quota(
+            &broker_handle,
+            vec![("user", Some("alice"))],
+            "producer_byte_rate",
+            1024.0,
+        )
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let allowed = DescribeClientQuotasResponse {
+            throttle_time_ms: 0,
+            error_code: NONE,
+            error_message: None,
+            entries: Some(vec![EntryData {
+                entity: vec![EntityData {
+                    entity_type: "user".into(),
+                    entity_name: Some("alice".into()),
+                    ..Default::default()
+                }],
+                values: vec![ValueData {
+                    key: "producer_byte_rate".into(),
+                    value: 1024.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        let denied = DescribeClientQuotasResponse {
+            throttle_time_ms: 0,
+            error_code: CLUSTER_AUTHORIZATION_FAILED,
+            error_message: None,
+            entries: None,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+
+        for (user, grant, expected) in [
+            ("no-grant", None, &denied),
+            (
+                "describe",
+                Some(krabka_metadata::AclOperation::Describe),
+                &denied,
+            ),
+            ("alter", Some(krabka_metadata::AclOperation::Alter), &denied),
+            (
+                "describe-configs",
+                Some(krabka_metadata::AclOperation::DescribeConfigs),
+                &allowed,
+            ),
+            (
+                "alter-configs",
+                Some(krabka_metadata::AclOperation::AlterConfigs),
+                &allowed,
+            ),
+            ("all", Some(krabka_metadata::AclOperation::All), &allowed),
+        ] {
+            if let Some(operation) = grant {
+                crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
+            }
+            let p = principal(user);
+            let peer = peer();
+            let ctx = test_context(&p, &peer);
+
+            let bytes = handle(
+                &broker,
+                request(vec![comp("user", MATCH_TYPE_ANY, None)], false),
+                &ctx,
+                VERSION,
+            )
+            .expect("handle");
+            let resp = decode_response(&bytes);
+
+            check!(resp == *expected, "user {user} with grant {grant:?}");
+        }
         broker_handle.shutdown().await;
     }
 

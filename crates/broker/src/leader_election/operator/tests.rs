@@ -1,7 +1,7 @@
 //! Tests for the operator-triggered elections: the preferred-leader happy
 //! path and every refusal it can report, the unclean election an operator
-//! forces after the ISR is gone, the controlled-shutdown drain, and the
-//! witness replica that none of them may give leadership to.
+//! forces after the ISR is gone, and the witness replica that neither may give
+//! leadership to.
 
 use assert2::assert;
 use krabka_metadata::{LeaderEpoch, MetadataImage};
@@ -144,92 +144,6 @@ async fn unclean_isr_member_alive_returns_election_not_needed() {
 }
 
 #[tokio::test]
-async fn shutdown_replacement_picks_alive_isr_member() {
-    // Broker 1 is leader and wants to shut down. ISR is {1,2,3}, all alive.
-    let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = alive_set(&[1, 2, 3]);
-    let new_pr = select_replacement_leader_for_shutdown(
-        &img,
-        &l,
-        &no_witnesses(),
-        "foo",
-        0,
-        /*shutting_down*/ NodeId(1),
-    )
-    .expect("should pick replacement");
-    // ISR untouched — shutting-down broker stays in ISR until dead.
-    let expected = PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(2),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(1), NodeId(2), NodeId(3)],
-        leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
-    assert!(new_pr == expected);
-}
-
-#[tokio::test]
-async fn shutdown_replacement_skips_dead_isr_members() {
-    // Broker 1 (leader) wants to drain. ISR {1,2,3} but 2 is dead.
-    // Replacement should be 3.
-    let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = alive_set(&[1, 3]);
-    let new_pr =
-        select_replacement_leader_for_shutdown(&img, &l, &no_witnesses(), "foo", 0, NodeId(1))
-            .expect("should pick replacement");
-    assert!(new_pr.leader == 3);
-    assert!(new_pr.leader_epoch == 6);
-}
-
-#[tokio::test]
-async fn shutdown_replacement_error_cases() {
-    // Replicas are always [1, 2, 3]; leader is always broker 1.
-    // (isr, alive, shutting_down, expected)
-    let cases: [(&[u64], &[u64], u64, ElectError); 3] = [
-        // Broker 5 wants to shut down, but leader is 1. No-op.
-        (&[1, 2, 3], &[1, 2, 3, 5], 5, ElectError::ElectionNotNeeded),
-        // Broker 1 wants to drain. ISR is {1} only (singleton). No
-        // other broker eligible.
-        (&[1], &[1, 2, 3], 1, ElectError::NoEligibleReplica),
-        // Broker 1 wants to drain. ISR {1,2} but 2 is dead; 3 is alive
-        // but not in ISR.
-        (&[1, 2], &[1, 3], 1, ElectError::NoEligibleReplica),
-    ];
-    for (isr, alive, shutting_down, expected) in cases {
-        let img = img_with_partition("foo", 0, 1, &[1, 2, 3], isr);
-        let l = alive_set(alive);
-        let err = select_replacement_leader_for_shutdown(
-            &img,
-            &l,
-            &no_witnesses(),
-            "foo",
-            0,
-            NodeId(shutting_down),
-        )
-        .unwrap_err();
-        assert!(
-            err == expected,
-            "isr {isr:?}, alive {alive:?}, shutting_down {shutting_down}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn shutdown_replacement_unknown_partition() {
-    let img = MetadataImage::new(Uuid::nil());
-    let l = alive_set(&[1]);
-    let err =
-        select_replacement_leader_for_shutdown(&img, &l, &no_witnesses(), "ghost", 0, NodeId(1))
-            .unwrap_err();
-    assert!(err == ElectError::UnknownTopicOrPartition);
-}
-
-#[tokio::test]
 async fn unknown_topic_returns_error() {
     let img = MetadataImage::new(Uuid::nil());
     let l = alive_set(&[]);
@@ -292,40 +206,4 @@ async fn operator_unclean_election_skips_a_witness_replica() {
         partition_epoch: 1,
     };
     assert!(new_pr == expected);
-}
-
-#[tokio::test]
-async fn controlled_shutdown_never_drains_leadership_to_a_witness() {
-    // Broker 1 leads and wants to drain. ISR is {1, 2, 3} with 2 the
-    // witness, so the drain target is data replica 3.
-    let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
-    let l = alive_set(&[1, 2, 3]);
-    let new_pr =
-        select_replacement_leader_for_shutdown(&img, &l, &witnesses(&[2]), "foo", 0, NodeId(1))
-            .expect("should pick the data replica");
-    let expected = PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(3),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(1), NodeId(2), NodeId(3)],
-        leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
-    assert!(new_pr == expected);
-}
-
-#[tokio::test]
-async fn controlled_shutdown_reports_no_eligible_replica_when_only_a_witness_remains() {
-    // ISR is {1, 2} with 2 the witness. Nothing can take leadership, so
-    // the drain gate must not count this partition.
-    let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
-    let l = alive_set(&[1, 2, 3]);
-    let err =
-        select_replacement_leader_for_shutdown(&img, &l, &witnesses(&[2]), "foo", 0, NodeId(1))
-            .unwrap_err();
-    assert!(err == ElectError::NoEligibleReplica);
 }

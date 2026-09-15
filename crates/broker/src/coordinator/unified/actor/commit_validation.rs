@@ -112,6 +112,7 @@ mod tests {
                         metadata: String::new(),
                         commit_timestamp_ms: 0,
                         expire_timestamp_ms: None,
+                        topic_id: None,
                     },
                 )],
                 reply: tx,

@@ -1,49 +1,106 @@
 //! The log reads behind a `ShareFetch` response, and the assembly of their
 //! bytes into one partition row.
 //!
-//! An acquire pass hands this module the offset ranges it locked, and gets
-//! back the verbatim on-disk batch bytes plus the `acquired_records` rows that
-//! describe them. The same log-scan shape answers the two questions the pass
-//! asks before it acquires: which offsets hold control batches or aborted
-//! transactional data, and which
-//! offsets KFC-1 scheduled delivery has not released yet.
+//! An acquire pass hands this module a partition's acquisition state. The
+//! module reads the log first, locks only the offsets inside the bytes that
+//! the read returned, and gives back those batch bytes plus the
+//! `acquired_records` rows that describe them. The same log-scan shape
+//! answers the two questions the pass asks before it acquires: which offsets
+//! hold control batches or aborted transactional data, and which offsets
+//! KFC-1 scheduled delivery has not released yet.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::{Bytes, BytesMut};
-use krabka_log::Offset;
-use krabka_protocol::{owned::share_fetch_response::AcquiredRecords, records::RecordsPayload};
+use krabka_log::{Offset, RawRead};
+use krabka_protocol::{
+    owned::share_fetch_response::{AcquiredRecords, PartitionData},
+    records::{HEADER_LEN, RecordBatchHeader, RecordsPayload},
+};
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
+use zerocopy::FromBytes as _;
 
-use super::pending::PendingPartition;
-use crate::error::BrokerError;
+use crate::{
+    error::BrokerError,
+    share_partition::state::{AcquiredRange, AcquisitionState},
+};
 
-pub(super) async fn populate_acquired_response(
-    pending: &mut PendingPartition,
-    partition: &Arc<crate::partition::Partition>,
-    acquired: &[crate::share_partition::state::AcquiredRange],
-    upper: Offset,
-    request_max_bytes: i32,
-) -> Result<i64, BrokerError> {
-    // The per-partition cap is absent at supported protocol versions and
-    // decodes to zero, so fall back to the request-wide byte budget.
-    let read_budget = if pending.partition_max_bytes > 0 {
-        pending.partition_max_bytes
+/// What one acquire step may take from a share partition.
+pub(super) struct AcquireRequest<'a> {
+    pub(super) member: &'a str,
+    /// The records that the request can still take, across its partitions.
+    pub(super) max_records: i32,
+    /// The byte budget of the log read.
+    pub(super) max_bytes: i32,
+    /// The exclusive end of the readable window: the high watermark, or the
+    /// last stable offset under `read_committed`.
+    pub(super) upper: Offset,
+    pub(super) now: Instant,
+    pub(super) lock_duration: Duration,
+    pub(super) max_attempts: i16,
+}
+
+/// The byte budget of one partition's log read.
+///
+/// The per-partition cap is absent at supported protocol versions and decodes
+/// to zero, so the read falls back to the request-wide byte budget.
+pub(super) fn read_budget(partition_max_bytes: i32, request_max_bytes: i32) -> i32 {
+    if partition_max_bytes > 0 {
+        partition_max_bytes
     } else {
         request_max_bytes
+    }
+}
+
+/// Reads the log, then acquires records only inside the bytes that the read
+/// returned, and fills `out` with those bytes and the acquired rows.
+///
+/// Kafka reads first and acquires second. `SharePartition.acquire` bounds the
+/// acquisition by the last batch of the fetched records, so every offset in
+/// `acquired_records` has its record in `records`. The Java share consumer
+/// treats an acquired offset with no record as a gap and acknowledges it as
+/// `Gap`, which archives it. An acquisition that ran past the byte budget
+/// would therefore lose the records that the read cut off.
+///
+/// The read starts at the first offset that the state can hand out. The
+/// response carries each read batch that holds an acquired offset, and no
+/// other batch. It returns the number of offsets that it acquired.
+pub(super) async fn acquire_read_records(
+    out: &mut PartitionData,
+    partition: &Arc<crate::partition::Partition>,
+    state: &mut AcquisitionState,
+    request: &AcquireRequest<'_>,
+) -> Result<i64, BrokerError> {
+    let Some(from) = state.first_acquirable_offset(request.max_attempts) else {
+        return Ok(0);
     };
-    let mut blob = BytesMut::new();
-    for range in acquired {
-        let limit = (range.last + 1).min(upper);
-        if let Some(bytes) = read_acquired_bytes(partition, range.first, limit, read_budget).await?
-        {
-            blob.extend_from_slice(&bytes);
-        }
+    let Some(read) = read_raw(partition, from, request.upper, request.max_bytes).await? else {
+        return Ok(0);
+    };
+    let Some(read_last) = read.last_offset else {
+        return Ok(0);
+    };
+    let last = read_last.min(request.upper - 1);
+    let acquired = state.acquire(
+        request.member,
+        request.max_records,
+        last,
+        request.now,
+        request.lock_duration,
+        request.max_attempts,
+    );
+    if acquired.is_empty() {
+        return Ok(0);
     }
-    if !blob.is_empty() {
-        pending.out.records = Some(RecordsPayload::Raw(blob.freeze()));
+    let records = batches_holding(&read.bytes, &acquired)?;
+    if !records.is_empty() {
+        out.records = Some(RecordsPayload::Raw(records));
     }
-    pending.out.acquired_records = acquired
+    out.acquired_records = acquired
         .iter()
         .map(|range| AcquiredRecords {
             first_offset: range.first.0,
@@ -58,15 +115,69 @@ pub(super) async fn populate_acquired_response(
         .sum())
 }
 
+/// Returns the batches of `bytes` that hold at least one offset of
+/// `acquired`, in log order.
+///
+/// It walks the v2 batch headers and decodes no record. When every batch
+/// qualifies, it returns `bytes` without a copy.
+fn batches_holding(bytes: &Bytes, acquired: &[AcquiredRange]) -> Result<Bytes, BrokerError> {
+    let mut kept: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut at = 0_usize;
+    while at < bytes.len() {
+        let header = bytes
+            .get(at..at + HEADER_LEN)
+            .and_then(|raw| RecordBatchHeader::ref_from_bytes(raw).ok())
+            .ok_or_else(|| corrupt_read("a truncated record batch header"))?;
+        let length = usize::try_from(header.batch_length.get())
+            .ok()
+            .map(|length| length + LOG_OVERHEAD)
+            .filter(|length| *length >= HEADER_LEN && at + length <= bytes.len())
+            .ok_or_else(|| corrupt_read("a record batch length outside the read"))?;
+        let base = header.base_offset.get();
+        let last = base + i64::from(header.last_offset_delta.get());
+        if acquired
+            .iter()
+            .any(|range| range.first.0 <= last && base <= range.last.0)
+        {
+            match kept.last_mut() {
+                Some(run) if run.end == at => run.end = at + length,
+                _ => kept.push(at..at + length),
+            }
+        }
+        at += length;
+    }
+    Ok(match kept.as_slice() {
+        [] => Bytes::new(),
+        [run] => bytes.slice(run.clone()),
+        runs => {
+            let mut blob = BytesMut::with_capacity(runs.iter().map(ExactSizeIterator::len).sum());
+            for run in runs {
+                blob.extend_from_slice(&bytes[run.clone()]);
+            }
+            blob.freeze()
+        }
+    })
+}
+
+/// The bytes of a v2 batch in front of its `batch_length` field: the base
+/// offset (8) and the length itself (4).
+const LOG_OVERHEAD: usize = 12;
+
+fn corrupt_read(what: &str) -> BrokerError {
+    BrokerError::Io(std::io::Error::other(format!(
+        "share-fetch read returned {what}"
+    )))
+}
+
 /// Reads the verbatim on-disk batch bytes for `[fetch_offset, limit_offset)`
 /// through `Log::read_raw`, off the reactor thread. It returns `None` when it
 /// read nothing.
-async fn read_acquired_bytes(
+async fn read_raw(
     part: &crate::partition::Partition,
     fetch_offset: Offset,
     limit_offset: Offset,
     max_bytes: i32,
-) -> Result<Option<Bytes>, BrokerError> {
+) -> Result<Option<RawRead>, BrokerError> {
     if limit_offset <= fetch_offset {
         return Ok(None);
     }
@@ -84,11 +195,7 @@ async fn read_acquired_bytes(
             ))));
         }
     };
-    if raw.total > 0 {
-        Ok(Some(raw.bytes))
-    } else {
-        Ok(None)
-    }
+    Ok((raw.total > 0).then_some(raw))
 }
 
 /// The byte budget, in bytes, of one log read while

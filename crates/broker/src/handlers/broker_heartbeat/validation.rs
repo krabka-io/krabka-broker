@@ -23,7 +23,9 @@ pub(super) fn validate_registration(
     image: &MetadataImage,
     req: &BrokerHeartbeatRequest,
 ) -> Result<(u64, krabka_verified::BrokerHeartbeatDecision), i16> {
-    let broker_id = u64::try_from(req.broker_id).map_err(|_| codes::BROKER_ID_NOT_REGISTERED)?;
+    // Kafka's `ClusterControlManager.checkBrokerEpoch` answers a broker id
+    // with no registration as a stale epoch, as it answers a mismatched one.
+    let broker_id = u64::try_from(req.broker_id).map_err(|_| codes::STALE_BROKER_EPOCH)?;
     let decision = krabka_verified::broker_heartbeat_decision(
         image
             .broker(NodeId(broker_id))
@@ -34,10 +36,8 @@ pub(super) fn validate_registration(
         req.want_shut_down,
     );
     match decision.registration {
-        krabka_verified::BrokerHeartbeatRegistration::Missing => {
-            return Err(codes::BROKER_ID_NOT_REGISTERED);
-        }
-        krabka_verified::BrokerHeartbeatRegistration::Stale => {
+        krabka_verified::BrokerHeartbeatRegistration::Missing
+        | krabka_verified::BrokerHeartbeatRegistration::Stale => {
             return Err(codes::STALE_BROKER_EPOCH);
         }
         krabka_verified::BrokerHeartbeatRegistration::Current => {}
@@ -92,9 +92,9 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(validate_registration(&image, &req) == Err(codes::BROKER_ID_NOT_REGISTERED));
+        assert!(validate_registration(&image, &req) == Err(codes::STALE_BROKER_EPOCH));
         req.broker_id = 8;
-        assert!(validate_registration(&image, &req) == Err(codes::BROKER_ID_NOT_REGISTERED));
+        assert!(validate_registration(&image, &req) == Err(codes::STALE_BROKER_EPOCH));
         req.broker_id = 7;
         req.broker_epoch = 41;
         assert!(validate_registration(&image, &req) == Err(codes::STALE_BROKER_EPOCH));

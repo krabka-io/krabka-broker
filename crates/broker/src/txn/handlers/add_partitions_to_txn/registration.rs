@@ -76,15 +76,17 @@ pub(super) async fn process_one_txn(
     let Some(entry_mutex) = coord.get(tid) else {
         return per_topic_with_refusals(topics, denied, frozen, codes::INVALID_PRODUCER_ID_MAPPING);
     };
-    if txnv.verified() && verify_only {
+    // Kafka's `TransactionCoordinator.handleVerifyPartitionsInTransaction`
+    // answers a verify-only request at every transaction version. A partition
+    // leader sends one for a `Produce` below v12.
+    if verify_only {
         let entry = entry_mutex.lock().await;
-        if entry.has_staged_producer_identity() {
-            return per_topic_with_refusals(topics, denied, frozen, codes::INVALID_TXN_STATE);
-        }
-        if entry.producer_id != producer_id || entry.producer_epoch != producer_epoch {
-            return per_topic_with_refusals(topics, denied, frozen, codes::INVALID_PRODUCER_EPOCH);
-        }
-        return verify_partitions(&entry, topics, denied, frozen);
+        return verify_partitions(
+            &entry,
+            (producer_id, producer_epoch),
+            topics,
+            (denied, frozen),
+        );
     }
     drop(entry_mutex);
 

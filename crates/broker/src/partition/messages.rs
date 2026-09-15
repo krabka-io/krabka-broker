@@ -106,6 +106,19 @@ pub struct ProduceJob {
     /// Oneshot that the writer uses to report a successful append, or failure,
     /// back to the handler.
     pub ack: oneshot::Sender<Result<AppendedBatch, BrokerError>>,
+    /// The producer transaction check the log runs just before it appends a
+    /// client batch. `None` for a batch the broker built itself, such as a
+    /// marker, an offset commit or a tombstone.
+    pub producer_check: Option<ProducerAppendCheck>,
+}
+
+/// A client batch as the log's transaction check sees it, and the KIP-890
+/// verification guard the produce path obtained for it. See
+/// [`krabka_log::Log::check_transactional_append`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProducerAppendCheck {
+    pub batch: krabka_log::TransactionalBatch,
+    pub guard: krabka_log::VerificationGuard,
 }
 
 /// All message kinds the partition's writer task accepts.
