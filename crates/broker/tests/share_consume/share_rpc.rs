@@ -20,7 +20,7 @@ use krabka_protocol::owned::{
     share_fetch_response::ShareFetchResponse,
 };
 
-use crate::{NONE, ONE_MB, harness::wire};
+use crate::{NONE, ONE_MB, RENEW, harness::wire};
 
 /// Build a `ShareFetchRequest` for a single `(topic_id, partition)` at the given
 /// share-session epoch. The request can also carry acknowledgement batches.
@@ -148,7 +148,7 @@ pub async fn share_renew(
                 acknowledgement_batches: vec![AckAckBatch {
                     first_offset: first,
                     last_offset: last,
-                    acknowledge_types: vec![],
+                    acknowledge_types: vec![RENEW],
                     ..Default::default()
                 }],
                 ..Default::default()
