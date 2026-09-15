@@ -14,7 +14,7 @@ use super::{
     acknowledge::apply_one_ack,
     long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
-    records::{control_batch_ranges, pending_activation_ranges, populate_acquired_response},
+    records::{pending_activation_ranges, populate_acquired_response, unreadable_batch_ranges},
 };
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -82,6 +82,45 @@ fn materialize_within_deferral_bound(
     }
 }
 
+/// Materializes the window and archives the offsets that no share consumer
+/// may get, until the window holds an `Available` record or cannot grow.
+///
+/// Transaction markers occupy log offsets but are broker metadata, not user
+/// records. They are archived before acquisition so their encoded coordinator
+/// epoch can never appear in a `ShareFetch` response. Under `read_committed`,
+/// the data of aborted transactions is archived too, as Kafka's
+/// `SharePartition` does: the share consumer has no aborted transaction list
+/// to filter them with.
+///
+/// One materialization adds at most `max_inflight` offsets. When all of them
+/// are archived, the window grows again in the same pass, so a large aborted
+/// transaction does not turn into a run of empty fetches. The first scan
+/// covers the whole window, and each later scan covers only the offsets that
+/// the last materialization added.
+async fn grow_readable_window(
+    state: &mut crate::share_partition::state::AcquisitionState,
+    partition: &crate::partition::Partition,
+    upper: Offset,
+    max_inflight: i32,
+    read_committed: bool,
+) -> Result<(), BrokerError> {
+    let mut scan_from = state.start_offset;
+    loop {
+        let end_before = state.end_offset;
+        materialize_within_deferral_bound(state, upper, max_inflight);
+        let scan_start = scan_from.max(state.start_offset);
+        for (first, last) in
+            unreadable_batch_ranges(partition, scan_start, state.end_offset, read_committed).await?
+        {
+            state.archive_internal(first, last);
+        }
+        if state.end_offset == end_before || state.has_available() {
+            return Ok(());
+        }
+        scan_from = state.end_offset;
+    }
+}
+
 fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
     max_records
         .saturating_sub(i32::try_from(acquired).unwrap_or(i32::MAX))
@@ -98,7 +137,8 @@ fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
 ///
 /// Under a `ReadCommitted` isolation level, this function clamps the
 /// materialize and read window to the partition's last stable offset, so it
-/// never acquires an uncommitted record. It returns the total number of
+/// never acquires an uncommitted record, and it archives the data batches of
+/// aborted transactions in the window. It returns the total number of
 /// offsets that it acquired across all partitions in this pass.
 ///
 /// On a KFC-1 scheduled topic it also re-derives which ranges of the window
@@ -198,13 +238,14 @@ async fn acquire_pass(
         } else {
             hwm
         };
-        materialize_within_deferral_bound(&mut st, upper, cfg.max_inflight_records);
-        // Transaction markers occupy log offsets but are broker metadata, not
-        // user records. Archive them before acquisition so their encoded
-        // coordinator epoch can never appear in a ShareFetch response.
-        for (first, last) in control_batch_ranges(&part, st.start_offset, st.end_offset).await? {
-            st.archive_internal(first, last);
-        }
+        grow_readable_window(
+            &mut st,
+            &part,
+            upper,
+            cfg.max_inflight_records,
+            read_committed,
+        )
+        .await?;
         // KFC-1: re-derive the deferral from the log and this partition's own
         // clock on every pass, exactly as the control-batch ranges above are.
         // Dropping it first is what keeps a batch that has since come due from
@@ -268,6 +309,111 @@ mod tests {
                 "deferred={deferred}"
             );
         }
+    }
+
+    /// A transactional batch at offsets 0-2 from producer 1000, its end marker
+    /// at offset 3, and a plain record at offset 4.
+    fn transaction_then_record(commit: bool) -> Vec<krabka_protocol::records::RecordBatch> {
+        use bytes::Bytes;
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+        let transactional = Attributes::default().with_transactional(true);
+        let value = |v: &'static [u8]| Record {
+            value: Some(Bytes::from_static(v)),
+            ..Record::default()
+        };
+        // Control key: version 0, marker type (0 abort, 1 commit). Control
+        // value: version 0, coordinator epoch 0.
+        let marker_key = [0, 0, 0, u8::from(commit)];
+        vec![
+            RecordBatch {
+                last_offset_delta: 2,
+                producer_id: 1000,
+                attributes: transactional,
+                records: (0..3)
+                    .map(|offset_delta| Record {
+                        offset_delta,
+                        ..value(b"txn")
+                    })
+                    .collect(),
+                ..RecordBatch::default()
+            },
+            RecordBatch {
+                producer_id: 1000,
+                attributes: transactional.with_control(true),
+                records: vec![Record {
+                    key: Some(Bytes::copy_from_slice(&marker_key)),
+                    value: Some(Bytes::from_static(&[0, 0, 0, 0, 0, 0])),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            },
+            RecordBatch {
+                records: vec![value(b"plain")],
+                ..RecordBatch::default()
+            },
+        ]
+    }
+
+    /// One pass reaches the first readable record behind a transaction that
+    /// fills whole materialization windows with offsets it archives.
+    #[tokio::test]
+    async fn the_window_grows_past_offsets_that_are_all_archived() {
+        use std::sync::Arc;
+
+        use qubit_clock::{FixedWallClock, WallClock};
+
+        use crate::delivery::test_support::{NOW_MS, partition_with_batches, wall_at};
+
+        // (commit, read_committed, max_inflight, acquired)
+        let cases = [
+            (false, true, 2, vec![(Offset(4), Offset(4))]),
+            (false, true, 100, vec![(Offset(4), Offset(4))]),
+            (false, false, 2, vec![(Offset(0), Offset(1))]),
+            (true, true, 2, vec![(Offset(0), Offset(1))]),
+        ];
+        let clock: Arc<dyn WallClock> = Arc::new(FixedWallClock::new(wall_at(NOW_MS)));
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (commit, read_committed, max_inflight, acquired) in cases {
+            let dir = tempfile::tempdir().expect("a log root");
+            let partition = partition_with_batches(
+                &dir,
+                "txn",
+                krabka_log::LogConfig::default(),
+                transaction_then_record(commit),
+                0,
+                &clock,
+            );
+            let mut state = crate::share_partition::state::AcquisitionState::new(Offset(0));
+
+            grow_readable_window(
+                &mut state,
+                &partition,
+                Offset(5),
+                max_inflight,
+                read_committed,
+            )
+            .await
+            .expect("grow the window");
+            let got: Vec<_> = state
+                .acquire(
+                    "m",
+                    500,
+                    i32::MAX,
+                    std::time::Instant::now(),
+                    std::time::Duration::from_secs(30),
+                    5,
+                )
+                .into_iter()
+                .map(|range| (range.first, range.last))
+                .collect();
+
+            let row = (commit, read_committed, max_inflight);
+            actual.push((row, got));
+            expected.push((row, acquired));
+        }
+        assert!(actual == expected);
     }
 
     #[test]
