@@ -29,6 +29,7 @@ mod framing;
 mod kip853;
 mod metadata_rpc;
 mod registration;
+mod sasl;
 #[cfg(test)]
 mod test_support;
 mod voter_admin;
@@ -218,6 +219,12 @@ where
                     )
                     .await?;
                     write_response(&mut stream, correlation_id, resp).await?;
+                    continue;
+                }
+                if sasl::is_sasl_api(api_key_n.0) {
+                    let resp = sasl::sasl_response(api_key_n.0, api_version.get(), &body)?;
+                    write_response_frame(&mut stream, correlation_id, resp, response_flexible)
+                        .await?;
                     continue;
                 }
                 if registration::is_controller_api(api_key_n.0) {
