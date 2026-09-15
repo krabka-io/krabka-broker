@@ -5,7 +5,7 @@
 //! and delegates to the module that implements that RPC. The return value is
 //! the actor loop's keep-running flag.
 
-use krabka_protocol::owned::heartbeat_request::HeartbeatRequest;
+use krabka_protocol::{owned::heartbeat_request::HeartbeatRequest, records::RecordBatch};
 
 use super::{
     ActorServices, ErrorCode, GroupActorMessage, MetadataProvider, ParkedWaiters,
@@ -17,11 +17,15 @@ use super::{
     messages::classic_leave_result,
     retention::handle_reap_message,
     seed::apply_seed,
+    topic_deletion::reply_delete_topic_offsets,
     views::{build_classic_view, build_describe, inspect_any},
 };
 use crate::{
     codes,
-    coordinator::unified::{ClientIdentity, classic_ops, group::CoordinatorGroup, migration},
+    coordinator::unified::{
+        ClientIdentity, classic_ops, classic_state::OffsetEntry, group::CoordinatorGroup,
+        migration, offsets_log::OffsetsLog,
+    },
 };
 
 fn handle_classic_heartbeat_message(
@@ -35,6 +39,26 @@ fn handle_classic_heartbeat_message(
         migration::serve_classic_heartbeat(state, &request.member_id, &metadata.snapshot())
     } else {
         codes::UNKNOWN_MEMBER_ID
+    }
+}
+
+/// Appends an `OffsetCommit` batch, and records its offsets in the group
+/// only when the append is durable.
+async fn commit_offsets(
+    group: &mut CoordinatorGroup,
+    offsets_log: &dyn OffsetsLog,
+    batch: RecordBatch,
+    entries: Vec<((String, i32), OffsetEntry)>,
+) -> Result<(), ErrorCode> {
+    match offsets_log.append(&group.group_id, batch).await {
+        Ok(()) => {
+            group.committed_offsets.extend(entries);
+            Ok(())
+        }
+        Err(error) => {
+            tracing::error!(group_id = %group.group_id, %error, "OffsetCommit append failed");
+            Err(codes::from_broker_error(&error))
+        }
     }
 }
 
@@ -144,16 +168,7 @@ pub(super) async fn handle_actor_message(
             entries,
             reply,
         } => {
-            let result = match services.offsets_log.append(&group.group_id, batch).await {
-                Ok(()) => {
-                    group.committed_offsets.extend(entries);
-                    Ok(())
-                }
-                Err(error) => {
-                    tracing::error!(group_id = %group.group_id, %error, "OffsetCommit append failed");
-                    Err(codes::from_broker_error(&error))
-                }
-            };
+            let result = commit_offsets(group, services.offsets_log, batch, entries).await;
             let _ = reply.send(result);
             true
         }
@@ -177,6 +192,9 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
+        GroupActorMessage::DeleteTopicOffsets { topics, reply } => {
+            reply_delete_topic_offsets(group, services.offsets_log, &topics, reply).await
+        }
         GroupActorMessage::AddPendingTxnOffsets {
             producer_id,
             written_at,
@@ -187,6 +205,7 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
+        GroupActorMessage::TxnOffsetReservation(reservation) => reservation.apply(group),
         GroupActorMessage::ResolveTxnOffsets {
             producer_id,
             resolved_through,
@@ -280,6 +299,7 @@ mod tests {
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 },
             )]
             .into(),
