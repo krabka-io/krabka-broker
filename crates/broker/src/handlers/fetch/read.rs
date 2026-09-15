@@ -447,7 +447,7 @@ fn plan_read(
         FetchWatermarks {
             log_start: local_log_start,
             hw: high_watermark,
-            lso: log.lso(),
+            lso: log.last_stable_offset(high_watermark),
             log_end,
             deliverable,
         },
@@ -805,6 +805,75 @@ mod tests {
                 .await
                 .expect("the read succeeds");
             assert!(bytes == expected_bytes, "{name}");
+            assert!(out == expected, "{name}");
+        }
+    }
+
+    /// A `read_committed` consumer sees nothing of a committed transaction
+    /// until the high watermark passes its commit marker. Kafka keeps the
+    /// transaction in `unreplicatedTxns` until then, so the last stable offset
+    /// stays at the transaction's first offset: a leader change can still
+    /// truncate the marker away and decide the outcome again.
+    #[tokio::test]
+    async fn read_committed_waits_for_the_high_watermark_to_pass_the_commit_marker() {
+        let (partition, _dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        let transaction = {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            log.append(&mut RecordBatch {
+                records: vec![Record {
+                    offset_delta: 0,
+                    value: Some(Bytes::from_static(b"before")),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            })
+            .expect("append the record before the transaction"); // offset 0
+            log.append(&mut transactional_batch(PID))
+                .expect("append the transaction's data"); // offset 1
+            let mut commit = abort_marker(PID);
+            commit.records[0].key = Some(Bytes::from_static(&[0, 0, 0, 1]));
+            log.append(&mut commit).expect("append the commit marker"); // offset 2
+            log.read_raw(Offset(1), Offset(3), UNBOUNDED)
+                .expect("the test log holds the transaction")
+                .bytes
+        };
+        let held = |high_watermark: i64| PartitionData {
+            error_code: crate::codes::NONE,
+            high_watermark,
+            last_stable_offset: 1,
+            log_start_offset: 0,
+            aborted_transactions: Some(Vec::new()),
+            records: None,
+            ..PartitionData::default()
+        };
+        let cases = [
+            ("high watermark inside the transaction", 1, held(1)),
+            ("high watermark at the marker", 2, held(2)),
+            (
+                "high watermark past the marker",
+                3,
+                PartitionData {
+                    last_stable_offset: 3,
+                    records: Some(RecordsPayload::Raw(transaction)),
+                    ..held(3)
+                },
+            ),
+        ];
+
+        for (name, high_watermark, expected) in cases {
+            partition.replica_state.lock().await.hw = Offset(high_watermark);
+            let mut out = PartitionData::default();
+            super::do_read(
+                &partition,
+                super::ReadRequest {
+                    read_committed: true,
+                    ..consumer_request(1)
+                },
+                &mut out,
+            )
+            .await
+            .expect("the read succeeds");
             assert!(out == expected, "{name}");
         }
     }

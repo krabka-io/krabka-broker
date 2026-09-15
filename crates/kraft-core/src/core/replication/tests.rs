@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    core::test_support::{CellLog, FakeLog, machine},
+    core::test_support::{CellLog, FakeLog, RunsLog, machine},
     event::Event,
 };
 
@@ -13,7 +13,7 @@ fn leader_advances_hwm_at_majority_fetch_offset() {
     // what followers replicate against.
     let log = CellLog {
         end: std::cell::Cell::new(0),
-        last_epoch: 0,
+        last_epoch: 1,
     };
     // drive to leader (epoch_start_offset captured as end_offset() == 0)
     m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
@@ -85,7 +85,7 @@ fn leader_hwm_does_not_regress_on_reordered_stale_fetch() {
     let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
     let log = CellLog {
         end: std::cell::Cell::new(0),
-        last_epoch: 0,
+        last_epoch: 1,
     };
     m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
     m.on_event(
@@ -203,100 +203,200 @@ fn leader_holds_hwm_for_prior_epoch_entries_until_current_epoch_committed() {
     }
 }
 
+/// krabka-io/krabka-broker#785: the leader validates a follower's fetch
+/// position as Kafka's `RaftLog.validateOffsetAndEpoch` does.
+///
+/// The leader's log holds epoch 4 over offsets 0 to 120 and epoch 6 from 120
+/// to 200. Epoch 5 is the classic lost-election epoch: an old leader appended
+/// it, and no voter that elected epoch 6 has it. A fetch is valid only when
+/// the leader holds the fetch epoch itself out to the fetch offset. Anything
+/// else is answered with the leader's `(epoch, end offset)` for that epoch,
+/// and records no follower progress.
 #[test]
-fn leader_detects_divergence_and_returns_truncate() {
-    // log has last_epoch 2 ending at 10; epoch-1 ended at 5.
-    struct L;
-    impl LogView for L {
-        fn end_offset(&self) -> i64 {
-            10
-        }
-        fn last_epoch(&self) -> Epoch {
-            2
-        }
-        fn end_offset_for_epoch(&self, e: Epoch) -> Option<i64> {
-            match e {
-                0 => Some(0),
-                1 => Some(5),
-                2 => Some(10),
-                _ => None,
-            }
-        }
+fn a_fetch_is_valid_only_at_an_epoch_the_leader_holds_to_that_offset() {
+    struct Case {
+        what: &'static str,
+        fetch_epoch: Epoch,
+        fetch_offset: i64,
+        diverging: Option<LogOffsetMetadata>,
     }
+    let diverging = |epoch, offset| Some(LogOffsetMetadata { offset, epoch });
+    let cases = [
+        Case {
+            what: "inside an epoch the leader holds",
+            fetch_epoch: 4,
+            fetch_offset: 100,
+            diverging: None,
+        },
+        Case {
+            what: "past the end of that epoch",
+            fetch_epoch: 4,
+            fetch_offset: 130,
+            diverging: diverging(4, 120),
+        },
+        Case {
+            what: "an epoch between two the leader holds",
+            fetch_epoch: 5,
+            fetch_offset: 100,
+            diverging: diverging(4, 120),
+        },
+        Case {
+            what: "that epoch beyond the leader's log end",
+            fetch_epoch: 5,
+            fetch_offset: 300,
+            diverging: diverging(4, 120),
+        },
+        Case {
+            what: "inside the current epoch",
+            fetch_epoch: 6,
+            fetch_offset: 150,
+            diverging: None,
+        },
+        Case {
+            what: "an epoch newer than the leader's log",
+            fetch_epoch: 7,
+            fetch_offset: 150,
+            diverging: diverging(6, 200),
+        },
+    ];
+    let log = RunsLog::new(&[(4, 120), (6, 80)]);
+    for case in cases {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+        let actions = m.on_event(
+            Event::ReceiveFetch {
+                from: NodeId(2),
+                fetch_epoch: case.fetch_epoch,
+                fetch_offset: case.fetch_offset,
+            },
+            &log,
+            SimInstant(2100),
+        );
+        let answered = actions.iter().find_map(|action| match action {
+            Action::ReplyDivergingEpoch(point) => Some(*point),
+            _ => None,
+        });
+        assert2::check!(answered == case.diverging, "{}", case.what);
+        let Role::Leader { replicas, .. } = m.role() else {
+            panic!("{}: expected leader", case.what);
+        };
+        let recorded = replicas[&NodeId(2)].fetch_offset;
+        let expected = if case.diverging.is_none() {
+            case.fetch_offset
+        } else {
+            0
+        };
+        assert2::check!(recorded == expected, "{}", case.what);
+    }
+}
+
+/// krabka-io/krabka-broker#785: a follower at an epoch the leader does not
+/// hold must not commit anything.
+///
+/// The leader is promoted at offset 120 and appends epoch 6 out to 200.
+/// Follower 2 kept a divergent epoch 5 tail out to offset 190 and follower 3
+/// has not fetched yet. If the leader counted follower 2, the majority
+/// `{200, 190}` would commit offset 190, although no second voter holds the
+/// leader's records there.
+#[test]
+fn a_fetch_at_an_epoch_the_leader_lacks_does_not_raise_the_high_watermark() {
     let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = L;
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
+    let at_promotion = RunsLog::new(&[(4, 120)]);
+    win_election(
+        &mut m,
+        &at_promotion,
+        &[NodeId(2), NodeId(3)],
+        SimInstant(2000),
     );
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 1,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2002),
-    );
-    // follower claims it fetched epoch 1 at offset 8, but epoch 1 ended at 5 → diverged.
+    let log = RunsLog::new(&[(4, 120), (6, 80)]);
     let actions = m.on_event(
         Event::ReceiveFetch {
             from: NodeId(2),
-            fetch_epoch: 1,
-            fetch_offset: 8,
+            fetch_epoch: 5,
+            fetch_offset: 190,
         },
         &log,
         SimInstant(2100),
     );
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::TruncateTo(LogOffsetMetadata {
-            offset: 5,
-            epoch: 1
-        })
-    )));
+    assert2::check!(
+        !actions
+            .iter()
+            .any(|action| matches!(action, Action::AdvanceHighWatermark(_)))
+    );
+    let Role::Leader { high_watermark, .. } = m.role() else {
+        panic!("expected leader");
+    };
+    assert2::assert!(*high_watermark == 0);
 }
 
+/// krabka-io/krabka-broker#785: a follower truncates as Kafka's
+/// `RaftLog.truncateToEndOffset` does, to the lower of the leader's end for
+/// the epoch and its own end for it.
+///
+/// The follower holds epoch 4 over 0 to 110 and a divergent epoch 5 from 110
+/// to 130. The leader answers `(4, 120)`. Truncating to 120 keeps ten epoch 5
+/// records, and the next fetch at epoch 5 diverges at the same point for
+/// ever. Its own epoch 4 ends at 110, so that is where it truncates.
 #[test]
-fn follower_truncates_on_diverging_fetch_response() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 10,
-        last_epoch: 2,
-    };
-    m.on_event(
-        Event::ReceiveBeginQuorumEpoch {
-            leader_id: NodeId(2),
-            leader_epoch: 3,
+fn a_follower_truncates_to_where_both_logs_still_hold_the_epoch() {
+    struct Case {
+        what: &'static str,
+        hint: LogOffsetMetadata,
+        truncate_to: i64,
+    }
+    let point = |epoch, offset| LogOffsetMetadata { offset, epoch };
+    let cases = [
+        Case {
+            what: "the follower's own copy of the epoch ends first",
+            hint: point(4, 120),
+            truncate_to: 110,
         },
-        &log,
-        SimInstant(10),
-    );
-    let actions = m.on_event(
-        Event::ReceiveFetchResponse {
-            leader_id: NodeId(2),
-            leader_epoch: 3,
-            diverging: Some(LogOffsetMetadata {
-                offset: 5,
-                epoch: 1,
-            }),
+        Case {
+            what: "the leader's copy of the epoch ends first",
+            hint: point(4, 100),
+            truncate_to: 100,
         },
-        &log,
-        SimInstant(11),
-    );
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::TruncateTo(LogOffsetMetadata {
-            offset: 5,
-            epoch: 1
-        })
-    )));
+        Case {
+            what: "an epoch the follower does not hold",
+            hint: point(3, 100),
+            truncate_to: 0,
+        },
+        Case {
+            what: "epoch 0 truncates to the lower end offset",
+            hint: point(0, 500),
+            truncate_to: 130,
+        },
+    ];
+    let log = RunsLog::new(&[(4, 110), (5, 20)]);
+    for case in cases {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        m.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 6,
+            },
+            &log,
+            SimInstant(10),
+        );
+        let actions = m.on_event(
+            Event::ReceiveFetchResponse {
+                leader_id: NodeId(2),
+                leader_epoch: 6,
+                diverging: Some(case.hint),
+            },
+            &log,
+            SimInstant(11),
+        );
+        assert2::check!(
+            actions
+                == vec![Action::TruncateTo(LogOffsetMetadata {
+                    offset: case.truncate_to,
+                    epoch: case.hint.epoch,
+                })],
+            "{}",
+            case.what
+        );
+    }
 }
 
 /// Drives `m` from `Unattached` to `Role::Leader`, returning every action the
@@ -474,20 +574,8 @@ fn a_snapshot_fetch_is_check_quorum_contact() {
 /// quorum over a truncation round would cost a whole election for nothing.
 #[test]
 fn a_diverging_fetch_still_counts_as_contact() {
-    struct EpochOneLog;
-    impl LogView for EpochOneLog {
-        fn end_offset(&self) -> i64 {
-            5
-        }
-        fn last_epoch(&self) -> Epoch {
-            1
-        }
-        fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
-            (epoch <= 1).then_some(5)
-        }
-    }
     let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = EpochOneLog;
+    let log = RunsLog::new(&[(1, 5)]);
     win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
     // Follower 2 claims epoch 1 out to offset 9; our epoch 1 ends at 5.
     let actions = m.on_event(
@@ -506,7 +594,7 @@ fn a_diverging_fetch_still_counts_as_contact() {
                     kind: TimerKind::CheckQuorum,
                     deadline: SimInstant(3600),
                 },
-                Action::TruncateTo(LogOffsetMetadata {
+                Action::ReplyDivergingEpoch(LogOffsetMetadata {
                     offset: 5,
                     epoch: 1,
                 }),

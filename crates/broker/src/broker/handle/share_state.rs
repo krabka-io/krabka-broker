@@ -241,7 +241,8 @@ mod tests {
         let acquired_cell = broker
             .share_partition_leaders
             .get_or_load(acquired_group, acquired_topic_id, 0)
-            .await;
+            .await
+            .expect("load the share partition");
         assert2::assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(75),

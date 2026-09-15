@@ -1,49 +1,42 @@
-//! Kafka registration RPCs served by the controller listener itself.
+//! The Kafka registration RPC served by the controller listener itself.
 //!
-//! This root routes an `api_key` to the handler that answers it, and owns what
-//! both handlers share: the Kafka error codes these APIs reply with, the
-//! declared API/version table, the leadership guard, and the mapping from a
-//! [`RaftError`] to the code a client acts on. Each RPC has its own submodule,
-//! with the listener grammar in `listeners` and the response encoders in
-//! `response`.
+//! This root routes an `api_key` to the handler that answers it, and owns the
+//! Kafka error codes it replies with, the declared API table, the leadership
+//! guard, and the mapping from a [`RaftError`] to the code a client acts on.
+//! The RPC has its own submodule, with the listener grammar in `listeners` and
+//! the response encoder in `response`.
 //!
-//! `BrokerHeartbeat` is deliberately absent. It is the one lifecycle RPC whose
-//! answer is not a function of the metadata image alone: it also drives the
-//! controller's heartbeat registry, the KIP-112 offline-dir failover, and the
-//! controlled-shutdown drain, all of which live in the broker crate. It
-//! therefore reaches the controller listener through the KIP-919 Admin router
-//! like the other broker-owned APIs, so there is exactly one implementation of
-//! it rather than a second one here that silently skips the bookkeeping.
+//! `BrokerRegistration` and `BrokerHeartbeat` are deliberately absent. Their
+//! answers are not a function of the metadata image alone. Registration refuses
+//! a new incarnation only while the previous one holds a heartbeat session, and
+//! it withdraws the ISR and ELR seats of a broker that cannot prove a clean
+//! restart. The heartbeat drives the controller's heartbeat registry, the
+//! KIP-112 offline-dir failover, and the controlled-shutdown drain. All of that
+//! lives in the broker crate, so both reach the controller listener through the
+//! KIP-919 Admin router like the other broker-owned APIs. There is exactly one
+//! implementation of each, not a second one here that skips the bookkeeping.
 
 use bytes::Bytes;
-use krabka_protocol::owned::{broker_registration_request, controller_registration_request};
+use krabka_protocol::owned::controller_registration_request;
 
-mod broker;
 mod controller;
 mod listeners;
 mod response;
 
-use self::{broker::broker_registration, controller::controller_registration};
+use self::controller::controller_registration;
 use crate::{RaftError, kraft::KraftController};
 
 const SUCCESS: i16 = 0;
 const UNKNOWN_SERVER_ERROR: i16 = -1;
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
-const UNSUPPORTED_VERSION: i16 = 35;
 const NOT_CONTROLLER: i16 = 41;
-const DUPLICATE_BROKER_REGISTRATION: i16 = 101;
-const BROKER_ID_NOT_REGISTERED: i16 = 102;
-const INCONSISTENT_CLUSTER_ID: i16 = 104;
 const UNKNOWN_CONTROLLER_ID: i16 = 116;
 const INVALID_REGISTRATION: i16 = 119;
 
 /// The lifecycle API keys this module answers. The versions they are served at
 /// are declared once, with the rest of the listener's surface, in
 /// [`super::api_versions::table`].
-pub(super) const SUPPORTED_APIS: [i16; 2] = [
-    broker_registration_request::API_KEY,
-    controller_registration_request::API_KEY,
-];
+pub(super) const SUPPORTED_APIS: [i16; 1] = [controller_registration_request::API_KEY];
 
 pub(super) fn is_controller_api(api_key: i16) -> bool {
     SUPPORTED_APIS.contains(&api_key)
@@ -57,9 +50,6 @@ pub(super) async fn dispatch(
     authorized: bool,
 ) -> Result<Bytes, RaftError> {
     match api_key {
-        broker_registration_request::API_KEY => {
-            broker_registration(version, body, engine, authorized).await
-        }
         controller_registration_request::API_KEY => {
             controller_registration(version, body, engine, authorized).await
         }
@@ -96,8 +86,13 @@ mod tests {
         // A key nothing declares: Produce is a broker API, never a controller one.
         check!(!is_controller_api(0), "Produce is not a controller api");
         check!(!is_controller_api(i16::MAX));
-        // `BrokerHeartbeat` is answered by the broker's handler through the
-        // Admin router, so this table must not claim it.
+        // `BrokerRegistration` and `BrokerHeartbeat` are answered by the
+        // broker's handlers through the Admin router, so this table must not
+        // claim them.
+        check!(
+            !is_controller_api(krabka_protocol::owned::broker_registration_request::API_KEY),
+            "BrokerRegistration belongs to the Admin router"
+        );
         check!(
             !is_controller_api(krabka_protocol::owned::broker_heartbeat_request::API_KEY),
             "BrokerHeartbeat belongs to the Admin router"
@@ -120,6 +115,6 @@ mod tests {
     /// [`super::super::api_versions::table`].
     #[test]
     fn lifecycle_api_keys_match_generated_schemas() {
-        assert2::assert!(SUPPORTED_APIS == [62, 70]);
+        assert2::assert!(SUPPORTED_APIS == [70]);
     }
 }
