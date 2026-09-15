@@ -465,12 +465,25 @@ async fn an_internal_topic_refuses_a_trim() {
     let peer = peer();
     let ctx = test_context(&admin, &peer);
 
-    crate::txn::bootstrap::ensure_topic(&broker.controller, 1, 1)
-        .await
-        .expect("create the transaction-state topic");
-    crate::share_coordinator::bootstrap::ensure_topic(&broker.controller, 1, 1)
-        .await
-        .expect("create the share-state topic");
+    crate::txn::bootstrap::ensure_topic(
+        &broker.controller,
+        1,
+        1,
+        &crate::txn::bootstrap::topic_configs(
+            broker.config.transaction_state_segment_bytes,
+            broker.config.transaction_state_min_isr,
+        ),
+    )
+    .await
+    .expect("create the transaction-state topic");
+    crate::share_coordinator::bootstrap::ensure_topic(
+        &broker.controller,
+        1,
+        1,
+        &crate::share_coordinator::bootstrap::topic_configs(&broker.config.share_coordinator),
+    )
+    .await
+    .expect("create the share-state topic");
     topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
 
     let cases = [
