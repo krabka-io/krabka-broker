@@ -289,6 +289,11 @@ kafka_codes! {
     /// unset, rather than with an empty listing or a durable binding no
     /// decision point will ever consult.
     SECURITY_DISABLED = 54;
+    /// `OPERATION_NOT_ATTEMPTED` (55): a batch failed on another item, so
+    /// this one was not tried. `AddPartitionsToTxn` puts it on every valid
+    /// partition of a transaction that names an unauthorized or unknown
+    /// partition.
+    OPERATION_NOT_ATTEMPTED = 55;
 
     // Bulletproof EOS / acks=all codes.
     /// `NOT_ENOUGH_REPLICAS` (19): per-partition error that `acks=all` Produce
