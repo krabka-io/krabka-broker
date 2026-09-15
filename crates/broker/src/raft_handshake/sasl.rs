@@ -12,18 +12,16 @@ use krabka_client_core::ClientDuplex;
 use krabka_protocol::{
     Decode,
     owned::{
-        api_versions_request::ApiVersionsRequest,
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_handshake_request::SaslHandshakeRequest,
     },
 };
-use krabka_raft::RaftHandshakeError;
+use krabka_raft::{ControllerApiVersions, RaftHandshakeError};
 use krabka_security::SaslMechanism;
 
 use super::{
     API_KEY_API_VERSIONS, API_KEY_SASL_AUTHENTICATE, API_KEY_SASL_HANDSHAKE, BrokerRaftHandshake,
-    api_versions::pre_auth_api_versions_response,
-    frame::{read_kafka_request, write_response},
+    frame::{read_kafka_request, write_response, write_response_body},
 };
 use crate::network::auth::{
     ConnectionAuth, SaslExchange, handle_authenticate_gssapi, handle_authenticate_oauthbearer,
@@ -99,10 +97,17 @@ fn emit_authentication(
 /// `auth.is_authenticated()` holds, so that `upgrade` can authorize it. It
 /// returns `Err(...)` if the peer sent an unexpected frame or the auth
 /// failed.
+///
+/// A pre-authentication `ApiVersions` gets the listener's own answer from
+/// `api_versions`, as Kafka's `SaslServerAuthenticator` answers from the
+/// `apiVersionSupplier` of the listener. That answer is the full table and the
+/// features, or an `UNSUPPORTED_VERSION` or `INVALID_REQUEST` refusal. A
+/// refusal keeps the connection open, so the peer can ask again.
 pub(super) async fn run_inbound_sasl(
     stream: &mut dyn ClientDuplex,
     cfg: &BrokerRaftHandshake,
     peer: &SocketAddr,
+    api_versions: &dyn ControllerApiVersions,
 ) -> Result<(krabka_security::Principal, bool), RaftHandshakeError> {
     let mut auth = pre_auth_state();
     loop {
@@ -114,16 +119,11 @@ pub(super) async fn run_inbound_sasl(
             )));
         }
         match api_key {
-            // ApiVersions — minimal response so peers that send it first
-            // (typical JVM client pattern) can proceed. Our
-            // `InterBrokerClient` outbound path skips ApiVersions, so this
-            // path exists for JVM-client tolerance only.
+            // A JVM client sends ApiVersions first. It gets the same answer
+            // as after authentication.
             API_KEY_API_VERSIONS => {
-                let mut cur = body.as_slice();
-                ApiVersionsRequest::decode(&mut cur, api_version)
-                    .map_err(|e| RaftHandshakeError::Protocol(e.to_string()))?;
-                let resp = pre_auth_api_versions_response();
-                write_response(stream, api_key, api_version, corr_id, &resp).await?;
+                let response = api_versions.respond(api_version, &body)?;
+                write_response_body(stream, api_key, api_version, corr_id, &response).await?;
             }
             API_KEY_SASL_HANDSHAKE => {
                 let mut cur = body.as_slice();
@@ -253,10 +253,7 @@ pub(super) async fn run_inbound_sasl(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::owned::{
-        api_versions_response::ApiVersionsResponse,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-    };
+    use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
     use tokio::io::AsyncWriteExt;
 
     use super::*;
@@ -267,6 +264,22 @@ mod tests {
 
     fn test_peer() -> SocketAddr {
         "192.0.2.11:9093".parse().expect("peer addr")
+    }
+
+    /// Echoes the request version and body, so a test sees which request the
+    /// handshake answered and that it wrote the answer unchanged.
+    struct FixedApiVersions;
+
+    impl ControllerApiVersions for FixedApiVersions {
+        fn respond(
+            &self,
+            request_version: i16,
+            request_body: &[u8],
+        ) -> Result<bytes::Bytes, RaftHandshakeError> {
+            let mut body = request_version.to_be_bytes().to_vec();
+            body.extend_from_slice(request_body);
+            Ok(bytes::Bytes::from(body))
+        }
     }
 
     /// Drives one PLAIN exchange (handshake then authenticate) against
@@ -281,8 +294,9 @@ mod tests {
         Result<(krabka_security::Principal, bool), RaftHandshakeError>,
     ) {
         let (mut client, mut server) = tokio::io::duplex(4096);
-        let task =
-            tokio::spawn(async move { run_inbound_sasl(&mut server, &cfg, &test_peer()).await });
+        let task = tokio::spawn(async move {
+            run_inbound_sasl(&mut server, &cfg, &test_peer(), &FixedApiVersions).await
+        });
         client
             .write_all(&request_frame(
                 API_KEY_SASL_HANDSHAKE,
@@ -396,27 +410,29 @@ mod tests {
         let (mut client, mut server) = tokio::io::duplex(4096);
         let server = tokio::spawn(async move {
             let cfg = sasl_test_config();
-            run_inbound_sasl(&mut server, &cfg, &test_peer()).await
+            run_inbound_sasl(&mut server, &cfg, &test_peer(), &FixedApiVersions).await
         });
 
-        client
-            .write_all(&request_frame(
-                API_KEY_API_VERSIONS,
-                3,
-                1,
-                Some(b"c"),
-                true,
-                &api_versions_body(3),
-            ))
-            .await
-            .expect("write api versions");
-        let api_versions = read_response_frame(&mut client).await;
-        assert!(&api_versions[0..4] == &1i32.to_be_bytes());
-        let mut api_versions_body = &api_versions[4..];
-        let response = ApiVersionsResponse::decode(&mut api_versions_body, 3)
-            .expect("decode api versions v3 response");
-        assert!(api_versions_body.is_empty());
-        assert!(response.api_keys.len() == 3);
+        // A served version and a version the listener does not serve. The
+        // listener's answer goes out verbatim behind a v0 response header, and
+        // neither answer ends the exchange.
+        for (corr_id, version, body) in [(1, 3, api_versions_body(3)), (4, 6, vec![0xff])] {
+            client
+                .write_all(&request_frame(
+                    API_KEY_API_VERSIONS,
+                    version,
+                    corr_id,
+                    Some(b"c"),
+                    true,
+                    &body,
+                ))
+                .await
+                .expect("write api versions");
+            let frame = read_response_frame(&mut client).await;
+            let mut expected = corr_id.to_be_bytes().to_vec();
+            expected.extend_from_slice(&FixedApiVersions.respond(version, &body).unwrap());
+            assert!(frame == expected, "ApiVersions v{version}");
+        }
 
         client
             .write_all(&request_frame(
@@ -460,7 +476,7 @@ mod tests {
         let (mut client, mut server) = tokio::io::duplex(128);
         let server = tokio::spawn(async move {
             let cfg = sasl_test_config();
-            run_inbound_sasl(&mut server, &cfg, &test_peer()).await
+            run_inbound_sasl(&mut server, &cfg, &test_peer(), &FixedApiVersions).await
         });
         client
             .write_all(&request_frame(1, 0, 1, Some(b"c"), false, b""))

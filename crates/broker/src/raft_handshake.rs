@@ -18,12 +18,14 @@
 use std::{collections::HashMap, sync::Arc};
 
 use krabka_client_core::ClientDuplex;
-use krabka_raft::{ControllerHandle, RaftConnection, RaftHandshakeError, RaftListenerHandshake};
+use krabka_raft::{
+    ControllerApiVersions, ControllerHandle, RaftConnection, RaftHandshakeError,
+    RaftListenerHandshake,
+};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::{net::TcpStream, sync::OnceCell};
 use tokio_rustls::TlsAcceptor;
 
-mod api_versions;
 mod authorization;
 mod frame;
 mod sasl;
@@ -86,7 +88,11 @@ pub struct BrokerRaftHandshake {
 
 #[async_trait::async_trait]
 impl RaftListenerHandshake for BrokerRaftHandshake {
-    async fn upgrade(&self, stream: TcpStream) -> Result<RaftConnection, RaftHandshakeError> {
+    async fn upgrade(
+        &self,
+        stream: TcpStream,
+        api_versions: &dyn ControllerApiVersions,
+    ) -> Result<RaftConnection, RaftHandshakeError> {
         // Capture the peer address before the stream is consumed by TLS
         // termination — it is the `host` of the authorization request.
         let peer = stream
@@ -120,7 +126,8 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
         let mut authenticated_via_token = false;
         let mut cluster_alter_authorized = true;
         if self.protocol.requires_sasl() {
-            let (authenticated, via_token) = run_inbound_sasl(&mut *stream, self, &peer).await?;
+            let (authenticated, via_token) =
+                run_inbound_sasl(&mut *stream, self, &peer, api_versions).await?;
             self.authorize_cluster_action(&authenticated, &peer)?;
             cluster_alter_authorized = self.authorize_cluster_alter(&authenticated, &peer)?;
             principal = Some(authenticated);
