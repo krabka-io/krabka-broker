@@ -17,7 +17,9 @@ use krabka_protocol::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
-        share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
+        share_fetch_request::{
+            AcknowledgementBatch, FetchPartition, FetchTopic, ShareFetchRequest,
+        },
         share_fetch_response::{PartitionData, ShareFetchResponse},
     },
     primitives::uuid::Uuid as WireUuid,
@@ -45,10 +47,15 @@ const RECORDS_PER_BATCH: i64 = 2;
 const PRODUCE_VERSION: i16 = 12;
 
 async fn start() -> (BrokerHandle, tempfile::TempDir) {
+    start_with_delivery_attempts(5).await
+}
+
+async fn start_with_delivery_attempts(attempts: i16) -> (BrokerHandle, tempfile::TempDir) {
     start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_group.enable = true;
+        cfg.share_group.max_delivery_attempts = attempts;
     })
     .await
 }
@@ -149,8 +156,8 @@ async fn share_fetch(
     member: &str,
     epoch: i32,
     topic_id: WireUuid,
-    max_records: i32,
-    max_bytes: i32,
+    (max_records, max_bytes): (i32, i32),
+    acknowledgements: &[(i64, i64, i8)],
 ) -> ShareFetchResponse {
     let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
     let request = ShareFetchRequest {
@@ -166,6 +173,17 @@ async fn share_fetch(
             topic_id,
             partitions: vec![FetchPartition {
                 partition_index: 0,
+                acknowledgement_batches: acknowledgements
+                    .iter()
+                    .map(
+                        |&(first_offset, last_offset, ack_type)| AcknowledgementBatch {
+                            first_offset,
+                            last_offset,
+                            acknowledge_types: vec![ack_type],
+                            ..Default::default()
+                        },
+                    )
+                    .collect(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -292,7 +310,8 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
         // Open both sessions on the empty log, so the share partition starts
         // at offset 0 under the default `latest` reset.
         for member in ["limited", "unlimited"] {
-            let opened = share_fetch(&broker, &group, member, 0, topic_id, 500, 1 << 20).await;
+            let opened =
+                share_fetch(&broker, &group, member, 0, topic_id, (500, 1 << 20), &[]).await;
             assert!(partition(&opened).error_code == codes::NONE, "{opened:?}");
         }
         produce_batches(&broker, &topic).await;
@@ -305,11 +324,20 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
             "limited",
             1,
             topic_id,
-            case.max_records,
-            size * numerator / denominator,
+            (case.max_records, size * numerator / denominator),
+            &[],
         )
         .await;
-        let rest = share_fetch(&broker, &group, "unlimited", 1, topic_id, 500, 1 << 20).await;
+        let rest = share_fetch(
+            &broker,
+            &group,
+            "unlimited",
+            1,
+            topic_id,
+            (500, 1 << 20),
+            &[],
+        )
+        .await;
 
         actual.push((
             case.name,
@@ -323,5 +351,43 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
     }
 
     assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// The acknowledge type `Release`.
+const RELEASE: i8 = 2;
+
+/// The log read starts at the first record that the partition can still
+/// deliver, so a released record at the delivery limit must be archived
+/// before the read. Otherwise it stays `Available`, the window cannot grow
+/// past it, and the partition never delivers a later record.
+#[tokio::test]
+async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
+    let (broker, _dir) = start_with_delivery_attempts(1).await;
+    let topic_id = create_topic(&broker, "delivery-limit").await;
+    let opened = share_fetch(&broker, "g", "m", 0, topic_id, (500, 1 << 20), &[]).await;
+    assert!(partition(&opened).error_code == codes::NONE, "{opened:?}");
+    produce_batches(&broker, "delivery-limit").await;
+    let first = share_fetch(&broker, "g", "m", 1, topic_id, (500, 1 << 20), &[]).await;
+    produce_batches(&broker, "delivery-limit").await;
+
+    // Release every record at its only delivery attempt, and fetch.
+    let after_release = share_fetch(
+        &broker,
+        "g",
+        "m",
+        2,
+        topic_id,
+        (500, 1 << 20),
+        &[(0, 7, RELEASE)],
+    )
+    .await;
+
+    assert!(
+        (
+            acquired(partition(&first)),
+            acquired(partition(&after_release))
+        ) == (vec![(0, 7)], vec![(8, 15)])
+    );
     broker.shutdown().await;
 }

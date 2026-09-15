@@ -92,6 +92,32 @@ impl AcquisitionState {
         }
     }
 
+    /// Archives every `Available` run that has reached `max_attempts`
+    /// deliveries, and advances the SPSO past a terminal prefix.
+    ///
+    /// The handler runs this before it materializes and reads. An exhausted
+    /// run is `Available`, so it would stop `materialize` from growing the
+    /// window, and the read starts past it, so `acquire` would never meet it
+    /// and archive it.
+    pub fn archive_exhausted(&mut self, max_attempts: i16) {
+        let mut changed = false;
+        for batch in &mut self.batches {
+            if batch.state == RecordState::Available && batch.delivery_count >= max_attempts {
+                self.delivery_complete_count = self
+                    .delivery_complete_count
+                    .saturating_add(clamp_i32(batch.len()));
+                batch.state = RecordState::Archived;
+                batch.acquired_by = None;
+                batch.lock_deadline = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.dirty = true;
+            self.advance_spso();
+        }
+    }
+
     /// The first offset that `acquire` can hand out: the start of the first
     /// `Available` run whose delivery count is under `max_attempts`.
     ///

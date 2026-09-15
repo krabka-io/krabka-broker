@@ -201,6 +201,9 @@ async fn acquire_pass(
         } else {
             hwm
         };
+        // A released or expired record at the delivery limit is archived
+        // first, so it cannot hold the window shut.
+        st.archive_exhausted(cfg.max_delivery_attempts);
         materialize_within_deferral_bound(&mut st, upper, cfg.max_inflight_records);
         // Transaction markers occupy log offsets but are broker metadata, not
         // user records. Archive them before acquisition so their encoded
