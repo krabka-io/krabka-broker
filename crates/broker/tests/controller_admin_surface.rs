@@ -131,6 +131,16 @@ async fn start_node(roles: &[NodeRole]) -> (BrokerHandle, tempfile::TempDir) {
     (broker, dir)
 }
 
+/// An `ApiVersions` request that passes Kafka's `ApiVersionsRequest.isValid`:
+/// from v3 the KIP-511 client software name and version must be set.
+fn api_versions_request() -> ApiVersionsRequest {
+    ApiVersionsRequest {
+        client_software_name: "krabka-test".into(),
+        client_software_version: "1.0".into(),
+        ..Default::default()
+    }
+}
+
 /// Dial the controller listener. `Connection::connect` runs the `ApiVersions`
 /// bootstrap, so every later `send` negotiates against what this listener
 /// advertises rather than against the client's own codec range.
@@ -201,7 +211,7 @@ async fn controller_api_versions_advertises_the_kafka_controller_admin_surface()
     let connection = dial_controller(&broker).await;
 
     let response = connection
-        .send(ApiVersionsRequest::default())
+        .send(api_versions_request())
         .await
         .expect("ApiVersions over the controller listener");
     connection.close();
@@ -242,7 +252,7 @@ async fn controller_listener_advertises_no_key_kafka_does_not() {
     let connection = dial_controller(&broker).await;
 
     let response = connection
-        .send(ApiVersionsRequest::default())
+        .send(api_versions_request())
         .await
         .expect("ApiVersions over the controller listener");
     connection.close();
