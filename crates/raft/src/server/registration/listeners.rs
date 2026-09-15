@@ -1,32 +1,13 @@
-//! The listener grammar both registration requests share.
+//! The listener grammar of a controller registration.
 //!
-//! A broker and a controller advertise their endpoints in the same shape, and
-//! the same checks apply to both: a named, hosted, non-zero port on a security
-//! protocol the wire defines, with no repeated name and at least one entry.
-//! Only the failure shape differs, so each caller gets its own thin wrapper —
-//! an error code for the broker path, a message for the controller path.
+//! Every endpoint must be a named, hosted, non-zero port on a security protocol
+//! the wire defines, with no repeated name and at least one entry.
 
 use std::collections::HashSet;
 
 use krabka_metadata::BrokerEndpoint;
-use krabka_protocol::owned::{broker_registration_request, controller_registration_request};
+use krabka_protocol::owned::controller_registration_request;
 use krabka_security::ListenerProtocol;
-
-use super::INVALID_REGISTRATION;
-
-pub(super) fn decode_broker_listeners(
-    listeners: &[broker_registration_request::Listener],
-) -> Result<Vec<BrokerEndpoint>, i16> {
-    decode_listeners(listeners.iter().map(|listener| {
-        (
-            listener.name.as_str(),
-            listener.host.as_str(),
-            listener.port,
-            listener.security_protocol,
-        )
-    }))
-    .map_err(|_| INVALID_REGISTRATION)
-}
 
 pub(super) fn decode_controller_listeners(
     listeners: &[controller_registration_request::Listener],
@@ -82,30 +63,10 @@ mod tests {
 
     use super::*;
 
-    /// Both listener decoders run the same checks; each reports failure in the
-    /// shape its caller needs -- an error code for the broker path, a message
-    /// for the controller path.
+    /// The controller listener decoder reads the wire listener and runs the
+    /// shared checks.
     #[test]
-    fn both_listener_decoders_reject_an_unusable_listener() {
-        let broker_bad = vec![broker_registration_request::Listener {
-            name: String::new(),
-            host: "host".to_owned(),
-            port: 9092,
-            security_protocol: 0,
-            ..Default::default()
-        }];
-        check!(decode_broker_listeners(&broker_bad) == Err(INVALID_REGISTRATION));
-
-        let broker_ok = vec![broker_registration_request::Listener {
-            name: "PLAINTEXT".to_owned(),
-            host: "host".to_owned(),
-            port: 9092,
-            security_protocol: 0,
-            ..Default::default()
-        }];
-        let decoded = decode_broker_listeners(&broker_ok).expect("a usable listener");
-        check!(decoded.len() == 1 && decoded[0].port == 9092);
-
+    fn the_controller_listener_decoder_rejects_an_unusable_listener() {
         let controller_bad = vec![controller_registration_request::Listener {
             name: "CONTROLLER".to_owned(),
             host: String::new(),
