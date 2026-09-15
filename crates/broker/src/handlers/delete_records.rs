@@ -297,6 +297,19 @@ async fn trim_one(
 ) -> (DeleteRecordsPartitionResult, bool) {
     let index = fp.partition_index;
     let refused = |code| (error_partition_result(index, code), false);
+
+    // Kafka's `ReplicaManager.deleteRecordsOnLocalLog` refuses every partition
+    // of an internal topic with `INVALID_TOPIC_EXCEPTION` before it looks for
+    // the partition. `KafkaApis` answers a partition the metadata does not
+    // hold before that, with `UNKNOWN_TOPIC_OR_PARTITION`. A trim of an
+    // internal topic deletes committed offsets, transaction state or share
+    // state, and a trim of krabka's own internal topics deletes broker state,
+    // so both sets are refused.
+    if crate::internal_topics::is_internal_topic(&env.broker.config, topic)
+        && env.image.partition(topic, index).is_some()
+    {
+        return refused(codes::INVALID_TOPIC_EXCEPTION);
+    }
     let part_opt = env.partitions.get(topic, krabka_ids::PartitionIndex(index));
     let Some(part) = part_opt else {
         return refused(codes::UNKNOWN_TOPIC_OR_PARTITION);

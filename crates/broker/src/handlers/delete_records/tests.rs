@@ -452,3 +452,74 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
     check!(part.log_start_offset() == before);
     broker_handle.shutdown().await;
 }
+
+/// Kafka refuses `DeleteRecords` on every partition of an internal topic with
+/// `INVALID_TOPIC_EXCEPTION` and a low watermark of -1, and trims an ordinary
+/// topic. Each topic holds two records first, so a trim to the high watermark
+/// would move the log start.
+#[tokio::test]
+async fn an_internal_topic_refuses_a_trim() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let admin = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&admin, &peer);
+
+    crate::txn::bootstrap::ensure_topic(&broker.controller, 1, 1)
+        .await
+        .expect("create the transaction-state topic");
+    crate::share_coordinator::bootstrap::ensure_topic(&broker.controller, 1, 1)
+        .await
+        .expect("create the share-state topic");
+    topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
+
+    let cases = [
+        (
+            crate::coordinator::bootstrap::OFFSETS_TOPIC,
+            -1_i64,
+            codes::INVALID_TOPIC_EXCEPTION,
+            0_i64,
+        ),
+        (
+            crate::txn::bootstrap::TOPIC,
+            -1,
+            codes::INVALID_TOPIC_EXCEPTION,
+            0,
+        ),
+        (
+            crate::share_coordinator::bootstrap::TOPIC,
+            -1,
+            codes::INVALID_TOPIC_EXCEPTION,
+            0,
+        ),
+        ("orders", 4, codes::NONE, 4),
+    ];
+    for (topic, low_watermark, error_code, log_start) in cases {
+        broker_handle.wait_until_partition_present(topic, 0).await;
+        let part = broker
+            .partitions
+            .get(topic, krabka_ids::PartitionIndex(0))
+            .expect("the partition is local");
+        if topic != "orders" {
+            let leader_epoch = part
+                .current_leader_epoch
+                .load(std::sync::atomic::Ordering::Acquire);
+            part.produce_batch(batch_at(DELIVERED_MS, leader_epoch))
+                .await
+                .expect("append a batch");
+        }
+
+        let resp = drive(&broker, &request(topic, &[(0, -1)]), &admin, &peer).await;
+
+        check!(
+            resp.topics == one_row(topic, low_watermark, error_code),
+            "{topic}"
+        );
+        check!(
+            part.log_start_offset() == krabka_log::Offset(log_start),
+            "{topic}"
+        );
+    }
+
+    broker_handle.shutdown().await;
+}
