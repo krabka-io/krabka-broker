@@ -159,10 +159,7 @@ impl BrokerHandle {
 mod tests {
     use assert2::check;
 
-    use crate::{
-        broker::{Broker, test_support::local_partition_with_records},
-        config::BrokerConfig,
-    };
+    use crate::{broker::Broker, config::BrokerConfig};
 
     #[tokio::test]
     async fn single_broker_handle_share_and_raft_helpers_observe_real_state() {
@@ -181,25 +178,7 @@ mod tests {
                 .await
                 .is_none()
         );
-        let share_state_partition = broker.share_coordinator.state_partition_for(
-            share_group,
-            &share_topic_id,
-            share_partition,
-        );
-        let share_state_part = local_partition_with_records(
-            dir.path(),
-            crate::share_coordinator::bootstrap::TOPIC,
-            share_state_partition.0,
-            &[],
-        );
-        broker.partitions.insert(
-            crate::share_coordinator::bootstrap::TOPIC.into(),
-            share_state_partition,
-            share_state_part,
-        );
-        broker
-            .share_coordinator
-            .lead_all_partitions_for_test()
+        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;
         broker
             .share_coordinator

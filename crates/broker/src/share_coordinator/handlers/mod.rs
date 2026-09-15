@@ -141,15 +141,49 @@ pub(crate) mod test_support {
         dir: &Path,
     ) -> (BrokerHandle, Arc<crate::broker::Broker>) {
         let (handle, broker) = broker(dir).await;
-        open_all_state_partitions(
-            &broker.partitions,
-            dir,
-            broker.config.share_coordinator.state_topic_num_partitions,
-        );
-        broker
-            .share_coordinator
-            .lead_all_partitions_for_test()
-            .await;
+        lead_share_state_partitions(&broker).await;
         (handle, broker)
+    }
+
+    /// Creates the real `__share_group_state` topic on `broker` and waits until
+    /// the share coordinator has loaded every partition of it.
+    ///
+    /// A test must not seed the leadership by hand on a live broker: the
+    /// metadata reconcile loop applies the image again at any time, and an
+    /// image without the topic drops every led partition.
+    pub(crate) async fn lead_share_state_partitions(broker: &Broker) {
+        let partitions = broker.share_coordinator.state_topic_num_partitions();
+        bootstrap::ensure_topic(
+            &broker.controller,
+            partitions,
+            broker.share_coordinator.state_topic_replication_factor(),
+            &broker.share_coordinator.state_topic_configs(),
+        )
+        .await
+        .expect("create __share_group_state");
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                broker
+                    .share_coordinator
+                    .refresh_leader_partitions(&broker.controller.current_image())
+                    .await
+                    .finished()
+                    .await;
+                let mut active = true;
+                for partition in 0..partitions {
+                    active &= broker
+                        .share_coordinator
+                        .load_status(PartitionIndex(partition))
+                        .await
+                        == Some(crate::share_coordinator::coordinator::LoadStatus::Active);
+                }
+                if active {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("every __share_group_state partition loads on this broker");
     }
 }
