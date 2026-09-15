@@ -66,12 +66,12 @@ async fn on_leadership_wake(
     metrics.controller_leader_changes_total.inc();
     *previous = current;
     if current == Some(node_id) {
-        let broker_ids: Vec<u64> = controller
-            .current_image()
-            .brokers()
-            .map(|broker| broker.node_id.0)
-            .collect();
-        liveness.seed_brokers(broker_ids).await;
+        let image = controller.current_image();
+        liveness
+            .seed_brokers(crate::heartbeat::controller_state::replicated_fences(
+                &image,
+            ))
+            .await;
     }
 }
 

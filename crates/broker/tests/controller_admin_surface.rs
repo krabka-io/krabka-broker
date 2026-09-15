@@ -16,6 +16,8 @@
 //! `IncrementalAlterConfigs`, the three ACL RPCs and
 //! `ListPartitionReassignments`.
 
+use std::time::Duration;
+
 use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
@@ -36,6 +38,11 @@ use krabka_protocol::{
         assign_replicas_to_dirs_response::{
             AssignReplicasToDirsResponse, DirectoryData as RespDirectoryData,
             PartitionData as RespPartitionData, TopicData as RespTopicData,
+        },
+        broker_heartbeat_request::BrokerHeartbeatRequest,
+        broker_registration_request::{
+            BrokerRegistrationRequest, Feature as RegistrationFeature,
+            Listener as RegistrationListener,
         },
         create_delegation_token_request::CreateDelegationTokenRequest,
         create_delegation_token_response::CreateDelegationTokenResponse,
@@ -616,4 +623,251 @@ async fn controller_only_node_places_no_replica_on_itself() {
             }
     );
     broker.shutdown().await;
+}
+
+/// Kafka's `DUPLICATE_BROKER_REGISTRATION`.
+const DUPLICATE_BROKER_REGISTRATION: i16 = 101;
+
+/// Kafka's `INVALID_REGISTRATION`.
+const INVALID_REGISTRATION: i16 = 119;
+
+/// One `BrokerRegistration` a Kafka broker sends over the controller listener.
+struct Registration {
+    broker_id: i32,
+    incarnation: u128,
+    port: u16,
+    log_dirs: &'static [u128],
+    with_metadata_version: bool,
+}
+
+impl Registration {
+    const fn broker_7(incarnation: u128, port: u16) -> Self {
+        Self {
+            broker_id: 7,
+            incarnation,
+            port,
+            log_dirs: &[7000],
+            with_metadata_version: true,
+        }
+    }
+
+    const fn broker_8() -> Self {
+        Self {
+            broker_id: 8,
+            incarnation: 0x8a,
+            port: 19_100,
+            log_dirs: &[8000],
+            with_metadata_version: true,
+        }
+    }
+
+    fn request(&self, image: &krabka_metadata::MetadataImage) -> BrokerRegistrationRequest {
+        BrokerRegistrationRequest {
+            broker_id: self.broker_id,
+            cluster_id: image.cluster_id().to_string(),
+            incarnation_id: WireUuid(*uuid::Uuid::from_u128(self.incarnation).as_bytes()),
+            listeners: vec![RegistrationListener {
+                name: "PLAINTEXT".into(),
+                host: "127.0.0.1".into(),
+                port: self.port,
+                security_protocol: 0,
+                ..Default::default()
+            }],
+            // What a real broker's `SupportedFeatures` covers: every level
+            // the cluster finalized.
+            features: image
+                .finalized_features()
+                .iter()
+                .filter(|(name, _)| {
+                    self.with_metadata_version
+                        || name.as_str()
+                            != krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                })
+                .map(|(name, level)| RegistrationFeature {
+                    name: name.clone(),
+                    min_supported_version: 0,
+                    max_supported_version: *level,
+                    ..Default::default()
+                })
+                .collect(),
+            log_dirs: self
+                .log_dirs
+                .iter()
+                .map(|id| WireUuid(*uuid::Uuid::from_u128(*id).as_bytes()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+
+/// How the broker epoch in a registration answer relates to the one broker 7
+/// held before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EpochAnswer {
+    Refused,
+    New,
+    Kept,
+}
+
+/// What one registration step came to: the error code, the epoch, and the
+/// port the image then holds for the broker the step registered, if the
+/// step was accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Outcome {
+    error_code: i16,
+    epoch: EpochAnswer,
+    registered_port: Option<u16>,
+}
+
+const fn refused(error_code: i16) -> Outcome {
+    Outcome {
+        error_code,
+        epoch: EpochAnswer::Refused,
+        registered_port: None,
+    }
+}
+
+const fn accepted(epoch: EpochAnswer, port: u16) -> Outcome {
+    Outcome {
+        error_code: 0,
+        epoch,
+        registered_port: Some(port),
+    }
+}
+
+/// krabka-io/krabka-broker#822: a Kafka broker that restarts rejoins over the
+/// controller listener.
+///
+/// A Kafka broker picks a new incarnation id in every process. Kafka's
+/// `ClusterControlManager.registerBroker` refuses that id with
+/// `DUPLICATE_BROKER_REGISTRATION` only while the previous incarnation still
+/// holds a heartbeat session, and registers it with a new broker epoch once
+/// the session expires. It rewrites the record for the same incarnation and
+/// keeps the epoch, and it validates `metadata.version` and the log
+/// directories. Each step runs against the image the steps before it left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
+    type Step = (&'static str, Registration, Option<Duration>, Outcome);
+    let steps: Vec<Step> = vec![
+        (
+            "a first registration",
+            Registration::broker_7(0xa, 19_092),
+            None,
+            accepted(EpochAnswer::New, 19_092),
+        ),
+        (
+            "the same incarnation again, on a new port",
+            Registration::broker_7(0xa, 19_093),
+            None,
+            accepted(EpochAnswer::Kept, 19_093),
+        ),
+        (
+            "a new incarnation while the previous one heartbeats",
+            Registration::broker_7(0xb, 19_094),
+            None,
+            refused(DUPLICATE_BROKER_REGISTRATION),
+        ),
+        (
+            "the new incarnation once the session expired",
+            Registration::broker_7(0xb, 19_094),
+            // Longer than the two-second `heartbeat_timeout` of the test
+            // configuration.
+            Some(Duration::from_millis(2_500)),
+            accepted(EpochAnswer::New, 19_094),
+        ),
+        (
+            "no metadata.version feature",
+            Registration {
+                with_metadata_version: false,
+                ..Registration::broker_8()
+            },
+            None,
+            refused(INVALID_REGISTRATION),
+        ),
+        (
+            "no log directory",
+            Registration {
+                log_dirs: &[],
+                ..Registration::broker_8()
+            },
+            None,
+            refused(INVALID_REGISTRATION),
+        ),
+        (
+            "a log directory broker 7 registered",
+            Registration {
+                log_dirs: &[8000, 7000],
+                ..Registration::broker_8()
+            },
+            None,
+            refused(INVALID_REGISTRATION),
+        ),
+    ];
+
+    let (broker, _dir) = start_broker().await;
+    let connection = dial_controller(&broker).await;
+    let mut epoch_of_7 = -1;
+    let mut expected = Vec::new();
+    let mut outcomes = Vec::new();
+    for (what, registration, wait, outcome) in steps {
+        expected.push((what, outcome));
+        if let Some(wait) = wait {
+            tokio::time::sleep(wait).await;
+        }
+        let image = broker.controller_image_for_test();
+        let answer = connection
+            .send(registration.request(&image))
+            .await
+            .expect("BrokerRegistration over the controller listener");
+        let node = NodeId(u64::try_from(registration.broker_id).expect("a broker id"));
+        let epoch = match answer.broker_epoch {
+            -1 => EpochAnswer::Refused,
+            epoch if node == NodeId(7) && epoch == epoch_of_7 => EpochAnswer::Kept,
+            _ => EpochAnswer::New,
+        };
+        let registered_port = if answer.error_code == 0 {
+            broker
+                .wait_for_image(|image| {
+                    image
+                        .broker(node)
+                        .is_some_and(|registered| registered.broker_epoch == answer.broker_epoch)
+                })
+                .await;
+            broker
+                .controller_image_for_test()
+                .broker(node)
+                .map(|registered| registered.port)
+        } else {
+            None
+        };
+        outcomes.push((
+            what,
+            Outcome {
+                error_code: answer.error_code,
+                epoch,
+                registered_port,
+            },
+        ));
+        if answer.error_code != 0 || node != NodeId(7) {
+            continue;
+        }
+        epoch_of_7 = answer.broker_epoch;
+        if registration.incarnation == 0xa {
+            // The first incarnation heartbeats, so it holds a session.
+            let heartbeat = connection
+                .send(BrokerHeartbeatRequest {
+                    broker_id: 7,
+                    broker_epoch: answer.broker_epoch,
+                    current_metadata_offset: answer.broker_epoch,
+                    ..Default::default()
+                })
+                .await
+                .expect("BrokerHeartbeat over the controller listener");
+            assert!(heartbeat.error_code == 0, "{what}: {heartbeat:?}");
+        }
+    }
+    connection.close();
+    broker.shutdown().await;
+
+    check!(outcomes == expected);
 }

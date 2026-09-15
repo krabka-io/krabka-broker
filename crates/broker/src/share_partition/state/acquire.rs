@@ -30,11 +30,7 @@ impl AcquisitionState {
     /// waiting one. The caller bounds how far it goes, because a deferred run
     /// is not in flight and so does not spend the in-flight budget itself.
     pub fn materialize(&mut self, hwm: Offset, max_inflight: i32) {
-        let has_available = self
-            .batches
-            .iter()
-            .any(|b| b.state == RecordState::Available);
-        if has_available || self.end_offset >= hwm {
+        if self.has_available() || self.end_offset >= hwm {
             return;
         }
         let max_inflight = i64::from(max_inflight.max(1));
@@ -54,13 +50,22 @@ impl AcquisitionState {
         self.coalesce();
     }
 
+    /// True when the window holds an `Available` record.
+    #[must_use]
+    pub fn has_available(&self) -> bool {
+        self.batches
+            .iter()
+            .any(|b| b.state == RecordState::Available)
+    }
+
     /// Archives an internal log offset range so it can never be delivered to
     /// a share consumer.
     ///
     /// Transaction control batches occupy offsets in the partition log but
     /// are broker metadata, not user records. The `ShareFetch` handler calls
     /// this after materialization for every control-batch range in the live
-    /// window.
+    /// window. Under `read_committed` it also calls it for the data batches
+    /// of aborted transactions.
     pub fn archive_internal(&mut self, first: Offset, last: Offset) {
         if first > last {
             return;

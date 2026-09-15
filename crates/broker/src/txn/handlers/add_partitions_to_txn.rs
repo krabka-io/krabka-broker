@@ -11,14 +11,22 @@
 //! producer client ever sends. When a v4+ request carries more than one
 //! transaction entry, the handler processes them all in sequence.
 //!
-//! ## ACL preamble
+//! ## Authorization
 //!
-//! For each transaction in the request:
-//! * `Write` on `TransactionalId(tid)`. On a deny, every topic row in that
-//!   transaction's results emits `TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53)`
-//!   on every partition.
-//! * For each topic, `Write` on `Topic(name)`. On a deny, that topic's
-//!   partition rows emit `TOPIC_AUTHORIZATION_FAILED (29)`.
+//! The checks are Kafka's `KafkaApis.handleAddPartitionsToTxnRequest`:
+//! * v4 and later come from brokers. The whole request needs `ClusterAction`
+//!   on the cluster, and a deny answers a top-level
+//!   `CLUSTER_AUTHORIZATION_FAILED (31)`. No transactional id or topic ACL is
+//!   checked.
+//! * v0 to v3 come from clients. `Write` on `TransactionalId(tid)`, else every
+//!   partition answers `TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53)`. Then
+//!   `Write` on each non-internal topic. An internal topic is never
+//!   authorized.
+//! * For every version, a partition is `TOPIC_AUTHORIZATION_FAILED (29)` when
+//!   its topic is not authorized, else `UNKNOWN_TOPIC_OR_PARTITION (3)` when
+//!   the metadata image has no such partition. Any such partition fails the
+//!   whole transaction: nothing is added, and every other partition answers
+//!   `OPERATION_NOT_ATTEMPTED (55)`.
 //!
 //! ## Write-freeze gate
 //!
@@ -46,6 +54,8 @@ mod wire;
 mod write_freeze;
 
 #[cfg(test)]
+mod authorization_tests;
+#[cfg(test)]
 mod test_support;
 
 use self::versions::{HandlerDependencies, handle_v3, handle_v4};
@@ -71,6 +81,20 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = AddPartitionsToTxnRequest::decode(&mut cur, version)?;
 
+    // Versions 4 and later come only from brokers. A deny is
+    // `AddPartitionsToTxnRequest.getErrorResponse`: the top-level error code.
+    if version >= 4
+        && crate::handlers::cluster_action_denied(authorizer, &controller.current_image(), ctx)
+    {
+        return wire::encode_response(
+            &krabka_protocol::owned::add_partitions_to_txn_response::AddPartitionsToTxnResponse {
+                error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            },
+            version,
+        );
+    }
+
     // Refresh leader-partition view from the current metadata image
     // before checking coordinator-ness, to avoid a race.
     let image = controller.current_image();
@@ -84,6 +108,7 @@ pub(crate) async fn handle(
         authorizer,
         principal: ctx.principal,
         peer: ctx.peer,
+        config: &broker.config,
     };
     if version >= 4 {
         handle_v4(&dependencies, version, &req).await

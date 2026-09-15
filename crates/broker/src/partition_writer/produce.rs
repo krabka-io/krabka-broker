@@ -70,6 +70,19 @@ pub(super) async fn handle_produce(
         datas.push(data);
     }
 
+    // A transaction marker adds a complete transaction that holds the last
+    // stable offset until the high watermark passes the marker. Release the
+    // ones the high watermark already passed before the group appends, so the
+    // set stays bounded on a partition that no reader fetches from.
+    let high_watermark = if datas
+        .iter()
+        .any(|data| data.control_producer_id().is_some())
+    {
+        Some(replica_state.lock().await.hw)
+    } else {
+        None
+    };
+
     let append_result = if wal.is_some() {
         let Some(sequencer) = sequencer else {
             for ack in acks {
@@ -82,7 +95,9 @@ pub(super) async fn handle_produce(
         };
         let count = datas.iter().map(ProduceData::record_count).sum();
         match sequencer.assign(identity.0, identity.1, count).await {
-            Ok(base) => run_produce_append_batch_at(Arc::clone(log), base, datas).await,
+            Ok(base) => {
+                run_produce_append_batch_at(Arc::clone(log), base, high_watermark, datas).await
+            }
             Err(error) => {
                 for ack in acks {
                     let _ = ack.send(Err(storage_failure_error(
@@ -94,7 +109,7 @@ pub(super) async fn handle_produce(
             }
         }
     } else {
-        run_produce_append_batch(Arc::clone(log), datas).await
+        run_produce_append_batch(Arc::clone(log), high_watermark, datas).await
     };
     let (results, leo, control_entries) = match append_result {
         Ok(value) => value,

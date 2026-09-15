@@ -83,16 +83,32 @@ pub(crate) fn scheduled_partition(
     leader: u64,
     clock: &Arc<dyn WallClock>,
 ) -> Arc<Partition> {
-    let partition_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);
-    std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
     let config = LogConfig {
         delivery_policy: policy,
         ..LogConfig::default()
     };
+    let batches = activations
+        .iter()
+        .map(|activation_ms| batch_at(*activation_ms));
+    partition_with_batches(dir, topic, config, batches, leader, clock)
+}
+
+/// A partition over a log with `config` that holds `batches`, registered
+/// under `topic` with this broker as its leader. The high watermark is the
+/// log end offset.
+pub(crate) fn partition_with_batches(
+    dir: &tempfile::TempDir,
+    topic: &str,
+    config: LogConfig,
+    batches: impl IntoIterator<Item = RecordBatch>,
+    leader: u64,
+    clock: &Arc<dyn WallClock>,
+) -> Arc<Partition> {
+    let partition_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);
+    std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
     let mut log = Log::open(&partition_dir, config).expect("open the log");
-    for activation_ms in activations {
-        log.append(&mut batch_at(*activation_ms))
-            .expect("append a scheduled batch");
+    for mut batch in batches {
+        log.append(&mut batch).expect("append a batch");
     }
 
     // A single-replica leader has acknowledged every record it holds the moment

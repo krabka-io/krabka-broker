@@ -37,7 +37,9 @@ impl SharePartitionLeaderManager {
                     let mut st = cell.lock().await;
                     st.expire_locks(now);
                     if st.dirty {
-                        mgr.persist_if_dirty(&group, topic_id, partition, &mut st)
+                        // A failed write keeps the state dirty for the next tick.
+                        let _ = mgr
+                            .persist_if_dirty(&group, topic_id, partition, Some(&cell), &mut st)
                             .await;
                     }
                 }

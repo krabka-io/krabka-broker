@@ -2,7 +2,7 @@
 //! satisfies so that the real-log binary compiles the trait without also
 //! carrying the fake's implementation in the same file.
 
-use krabka_raft::kraft::types::{Epoch, LogView};
+use krabka_raft::kraft::types::{Epoch, LogOffsetMetadata, LogView};
 
 use super::node_log::SimNodeLog;
 
@@ -27,19 +27,8 @@ impl LogView for SimLog {
         self.epochs.last().copied().unwrap_or(0)
     }
 
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
-        // Unknown epoch (strictly newer than anything we hold).
-        if epoch > self.last_epoch() {
-            return None;
-        }
-        // The end offset for `epoch` is the offset of the first record with a
-        // strictly greater epoch, or the log end if no such record exists.
-        for (i, &e) in self.epochs.iter().enumerate() {
-            if e > epoch {
-                return Some(i64::try_from(i).expect("offset fits in i64"));
-            }
-        }
-        Some(self.end_offset())
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
+        LogOffsetMetadata::end_of_epoch_in(&self.epochs, epoch)
     }
 }
 
