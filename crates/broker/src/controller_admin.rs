@@ -252,7 +252,8 @@ async fn invoke_registered_handler(
     })?;
     match entry.kind() {
         // A plain handler takes no session at all. `AssignReplicasToDirs` (73)
-        // is the one key that reaches it, straight off the listener.
+        // is the one key that reaches it, straight off the listener, which
+        // checks `ClusterAction` for it before it routes the request here.
         // `AllocateProducerIds` (67), which a JVM broker forwards in an
         // `Envelope`, is a context dispatch: its handler checks `ClusterAction`
         // for the principal that the envelope names.

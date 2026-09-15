@@ -7,6 +7,7 @@ use krabka_protocol::{
     Decode as _, Encode as _,
     owned::{
         add_raft_voter_response::AddRaftVoterResponse,
+        assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
         begin_quorum_epoch_response::BeginQuorumEpochResponse,
         controller_registration_response::ControllerRegistrationResponse,
         describe_cluster_request::DescribeClusterRequest,
@@ -69,6 +70,7 @@ fn each_controller_api_needs_the_kafka_operation() {
         ),
         ("ControllerRegistration", 70, Some(ClusterAction)),
         ("UpdateRaftVoter", 82, Some(ClusterAction)),
+        ("AssignReplicasToDirs", 73, Some(ClusterAction)),
         ("SubmitChange", API_KEY_SUBMIT_CHANGE, Some(ClusterAction)),
         ("MetadataFetch", API_KEY_METADATA_FETCH, Some(ClusterAction)),
         (
@@ -97,6 +99,7 @@ enum Refusal {
     Fetch(FetchResponse),
     Vote(VoteResponse),
     BeginQuorumEpoch(BeginQuorumEpochResponse),
+    AssignReplicasToDirs(AssignReplicasToDirsResponse),
     EndQuorumEpoch(EndQuorumEpochResponse),
     FetchSnapshot(FetchSnapshotResponse),
     ControllerRegistration(ControllerRegistrationResponse),
@@ -123,6 +126,9 @@ fn decode(api: i16, version: i16, bytes: &[u8]) -> Refusal {
         api_key::FETCH_SNAPSHOT => {
             Refusal::FetchSnapshot(FetchSnapshotResponse::decode(&mut cursor, version).unwrap())
         }
+        73 => Refusal::AssignReplicasToDirs(
+            AssignReplicasToDirsResponse::decode(&mut cursor, version).unwrap(),
+        ),
         70 => Refusal::ControllerRegistration(
             ControllerRegistrationResponse::decode(&mut cursor, version).unwrap(),
         ),
@@ -258,6 +264,16 @@ fn each_refusal_is_the_kafka_error_response_of_its_api() {
             1,
             Bytes::new(),
             Refusal::FetchSnapshot(FetchSnapshotResponse {
+                error_code: 31,
+                ..Default::default()
+            }),
+        ),
+        (
+            "AssignReplicasToDirs",
+            73,
+            0,
+            Bytes::new(),
+            Refusal::AssignReplicasToDirs(AssignReplicasToDirsResponse {
                 error_code: 31,
                 ..Default::default()
             }),

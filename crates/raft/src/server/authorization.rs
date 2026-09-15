@@ -7,8 +7,9 @@
 //! itself, and the refusal body of each one.
 //!
 //! The apis that the KIP-919 Admin router sends to a broker handler are not
-//! in the table: each of those handlers checks its own operation. `ApiVersions`
-//! needs no grant.
+//! in the table: each of those handlers checks its own operation. The
+//! exception is `AssignReplicasToDirs`, whose broker handler takes no
+//! principal, so the table holds it. `ApiVersions` needs no grant.
 
 use bytes::{Bytes, BytesMut};
 use krabka_protocol::{Decode, Encode, owned};
@@ -42,8 +43,9 @@ const FETCH_TOP_LEVEL_ERROR_ONLY_VERSION: i16 = 13;
 ///
 /// The operations are Kafka's, from `ControllerApis`: `handleFetch`,
 /// `handleFetchSnapshot`, `handleVote`, `handleBeginQuorumEpoch`,
-/// `handleEndQuorumEpoch`, `handleControllerRegistration` and
-/// `handleUpdateRaftVoter` need `CLUSTER_ACTION`. `handleAddRaftVoter`, `handleRemoveRaftVoter` and
+/// `handleEndQuorumEpoch`, `handleControllerRegistration`,
+/// `handleUpdateRaftVoter` and `handleAssignReplicasToDirs` need
+/// `CLUSTER_ACTION`. `handleAddRaftVoter`, `handleRemoveRaftVoter` and
 /// `handleDescribeCluster` need `ALTER`. `handleDescribeQuorum` needs
 /// `DESCRIBE`. The krabka-private metadata apis have no Kafka counterpart.
 /// They read or write the metadata log for another node, so they need
@@ -57,6 +59,7 @@ pub(super) const fn required_operation(api_key: i16) -> Option<ClusterOperation>
         | api_key::FETCH_SNAPSHOT
         | owned::controller_registration_request::API_KEY
         | owned::update_raft_voter_request::API_KEY
+        | owned::assign_replicas_to_dirs_request::API_KEY
         | API_KEY_SUBMIT_CHANGE
         | API_KEY_METADATA_FETCH
         | API_KEY_DELEGATION_TOKEN_MUTATION => Some(ClusterOperation::ClusterAction),
@@ -107,6 +110,13 @@ pub(super) fn refusal(api_key: i16, version: i16, body: &[u8]) -> Result<Bytes, 
         }
         api_key::FETCH_SNAPSHOT => {
             owned::fetch_snapshot_response::FetchSnapshotResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            }
+            .encode(&mut out, version)?;
+        }
+        owned::assign_replicas_to_dirs_request::API_KEY => {
+            owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse {
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 ..Default::default()
             }
