@@ -305,10 +305,14 @@ async fn trim_one(
     // internal topic deletes committed offsets, transaction state or share
     // state, and a trim of krabka's own internal topics deletes broker state,
     // so both sets are refused.
-    if crate::internal_topics::is_internal_topic(&env.broker.config, topic)
-        && env.image.partition(topic, index).is_some()
-    {
-        return refused(codes::INVALID_TOPIC_EXCEPTION);
+    // The partition registry is updated apart from this image, so an internal
+    // partition the image lacks never falls through to it.
+    if crate::internal_topics::is_internal_topic(&env.broker.config, topic) {
+        return refused(if env.image.partition(topic, index).is_some() {
+            codes::INVALID_TOPIC_EXCEPTION
+        } else {
+            codes::UNKNOWN_TOPIC_OR_PARTITION
+        });
     }
     let part_opt = env.partitions.get(topic, krabka_ids::PartitionIndex(index));
     let Some(part) = part_opt else {

@@ -521,5 +521,26 @@ async fn an_internal_topic_refuses_a_trim() {
         );
     }
 
+    // A partition of an internal topic that the metadata does not hold is
+    // unknown, as `KafkaApis` answers it before the internal-topic check.
+    let missing = 10_000;
+    let resp = drive(
+        &broker,
+        &request(
+            crate::coordinator::bootstrap::OFFSETS_TOPIC,
+            &[(missing, -1)],
+        ),
+        &admin,
+        &peer,
+    )
+    .await;
+    check!(
+        resp.topics[0].partitions
+            == vec![error_partition_result(
+                missing,
+                codes::UNKNOWN_TOPIC_OR_PARTITION
+            )]
+    );
+
     broker_handle.shutdown().await;
 }
