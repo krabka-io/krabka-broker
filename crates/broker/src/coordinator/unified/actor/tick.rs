@@ -91,7 +91,11 @@ async fn handle_session_tick(
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), crate::error::BrokerError> {
-    let evicted = state.evict_expired(Instant::now(), config.session_timeout);
+    let now = Instant::now();
+    let mut evicted = state.evict_expired(now, config.session_timeout);
+    // KIP-848: a member that did not revoke its partitions within its
+    // rebalance timeout is fenced like a member whose session expired.
+    evicted.extend(state.fence_rebalance_timeouts(now));
     if evicted.is_empty() {
         return Ok(());
     }
@@ -221,6 +225,138 @@ mod tests {
             state.group_epoch == epoch_before + 1,
             "a single eviction must advance the group epoch by exactly 1"
         );
+    }
+
+    /// KIP-848: Kafka fences a member that does not revoke its partitions
+    /// within its rebalance timeout (`scheduleConsumerGroupRebalanceTimeout`),
+    /// even when it keeps heartbeating. The fence frees the partitions for
+    /// their new owner.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_member_that_misses_its_rebalance_timeout_is_fenced() {
+        use std::collections::HashMap;
+
+        use krabka_protocol::{
+            owned::consumer_group_heartbeat_request::TopicPartitions, primitives::uuid::Uuid,
+        };
+
+        use crate::coordinator::unified::{
+            actor::{step_heartbeat, test_support::StaticMetadata},
+            reconciler::ReconcileInput,
+        };
+
+        struct Row {
+            name: &'static str,
+            rebalance_timeout_ms: i32,
+            /// The second heartbeat of m1 revokes the partition it lost.
+            revokes: bool,
+            m1_present_after: bool,
+            m2_partitions_after: usize,
+        }
+        let rows = [
+            Row {
+                name: "heartbeats but never revokes",
+                rebalance_timeout_ms: 100,
+                revokes: false,
+                m1_present_after: false,
+                m2_partitions_after: 2,
+            },
+            Row {
+                name: "revokes before the timeout",
+                rebalance_timeout_ms: 100,
+                revokes: true,
+                m1_present_after: true,
+                m2_partitions_after: 1,
+            },
+            Row {
+                name: "never revokes, timeout not reached",
+                rebalance_timeout_ms: 600_000,
+                revokes: false,
+                m1_present_after: true,
+                m2_partitions_after: 0,
+            },
+        ];
+
+        let topic = Uuid([42; 16]);
+        let metadata = StaticMetadata {
+            input: ReconcileInput {
+                topic_id_by_name: HashMap::from([("t".to_string(), topic)]),
+                partitions_per_topic: HashMap::from([(topic, 2)]),
+                ..Default::default()
+            },
+        };
+        let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
+        let owned = |partitions: Vec<i32>| {
+            Some(vec![TopicPartitions {
+                topic_id: topic,
+                partitions,
+                ..Default::default()
+            }])
+        };
+
+        for row in rows {
+            let (coord, log) = make_coordinator();
+            let config = NextGenConfig::default();
+            let mut state = GroupState::new("g");
+            // Every heartbeat happened a second ago, so a 100 ms timeout armed
+            // by them has fired when the tick runs, and a session has not.
+            let earlier = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+            let heartbeat =
+                |state: &mut GroupState, member_id: &str, partitions: Option<Vec<i32>>| {
+                    let member_epoch = state.members.get(member_id).map_or(0, |m| m.member_epoch);
+                    step_heartbeat(
+                        state,
+                        &config,
+                        &metadata,
+                        &ConsumerGroupHeartbeatRequest {
+                            group_id: "g".into(),
+                            member_id: member_id.into(),
+                            member_epoch,
+                            subscribed_topic_names: Some(vec!["t".into()]),
+                            rebalance_timeout_ms: row.rebalance_timeout_ms,
+                            topic_partitions: partitions.and_then(owned),
+                            ..Default::default()
+                        },
+                        client,
+                        earlier,
+                    )
+                    .response
+                };
+
+            heartbeat(&mut state, "m1", Some(vec![]));
+            heartbeat(&mut state, "m1", Some(vec![0, 1]));
+            heartbeat(&mut state, "m2", Some(vec![]));
+            // m1 learns that it must give up one partition, and does not.
+            heartbeat(&mut state, "m1", Some(vec![0, 1]));
+            let kept: Vec<i32> = state.members["m1"]
+                .assigned_partitions
+                .get(&topic)
+                .cloned()
+                .unwrap_or_default();
+            check!(kept.len() == 1, "{}", row.name);
+            let second = if row.revokes { kept } else { vec![0, 1] };
+            heartbeat(&mut state, "m1", Some(second));
+
+            handle_session_tick(&mut state, &config, &metadata, &*log, &coord)
+                .await
+                .expect("tick");
+
+            check!(
+                state.members.contains_key("m1") == row.m1_present_after,
+                "{}",
+                row.name
+            );
+            let response = heartbeat(&mut state, "m2", None);
+            let m2_partitions: usize = response
+                .assignment
+                .map(|a| {
+                    a.topic_partitions
+                        .iter()
+                        .map(|tp| tp.partitions.len())
+                        .sum()
+                })
+                .unwrap_or_default();
+            check!(m2_partitions == row.m2_partitions_after, "{}", row.name);
+        }
     }
 
     /// KIP-848 live migration: the tick must dispatch on the LIVE

@@ -207,6 +207,7 @@ pub(crate) fn step_heartbeat(
         // partitions, withholds those still held by others) before responding.
         let owned = reported_owned(req);
         state.reconcile_member(&new_member_id, &owned);
+        state.track_rebalance_timeout(&new_member_id, now);
         let pending =
             snapshot_pending_after_change(state, std::slice::from_ref(&new_member_id), true);
         let response = build_assignment_resp(state, &new_member_id, config);
@@ -239,6 +240,7 @@ pub(crate) fn step_heartbeat(
             };
         }
     };
+    state.track_rebalance_timeout(&req.member_id, now);
     let pending = if any_change {
         snapshot_pending_after_change(
             state,
