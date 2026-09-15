@@ -43,6 +43,7 @@ pub(crate) async fn start_stretch_cluster() -> Vec<(BrokerHandle, BrokerConfig, 
             cfg.rack = Some(SITES[i].to_string());
             cfg.stretch = Some(stretch_profile());
             cfg.default_min_insync_replicas = 2;
+            cfg.default_replication_factor = 3;
             cfg.replica_selector = ReplicaSelectorKind::RackAware;
             if SITES[i] == SITE_C {
                 cfg.roles.push(NodeRole::Witness);
