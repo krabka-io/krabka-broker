@@ -11,7 +11,7 @@ use krabka_units::convert::ByteSizeExt as _;
 use tokio::sync::Notify;
 
 use super::{
-    plan::{PendingRead, apply_epoch_checks},
+    plan::{PendingRead, ReadRole, apply_epoch_checks, required_leader},
     read::{ReadRequest, do_read},
     remote::try_remote_read,
     request::EffectivePartition,
@@ -265,7 +265,17 @@ fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
             &read.topic_name,
             read.partition_index,
             &request,
-            &part,
+            ReadRole {
+                partition: &part,
+                required_leader: required_leader(
+                    read.fetch_only_leader,
+                    broker.config.node_id,
+                    &part,
+                ),
+                // Kafka's `DelayedFetch.tryComplete` checks the leader again
+                // and does not check the replica id again.
+                assigned_follower: true,
+            },
             &mut fresh,
         ) {
             read.out = fresh;
@@ -486,6 +496,7 @@ mod tests {
             max_bytes: i32::try_from(flushed.len()).expect("small run"),
             read_committed: false,
             is_follower_fetch: false,
+            fetch_only_leader: false,
             partition: Some(std::sync::Arc::clone(&part)),
             out: super::PartitionData {
                 error_code: crate::codes::OFFSET_OUT_OF_RANGE,
@@ -539,6 +550,9 @@ mod tests {
             broker.producer_state.clone(),
             false,
         );
+        // A follower fetch reads only from the leader.
+        part.install_replication_target(None, broker.config.node_id.0, 0)
+            .await;
         let request = super::EffectivePartition {
             partition: 0,
             current_leader_epoch: 0,
@@ -609,6 +623,9 @@ mod tests {
             broker.producer_state.clone(),
             false,
         );
+        // A follower fetch reads only from the leader.
+        part.install_replication_target(None, broker.config.node_id.0, 0)
+            .await;
         let request = super::EffectivePartition {
             partition: 0,
             current_leader_epoch: 0,
@@ -712,6 +729,9 @@ mod tests {
             broker.producer_state.clone(),
             false,
         );
+        // A follower fetch reads only from the leader.
+        part.install_replication_target(None, broker.config.node_id.0, 0)
+            .await;
 
         // One batch's worth of bytes, so the floor can be set between two
         // appends and three.
@@ -792,6 +812,9 @@ mod tests {
             broker.producer_state.clone(),
             false,
         );
+        // A follower fetch reads only from the leader.
+        part.install_replication_target(None, broker.config.node_id.0, 0)
+            .await;
 
         let request = super::EffectivePartition {
             partition: 0,
