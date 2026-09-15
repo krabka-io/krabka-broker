@@ -59,7 +59,12 @@ pub(super) async fn delete_group(
                 "share group tombstone append failed",
             );
             DeleteGroupError::Internal
-        })
+        })?;
+    // The actor clears the seeds while it still owns the group, so a group
+    // that a later heartbeat creates with the same id starts empty.
+    coordinator.share_seeds.remove(&state.group_id);
+    coordinator.share_seeds_cache.remove(&state.group_id);
+    Ok(())
 }
 
 /// Deletes the share state of every initialized partition of the group.
@@ -298,5 +303,46 @@ mod tests {
                 .collect();
             check!(written == appended, "row {index}");
         }
+    }
+
+    /// A share actor that stopped after a log-write failure leaves a closed
+    /// handle and a cached seed. `DeleteGroups` respawns the actor from the
+    /// seed and deletes the group, and the seeds are gone afterwards.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_respawns_a_stopped_share_actor() {
+        let (coordinator, log) = make_coord_with_log();
+        coordinator.mark_share("sg");
+        coordinator.update_share_cache("sg", seed(0, &[]));
+        let handle = coordinator.get_or_create_share("sg");
+        let (stopped_tx, stopped_rx) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(ShareGroupActorMessage::Shutdown(stopped_tx))
+            .await
+            .expect("stop the share actor");
+        stopped_rx.await.expect("the share actor stopped");
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle.tx.closed())
+            .await
+            .expect("the stopped actor closes its mailbox");
+
+        let result = coordinator.delete_group("sg").await;
+
+        let written: Appended = log
+            .batches()
+            .await
+            .into_iter()
+            .flat_map(|batch| batch.records)
+            .map(|record| (record.key, record.value))
+            .collect();
+        let tombstones: Appended = tombstone_batch("sg", 0)
+            .records
+            .into_iter()
+            .map(|record| (record.key, record.value))
+            .collect();
+        check!(result == Ok(()));
+        check!(written == tombstones);
+        check!(!coordinator.share_group_ids().contains(&"sg".to_owned()));
+        check!(coordinator.cached_share_seed("sg") == None);
+        check!(coordinator.group_type("sg") == None);
     }
 }
