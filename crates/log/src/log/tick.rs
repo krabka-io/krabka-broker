@@ -16,7 +16,9 @@ use crate::{error::LogError, retention, segment::Segment};
 
 impl Log {
     /// Periodic maintenance: roll an old active segment, then apply time- and
-    /// size-based retention to sealed segments. The active segment is never
+    /// size-based retention to sealed segments when `cleanup.policy` holds
+    /// `delete`, and delete sealed segments below the log start offset under
+    /// every policy. The active segment is never
     /// deleted, and if every segment would otherwise be evicted we retain at
     /// least one.
     #[instrument(
@@ -58,21 +60,52 @@ impl Log {
         let active_size = self.active.as_ref().map_or(ByteSize::ZERO, Segment::size);
 
         let cfg_guard = self.config.read().unwrap();
-        let time_evict = retention::time_based_evict(&sealed_refs, &cfg_guard, now);
+        // Kafka's `UnifiedLog.deleteOldSegments`: time and size retention run
+        // only when `cleanup.policy` holds `delete`. A compact-only log keeps
+        // every key however old it is, and loses a segment only when the whole
+        // segment is below the log start offset.
+        let retention_applies = cfg_guard.cleanup_policy.contains_delete();
+        let time_evict = if retention_applies {
+            retention::time_based_evict(&sealed_refs, &cfg_guard, now)
+        } else {
+            Vec::new()
+        };
         let total_size: ByteSize = sealed_refs
             .iter()
             .fold(active_size, |total, segment| total + segment.size());
-        let size_debt = cfg_guard.retention_size.map_or(0, |budget| {
-            if total_size > budget {
-                (total_size - budget).bytes_u64()
-            } else {
-                0
-            }
-        });
+        let size_debt = cfg_guard
+            .retention_size
+            .filter(|_| retention_applies)
+            .map_or(0, |budget| {
+                if total_size > budget {
+                    (total_size - budget).bytes_u64()
+                } else {
+                    0
+                }
+            });
         drop(cfg_guard);
 
-        let time_expired: Vec<bool> = (0..self.segments.len())
-            .map(|index| index < time_evict.len())
+        // Kafka's `deleteLogStartOffsetBreachedSegments`: a sealed segment
+        // whose next segment starts at or below the log start offset holds no
+        // record at or above it. Every policy deletes it.
+        let log_start = self.log_start_offset();
+        let active_base = self
+            .active
+            .as_ref()
+            .map_or_else(|| self.log_end_offset(), Segment::base_offset);
+        let start_breached: Vec<bool> = self
+            .segments
+            .iter()
+            .map(Segment::base_offset)
+            .skip(1)
+            .chain(std::iter::once(active_base))
+            .take(self.segments.len())
+            .map(|next_base| next_base <= log_start)
+            .collect();
+        let time_expired: Vec<bool> = start_breached
+            .iter()
+            .enumerate()
+            .map(|(index, breached)| *breached || index < time_evict.len())
             .collect();
         // On an immediate topic the floor is the log end, so every entry is
         // false. On a scheduled topic the first waiting segment stops the
@@ -190,6 +223,102 @@ mod tests {
             log.append(&mut batch).is_ok(),
             "the log still accepts appends"
         );
+    }
+
+    /// Kafka's `UnifiedLog.deleteOldSegments`: `cleanup.policy` decides which
+    /// passes run. Each log has three one-record segments. Offset 0 is older
+    /// than `retention.ms`, and offsets 1 and 2 are fresh. The base offsets
+    /// that survive the tick are compared as a whole.
+    #[test]
+    fn tick_applies_time_and_size_retention_only_when_the_policy_deletes() {
+        use crate::config::CleanupPolicy;
+
+        /// The policy, the retention byte budget, the log start offset set
+        /// before the tick, and the base offsets that survive it.
+        type Case = (CleanupPolicy, Option<ByteSize>, Offset, Vec<Offset>);
+
+        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let all = vec![Offset(0), Offset(1), Offset(2)];
+        let cases: [Case; 8] = [
+            (
+                CleanupPolicy::Delete,
+                None,
+                Offset(0),
+                vec![Offset(1), Offset(2)],
+            ),
+            (CleanupPolicy::Compact, None, Offset(0), all.clone()),
+            (
+                CleanupPolicy::CompactAndDelete,
+                None,
+                Offset(0),
+                vec![Offset(1), Offset(2)],
+            ),
+            // Size retention with a budget of nothing deletes every sealed
+            // segment, but only under a policy that deletes.
+            (
+                CleanupPolicy::Delete,
+                Some(ByteSize::ZERO),
+                Offset(0),
+                vec![Offset(2)],
+            ),
+            (
+                CleanupPolicy::Compact,
+                Some(ByteSize::ZERO),
+                Offset(0),
+                all.clone(),
+            ),
+            (
+                CleanupPolicy::CompactAndDelete,
+                Some(ByteSize::ZERO),
+                Offset(0),
+                vec![Offset(2)],
+            ),
+            // A segment wholly below the log start offset goes under every
+            // policy, and a segment the start offset only reaches stays.
+            (
+                CleanupPolicy::Compact,
+                None,
+                Offset(1),
+                vec![Offset(1), Offset(2)],
+            ),
+            (CleanupPolicy::Compact, None, Offset(2), vec![Offset(2)]),
+        ];
+
+        for (cleanup_policy, retention_size, log_start, expected) in cases {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(
+                dir.path(),
+                LogConfig {
+                    segment_size: bytes(1),
+                    retention: Some(secs(10)),
+                    retention_size,
+                    cleanup_policy,
+                    ..LogConfig::default()
+                },
+            )
+            .unwrap();
+            for timestamp in [1_000, 95_000, 95_000] {
+                let mut batch = sample_batch(1);
+                batch.base_timestamp = timestamp;
+                batch.max_timestamp = timestamp;
+                log.append(&mut batch).unwrap();
+            }
+            log.set_log_start_offset(log_start).unwrap();
+
+            log.tick(now).unwrap();
+
+            let surviving: Vec<Offset> = log
+                .segments
+                .iter()
+                .chain(log.active.as_ref())
+                .filter(|segment| segment.size() > ByteSize::ZERO)
+                .map(Segment::base_offset)
+                .collect();
+            check!(
+                surviving == expected,
+                "{cleanup_policy:?} {retention_size:?} start={log_start:?}"
+            );
+        }
     }
 
     #[test]
