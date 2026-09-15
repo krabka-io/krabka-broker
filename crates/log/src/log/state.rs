@@ -172,6 +172,7 @@ impl Log {
         self.active_txn_index = TxnIndex::open(new_active.txn_index_path())?;
         let stamp_index_path = new_active.stamp_index_path();
         self.pending.clear(); // reset_to is a hard reset (after divergence)
+        self.verification_states.clear();
         self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();

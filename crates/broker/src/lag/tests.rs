@@ -371,6 +371,7 @@ async fn commit_offset(handle: &GroupActorHandle, offset: i64) {
                     metadata: String::new(),
                     commit_timestamp_ms: 1_700_000_000_000,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 },
             )],
             reply,

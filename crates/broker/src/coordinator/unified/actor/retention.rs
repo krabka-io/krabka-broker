@@ -200,7 +200,7 @@ fn group_empty_since_ms(group: &CoordinatorGroup) -> Option<i64> {
 
 /// One `__consumer_offsets` batch: an offset tombstone for each expired key,
 /// then the group's own tombstones when `delete_group_of_kind` is set.
-fn tombstone_batch(
+pub(super) fn tombstone_batch(
     group_id: &str,
     expired: &[(String, i32)],
     delete_group_of_kind: Option<&GroupKind>,

@@ -35,7 +35,9 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// Returns the per-partition error code on a fenced epoch. Returns
-    /// `COORDINATOR_NOT_AVAILABLE` if the persist fails.
+    /// `COORDINATOR_NOT_AVAILABLE` if the persist fails. Returns
+    /// `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR` when the state
+    /// partition of the key is not active on this broker.
     pub(crate) async fn initialize(
         &self,
         group: &str,
@@ -46,6 +48,7 @@ impl ShareCoordinator {
     ) -> Result<(), ShareErrorCode> {
         let map_key = (group.to_string(), topic_id, partition);
         let state_partition = self.state_partition_for(group, &topic_id, partition);
+        let _led = self.active(state_partition).await?;
 
         if let Some(existing) = self.state.get(&map_key) {
             let cur = existing.value().clone();
@@ -95,7 +98,9 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// Returns the per-partition error code on a fenced epoch. Returns
-    /// `COORDINATOR_NOT_AVAILABLE` if the persist fails.
+    /// `COORDINATOR_NOT_AVAILABLE` if the persist fails. Returns
+    /// `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR` when the state
+    /// partition of the key is not active on this broker.
     pub(crate) async fn write(
         &self,
         group: &str,
@@ -109,6 +114,7 @@ impl ShareCoordinator {
         let (start_offset, delivery_complete_count) = progress;
         let map_key = (group.to_string(), topic_id, partition);
         let state_partition = self.state_partition_for(group, &topic_id, partition);
+        let _led = self.active(state_partition).await?;
 
         let entry = self
             .state
@@ -190,34 +196,55 @@ impl ShareCoordinator {
     }
 
     /// Clones the current state for `(group, topic_id, partition)`.
+    ///
+    /// Returns `Ok(None)` when the key has no state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR` when the
+    /// state partition of the key is not active on this broker.
     pub(crate) async fn read(
         &self,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Option<SharePartitionState> {
+    ) -> Result<Option<SharePartitionState>, ShareErrorCode> {
+        let state_partition = self.state_partition_for(group, &topic_id, partition);
+        let _led = self.active(state_partition).await?;
         let map_key = (group.to_string(), topic_id, partition);
-        let handle = self.state.get(&map_key)?.value().clone();
+        let Some(handle) = self.state.get(&map_key).map(|entry| entry.value().clone()) else {
+            return Ok(None);
+        };
         let st = handle.lock().await;
-        Some(st.clone())
+        Ok(Some(st.clone()))
     }
 
     /// Returns `(state_epoch, leader_epoch, start_offset, delivery_complete_count)`.
+    ///
+    /// Returns `Ok(None)` when the key has no state.
+    ///
+    /// # Errors
+    ///
+    /// As [`ShareCoordinator::read`].
     pub(crate) async fn read_summary(
         &self,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Option<ShareStateSummary> {
+    ) -> Result<Option<ShareStateSummary>, ShareErrorCode> {
+        let state_partition = self.state_partition_for(group, &topic_id, partition);
+        let _led = self.active(state_partition).await?;
         let map_key = (group.to_string(), topic_id, partition);
-        let handle = self.state.get(&map_key)?.value().clone();
+        let Some(handle) = self.state.get(&map_key).map(|entry| entry.value().clone()) else {
+            return Ok(None);
+        };
         let st = handle.lock().await;
-        Some((
+        Ok(Some((
             st.state_epoch,
             st.leader_epoch,
             st.start_offset,
             st.delivery_complete_count,
-        ))
+        )))
     }
 
     /// Deletes the share state for `(group, topic_id, partition)`.
@@ -227,7 +254,9 @@ impl ShareCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns `COORDINATOR_NOT_AVAILABLE` if the tombstone persist fails.
+    /// Returns `COORDINATOR_NOT_AVAILABLE` if the tombstone persist fails, and
+    /// the codes of [`ShareCoordinator::read`] when the state partition is not
+    /// active.
     pub(crate) async fn delete(
         &self,
         group: &str,
@@ -236,6 +265,7 @@ impl ShareCoordinator {
     ) -> Result<(), ShareErrorCode> {
         let map_key = (group.to_string(), topic_id, partition);
         let state_partition = self.state_partition_for(group, &topic_id, partition);
+        let _led = self.active(state_partition).await?;
         let key = ShareStateKey {
             record_type: KEY_SHARE_SNAPSHOT,
             group_id: group.to_string(),
@@ -270,10 +300,14 @@ mod tests {
 
         coord.initialize("g", tid, 0, 5, Offset(100)).await.unwrap();
 
-        let st = coord.read("g", tid, 0).await.expect("present");
+        let st = coord.read("g", tid, 0).await.unwrap().expect("present");
         assert!(st.state_epoch == 5);
         assert!(st.start_offset == 100);
-        let summary = coord.read_summary("g", tid, 0).await.expect("present");
+        let summary = coord
+            .read_summary("g", tid, 0)
+            .await
+            .unwrap()
+            .expect("present");
         assert!(summary == (5, 0, Offset(100), 0));
     }
 
@@ -305,14 +339,18 @@ mod tests {
             .await
             .unwrap();
 
-        let st = coord.read("g", tid, 0).await.expect("present");
+        let st = coord.read("g", tid, 0).await.unwrap().expect("present");
         check!(st.state_epoch == 1);
         check!(st.leader_epoch == 2);
         check!(st.start_offset == 50);
         check!(st.delivery_complete_count == 7);
         check!(st.state_batches == vec![batch(50, 59)]);
 
-        let summary = coord.read_summary("g", tid, 0).await.expect("present");
+        let summary = coord
+            .read_summary("g", tid, 0)
+            .await
+            .unwrap()
+            .expect("present");
         assert!(summary == (1, 2, Offset(50), 7));
     }
 
@@ -358,8 +396,8 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([8; 16]);
 
         coord.initialize("g", tid, 0, 1, Offset(0)).await.unwrap();
-        assert!(coord.read("g", tid, 0).await.is_some());
+        assert!(coord.read("g", tid, 0).await.unwrap().is_some());
         coord.delete("g", tid, 0).await.unwrap();
-        assert!(coord.read("g", tid, 0).await.is_none());
+        assert!(coord.read("g", tid, 0).await.unwrap().is_none());
     }
 }

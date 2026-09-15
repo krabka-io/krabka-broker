@@ -36,6 +36,7 @@ pub(crate) mod fanout_gate;
 mod markers;
 mod persistence;
 mod pid_index;
+pub(crate) mod produce_verification;
 mod reaper;
 mod registration;
 
@@ -187,6 +188,7 @@ impl TxnCoordinator {
 
     /// Returns the `transactional_id` that `producer_id` was registered
     /// under, or `None` if the pid is unknown.
+    #[cfg(test)]
     pub(crate) fn tid_for_pid(&self, pid: ProducerId) -> Option<String> {
         self.pid_to_tid.get(&pid).map(|e| e.value().clone())
     }

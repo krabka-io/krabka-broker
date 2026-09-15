@@ -153,7 +153,14 @@ mod tests {
         {
             let mut state = cell.lock().await;
             state.materialize(Offset(1), 100);
-            let acquired = state.acquire("m1", 1, i32::MAX, std::time::Instant::now(), LOCK, 5);
+            let acquired = state.acquire(
+                "m1",
+                1,
+                krabka_log::Offset(i64::MAX),
+                std::time::Instant::now(),
+                LOCK,
+                5,
+            );
             assert!(acquired.len() == 1);
         }
         let partitions = maplit::hashset! {(tid, 0)};
@@ -172,7 +179,14 @@ mod tests {
         mgr.release_connection("connection-1").await;
 
         let mut state = cell.lock().await;
-        let redelivered = state.acquire("m2", 1, i32::MAX, std::time::Instant::now(), LOCK, 5);
+        let redelivered = state.acquire(
+            "m2",
+            1,
+            krabka_log::Offset(i64::MAX),
+            std::time::Instant::now(),
+            LOCK,
+            5,
+        );
         assert!(redelivered.len() == 1);
         assert!(redelivered[0].delivery_count == 2);
     }

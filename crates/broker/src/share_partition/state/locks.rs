@@ -117,12 +117,12 @@ mod tests {
     fn session_release_makes_only_members_records_available() {
         let mut state = AcquisitionState::new(Offset(0));
         state.materialize(Offset(4), 100);
-        let _ = state.acquire("m1", 2, i32::MAX, t0(), LOCK, 5);
-        let _ = state.acquire("m2", 2, i32::MAX, t0(), LOCK, 5);
+        let _ = state.acquire("m1", 2, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        let _ = state.acquire("m2", 2, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
 
         state.release_member("m1");
 
-        let reacquired = state.acquire("m3", 10, i32::MAX, t0(), LOCK, 5);
+        let reacquired = state.acquire("m3", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(reacquired.len() == 1);
         assert!(reacquired[0].first == Offset(0));
         assert!(reacquired[0].last == Offset(1));
@@ -133,13 +133,20 @@ mod tests {
     fn expire_locks_reverts_to_available() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(4), 100);
-        let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         // Before expiry: re-acquire finds nothing (all Acquired).
-        let none = s.acquire("m2", 10, i32::MAX, t0(), LOCK, 5);
+        let none = s.acquire("m2", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(none.is_empty());
         s.expire_locks(t0() + Duration::from_secs(31));
         // Now another member can acquire; redelivery bumps the count.
-        let acq = s.acquire("m2", 10, i32::MAX, t0() + Duration::from_secs(31), LOCK, 5);
+        let acq = s.acquire(
+            "m2",
+            10,
+            krabka_log::Offset(i64::MAX),
+            t0() + Duration::from_secs(31),
+            LOCK,
+            5,
+        );
         assert!(
             acq == vec![AcquiredRange {
                 first: Offset(0),
@@ -160,7 +167,7 @@ mod tests {
 
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(4), 100);
-        let acq = s.acquire("m1", 10, i32::MAX, t0, short, 5);
+        let acq = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0, short, 5);
         assert!(acq.len() == 1);
         let original_deadline = t0 + short;
 
@@ -171,7 +178,14 @@ mod tests {
         // Sweeping at the original deadline must NOT release the renewed lock.
         s.expire_locks(original_deadline);
         // Still Acquired by m1 -> a different member acquires nothing.
-        let none = s.acquire("m2", 10, i32::MAX, original_deadline, short, 5);
+        let none = s.acquire(
+            "m2",
+            10,
+            krabka_log::Offset(i64::MAX),
+            original_deadline,
+            short,
+            5,
+        );
         assert!(none.is_empty());
         // And m1 can still acknowledge it (proves it stayed Acquired by m1).
         s.acknowledge(
@@ -190,7 +204,7 @@ mod tests {
         let t0 = Instant::now();
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(3), 100);
-        let _ = s.acquire("m1", 10, i32::MAX, t0, LOCK, 5);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0, LOCK, 5);
         // Wrong member.
         let err = s.renew("m2", Offset(0), Offset(2), t0, LOCK);
         assert!(err == Err(crate::codes::INVALID_RECORD_STATE));

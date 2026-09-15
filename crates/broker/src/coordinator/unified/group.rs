@@ -94,6 +94,14 @@ pub struct CoordinatorGroup {
 #[derive(Debug, Clone)]
 struct ProducerTxnOffsets {
     keys: HashSet<(String, i32)>,
+    /// Keys a `TxnOffsetCommit` of this producer is about to append, before
+    /// its records are durable and its mark arrives.
+    ///
+    /// `DeleteGroups` tombstones them with the pending keys. Without them a
+    /// delete that runs between the durable append and the mark leaves the
+    /// transactional record untombstoned, and its commit marker brings the
+    /// deleted group back. The mark or a failed append removes them.
+    reserved: HashSet<(String, i32)>,
     /// Offsets-log position of the newest marker resolved for this producer,
     /// or `-1` when no marker has been. Log offsets start at zero, so `-1`
     /// accepts every mark.
@@ -104,6 +112,7 @@ impl Default for ProducerTxnOffsets {
     fn default() -> Self {
         Self {
             keys: HashSet::new(),
+            reserved: HashSet::new(),
             resolved_through: -1,
         }
     }
@@ -258,10 +267,47 @@ impl CoordinatorGroup {
         keys: impl IntoIterator<Item = (String, i32)>,
     ) {
         let entry = self.pending_txn_offsets.entry(producer_id).or_default();
+        let keys: Vec<(String, i32)> = keys.into_iter().collect();
+        for key in &keys {
+            entry.reserved.remove(key);
+        }
         if written_at <= entry.resolved_through {
             return;
         }
         entry.keys.extend(keys);
+    }
+
+    /// Reserves `keys` for a `TxnOffsetCommit` of `producer_id` that is about
+    /// to append them. See [`ProducerTxnOffsets::reserved`].
+    pub fn reserve_txn_offsets(
+        &mut self,
+        producer_id: i64,
+        keys: impl IntoIterator<Item = (String, i32)>,
+    ) {
+        self.pending_txn_offsets
+            .entry(producer_id)
+            .or_default()
+            .reserved
+            .extend(keys);
+    }
+
+    /// Releases the reservation of a `TxnOffsetCommit` whose append failed.
+    pub fn release_txn_offsets(&mut self, producer_id: i64, keys: &[(String, i32)]) {
+        if let Some(entry) = self.pending_txn_offsets.get_mut(&producer_id) {
+            for key in keys {
+                entry.reserved.remove(key);
+            }
+        }
+    }
+
+    /// Every key an unresolved transaction has written or is about to write:
+    /// the pending marks and the reservations. `DeleteGroups` tombstones all
+    /// of them.
+    pub fn unresolved_txn_keys(&self) -> HashSet<(String, i32)> {
+        self.pending_txn_offsets
+            .values()
+            .flat_map(|producer| producer.keys.iter().chain(&producer.reserved).cloned())
+            .collect()
     }
 
     /// Drops every pending mark `producer_id`'s transaction holds, whether its
@@ -273,6 +319,20 @@ impl CoordinatorGroup {
         let entry = self.pending_txn_offsets.entry(producer_id).or_default();
         entry.keys.clear();
         entry.resolved_through = entry.resolved_through.max(resolved_through);
+    }
+
+    /// Removes `keys` from the committed offsets and from every open
+    /// transaction, after their `OffsetCommit` tombstones are durable.
+    ///
+    /// Kafka's `OffsetMetadataManager.replay` does the same for a tombstone:
+    /// it removes the offset and the key's pending transactional offsets.
+    pub fn drop_offsets(&mut self, keys: &[(String, i32)]) {
+        for key in keys {
+            self.committed_offsets.remove(key);
+            for producer in self.pending_txn_offsets.values_mut() {
+                producer.keys.remove(key);
+            }
+        }
     }
 
     /// Kafka's `validateOffsetFetch` for the member fields of an
