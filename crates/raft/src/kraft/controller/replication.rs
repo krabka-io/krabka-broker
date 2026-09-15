@@ -222,13 +222,15 @@ impl Engine {
                 }
             }
             FetchResponseMutation::Truncate => {
-                // Diverged: truncate to the leader's hint. The next fetch
-                // starts at the truncation point.
+                // Diverged: truncate where Kafka's `truncateToEndOffset`
+                // does, which also reads our own end of the hinted epoch. The
+                // next fetch starts at the truncation point.
                 let Some(point) = diverging else { return };
-                if let Err(e) = self.log.truncate_to(Offset(point.offset)) {
+                let truncate_to = point.follower_truncation_offset(&self.log);
+                if let Err(e) = self.log.truncate_to(Offset(truncate_to)) {
                     tracing::error!(?e, "kraft: follower truncate failed");
                 } else {
-                    self.restore_control_state_after_truncation(point.offset);
+                    self.restore_control_state_after_truncation(truncate_to);
                 }
             }
             FetchResponseMutation::Append => {
