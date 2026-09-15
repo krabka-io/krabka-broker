@@ -165,8 +165,8 @@ async fn handle_leave(
         epoch: state.group_epoch,
     });
     flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
-    // Delete state for subscriptions dropped by remaining members. If the
-    // group became empty, preserve its durable cursor for future consumers.
+    // Initialize the partitions that the remaining members gained. The share
+    // state of a dropped partition stays, as in Kafka.
     reconcile_share_state(state, offsets_log, coordinator, now_ms).await;
     Ok(base_resp(0, req.member_epoch, config))
 }
