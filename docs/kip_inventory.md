@@ -103,6 +103,7 @@ its line and its row together.
 - KIP-1142
 - KIP-1155
 - KIP-1186
+- KIP-1222
 - KIP-1242
 - KIP-1263
 - KIP-1319

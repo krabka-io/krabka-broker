@@ -135,10 +135,16 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
     let mut resp = vec![0u8; resp_len as usize];
     stream.read_exact(&mut resp).await.unwrap();
 
-    // Decode to assert no transport error.
+    // Decode to assert no transport error and no partition error.
     let mut cur: &[u8] = &resp[4..]; // skip corr_id
     let _tagged = cur.get_u8(); // v1 header tagged-fields
-    let _decoded = FetchResponse::decode(&mut cur, VERSION).expect("decode FetchResponse");
+    let decoded = FetchResponse::decode(&mut cur, VERSION).expect("decode FetchResponse");
+    // A refused row is small too, so a throttle check on the size alone would
+    // pass for a fetch the leader never served.
+    assert!(
+        decoded.responses[0].partitions[0].error_code == 0,
+        "replica fetch refused: {decoded:?}"
+    );
 
     resp.len()
 }

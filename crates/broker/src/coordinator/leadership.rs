@@ -83,7 +83,13 @@ fn spawn_partition_load(
                         %error,
                         "could not load newly-led group coordinator partition"
                     );
+                    return;
                 }
+                let image = metadata.current_image();
+                super::topic_deletion::after_partition_load(&coordinator, &image, |group_id| {
+                    partition_for_group(&image, group_id) == partition.get()
+                })
+                .await;
                 return;
             }
             tokio::select! {

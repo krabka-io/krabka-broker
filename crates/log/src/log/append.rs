@@ -354,6 +354,13 @@ impl Log {
 
             if !is_barrier {
                 self.update_owned_producer_entry(batch)?;
+                if is_transactional {
+                    self.clear_verification_after_append(
+                        pid,
+                        batch.producer_epoch,
+                        batch.attributes.is_control_batch(),
+                    );
+                }
             }
             Ok(())
         })();

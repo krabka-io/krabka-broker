@@ -21,6 +21,37 @@ pub(crate) enum ProduceBatchError {
 }
 
 impl Partition {
+    /// Start a KIP-890 transaction verification on the log. See
+    /// [`krabka_log::Log::maybe_start_transaction_verification`].
+    ///
+    /// The log mutex can be held by an append that waits on the disk, so the
+    /// call leaves normal async polling the way the writer's appends do:
+    /// `block_in_place` on the multi-thread runtime, and `spawn_blocking`
+    /// elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// Returns the log's refusal for a stale producer epoch.
+    pub(crate) async fn start_transaction_verification(
+        &self,
+        batch: krabka_log::TransactionalBatch,
+        supports_epoch_bump: bool,
+        clock: (i64, i64),
+    ) -> Result<krabka_log::VerificationGuard, krabka_log::TransactionAppendRefusal> {
+        let log = std::sync::Arc::clone(&self.log);
+        let start = move || {
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .maybe_start_transaction_verification(batch, supports_epoch_bump, clock)
+        };
+        match tokio::runtime::Handle::current().runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(start),
+            _ => tokio::task::spawn_blocking(start).await.unwrap_or(Err(
+                krabka_log::TransactionAppendRefusal::InvalidTransactionState,
+            )),
+        }
+    }
+
     /// Push `overrides` through the writer actor so the partition's `Log`
     /// picks up the new `retention.ms`, `retention.bytes`, and
     /// `segment.bytes` on the next retention or roll tick. The caller has
@@ -212,6 +243,7 @@ impl Partition {
             .send(WriterMessage::Produce(ProduceJob {
                 data: ProduceData::Owned(batch),
                 ack: ack_tx,
+                producer_check: None,
             }))
             .await
             .map_err(|_| {
@@ -271,6 +303,7 @@ impl Partition {
                     commit_stamp,
                 },
                 ack: ack_tx,
+                producer_check: None,
             }))
             .await
             .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;
@@ -303,6 +336,7 @@ impl Partition {
             .send(WriterMessage::Produce(ProduceJob {
                 data: ProduceData::OwnedControl(batch),
                 ack: ack_tx,
+                producer_check: None,
             }))
             .await
             .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;

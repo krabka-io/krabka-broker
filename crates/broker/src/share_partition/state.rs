@@ -143,5 +143,16 @@ impl AcquisitionState {
 }
 
 #[cfg(test)]
+impl AcquisitionState {
+    /// Test-only: the state of every offset in the window, in offset order.
+    pub(crate) fn record_states(&self) -> Vec<(i64, RecordState)> {
+        self.batches
+            .iter()
+            .flat_map(|b| (b.first_offset.0..=b.last_offset.0).map(move |offset| (offset, b.state)))
+            .collect()
+    }
+}
+
+#[cfg(test)]
 #[path = "state_model.rs"]
 mod state_model;

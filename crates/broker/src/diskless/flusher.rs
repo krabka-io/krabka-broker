@@ -102,6 +102,7 @@ pub(crate) async fn run(
     let mut reclaimer = Reclaimer::new(RECLAIM_GRACE);
     tokio::select! {
         biased;
+        () = shutdown.cancelled() => return flusher_shut_down(),
         () = &mut projection_unusable => return FlusherExit::ProjectionUnavailable,
         () = reclaimer.sweep(&context) => {}
     }
@@ -114,26 +115,47 @@ pub(crate) async fn run(
     );
     reclaim_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut rotation = 0usize;
+    // Shutdown comes before both tickers, and it also interrupts the tick in
+    // flight. A tick that outlasts the interval leaves the next tick already
+    // due, so a ticker polled first would win every pass and the flusher would
+    // never see shutdown. A flush tick outlasts the interval whenever the
+    // index publish cannot reach a leader, which is exactly what happens while
+    // the rest of the cluster stops. Leaving a tick unfinished is safe: a
+    // flush is built to survive a crash between any two of its steps, and the
+    // durable index frontier moves only when its record is published.
     loop {
         tokio::select! {
             biased;
+            () = shutdown.cancelled() => return flusher_shut_down(),
             () = &mut projection_unusable => {
                 tracing::error!("diskless WAL index projection became unavailable; stopping flusher");
                 return FlusherExit::ProjectionUnavailable;
             }
             _ = ticker.tick() => {
-                if let Err(error) = flush_tick(&context, &config, rotation).await {
+                let flushed = tokio::select! {
+                    biased;
+                    () = shutdown.cancelled() => return flusher_shut_down(),
+                    flushed = flush_tick(&context, &config, rotation) => flushed,
+                };
+                if let Err(error) = flushed {
                     tracing::warn!(%error, "diskless WAL flush failed; retrying");
                 }
                 rotation = rotation.wrapping_add(1);
             }
-            _ = reclaim_ticker.tick() => reclaimer.sweep(&context).await,
-            () = shutdown.cancelled() => {
-                tracing::debug!("diskless WAL flusher shutting down");
-                return FlusherExit::ShutDown;
+            _ = reclaim_ticker.tick() => {
+                tokio::select! {
+                    biased;
+                    () = shutdown.cancelled() => return flusher_shut_down(),
+                    () = reclaimer.sweep(&context) => {}
+                }
             }
         }
     }
+}
+
+fn flusher_shut_down() -> FlusherExit {
+    tracing::debug!("diskless WAL flusher shutting down");
+    FlusherExit::ShutDown
 }
 
 async fn flush_tick(
@@ -1210,6 +1232,97 @@ mod tests {
         assert!(exit == FlusherExit::ShutDown);
         assert!(!ready.load(Ordering::Acquire));
         assert!(object_keys(&store).await.is_empty());
+    }
+
+    /// A flush tick that is slower than the flush interval must not hide
+    /// shutdown from the flusher.
+    ///
+    /// When such a tick ends, the next tick is already due. A loop that polls
+    /// its ticker before shutdown then takes a new tick on every pass, and
+    /// `BrokerHandle::shutdown`, which awaits this task, never returns. A
+    /// broker whose index publish cannot reach a leader is in exactly that
+    /// state while the rest of the cluster stops. The second row is a tick
+    /// that never ends at all: shutdown must not wait for it either.
+    ///
+    /// Every PUT fails after its latency, so no tick moves the frontier and
+    /// each one uploads again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worker_stops_at_shutdown_while_its_flushes_outlast_the_interval() {
+        use krabka_object_store::fault::{
+            FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp,
+        };
+
+        let cases = [
+            (
+                "each flush fails after more than one interval",
+                OpFault::always(FaultKind::Throttled).with_latency(Duration::from_millis(20)),
+                2,
+            ),
+            (
+                "the flush in flight never ends",
+                OpFault::stall(Duration::from_hours(1)),
+                1,
+            ),
+        ];
+        for (case, put_fault, puts_before_shutdown) in cases {
+            let dir = tempdir().unwrap();
+            let partitions = Arc::new(PartitionRegistry::new());
+            partitions.insert(
+                "orders".into(),
+                krabka_ids::PartitionIndex(0),
+                test_partition(dir.path(), "orders", 0, true, NodeId(1)),
+            );
+            let mut image = MetadataImage::new(Uuid::nil());
+            image.apply(&MetadataRecord::V1Topic(TopicRecord {
+                name: "orders".into(),
+                topic_id: Uuid::from_u128(11),
+                partitions: 1,
+                replication_factor: 1,
+            }));
+            let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
+            let store = Arc::new(FaultInjectingStore::new(
+                Arc::new(InMemory::new()),
+                FaultPolicy::none().with(StoreOp::Put, put_fault),
+            ));
+            let index = DisklessIndexLog::start(
+                krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+            )
+            .await
+            .unwrap();
+            let shutdown = CancellationToken::new();
+            let task = tokio::spawn(run(
+                FlusherContext {
+                    partitions,
+                    image_rx,
+                    object_store: Arc::clone(&store) as Arc<dyn ObjectStore>,
+                    index_log: index,
+                    node_id: NodeId(1),
+                    broker_id: 7,
+                    metrics: crate::metrics::BrokerMetrics::new(),
+                    ready: Arc::new(AtomicBool::new(false)),
+                },
+                FlushConfig {
+                    interval: Duration::from_millis(1),
+                    trim_safety_lag: None,
+                    ..FlushConfig::default()
+                },
+                shutdown.clone(),
+            ));
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while store.attempts(StoreOp::Put) < puts_before_shutdown {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{case}: the flusher never uploaded"));
+            shutdown.cancel();
+
+            let exit = tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .map(Result::unwrap);
+            assert!(exit == Ok(FlusherExit::ShutDown), "{case}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

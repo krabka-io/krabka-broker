@@ -18,19 +18,20 @@ use krabka_protocol::owned::common::{
 };
 
 use super::write_freeze::topic_refusal;
-use crate::{codes, txn::state::TopicPartition};
+use crate::txn::state::TopicPartition;
 
-/// KIP-890 `TV_2` verify-only per-partition decision. It gives `NONE (0)` when
-/// the partition is already part of the ongoing transaction, and
-/// `TRANSACTION_ABORTABLE (120)` in every other case. This matches the
-/// verify-only path in cp-kafka 4.0:
-/// `if txnMetadata.topicPartitions.contains(part) NONE else TRANSACTION_ABORTABLE`.
-fn verify_partition_code(entry: &crate::txn::state::TxnEntry, tp: &TopicPartition) -> i16 {
-    if entry.partitions.contains(tp) {
-        codes::NONE
-    } else {
-        codes::TRANSACTION_ABORTABLE
-    }
+/// KIP-890 verify-only per-partition decision. See
+/// [`verification_code`](crate::txn::coordinator::produce_verification::verification_code).
+fn verify_partition_code(
+    entry: &crate::txn::state::TxnEntry,
+    requested: (krabka_log::ProducerId, i16),
+    tp: &TopicPartition,
+) -> i16 {
+    crate::txn::coordinator::produce_verification::verification_code(
+        (entry.producer_id, entry.producer_epoch, entry.state),
+        entry.partitions.contains(tp),
+        requested,
+    )
 }
 
 /// Builds the verify-only response. It has the same shape as
@@ -39,9 +40,12 @@ fn verify_partition_code(entry: &crate::txn::state::TxnEntry, tp: &TopicPartitio
 /// still short-circuits to its refusal on every partition row.
 pub(super) fn verify_partitions(
     entry: &crate::txn::state::TxnEntry,
+    requested: (krabka_log::ProducerId, i16),
     topics: &[AddPartitionsToTxnTopic],
-    denied: &std::collections::HashSet<String>,
-    frozen: &std::collections::HashSet<String>,
+    (denied, frozen): (
+        &std::collections::HashSet<String>,
+        &std::collections::HashSet<String>,
+    ),
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     topics
         .iter()
@@ -56,6 +60,7 @@ pub(super) fn verify_partitions(
                         let row_code = refusal.unwrap_or_else(|| {
                             verify_partition_code(
                                 entry,
+                                requested,
                                 &TopicPartition {
                                     topic: t.name.clone(),
                                     partition: PartitionIndex(p),
@@ -136,9 +141,12 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::txn::{
-        handlers::add_partitions_to_txn::test_support::{topic, topic_result},
-        state::TxnEntry,
+    use crate::{
+        codes,
+        txn::{
+            handlers::add_partitions_to_txn::test_support::{topic, topic_result},
+            state::TxnEntry,
+        },
     };
 
     #[test]
@@ -153,8 +161,9 @@ mod tests {
             topic: "b".into(),
             partition: PartitionIndex(0),
         };
-        assert!(verify_partition_code(&e, &present) == codes::NONE);
-        assert!(verify_partition_code(&e, &absent) == codes::TRANSACTION_ABORTABLE);
+        let identity = (krabka_log::ProducerId(1), 0);
+        assert!(verify_partition_code(&e, identity, &present) == codes::NONE);
+        assert!(verify_partition_code(&e, identity, &absent) == codes::TRANSACTION_ABORTABLE);
     }
 
     #[test]
@@ -170,7 +179,12 @@ mod tests {
         let frozen = maplit::hashset! {"frozen".to_string()};
         let topics = [topics, vec![topic("frozen", &[4])]].concat();
 
-        let rows = verify_partitions(&e, &topics, &denied, &frozen);
+        let rows = verify_partitions(
+            &e,
+            (krabka_log::ProducerId(1), 0),
+            &topics,
+            (&denied, &frozen),
+        );
 
         let expected = vec![
             topic_result(

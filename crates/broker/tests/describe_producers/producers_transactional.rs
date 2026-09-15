@@ -28,6 +28,7 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
     let produce_response = p
         .client
         .send(ProduceRequest {
+            transactional_id: Some("describe-producers-tid".into()),
             acks: -1,
             timeout_ms: 5_000,
             topic_data: vec![TopicProduceData {
@@ -103,6 +104,7 @@ async fn transactional_fields_follow_open_and_completed_transactions() {
     let produce_response = p
         .client
         .send(ProduceRequest {
+            transactional_id: Some("describe-producers-tid".into()),
             acks: -1,
             timeout_ms: 5_000,
             topic_data: vec![TopicProduceData {

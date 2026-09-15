@@ -41,6 +41,11 @@ pub enum BrokerError {
         version: i16,
     },
 
+    /// The log refused a client batch because of the producer's transaction
+    /// state on the partition (KIP-890).
+    #[error("transactional append refused: {0:?}")]
+    TransactionAppend(krabka_log::TransactionAppendRefusal),
+
     /// A produce request arrived at a partition whose writer actor has
     /// exited. This normally happens only at shutdown.
     #[error("partition writer for {topic}-{partition} died")]

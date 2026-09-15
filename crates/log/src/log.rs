@@ -40,6 +40,7 @@ mod timestamp;
 mod transaction;
 mod truncate;
 mod verbatim;
+mod verification;
 
 pub use self::{
     compaction::CompactionContext,
@@ -47,6 +48,7 @@ pub use self::{
     read::{RawRead, ReadOutput},
     tiering::SegmentExport,
     verbatim::VerbatimBatch,
+    verification::{TransactionAppendRefusal, TransactionalBatch, VerificationGuard},
 };
 
 crate::sendfile_cfg! {
@@ -129,6 +131,10 @@ pub struct Log {
     /// applies a commit or abort marker for that `producer_id`.
     pending: HashMap<ProducerId, Offset>,
 
+    /// KIP-890 verification state per producer, from the start of a
+    /// transaction verification to the producer's next transactional append.
+    /// See [`VerificationGuard`].
+    verification_states: HashMap<ProducerId, verification::VerificationState>,
     /// Complete transactions whose marker the high watermark has not passed:
     /// first offset of the transaction → last offset of its marker. They still
     /// hold the last stable offset, as Kafka's `unreplicatedTxns` does, so a
