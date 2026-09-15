@@ -45,8 +45,13 @@ use krabka_raft::{
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _},
     net::TcpStream,
+};
+use tokio_rustls::rustls::{
+    ClientConfig, DigitallySignedStruct, SignatureScheme,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
 };
 
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
@@ -58,6 +63,14 @@ const NODE: (&str, &str) = ("node", "node-secret");
 async fn start(
     protocol: ListenerProtocol,
     users: &[(&str, &str)],
+) -> (BrokerHandle, tempfile::TempDir) {
+    start_with(protocol, users, |_| {}).await
+}
+
+async fn start_with(
+    protocol: ListenerProtocol,
+    users: &[(&str, &str)],
+    adjust: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -86,6 +99,7 @@ async fn start(
     });
     config.super_users = std::iter::once(NODE.0.to_owned()).collect();
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+    adjust(&mut config);
     let broker =
         Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
             .await
@@ -116,8 +130,8 @@ fn encode<T: Encode>(message: &T, version: i16) -> Bytes {
 
 /// Sends one request and returns the response body after its header. The
 /// request and response headers are flexible when `flexible` is set.
-async fn exchange(
-    stream: &mut TcpStream,
+async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
     api_key: i16,
     version: i16,
     flexible: bool,
@@ -463,6 +477,163 @@ async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() 
                 ..Default::default()
             }
     );
+
+    broker.shutdown().await;
+}
+
+const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
+const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
+const DEV_CLIENT_CA: &str = include_str!("fixtures/security/dev_client_ca.pem");
+const DEV_CLIENT_CERT: &str = include_str!("fixtures/security/dev_client_cert.pem");
+const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem");
+
+/// The Subject DN of the fixture client certificate, which Kafka's `DEFAULT`
+/// mapping rule keeps as the principal name.
+const CLIENT_PRINCIPAL: &str = "CN=test-client,OU=integration,O=crabka";
+
+/// Accepts exactly the broker's fixture certificate. The fixture is a
+/// self-issued CA certificate, which rustls refuses as an end entity.
+#[derive(Debug)]
+struct PinnedServer(CertificateDer<'static>);
+
+impl ServerCertVerifier for PinnedServer {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
+        if end_entity.as_ref() == self.0.as_ref() {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(tokio_rustls::rustls::Error::General(
+                "not the pinned fixture certificate".into(),
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::ED25519,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+        ]
+    }
+}
+
+/// An `SSL` controller listener authorizes each request for the principal of
+/// the client certificate.
+///
+/// Before #684 the controller listener took no principal from a certificate
+/// and checked nothing on `SSL`. Now `DescribeQuorum` from the certificate
+/// principal is refused until an ACL grants `Describe` to that principal, and
+/// then it is served on the same connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let pem_dir = tempfile::TempDir::new().expect("tempdir");
+    let write = |name: &str, contents: &str| {
+        let path = pem_dir.path().join(name);
+        std::fs::write(&path, contents).expect("write fixture");
+        path
+    };
+    let tls = krabka_security::TlsConfig {
+        cert_chain_path: write("server.pem", DEV_CERT),
+        private_key_path: write("server.key", DEV_KEY),
+        trust_roots_path: None,
+        client_ca_path: Some(write("client_ca.pem", DEV_CLIENT_CA)),
+        client_auth: krabka_security::ClientAuthMode::Required,
+    };
+    let (broker, _dir) = start_with(ListenerProtocol::Ssl, &[], |config| {
+        config.tls_config = Some(tls);
+    })
+    .await;
+
+    let server_certificate = CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
+        .next()
+        .expect("fixture server certificate")
+        .expect("parse server certificate");
+    let client_certificates: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(DEV_CLIENT_CERT.as_bytes())
+            .collect::<Result<_, _>>()
+            .expect("parse client certificate");
+    let client_key =
+        PrivateKeyDer::from_pem_slice(DEV_CLIENT_KEY.as_bytes()).expect("parse client key");
+    let client = ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(PinnedServer(server_certificate)))
+        .with_client_auth_cert(client_certificates, client_key)
+        .expect("client certificate");
+    let tcp = TcpStream::connect(broker.controller_addr())
+        .await
+        .expect("connect controller listener");
+    let mut stream = tokio_rustls::TlsConnector::from(std::sync::Arc::new(client))
+        .connect(
+            ServerName::try_from("crabka-dev").expect("server name"),
+            tcp,
+        )
+        .await
+        .expect("mTLS handshake");
+
+    let quorum_version = describe_quorum_request::MAX_VERSION;
+    let refused = exchange(
+        &mut stream,
+        describe_quorum_request::API_KEY,
+        quorum_version,
+        true,
+        &describe_quorum(),
+    )
+    .await;
+    check!(
+        decode::<DescribeQuorumResponse>(&refused, quorum_version)
+            == DescribeQuorumResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }
+    );
+
+    allow(
+        &broker,
+        &format!("User:{CLIENT_PRINCIPAL}"),
+        AclOperation::Describe,
+    )
+    .await;
+    let served = exchange(
+        &mut stream,
+        describe_quorum_request::API_KEY,
+        quorum_version,
+        true,
+        &describe_quorum(),
+    )
+    .await;
+    check!(decode::<DescribeQuorumResponse>(&served, quorum_version).error_code == 0);
 
     broker.shutdown().await;
 }
