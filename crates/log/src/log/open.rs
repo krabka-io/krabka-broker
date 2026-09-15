@@ -173,6 +173,7 @@ impl Log {
             compacted_once: false,
             lso,
             pending: HashMap::new(),
+            verification_states: HashMap::new(),
             unreplicated: BTreeMap::new(),
             pending_stamp_ranges: HashMap::new(),
             coordinator_epochs: HashMap::new(),
@@ -234,6 +235,7 @@ impl Log {
     /// producer state.
     pub(super) fn rebuild_producer_and_transaction_state(&mut self) -> Result<(), LogError> {
         self.pending.clear();
+        self.verification_states.clear();
         self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();

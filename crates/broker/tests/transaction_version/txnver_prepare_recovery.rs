@@ -169,13 +169,16 @@ async fn topic_id(client: &Client, topic: &str) -> Uuid {
         .expect("topic in metadata")
 }
 
-/// Produce `values` in one batch. `producer` is `None` for a plain batch.
+/// Produce `values` in one batch. `transaction` is `None` for a plain batch,
+/// and otherwise names the transactional id the request carries, as a Kafka
+/// producer's request does.
 async fn produce(
     client: &Client,
     topic: &str,
-    producer: Option<Identity>,
+    transaction: Option<(&str, Identity)>,
     values: &[&'static str],
 ) {
+    let producer = transaction.map(|(_, producer)| producer);
     let records = i32::try_from(values.len()).expect("record count");
     let batch = RecordBatch {
         attributes: Attributes::default().with_transactional(producer.is_some()),
@@ -196,6 +199,7 @@ async fn produce(
         ..RecordBatch::default()
     };
     let request = ProduceRequest {
+        transactional_id: transaction.map(|(transactional_id, _)| transactional_id.to_owned()),
         acks: -1,
         timeout_ms: 5_000,
         topic_data: vec![TopicProduceData {
@@ -325,7 +329,13 @@ async fn open_transaction(
     }
     let producer = init_producer(client, transactional_id).await;
     add_partition(client, transactional_id, producer, topic).await;
-    produce(client, topic, Some(producer), &["a", "b", "c"]).await;
+    produce(
+        client,
+        topic,
+        Some((transactional_id, producer)),
+        &["a", "b", "c"],
+    )
+    .await;
     producer
 }
 

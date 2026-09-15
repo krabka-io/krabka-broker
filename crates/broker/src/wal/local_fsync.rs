@@ -96,7 +96,7 @@ mod tests {
         let (results, leo, _) = crate::partition_writer::run_produce_append_batch(
             w.log.clone(),
             None,
-            vec![sample_owned(2), sample_owned(3)],
+            (vec![sample_owned(2), sample_owned(3)], Vec::new()),
         )
         .await
         .unwrap();
@@ -124,7 +124,7 @@ mod tests {
         let (_results, leo, _) = crate::partition_writer::run_produce_append_batch(
             w.log.clone(),
             None,
-            vec![sample_owned(3)],
+            (vec![sample_owned(3)], Vec::new()),
         )
         .await
         .unwrap();
