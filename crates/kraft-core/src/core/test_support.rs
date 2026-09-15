@@ -8,7 +8,20 @@
 use krabka_units::prelude::{Time, secs};
 
 use super::QuorumStateMachine;
-use crate::types::{Epoch, LogView, NodeId, QuorumState};
+use crate::types::{Epoch, LogOffsetMetadata, LogView, NodeId, QuorumState};
+
+/// The end of `epoch` in a fake log of `end` records that all carry
+/// `last_epoch`: Kafka's lookup over a log with one epoch in it.
+fn single_epoch_end(end: i64, last_epoch: Epoch, epoch: Epoch) -> LogOffsetMetadata {
+    if epoch < last_epoch {
+        LogOffsetMetadata { offset: 0, epoch }
+    } else {
+        LogOffsetMetadata {
+            offset: end,
+            epoch: last_epoch,
+        }
+    }
+}
 
 pub struct FakeLog {
     pub end: i64,
@@ -21,12 +34,8 @@ impl LogView for FakeLog {
     fn last_epoch(&self) -> Epoch {
         self.last_epoch
     }
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
-        if epoch <= self.last_epoch {
-            Some(self.end)
-        } else {
-            None
-        }
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
+        single_epoch_end(self.end, self.last_epoch, epoch)
     }
 }
 /// A `LogView` whose `end_offset` can change between calls.
@@ -45,12 +54,37 @@ impl LogView for CellLog {
     fn last_epoch(&self) -> Epoch {
         self.last_epoch
     }
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
-        if epoch <= self.last_epoch {
-            Some(self.end.get())
-        } else {
-            None
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
+        single_epoch_end(self.end.get(), self.last_epoch, epoch)
+    }
+}
+/// A log described by its epoch runs: `(epoch, record count)` in log order.
+///
+/// Its divergence lookup is the real rule over the records it holds, so a
+/// test can put an epoch gap in the log, which neither [`FakeLog`] nor
+/// [`CellLog`] can.
+pub struct RunsLog {
+    epochs: Vec<Epoch>,
+}
+impl RunsLog {
+    pub fn new(runs: &[(Epoch, usize)]) -> Self {
+        Self {
+            epochs: runs
+                .iter()
+                .flat_map(|&(epoch, count)| std::iter::repeat_n(epoch, count))
+                .collect(),
         }
+    }
+}
+impl LogView for RunsLog {
+    fn end_offset(&self) -> i64 {
+        i64::try_from(self.epochs.len()).expect("test log length fits in i64")
+    }
+    fn last_epoch(&self) -> Epoch {
+        self.epochs.last().copied().unwrap_or(0)
+    }
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
+        LogOffsetMetadata::end_of_epoch_in(&self.epochs, epoch)
     }
 }
 pub fn voters(ids: &[NodeId]) -> krabka_voters::VoterSet {
