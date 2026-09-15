@@ -61,10 +61,19 @@ pub fn replica_key(voter_id: i32, directory_id: WireUuid) -> String {
     format!("ReplicaKey(id={voter_id}, directoryId={directory})")
 }
 
+/// Whether a request's cluster id names this cluster. krabka reports its
+/// cluster id in the hyphenated form, and a Kafka tool may send Kafka's base64
+/// `Uuid` form of the same id, so both match.
+fn names_this_cluster(request_cluster_id: &str, cluster_id: &str) -> bool {
+    request_cluster_id == cluster_id
+        || uuid::Uuid::parse_str(cluster_id)
+            .is_ok_and(|id| URL_SAFE_NO_PAD.encode(id.as_bytes()) == request_cluster_id)
+}
+
 /// Kafka's `hasValidClusterId` refusal, with its message. An absent id is
 /// valid.
 fn cluster_id_refusal(request_cluster_id: Option<&str>, cluster_id: &str) -> Option<Refusal> {
-    let request_cluster_id = request_cluster_id.filter(|id| *id != cluster_id)?;
+    let request_cluster_id = request_cluster_id.filter(|id| !names_this_cluster(id, cluster_id))?;
     Some((
         INCONSISTENT_CLUSTER_ID,
         Some(format!(
@@ -415,6 +424,24 @@ mod tests {
             INCONSISTENT_CLUSTER_ID,
             Some("The given id \"cluster-b\" doesn't match the cluster id \"cluster-a\"".into()),
         )
+    }
+
+    #[test]
+    fn a_cluster_id_matches_in_either_form() {
+        let id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+        let local = id.to_string();
+        for (label, request, names_it) in [
+            ("hyphenated", local.clone(), true),
+            ("Kafka base64", URL_SAFE_NO_PAD.encode(id.as_bytes()), true),
+            (
+                "another cluster",
+                uuid::Uuid::from_u128(7).to_string(),
+                false,
+            ),
+            ("not an id", "cluster-b".to_owned(), false),
+        ] {
+            check!(names_this_cluster(&request, &local) == names_it, "{label}");
+        }
     }
 
     #[test]
