@@ -85,7 +85,7 @@ impl GroupCoordinator {
     /// # Errors
     /// Returns an error when the group is not deletable or the tombstone cannot
     /// be appended.
-    pub async fn delete_group(&self, group_id: &str) -> Result<(), DeleteGroupError> {
+    pub async fn delete_group(self: &Arc<Self>, group_id: &str) -> Result<(), DeleteGroupError> {
         // KIP-1071: a Streams-locked group is deleted through the streams path —
         // never fall through to the classic path, which would remove the offset-home
         // `groups` entry out from under a live streams group.
@@ -158,13 +158,20 @@ impl GroupCoordinator {
     ///
     /// The share actor answers `NonEmpty` when the group has members. For an
     /// empty group it deletes the share state of every initialized partition,
-    /// and then it appends the group tombstones. On success this method drops
-    /// the actor, the type lock and the seeds. It returns `NotFound` when no
-    /// share actor exists for the id.
-    async fn delete_share_group(&self, group_id: &str) -> Result<(), DeleteGroupError> {
-        let handle = self
-            .find_share(group_id)
-            .ok_or(DeleteGroupError::NotFound)?;
+    /// appends the group tombstones, and drops the group seeds. It returns
+    /// `NotFound` when the coordinator knows no share group with the id.
+    ///
+    /// An actor that stopped after a log-write failure is respawned from its
+    /// seed first, as `get_or_create_share` does for any other request. On
+    /// success the method drops the registry entry and the type lock only while
+    /// the entry is still the handle that deleted the group: a heartbeat that
+    /// created a new group with the same id right after the delete keeps its
+    /// actor.
+    async fn delete_share_group(self: &Arc<Self>, group_id: &str) -> Result<(), DeleteGroupError> {
+        if self.find_share(group_id).is_none() && self.cached_share_seed(group_id).is_none() {
+            return Err(DeleteGroupError::NotFound);
+        }
+        let handle = self.get_or_create_share(group_id);
         let (tx, rx) = oneshot::channel();
         handle
             .tx
@@ -172,11 +179,15 @@ impl GroupCoordinator {
             .await
             .map_err(|_| DeleteGroupError::NotFound)?;
         rx.await.map_err(|_| DeleteGroupError::NotFound)??;
-        self.share_groups.remove(group_id);
-        self.group_types.remove(group_id);
-        self.share_seeds.remove(group_id);
-        self.share_seeds_cache.remove(group_id);
-        self.forget_group_metrics(group_id);
+        if self
+            .share_groups
+            .remove_if(group_id, |_, registered| Arc::ptr_eq(registered, &handle))
+            .is_some()
+        {
+            self.group_types
+                .remove_if(group_id, |_, group_type| *group_type == GroupType::Share);
+            self.forget_group_metrics(group_id);
+        }
         Ok(())
     }
 
