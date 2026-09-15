@@ -26,16 +26,13 @@ use super::{
     reconciliation::compute_and_install_target,
     records::{apply_seed, snapshot_seed},
 };
-use crate::coordinator::unified::{
-    streams::{
-        config::{StreamsAssignorKind, StreamsGroupConfig},
-        persistence::{StoredSubtopology, StreamsGroupTopologyValue},
-        state::{
-            StreamsGroupState, StreamsGroupStatePhase, StreamsMemberAssignmentState,
-            StreamsMemberState,
-        },
+use crate::coordinator::unified::streams::{
+    config::{StreamsAssignorKind, StreamsGroupConfig},
+    persistence::{StoredSubtopology, StreamsGroupTopologyValue},
+    state::{
+        OwnedTasks, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberAssignmentState,
+        StreamsMemberState,
     },
-    validate_member_epoch,
 };
 
 const SUBTOPOLOGY: &str = "s";
@@ -52,7 +49,7 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 43_256;
+const PINNED_UNIQUE_STATES: usize = 42_936;
 const WITNESS_STALE_FENCED: u16 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u16 = 1 << 1;
 const WITNESS_UNKNOWN_FENCED: u16 = 1 << 2;
@@ -493,7 +490,11 @@ impl Model for StreamsModel {
             }
             Action::CurrentHeartbeat(member_id, report_kind) => {
                 let current = state.actor.state.members.get(member_id)?.member_epoch;
-                validate_member_epoch(Some(current), current).ok()?;
+                state
+                    .actor
+                    .state
+                    .validate_heartbeat_epoch(member_id, current, OwnedTasks::default())
+                    .ok()?;
                 let before_pending = !state.actor.state.members[member_id]
                     .active_pending_revocation
                     .is_empty();
@@ -518,18 +519,28 @@ impl Model for StreamsModel {
             Action::StaleHeartbeat(member_id) => {
                 let current = state.actor.state.members.get(member_id)?.member_epoch;
                 let requested = current.saturating_sub(1);
-                if requested == current {
+                // Epoch 0 is a rejoin, not a stale epoch.
+                if requested == current || requested == 0 {
                     return None;
                 }
-                let error = validate_member_epoch(Some(current), requested)
+                // The request reports no owned tasks, so even the previous
+                // epoch is fenced (Kafka's
+                // `throwIfStreamsGroupMemberEpochIsInvalid`).
+                let error = state
+                    .actor
+                    .state
+                    .validate_heartbeat_epoch(member_id, requested, OwnedTasks::default())
                     .expect_err("stale member epoch is rejected");
-                assert2::assert!(error == crate::codes::STALE_MEMBER_EPOCH);
+                assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
                 state.witnesses |= WITNESS_STALE_FENCED;
             }
             Action::ForwardHeartbeat(member_id) => {
                 let current = state.actor.state.members.get(member_id)?.member_epoch;
                 let requested = current.checked_add(1)?;
-                let error = validate_member_epoch(Some(current), requested)
+                let error = state
+                    .actor
+                    .state
+                    .validate_heartbeat_epoch(member_id, requested, OwnedTasks::default())
                     .expect_err("forward member epoch is rejected");
                 assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
                 state.witnesses |= WITNESS_FORWARD_FENCED;
@@ -569,7 +580,11 @@ impl Model for StreamsModel {
                 state.witnesses |= WITNESS_TOPOLOGY;
             }
             Action::UnknownHeartbeat => {
-                let error = validate_member_epoch(None, 0).expect_err("unknown member is rejected");
+                let error = state
+                    .actor
+                    .state
+                    .validate_heartbeat_epoch("unknown", 1, OwnedTasks::default())
+                    .expect_err("unknown member is rejected");
                 assert2::assert!(error == crate::codes::UNKNOWN_MEMBER_ID);
                 state.witnesses |= WITNESS_UNKNOWN_FENCED;
             }

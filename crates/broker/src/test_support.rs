@@ -122,6 +122,24 @@ pub(crate) async fn finalize_elr_version_on(broker: &crate::Broker) {
     .expect("eligible.leader.replicas.version visible");
 }
 
+/// End the heartbeat session of `broker_id` on the controller `broker`, as if
+/// that broker stopped and its session expired.
+///
+/// It first waits for a liveness tick of the current controller term to
+/// finish. The first tick of a term seeds every registered broker with a
+/// session, so a session ended before that tick would be opened again.
+pub(crate) async fn end_heartbeat_session(broker: &crate::Broker, broker_id: u64) {
+    let ticks = broker.metrics.controller_fencing_publications_total.get();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while broker.metrics.controller_fencing_publications_total.get() <= ticks {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a liveness tick of this controller term finished");
+    broker.liveness.end_session(broker_id).await;
+}
+
 pub(crate) fn principal(name: &str) -> Principal {
     Principal {
         name: name.into(),

@@ -152,7 +152,7 @@ fn re2j_unsupported_inline_flag(pattern: &str) -> Option<char> {
 /// against every topic name on every metadata refresh, where RE2J's and
 /// `regex`'s linear-time guarantee is what keeps a subscription from becoming
 /// a denial of service.
-fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
+pub(super) fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
     if re2j_unsupported_inline_flag(pattern).is_some() {
         return Err(format!(
             "SubscribedTopicRegex `{pattern}` is not a valid regular expression: \
@@ -209,6 +209,25 @@ pub(super) fn update_member_state(
         if m.client_host != client.host {
             m.client_host = client.host.to_string();
             member_metadata_changed = true;
+        }
+        // Kafka's `maybeUpdateRackId` and `maybeUpdateServerAssignorName`: an
+        // absent value keeps the stored one. Neither changes the group epoch.
+        if req.rack_id.is_some() && req.rack_id != m.rack_id {
+            m.rack_id.clone_from(&req.rack_id);
+            member_metadata_changed = true;
+        }
+        if req.server_assignor.is_some() && req.server_assignor != m.server_assignor {
+            m.server_assignor.clone_from(&req.server_assignor);
+            member_metadata_changed = true;
+        }
+        // Kafka's `maybeUpdateRebalanceTimeoutMs(ofSentinel(..))`: -1 keeps the
+        // stored timeout, and any other value replaces it.
+        if let Ok(millis) = u64::try_from(req.rebalance_timeout_ms) {
+            let timeout = Duration::from_millis(millis);
+            if m.rebalance_timeout != timeout {
+                m.rebalance_timeout = timeout;
+                member_metadata_changed = true;
+            }
         }
         if let Some(ref names) = req.subscribed_topic_names {
             let set: std::collections::HashSet<String> = names.iter().cloned().collect();
@@ -273,6 +292,9 @@ pub(super) fn run_reconcile(
     let input = metadata.snapshot();
     let assignor = pick_assignor(state, config);
     reconciler::reconcile_if_dirty(state, &input, &*assignor);
+    // A new target can end the revocation of any member, not only the one
+    // whose heartbeat got here.
+    state.prune_rebalance_timeouts();
 }
 
 fn pick_assignor(state: &GroupState, config: &NextGenConfig) -> Arc<dyn Assignor> {

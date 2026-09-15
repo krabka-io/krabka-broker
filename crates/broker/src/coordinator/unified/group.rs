@@ -122,6 +122,14 @@ pub struct GroupOffsets {
     pub pending_txn: HashSet<(String, i32)>,
 }
 
+/// The member fields of an `OffsetFetch` request group (v9+): no member id
+/// and epoch -1 before v9, and for the admin client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OffsetFetchMember {
+    pub member_id: Option<String>,
+    pub member_epoch: i32,
+}
+
 impl CoordinatorGroup {
     /// A fresh, empty classic group.
     pub fn new_classic(group_id: impl Into<String>) -> Self {
@@ -267,6 +275,46 @@ impl CoordinatorGroup {
         entry.resolved_through = entry.resolved_through.max(resolved_through);
     }
 
+    /// Kafka's `validateOffsetFetch` for the member fields of an
+    /// `OffsetFetch` request (v9+).
+    ///
+    /// A classic group accepts every fetch (`ClassicGroup.validateOffsetFetch`
+    /// refuses only a dead group, and a dead group has no actor). A consumer
+    /// group (`ConsumerGroup.validateOffsetFetch`) accepts a fetch with no
+    /// member id and a negative epoch, which is the admin client. Otherwise
+    /// the member must exist (`UNKNOWN_MEMBER_ID`) and the epoch must be its
+    /// member epoch: `ILLEGAL_GENERATION` for a member of the classic
+    /// protocol, `STALE_MEMBER_EPOCH` for the others.
+    pub fn validate_offset_fetch(
+        &self,
+        member_id: Option<&str>,
+        member_epoch: i32,
+    ) -> Result<(), i16> {
+        let Some(state) = self.as_consumer() else {
+            return Ok(());
+        };
+        if member_id.is_none() && member_epoch < 0 {
+            return Ok(());
+        }
+        let member = member_id
+            .and_then(|id| state.members.get(id))
+            .ok_or(crate::codes::UNKNOWN_MEMBER_ID)?;
+        if member.member_epoch == member_epoch {
+            Ok(())
+        } else if member.is_classic() {
+            Err(crate::codes::ILLEGAL_GENERATION)
+        } else {
+            Err(crate::codes::STALE_MEMBER_EPOCH)
+        }
+    }
+
+    /// The group's offset state for an `OffsetFetch` that names `member`, or
+    /// the error code of [`validate_offset_fetch`](Self::validate_offset_fetch).
+    pub fn offsets_for_member(&self, member: &OffsetFetchMember) -> Result<GroupOffsets, i16> {
+        self.validate_offset_fetch(member.member_id.as_deref(), member.member_epoch)
+            .map(|()| self.offsets())
+    }
+
     /// The group's offset state for `OffsetFetch`, with every open
     /// transaction's pending keys flattened into one set.
     pub fn offsets(&self) -> GroupOffsets {
@@ -340,6 +388,103 @@ mod tests {
         check!(g.as_classic().is_none());
         check!(g.as_consumer_mut().is_some());
         check!(g.group_id == "g");
+    }
+
+    /// Kafka's `ClassicGroup.validateOffsetFetch` and
+    /// `ConsumerGroup.validateOffsetFetch`.
+    #[test]
+    fn validate_offset_fetch_follows_the_group_kind_and_member_protocol() {
+        type Row<'a> = (
+            &'a str,
+            &'a CoordinatorGroup,
+            Option<&'a str>,
+            i32,
+            Result<(), i16>,
+        );
+
+        use std::time::Duration;
+
+        use crate::{
+            codes,
+            coordinator::unified::consumer_state::{ClassicMemberFacade, test_support::member},
+        };
+
+        let mut consumer = CoordinatorGroup::new_consumer("g");
+        let state = consumer.as_consumer_mut().unwrap();
+        for (member_id, classic) in [("native", false), ("classic", true)] {
+            let mut next = member(member_id);
+            next.member_epoch = 7;
+            if classic {
+                next.classic = Some(ClassicMemberFacade {
+                    generation_id: 7,
+                    supported_protocols: vec![],
+                    session_timeout: Duration::from_secs(45),
+                    last_synced_assignment: bytes::Bytes::new(),
+                    awaiting_sync: false,
+                });
+            }
+            state.add_or_update_member(next);
+        }
+        let classic = CoordinatorGroup::new_classic("g");
+
+        let rows: [Row<'_>; 8] = [
+            (
+                "classic group, any member",
+                &classic,
+                Some("ghost"),
+                3,
+                Ok(()),
+            ),
+            ("admin fetch", &consumer, None, -1, Ok(())),
+            (
+                "native member, its epoch",
+                &consumer,
+                Some("native"),
+                7,
+                Ok(()),
+            ),
+            (
+                "native member, other epoch",
+                &consumer,
+                Some("native"),
+                6,
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            (
+                "classic member, its generation",
+                &consumer,
+                Some("classic"),
+                7,
+                Ok(()),
+            ),
+            (
+                "classic member, other generation",
+                &consumer,
+                Some("classic"),
+                8,
+                Err(codes::ILLEGAL_GENERATION),
+            ),
+            (
+                "unknown member",
+                &consumer,
+                Some("ghost"),
+                7,
+                Err(codes::UNKNOWN_MEMBER_ID),
+            ),
+            (
+                "no member id with an epoch",
+                &consumer,
+                None,
+                0,
+                Err(codes::UNKNOWN_MEMBER_ID),
+            ),
+        ];
+        for (name, group, member_id, epoch, expected) in rows {
+            check!(
+                group.validate_offset_fetch(member_id, epoch) == expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]

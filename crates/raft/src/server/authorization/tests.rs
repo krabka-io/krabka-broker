@@ -8,7 +8,6 @@ use krabka_protocol::{
     owned::{
         add_raft_voter_response::AddRaftVoterResponse,
         begin_quorum_epoch_response::BeginQuorumEpochResponse,
-        broker_registration_response::BrokerRegistrationResponse,
         controller_registration_response::ControllerRegistrationResponse,
         describe_cluster_request::DescribeClusterRequest,
         describe_cluster_response::DescribeClusterResponse,
@@ -68,7 +67,6 @@ fn each_controller_api_needs_the_kafka_operation() {
             api_key::FETCH_SNAPSHOT,
             Some(ClusterAction),
         ),
-        ("BrokerRegistration", 62, Some(ClusterAction)),
         ("ControllerRegistration", 70, Some(ClusterAction)),
         ("UpdateRaftVoter", 82, Some(ClusterAction)),
         ("SubmitChange", API_KEY_SUBMIT_CHANGE, Some(ClusterAction)),
@@ -85,6 +83,7 @@ fn each_controller_api_needs_the_kafka_operation() {
         ("ApiVersions", 18, None),
         ("CreateTopics", 19, None),
         ("Envelope", 58, None),
+        ("BrokerRegistration", 62, None),
         ("BrokerHeartbeat", 63, None),
     ];
     for (name, key, operation) in cases {
@@ -100,7 +99,6 @@ enum Refusal {
     BeginQuorumEpoch(BeginQuorumEpochResponse),
     EndQuorumEpoch(EndQuorumEpochResponse),
     FetchSnapshot(FetchSnapshotResponse),
-    BrokerRegistration(BrokerRegistrationResponse),
     ControllerRegistration(ControllerRegistrationResponse),
     UpdateRaftVoter(UpdateRaftVoterResponse),
     AddRaftVoter(AddRaftVoterResponse),
@@ -125,9 +123,6 @@ fn decode(api: i16, version: i16, bytes: &[u8]) -> Refusal {
         api_key::FETCH_SNAPSHOT => {
             Refusal::FetchSnapshot(FetchSnapshotResponse::decode(&mut cursor, version).unwrap())
         }
-        62 => Refusal::BrokerRegistration(
-            BrokerRegistrationResponse::decode(&mut cursor, version).unwrap(),
-        ),
         70 => Refusal::ControllerRegistration(
             ControllerRegistrationResponse::decode(&mut cursor, version).unwrap(),
         ),
@@ -263,16 +258,6 @@ fn each_refusal_is_the_kafka_error_response_of_its_api() {
             1,
             Bytes::new(),
             Refusal::FetchSnapshot(FetchSnapshotResponse {
-                error_code: 31,
-                ..Default::default()
-            }),
-        ),
-        (
-            "BrokerRegistration",
-            62,
-            4,
-            Bytes::new(),
-            Refusal::BrokerRegistration(BrokerRegistrationResponse {
                 error_code: 31,
                 ..Default::default()
             }),

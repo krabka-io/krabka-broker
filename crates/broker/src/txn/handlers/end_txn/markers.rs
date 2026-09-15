@@ -226,6 +226,6 @@ mod tests {
             .unwrap();
 
         assert!(part.log_end_offset() == Offset(1));
-        assert!(part.lso() == Offset(1));
+        assert!(part.last_stable_offset(Offset(1)) == Offset(1));
     }
 }

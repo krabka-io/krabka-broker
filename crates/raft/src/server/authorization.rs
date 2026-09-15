@@ -42,9 +42,8 @@ const FETCH_TOP_LEVEL_ERROR_ONLY_VERSION: i16 = 13;
 ///
 /// The operations are Kafka's, from `ControllerApis`: `handleFetch`,
 /// `handleFetchSnapshot`, `handleVote`, `handleBeginQuorumEpoch`,
-/// `handleEndQuorumEpoch`, `handleBrokerRegistration`,
-/// `handleControllerRegistration` and `handleUpdateRaftVoter` need
-/// `CLUSTER_ACTION`. `handleAddRaftVoter`, `handleRemoveRaftVoter` and
+/// `handleEndQuorumEpoch`, `handleControllerRegistration` and
+/// `handleUpdateRaftVoter` need `CLUSTER_ACTION`. `handleAddRaftVoter`, `handleRemoveRaftVoter` and
 /// `handleDescribeCluster` need `ALTER`. `handleDescribeQuorum` needs
 /// `DESCRIBE`. The krabka-private metadata apis have no Kafka counterpart.
 /// They read or write the metadata log for another node, so they need
@@ -56,7 +55,6 @@ pub(super) const fn required_operation(api_key: i16) -> Option<ClusterOperation>
         | api_key::BEGIN_QUORUM_EPOCH
         | api_key::END_QUORUM_EPOCH
         | api_key::FETCH_SNAPSHOT
-        | owned::broker_registration_request::API_KEY
         | owned::controller_registration_request::API_KEY
         | owned::update_raft_voter_request::API_KEY
         | API_KEY_SUBMIT_CHANGE
@@ -109,13 +107,6 @@ pub(super) fn refusal(api_key: i16, version: i16, body: &[u8]) -> Result<Bytes, 
         }
         api_key::FETCH_SNAPSHOT => {
             owned::fetch_snapshot_response::FetchSnapshotResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-            .encode(&mut out, version)?;
-        }
-        owned::broker_registration_request::API_KEY => {
-            owned::broker_registration_response::BrokerRegistrationResponse {
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 ..Default::default()
             }
