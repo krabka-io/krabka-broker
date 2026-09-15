@@ -82,7 +82,14 @@ mod tests {
         let mut st = cell.lock().await;
         // Make the state dirty with persistable content.
         st.materialize(Offset(4), 100);
-        let _ = st.acquire("m1", 10, i32::MAX, std::time::Instant::now(), LOCK, 5);
+        let _ = st.acquire(
+            "m1",
+            10,
+            krabka_log::Offset(i64::MAX),
+            std::time::Instant::now(),
+            LOCK,
+            5,
+        );
         assert!(st.dirty);
 
         mgr.persist_if_dirty("g1", tid, 0, &mut st).await;

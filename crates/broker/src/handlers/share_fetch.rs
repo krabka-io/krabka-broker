@@ -46,6 +46,8 @@ mod request;
 mod response;
 
 #[cfg(test)]
+mod byte_limit_tests;
+#[cfg(test)]
 mod group_authorization_tests;
 #[cfg(test)]
 mod topic_resolution_tests;

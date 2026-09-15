@@ -92,6 +92,19 @@ impl AcquisitionState {
         }
     }
 
+    /// The first offset that `acquire` can hand out: the start of the first
+    /// `Available` run whose delivery count is under `max_attempts`.
+    ///
+    /// The handler starts its log read here, so the bytes it reads begin with
+    /// a record it can acquire. It returns `None` when no such run exists.
+    #[must_use]
+    pub fn first_acquirable_offset(&self, max_attempts: i16) -> Option<Offset> {
+        self.batches
+            .iter()
+            .find(|b| b.state == RecordState::Available && b.delivery_count < max_attempts)
+            .map(|b| b.first_offset)
+    }
+
     /// Acquires up to `max_records` Available records for `member`. It walks
     /// the window from `start_offset`.
     ///
@@ -108,14 +121,17 @@ impl AcquisitionState {
     /// `delivery_count`. A record the schedule holds back is therefore never
     /// archived as a poison pill for an attempt nobody made.
     ///
-    /// This method accepts `max_bytes` for API symmetry, but approximates it
-    /// here with the record count `max_records`. The handler enforces byte
-    /// limits at its log-read step, not in this pure machine.
+    /// The walk acquires no offset past `last_offset`. The handler reads the
+    /// log first and passes the last offset of the bytes that the read
+    /// returned, so every acquired offset has its record in the response, as
+    /// Kafka's `SharePartition.acquire` bounds the acquisition by the last
+    /// fetched batch. An `Available` run that crosses `last_offset` is split,
+    /// and its tail stays `Available`.
     pub fn acquire(
         &mut self,
         member: &str,
         max_records: i32,
-        _max_bytes: i32,
+        last_offset: Offset,
         now: Instant,
         lock_dur: Duration,
         max_attempts: i16,
@@ -126,6 +142,9 @@ impl AcquisitionState {
         let mut any_change = false;
         while i < self.batches.len() {
             if remaining == 0 {
+                break;
+            }
+            if self.batches[i].first_offset > last_offset {
                 break;
             }
             if self.batches[i].state != RecordState::Available {
@@ -143,12 +162,11 @@ impl AcquisitionState {
                 i += 1;
                 continue;
             }
-            // Split if the Available run exceeds the remaining budget.
-            let avail_len = self.batches[i].len();
-            if avail_len > remaining {
-                let split_at = self.batches[i].first_offset + remaining;
-                self.split_at(i, split_at);
-            }
+            // Split if the Available run exceeds the remaining budget or
+            // crosses the last offset that the log read returned.
+            let split_at = (self.batches[i].first_offset + remaining)
+                .min(Offset(last_offset.0.saturating_add(1)));
+            self.split_at(i, split_at);
             let b = &mut self.batches[i];
             b.state = RecordState::Acquired;
             b.delivery_count += 1;
@@ -184,10 +202,17 @@ mod tests {
         s.materialize(Offset(1), 100);
         for _ in 0..2 {
             // max_attempts = 2
-            let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 2);
+            let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 2);
             s.expire_locks(t0() + Duration::from_secs(31));
         }
-        let acq = s.acquire("m1", 10, i32::MAX, t0() + Duration::from_secs(62), LOCK, 2);
+        let acq = s.acquire(
+            "m1",
+            10,
+            krabka_log::Offset(i64::MAX),
+            t0() + Duration::from_secs(62),
+            LOCK,
+            2,
+        );
         assert!(acq.is_empty()); // archived, not redelivered
         assert!(s.start_offset == 1); // SPSO advanced past the poison pill
     }
@@ -198,7 +223,7 @@ mod tests {
         s.materialize(Offset(5), 100);
         s.archive_internal(Offset(2), Offset(2));
 
-        let acquired = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 5);
+        let acquired = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(
             acquired
                 == vec![
@@ -222,20 +247,48 @@ mod tests {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(100), 10); // hwm far ahead, but cap at 10 in flight
         assert!(s.end_offset == 10);
-        let acq = s.acquire("m1", 100, i32::MAX, t0(), LOCK, 5);
+        let acq = s.acquire("m1", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq[0].first == 0);
         assert!(acq[0].last == 9);
+    }
+
+    #[test]
+    fn acquire_stops_at_the_last_offset_of_the_read() {
+        // (max_records, last_offset, acquired, first offset left Available)
+        let cases = [
+            (100, Offset(9), (Offset(0), Offset(9)), None),
+            (100, Offset(3), (Offset(0), Offset(3)), Some(Offset(4))),
+            (2, Offset(3), (Offset(0), Offset(1)), Some(Offset(2))),
+        ];
+        for (max_records, last_offset, (first, last), available) in cases {
+            let mut s = AcquisitionState::new(Offset(0));
+            s.materialize(Offset(10), 100);
+
+            let acquired = s.acquire("m1", max_records, last_offset, t0(), LOCK, 5);
+
+            assert!(
+                (acquired, s.first_acquirable_offset(5))
+                    == (
+                        vec![AcquiredRange {
+                            first,
+                            last,
+                            delivery_count: 1,
+                        }],
+                        available,
+                    )
+            );
+        }
     }
 
     #[test]
     fn acquire_splits_at_max_records() {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(10), 100);
-        let acq = s.acquire("m1", 4, i32::MAX, t0(), LOCK, 5);
+        let acq = s.acquire("m1", 4, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq.len() == 1);
         assert!(acq[0].first == 0 && acq[0].last == 3);
         // The remaining [4,9] is still Available.
-        let acq2 = s.acquire("m2", 100, i32::MAX, t0(), LOCK, 5);
+        let acq2 = s.acquire("m2", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq2[0].first == 4 && acq2[0].last == 9);
     }
 }

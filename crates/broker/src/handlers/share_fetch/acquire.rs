@@ -14,7 +14,10 @@ use super::{
     acknowledge::apply_one_ack,
     long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
-    records::{control_batch_ranges, pending_activation_ranges, populate_acquired_response},
+    records::{
+        AcquireRequest, acquire_read_records, control_batch_ranges, pending_activation_ranges,
+        read_budget,
+    },
 };
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -221,21 +224,17 @@ async fn acquire_pass(
             st.defer_internal(first, last);
         }
         let remaining_records = remaining_record_budget(max_records, total);
-        let acquired = if remaining_records > 0 {
-            st.acquire(
+        if remaining_records > 0 {
+            let request = AcquireRequest {
                 member,
-                remaining_records,
-                max_bytes,
+                max_records: remaining_records,
+                max_bytes: read_budget(p.partition_max_bytes, max_bytes),
+                upper,
                 now,
-                cfg.record_lock_duration,
-                cfg.max_delivery_attempts,
-            )
-        } else {
-            Vec::new()
-        };
-
-        if !acquired.is_empty() {
-            total += populate_acquired_response(p, &part, &acquired, upper, max_bytes).await?;
+                lock_duration: cfg.record_lock_duration,
+                max_attempts: cfg.max_delivery_attempts,
+            };
+            total += acquire_read_records(&mut p.out, &part, &mut st, &request).await?;
         }
 
         p.out.error_code = codes::NONE;
