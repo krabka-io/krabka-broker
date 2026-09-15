@@ -212,20 +212,38 @@ mod tests {
             )
             .await
             .expect("initialize share state");
+        let share_image = crate::share_coordinator::coordinator::test_support::image_with_topic(
+            share_topic_id,
+            share_partition + 1,
+        );
         broker
             .share_coordinator
-            .write(
+            .read(
+                &share_image,
                 share_group,
                 share_topic_id,
                 share_partition,
-                (12, 2),
-                (krabka_log::Offset(95), 7),
-                vec![crate::share_coordinator::persistence::StateBatch {
-                    first_offset: krabka_log::Offset(95),
-                    last_offset: krabka_log::Offset(99),
-                    delivery_state: 0,
-                    delivery_count: 1,
-                }],
+                2,
+            )
+            .await
+            .expect("raise the stored leader epoch");
+        broker
+            .share_coordinator
+            .write(
+                &share_image,
+                share_group,
+                share_topic_id,
+                share_partition,
+                crate::share_coordinator::coordinator::test_support::share_write(
+                    (11, 2),
+                    (95, 7),
+                    vec![crate::share_coordinator::persistence::StateBatch {
+                        first_offset: krabka_log::Offset(95),
+                        last_offset: krabka_log::Offset(99),
+                        delivery_state: 0,
+                        delivery_count: 1,
+                    }],
+                ),
             )
             .await
             .expect("write share state summary");
@@ -233,7 +251,7 @@ mod tests {
             handle
                 .share_state_summary_for_test(share_group, share_topic_id, share_partition)
                 .await
-                == Some((12, 2, 95, 7))
+                == Some((11, 2, 95, 7))
         );
         check!(
             tokio::time::timeout(

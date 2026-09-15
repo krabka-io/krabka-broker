@@ -40,6 +40,10 @@ use krabka_protocol::{
         read_share_group_state_request::{
             PartitionData as ReadPartitionData, ReadShareGroupStateRequest, ReadStateData,
         },
+        read_share_group_state_summary_request::{
+            PartitionData as ReadSummaryPartitionData, ReadShareGroupStateSummaryRequest,
+            ReadStateSummaryData,
+        },
         write_share_group_state_request::{
             PartitionData as WritePartitionData, StateBatch as ProtoStateBatch,
             WriteShareGroupStateRequest, WriteStateData,
@@ -56,7 +60,9 @@ use crate::{
     network::client::InterBrokerClient,
     share_coordinator::{
         bootstrap,
-        coordinator::{LoadStatus, ShareCoordinator},
+        coordinator::{
+            LoadStatus, ShareCoordinator, ShareStateSummary, ShareWrite, UNINITIALIZED_START_OFFSET,
+        },
         persistence::StateBatch,
         state::SharePartitionState,
     },
@@ -256,15 +262,24 @@ impl SharePersister {
         }
     }
 
-    /// Read the durable share state for `(group, topic_id, partition)`. The
-    /// call is local when this broker leads the target `__share_group_state`
-    /// partition. If it does not, the client routes the call to the leader
-    /// over RPC and decodes the typed response.
+    /// Read the durable share state for `(group, topic_id, partition)`, as
+    /// the share-partition leader at `leader_epoch`. The call is local when
+    /// this broker leads the target `__share_group_state` partition. If it
+    /// does not, the client routes the call to the leader over RPC and decodes
+    /// the typed response.
+    ///
+    /// This is Kafka's `ReadShareGroupState`: the coordinator persists a new
+    /// `leader_epoch`, which fences a share-partition leader with an older
+    /// one, and it refuses a key that the group coordinator has not
+    /// initialized. A `start_offset` of `UNINITIALIZED_START_OFFSET` is state:
+    /// the group coordinator registered the partition and did not decide where
+    /// the group starts.
     ///
     /// # Errors
     ///
-    /// As [`SharePersister::initialize`], from the connect or send on the
-    /// remote path.
+    /// Returns [`BrokerError::Share`] when the coordinator answers a non-zero
+    /// error code (among them `INVALID_REQUEST` for a key with no state), or
+    /// [`BrokerError`] from the connect or send on the remote path.
     // Consumed by `SharePartitionLeaderManager::get_or_load`, which the
     // ShareFetch/ShareAcknowledge handlers drive.
     pub(crate) async fn read_state(
@@ -272,7 +287,8 @@ impl SharePersister {
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Result<Option<SharePartitionState>, BrokerError> {
+        leader_epoch: i32,
+    ) -> Result<SharePartitionState, BrokerError> {
         let state_partition = self
             .share_coordinator
             .state_partition_for(group, &topic_id, partition);
@@ -280,12 +296,21 @@ impl SharePersister {
         if self.share_coordinator.is_leader(state_partition).await {
             return self
                 .share_coordinator
-                .read(group, topic_id, partition)
+                .read(
+                    &self.controller.current_image(),
+                    group,
+                    topic_id,
+                    partition,
+                    leader_epoch,
+                )
                 .await
-                .map_err(|code| {
-                    BrokerError::Share(format!(
-                        "ReadShareGroupState {group}:{topic_id}:{partition} refused (code {code})"
-                    ))
+                .map_err(|error| {
+                    refused(
+                        "ReadShareGroupState",
+                        partition,
+                        error.code(),
+                        &error.row_message("read"),
+                    )
                 });
         }
 
@@ -295,6 +320,7 @@ impl SharePersister {
                 topic_id: ProtoUuid(*topic_id.as_bytes()),
                 partitions: vec![ReadPartitionData {
                     partition,
+                    leader_epoch,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -302,30 +328,29 @@ impl SharePersister {
             ..Default::default()
         };
         let resp = self.send_to_leader_resp(state_partition, req).await?;
-        // Map the per-partition result into a `SharePartitionState`. A
-        // non-zero error_code or an absent partition entry is treated as
-        // "no state" (the caller starts from an empty acquisition window).
-        //
-        // A `start_offset` of `UNINITIALIZED_START_OFFSET` is state, not the
-        // absence of it: the group coordinator registered the partition and
-        // stamped a state epoch, and only where the group starts is still
-        // open. It passes through as it does on the local path, so the caller
-        // sees the same row on either side of the routing decision and keeps
-        // the epoch its write-back must carry.
-        let part_result = resp
+        let Some(pr) = resp
             .results
             .into_iter()
             .flat_map(|t| t.partitions)
-            .find(|p| p.partition == partition);
-        let Some(pr) = part_result else {
-            return Ok(None);
+            .find(|p| p.partition == partition)
+        else {
+            return Err(BrokerError::Share(format!(
+                "ReadShareGroupState for partition {partition}: leader answered for no such partition"
+            )));
         };
         if pr.error_code != 0 {
-            return Ok(None);
+            return Err(refused(
+                "ReadShareGroupState",
+                partition,
+                pr.error_code,
+                pr.error_message.as_deref().unwrap_or("no error message"),
+            ));
         }
-        Ok(Some(SharePartitionState {
+        // The read response carries no leader epoch and no delivery complete
+        // count.
+        Ok(SharePartitionState {
             state_epoch: pr.state_epoch,
-            leader_epoch: 0,
+            leader_epoch,
             start_offset: Offset(pr.start_offset),
             delivery_complete_count: 0,
             state_batches: pr
@@ -341,7 +366,87 @@ impl SharePersister {
             snapshot_epoch: 0,
             last_snapshot_offset: Offset(0),
             updates_since_snapshot: 0,
-        }))
+        })
+    }
+
+    /// Read the share state summary for `(group, topic_id, partition)`, with
+    /// no side effect. `Ok(None)` means the key has no state.
+    ///
+    /// This is Kafka's `ReadShareGroupStateSummary`, which the admin offset
+    /// RPCs use. Unlike [`SharePersister::read_state`] it does not change the
+    /// stored leader epoch, and a key with no state is not an error.
+    ///
+    /// # Errors
+    ///
+    /// As [`SharePersister::read_state`].
+    pub(crate) async fn read_summary(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<Option<ShareStateSummary>, BrokerError> {
+        let state_partition = self
+            .share_coordinator
+            .state_partition_for(group, &topic_id, partition);
+        self.ensure_topic_and_refresh(state_partition).await?;
+        if self.share_coordinator.is_leader(state_partition).await {
+            return self
+                .share_coordinator
+                .read_summary(group, topic_id, partition)
+                .await
+                .map_err(|code| {
+                    refused(
+                        "ReadShareGroupStateSummary",
+                        partition,
+                        code,
+                        "no error message",
+                    )
+                });
+        }
+
+        let req = ReadShareGroupStateSummaryRequest {
+            group_id: group.to_string(),
+            topics: vec![ReadStateSummaryData {
+                topic_id: ProtoUuid(*topic_id.as_bytes()),
+                partitions: vec![ReadSummaryPartitionData {
+                    partition,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let resp = self.send_to_leader_resp(state_partition, req).await?;
+        let Some(pr) = resp
+            .results
+            .into_iter()
+            .flat_map(|t| t.partitions)
+            .find(|p| p.partition == partition)
+        else {
+            return Err(BrokerError::Share(format!(
+                "ReadShareGroupStateSummary for partition {partition}: leader answered for no such partition"
+            )));
+        };
+        if pr.error_code != 0 {
+            return Err(refused(
+                "ReadShareGroupStateSummary",
+                partition,
+                pr.error_code,
+                pr.error_message.as_deref().unwrap_or("no error message"),
+            ));
+        }
+        // The summary of a key with no state is the default row: epochs 0 and
+        // start offset -1. An initialized key always has a state epoch above
+        // 0, because the group coordinator stamps the group epoch.
+        if pr.state_epoch == 0 && pr.start_offset == UNINITIALIZED_START_OFFSET {
+            return Ok(None);
+        }
+        Ok(Some((
+            pr.state_epoch,
+            pr.leader_epoch,
+            Offset(pr.start_offset),
+            pr.delivery_complete_count,
+        )))
     }
 
     /// Persist a `WriteShareGroupState` delta for `(group, topic_id,
@@ -372,14 +477,30 @@ impl SharePersister {
             .state_partition_for(group, &topic_id, partition);
         self.ensure_topic_and_refresh(state_partition).await?;
         if self.share_coordinator.is_leader(state_partition).await {
+            let request = ShareWrite {
+                state_epoch,
+                leader_epoch,
+                start_offset,
+                delivery_complete_count,
+                batches,
+            };
             return self
                 .share_coordinator
-                .write(group, topic_id, partition, epochs, progress, batches)
+                .write(
+                    &self.controller.current_image(),
+                    group,
+                    topic_id,
+                    partition,
+                    request,
+                )
                 .await
-                .map_err(|code| {
-                    BrokerError::Share(format!(
-                        "WriteShareGroupState {group}:{topic_id}:{partition} fenced (code {code})"
-                    ))
+                .map_err(|error| {
+                    refused(
+                        "WriteShareGroupState",
+                        partition,
+                        error.code(),
+                        &error.row_message("write"),
+                    )
                 });
         }
 
@@ -543,6 +664,14 @@ impl_partition_results!(
     WriteShareGroupStateResponse,
     DeleteShareGroupStateResponse,
 );
+
+/// The error for a share-state call on `partition` that the coordinator
+/// refused with `error_code`.
+fn refused(what: &str, partition: i32, error_code: i16, message: &str) -> BrokerError {
+    BrokerError::Share(format!(
+        "{what} for partition {partition} refused by the leader (code {error_code}): {message}"
+    ))
+}
 
 /// `Ok(())` only when the leader answered for `partition` with error code 0.
 ///

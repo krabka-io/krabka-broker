@@ -11,7 +11,12 @@ use crate::{
     partition_registry::PartitionRegistry,
     share_coordinator::{
         config::ShareCoordinatorConfig,
-        coordinator::test_support::{batch, coordinator, lead_all, open_state_partition},
+        coordinator::{
+            ShareStateError,
+            test_support::{
+                batch, coordinator, image_with_topic, lead_all, open_state_partition, share_write,
+            },
+        },
         persistence::{StateBatch, encode_state_key},
     },
 };
@@ -68,7 +73,7 @@ async fn recover_honors_nondefault_read_bound() {
         },
     ));
     bounded.recover(&image).await.unwrap();
-    assert!(bounded.read("bounded", topic_id, 0).await == Ok(None));
+    assert!(bounded.read_summary("bounded", topic_id, 0).await == Ok(None));
 
     let unbounded = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
@@ -99,7 +104,17 @@ async fn write_persists_and_recovers() {
         lead_all(&coord).await;
         coord.initialize("g", tid, 0, 2, Offset(0)).await.unwrap();
         coord
-            .write("g", tid, 0, (2, 3), (Offset(20), 4), vec![batch(20, 29)])
+            .read(&image_with_topic(tid, 1), "g", tid, 0, 3)
+            .await
+            .unwrap();
+        coord
+            .write(
+                &image_with_topic(tid, 1),
+                "g",
+                tid,
+                0,
+                share_write((2, 3), (20, 4), vec![batch(20, 29)]),
+            )
             .await
             .unwrap();
     }
@@ -116,9 +131,8 @@ async fn write_persists_and_recovers() {
     recovered.reload_all_partitions_for_test().await;
 
     let st = recovered
-        .read("g", tid, 0)
+        .state_for_test("g", tid, 0)
         .await
-        .unwrap()
         .expect("recovered");
     check!(st.state_epoch == 2);
     check!(st.leader_epoch == 3);
@@ -222,7 +236,7 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
 
     coord.reload_all_partitions_for_test().await;
 
-    let st = coord.read("g", tid, 0).await.unwrap().expect("recovered");
+    let st = coord.state_for_test("g", tid, 0).await.expect("recovered");
     // Batch B is the final snapshot — proves the inter-batch cursor advanced
     // past batch A (base_offset + last_offset_delta + 1 == 2).
     check!(st.leader_epoch == 9);
@@ -302,7 +316,7 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
 
     coord.reload_all_partitions_for_test().await;
 
-    let st = coord.read("g", tid, 0).await.unwrap().expect("recovered");
+    let st = coord.state_for_test("g", tid, 0).await.expect("recovered");
     check!(st.leader_epoch == 3);
     check!(st.start_offset == 20);
     // The snapshot record sits at base_offset(0) + offset_delta(1) == 1.
@@ -395,6 +409,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
     ));
     let state_partition = coordinator_a.state_partition_for("g", &topic_id, 0);
     open_state_partition(&registry, dir.path(), state_partition.get());
+    let data_image = image_with_topic(topic_id, 1);
 
     // Broker A leads at epoch 0 and initializes the key at offset 10.
     coordinator_a
@@ -525,14 +540,14 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
             } => {
                 let written = on(broker)
                     .write(
+                        &data_image,
                         "g",
                         topic_id,
                         0,
-                        (1, 0),
-                        (Offset(start), 0),
-                        vec![batch(start, start + 9)],
+                        share_write((1, 0), (start, 0), vec![batch(start, start + 9)]),
                     )
-                    .await;
+                    .await
+                    .map_err(ShareStateError::code);
                 assert!(written == expected, "step {index}");
             }
             Step::Read {
@@ -540,9 +555,10 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
                 expected,
             } => {
                 let read = on(broker)
-                    .read("g", topic_id, 0)
+                    .read(&data_image, "g", topic_id, 0, 0)
                     .await
-                    .map(|state| state.map(|st| (st.start_offset.0, st.state_batches)));
+                    .map(|st| Some((st.start_offset.0, st.state_batches)))
+                    .map_err(ShareStateError::code);
                 assert!(read == expected, "step {index}");
             }
         }
@@ -572,7 +588,8 @@ async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
         .await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Pending));
     check!(
-        coordinator.read("g", topic_id, 0).await == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
+        coordinator.read_summary("g", topic_id, 0).await
+            == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
     );
 
     open_state_partition(&registry, dir.path(), state_partition.get());
@@ -582,5 +599,5 @@ async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
         .finished()
         .await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
-    check!(coordinator.read("g", topic_id, 0).await == Ok(None));
+    check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
 }

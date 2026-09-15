@@ -46,7 +46,7 @@ mod recovery;
 mod state_machine;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use crate::{
     partition_registry::PartitionRegistry,
@@ -81,6 +81,94 @@ pub(crate) type ShareErrorCode = i16;
 /// The fields are `state_epoch`, `leader_epoch`, `start_offset`, and
 /// `delivery_complete_count`.
 pub(crate) type ShareStateSummary = (StateEpoch, LeaderEpoch, Offset, i32);
+
+/// Kafka's messages for the share-state error rows: the `Errors` default
+/// messages and the validation messages of `ShareCoordinatorShard`.
+pub(crate) mod message {
+    pub(crate) const NEGATIVE_PARTITION_ID: &str = "The partition id cannot be a negative number.";
+    pub(crate) const NEGATIVE_LEADER_EPOCH: &str = "The leader epoch cannot be a negative number.";
+    pub(crate) const NEGATIVE_STATE_EPOCH: &str = "The state epoch cannot be a negative number.";
+    pub(crate) const WRITE_UNINITIALIZED_SHARE_PARTITION: &str =
+        "Write operation on uninitialized share partition not allowed.";
+    pub(crate) const READ_UNINITIALIZED_SHARE_PARTITION: &str =
+        "Read operation on uninitialized share partition not allowed.";
+    pub(crate) const UNKNOWN_SERVER_ERROR: &str =
+        "The server experienced an unexpected error when processing the request.";
+    pub(crate) const UNKNOWN_TOPIC_OR_PARTITION: &str =
+        "This server does not host this topic-partition.";
+    pub(crate) const COORDINATOR_LOAD_IN_PROGRESS: &str =
+        "The coordinator is loading and hence can't process requests.";
+    pub(crate) const NOT_COORDINATOR: &str = "This is not the correct coordinator.";
+    pub(crate) const KAFKA_STORAGE_ERROR: &str =
+        "Disk error when trying to access log file on the disk.";
+    pub(crate) const FENCED_LEADER_EPOCH: &str =
+        "The leader epoch in the request is older than the epoch on the broker.";
+    pub(crate) const FENCED_STATE_EPOCH: &str =
+        "The coordinator rejected the request because the state epoch did not match.";
+}
+
+/// A `ReadShareGroupState` or `WriteShareGroupState` that the coordinator
+/// did not apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShareStateError {
+    /// The shard refused the request. Kafka puts `message` on the row as it
+    /// is.
+    Refused {
+        code: ShareErrorCode,
+        message: &'static str,
+    },
+    /// The operation did not run to its end: this broker is not the
+    /// coordinator, the state partition loads, or the append failed. `code`
+    /// is the code after Kafka's
+    /// `CoordinatorOperationExceptionHelper.handleOperationException`, and
+    /// `message` is the message of the error before that mapping. Kafka
+    /// prefixes it with `Unable to read share group state: ` or
+    /// `Unable to write share group state: `.
+    Operation {
+        code: ShareErrorCode,
+        message: &'static str,
+    },
+}
+
+impl ShareStateError {
+    /// The wire error code.
+    pub(crate) fn code(self) -> ShareErrorCode {
+        match self {
+            Self::Refused { code, .. } | Self::Operation { code, .. } => code,
+        }
+    }
+
+    /// The wire error message. `operation` is `read` or `write`.
+    pub(crate) fn row_message(self, operation: &str) -> String {
+        match self {
+            Self::Refused { message, .. } => message.to_owned(),
+            Self::Operation { message, .. } => {
+                format!("Unable to {operation} share group state: {message}")
+            }
+        }
+    }
+
+    /// The error of a status check that [`ShareCoordinator::active`] refused.
+    fn inactive(code: ShareErrorCode) -> Self {
+        let message = if code == crate::codes::COORDINATOR_LOAD_IN_PROGRESS {
+            message::COORDINATOR_LOAD_IN_PROGRESS
+        } else {
+            message::NOT_COORDINATOR
+        };
+        Self::Operation { code, message }
+    }
+}
+
+/// The fields of one `WriteShareGroupState` partition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShareWrite {
+    pub(crate) state_epoch: StateEpoch,
+    pub(crate) leader_epoch: LeaderEpoch,
+    pub(crate) start_offset: Offset,
+    /// `-1` when the request version has no such field.
+    pub(crate) delivery_complete_count: i32,
+    pub(crate) batches: Vec<crate::share_coordinator::persistence::StateBatch>,
+}
 
 /// `start_offset` sentinel for "no persisted share state".
 ///
