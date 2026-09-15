@@ -59,8 +59,8 @@ impl Authorizer for Grants {
             request.resource_type,
             request.operation,
         ) {
-            (BROKER, ResourceType::Cluster, AclOperation::ClusterAction) => true,
-            (CLIENT, ResourceType::TransactionalId, AclOperation::Write) => true,
+            (BROKER, ResourceType::Cluster, AclOperation::ClusterAction)
+            | (CLIENT, ResourceType::TransactionalId, AclOperation::Write) => true,
             (CLIENT, ResourceType::Topic, AclOperation::Write) => {
                 CLIENT_TOPICS.contains(&request.resource_name)
             }
