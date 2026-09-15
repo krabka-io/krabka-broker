@@ -31,26 +31,39 @@
 
 use std::{
     net::SocketAddr,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use assert2::assert;
+use bytes::BufMut;
 use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle,
+    authorizer::SimpleAclAuthorizer,
     config::{InterBrokerCredentials, ListenerSpec},
 };
 use krabka_client_core::{
     Client,
     security::{ClientSecurity, SaslCredentials},
 };
-use krabka_protocol::owned::{
-    add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
-    common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    end_txn_request::EndTxnRequest,
-    find_coordinator_request::FindCoordinatorRequest,
-    init_producer_id_request::InitProducerIdRequest,
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
+use krabka_metadata::{
+    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+};
+use krabka_protocol::{
+    Encode, ProtocolError, ProtocolRequest,
+    owned::{
+        add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
+        common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        end_txn_request::EndTxnRequest,
+        find_coordinator_request::FindCoordinatorRequest,
+        init_producer_id_request::InitProducerIdRequest,
+        init_producer_id_response::InitProducerIdResponse,
+        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_response::PartitionProduceResponse,
+    },
+    records::{Attributes, Record, RecordBatch},
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
@@ -99,27 +112,32 @@ fn apply_sasl(cfg: &mut BrokerConfig, addr: SocketAddr) {
 
 /// Client-side `SASL/PLAIN` so the test's low-level clients authenticate
 /// against the brokers' `SASL_PLAINTEXT` listener.
-fn client_security() -> ClientSecurity {
+fn client_security((username, password): (&str, &str)) -> ClientSecurity {
     ClientSecurity {
         protocol: ListenerProtocol::SaslPlaintext,
         tls: None,
         sasl: Some(SaslCredentials::Plain {
-            username: USER.to_string(),
-            password: PASS.to_string(),
+            username: username.to_string(),
+            password: password.to_string(),
         }),
         sasl_host: None,
     }
 }
 
-/// Open a SASL-authenticated client to `addr`.
-async fn sasl_client(addr: &str) -> Client {
+/// Open a client to `addr` that authenticates as `credentials`.
+async fn sasl_client_as(addr: &str, credentials: (&str, &str)) -> Client {
     Client::builder()
         .bootstrap(addr.to_string())
         .client_id("krabka-txn-fanout-test")
-        .security(client_security())
+        .security(client_security(credentials))
         .build()
         .await
         .expect("sasl client connect")
+}
+
+/// Open a client to `addr` that authenticates as the broker user.
+async fn sasl_client(addr: &str) -> Client {
+    sasl_client_as(addr, (USER, PASS)).await
 }
 
 /// Boot a two-broker KIP-853 auto-join cluster on a `SASL_PLAINTEXT` listener.
@@ -128,7 +146,9 @@ async fn sasl_client(addr: &str) -> Client {
 /// mirrors the concrete-port handling in `support::start_n_node`. The marker
 /// fan-out resolves the leader's advertised inter-broker endpoint, which must be
 /// a real reachable port.
-async fn start_two_sasl() -> Result<Vec<(BrokerHandle, BrokerConfig, TempDir)>, BrokerError> {
+async fn start_two_sasl(
+    configure: fn(&mut BrokerConfig),
+) -> Result<Vec<(BrokerHandle, BrokerConfig, TempDir)>, BrokerError> {
     support::init_tracing();
 
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
@@ -154,6 +174,7 @@ async fn start_two_sasl() -> Result<Vec<(BrokerHandle, BrokerConfig, TempDir)>, 
     cfg0.auto_join = false;
     cfg0.bootstrap_servers = vec![];
     apply_sasl(&mut cfg0, client_addrs[0]);
+    configure(&mut cfg0);
 
     let dir1 = TempDir::new().unwrap();
     let mut cfg1 = BrokerConfig::for_tests(dir1.path().to_path_buf());
@@ -169,6 +190,7 @@ async fn start_two_sasl() -> Result<Vec<(BrokerHandle, BrokerConfig, TempDir)>, 
     cfg1.auto_join = false;
     cfg1.bootstrap_servers = vec![];
     apply_sasl(&mut cfg1, client_addrs[1]);
+    configure(&mut cfg1);
 
     // Pull held listeners before the spawns so each spawn owns its pair.
     let mut data_ls = client_listeners.into_iter();
@@ -208,10 +230,12 @@ async fn start_two_sasl() -> Result<Vec<(BrokerHandle, BrokerConfig, TempDir)>, 
 ///
 /// Short raft timings sometimes split-vote on busy runners. This function
 /// mirrors `support::start_n_node_with_retry`.
-async fn start_two_sasl_with_retry() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
+async fn start_two_sasl_with_retry(
+    configure: fn(&mut BrokerConfig),
+) -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
     let mut last = None;
     for attempt in 1..=3 {
-        match start_two_sasl().await {
+        match start_two_sasl(configure).await {
             Ok(c) => return c,
             Err(e) => {
                 tracing::warn!(attempt, error = %e, "SASL cluster boot failed; retrying");
@@ -242,19 +266,19 @@ async fn wait_both_registered(cluster: &[(BrokerHandle, BrokerConfig, TempDir)])
 /// The function waits until both partitions have an elected leader in
 /// `handle`'s metadata image. The broker serves Metadata to the connected admin
 /// client from that same image.
-async fn partition_leaders(client: &Client, handle: &BrokerHandle) -> Vec<(i32, i32)> {
+async fn partition_leaders(client: &Client, handle: &BrokerHandle, topic: &str) -> Vec<(i32, i32)> {
     // A non-zero `leader` in the image is exactly the wire condition the old
     // loop polled for (`leader_id >= 0`); await both partitions' elections
     // event-driven via the image watch channel, then take one Metadata snapshot.
     handle
         .wait_for_image(|img| {
-            (0..2).all(|p| img.partition(TOPIC, p).is_some_and(|pr| pr.leader != 0))
+            (0..2).all(|p| img.partition(topic, p).is_some_and(|pr| pr.leader != 0))
         })
         .await;
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {
-                name: Some(TOPIC.to_string()),
+                name: Some(topic.to_string()),
                 ..Default::default()
             }]),
             ..Default::default()
@@ -264,7 +288,7 @@ async fn partition_leaders(client: &Client, handle: &BrokerHandle) -> Vec<(i32, 
     let topic = resp
         .topics
         .iter()
-        .find(|t| t.name.as_deref() == Some(TOPIC))
+        .find(|t| t.name.as_deref() == Some(topic))
         .expect("topic present in metadata after leader election");
     topic
         .partitions
@@ -273,9 +297,44 @@ async fn partition_leaders(client: &Client, handle: &BrokerHandle) -> Vec<(i32, 
         .collect()
 }
 
+/// Find the transaction coordinator for `transactional_id`: its node id, host
+/// and port.
+///
+/// The transaction coordinator partition (`__transaction_state[hash(id)]`) is
+/// auto-created and its leader elected lazily on first access, so the first
+/// `FindCoordinator` can race ahead of that election and briefly return
+/// `COORDINATOR_NOT_AVAILABLE`. The function retries until a deadline, so a
+/// coordinator that never becomes available still fails the test.
+async fn find_coordinator(client: &Client, transactional_id: &str) -> (i32, String, i32) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let fc = client
+            .send(FindCoordinatorRequest {
+                key: transactional_id.into(),
+                key_type: 1, // TRANSACTION
+                coordinator_keys: vec![transactional_id.into()],
+                ..Default::default()
+            })
+            .await
+            .expect("find coordinator");
+        let (node, host, port) = fc.coordinators.first().map_or_else(
+            || (fc.node_id, fc.host.clone(), fc.port),
+            |c| (c.node_id, c.host.clone(), c.port),
+        );
+        if node >= 0 {
+            return (node, host, port);
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "txn coordinator never became available: {fc:?}"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
-    let cluster = start_two_sasl_with_retry().await;
+    let cluster = start_two_sasl_with_retry(|_| {}).await;
     wait_both_registered(&cluster).await;
 
     let bootstrap = cluster[0].1.listen_addr.to_string();
@@ -302,45 +361,14 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
         cr.topics[0].error_code
     );
 
-    let leaders = partition_leaders(&admin, &cluster[0].0).await;
+    let leaders = partition_leaders(&admin, &cluster[0].0, TOPIC).await;
     let distinct: std::collections::BTreeSet<i32> = leaders.iter().map(|&(_, l)| l).collect();
     assert!(
         distinct.len() == 2,
         "expected partition leadership split across both brokers, got {leaders:?}"
     );
 
-    // Locate the transaction coordinator for TID.
-    // The transaction coordinator partition (`__transaction_state[hash(TID)]`)
-    // is auto-created and its leader elected lazily on first access, so the
-    // initial FindCoordinator can race ahead of that election and briefly
-    // return COORDINATOR_NOT_AVAILABLE ("partition not found"). Poll until it
-    // resolves — matching the retry-with-deadline idiom used elsewhere in this
-    // test — so a genuine never-available coordinator still surfaces (after the
-    // deadline) rather than flaking on the timing window.
-    let fc_deadline = Instant::now() + Duration::from_secs(30);
-    let (coord_node, coord_host, coord_port) = loop {
-        let fc = admin
-            .send(FindCoordinatorRequest {
-                key: TID.into(),
-                key_type: 1, // TRANSACTION
-                coordinator_keys: vec![TID.into()],
-                ..Default::default()
-            })
-            .await
-            .expect("find coordinator");
-        let (node, host, port) = fc.coordinators.first().map_or_else(
-            || (fc.node_id, fc.host.clone(), fc.port),
-            |c| (c.node_id, c.host.clone(), c.port),
-        );
-        if node >= 0 {
-            break (node, host, port);
-        }
-        assert!(
-            Instant::now() <= fc_deadline,
-            "txn coordinator never became available: {fc:?}"
-        );
-        tokio::task::yield_now().await;
-    };
+    let (coord_node, coord_host, coord_port) = find_coordinator(&admin, TID).await;
 
     // Pick the partition led by the broker that is NOT the coordinator, so
     // EndTxn must fan a marker to a *remote* leader over the SASL listener.
@@ -421,5 +449,319 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     coord.close();
     for (h, _, _) in cluster {
         h.shutdown().await;
+    }
+}
+
+const ADMIN_USER: &str = "admin";
+const ADMIN_PASS: &str = "admin-secret";
+const CLIENT_USER: &str = "client";
+const CLIENT_PASS: &str = "client-secret";
+
+/// Run the brokers with an ACL authorizer. `admin` is the only super user.
+/// The broker user and the client user get their ACLs from the test.
+fn apply_acls(cfg: &mut BrokerConfig) {
+    for (user, pass) in [(ADMIN_USER, ADMIN_PASS), (CLIENT_USER, CLIENT_PASS)] {
+        cfg.plain_credentials
+            .insert(user.to_string(), pass.to_string());
+    }
+    cfg.super_users = std::iter::once(ADMIN_USER.to_string()).collect();
+    cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+}
+
+/// An `Allow` ACL on a literal resource.
+fn allow(
+    resource_type: ResourceType,
+    resource_name: &str,
+    principal: &str,
+    operation: AclOperation,
+) -> MetadataRecord {
+    MetadataRecord::V1AccessControlEntry(AclEntry {
+        resource_type,
+        resource_name: resource_name.into(),
+        pattern_type: PatternType::Literal,
+        principal: principal.into(),
+        host: "*".into(),
+        operation,
+        permission_type: PermissionType::Allow,
+    })
+}
+
+/// A request sent at exactly version `V`, whatever the broker also supports.
+#[derive(Clone, Debug)]
+struct At<R, const V: i16>(R);
+
+impl<R: Encode, const V: i16> Encode for At<R, V> {
+    fn encode<B: BufMut>(&self, buf: &mut B, version: i16) -> Result<(), ProtocolError> {
+        self.0.encode(buf, version)
+    }
+
+    fn encoded_len(&self, version: i16) -> usize {
+        self.0.encoded_len(version)
+    }
+}
+
+impl<R: ProtocolRequest, const V: i16> ProtocolRequest for At<R, V> {
+    const API_KEY: i16 = R::API_KEY;
+    const MIN_VERSION: i16 = V;
+    const MAX_VERSION: i16 = V;
+    const FLEXIBLE_MIN: i16 = R::FLEXIBLE_MIN;
+    type Response = R::Response;
+}
+
+/// One transactional `Produce` whose partition leader is not the transaction
+/// coordinator.
+struct VerificationCase {
+    name: &'static str,
+    /// `Produce` v11 only verifies the partition, so the client adds it first
+    /// with its own `AddPartitionsToTxn` (v3). `Produce` v12 lets the leader
+    /// add the partition.
+    produce_version: i16,
+}
+
+/// KIP-890 verification of a transactional `Produce` when the transaction
+/// coordinator is on another broker, in a cluster with ACLs.
+///
+/// The partition leader sends `AddPartitionsToTxn` v4 or later to the
+/// coordinator as the broker principal. Kafka's
+/// `KafkaApis.handleAddPartitionsToTxnRequest` authorizes that request with
+/// `ClusterAction` on the cluster alone, and checks no transactional id or
+/// topic ACL. The broker user here holds only `ClusterAction`, so the produce
+/// succeeds only if the coordinator follows Kafka. The commit then fans the
+/// marker out to the remote leader as the same broker principal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_action() {
+    let cluster = start_two_sasl_with_retry(apply_acls).await;
+    wait_both_registered(&cluster).await;
+
+    let grants = [
+        allow(
+            ResourceType::Cluster,
+            "kafka-cluster",
+            &format!("User:{USER}"),
+            AclOperation::ClusterAction,
+        ),
+        allow(
+            ResourceType::TransactionalId,
+            "*",
+            &format!("User:{CLIENT_USER}"),
+            AclOperation::Write,
+        ),
+        allow(
+            ResourceType::Topic,
+            "*",
+            &format!("User:{CLIENT_USER}"),
+            AclOperation::Write,
+        ),
+    ];
+    for grant in grants {
+        cluster[0]
+            .0
+            .submit_metadata_record_for_test(grant)
+            .await
+            .expect("seed ACL");
+    }
+    for (handle, _, _) in &cluster {
+        handle
+            .wait_for_image(|img| {
+                img.matching_acls(ResourceType::Cluster, "kafka-cluster")
+                    .count()
+                    == 1
+                    && img
+                        .matching_acls(ResourceType::TransactionalId, "any")
+                        .count()
+                        == 1
+                    && img.matching_acls(ResourceType::Topic, "any").count() == 1
+            })
+            .await;
+    }
+
+    let admin = sasl_client_as(
+        &cluster[0].1.listen_addr.to_string(),
+        (ADMIN_USER, ADMIN_PASS),
+    )
+    .await;
+    let client_bootstrap = sasl_client_as(
+        &cluster[0].1.listen_addr.to_string(),
+        (CLIENT_USER, CLIENT_PASS),
+    )
+    .await;
+
+    let cases = [
+        VerificationCase {
+            name: "verify-only-produce-v11",
+            produce_version: 11,
+        },
+        VerificationCase {
+            name: "add-produce-v12",
+            produce_version: 12,
+        },
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for case in cases {
+        let created = admin
+            .send(CreateTopicsRequest {
+                topics: vec![CreatableTopic {
+                    name: case.name.into(),
+                    num_partitions: 2,
+                    replication_factor: 1,
+                    ..Default::default()
+                }],
+                timeout_ms: 5_000,
+                ..Default::default()
+            })
+            .await
+            .expect("create topic");
+        assert!(
+            created.topics[0].error_code == 0,
+            "{}: {created:?}",
+            case.name
+        );
+        let leaders = partition_leaders(&admin, &cluster[0].0, case.name).await;
+
+        let (coordinator, coordinator_host, coordinator_port) =
+            find_coordinator(&client_bootstrap, case.name).await;
+        let (partition, leader) = leaders
+            .iter()
+            .copied()
+            .find(|&(_, leader)| leader != coordinator)
+            .expect("a partition led by a broker that is not the coordinator");
+        let leader_addr = cluster
+            .iter()
+            .find(|(_, cfg, _)| i64::from(leader) == i64::try_from(cfg.node_id.0).unwrap())
+            .map(|(_, cfg, _)| cfg.listen_addr.to_string())
+            .expect("the leader is in the cluster");
+        let to_coordinator = sasl_client_as(
+            &format!("{coordinator_host}:{coordinator_port}"),
+            (CLIENT_USER, CLIENT_PASS),
+        )
+        .await;
+        let to_leader = sasl_client_as(&leader_addr, (CLIENT_USER, CLIENT_PASS)).await;
+
+        let init = init_producer(&to_coordinator, case.name).await;
+        let topic = AddPartitionsToTxnTopic {
+            name: case.name.into(),
+            partitions: vec![partition],
+            ..Default::default()
+        };
+        if case.produce_version < 12 {
+            let added = to_coordinator
+                .send(At::<_, 3>(AddPartitionsToTxnRequest {
+                    v3_and_below_transactional_id: case.name.into(),
+                    v3_and_below_producer_id: init.producer_id,
+                    v3_and_below_producer_epoch: init.producer_epoch,
+                    v3_and_below_topics: vec![topic],
+                    ..Default::default()
+                }))
+                .await
+                .expect("add partitions to txn");
+            assert!(
+                added.results_by_topic_v3_and_below[0].results_by_partition[0].partition_error_code
+                    == 0,
+                "{}: {added:?}",
+                case.name
+            );
+        }
+
+        let batch = RecordBatch {
+            attributes: Attributes::default().with_transactional(true),
+            producer_id: init.producer_id,
+            producer_epoch: init.producer_epoch,
+            base_sequence: 0,
+            last_offset_delta: 0,
+            max_timestamp: 1,
+            records: vec![Record {
+                offset_delta: 0,
+                value: Some(bytes::Bytes::from_static(b"v")),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        };
+        let request = ProduceRequest {
+            transactional_id: Some(case.name.into()),
+            acks: -1,
+            timeout_ms: 5_000,
+            topic_data: vec![TopicProduceData {
+                name: case.name.into(),
+                partition_data: vec![PartitionProduceData {
+                    index: partition,
+                    records: Some(batch.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let produced = if case.produce_version < 12 {
+            to_leader.send(At::<_, 11>(request)).await
+        } else {
+            to_leader.send(At::<_, 12>(request)).await
+        }
+        .expect("produce");
+
+        let ended = to_coordinator
+            .send(EndTxnRequest {
+                transactional_id: case.name.into(),
+                producer_id: init.producer_id,
+                producer_epoch: init.producer_epoch,
+                committed: true,
+                ..Default::default()
+            })
+            .await
+            .expect("end txn");
+
+        actual.push((
+            case.name,
+            produced.responses[0].partition_responses[0].clone(),
+            ended.error_code,
+        ));
+        expected.push((
+            case.name,
+            PartitionProduceResponse {
+                index: partition,
+                error_code: 0,
+                base_offset: 0,
+                log_append_time_ms: -1,
+                log_start_offset: 0,
+                ..Default::default()
+            },
+            0,
+        ));
+        to_coordinator.close();
+        to_leader.close();
+    }
+
+    admin.close();
+    client_bootstrap.close();
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+    assert!(actual == expected);
+}
+
+/// `InitProducerId` for `transactional_id`, retried while the coordinator
+/// loads its partition.
+async fn init_producer(client: &Client, transactional_id: &str) -> InitProducerIdResponse {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let init = client
+            .send(InitProducerIdRequest {
+                transactional_id: Some(transactional_id.into()),
+                transaction_timeout_ms: 60_000,
+                producer_id: -1,
+                producer_epoch: -1,
+                ..Default::default()
+            })
+            .await
+            .expect("init producer id");
+        // COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR and
+        // CONCURRENT_TRANSACTIONS mean the coordinator is still loading.
+        if !matches!(init.error_code, 15 | 16 | 51) || Instant::now() > deadline {
+            assert!(init.error_code == 0, "InitProducerId: {init:?}");
+            return init;
+        }
+        // intentional: coordinator load has no awaiter reachable from this
+        // client; the coordinator answer is the signal.
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
