@@ -1,0 +1,302 @@
+//! `DeleteGroups` for a share group (KIP-932).
+//!
+//! Kafka's `GroupCoordinatorService.deleteGroups` runs the share group delete
+//! first. A group with members answers `NON_EMPTY_GROUP`. For an empty group,
+//! the persister deletes the share state of every initialized partition. A
+//! group whose state delete failed is kept and answers the error. Only then
+//! does the general delete write the group tombstones
+//! (`ShareGroup.createGroupTombstoneRecords`).
+
+use krabka_protocol::records::RecordBatch;
+
+use super::records::{
+    PendingShareRecords, chrono_now_ms, flush_pending, state_partition_metadata_from,
+};
+use crate::{
+    codes,
+    coordinator::{
+        DeleteGroupError,
+        unified::{
+            GroupCoordinator, OffsetRecordBatchBuilder,
+            offsets_log::OffsetsLog,
+            share::{
+                persistence::{ShareGroupKey, encode_share_key},
+                state::ShareGroupState,
+            },
+        },
+    },
+};
+
+/// Deletes the share group that `state` holds.
+///
+/// # Errors
+///
+/// Returns [`DeleteGroupError::NonEmpty`] when the group has members,
+/// [`DeleteGroupError::ShareState`] when the delete of a share state fails
+/// (the group is kept, without the partitions whose state is gone), and
+/// [`DeleteGroupError::Internal`] when the tombstone append fails.
+pub(super) async fn delete_group(
+    state: &mut ShareGroupState,
+    offsets_log: &dyn OffsetsLog,
+    coordinator: &GroupCoordinator,
+) -> Result<(), DeleteGroupError> {
+    if !state.members.is_empty() {
+        return Err(DeleteGroupError::NonEmpty);
+    }
+
+    delete_share_state(state, offsets_log, coordinator).await?;
+
+    offsets_log
+        .append(
+            &state.group_id,
+            tombstone_batch(&state.group_id, chrono_now_ms()),
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                group_id = %state.group_id,
+                %error,
+                "share group tombstone append failed",
+            );
+            DeleteGroupError::Internal
+        })
+}
+
+/// Deletes the share state of every initialized partition of the group.
+///
+/// When a delete fails, the partitions whose state is already gone leave the
+/// initialized set, and the method writes the new
+/// `ShareGroupStatePartitionMetadata`, so a retry deletes only the rest.
+async fn delete_share_state(
+    state: &mut ShareGroupState,
+    offsets_log: &dyn OffsetsLog,
+    coordinator: &GroupCoordinator,
+) -> Result<(), DeleteGroupError> {
+    if state.initialized.is_empty() {
+        return Ok(());
+    }
+    let Some(persister) = coordinator.share_persister() else {
+        return Err(DeleteGroupError::ShareState(
+            codes::COORDINATOR_NOT_AVAILABLE,
+        ));
+    };
+
+    let mut partitions: Vec<_> = state.initialized.iter().copied().collect();
+    partitions.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
+    let mut failed = false;
+    let mut removed = false;
+    for (topic_id, partition) in partitions {
+        let topic_uuid = uuid::Uuid::from_bytes(topic_id.0);
+        match persister
+            .delete(&state.group_id, topic_uuid, partition)
+            .await
+        {
+            Ok(()) => {
+                state.initialized.remove(&(topic_id, partition));
+                removed = true;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    group_id = %state.group_id,
+                    topic_id = %topic_uuid,
+                    partition,
+                    %error,
+                    "share state delete failed; the share group is kept",
+                );
+                failed = true;
+            }
+        }
+    }
+    if !failed {
+        return Ok(());
+    }
+    if removed {
+        state.forget_unused_topic_names();
+        let pending = PendingShareRecords {
+            state_partition_metadata: Some(state_partition_metadata_from(state)),
+            ..Default::default()
+        };
+        if let Err(error) =
+            flush_pending(state, pending, offsets_log, coordinator, chrono_now_ms()).await
+        {
+            tracing::warn!(
+                group_id = %state.group_id,
+                %error,
+                "persisting ShareGroupStatePartitionMetadata after a failed state delete failed",
+            );
+        }
+    }
+    // The persister reports no per-partition code to this caller yet, so every
+    // failure answers the retriable coordinator error.
+    Err(DeleteGroupError::ShareState(
+        codes::COORDINATOR_NOT_AVAILABLE,
+    ))
+}
+
+/// The tombstones of an empty share group, in the order of Kafka's
+/// `ShareGroup.createGroupTombstoneRecords`: the target assignment metadata,
+/// the `ShareGroupStatePartitionMetadata`, and the group epoch. An empty
+/// group has no member records left.
+pub(super) fn tombstone_batch(group_id: &str, now_ms: i64) -> RecordBatch {
+    let mut batch = OffsetRecordBatchBuilder::default();
+    for key in [
+        ShareGroupKey::TargetAssignmentMetadata {
+            group_id: group_id.into(),
+        },
+        ShareGroupKey::StatePartitionMetadata {
+            group_id: group_id.into(),
+        },
+        ShareGroupKey::GroupMetadata {
+            group_id: group_id.into(),
+        },
+    ] {
+        batch.push(encode_share_key(&key), None);
+    }
+    batch.finish(now_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use assert2::check;
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::coordinator::unified::{
+        ShareGroupSeed,
+        share::{
+            actor::ShareGroupActorMessage,
+            persistence::{InitializedTopic, ShareGroupStatePartitionMetadataValue},
+        },
+        test_support::{fixed_source, make_coord_with_log, make_share_persister, share_member},
+    };
+
+    /// `(key, value)` of every record appended to `__consumer_offsets`.
+    type Appended = Vec<(Option<Bytes>, Option<Bytes>)>;
+
+    /// `(share group seed, persister wired, expected result, group kept,
+    /// expected appended records)`.
+    type Row = (
+        Option<ShareGroupSeed>,
+        bool,
+        Result<(), DeleteGroupError>,
+        bool,
+        Appended,
+    );
+
+    fn seed(members: usize, initialized_partitions: &[i32]) -> ShareGroupSeed {
+        let initialized = if initialized_partitions.is_empty() {
+            Vec::new()
+        } else {
+            vec![InitializedTopic {
+                topic_id: uuid::Uuid::from_bytes([9; 16]),
+                topic_name: "orders".to_owned(),
+                partitions: initialized_partitions.to_vec(),
+            }]
+        };
+        ShareGroupSeed {
+            group_epoch: 3,
+            members: (0..members)
+                .map(|index| (format!("member-{index}"), share_member("client")))
+                .collect::<HashMap<_, _>>(),
+            state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                initialized,
+                deleting: Vec::new(),
+            },
+            ..ShareGroupSeed::default()
+        }
+    }
+
+    /// `DeleteGroups` on a share group, per row: whether the group exists,
+    /// its members and initialized partitions, and whether a share persister
+    /// is wired. The persister runs over a metadata image with no brokers, so
+    /// it cannot reach a share coordinator and every state delete fails.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_answers_as_kafka() {
+        let tombstones: Appended = tombstone_batch("sg", 0)
+            .records
+            .into_iter()
+            .map(|record| (record.key, record.value))
+            .collect();
+        // (share group seed, persister wired, expected result, group kept,
+        //  expected appended records)
+        let rows: [Row; 5] = [
+            (
+                None,
+                true,
+                Err(DeleteGroupError::NotFound),
+                false,
+                Vec::new(),
+            ),
+            (
+                Some(seed(1, &[])),
+                true,
+                Err(DeleteGroupError::NonEmpty),
+                true,
+                Vec::new(),
+            ),
+            (Some(seed(0, &[])), false, Ok(()), false, tombstones.clone()),
+            (
+                Some(seed(0, &[0, 1])),
+                true,
+                Err(DeleteGroupError::ShareState(
+                    codes::COORDINATOR_NOT_AVAILABLE,
+                )),
+                true,
+                Vec::new(),
+            ),
+            (
+                Some(seed(0, &[0])),
+                false,
+                Err(DeleteGroupError::ShareState(
+                    codes::COORDINATOR_NOT_AVAILABLE,
+                )),
+                true,
+                Vec::new(),
+            ),
+        ];
+
+        for (index, (group_seed, persister, expected, kept, appended)) in
+            rows.into_iter().enumerate()
+        {
+            let (coordinator, log) = make_coord_with_log();
+            if persister {
+                coordinator.set_share_persister(make_share_persister(fixed_source(
+                    krabka_metadata::MetadataImage::default(),
+                )));
+            }
+            if let Some(group_seed) = group_seed {
+                coordinator.mark_share("sg");
+                let handle = coordinator.get_or_create_share("sg");
+                handle
+                    .tx
+                    .send(ShareGroupActorMessage::Seed(group_seed))
+                    .await
+                    .expect("seed the share group");
+            }
+
+            let result = coordinator.delete_group("sg").await;
+
+            check!(result == expected, "row {index}");
+            check!(
+                coordinator.share_group_ids().contains(&"sg".to_owned()) == kept,
+                "row {index}"
+            );
+            check!(
+                (coordinator.group_type("sg")
+                    == Some(crate::coordinator::unified::group_coordinator::GroupType::Share))
+                    == kept,
+                "row {index}"
+            );
+            let written: Appended = log
+                .batches()
+                .await
+                .into_iter()
+                .flat_map(|batch| batch.records)
+                .map(|record| (record.key, record.value))
+                .collect();
+            check!(written == appended, "row {index}");
+        }
+    }
+}

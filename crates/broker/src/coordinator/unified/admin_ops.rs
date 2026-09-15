@@ -76,7 +76,7 @@ impl GroupCoordinator {
         rx.await.ok()
     }
 
-    /// Drop a **classic** group from the registry.
+    /// Drop a **classic**, **streams** or **share** group from the registry.
     ///
     /// The actor atomically verifies that a classic group is empty and appends
     /// its durable k2 tombstone before removing it from the registry. The
@@ -89,8 +89,10 @@ impl GroupCoordinator {
         // KIP-1071: a Streams-locked group is deleted through the streams path —
         // never fall through to the classic path, which would remove the offset-home
         // `groups` entry out from under a live streams group.
-        if self.group_type(group_id) == Some(GroupType::Streams) {
-            return self.delete_streams_group(group_id).await;
+        match self.group_type(group_id) {
+            Some(GroupType::Streams) => return self.delete_streams_group(group_id).await,
+            Some(GroupType::Share) => return self.delete_share_group(group_id).await,
+            _ => {}
         }
         let handle = self.find(group_id).ok_or(DeleteGroupError::NotFound)?;
         // The actor serializes this check with Join/Leave so a concurrent join
@@ -148,6 +150,32 @@ impl GroupCoordinator {
         self.groups.remove(group_id);
         self.streams_seeds.remove(group_id);
         self.streams_seeds_cache.remove(group_id);
+        self.forget_group_metrics(group_id);
+        Ok(())
+    }
+
+    /// Delete a **share** group, per KIP-932.
+    ///
+    /// The share actor answers `NonEmpty` when the group has members. For an
+    /// empty group it deletes the share state of every initialized partition,
+    /// and then it appends the group tombstones. On success this method drops
+    /// the actor, the type lock and the seeds. It returns `NotFound` when no
+    /// share actor exists for the id.
+    async fn delete_share_group(&self, group_id: &str) -> Result<(), DeleteGroupError> {
+        let handle = self
+            .find_share(group_id)
+            .ok_or(DeleteGroupError::NotFound)?;
+        let (tx, rx) = oneshot::channel();
+        handle
+            .tx
+            .send(ShareGroupActorMessage::Delete { reply: tx })
+            .await
+            .map_err(|_| DeleteGroupError::NotFound)?;
+        rx.await.map_err(|_| DeleteGroupError::NotFound)??;
+        self.share_groups.remove(group_id);
+        self.group_types.remove(group_id);
+        self.share_seeds.remove(group_id);
+        self.share_seeds_cache.remove(group_id);
         self.forget_group_metrics(group_id);
         Ok(())
     }
