@@ -39,7 +39,7 @@ impl SharePartitionLeaderManager {
                     if st.dirty {
                         // A failed write keeps the state dirty for the next tick.
                         let _ = mgr
-                            .persist_if_dirty(&group, topic_id, partition, &mut st)
+                            .persist_if_dirty(&group, topic_id, partition, Some(&cell), &mut st)
                             .await;
                     }
                 }

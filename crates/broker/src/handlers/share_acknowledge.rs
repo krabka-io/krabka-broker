@@ -188,7 +188,7 @@ async fn process_topics(
             // back and the write error is the partition error, as Kafka's
             // `SharePartition.rollbackOrProcessStateUpdates` does.
             out.error_code = mgr
-                .apply_durably(group, topic_id, ap.partition_index, &mut st, |st| {
+                .apply_durably(group, topic_id, ap.partition_index, &cell, &mut st, |st| {
                     let mut err = codes::NONE;
                     for batch in &ap.acknowledgement_batches {
                         // A renew-ack RENEWs each batch's lock instead of

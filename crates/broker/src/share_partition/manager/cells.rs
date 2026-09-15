@@ -107,7 +107,7 @@ impl SharePartitionLeaderManager {
         // durable: a failed write keeps `dirty` set for a retry. A fenced
         // write means another writer owns the state, so no cell is cached.
         if let Err(code) = self
-            .persist_if_dirty(group, topic_id, partition, &mut loaded)
+            .persist_if_dirty(group, topic_id, partition, None, &mut loaded)
             .await
             && fences_the_partition(code)
         {
@@ -184,6 +184,26 @@ impl SharePartitionLeaderManager {
         self.leaders
             .get(&(group.to_string(), topic_id, partition))
             .map(|c| c.value().clone())
+    }
+
+    /// Drops `cell` from the cache when it is still the cached cell for
+    /// `(group, topic_id, partition)`.
+    ///
+    /// A request that held a fenced cell can finish after another request
+    /// loaded a replacement. Removing by key alone would then drop the
+    /// replacement while it is in use, and a later load would create a second
+    /// machine for the same share partition.
+    pub(crate) fn invalidate_cell(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+        cell: &Arc<Mutex<AcquisitionState>>,
+    ) {
+        self.leaders
+            .remove_if(&(group.to_string(), topic_id, partition), |_, cached| {
+                Arc::ptr_eq(cached, cell)
+            });
     }
 
     /// Test-only: caches `state` as the live cell, with no persister read.
@@ -349,6 +369,23 @@ mod tests {
             (loads, mgr.peek_for_test("g1", tid, 0).is_none())
                 == ([Some(codes::COORDINATOR_NOT_AVAILABLE); 2], true)
         );
+    }
+
+    /// Only the cell that a fenced request held leaves the cache.
+    #[tokio::test]
+    async fn invalidate_cell_keeps_a_replacement() {
+        let mgr = manager();
+        let tid = uuid::Uuid::from_bytes([23; 16]);
+        let stale = Arc::new(tokio::sync::Mutex::new(AcquisitionState::new(Offset(0))));
+        let replacement = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
+
+        mgr.invalidate_cell("g1", tid, 0, &stale);
+        let kept = mgr
+            .peek_for_test("g1", tid, 0)
+            .is_some_and(|cached| Arc::ptr_eq(&cached, &replacement));
+        mgr.invalidate_cell("g1", tid, 0, &replacement);
+
+        assert!((kept, mgr.peek_for_test("g1", tid, 0).is_none()) == (true, true));
     }
 
     #[tokio::test]

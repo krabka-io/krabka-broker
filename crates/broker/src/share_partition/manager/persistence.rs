@@ -7,6 +7,9 @@
 //! `SharePartition.rollbackOrProcessStateUpdates` does. A fenced partition
 //! drops its cell, so the next request reads the state again.
 
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 use tracing::warn;
 
 use super::SharePartitionLeaderManager;
@@ -53,17 +56,22 @@ pub(crate) fn fences_the_partition(code: i16) -> bool {
 impl SharePartitionLeaderManager {
     /// Persists `st` if it is dirty, then clears the dirty flag.
     ///
+    /// `cell` is the cached cell that holds `st`, or `None` for a state that
+    /// is not cached yet.
+    ///
     /// # Errors
     ///
     /// Returns the mapped error code ([`persister_error_code`]) when the write
     /// fails. `dirty` then stays set, so a later write retries. When the code
-    /// fences the partition, the method also drops the cell, so the next
-    /// request loads the state again.
+    /// fences the partition, the method also drops `cell` from the cache, so
+    /// the next request loads the state again. It drops only that cell: a
+    /// replacement that another request already loaded stays cached.
     pub(crate) async fn persist_if_dirty(
         &self,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
+        cell: Option<&Arc<Mutex<AcquisitionState>>>,
         st: &mut AcquisitionState,
     ) -> Result<(), i16> {
         if !st.dirty {
@@ -93,8 +101,10 @@ impl SharePartitionLeaderManager {
                     %topic_id, partition, error = %e, code,
                     "share-partition state persist failed"
                 );
-                if fences_the_partition(code) {
-                    self.invalidate(group, topic_id, partition);
+                if fences_the_partition(code)
+                    && let Some(cell) = cell
+                {
+                    self.invalidate_cell(group, topic_id, partition, cell);
                 }
                 Err(code)
             }
@@ -113,6 +123,7 @@ impl SharePartitionLeaderManager {
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
+        cell: &Arc<Mutex<AcquisitionState>>,
         st: &mut AcquisitionState,
         apply: impl FnOnce(&mut AcquisitionState) -> i16,
     ) -> i16 {
@@ -121,7 +132,10 @@ impl SharePartitionLeaderManager {
         if *st == before {
             return code;
         }
-        match self.persist_if_dirty(group, topic_id, partition, st).await {
+        match self
+            .persist_if_dirty(group, topic_id, partition, Some(cell), st)
+            .await
+        {
             Ok(()) => code,
             Err(write_code) => {
                 *st = before;
@@ -218,7 +232,7 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([22; 16]);
         let mut st = AcquisitionState::new(Offset(0));
 
-        let result = mgr.persist_if_dirty("g1", tid, 0, &mut st).await;
+        let result = mgr.persist_if_dirty("g1", tid, 0, None, &mut st).await;
 
         assert!((result, st.dirty) == (Ok(()), false));
     }
@@ -234,7 +248,7 @@ mod tests {
         st.materialize(Offset(4), 100);
         let _ = st.acquire("m1", 10, i32::MAX, Instant::now(), LOCK, 5);
 
-        let result = mgr.persist_if_dirty("g1", tid, 0, &mut st).await;
+        let result = mgr.persist_if_dirty("g1", tid, 0, None, &mut st).await;
 
         assert!((result, st.dirty) == (Err(codes::COORDINATOR_NOT_AVAILABLE), true));
     }
@@ -250,9 +264,11 @@ mod tests {
         st.materialize(Offset(4), 100);
         let _ = st.acquire("m1", 10, i32::MAX, Instant::now(), LOCK, 5);
         let before = st.clone();
+        // A cell that the cache does not hold: the write fails without fencing.
+        let cell = Arc::new(Mutex::new(before.clone()));
 
         let accepted = mgr
-            .apply_durably("g1", tid, 0, &mut st, |st| {
+            .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
                 st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, Instant::now())
                     .err()
                     .unwrap_or(codes::NONE)
@@ -260,7 +276,7 @@ mod tests {
             .await;
         let rolled_back = st == before;
         let refused = mgr
-            .apply_durably("g1", tid, 0, &mut st, |st| {
+            .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
                 st.acknowledge("m2", Offset(0), Offset(3), AckType::Accept, Instant::now())
                     .err()
                     .unwrap_or(codes::NONE)

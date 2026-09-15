@@ -158,7 +158,7 @@ async fn acquire_pass(
         if has_acks {
             let ack_batches = &p.ack_batches;
             let code = mgr
-                .apply_durably(group, p.topic_id, p.partition_index, &mut st, |st| {
+                .apply_durably(group, p.topic_id, p.partition_index, &cell, &mut st, |st| {
                     let mut ack_err = codes::NONE;
                     for (first, last, types) in ack_batches {
                         let res = if is_renew_ack {
@@ -189,7 +189,7 @@ async fn acquire_pass(
         if !p.fetchable {
             // Best-effort: a failed write keeps the state dirty for a retry.
             let _ = mgr
-                .persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
+                .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
                 .await;
             continue;
         }
@@ -207,7 +207,7 @@ async fn acquire_pass(
             p.leadable = false;
             // Best-effort: a failed write keeps the state dirty for a retry.
             let _ = mgr
-                .persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
+                .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
                 .await;
             continue;
         };
@@ -274,7 +274,7 @@ async fn acquire_pass(
         // a retry. A fenced write drops the cell, and the records acquired on
         // it must not reach the client.
         match mgr
-            .persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
+            .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
             .await
         {
             Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
