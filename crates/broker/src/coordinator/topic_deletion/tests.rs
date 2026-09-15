@@ -1,0 +1,255 @@
+//! Tests for finding deleted topics and for tombstoning their offsets in every
+//! owned group.
+
+use std::collections::HashMap;
+
+use assert2::check;
+use krabka_log::Offset;
+use krabka_metadata::{DeleteTopicRecord, MetadataImage, MetadataRecord, TopicRecord};
+use uuid::Uuid;
+
+use super::{deleted_topics, on_topics_deleted};
+use crate::coordinator::unified::{
+    classic_state::{ClassicGroup, OffsetEntry},
+    group::{CoordinatorGroup, GroupKind},
+    test_support::make_coord_with_log,
+};
+
+fn topic(name: &str, id: u128) -> MetadataRecord {
+    MetadataRecord::V1Topic(TopicRecord {
+        name: name.into(),
+        topic_id: Uuid::from_u128(id),
+        partitions: 1,
+        replication_factor: 1,
+    })
+}
+
+fn delete(name: &str) -> MetadataRecord {
+    MetadataRecord::V1DeleteTopic(DeleteTopicRecord { name: name.into() })
+}
+
+fn image(records: &[MetadataRecord]) -> MetadataImage {
+    let mut image = MetadataImage::new(Uuid::from_u128(1));
+    for record in records {
+        image.apply(record);
+    }
+    image
+}
+
+#[test]
+fn deleted_topics_compares_topic_ids() {
+    let base = [topic("orders", 10), topic("payments", 20)];
+    let rows: [(&str, Vec<MetadataRecord>, Vec<String>); 4] = [
+        ("no change", vec![], vec![]),
+        ("a new topic", vec![topic("refunds", 30)], vec![]),
+        (
+            "one topic deleted",
+            vec![delete("orders")],
+            vec!["orders".into()],
+        ),
+        (
+            "deleted and created again with the same name",
+            vec![delete("orders"), topic("orders", 11)],
+            vec!["orders".into()],
+        ),
+    ];
+    for (name, changes, expected) in rows {
+        let previous = image(&base);
+        let next = image(&[base.as_slice(), changes.as_slice()].concat());
+        check!(deleted_topics(&previous, &next) == expected, "{name}");
+    }
+}
+
+fn entry(offset: i64) -> OffsetEntry {
+    OffsetEntry {
+        offset: Offset(offset),
+        leader_epoch: -1,
+        metadata: String::new(),
+        commit_timestamp_ms: 0,
+        expire_timestamp_ms: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn on_topics_deleted_tombstones_offsets_in_every_owned_group() {
+    let (coordinator, log) = make_coord_with_log();
+    for group_id in ["a", "b", "not-owned"] {
+        let group = CoordinatorGroup::seeded(
+            group_id,
+            GroupKind::Classic(ClassicGroup::new(group_id)),
+            HashMap::from([
+                (("orders".to_string(), 0), entry(1)),
+                (("payments".to_string(), 0), entry(2)),
+            ]),
+        );
+        coordinator.seed_classic(group_id, Box::new(group));
+    }
+
+    let changed = on_topics_deleted(
+        &coordinator,
+        |group_id| group_id != "not-owned",
+        &["orders".to_string()],
+    )
+    .await;
+
+    check!(
+        changed
+            == vec![
+                ("a".to_string(), vec![("orders".to_string(), 0)]),
+                ("b".to_string(), vec![("orders".to_string(), 0)]),
+            ]
+    );
+    check!(log.batches().await.len() == 2);
+}
+
+/// Through a running broker: a consumer commits an offset, the topic is
+/// deleted and created again with the same name, and `OffsetFetch` then
+/// answers no committed offset, as Kafka does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
+    use std::{sync::Arc, time::Duration};
+
+    use krabka_protocol::owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
+        offset_commit_request::{
+            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+        },
+        offset_commit_response::OffsetCommitResponse,
+        offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
+        offset_fetch_response::OffsetFetchResponse,
+    };
+
+    use crate::{
+        broker::Broker,
+        codes,
+        test_support::{decode_response, encode_request, peer, principal, request_context},
+    };
+
+    const TOPIC: &str = "orders";
+    const GROUP: &str = "recreated-topic-group";
+    /// The name-keyed versions, so the test does not track topic ids.
+    const COMMIT_VERSION: i16 = 8;
+    const FETCH_VERSION: i16 = 7;
+
+    async fn fetched_offset(broker: &Broker) -> i64 {
+        let request = OffsetFetchRequest {
+            group_id: GROUP.into(),
+            topics: Some(vec![OffsetFetchRequestTopic {
+                name: TOPIC.into(),
+                partition_indexes: vec![0],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let principal = principal("admin");
+        let peer = peer();
+        let ctx = request_context(&principal, &peer, "consumer");
+        let bytes = crate::handlers::offset_fetch::handle(
+            broker,
+            FETCH_VERSION,
+            2,
+            &encode_request(&request, FETCH_VERSION),
+            &ctx,
+        )
+        .await
+        .expect("OffsetFetch");
+        let response: OffsetFetchResponse = decode_response(&bytes, FETCH_VERSION);
+        response.topics[0].partitions[0].committed_offset
+    }
+
+    let (handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
+    let broker = handle.broker_arc_for_test();
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(handle.listen_addr().to_string())
+        .client_id("topic-deletion-test")
+        .build()
+        .await
+        .expect("client build");
+    let create = || CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: TOPIC.to_string(),
+            num_partitions: 1,
+            replication_factor: 1,
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+
+    let created = client.send(create()).await.expect("CreateTopics");
+    check!(created.topics[0].error_code == codes::NONE);
+    handle.wait_until_partition_present(TOPIC, 0).await;
+    let commit = OffsetCommitRequest {
+        group_id: GROUP.into(),
+        generation_id_or_member_epoch: -1,
+        topics: vec![OffsetCommitRequestTopic {
+            name: TOPIC.into(),
+            partitions: vec![OffsetCommitRequestPartition {
+                partition_index: 0,
+                committed_offset: 42,
+                committed_leader_epoch: -1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let principal_admin = principal("admin");
+    let peer_addr = peer();
+    let ctx = request_context(&principal_admin, &peer_addr, "consumer");
+    let bytes = crate::handlers::offset_commit::handle(
+        &broker,
+        COMMIT_VERSION,
+        1,
+        &encode_request(&commit, COMMIT_VERSION),
+        &ctx,
+    )
+    .await
+    .expect("OffsetCommit");
+    let committed: OffsetCommitResponse = decode_response(&bytes, COMMIT_VERSION);
+    check!(committed.topics[0].partitions[0].error_code == codes::NONE);
+    check!(fetched_offset(&broker).await == 42);
+
+    let deleted = client
+        .send(DeleteTopicsRequest {
+            topics: vec![DeleteTopicState {
+                name: Some(TOPIC.into()),
+                ..Default::default()
+            }],
+            topic_names: vec![TOPIC.into()],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("DeleteTopics");
+    check!(deleted.responses[0].error_code == codes::NONE);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while handle.controller_image_for_test().topic(TOPIC).is_some() {
+        assert2::assert!(
+            tokio::time::Instant::now() < deadline,
+            "topic never left the image"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let recreated = client.send(create()).await.expect("CreateTopics again");
+    check!(recreated.topics[0].error_code == codes::NONE);
+    handle.wait_until_partition_present(TOPIC, 0).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let offset = fetched_offset(&broker).await;
+        if offset == -1 {
+            break;
+        }
+        assert2::assert!(
+            tokio::time::Instant::now() < deadline,
+            "the recreated topic still reports offset {offset}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    handle.shutdown().await;
+}

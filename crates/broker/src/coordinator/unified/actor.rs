@@ -34,6 +34,7 @@ mod persistence;
 mod retention;
 mod seed;
 mod tick;
+mod topic_deletion;
 mod views;
 mod waiters;
 

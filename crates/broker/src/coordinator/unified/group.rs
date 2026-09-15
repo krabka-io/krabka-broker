@@ -313,6 +313,20 @@ impl CoordinatorGroup {
         entry.resolved_through = entry.resolved_through.max(resolved_through);
     }
 
+    /// Removes `keys` from the committed offsets and from every open
+    /// transaction, after their `OffsetCommit` tombstones are durable.
+    ///
+    /// Kafka's `OffsetMetadataManager.replay` does the same for a tombstone:
+    /// it removes the offset and the key's pending transactional offsets.
+    pub fn drop_offsets(&mut self, keys: &[(String, i32)]) {
+        for key in keys {
+            self.committed_offsets.remove(key);
+            for producer in self.pending_txn_offsets.values_mut() {
+                producer.keys.remove(key);
+            }
+        }
+    }
+
     /// The group's offset state for `OffsetFetch`, with every open
     /// transaction's pending keys flattened into one set.
     pub fn offsets(&self) -> GroupOffsets {

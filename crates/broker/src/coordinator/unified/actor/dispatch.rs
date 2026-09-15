@@ -17,6 +17,7 @@ use super::{
     messages::classic_leave_result,
     retention::handle_reap_message,
     seed::apply_seed,
+    topic_deletion::delete_topic_offsets,
     views::{build_classic_view, build_describe, inspect_any},
 };
 use crate::{
@@ -171,6 +172,11 @@ pub(super) async fn handle_actor_message(
                 group.committed_offsets.remove(&key);
             }
             let _ = reply.send(());
+            true
+        }
+        GroupActorMessage::DeleteTopicOffsets { topics, reply } => {
+            let deleted = delete_topic_offsets(group, services.offsets_log, &topics).await;
+            let _ = reply.send(deleted);
             true
         }
         GroupActorMessage::AddPendingTxnOffsets {

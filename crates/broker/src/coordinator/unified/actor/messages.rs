@@ -141,6 +141,15 @@ pub enum GroupActorMessage {
         reply: oneshot::Sender<ReapOutcome>,
     },
 
+    /// Tombstone every committed offset and every open transactional offset
+    /// of `topics`, which the metadata image no longer holds. The reply names
+    /// the `(topic, partition)` keys that the actor tombstoned, sorted, and is
+    /// empty when the append fails.
+    DeleteTopicOffsets {
+        topics: Vec<String>,
+        reply: oneshot::Sender<Vec<(String, i32)>>,
+    },
+
     // ── in-flight transactional offsets (KIP-447) ──
     /// Record that `producer_id`'s open transaction has durably written
     /// offset commits for `keys` at offsets-log position `written_at`. Until
