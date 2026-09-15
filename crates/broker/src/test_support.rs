@@ -154,6 +154,64 @@ pub(crate) fn peer() -> SocketAddr {
     "127.0.0.1:9092".parse().unwrap()
 }
 
+/// Register `node_id` as a remote broker in the controller's image.
+pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                node_id: krabka_raft::NodeId(node_id),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features: std::collections::BTreeMap::new(),
+            },
+        )])
+        .await
+        .expect("seed broker registration");
+}
+
+/// Fence `node_id` the way the controller does: its heartbeat session is
+/// fenced, and the replicated `broker.fenced` config says so, which is what
+/// every node reads.
+pub(crate) async fn fence_remote_broker(handle: &BrokerHandle, node_id: u64) {
+    let broker = handle.broker_arc_for_test();
+    broker.liveness.record_fenced_heartbeat(node_id).await;
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_raft::NodeId(node_id),
+                config_name: crate::config_keys::BROKER_FENCED.to_string(),
+                config_value: Some(crate::config_keys::FENCED_TRUE.to_string()),
+            },
+        )])
+        .await
+        .expect("publish broker fencing");
+}
+
+/// Give `node_id` the witness role, as the controller-managed
+/// `broker.witness` broker config does.
+pub(crate) async fn make_witness(handle: &BrokerHandle, node_id: u64) {
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_raft::NodeId(node_id),
+                config_name: crate::config_keys::BROKER_WITNESS.to_string(),
+                config_value: Some(crate::config_keys::WITNESS_TRUE.to_string()),
+            },
+        )])
+        .await
+        .expect("publish the witness role");
+}
+
 /// Build a [`RequestContext`] over the given principal, peer, and client id.
 ///
 /// The remaining fields are the plaintext, non-sendfile defaults that every
