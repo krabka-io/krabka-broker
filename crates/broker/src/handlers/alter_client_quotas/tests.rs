@@ -142,7 +142,7 @@ async fn handle_denies_cluster_alter_for_each_entry() {
         throttle_time_ms: 0,
         entries: vec![RespEntry {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("alter-client-quotas denied".into()),
+            error_message: Some("Cluster authorization failed.".into()),
             entity: vec![RespEntity {
                 entity_type: "user".into(),
                 entity_name: Some("alice".into()),
@@ -154,6 +154,82 @@ async fn handle_denies_cluster_alter_for_each_entry() {
     };
     assert!(resp == expected);
     assert!(quota_value(&broker_handle, "alice", "producer_byte_rate") == None);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka's `ControllerApis.handleAlterClientQuotas` authorizes `AlterConfigs`
+/// on the cluster (#664). `All` implies it. `Alter` does not, so a principal
+/// that can reassign partitions cannot change quotas.
+#[tokio::test]
+async fn cluster_alter_configs_gates_the_quota_write() {
+    let version = 1;
+    let (broker_handle, _dir) = start_broker(Arc::new(
+        crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+    ))
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+
+    for (user, grant, allowed) in [
+        ("no-grant", None, false),
+        ("alter", Some(AclOperation::Alter), false),
+        (
+            "describe-configs",
+            Some(AclOperation::DescribeConfigs),
+            false,
+        ),
+        ("alter-configs", Some(AclOperation::AlterConfigs), true),
+        ("all", Some(AclOperation::All), true),
+    ] {
+        if let Some(operation) = grant {
+            crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
+        }
+        let principal = Principal {
+            name: user.into(),
+            auth_method: AuthMethod::Anonymous,
+            groups: Vec::new(),
+        };
+        let ctx = test_context(&principal, &peer);
+        let req = request(
+            vec![entry(
+                vec![("user", Some(user))],
+                vec![("producer_byte_rate", 1024.0, false)],
+            )],
+            false,
+        );
+
+        let resp = handle(&broker, req, &ctx, version).await.expect("handle");
+        let resp = decode_response(&resp, version);
+
+        let (error_code, error_message) = if allowed {
+            (0, None)
+        } else {
+            (
+                CLUSTER_AUTHORIZATION_FAILED,
+                Some("Cluster authorization failed.".to_string()),
+            )
+        };
+        let expected = AlterClientQuotasResponse {
+            throttle_time_ms: 0,
+            entries: vec![RespEntry {
+                error_code,
+                error_message,
+                entity: vec![RespEntity {
+                    entity_type: "user".into(),
+                    entity_name: Some(user.into()),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }],
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        assert2::check!(resp == expected, "user {user} with grant {grant:?}");
+        let stored = allowed.then_some(1024.0);
+        assert2::check!(
+            quota_value(&broker_handle, user, "producer_byte_rate") == stored,
+            "user {user} with grant {grant:?}"
+        );
+    }
     broker_handle.shutdown().await;
 }
 

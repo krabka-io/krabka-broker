@@ -1,8 +1,6 @@
 //! The operator-triggered elections. [`select_new_leader_for_partition`]
 //! serves the KIP-460 `ElectLeaders` request and the preferred-leader
-//! rebalance; [`select_replacement_leader_for_shutdown`] drains leadership
-//! off a broker that asked to shut down. Both are pure: the caller submits
-//! the returned record.
+//! rebalance. It is pure: the caller submits the returned record.
 
 use std::collections::HashSet;
 
@@ -38,71 +36,6 @@ pub(crate) enum ElectError {
     NoEligibleReplica,
     /// A safety-relevant metadata epoch reached its wire maximum.
     EpochExhausted,
-}
-
-/// Pick a replacement leader for a partition currently led by a broker
-/// that asked to shut down. Returns the new `PartitionRecord` ready to
-/// submit, or `ElectError::ElectionNotNeeded` when `shutting_down` is
-/// not actually this partition's current leader, or
-/// `ElectError::NoEligibleReplica` when no other ISR member is alive.
-///
-/// Differs from `select_new_leader_for_partition(Preferred)`:
-/// - The trigger is "current leader wants to drain", not "preferred replica
-///   isn't leader". So this function picks any alive ISR member that isn't the
-///   shutting-down broker, not strictly the preferred one.
-/// - This function does not change the ISR. The shutting-down broker stays in
-///   ISR until it actually goes offline. The heartbeat loop is what flips
-///   it dead.
-///
-/// `witnesses` is the set of witness nodes. A controlled shutdown must not
-/// hand leadership to a node that serves no client, so the drain target is
-/// always a data replica.
-///
-/// `alive` is the set of broker ids leadership may move to. The drain runs on
-/// the controller, so the caller passes its heartbeat registry's
-/// [`alive_snapshot`](crate::heartbeat::controller_state::ControllerLivenessState::alive_snapshot).
-pub(crate) fn select_replacement_leader_for_shutdown(
-    image: &krabka_metadata::MetadataImage,
-    alive: &HashSet<u64>,
-    witnesses: &std::collections::HashSet<NodeId>,
-    topic: &str,
-    partition: i32,
-    shutting_down: NodeId,
-) -> Result<krabka_metadata::PartitionRecord, ElectError> {
-    let pr = image
-        .partition(topic, partition)
-        .ok_or(ElectError::UnknownTopicOrPartition)?;
-    if pr.leader != shutting_down {
-        return Err(ElectError::ElectionNotNeeded);
-    }
-    let mut new_leader: Option<NodeId> = None;
-    for &n in &pr.isr {
-        if n == shutting_down || witnesses.contains(&n) {
-            continue;
-        }
-        if alive.contains(&n.0) {
-            new_leader = Some(n);
-            break;
-        }
-    }
-    let Some(new_leader) = new_leader else {
-        return Err(ElectError::NoEligibleReplica);
-    };
-    let (partition_epoch, leader_epoch) =
-        crate::metadata_epoch::next_partition_change(pr.partition_epoch, pr.leader_epoch, true)
-            .ok_or(ElectError::EpochExhausted)?;
-    Ok(krabka_metadata::PartitionRecord {
-        topic: pr.topic.clone(),
-        partition: pr.partition,
-        leader: new_leader,
-        replicas: pr.replicas.clone(),
-        isr: pr.isr.clone(),
-        leader_epoch,
-        adding_replicas: pr.adding_replicas.clone(),
-        removing_replicas: pr.removing_replicas.clone(),
-        directories: pr.directories.clone(),
-        partition_epoch,
-    })
 }
 
 /// Operator-triggered single-partition election. Returns the new

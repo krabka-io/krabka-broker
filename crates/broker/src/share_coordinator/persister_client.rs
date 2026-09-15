@@ -4,8 +4,10 @@
 //!
 //! - When a share group joins a topic, the coordinator calls
 //!   [`SharePersister::initialize`] for each newly-assigned `(topic, partition)`.
-//! - When a topic leaves the subscription, or the group empties, the
-//!   coordinator calls [`SharePersister::delete`].
+//! - When `DeleteGroups` deletes an empty share group, the coordinator calls
+//!   [`SharePersister::delete`] for each initialized `(topic, partition)`.
+//!   It also calls it for each initialized partition of a topic that the
+//!   metadata image no longer holds.
 //!
 //! Routing mirrors [`crate::handlers::find_coordinator`]:
 //! [`ShareCoordinator::state_partition_for`] maps the share key

@@ -987,6 +987,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1222",
+        claim: "Share acquisition lock renewal: the Renew acknowledge type and IsRenewAck on ShareFetch and ShareAcknowledge v2",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/share_fetch/acknowledge.rs",
+        tests: &[
+            "crates/broker/src/handlers/share_fetch/renew_tests.rs::renew_acknowledgements_renew_only_the_renew_offsets",
+            "crates/broker/src/handlers/share_fetch/renew_tests.rs::a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error",
+            "crates/broker/tests/share_consume/lock_lifetime.rs::renew_extends_lock_not_redelivered",
+        ],
+        note: "IncrementalAlterConfigs does not accept share.renew.acknowledge.enable yet (#758), and the other validateAcknowledgementBatches rules are open (#724).",
+    },
+    KipAnnotation {
         key: "KIP-1242",
         claim: "ApiVersions v5 routing identity and REBOOTSTRAP_REQUIRED",
         status: KipStatus::Implemented,

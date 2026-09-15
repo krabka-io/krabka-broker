@@ -22,6 +22,8 @@ mod replay;
 #[cfg(test)]
 mod classic_state_tests;
 #[cfg(test)]
+mod delete_groups_replay_tests;
+#[cfg(test)]
 mod log_walk_tests;
 #[cfg(test)]
 mod share_streams_replay_tests;

@@ -14,7 +14,10 @@ use super::{
     acknowledge::apply_one_ack,
     long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
-    records::{pending_activation_ranges, populate_acquired_response, unreadable_batch_ranges},
+    records::{
+        AcquireRequest, acquire_read_records, pending_activation_ranges, read_budget,
+        unreadable_batch_ranges,
+    },
 };
 use crate::{
     broker::Broker, codes, error::BrokerError,
@@ -45,7 +48,7 @@ pub(super) struct AcquireContext<'a> {
     pub(super) member: &'a str,
     pub(super) max_records: i32,
     pub(super) max_bytes: i32,
-    pub(super) is_renew_ack: bool,
+    pub(super) renewal: super::acknowledge::Renewal,
     pub(super) config: &'a crate::coordinator::unified::share::config::ShareGroupConfig,
 }
 
@@ -134,9 +137,8 @@ fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
 /// lead.
 ///
 /// When `apply_acks` is true, this function applies the piggybacked
-/// acknowledgement batches first, and sets `acknowledge_error_code`. When
-/// `is_renew_ack` is set, those batches RENEW the acquisition lock instead of
-/// acknowledging it, per KIP-932.
+/// acknowledgement batches first, and sets `acknowledge_error_code`. A batch
+/// offset of type Renew renews its acquisition lock, per KIP-1222.
 ///
 /// Under a `ReadCommitted` isolation level, this function clamps the
 /// materialize and read window to the partition's last stable offset, so it
@@ -160,7 +162,7 @@ async fn acquire_pass(
         member,
         max_records,
         max_bytes,
-        is_renew_ack,
+        renewal,
         config: cfg,
     } = context;
     let now = Instant::now();
@@ -190,9 +192,9 @@ async fn acquire_pass(
         };
         let mut st = cell.lock().await;
 
-        // Apply piggybacked acknowledgements (first pass only). When the
-        // request is a renew-ack, each batch RENEWs the lock on its range
-        // rather than acknowledging it. The change is durable before the
+        // Apply piggybacked acknowledgements (first pass only). The type
+        // Renew renews the lock of its offsets, and the other types take
+        // their normal transition. The change is durable before the
         // acquisition runs, or it is rolled back and the write error becomes
         // the acknowledge error.
         if has_acks {
@@ -201,18 +203,9 @@ async fn acquire_pass(
                 .apply_durably(group, p.topic_id, p.partition_index, &cell, &mut st, |st| {
                     let mut ack_err = codes::NONE;
                     for (first, last, types) in ack_batches {
-                        let res = if is_renew_ack {
-                            st.renew(
-                                member,
-                                Offset(*first),
-                                Offset(*last),
-                                now,
-                                cfg.record_lock_duration,
-                            )
-                        } else {
-                            apply_one_ack(st, member, *first, *last, types, now)
-                        };
-                        if let Err(code) = res {
+                        if let Err(code) =
+                            apply_one_ack(st, member, *first, *last, types, now, renewal)
+                        {
                             ack_err = code;
                         }
                     }
@@ -266,6 +259,9 @@ async fn acquire_pass(
         } else {
             hwm
         };
+        // A released or expired record at the delivery limit is archived
+        // first, so it cannot hold the window shut.
+        st.archive_exhausted(cfg.max_delivery_attempts);
         grow_readable_window(
             &mut st,
             &part,
@@ -290,23 +286,19 @@ async fn acquire_pass(
             st.defer_internal(first, last);
         }
         let remaining_records = remaining_record_budget(max_records, total);
-        let acquired = if remaining_records > 0 {
-            st.acquire(
+        let acquired_count = if remaining_records > 0 {
+            let request = AcquireRequest {
                 member,
-                remaining_records,
-                max_bytes,
+                max_records: remaining_records,
+                max_bytes: read_budget(p.partition_max_bytes, max_bytes),
+                upper,
                 now,
-                cfg.record_lock_duration,
-                cfg.max_delivery_attempts,
-            )
+                lock_duration: cfg.record_lock_duration,
+                max_attempts: cfg.max_delivery_attempts,
+            };
+            acquire_read_records(&mut p.out, &part, &mut st, &request).await?
         } else {
-            Vec::new()
-        };
-
-        let acquired_count = if acquired.is_empty() {
             0
-        } else {
-            populate_acquired_response(p, &part, &acquired, upper, max_bytes).await?
         };
 
         p.out.error_code = codes::NONE;
@@ -456,7 +448,7 @@ mod tests {
                 .acquire(
                     "m",
                     500,
-                    i32::MAX,
+                    Offset(4),
                     std::time::Instant::now(),
                     std::time::Duration::from_secs(30),
                     5,
