@@ -340,6 +340,7 @@ async fn share_state_rpcs_need_cluster_action() {
         &broker.controller,
         state_partitions,
         broker.share_coordinator.state_topic_replication_factor(),
+        &broker.share_coordinator.state_topic_configs(),
     )
     .await
     .expect("create __share_group_state");
