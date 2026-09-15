@@ -461,6 +461,7 @@ pub(crate) struct FakeMetadataSource {
     submitted: Mutex<Vec<Vec<MetadataRecord>>>,
     on_submit: SubmitOutcome,
     stall_submits: bool,
+    commit_submits: bool,
     current_image_calls: AtomicUsize,
     controller_bound_addr_calls: AtomicUsize,
 }
@@ -478,6 +479,7 @@ impl FakeMetadataSource {
             owns_controller_epoch: true,
             on_submit: None,
             stall_submits: false,
+            commit_submits: false,
         }
     }
 
@@ -544,6 +546,7 @@ pub(crate) struct FakeMetadataSourceBuilder {
     owns_controller_epoch: bool,
     on_submit: Option<SubmitOutcome>,
     stall_submits: bool,
+    commit_submits: bool,
 }
 
 impl FakeMetadataSourceBuilder {
@@ -609,6 +612,14 @@ impl FakeMetadataSourceBuilder {
         self
     }
 
+    /// Apply every accepted `submit_change` batch to the served image, as a
+    /// raft commit does. Without this seam the image never changes on a
+    /// submit.
+    pub(crate) fn commit_submits(mut self) -> Self {
+        self.commit_submits = true;
+        self
+    }
+
     pub(crate) fn build(self) -> FakeMetadataSource {
         let (image_tx, _) = watch::channel(self.image);
         let (leader_tx, _) = watch::channel(self.leader);
@@ -623,6 +634,7 @@ impl FakeMetadataSourceBuilder {
                 .on_submit
                 .unwrap_or_else(|| Box::new(|_| Ok(SubmitChangeResult::default()))),
             stall_submits: self.stall_submits,
+            commit_submits: self.commit_submits,
             current_image_calls: AtomicUsize::new(0),
             controller_bound_addr_calls: AtomicUsize::new(0),
         }
@@ -690,6 +702,13 @@ impl MetadataSource for FakeMetadataSource {
             std::future::pending::<()>().await;
         }
         let outcome = (self.on_submit)(&records);
+        if self.commit_submits && outcome.is_ok() {
+            let mut image = MetadataImage::clone(&self.image_tx.borrow());
+            for record in &records {
+                image.apply(record);
+            }
+            self.set_image(image);
+        }
         self.submitted
             .lock()
             .expect("the submitted batches are not poisoned")
