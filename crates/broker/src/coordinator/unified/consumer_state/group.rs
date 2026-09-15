@@ -222,6 +222,12 @@ impl GroupState {
             return;
         };
         self.rebalance_deadlines.remove(previous);
+        // Kafka writes the copy under `member_id` over any member that already
+        // has that id. Remove that member through `remove_member`, so its
+        // instance id does not keep pointing at the copy.
+        if member_id != previous {
+            self.remove_member(member_id);
+        }
         member.member_id = member_id.to_string();
         member.member_epoch = 0;
         member.previous_member_epoch = 0;
@@ -441,6 +447,39 @@ mod tests {
             g.fence_rebalance_timeouts(start + Duration::from_mins(1))
                 == vec!["classic".to_string()]
         );
+    }
+
+    /// A static replacement whose member id another member already holds
+    /// takes that id over: the other member and its instance id go, and the
+    /// instance index stays coherent.
+    #[test]
+    fn static_replacement_over_an_occupied_member_id_keeps_the_index_coherent() {
+        let mut g = GroupState::new("g");
+        let mut released = member("s1");
+        released.instance_id = Some("i1".into());
+        released.member_epoch = -2;
+        g.add_or_update_member(released);
+        let mut occupant = member("m1");
+        occupant.instance_id = Some("i2".into());
+        g.add_or_update_member(occupant);
+
+        g.replace_static_member("s1", "m1");
+
+        let mut members: Vec<(&str, Option<&str>, i32)> = g
+            .members
+            .values()
+            .map(|m| {
+                (
+                    m.member_id.as_str(),
+                    m.instance_id.as_deref(),
+                    m.member_epoch,
+                )
+            })
+            .collect();
+        members.sort_unstable();
+        assert!(members == vec![("m1", Some("i1"), 0)]);
+        assert!(g.current_member_for_instance("i1") == Some("m1"));
+        assert!(g.current_member_for_instance("i2") == None);
     }
 
     #[test]

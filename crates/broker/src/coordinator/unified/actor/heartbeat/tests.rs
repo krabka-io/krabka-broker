@@ -471,7 +471,11 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
         &mut state,
         &config,
         &*metadata,
-        &join("s2", 0),
+        &ConsumerGroupHeartbeatRequest {
+            rack_id: Some("rack-b".into()),
+            rebalance_timeout_ms: 12_345,
+            ..join("s2", 0)
+        },
         client,
         Instant::now(),
     );
@@ -481,6 +485,15 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
     check!(written(&replaced.pending.member_metadata) == expected);
     check!(written(&replaced.pending.target_per_member) == expected);
     check!(written(&replaced.pending.current_per_member) == expected);
+    // The restarted process's join fields replace the released member's.
+    let metadata_of_s2 = replaced
+        .pending
+        .member_metadata
+        .iter()
+        .find_map(|(id, value)| (id == "s2").then_some(value.as_ref()).flatten())
+        .expect("s2 member metadata");
+    check!(metadata_of_s2.rack_id.as_deref() == Some("rack-b"));
+    check!(metadata_of_s2.rebalance_timeout_ms == 12_345);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

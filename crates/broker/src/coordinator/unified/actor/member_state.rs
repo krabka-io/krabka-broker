@@ -210,6 +210,16 @@ pub(super) fn update_member_state(
             m.client_host = client.host.to_string();
             member_metadata_changed = true;
         }
+        // Kafka's `maybeUpdateRackId` and `maybeUpdateServerAssignorName`: an
+        // absent value keeps the stored one. Neither changes the group epoch.
+        if req.rack_id.is_some() && req.rack_id != m.rack_id {
+            m.rack_id.clone_from(&req.rack_id);
+            member_metadata_changed = true;
+        }
+        if req.server_assignor.is_some() && req.server_assignor != m.server_assignor {
+            m.server_assignor.clone_from(&req.server_assignor);
+            member_metadata_changed = true;
+        }
         // Kafka's `maybeUpdateRebalanceTimeoutMs(ofSentinel(..))`: -1 keeps the
         // stored timeout, and any other value replaces it.
         if let Ok(millis) = u64::try_from(req.rebalance_timeout_ms) {
