@@ -63,6 +63,12 @@ context_dispatches!(register_context_dispatches;
     (end_txn_adapter, EndTxn, end_txn_request, crate::txn::handlers::end_txn::handle),
     (txn_offset_commit_adapter, TxnOffsetCommit, txn_offset_commit_request, crate::txn::handlers::txn_offset_commit::handle),
     (describe_quorum_adapter, DescribeQuorum, describe_quorum_request, crate::handlers::describe_quorum::handle),
+);
+
+// The inter-broker apis that were plain dispatches until they needed a
+// principal to authorize. The dispatch loop still charges them to the request
+// quota.
+fallback_accounted_context_dispatches!(register_fallback_accounted_context_dispatches;
     (allocate_producer_ids_adapter, AllocateProducerIds, allocate_producer_ids_request, crate::handlers::allocate_producer_ids::handle),
     (add_offsets_to_txn_adapter, AddOffsetsToTxn, add_offsets_to_txn_request, crate::txn::handlers::add_offset_commits_to_txn::handle),
     (write_txn_markers_adapter, WriteTxnMarkers, write_txn_markers_request, crate::txn::handlers::write_txn_markers::handle),

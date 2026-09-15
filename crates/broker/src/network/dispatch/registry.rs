@@ -57,11 +57,9 @@ where
         // Kafka mutes the channel once per request, for the longest window
         // any quota asked for, so a handler-charged window is folded in with
         // `max` rather than added. No handler reaches this branch with a
-        // window today: every `ApplyFallbackAccounting` entry is a
-        // `DispatchEntry::plain` dispatch, whose handler takes no
-        // `RequestContext` and so can charge nothing. Combining here keeps
-        // the rule in the one place that has both windows, should a
-        // context-taking api ever take fallback accounting.
+        // window today: no `ApplyFallbackAccounting` handler charges a quota
+        // of its own. Combining here keeps the rule in the one place that has
+        // both windows, should one of them ever charge one.
         let handler_throttle = response.throttle;
         response = apply_request_quota(
             context.broker,
