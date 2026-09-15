@@ -89,6 +89,17 @@ impl Replayed {
     }
 }
 
+/// A transactional record that replay holds back until a marker resolves its
+/// transaction.
+struct DeferredRecord {
+    key: Key,
+    value: Option<bytes::Bytes>,
+    timestamp_ms: i64,
+    /// Offset of the batch the record arrived in, kept for the records that
+    /// turn out to belong to a transaction the log never resolved.
+    written_at: i64,
+}
+
 /// Replay one newly-led offsets partition into the coordinator after a
 /// metadata leadership change.
 pub(crate) async fn replay_partition(
@@ -124,15 +135,6 @@ pub(super) fn replay_records(
     log: &krabka_log::Log,
     coordinator: &Arc<GroupCoordinator>,
 ) -> Result<Replayed, BrokerError> {
-    struct DeferredRecord {
-        key: Key,
-        value: Option<bytes::Bytes>,
-        timestamp_ms: i64,
-        /// Offset of the batch the record arrived in, kept for the records
-        /// that turn out to belong to a transaction the log never resolved.
-        written_at: i64,
-    }
-
     let mut acc = Replayed::default();
     let mut pending_transactions: HashMap<i64, Vec<DeferredRecord>> = HashMap::new();
     let mut next = log.log_start_offset();
@@ -196,13 +198,11 @@ pub(super) fn replay_records(
                         });
                     continue;
                 }
-                match &record.value {
-                    Some(value_bytes) => {
-                        apply_record(coordinator, &mut acc, key, value_bytes, batch)?;
-                    }
-                    None => {
-                        apply_tombstone(coordinator, &mut acc, key);
-                    }
+                if let Some(value_bytes) = &record.value {
+                    apply_record(coordinator, &mut acc, key, value_bytes, batch)?;
+                } else {
+                    drop_pending_offset_commits(&mut pending_transactions, &key);
+                    apply_tombstone(coordinator, &mut acc, key);
                 }
             }
             advanced_to = krabka_log::Offset(batch_end);
@@ -233,6 +233,25 @@ pub(super) fn replay_records(
         }
     }
     Ok(acc)
+}
+
+/// Drops the offset commits that open transactions wrote for the key of a
+/// plain `OffsetCommit` tombstone, as Kafka's `OffsetMetadataManager.replay`
+/// does for a null value: it removes the key from every pending transaction.
+///
+/// A later commit marker then has nothing to publish for that key. Without
+/// this, a group deleted while a transaction held one of its offsets gets the
+/// offset back when the marker replays.
+fn drop_pending_offset_commits(
+    pending_transactions: &mut HashMap<i64, Vec<DeferredRecord>>,
+    tombstone: &Key,
+) {
+    if !matches!(tombstone, Key::OffsetCommit { .. }) {
+        return;
+    }
+    for records in pending_transactions.values_mut() {
+        records.retain(|record| record.key != *tombstone);
+    }
 }
 
 pub(super) fn apply_record(

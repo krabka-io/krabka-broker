@@ -36,6 +36,15 @@ pub(super) fn pending_offset_entries(
     let log = partition.log.lock().map_err(|_| {
         BrokerError::Replication("offsets log lock poisoned while applying txn marker".into())
     })?;
+    scan_pending_offset_entries(&log, producer_id)
+}
+
+/// Reads the offset commits of `producer_id`'s open transaction from `log`,
+/// without the offsets that a later plain tombstone deleted.
+fn scan_pending_offset_entries(
+    log: &krabka_log::Log,
+    producer_id: krabka_log::ProducerId,
+) -> Result<CommittedOffsets, BrokerError> {
     let Some(mut next) = log.pending_transaction_start(producer_id) else {
         return Ok(HashMap::new());
     };
@@ -48,6 +57,9 @@ pub(super) fn pending_offset_entries(
         }
         let mut advanced_to = next;
         for batch in &read.batches {
+            if !batch.attributes.is_transactional() && !batch.attributes.is_control_batch() {
+                drop_tombstoned_entries(&mut offsets, batch)?;
+            }
             if batch.producer_id == producer_id.get()
                 && batch.attributes.is_transactional()
                 && !batch.attributes.is_control_batch()
@@ -89,6 +101,35 @@ pub(super) fn pending_offset_entries(
         next = advanced_to;
     }
     Ok(offsets)
+}
+
+/// Removes the entries that a plain `OffsetCommit` tombstone in `batch`
+/// deletes. Kafka's `OffsetMetadataManager.replay` drops a key from every open
+/// transaction when it replays such a tombstone, so the marker does not publish
+/// it. The group keeps its (maybe empty) entry, so the marker still clears the
+/// producer's pending marks on a live group. `DeleteGroups`, `OffsetDelete` and offset retention write these
+/// tombstones.
+fn drop_tombstoned_entries(
+    offsets: &mut CommittedOffsets,
+    batch: &krabka_protocol::records::RecordBatch,
+) -> Result<(), BrokerError> {
+    for record in &batch.records {
+        let (Some(key), None) = (&record.key, &record.value) else {
+            continue;
+        };
+        if let Key::OffsetCommit {
+            group_id,
+            topic,
+            partition,
+        } = parse_key(key)?
+            && let Some(entries) = offsets.get_mut(&group_id)
+        {
+            entries.retain(|((entry_topic, entry_partition), _)| {
+                *entry_topic != topic || *entry_partition != partition
+            });
+        }
+    }
+    Ok(())
 }
 
 fn checked_batch_advance(
@@ -148,7 +189,10 @@ pub(super) async fn resolve_pending_offsets(
     let commit = marker_type == MarkerType::Commit;
     let mut unresolved: Vec<String> = Vec::new();
     for (group_id, entries) in offsets {
-        let handle = if commit {
+        // A commit with nothing left to publish must not create a group: a
+        // tombstone removed every offset, and `DeleteGroups` may have
+        // removed the group too.
+        let handle = if commit && !entries.is_empty() {
             Some(coordinator.get_or_create_group(&group_id, GroupKindTag::Classic))
         } else {
             coordinator.find(&group_id).filter(|h| !h.tx.is_closed())
@@ -187,10 +231,130 @@ pub(super) async fn resolve_pending_offsets(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_log::Offset;
+    use std::collections::HashMap;
 
-    use super::checked_batch_advance;
+    use assert2::assert;
+    use krabka_log::{Offset, ProducerId};
+    use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+    use super::{CommittedOffsets, checked_batch_advance, scan_pending_offset_entries};
+    use crate::coordinator::{persistence::OffsetCommitValue, unified::classic_state::OffsetEntry};
+
+    fn entry(offset: i64) -> OffsetEntry {
+        OffsetEntry {
+            offset: Offset(offset),
+            leader_epoch: -1,
+            metadata: String::new(),
+            commit_timestamp_ms: 0,
+            expire_timestamp_ms: None,
+        }
+    }
+
+    fn commit(group: &str, topic: &str, partition: i32, offset: i64) -> Record {
+        Record {
+            key: Some(OffsetCommitValue::encode_key(group, topic, partition)),
+            value: Some(
+                OffsetCommitValue {
+                    offset: Offset(offset),
+                    leader_epoch: -1,
+                    metadata: String::new(),
+                    commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
+                }
+                .encode_value(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn tombstone(group: &str, topic: &str, partition: i32) -> Record {
+        Record {
+            key: Some(OffsetCommitValue::encode_key(group, topic, partition)),
+            value: None,
+            ..Default::default()
+        }
+    }
+
+    fn batch(transactional: bool, records: Vec<Record>) -> RecordBatch {
+        let records: Vec<Record> = records
+            .into_iter()
+            .zip(0..)
+            .map(|(record, offset_delta)| Record {
+                offset_delta,
+                ..record
+            })
+            .collect();
+        RecordBatch {
+            producer_id: if transactional { 7 } else { -1 },
+            producer_epoch: if transactional { 0 } else { -1 },
+            attributes: Attributes::default().with_transactional(transactional),
+            last_offset_delta: i32::try_from(records.len()).unwrap() - 1,
+            records,
+            ..RecordBatch::default()
+        }
+    }
+
+    /// Kafka's `OffsetMetadataManager.replay` removes a key from every open
+    /// transaction when it replays a plain tombstone for it. The marker must
+    /// then not publish that key: `DeleteGroups` tombstones a group's pending
+    /// transactional offsets, and a commit marker must not bring them back.
+    #[test]
+    fn a_plain_tombstone_after_the_transaction_drops_its_offset() {
+        let rows: [(&str, Vec<Record>, CommittedOffsets); 3] = [
+            (
+                "no tombstone",
+                vec![],
+                HashMap::from([
+                    (
+                        "g".to_string(),
+                        vec![
+                            (("orders".to_string(), 0), entry(10)),
+                            (("orders".to_string(), 1), entry(11)),
+                        ],
+                    ),
+                    ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
+                ]),
+            ),
+            (
+                "one key of one group",
+                vec![tombstone("g", "orders", 0)],
+                HashMap::from([
+                    (
+                        "g".to_string(),
+                        vec![(("orders".to_string(), 1), entry(11))],
+                    ),
+                    ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
+                ]),
+            ),
+            (
+                "every key of a deleted group",
+                vec![tombstone("g", "orders", 0), tombstone("g", "orders", 1)],
+                HashMap::from([
+                    ("g".to_string(), vec![]),
+                    ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
+                ]),
+            ),
+        ];
+        for (name, tombstones, expected) in rows {
+            let dir = tempfile::tempdir().unwrap();
+            let mut log =
+                krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+            log.append(&mut batch(
+                true,
+                vec![
+                    commit("g", "orders", 0, 10),
+                    commit("g", "orders", 1, 11),
+                    commit("h", "t", 0, 20),
+                ],
+            ))
+            .unwrap();
+            if !tombstones.is_empty() {
+                log.append(&mut batch(false, tombstones)).unwrap();
+            }
+            let scanned = scan_pending_offset_entries(&log, ProducerId(7)).unwrap();
+            assert!(scanned == expected, "{name}");
+        }
+    }
 
     #[test]
     fn transactional_offset_scan_rejects_overlap_bounds_and_overflow() {

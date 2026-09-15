@@ -75,8 +75,9 @@ pub enum GroupActorMessage {
         version: i16,
         reply: oneshot::Sender<LeaveResult>,
     },
-    /// Atomically verify that a classic group is empty and append its k2
-    /// tombstone. A successful delete stops the actor.
+    /// Atomically verify that a classic group is empty and append the
+    /// tombstones of its offsets and its k2 record. A successful delete stops
+    /// the actor.
     ClassicDelete {
         reply: oneshot::Sender<Result<(), DeleteGroupError>>,
     },
