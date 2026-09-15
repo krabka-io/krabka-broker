@@ -466,7 +466,6 @@ impl BrokerConfig {
             }
         }
         for (name, value) in [
-            ("transaction_min_timeout", self.transaction_min_timeout),
             ("transaction_max_timeout", self.transaction_max_timeout),
             (
                 "barrier_min_injection_interval",

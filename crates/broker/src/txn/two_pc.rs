@@ -24,31 +24,44 @@
 //! guarantees bind production behaviour. The callers are the idle-transaction
 //! reaper in [`super::expiration`] and the `InitProducerId` handler.
 
-use krabka_verified::transaction::{
-    IdleTransactionState, resolve_transaction_timeout, should_abort_idle_transaction,
-};
+use krabka_verified::transaction::{IdleTransactionState, should_abort_idle_transaction};
 
 use super::state::TxnState;
 
 /// Persisted 2PC timeout sentinel.
 pub(crate) const NO_TIMEOUT_MS: i32 = krabka_verified::transaction::NO_TRANSACTION_TIMEOUT_MS;
 
-/// Resolve the `TransactionTimeoutMs` to persist for an `InitProducerId`.
+/// The `TransactionTimeoutMs` to persist for an `InitProducerId`, or
+/// `INVALID_TRANSACTION_TIMEOUT` when the request asks for a timeout that
+/// Kafka refuses.
 ///
-/// * `enable_2pc` → `i32::MAX`: the external coordinator owns the
-///   commit decision, so the broker never times the transaction out. This
-///   function ignores the client-requested timeout. That timeout is irrelevant
-///   under 2PC, and Kafka's `transaction.max.timeout.ms` cap does not apply.
-/// * otherwise → the client-requested timeout clamped to
-///   `[min_timeout_ms, max_timeout_ms]`, the classic KIP-98 behaviour.
-#[must_use]
+/// Kafka's `TransactionStateManager.validateTransactionTimeoutMs` is
+/// `enableTwoPC || (txnTimeoutMs <= config.transactionMaxTimeoutMs &&
+/// txnTimeoutMs > 0)`, and `TransactionCoordinator.handleInitProducerId`
+/// answers `INVALID_TRANSACTION_TIMEOUT` when it fails. A valid timeout is
+/// stored as the client sent it.
+///
+/// * `enable_2pc` gives `i32::MAX`: the external transaction manager owns the
+///   commit decision, so the broker never times the transaction out. The
+///   requested timeout is not read, and `transaction.max.timeout.ms` does not
+///   apply (KIP-939).
+///
+/// # Errors
+///
+/// Returns `INVALID_TRANSACTION_TIMEOUT` (50) for a timeout that is not
+/// positive, or that is above `max_timeout_ms`.
 pub(crate) fn resolve_txn_timeout(
     enable_2pc: bool,
     requested_ms: i32,
-    min_timeout_ms: i32,
     max_timeout_ms: i32,
-) -> i32 {
-    resolve_transaction_timeout(enable_2pc, requested_ms, min_timeout_ms, max_timeout_ms)
+) -> Result<i32, i16> {
+    if enable_2pc {
+        return Ok(NO_TIMEOUT_MS);
+    }
+    if requested_ms <= 0 || requested_ms > max_timeout_ms {
+        return Err(crate::codes::INVALID_TRANSACTION_TIMEOUT);
+    }
+    Ok(requested_ms)
 }
 
 /// Reports whether this persisted timeout marks a 2PC (externally-coordinated)
@@ -107,24 +120,28 @@ mod tests {
         // Even an out-of-range request (-5) is ignored under 2PC.
         for requested in [30_000, 0, i32::MAX, -5] {
             assert!(
-                resolve_txn_timeout(true, requested, 2_000, 8_000) == NO_TIMEOUT_MS,
+                resolve_txn_timeout(true, requested, 8_000) == Ok(NO_TIMEOUT_MS),
                 "{requested}"
             );
         }
     }
 
+    /// Kafka `validateTransactionTimeoutMs`.
     #[test]
-    fn resolve_timeout_non_2pc_clamps_to_configured_bounds() {
-        // Below the floor clamps up; above the ceiling clamps down.
+    fn resolve_timeout_refuses_what_kafka_refuses() {
+        let refused = Err(crate::codes::INVALID_TRANSACTION_TIMEOUT);
         for (requested, want) in [
-            (5_000, 5_000),
-            (0, 2_000),
-            (-1, 2_000),
-            (i32::MAX, 8_000),
-            (8_001, 8_000),
+            (1, Ok(1)),
+            (5_000, Ok(5_000)),
+            (8_000, Ok(8_000)),
+            (8_001, refused),
+            (0, refused),
+            (-1, refused),
+            (i32::MIN, refused),
+            (i32::MAX, refused),
         ] {
             assert!(
-                resolve_txn_timeout(false, requested, 2_000, 8_000) == want,
+                resolve_txn_timeout(false, requested, 8_000) == want,
                 "{requested}"
             );
         }
@@ -133,18 +150,14 @@ mod tests {
     #[test]
     fn non_2pc_resolution_never_collides_with_the_sentinel() {
         use assert2::check;
-        // The clamp ceiling is far below i32::MAX, so a non-2PC transaction can
+        // The ceiling is far below i32::MAX, so a non-2PC transaction can
         // never accidentally look like a 2PC one.
-        check!(resolve_txn_timeout(false, i32::MAX, 2_000, 8_000) != NO_TIMEOUT_MS);
-        check!(!is_two_phase_commit(resolve_txn_timeout(
-            false,
-            i32::MAX,
-            2_000,
-            8_000
-        )));
-        check!(is_two_phase_commit(resolve_txn_timeout(
-            true, 1, 2_000, 8_000
-        )));
+        check!(!is_two_phase_commit(
+            resolve_txn_timeout(false, 8_000, 8_000).expect("a valid timeout")
+        ));
+        check!(is_two_phase_commit(
+            resolve_txn_timeout(true, 1, 8_000).expect("2PC")
+        ));
     }
 
     #[test]

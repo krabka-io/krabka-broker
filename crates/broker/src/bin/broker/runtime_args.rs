@@ -271,8 +271,6 @@ pub struct RuntimeArgs {
     pub transaction_state_segment_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_TRANSACTION_STATE_MIN_ISR", value_parser = parse_positive_i32)]
     pub transaction_state_min_isr: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_TRANSACTION_MIN_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
-    pub transaction_min_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub transaction_max_timeout: Option<Time>,
 

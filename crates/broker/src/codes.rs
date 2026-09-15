@@ -157,6 +157,10 @@ kafka_codes! {
 
     // Transactional protocol codes.
     INVALID_TXN_STATE = 48;
+    /// `INVALID_TRANSACTION_TIMEOUT` (50): the `InitProducerId` request asked
+    /// for a transaction timeout that is not positive, or that is above
+    /// `transaction.max.timeout.ms`.
+    INVALID_TRANSACTION_TIMEOUT = 50;
     CONCURRENT_TRANSACTIONS = 51;
     /// `TRANSACTION_COORDINATOR_FENCED` (52): the marker came from an older
     /// transaction-coordinator generation than the partition has observed.

@@ -92,7 +92,6 @@ fn runtime_millisecond_and_byte_keys_round_trip_through_quantities() {
 heartbeat_interval = "3s"
 heartbeat_timeout = "9s"
 replica_lag_time_max = "30s"
-transaction_min_timeout = "1s"
 transaction_max_timeout = "15min"
 producer_id_expiration = "24h"
 client_metrics_default_interval = "5min"
@@ -114,7 +113,6 @@ replication_fetch_min = "1B"
     assert!(cfg.heartbeat_interval == secs(3));
     assert!(cfg.heartbeat_timeout == secs(9));
     assert!(cfg.replica_lag_time_max == secs(30));
-    assert!(cfg.transaction_min_timeout == secs(1));
     assert!(cfg.transaction_max_timeout == minutes(15));
     assert!(cfg.producer_id_expiration == hours(24));
     assert!(cfg.client_metrics_default_interval == minutes(5));
@@ -127,16 +125,12 @@ replication_fetch_min = "1B"
     assert!(cfg.replication.fetch_min == bytes(1));
 
     // …and leave for the wire exactly the integers that came in.
-    let millis: [(&str, i64); 9] = [
+    let millis: [(&str, i64); 8] = [
         ("heartbeat_interval", cfg.heartbeat_interval.millis_i64()),
         ("heartbeat_timeout", cfg.heartbeat_timeout.millis_i64()),
         (
             "replica_lag_time_max",
             cfg.replica_lag_time_max.millis_i64(),
-        ),
-        (
-            "transaction_min_timeout",
-            i64::from(cfg.transaction_min_timeout.millis_i32()),
         ),
         (
             "transaction_max_timeout",
@@ -167,7 +161,6 @@ replication_fetch_min = "1B"
                 ("heartbeat_interval", 3_000),
                 ("heartbeat_timeout", 9_000),
                 ("replica_lag_time_max", 30_000),
-                ("transaction_min_timeout", 1_000),
                 ("transaction_max_timeout", 900_000),
                 ("producer_id_expiration", 86_400_000),
                 ("client_metrics_default_interval", 300_000),
@@ -204,16 +197,10 @@ replication_fetch_min = "1B"
 }
 #[test]
 fn runtime_file_config_rejects_relational_conflicts() {
-    let cases = [
-        (
-            "[runtime]\nreplication_fetch_min = \"3B\"\nreplication_fetch_max = \"2B\"\n",
-            "replication fetch minimum",
-        ),
-        (
-            "[runtime]\ntransaction_min_timeout = \"2s\"\ntransaction_max_timeout = \"1s\"\n",
-            "transaction minimum timeout",
-        ),
-    ];
+    let cases = [(
+        "[runtime]\nreplication_fetch_min = \"3B\"\nreplication_fetch_max = \"2B\"\n",
+        "replication fetch minimum",
+    )];
 
     for (source, message) in cases {
         let file: FileConfig = toml::from_str(source).expect("parse runtime config");

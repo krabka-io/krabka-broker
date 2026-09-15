@@ -228,8 +228,6 @@ macro_rules! tuning_fields {
             /// `min.insync.replicas` of the transaction-state internal topic.
             /// Kafka's `transaction.state.log.min.isr`.
             pub transaction_state_min_isr: i32,
-            /// Minimum accepted transaction timeout.
-            pub transaction_min_timeout: Time,
             /// Maximum accepted transaction timeout.
             pub transaction_max_timeout: Time,
             /// Partition count for the `__barrier_state` internal topic.
