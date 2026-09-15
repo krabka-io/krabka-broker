@@ -106,28 +106,6 @@ macro_rules! context_dispatches {
     };
 }
 
-/// Registers context dispatches that the dispatch loop charges to the
-/// request quota. See [`DispatchEntry::fallback_accounted_context`].
-macro_rules! fallback_accounted_context_dispatches {
-    ($register_fn:ident; $(($adapter:ident, $api:ident, $request:ident, $handler:path)),+ $(,)?) => {
-        $(context_adapter!($adapter, $handler);)+
-
-        pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
-            $(
-                assert2::assert!(
-                    registry.register(DispatchEntry::fallback_accounted_context(
-                        ApiKey::$api as i16,
-                        krabka_protocol::owned::$request::FLEXIBLE_MIN,
-                        $adapter,
-                    )),
-                    "duplicate dispatch registration for {:?}",
-                    ApiKey::$api
-                );
-            )+
-        }
-    };
-}
-
 /// Registers krabka-private context dispatches by raw wire `api_key`.
 ///
 /// A krabka-private api key sits at or above
@@ -305,10 +283,7 @@ use self::{
         describe_delegation_token_adapter, expire_delegation_token_adapter,
         renew_delegation_token_adapter,
     },
-    context::{
-        register_context_dispatches, register_fallback_accounted_context_dispatches,
-        register_sync_context_dispatches,
-    },
+    context::{register_context_dispatches, register_sync_context_dispatches},
     decoded::{
         alter_user_scram_credentials_adapter, register_decoded_context_dispatches,
         register_decoded_sync_context_dispatches, update_features_adapter,
@@ -367,7 +342,6 @@ pub(crate) fn build_registry() -> DispatchRegistry {
         krabka_protocol::owned::sasl_authenticate_request::FLEXIBLE_MIN,
     ));
     register_context_dispatches(&mut registry);
-    register_fallback_accounted_context_dispatches(&mut registry);
     register_sync_context_dispatches(&mut registry);
     register_krabka_private_context_dispatches(&mut registry);
     register_decoded_context_dispatches(&mut registry);
@@ -417,6 +391,21 @@ pub(crate) fn build_registry() -> DispatchRegistry {
         krabka_protocol::owned::push_telemetry_request::FLEXIBLE_MIN,
         push_telemetry_adapter,
     ));
+    // The apis Kafka answers through `sendResponseExemptThrottle`, so no
+    // request quota holds them: `KafkaApis.handleWriteTxnMarkersRequest`,
+    // `ControllerApis.handleAlterPartitionRequest`, and the raft rpcs of
+    // `ControllerApis.handleRaftRequest` that no broker forwards
+    // (`FetchSnapshot`, `UpdateRaftVoter`). `DescribeQuorum`, `AddRaftVoter`
+    // and `RemoveRaftVoter` stay charged, because a broker forwards them and
+    // `sendForwardedResponse` charges them there.
+    for api in [
+        ApiKey::WriteTxnMarkers,
+        ApiKey::AlterPartition,
+        ApiKey::FetchSnapshot,
+        ApiKey::UpdateRaftVoter,
+    ] {
+        registry.exempt_from_request_quota(api as i16);
+    }
 
     registry.apply_api_catalog();
 

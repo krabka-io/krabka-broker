@@ -85,10 +85,13 @@ pub(super) fn apply_request_quota(
     );
     let mut throttle = <Time as TimeExt>::ZERO;
     if !self_accounts {
-        // KIP-124 keys the request quota on the principal, so a connection
-        // that never authenticated is charged nothing. The zero still reaches
-        // the throttle histogram below, which is what keeps that family's
-        // `_count` equal to the number of requests this path accounted for.
+        // KIP-124 keys the request quota on the principal. A PLAINTEXT or SSL
+        // connection starts as `ANONYMOUS`, so only a SASL connection that has
+        // not authenticated yet has none, and Kafka's authenticator answers
+        // those requests before `KafkaApis` could charge them. The zero still
+        // reaches the throttle histogram below, which is what keeps that
+        // family's `_count` equal to the number of requests this path
+        // accounted for.
         let charged = match auth.principal() {
             None => crate::quota::QuotaDelay::zero(),
             Some(principal) => {
@@ -111,14 +114,16 @@ pub(super) fn apply_request_quota(
             &[(crate::metrics::QuotaType::Request, charged).into()],
         );
         if delay > <Time as TimeExt>::ZERO {
+            let delay_ms = crate::quota::throttle_time_ms(delay);
             if throttle_is_leading_field(parsed.api_key, shape.version) {
-                let delay_ms = crate::quota::throttle_time_ms(delay);
                 response_bytes = patch_leading_throttle(
                     response_bytes,
                     parsed.api_key,
                     shape.body_flexible,
                     delay_ms,
                 );
+            } else if buried_throttle_is_reencoded(parsed.api_key) {
+                response_bytes = set_buried_throttle(response_bytes, parsed, shape, delay_ms);
             }
             throttle = delay;
         }
@@ -127,6 +132,109 @@ pub(super) fn apply_request_quota(
         bytes: response_bytes,
         throttle,
     }
+}
+
+/// Whether the dispatch loop reports a request-quota delay on `api_key` by
+/// decoding the response, setting its `ThrottleTimeMs`, and encoding it again.
+///
+/// These are the apis whose `ThrottleTimeMs` is not the first field, and whose
+/// handler does not set it: the four delegation-token apis carry it last, and
+/// `OffsetDelete` carries it behind `ErrorCode`. Kafka sets the field on the
+/// typed response in `sendResponseMaybeThrottle`, so the client learns the
+/// delay on these apis too.
+pub(super) fn buried_throttle_is_reencoded(api_key: ApiKeyCode) -> bool {
+    matches!(
+        ApiKey::from_i16(api_key),
+        Some(
+            ApiKey::CreateDelegationToken
+                | ApiKey::RenewDelegationToken
+                | ApiKey::ExpireDelegationToken
+                | ApiKey::DescribeDelegationToken
+                | ApiKey::OffsetDelete
+        )
+    )
+}
+
+/// Raises the buried `ThrottleTimeMs` of an encoded response to
+/// `max(existing, delay_ms)`, for an api that
+/// [`buried_throttle_is_reencoded`] names.
+///
+/// A body that does not decode at the response's version is left as it is:
+/// the connection is still muted for the window, and the response the client
+/// gets is the one the handler wrote.
+fn set_buried_throttle(
+    response_bytes: Bytes,
+    parsed: &crate::network::request::ParsedRequest<'_>,
+    shape: ResponseShape,
+    delay_ms: i32,
+) -> Bytes {
+    use krabka_protocol::owned::{
+        create_delegation_token_response::CreateDelegationTokenResponse,
+        describe_delegation_token_response::DescribeDelegationTokenResponse,
+        expire_delegation_token_response::ExpireDelegationTokenResponse,
+        offset_delete_response::OffsetDeleteResponse,
+        renew_delegation_token_response::RenewDelegationTokenResponse,
+    };
+
+    let header_len = crate::network::response_header_len(parsed.api_key, shape.body_flexible);
+    let Some(body) = response_bytes.get(header_len..) else {
+        return response_bytes;
+    };
+    let version = shape.version;
+    let reencoded = match ApiKey::from_i16(parsed.api_key) {
+        Some(ApiKey::CreateDelegationToken) => {
+            reencode::<CreateDelegationTokenResponse>(body, version, |response| {
+                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
+            })
+        }
+        Some(ApiKey::RenewDelegationToken) => {
+            reencode::<RenewDelegationTokenResponse>(body, version, |response| {
+                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
+            })
+        }
+        Some(ApiKey::ExpireDelegationToken) => {
+            reencode::<ExpireDelegationTokenResponse>(body, version, |response| {
+                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
+            })
+        }
+        Some(ApiKey::DescribeDelegationToken) => {
+            reencode::<DescribeDelegationTokenResponse>(body, version, |response| {
+                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
+            })
+        }
+        Some(ApiKey::OffsetDelete) => reencode::<OffsetDeleteResponse>(body, version, |response| {
+            response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
+        }),
+        _ => None,
+    };
+    let Some(reencoded) = reencoded else {
+        tracing::warn!(
+            api_key = parsed.api_key,
+            version,
+            "could not set the request-quota delay on the response; sending it unchanged"
+        );
+        return response_bytes;
+    };
+    let mut out = BytesMut::with_capacity(header_len + reencoded.len());
+    out.put_slice(&response_bytes[..header_len]);
+    out.put_slice(&reencoded);
+    out.freeze()
+}
+
+/// Decodes `body` as `R` at `version`, applies `set`, and encodes it again.
+fn reencode<R>(body: &[u8], version: ApiVersion, set: impl FnOnce(&mut R)) -> Option<BytesMut>
+where
+    R: for<'de> krabka_protocol::Decode<'de> + krabka_protocol::Encode,
+{
+    let mut cursor = body;
+    let mut response = R::decode(&mut cursor, version).ok()?;
+    if !cursor.is_empty() {
+        return None;
+    }
+    set(&mut response);
+    let mut out = BytesMut::with_capacity(response.encoded_len(version));
+    response.encode(&mut out, version).ok()?;
+    Some(out)
 }
 
 /// Prepends the response header, the `corr_id` and an optional tagged-fields
@@ -204,15 +312,14 @@ pub(super) fn encode_response(
 /// Classifying an API correctly is necessary but not sufficient for it to echo
 /// a delay. This predicate is only consulted where `apply_request_quota`
 /// runs: the dispatch entries whose policy is
-/// `RequestQuotaPolicy::ApplyFallbackAccounting` (the `DispatchEntry::plain`
-/// ones) and the unsupported-version reply path, which takes it for every
-/// `api_key`. The `SelfAccounted` entries -- `Produce`, `Fetch` and
-/// `ApiVersions` -- charge the quota in their handler and set
-/// `ThrottleTimeMs` on the typed response before encoding, so they never reach
-/// this predicate. The `InlineExempt` entries -- most of the admin and ACL
-/// surface -- are exempt from the request quota altogether and so are neither
-/// delayed nor throttle-stamped. Narrowing that exemption is KIP-124 work
-/// rather than KIP-219 work; this table is what a narrowing would land on.
+/// `RequestQuotaPolicy::ApplyFallbackAccounting` (every api except the
+/// self-accounted and exempt ones) and the unsupported-version reply path,
+/// which takes it for every `api_key`. The `SelfAccounted` entries --
+/// `Produce`, `Fetch` and `ApiVersions` -- charge the quota in their handler
+/// and set `ThrottleTimeMs` on the typed response before encoding, so they
+/// never reach this predicate. The `InlineExempt` entries are the apis Kafka
+/// exempts from the request quota, and they are neither delayed nor
+/// throttle-stamped.
 ///
 /// `Produce` (0) and `Fetch` (1) never reach this predicate. Both their
 /// bandwidth quota and their share of the request quota are charged by the
@@ -241,15 +348,10 @@ pub(super) fn encode_response(
 ///   variable-length array, the four delegation-token APIs (38-41) carry it
 ///   last, and `OffsetDelete` (47) leads with `ErrorCode`.
 ///   What that costs on the wire differs per API, and the audit records it
-///   as a `QuotaReach` pinned against the dispatch registry: `Produce` is
-///   `SelfAccounted`, so it never reaches this predicate and its handler
-///   fills the field in; `ApiVersions` is `ApplyFallbackAccounting`, so an
-///   ordinary request can be held while the response reports zero; the other
-///   five are `InlineExempt`, so only the unsupported-version reply path --
-///   which charges every `api_key` -- can hold one.
-///   Echoing the field on any of them needs it set on the typed response
-///   before encoding, which is how the Produce and Fetch handlers already do
-///   it.
+///   as a `QuotaReach` pinned against the dispatch registry: `Produce` and
+///   `ApiVersions` are `SelfAccounted`, so they never reach this predicate
+///   and their handlers fill the field in; the other five are re-encoded by
+///   [`set_buried_throttle`], so the client sees the delay on them too.
 pub(super) fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion) -> bool {
     // The version bounds are the schema versions at which each API moved
     // `ThrottleTimeMs` to the front of its response. They are deliberately
