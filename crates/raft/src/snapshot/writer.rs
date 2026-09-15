@@ -322,4 +322,98 @@ mod tests {
         );
         check!(cur.is_empty());
     }
+
+    /// The apiKeys of Kafka's `MetadataRecordType` table
+    /// (`metadata/src/main/resources/common/metadata/*Record.json`).
+    /// `MetadataRecordSerde.apiMessageFor` throws for any other id, so
+    /// `kafka-dump-log` and `kafka-metadata-shell` fail on the record.
+    const KAFKA_METADATA_RECORD_API_KEYS: [u32; 27] = [
+        0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+        28, 29,
+    ];
+
+    /// Every data record of a checkpoint names an apiKey that Kafka knows,
+    /// also for the krabka-only state. One row for each krabka-only record.
+    #[test]
+    fn writer_emits_only_kafka_metadata_record_types() {
+        use krabka_metadata::{
+            BreakGlassAction, BreakGlassProposalRecord, FeatureLevelRecord,
+            PartitionOffsetAdvanceRecord, PatternType, TopicFreezeRecord,
+        };
+        use krabka_protocol::records::metadata::KraftMetadataRecord;
+
+        let rows: [(&str, MetadataRecord); 4] = [
+            (
+                "features epoch",
+                MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: "metadata.version".into(),
+                    level: 25,
+                }),
+            ),
+            (
+                "diskless offset advance",
+                MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
+                    topic: "orders".into(),
+                    partition: 0,
+                    count: 12,
+                }),
+            ),
+            (
+                "write freeze",
+                MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+                    scope: "orders".into(),
+                    pattern_type: PatternType::Literal,
+                    frozen: true,
+                    reason: "incident".into(),
+                    set_by: "User:alice".into(),
+                    set_at_ms: 1,
+                    proposal_id: Uuid::nil(),
+                    key_id: String::new(),
+                    signature: vec![],
+                }),
+            ),
+            (
+                "break-glass proposal",
+                MetadataRecord::V1BreakGlassProposal(BreakGlassProposalRecord {
+                    proposal_id: Uuid::from_u128(0xB1),
+                    action: BreakGlassAction::ThawTopicFreeze,
+                    target: "literal:orders".into(),
+                    proposer: "User:alice".into(),
+                    reason: "incident closed".into(),
+                    created_at_ms: 1,
+                    expires_at_ms: 2,
+                    approvals: vec![],
+                    consumed_at_ms: 0,
+                    withdrawn: false,
+                }),
+            ),
+        ];
+        for (label, rec) in rows {
+            let mut image = MetadataImage::new(Uuid::new_v4());
+            image.apply(&rec);
+
+            let bytes = SnapshotWriter::serialize(&image, 1).unwrap();
+            let mut cur: &[u8] = &bytes;
+            let mut api_keys = Vec::new();
+            while !cur.is_empty() {
+                let batch = RecordBatch::decode(&mut cur).expect("batch");
+                if batch.attributes.is_control_batch() {
+                    continue;
+                }
+                for record in &batch.records {
+                    let value = record.value.as_ref().expect("metadata value");
+                    let (decoded, _) = KraftMetadataRecord::decode_value(value).expect("decode");
+                    api_keys.push(decoded.api_key());
+                }
+            }
+
+            check!(!api_keys.is_empty(), "{label}");
+            check!(
+                api_keys
+                    .iter()
+                    .all(|key| KAFKA_METADATA_RECORD_API_KEYS.contains(key)),
+                "{label}: {api_keys:?}"
+            );
+        }
+    }
 }
