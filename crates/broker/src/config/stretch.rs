@@ -39,10 +39,11 @@ impl BrokerConfig {
     /// profile: its [`rack`][Self::rack] must name one of the sites, and its
     /// roles must agree with the site it names.
     ///
-    /// The durability check reads the replication factor from
+    /// The durability check covers two replication factors:
     /// [`offsets_topic_replication_factor`][Self::offsets_topic_replication_factor],
-    /// the replication factor the broker applies to the topics it creates
-    /// itself.
+    /// which the broker applies to the topics it creates itself, and
+    /// [`default_replication_factor`][Self::default_replication_factor], which
+    /// a `CreateTopics` that omits the replication factor gets.
     pub(super) fn validate_stretch(&self) -> Result<(), BrokerError> {
         let Some(profile) = self.stretch.as_ref() else {
             return Ok(());
@@ -88,25 +89,36 @@ impl BrokerConfig {
             return Err(BrokerError::StretchWitnessRoleOutsideWitnessSite { rack: rack.clone() });
         }
 
-        let replication_factor = i64::from(self.offsets_topic_replication_factor);
-        // The scalar checks reject non-positive replication factors, and the
-        // exact-three-sites check above bounds `site_count`. Reject the one
-        // remaining out-of-domain input before calling the verified kernel.
-        if replication_factor > STRETCH_MAX_REPLICATION_FACTOR {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "offsets_topic_replication_factor exceeds the stretch verification bound of 1024"
-                    .into(),
-            ));
-        }
-        if !krabka_verified::stretch::min_insync_is_site_loss_safe(
-            replication_factor,
-            site_count,
-            i64::from(self.default_min_insync_replicas),
-        ) {
-            return Err(BrokerError::StretchMinInsyncUnsafe {
-                min_insync: self.default_min_insync_replicas,
-                replication_factor: self.offsets_topic_replication_factor,
-            });
+        for (name, factor) in [
+            (
+                "offsets_topic_replication_factor",
+                self.offsets_topic_replication_factor,
+            ),
+            (
+                "default_replication_factor",
+                self.default_replication_factor,
+            ),
+        ] {
+            let replication_factor = i64::from(factor);
+            // The scalar checks reject non-positive replication factors, and
+            // the exact-three-sites check above bounds `site_count`. Reject the
+            // one remaining out-of-domain input before calling the verified
+            // kernel.
+            if replication_factor > STRETCH_MAX_REPLICATION_FACTOR {
+                return Err(BrokerError::InvalidRuntimeConfig(format!(
+                    "{name} exceeds the stretch verification bound of 1024"
+                )));
+            }
+            if !krabka_verified::stretch::min_insync_is_site_loss_safe(
+                replication_factor,
+                site_count,
+                i64::from(self.default_min_insync_replicas),
+            ) {
+                return Err(BrokerError::StretchMinInsyncUnsafe {
+                    min_insync: self.default_min_insync_replicas,
+                    replication_factor: factor,
+                });
+            }
         }
         Ok(())
     }
@@ -141,13 +153,15 @@ mod tests {
     /// A node of [`three_site_profile`], in `rack` and with `roles`.
     ///
     /// `min.insync.replicas` is 2, the only value that is safe at the default
-    /// replication factor of 3 spread over three sites.
+    /// replication factor of 3 spread over three sites. The topic-creation
+    /// default replication factor is 3 for the same reason.
     fn stretch_node(rack: &str, roles: Vec<NodeRole>) -> BrokerConfig {
         BrokerConfig {
             roles,
             rack: Some(rack.to_string()),
             stretch: Some(three_site_profile()),
             default_min_insync_replicas: 2,
+            default_replication_factor: 3,
             ..BrokerConfig::default()
         }
     }
@@ -288,15 +302,47 @@ mod tests {
         }
     }
 
+    /// A topic created with an omitted replication factor gets
+    /// `default_replication_factor`, so the site-loss check covers it as it
+    /// covers the offsets topic.
+    #[test]
+    fn stretch_rejects_a_topic_creation_default_that_a_site_loss_would_break() {
+        for replication_factor in [1, 2] {
+            let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+            c.default_replication_factor = replication_factor;
+            check!(matches!(
+                c.validate(),
+                Err(BrokerError::StretchMinInsyncUnsafe {
+                    min_insync: 2,
+                    replication_factor: got,
+                }) if got == replication_factor
+            ));
+        }
+    }
+
     #[test]
     fn stretch_rejects_replication_factor_above_the_verified_bound() {
-        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
-        c.offsets_topic_replication_factor = 1025;
+        for (field, set) in [
+            (
+                "offsets_topic_replication_factor",
+                (|c: &mut BrokerConfig| c.offsets_topic_replication_factor = 1025)
+                    as fn(&mut BrokerConfig),
+            ),
+            ("default_replication_factor", |c: &mut BrokerConfig| {
+                c.default_replication_factor = 1025;
+            }),
+        ] {
+            let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+            set(&mut c);
 
-        assert!(matches!(
-            c.validate(),
-            Err(BrokerError::InvalidRuntimeConfig(message))
-                if message == "offsets_topic_replication_factor exceeds the stretch verification bound of 1024"
-        ));
+            check!(
+                matches!(
+                    c.validate(),
+                    Err(BrokerError::InvalidRuntimeConfig(message))
+                        if message == format!("{field} exceeds the stretch verification bound of 1024")
+                ),
+                "{field}"
+            );
+        }
     }
 }
