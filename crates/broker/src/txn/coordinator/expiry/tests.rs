@@ -107,21 +107,23 @@ fn a_backwards_clock_expires_nothing() {
 
 // ── The live sweep ────────────────────────────────────────────────────
 
-/// A `TxnEntry` that committed at `last_update_ms` and has sat in
-/// `CompleteCommit` ever since.
+/// A `TxnEntry` that started at time 0, committed at `last_update_ms` and has
+/// sat in `CompleteCommit` ever since.
 fn complete_commit_entry(last_update_ms: i64) -> TxnEntry {
     let mut entry = TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), 3, 60_000, 0);
     entry.state = TxnState::CompleteCommit;
+    entry.start_ms = 0;
     entry.last_update_ms = last_update_ms;
     entry
 }
 
-/// A KIP-939 2PC transaction that an external transaction manager prepared at
-/// `last_update_ms` and has not yet resolved. The [`NO_TIMEOUT_MS`] sentinel is
-/// what marks it 2PC on disk.
+/// A KIP-939 2PC transaction that started at time 0, that an external
+/// transaction manager prepared at `last_update_ms` and has not yet resolved.
+/// The [`NO_TIMEOUT_MS`] sentinel is what marks it 2PC on disk.
 fn prepared_two_pc_entry(last_update_ms: i64) -> TxnEntry {
     let mut entry = TxnEntry::new_empty(TID.to_owned(), ProducerId(2000), 1, NO_TIMEOUT_MS, 0);
     entry.state = TxnState::PrepareCommit;
+    entry.start_ms = 0;
     entry.last_update_ms = last_update_ms;
     entry
 }
