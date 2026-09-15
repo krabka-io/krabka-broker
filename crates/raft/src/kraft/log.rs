@@ -12,7 +12,7 @@ use krabka_units::prelude::ByteSize;
 
 use crate::{
     error::RaftError,
-    kraft::types::{Epoch, LogView},
+    kraft::types::{Epoch, LogOffsetMetadata, LogView},
 };
 
 pub struct KraftLog {
@@ -244,6 +244,37 @@ impl KraftLog {
     }
 }
 
+/// Kafka's `KafkaRaftLog.endOffsetForEpoch` over a leader epoch checkpoint.
+///
+/// The checkpoint answers the floor epoch and its end, as
+/// `LeaderEpochFileCache.endOffsetFor` does. An epoch newer than every entry
+/// has no floor there, and Kafka then answers the log end with the latest
+/// epoch, which never equals the requested one. The WAL replica log shares
+/// this lookup.
+#[must_use]
+pub fn end_offset_for_epoch_in(
+    checkpoint: &krabka_log::LeaderEpochCheckpoint,
+    log_end: Offset,
+    epoch: Epoch,
+) -> LogOffsetMetadata {
+    let latest = u32::try_from(checkpoint.latest_epoch().unwrap_or(LeaderEpoch(0)).0).unwrap_or(0);
+    let past_every_epoch = LogOffsetMetadata {
+        offset: log_end.0,
+        epoch: latest,
+    };
+    let Ok(requested) = i32::try_from(epoch) else {
+        return past_every_epoch;
+    };
+    let (found, end) = checkpoint.epoch_and_offset_for(LeaderEpoch(requested), log_end);
+    match u32::try_from(found.0) {
+        Ok(found) => LogOffsetMetadata {
+            offset: end.0,
+            epoch: found,
+        },
+        Err(_) => past_every_epoch,
+    }
+}
+
 impl LogView for KraftLog {
     // `LogView` is defined by the pure `krabka-kraft-core` consensus engine and
     // speaks raw `i64` offsets; unwrap the `krabka-log` `Offset`s with `.0` at
@@ -262,19 +293,12 @@ impl LogView for KraftLog {
             .unwrap_or(LeaderEpoch(0));
         u32::try_from(latest.0).unwrap_or(0)
     }
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
-        let log_end = self.log.log_end_offset();
-        // Wrap the consensus `Epoch` into the log seam's `LeaderEpoch(i32)`.
-        let epoch = LeaderEpoch(i32::try_from(epoch).ok()?);
-        match self
-            .log
-            .epoch_checkpoint()
-            .end_offset_for_epoch(epoch, log_end)
-            .0
-        {
-            -1 => None,
-            off => Some(off),
-        }
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
+        end_offset_for_epoch_in(
+            self.log.epoch_checkpoint(),
+            self.log.log_end_offset(),
+            epoch,
+        )
     }
 }
 
@@ -469,18 +493,19 @@ mod tests {
     }
 
     #[test]
-    fn logview_end_offset_for_epoch_maps_unknown_to_none() {
+    fn logview_end_offset_for_epoch_follows_kafka() {
         let (mut log, _dir) = open_tmp();
-        log.append(&mut batch(0, 1, b"a"), 0).unwrap(); // epoch 1 @ [0,1)
-        log.append(&mut batch(0, 2, b"b"), 0).unwrap(); // epoch 2 @ [1,2)
-        // epoch 1 ends where epoch 2 starts (offset 1); epoch 2 is current → end 2.
-        // unknown future epoch → None
-        for (_case, epoch, want) in [
-            ("completed prior epoch", 1, Some(1)),
-            ("current epoch", 2, Some(2)),
-            ("unknown future epoch", 9, None),
+        log.append(&mut batch(0, 2, b"a"), 0).unwrap(); // epoch 2 @ [0,1)
+        log.append(&mut batch(0, 4, b"b"), 0).unwrap(); // epoch 4 @ [1,2)
+        let at = |offset, epoch| LogOffsetMetadata { offset, epoch };
+        for (case, epoch, want) in [
+            ("an epoch older than the log", 1, at(0, 1)),
+            ("a completed prior epoch", 2, at(1, 2)),
+            ("an epoch between two the log holds", 3, at(1, 2)),
+            ("the current epoch", 4, at(2, 4)),
+            ("an epoch newer than the log", 9, at(2, 4)),
         ] {
-            assert2::assert!(LogView::end_offset_for_epoch(&log, epoch) == want);
+            check!(LogView::end_offset_for_epoch(&log, epoch) == want, "{case}");
         }
     }
 
