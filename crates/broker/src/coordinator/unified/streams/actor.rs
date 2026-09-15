@@ -66,7 +66,7 @@ pub enum StreamsGroupActorMessage {
         request: Box<StreamsGroupHeartbeatRequest>,
         client_id: String,
         client_host: String,
-        reply: oneshot::Sender<StreamsGroupHeartbeatResponse>,
+        reply: oneshot::Sender<StreamsHeartbeatResult>,
     },
     Describe {
         reply: oneshot::Sender<StreamsDescribeView>,
@@ -86,6 +86,14 @@ pub enum StreamsGroupActorMessage {
     },
     Seed(super::super::StreamsGroupSeed),
     Shutdown(oneshot::Sender<()>),
+}
+
+/// Kafka's `StreamsGroupHeartbeatResult`: the response, and the internal
+/// topics that the handler must create through `CreateTopics`.
+#[derive(Debug, Default)]
+pub struct StreamsHeartbeatResult {
+    pub response: StreamsGroupHeartbeatResponse,
+    pub creatable_topics: Vec<super::topology::InternalTopicSpec>,
 }
 
 /// Read-only projection of [`StreamsGroupState`] for the
@@ -205,10 +213,11 @@ struct ActorState {
     /// the image that the most recent reconcile configured the topology
     /// against. A heartbeat that sees another hash reconciles again.
     metadata_hash: i64,
-    /// The internal topics that the most recent reconcile could not create.
-    /// Every heartbeat tries them again, as Kafka's `KafkaApis` sends the
-    /// `internalTopicsToBeCreated` of each heartbeat to the controller.
-    missing_internal_topics: Vec<super::topology::InternalTopicSpec>,
+    /// The internal topics that the topology needs and the metadata image
+    /// does not hold. Every heartbeat answer carries them, as Kafka's
+    /// `StreamsGroupHeartbeatResult.creatableTopics` does, and `KafkaApis`
+    /// sends them to the controller as a `CreateTopics` request.
+    creatable_topics: Vec<super::topology::InternalTopicSpec>,
     /// Set when a reconcile installed a new target. The next record batch then
     /// carries the target and current assignment of every member, because the
     /// new target changed all of them.
@@ -227,7 +236,7 @@ impl ActorState {
             topology: None,
             partition_metadata: None,
             metadata_hash: 0,
-            missing_internal_topics: Vec::new(),
+            creatable_topics: Vec::new(),
             target_changed: false,
             configured: false,
         }
@@ -267,8 +276,18 @@ async fn actor_loop(
                         )
                         .await
                         {
-                            Ok(resp) => {
-                                let _ = reply.send(resp);
+                            Ok(response) => {
+                                // Kafka answers the internal topics to create
+                                // only with a response that the group accepted.
+                                let creatable_topics = if response.error_code == codes::NONE {
+                                    actor.creatable_topics.clone()
+                                } else {
+                                    Vec::new()
+                                };
+                                let _ = reply.send(StreamsHeartbeatResult {
+                                    response,
+                                    creatable_topics,
+                                });
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -276,10 +295,13 @@ async fn actor_loop(
                                     error = %e,
                                     "streams-group actor exiting after log-write failure",
                                 );
-                                let _ = reply.send(response::error_resp(
-                                    codes::COORDINATOR_LOAD_IN_PROGRESS,
-                                    None,
-                                ));
+                                let _ = reply.send(StreamsHeartbeatResult {
+                                    response: response::error_resp(
+                                        codes::COORDINATOR_LOAD_IN_PROGRESS,
+                                        None,
+                                    ),
+                                    creatable_topics: Vec::new(),
+                                });
                                 break;
                             }
                         }
@@ -337,7 +359,7 @@ async fn actor_loop(
                     tick = tokio::time::interval(config.heartbeat_interval);
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     actor.state.dirty = true;
-                    reconcile(&mut actor, &config, metadata_source.as_ref()).await;
+                    reconcile(&mut actor, &config, metadata_source.as_ref());
                     let pending = snapshot_pending_after_change(&mut actor, &[]);
                     if flush_pending(
                         &actor,

@@ -37,7 +37,8 @@ use crate::{
 };
 
 /// Evict members silent past the session timeout, fence members past their
-/// rebalance timeout, reconcile, and persist the resulting tombstones. Returns `Err` if the log write fails (the actor exits).
+/// rebalance timeout, reconcile, and persist the resulting tombstones.
+/// Returns `Err` if the log write fails (the actor exits).
 pub(super) async fn handle_session_tick(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
@@ -55,7 +56,7 @@ pub(super) async fn handle_session_tick(
         return Ok(());
     }
     // `evict_expired` set `dirty`; reconcile owns the single `bump_epoch`.
-    reconcile(actor, config, metadata_source).await;
+    reconcile(actor, config, metadata_source);
     let mut pending = snapshot_pending_after_change(actor, &[]);
     for mid in &evicted {
         pending.member_metadata.push((mid.clone(), None));
@@ -150,7 +151,7 @@ pub(super) async fn handle_heartbeat(
         {
             accept_topology(actor, topo);
         }
-        reconcile(actor, config, metadata_source).await;
+        reconcile(actor, config, metadata_source);
         if req.shutdown_application {
             actor.state.request_shutdown(&new_member_id);
         }
@@ -215,10 +216,10 @@ pub(super) async fn handle_heartbeat(
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
-    refresh_topic_metadata(actor, config, metadata_source).await;
+    refresh_topic_metadata(actor, metadata_source);
 
     if actor.state.dirty {
-        reconcile(actor, config, metadata_source).await;
+        reconcile(actor, config, metadata_source);
         changed = true;
     }
     // Kafka's `maybeReconcile`: move the member toward the target, and arm
@@ -466,12 +467,9 @@ fn subtopologies_by_id(
 /// Kafka's `onMetadataUpdate` requests a metadata refresh for every streams
 /// group that uses a created, changed or deleted topic, and the next heartbeat
 /// computes the metadata hash again. A new hash configures the topology again
-/// and bumps the group epoch. This function first tries again to create the
-/// internal topics that the last reconcile could not create, as Kafka creates
-/// the missing internal topics on every heartbeat.
-async fn refresh_topic_metadata(
+/// and bumps the group epoch.
+fn refresh_topic_metadata(
     actor: &mut ActorState,
-    config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) {
     let Some(source) = metadata_source else {
@@ -483,21 +481,6 @@ async fn refresh_topic_metadata(
     let Some(topology) = actor.topology.as_ref() else {
         return;
     };
-    if !actor.state.dirty
-        && !actor.missing_internal_topics.is_empty()
-        && let Err(error) = topology::ensure_internal_topics(
-            source,
-            &actor.missing_internal_topics,
-            config.internal_topic_replication_factor,
-        )
-        .await
-    {
-        tracing::warn!(
-            group_id = %actor.state.group_id,
-            %error,
-            "streams internal topic creation failed again",
-        );
-    }
     if topology::metadata_hash(topology, &source.current_image()) != actor.metadata_hash {
         actor.state.dirty = true;
     }
@@ -656,7 +639,7 @@ async fn handle_leave(
         ));
     }
     // `remove_member` set `dirty`; reconcile owns the single `bump_epoch`.
-    reconcile(actor, config, metadata_source).await;
+    reconcile(actor, config, metadata_source);
     let mut pending = snapshot_pending_after_change(actor, &[]);
     pending.member_metadata.push((req.member_id.clone(), None));
     pending
