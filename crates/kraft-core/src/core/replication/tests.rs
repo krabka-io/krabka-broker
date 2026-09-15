@@ -204,7 +204,7 @@ fn leader_holds_hwm_for_prior_epoch_entries_until_current_epoch_committed() {
 }
 
 #[test]
-fn leader_detects_divergence_and_returns_truncate() {
+fn leader_detects_divergence_and_replies_with_the_diverging_epoch() {
     // log has last_epoch 2 ending at 10; epoch-1 ended at 5.
     struct L;
     impl LogView for L {
@@ -256,7 +256,7 @@ fn leader_detects_divergence_and_returns_truncate() {
     );
     assert2::assert!(actions.iter().any(|a| matches!(
         a,
-        Action::TruncateTo(LogOffsetMetadata {
+        Action::ReplyDivergingEpoch(LogOffsetMetadata {
             offset: 5,
             epoch: 1
         })
@@ -506,7 +506,7 @@ fn a_diverging_fetch_still_counts_as_contact() {
                     kind: TimerKind::CheckQuorum,
                     deadline: SimInstant(3600),
                 },
-                Action::TruncateTo(LogOffsetMetadata {
+                Action::ReplyDivergingEpoch(LogOffsetMetadata {
                     offset: 5,
                     epoch: 1,
                 }),

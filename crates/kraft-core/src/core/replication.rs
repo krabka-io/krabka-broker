@@ -52,7 +52,7 @@ impl QuorumStateMachine {
             && let Some(div_end) = log.end_offset_for_epoch(fetch_epoch)
             && fetch_offset > div_end
         {
-            actions.push(Action::TruncateTo(LogOffsetMetadata {
+            actions.push(Action::ReplyDivergingEpoch(LogOffsetMetadata {
                 offset: div_end,
                 epoch: fetch_epoch,
             }));
