@@ -26,6 +26,8 @@ impl BrokerHandle {
             .share_coordinator
             .read_summary(group, topic_id, partition)
             .await
+            .ok()
+            .flatten()
             .map(|(state_epoch, leader_epoch, start_offset, count)| {
                 (state_epoch, leader_epoch, start_offset.0, count)
             })
@@ -195,6 +197,10 @@ mod tests {
             share_state_partition,
             share_state_part,
         );
+        broker
+            .share_coordinator
+            .lead_all_partitions_for_test()
+            .await;
         broker
             .share_coordinator
             .initialize(

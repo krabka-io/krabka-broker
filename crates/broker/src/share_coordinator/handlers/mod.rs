@@ -1,9 +1,9 @@
 //! KIP-932 share-state persister RPC handlers (api keys 83–87). Each handler
-//! decodes the typed request, gates every `(topic, partition)` on
-//! [`crate::share_coordinator::coordinator::ShareCoordinator::is_leader`] for
-//! its state partition, and it returns per-partition `NOT_COORDINATOR`
-//! otherwise. It then delegates to the matching coordinator method and maps the
-//! result to a per-partition `error_code`.
+//! decodes the typed request and delegates every `(topic, partition)` to the
+//! matching coordinator method. The method answers per-partition
+//! `NOT_COORDINATOR` when this broker does not lead the state partition, and
+//! `COORDINATOR_LOAD_IN_PROGRESS` while the state partition loads. The handler
+//! maps the result to a per-partition `error_code`.
 //!
 //! These are inter-broker RPCs. As in Kafka, every handler first checks
 //! `ClusterAction` on `Cluster("kafka-cluster")` for the principal of the

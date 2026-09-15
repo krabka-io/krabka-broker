@@ -1,12 +1,14 @@
-//! Replay of the locally-led `__share_group_state` partitions back into the
-//! in-memory delivery state.
+//! The load of a led `__share_group_state` partition: a replay of its log
+//! into the in-memory delivery state.
 //!
-//! `Broker::start` calls `recover` once. It refreshes the leadership set and
-//! then folds every `ShareSnapshot`, `ShareUpdate`, and tombstone record of
-//! each led partition into the state map. This path only reads the log, so it
-//! lives apart from the write path in `persist`.
+//! [`ShareCoordinator::refresh_leader_partitions`] starts one load task for
+//! each partition that this broker starts to lead. The task folds every
+//! `ShareSnapshot`, `ShareUpdate`, and tombstone record of the partition into
+//! a private map. It installs the map and marks the partition active only if
+//! no newer term of the partition started in the meantime. This path only
+//! reads the log, so it lives apart from the write path in `persist`.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
@@ -18,9 +20,10 @@ use tracing::{info, warn};
 #[cfg(test)]
 mod tests;
 
-use super::{ShareCoordinator, ShareStateKey3};
+use super::{LoadStatus, ShareCoordinator, ShareStateKey3};
 use crate::{
     error::BrokerError,
+    partition::Partition,
     share_coordinator::{
         bootstrap,
         persistence::{
@@ -32,19 +35,22 @@ use crate::{
 };
 
 impl ShareCoordinator {
-    /// Replays every locally-led `__share_group_state` partition.
+    /// Applies the leadership of `image` and waits until every load that it
+    /// started has ended.
     ///
-    /// The replayed records go into the in-memory state map. `Broker::start`
-    /// calls this method.
+    /// `Broker::start` calls this method, so the partitions that this broker
+    /// leads at start serve requests as soon as the broker is up.
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError`] if the leadership refresh fails. The method logs
-    /// a per-partition read error and then skips that partition, as if it holds
-    /// nothing to replay.
-    pub(crate) async fn recover(&self, image: &MetadataImage) -> Result<(), BrokerError> {
-        self.refresh_leader_partitions(image).await;
-        self.replay_led_partitions().await;
+    /// This method does not fail at present. A per-partition read error is
+    /// logged, and the partition becomes active with the records read before
+    /// the error.
+    pub(crate) async fn recover(
+        self: &Arc<Self>,
+        image: &MetadataImage,
+    ) -> Result<(), BrokerError> {
+        self.refresh_leader_partitions(image).await.finished().await;
         info!(
             keys_loaded = self.state.len(),
             "ShareCoordinator recovery complete"
@@ -52,127 +58,135 @@ impl ShareCoordinator {
         Ok(())
     }
 
-    /// Replays the log of every currently-led `__share_group_state` partition.
+    /// Replays `state_partition` and installs the result for term
+    /// `generation`.
     ///
-    /// The replayed records go into the in-memory state map. This method
-    /// assumes that `refresh_leader_partitions` already filled
-    /// `leader_partitions`.
-    async fn replay_led_partitions(&self) {
-        let local_partitions: Vec<PartitionIndex> = self
-            .leader_partitions
-            .read()
-            .await
-            .iter()
-            .copied()
-            .collect();
-
-        let read_max = self.config.recovery_read_max;
-
-        for p in local_partitions {
-            let Some(part) = self.partitions.get(bootstrap::TOPIC, p) else {
-                continue;
-            };
-
-            let mut offset = part.log_start_offset();
-            loop {
-                let out = match part.read_log(offset, read_max) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        warn!(
-                            partition = p.get(),
-                            error = %e,
-                            "read error during __share_group_state recovery; skipping partition"
-                        );
-                        break;
-                    }
-                };
-
-                if out.batches.is_empty() {
-                    break;
-                }
-
-                for batch in &out.batches {
-                    for rec in &batch.records {
-                        let rec_offset = Offset(batch.base_offset + i64::from(rec.offset_delta));
-                        let Some(key_bytes) = rec.key.as_ref() else {
-                            continue;
-                        };
-                        let key = match parse_state_key(key_bytes) {
-                            Ok(k) => k,
-                            Err(e) => {
-                                warn!(
-                                    partition = p.get(),
-                                    error = %e,
-                                    "invalid share-state key; skipping record"
-                                );
-                                continue;
-                            }
-                        };
-                        let map_key = (key.group_id.clone(), key.topic_id, key.partition);
-
-                        // Tombstone: drop the in-memory entry.
-                        let Some(value) = rec.value.as_ref() else {
-                            self.state.remove(&map_key);
-                            continue;
-                        };
-
-                        self.replay_value(&key, &map_key, value, rec_offset, p);
-                    }
-                    offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
-                }
-            }
+    /// The install runs under the write guard of the leadership map. When the
+    /// partition is no longer led, or a newer term started, the method drops
+    /// the replayed state.
+    pub(super) async fn load_partition(&self, state_partition: PartitionIndex, generation: u64) {
+        let replayed = match self.partitions.get(bootstrap::TOPIC, state_partition) {
+            Some(part) => self.replay_partition(&part, state_partition),
+            None => HashMap::new(),
+        };
+        let mut led = self.leader_partitions.write().await;
+        let Some(entry) = led
+            .get_mut(&state_partition)
+            .filter(|entry| entry.generation == generation)
+        else {
+            info!(
+                partition = state_partition.get(),
+                "__share_group_state load superseded; replayed state dropped"
+            );
+            return;
+        };
+        let keys_loaded = replayed.len();
+        for (key, state) in replayed {
+            self.state.insert(key, Arc::new(Mutex::new(state)));
         }
+        entry.status = LoadStatus::Active;
+        info!(
+            partition = state_partition.get(),
+            keys_loaded, "__share_group_state partition loaded"
+        );
     }
 
-    /// Folds one replayed record value into the in-memory state map.
-    ///
-    /// A snapshot record resets the state and records `last_snapshot_offset`.
-    /// An update record applies a delta.
-    fn replay_value(
+    /// Reads the whole log of `state_partition` and folds it into a new map.
+    fn replay_partition(
         &self,
-        key: &ShareStateKey,
-        map_key: &ShareStateKey3,
-        value: &Bytes,
-        rec_offset: Offset,
-        partition: PartitionIndex,
-    ) {
-        let entry = self
-            .state
-            .entry(map_key.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(SharePartitionState::default())))
-            .value()
-            .clone();
-        // Recovery runs single-threaded before the coordinator is shared, so
-        // the lock is uncontended; `try_lock` keeps `recover` non-async here.
-        let mut st = entry
-            .try_lock()
-            .expect("share-state recovery lock uncontended");
-
-        match key.record_type {
-            KEY_SHARE_SNAPSHOT => match ShareSnapshotValue::decode(value) {
-                Ok(snap) => {
-                    st.apply_snapshot(&snap);
-                    st.last_snapshot_offset = rec_offset;
+        part: &Partition,
+        state_partition: PartitionIndex,
+    ) -> HashMap<ShareStateKey3, SharePartitionState> {
+        let mut replayed = HashMap::new();
+        let read_max = self.config.recovery_read_max;
+        let mut offset = part.log_start_offset();
+        loop {
+            let out = match part.read_log(offset, read_max) {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!(
+                        partition = state_partition.get(),
+                        error = %e,
+                        "read error during __share_group_state load; stopping the replay"
+                    );
+                    break;
                 }
-                Err(e) => warn!(
-                    partition = partition.get(),
-                    error = %e,
-                    "invalid ShareSnapshot value; skipping record"
-                ),
-            },
-            KEY_SHARE_UPDATE => match ShareUpdateValue::decode(value) {
-                Ok(upd) => st.apply_update(&upd),
-                Err(e) => warn!(
-                    partition = partition.get(),
-                    error = %e,
-                    "invalid ShareUpdate value; skipping record"
-                ),
-            },
-            other => warn!(
-                partition = partition.get(),
-                record_type = other,
-                "unknown share-state record type"
-            ),
+            };
+
+            if out.batches.is_empty() {
+                break;
+            }
+
+            for batch in &out.batches {
+                for rec in &batch.records {
+                    let rec_offset = Offset(batch.base_offset + i64::from(rec.offset_delta));
+                    let Some(key_bytes) = rec.key.as_ref() else {
+                        continue;
+                    };
+                    let key = match parse_state_key(key_bytes) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            warn!(
+                                partition = state_partition.get(),
+                                error = %e,
+                                "invalid share-state key; skipping record"
+                            );
+                            continue;
+                        }
+                    };
+                    let map_key = (key.group_id.clone(), key.topic_id, key.partition);
+
+                    // Tombstone: drop the entry.
+                    let Some(value) = rec.value.as_ref() else {
+                        replayed.remove(&map_key);
+                        continue;
+                    };
+
+                    let st = replayed.entry(map_key).or_default();
+                    replay_value(st, &key, value, rec_offset, state_partition);
+                }
+                offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+            }
         }
+        replayed
+    }
+}
+
+/// Folds one replayed record value into `st`.
+///
+/// A snapshot record resets the state and records `last_snapshot_offset`. An
+/// update record applies a delta.
+fn replay_value(
+    st: &mut SharePartitionState,
+    key: &ShareStateKey,
+    value: &Bytes,
+    rec_offset: Offset,
+    partition: PartitionIndex,
+) {
+    match key.record_type {
+        KEY_SHARE_SNAPSHOT => match ShareSnapshotValue::decode(value) {
+            Ok(snap) => {
+                st.apply_snapshot(&snap);
+                st.last_snapshot_offset = rec_offset;
+            }
+            Err(e) => warn!(
+                partition = partition.get(),
+                error = %e,
+                "invalid ShareSnapshot value; skipping record"
+            ),
+        },
+        KEY_SHARE_UPDATE => match ShareUpdateValue::decode(value) {
+            Ok(upd) => st.apply_update(&upd),
+            Err(e) => warn!(
+                partition = partition.get(),
+                error = %e,
+                "invalid ShareUpdate value; skipping record"
+            ),
+        },
+        other => warn!(
+            partition = partition.get(),
+            record_type = other,
+            "unknown share-state record type"
+        ),
     }
 }

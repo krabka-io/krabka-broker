@@ -55,7 +55,9 @@ use crate::{
     metadata_source::MetadataSource,
     network::client::InterBrokerClient,
     share_coordinator::{
-        bootstrap, coordinator::ShareCoordinator, persistence::StateBatch,
+        bootstrap,
+        coordinator::{LoadStatus, ShareCoordinator},
+        persistence::StateBatch,
         state::SharePartitionState,
     },
 };
@@ -211,7 +213,11 @@ impl SharePersister {
     /// of which of its partitions it leads. This method creates the topic
     /// lazily. The creation is idempotent and accepts an existing topic. The
     /// leadership refresh picks up every partition that the replicator
-    /// supervisor has already materialized locally.
+    /// supervisor has already materialized locally. When this broker leads
+    /// `state_partition`, the method waits, up to the same deadline, until the
+    /// load of that partition ends. A load that is still running at the
+    /// deadline is not an error: the local coordinator then answers
+    /// `COORDINATOR_LOAD_IN_PROGRESS`, and the caller retries.
     async fn ensure_topic_and_refresh(
         &self,
         state_partition: PartitionIndex,
@@ -227,17 +233,16 @@ impl SharePersister {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let image = self.controller.current_image();
-            self.share_coordinator
-                .refresh_leader_partitions(&image)
-                .await;
+            drop(
+                self.share_coordinator
+                    .refresh_leader_partitions(&image)
+                    .await,
+            );
+            let status = self.share_coordinator.load_status(state_partition).await;
             match image.partition(bootstrap::TOPIC, state_partition.get()) {
                 Some(metadata) if metadata.leader != self.node_id => return Ok(()),
-                Some(_)
-                    if self
-                        .share_coordinator
-                        .partitions
-                        .contains(bootstrap::TOPIC, state_partition) =>
-                {
+                Some(_) if status == Some(LoadStatus::Active) => return Ok(()),
+                Some(_) if status.is_some() && tokio::time::Instant::now() >= deadline => {
                     return Ok(());
                 }
                 _ if tokio::time::Instant::now() >= deadline => {
@@ -273,10 +278,15 @@ impl SharePersister {
             .state_partition_for(group, &topic_id, partition);
         self.ensure_topic_and_refresh(state_partition).await?;
         if self.share_coordinator.is_leader(state_partition).await {
-            return Ok(self
+            return self
                 .share_coordinator
                 .read(group, topic_id, partition)
-                .await);
+                .await
+                .map_err(|code| {
+                    BrokerError::Share(format!(
+                        "ReadShareGroupState {group}:{topic_id}:{partition} refused (code {code})"
+                    ))
+                });
         }
 
         let req = ReadShareGroupStateRequest {

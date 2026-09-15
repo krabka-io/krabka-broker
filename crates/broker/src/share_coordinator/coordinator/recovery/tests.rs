@@ -12,7 +12,7 @@ use crate::{
     share_coordinator::{
         config::ShareCoordinatorConfig,
         coordinator::test_support::{batch, coordinator, lead_all, open_state_partition},
-        persistence::encode_state_key,
+        persistence::{StateBatch, encode_state_key},
     },
 };
 
@@ -20,11 +20,17 @@ use crate::{
 async fn recover_honors_nondefault_read_bound() {
     let dir = tempdir().unwrap();
     let registry = Arc::new(PartitionRegistry::new());
-    open_state_partition(&registry, dir.path(), 0);
-    let partition = registry
-        .get(bootstrap::TOPIC, PartitionIndex(0))
-        .expect("state partition open");
     let topic_id = uuid::Uuid::from_bytes([42; 16]);
+    let state_partition = crate::share_coordinator::partitioner::partition_for_share_key(
+        "bounded",
+        &topic_id,
+        0,
+        ShareCoordinatorConfig::default().state_topic_num_partitions,
+    );
+    open_state_partition(&registry, dir.path(), state_partition);
+    let partition = registry
+        .get(bootstrap::TOPIC, PartitionIndex(state_partition))
+        .expect("state partition open");
     let key = ShareStateKey {
         record_type: KEY_SHARE_SNAPSHOT,
         group_id: "bounded".to_string(),
@@ -52,50 +58,28 @@ async fn recover_honors_nondefault_read_bound() {
     batch.last_offset_delta = 1;
     partition.produce_batch(batch).await.unwrap();
 
-    let image = MetadataImage::from_records(
-        uuid::Uuid::nil(),
-        &[
-            krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-                name: bootstrap::TOPIC.to_string(),
-                topic_id: uuid::Uuid::from_bytes([43; 16]),
-                partitions: 1,
-                replication_factor: 1,
-            }),
-            krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: bootstrap::TOPIC.to_string(),
-                partition: 0,
-                leader: krabka_metadata::NodeId(1),
-                replicas: vec![krabka_metadata::NodeId(1)],
-                isr: vec![krabka_metadata::NodeId(1)],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
-        ],
-    );
-    let bounded = ShareCoordinator::new(
+    let image = state_partition_image(state_partition, 1, 0);
+    let bounded = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
         Arc::clone(&registry),
         ShareCoordinatorConfig {
             recovery_read_max: krabka_units::bytes(700),
             ..ShareCoordinatorConfig::default()
         },
-    );
+    ));
     bounded.recover(&image).await.unwrap();
-    assert!(bounded.read("bounded", topic_id, 0).await.is_none());
+    assert!(bounded.read("bounded", topic_id, 0).await == Ok(None));
 
-    let unbounded = ShareCoordinator::new(
+    let unbounded = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
         registry,
         ShareCoordinatorConfig {
             recovery_read_max: krabka_units::kibibytes(4),
             ..ShareCoordinatorConfig::default()
         },
-    );
+    ));
     unbounded.recover(&image).await.unwrap();
-    assert!(unbounded.read_summary("bounded", topic_id, 0).await == Some((3, 4, Offset(5), 6)));
+    assert!(unbounded.read_summary("bounded", topic_id, 0).await == Ok(Some((3, 4, Offset(5), 6))));
 }
 
 #[tokio::test]
@@ -127,12 +111,15 @@ async fn write_persists_and_recovers() {
         reg.clone(),
         ShareCoordinatorConfig::default(),
     );
-    lead_all(&recovered).await;
-    // `recover` re-derives leadership from a MetadataImage; here we seed
-    // the leadership set directly (lead_all) and replay the open logs.
-    recovered.replay_led_partitions().await;
+    // `recover` derives leadership from a MetadataImage. Here every state
+    // partition starts a new term directly, and each log is replayed.
+    recovered.reload_all_partitions_for_test().await;
 
-    let st = recovered.read("g", tid, 0).await.expect("recovered");
+    let st = recovered
+        .read("g", tid, 0)
+        .await
+        .unwrap()
+        .expect("recovered");
     check!(st.state_epoch == 2);
     check!(st.leader_epoch == 3);
     check!(st.start_offset == 20);
@@ -140,7 +127,7 @@ async fn write_persists_and_recovers() {
     check!(st.state_batches == vec![batch(20, 29)]);
 }
 
-// `replay_led_partitions` must derive each record's offset as
+// The replay must derive each record's offset as
 // `base_offset + offset_delta` and advance the inter-batch cursor as
 // `base_offset + last_offset_delta + 1`. A hand-crafted TWO-record batch
 // (an update at offset_delta 0, then a snapshot at offset_delta 1) pins
@@ -233,9 +220,9 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
     });
     part.produce_batch(batch_b).await.unwrap();
 
-    coord.replay_led_partitions().await;
+    coord.reload_all_partitions_for_test().await;
 
-    let st = coord.read("g", tid, 0).await.expect("recovered");
+    let st = coord.read("g", tid, 0).await.unwrap().expect("recovered");
     // Batch B is the final snapshot — proves the inter-batch cursor advanced
     // past batch A (base_offset + last_offset_delta + 1 == 2).
     check!(st.leader_epoch == 9);
@@ -313,11 +300,287 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
     });
     part.produce_batch(batch_a).await.unwrap();
 
-    coord.replay_led_partitions().await;
+    coord.reload_all_partitions_for_test().await;
 
-    let st = coord.read("g", tid, 0).await.expect("recovered");
+    let st = coord.read("g", tid, 0).await.unwrap().expect("recovered");
     check!(st.leader_epoch == 3);
     check!(st.start_offset == 20);
     // The snapshot record sits at base_offset(0) + offset_delta(1) == 1.
     check!(st.last_snapshot_offset == 1);
+}
+
+/// A metadata image with one `__share_group_state` partition, led by `leader`
+/// at `leader_epoch`.
+fn state_partition_image(partition: i32, leader: u64, leader_epoch: i32) -> MetadataImage {
+    let node = krabka_metadata::NodeId(leader);
+    MetadataImage::from_records(
+        uuid::Uuid::nil(),
+        &[
+            krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+                name: bootstrap::TOPIC.to_string(),
+                topic_id: uuid::Uuid::from_bytes([44; 16]),
+                partitions: ShareCoordinatorConfig::default().state_topic_num_partitions,
+                replication_factor: 2,
+            }),
+            krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                topic: bootstrap::TOPIC.to_string(),
+                partition,
+                leader: node,
+                replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+                isr: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+                leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: leader_epoch,
+            }),
+        ],
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Broker {
+    A,
+    B,
+}
+
+#[derive(Debug)]
+enum Step {
+    /// Apply an image where `leader` leads the state partition at `epoch`.
+    /// `wait` waits for the loads that the refresh started.
+    Refresh {
+        on: Broker,
+        leader: u64,
+        epoch: i32,
+        wait: bool,
+    },
+    /// Wait until the load that an earlier refresh started has ended.
+    AwaitActive { on: Broker },
+    /// Advance the start offset and write one batch.
+    Write {
+        on: Broker,
+        start: i64,
+        expected: Result<(), i16>,
+    },
+    /// Read the state: `Ok(Some((start_offset, batches)))`, `Ok(None)` for no
+    /// state, or the error code.
+    Read {
+        on: Broker,
+        expected: Result<Option<(i64, Vec<StateBatch>)>, i16>,
+    },
+}
+
+/// Leadership of a `__share_group_state` partition moves between two brokers
+/// that share one log (the replicated log of the partition). Each broker
+/// loads the log when it becomes the leader, answers
+/// `COORDINATOR_LOAD_IN_PROGRESS` until the load ends, and drops its state and
+/// answers `NOT_COORDINATOR` when it resigns (Kafka's
+/// `ShareCoordinatorService.onElection` and `onResignation`).
+#[tokio::test]
+async fn leadership_change_loads_and_unloads_the_state_partition() {
+    use crate::codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR};
+
+    let dir = tempdir().unwrap();
+    let registry = Arc::new(PartitionRegistry::new());
+    let topic_id = uuid::Uuid::from_bytes([45; 16]);
+    let coordinator_a = Arc::new(ShareCoordinator::new(
+        krabka_audit::NodeId(1),
+        Arc::clone(&registry),
+        ShareCoordinatorConfig::default(),
+    ));
+    let coordinator_b = Arc::new(ShareCoordinator::new(
+        krabka_audit::NodeId(2),
+        Arc::clone(&registry),
+        ShareCoordinatorConfig::default(),
+    ));
+    let state_partition = coordinator_a.state_partition_for("g", &topic_id, 0);
+    open_state_partition(&registry, dir.path(), state_partition.get());
+
+    // Broker A leads at epoch 0 and initializes the key at offset 10.
+    coordinator_a
+        .refresh_leader_partitions(&state_partition_image(state_partition.get(), 1, 0))
+        .await
+        .finished()
+        .await;
+    coordinator_a
+        .initialize("g", topic_id, 0, 1, Offset(10))
+        .await
+        .unwrap();
+
+    let steps = [
+        Step::Write {
+            on: Broker::A,
+            start: 20,
+            expected: Ok(()),
+        },
+        Step::Read {
+            on: Broker::A,
+            expected: Ok(Some((20, vec![batch(20, 29)]))),
+        },
+        // Leadership moves to B. B has not run its load yet.
+        Step::Refresh {
+            on: Broker::A,
+            leader: 2,
+            epoch: 1,
+            wait: true,
+        },
+        Step::Refresh {
+            on: Broker::B,
+            leader: 2,
+            epoch: 1,
+            wait: false,
+        },
+        Step::Read {
+            on: Broker::B,
+            expected: Err(COORDINATOR_LOAD_IN_PROGRESS),
+        },
+        Step::Write {
+            on: Broker::B,
+            start: 30,
+            expected: Err(COORDINATOR_LOAD_IN_PROGRESS),
+        },
+        Step::Read {
+            on: Broker::A,
+            expected: Err(NOT_COORDINATOR),
+        },
+        Step::Write {
+            on: Broker::A,
+            start: 30,
+            expected: Err(NOT_COORDINATOR),
+        },
+        // B finished its load: it serves the state that A wrote.
+        Step::AwaitActive { on: Broker::B },
+        Step::Read {
+            on: Broker::B,
+            expected: Ok(Some((20, vec![batch(20, 29)]))),
+        },
+        Step::Write {
+            on: Broker::B,
+            start: 30,
+            expected: Ok(()),
+        },
+        // Leadership moves back to A: A serves the state that B wrote, not
+        // the state that it held in its earlier term.
+        Step::Refresh {
+            on: Broker::B,
+            leader: 1,
+            epoch: 2,
+            wait: true,
+        },
+        Step::Refresh {
+            on: Broker::A,
+            leader: 1,
+            epoch: 2,
+            wait: true,
+        },
+        Step::Read {
+            on: Broker::A,
+            expected: Ok(Some((30, vec![batch(30, 39)]))),
+        },
+        Step::Read {
+            on: Broker::B,
+            expected: Err(NOT_COORDINATOR),
+        },
+    ];
+
+    for (index, step) in steps.into_iter().enumerate() {
+        let on = |broker| match broker {
+            Broker::A => &coordinator_a,
+            Broker::B => &coordinator_b,
+        };
+        match step {
+            Step::Refresh {
+                on: broker,
+                leader,
+                epoch,
+                wait,
+            } => {
+                let loads = on(broker)
+                    .refresh_leader_partitions(&state_partition_image(
+                        state_partition.get(),
+                        leader,
+                        epoch,
+                    ))
+                    .await;
+                if wait {
+                    loads.finished().await;
+                }
+            }
+            Step::AwaitActive { on: broker } => {
+                let coordinator = on(broker);
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    while coordinator.load_status(state_partition).await
+                        != Some(super::LoadStatus::Active)
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("the load ends");
+            }
+            Step::Write {
+                on: broker,
+                start,
+                expected,
+            } => {
+                let written = on(broker)
+                    .write(
+                        "g",
+                        topic_id,
+                        0,
+                        (1, 0),
+                        (Offset(start), 0),
+                        vec![batch(start, start + 9)],
+                    )
+                    .await;
+                assert!(written == expected, "step {index}");
+            }
+            Step::Read {
+                on: broker,
+                expected,
+            } => {
+                let read = on(broker)
+                    .read("g", topic_id, 0)
+                    .await
+                    .map(|state| state.map(|st| (st.start_offset.0, st.state_batches)));
+                assert!(read == expected, "step {index}");
+            }
+        }
+    }
+}
+
+/// A broker that the image names as leader, but whose state partition log is
+/// not open yet, answers `COORDINATOR_LOAD_IN_PROGRESS`. The refresh after the
+/// log opens loads the partition.
+#[tokio::test]
+async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
+    let dir = tempdir().unwrap();
+    let registry = Arc::new(PartitionRegistry::new());
+    let topic_id = uuid::Uuid::from_bytes([46; 16]);
+    let coordinator = Arc::new(ShareCoordinator::new(
+        krabka_audit::NodeId(1),
+        Arc::clone(&registry),
+        ShareCoordinatorConfig::default(),
+    ));
+    let state_partition = coordinator.state_partition_for("g", &topic_id, 0);
+    let image = state_partition_image(state_partition.get(), 1, 0);
+
+    coordinator
+        .refresh_leader_partitions(&image)
+        .await
+        .finished()
+        .await;
+    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Pending));
+    check!(
+        coordinator.read("g", topic_id, 0).await == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
+    );
+
+    open_state_partition(&registry, dir.path(), state_partition.get());
+    coordinator
+        .refresh_leader_partitions(&image)
+        .await
+        .finished()
+        .await;
+    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
+    check!(coordinator.read("g", topic_id, 0).await == Ok(None));
 }
