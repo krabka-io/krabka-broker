@@ -37,29 +37,29 @@ fn prepare_raft_transport(
 ) -> RaftTransport {
     let controller_cell = Arc::new(tokio::sync::OnceCell::new());
     let audit_cell: crate::raft_handshake::AuditLogArc = Arc::new(tokio::sync::OnceCell::new());
-    let handshake =
-        if config.controller_listener_protocol == krabka_security::ListenerProtocol::Plaintext {
-            tracing::warn!(
-                "controller listener is PLAINTEXT: raft/controller RPCs are unauthenticated"
-            );
-            None
-        } else {
-            let tls_acceptor =
-                tls_dynamic.map(|dynamic| tokio_rustls::TlsAcceptor::from(dynamic.current()));
-            let handshake = crate::raft_handshake::BrokerRaftHandshake {
-                tls_acceptor,
-                plain_credentials: config.plain_credentials.as_map().clone(),
-                enabled_sasl_mechanisms: config.enabled_sasl_mechanisms.clone(),
-                gssapi: config.gssapi.clone(),
-                oauthbearer_validator: config.oauthbearer_validator.clone(),
-                protocol: config.controller_listener_protocol,
-                controller: Arc::clone(&controller_cell),
-                audit_log: Arc::clone(&audit_cell),
-                max_frame_bytes: config.socket_request_max.bytes_usize(),
-                authorizer: Arc::clone(&config.authorizer),
-            };
-            Some(Arc::new(handshake) as Arc<dyn krabka_raft::RaftListenerHandshake>)
-        };
+    if config.controller_listener_protocol == krabka_security::ListenerProtocol::Plaintext {
+        tracing::warn!(
+            "controller listener is PLAINTEXT: every peer is ANONYMOUS, and each \
+             controller RPC is authorized for that principal"
+        );
+    }
+    // The handshake runs on every protocol. On `PLAINTEXT` it does no
+    // authentication, but it still gives each connection the grants that the
+    // listener checks for every request.
+    let tls_acceptor =
+        tls_dynamic.map(|dynamic| tokio_rustls::TlsAcceptor::from(dynamic.current()));
+    let handshake = Some(Arc::new(crate::raft_handshake::BrokerRaftHandshake {
+        tls_acceptor,
+        plain_credentials: config.plain_credentials.as_map().clone(),
+        enabled_sasl_mechanisms: config.enabled_sasl_mechanisms.clone(),
+        gssapi: config.gssapi.clone(),
+        oauthbearer_validator: config.oauthbearer_validator.clone(),
+        protocol: config.controller_listener_protocol,
+        controller: Arc::clone(&controller_cell),
+        audit_log: Arc::clone(&audit_cell),
+        max_frame_bytes: config.socket_request_max.bytes_usize(),
+        authorizer: Arc::clone(&config.authorizer),
+    }) as Arc<dyn krabka_raft::RaftListenerHandshake>);
     let server_name = config
         .controller_server_name
         .clone()

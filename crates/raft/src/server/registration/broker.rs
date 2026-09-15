@@ -12,9 +12,9 @@ use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, NodeId};
 use krabka_protocol::{Decode, owned::broker_registration_request::BrokerRegistrationRequest};
 
 use super::{
-    BROKER_ID_NOT_REGISTERED, CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_BROKER_REGISTRATION,
-    INCONSISTENT_CLUSTER_ID, INVALID_REGISTRATION, NOT_CONTROLLER, SUCCESS, UNKNOWN_SERVER_ERROR,
-    UNSUPPORTED_VERSION, is_leader, listeners::decode_broker_listeners, raft_error_code,
+    BROKER_ID_NOT_REGISTERED, DUPLICATE_BROKER_REGISTRATION, INCONSISTENT_CLUSTER_ID,
+    INVALID_REGISTRATION, NOT_CONTROLLER, SUCCESS, UNKNOWN_SERVER_ERROR, UNSUPPORTED_VERSION,
+    is_leader, listeners::decode_broker_listeners, raft_error_code,
     response::broker_registration_response,
 };
 use crate::{RaftError, kraft::KraftController};
@@ -23,13 +23,9 @@ pub(super) async fn broker_registration(
     version: i16,
     body: &[u8],
     engine: &KraftController,
-    authorized: bool,
 ) -> Result<Bytes, RaftError> {
     let mut body = body;
     let request = BrokerRegistrationRequest::decode(&mut body, version)?;
-    if !authorized {
-        return broker_registration_response(version, CLUSTER_AUTHORIZATION_FAILED, -1);
-    }
     if !is_leader(engine) {
         return broker_registration_response(version, NOT_CONTROLLER, -1);
     }

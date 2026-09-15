@@ -174,10 +174,6 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                     peer: &request.peer,
                     principal: &principal,
                     authenticated_via_token: request.authenticated_via_token,
-                    // This request arrived on the controller listener itself,
-                    // which already ran the `ClusterAction` gate for the whole
-                    // connection.
-                    listener_authorized_cluster_action: true,
                 },
             )
             .await
@@ -193,9 +189,9 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
 
 /// The identity of the peer that opened the controller-listener connection.
 ///
-/// A Plaintext or TLS-only controller listener authenticates nobody, so there
-/// is no principal to carry and the request runs as `ANONYMOUS` — the same
-/// default the SASL-less listener applies everywhere else.
+/// The SASL principal, or the mTLS principal of an `SSL` connection. A peer
+/// with neither runs as `ANONYMOUS`, the same default a broker listener
+/// applies.
 fn outer_principal(request: &ControllerAdminRequest) -> krabka_security::Principal {
     request
         .principal
@@ -223,15 +219,6 @@ struct Invocation<'a> {
     /// this is the *client's* principal, not the forwarding hop's.
     principal: &'a krabka_security::Principal,
     authenticated_via_token: bool,
-    /// Whether the listener has already authorized this identity for
-    /// `ClusterAction`, which is what lets `BrokerHeartbeat` skip its own ACL
-    /// gate. See [`RequestContext::listener_authorized_cluster_action`].
-    ///
-    /// False on the `Envelope` path, and it has to be: the listener authorized
-    /// the *forwarding broker*, while the embedded request runs as the client
-    /// the envelope names. Carrying the flag across would hand every forwarded
-    /// client the inter-broker control plane.
-    listener_authorized_cluster_action: bool,
 }
 
 /// Dispatch `invocation` through the broker's Admin handler registry.
@@ -252,7 +239,6 @@ async fn invoke_registered_handler(
         peer,
         principal,
         authenticated_via_token,
-        listener_authorized_cluster_action,
     } = invocation;
     let entry = broker.handlers().get(api_key).ok_or_else(|| {
         crate::error::BrokerError::UnsupportedApi {
@@ -276,11 +262,6 @@ async fn invoke_registered_handler(
                 false,
                 "CONTROLLER",
             );
-            let context = if listener_authorized_cluster_action {
-                context.listener_authorized_for_cluster_action()
-            } else {
-                context
-            };
             handler(broker, api_version, correlation_id, body, &context).await
         }
         DispatchKind::Auth(handler) => {
@@ -343,10 +324,6 @@ async fn serve_envelope(
                     // caller from minting or renewing another token, and that
                     // rule has to follow the identity it belongs to.
                     authenticated_via_token: token_authenticated,
-                    // The listener authorized the forwarding broker for
-                    // `ClusterAction`, not the client this request runs as, so
-                    // the embedded handler faces its own ACL gate.
-                    listener_authorized_cluster_action: false,
                 },
             )
             .await

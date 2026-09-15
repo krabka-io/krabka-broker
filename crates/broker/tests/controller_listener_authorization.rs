@@ -1,0 +1,468 @@
+//! Per-request authorization on the controller listener (#684).
+//!
+//! Kafka's `ControllerApis` authorizes every request against the principal of
+//! the connection, with the cluster operation that the api needs. A denial is
+//! the error response of that api, and the connection stays open. On
+//! `PLAINTEXT` the principal is `ANONYMOUS`. On `SASL_PLAINTEXT` it is the
+//! SASL principal, and a principal without `ClusterAction` can still run the
+//! Admin apis that its own grants allow.
+//!
+//! Each case talks to a live one-node cluster over a raw controller-listener
+//! socket, with a `SimpleAclAuthorizer` whose only super user is the node's
+//! own inter-broker principal.
+
+use assert2::{assert, check};
+use bytes::{BufMut as _, Bytes, BytesMut};
+use krabka_broker::{
+    Broker, BrokerConfig, BrokerHandle, NodeId, authorizer::SimpleAclAuthorizer,
+    config::InterBrokerCredentials,
+};
+use krabka_metadata::{
+    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType, TopicRecord,
+};
+use krabka_protocol::{
+    Decode, Encode, UnknownTaggedFields,
+    owned::{
+        broker_heartbeat_request::{self, BrokerHeartbeatRequest},
+        broker_heartbeat_response::BrokerHeartbeatResponse,
+        create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
+        create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
+        describe_cluster_request::{self, DescribeClusterRequest},
+        describe_cluster_response::DescribeClusterResponse,
+        describe_quorum_request::{self, DescribeQuorumRequest, PartitionData, TopicData},
+        describe_quorum_response::DescribeQuorumResponse,
+        sasl_authenticate_request::SaslAuthenticateRequest,
+        sasl_authenticate_response::SaslAuthenticateResponse,
+        sasl_handshake_request::SaslHandshakeRequest,
+        sasl_handshake_response::SaslHandshakeResponse,
+        vote_request::{self, VoteRequest},
+        vote_response::VoteResponse,
+    },
+};
+use krabka_raft::{
+    API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE, KrabkaMetadataFetchRequest,
+    KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse,
+};
+use krabka_security::{ListenerProtocol, SaslMechanism};
+use tokio::{
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    net::TcpStream,
+};
+
+const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
+const MESSAGE: &str = "Cluster authorization failed.";
+
+/// The node's own inter-broker principal, and its only super user.
+const NODE: (&str, &str) = ("node", "node-secret");
+
+async fn start(
+    protocol: ListenerProtocol,
+    users: &[(&str, &str)],
+) -> (BrokerHandle, tempfile::TempDir) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind data listener");
+    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind controller listener");
+    let data_addr = data_listener.local_addr().expect("data addr");
+    let controller_addr = controller_listener.local_addr().expect("controller addr");
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.listen_addr = data_addr;
+    config.advertised_listener = data_addr.to_string();
+    config.controller_listen_addr = controller_addr;
+    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
+    config.controller_listener_protocol = protocol;
+    config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    for (user, password) in std::iter::once(&NODE).chain(users) {
+        config
+            .plain_credentials
+            .insert((*user).to_owned(), (*password).to_owned());
+    }
+    config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+        username: NODE.0.to_owned(),
+        password: NODE.1.to_owned(),
+    });
+    config.super_users = std::iter::once(NODE.0.to_owned()).collect();
+    config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+    let broker =
+        Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
+            .await
+            .expect("broker start");
+    (broker, dir)
+}
+
+async fn allow(broker: &BrokerHandle, principal: &str, operation: AclOperation) {
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
+            resource_type: ResourceType::Cluster,
+            resource_name: "kafka-cluster".into(),
+            pattern_type: PatternType::Literal,
+            principal: principal.into(),
+            host: "*".into(),
+            operation,
+            permission_type: PermissionType::Allow,
+        }))
+        .await
+        .expect("seed ACL");
+}
+
+fn encode<T: Encode>(message: &T, version: i16) -> Bytes {
+    let mut body = BytesMut::new();
+    message.encode(&mut body, version).expect("encode");
+    body.freeze()
+}
+
+/// Sends one request and returns the response body after its header. The
+/// request and response headers are flexible when `flexible` is set.
+async fn exchange(
+    stream: &mut TcpStream,
+    api_key: i16,
+    version: i16,
+    flexible: bool,
+    body: &[u8],
+) -> Bytes {
+    let mut frame = BytesMut::new();
+    frame.put_i16(api_key);
+    frame.put_i16(version);
+    frame.put_i32(77);
+    frame.put_i16(-1);
+    if flexible {
+        frame.put_u8(0);
+    }
+    frame.put_slice(body);
+    stream
+        .write_all(&i32::try_from(frame.len()).expect("length").to_be_bytes())
+        .await
+        .expect("write length");
+    stream.write_all(&frame).await.expect("write request");
+
+    let mut length = [0_u8; 4];
+    stream
+        .read_exact(&mut length)
+        .await
+        .expect("a response, and the connection stays open");
+    let mut response = vec![0_u8; usize::try_from(i32::from_be_bytes(length)).expect("length")];
+    stream.read_exact(&mut response).await.expect("read body");
+    let header = if flexible { 5 } else { 4 };
+    check!(response[..4] == [0, 0, 0, 77], "correlation id");
+    Bytes::copy_from_slice(&response[header..])
+}
+
+fn decode<T: Decode<'static>>(bytes: &Bytes, version: i16) -> T {
+    let mut cursor: &[u8] = bytes;
+    let decoded = T::decode(&mut cursor, version).expect("decode response");
+    check!(cursor.is_empty(), "the response consumed its body");
+    decoded
+}
+
+async fn sasl_plain(stream: &mut TcpStream, user: &str, password: &str) {
+    let handshake = exchange(
+        stream,
+        17,
+        1,
+        false,
+        &encode(
+            &SaslHandshakeRequest {
+                mechanism: "PLAIN".to_owned(),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            1,
+        ),
+    )
+    .await;
+    check!(decode::<SaslHandshakeResponse>(&handshake, 1).error_code == 0);
+    let mut auth_bytes = vec![0];
+    auth_bytes.extend_from_slice(user.as_bytes());
+    auth_bytes.push(0);
+    auth_bytes.extend_from_slice(password.as_bytes());
+    let authenticate = exchange(
+        stream,
+        36,
+        2,
+        true,
+        &encode(
+            &SaslAuthenticateRequest {
+                auth_bytes: Bytes::from(auth_bytes),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            2,
+        ),
+    )
+    .await;
+    assert!(decode::<SaslAuthenticateResponse>(&authenticate, 2).error_code == 0);
+}
+
+fn submit_change(topic: &str) -> Bytes {
+    let records = vec![MetadataRecord::V1Topic(TopicRecord {
+        name: topic.into(),
+        topic_id: uuid::Uuid::new_v4(),
+        partitions: 1,
+        replication_factor: 1,
+    })];
+    let records =
+        <serde_wincode::SerdeCompat<Vec<MetadataRecord>> as wincode::Serialize>::serialize(
+            &records,
+        )
+        .expect("wincode");
+    let mut body = Vec::new();
+    KrabkaSubmitChangeRequest {
+        records: Bytes::from(records),
+    }
+    .encode_v0(&mut body)
+    .expect("encode SubmitChange");
+    Bytes::from(body)
+}
+
+fn submit_change_response(bytes: &Bytes) -> KrabkaSubmitChangeResponse {
+    let mut cursor: &[u8] = bytes;
+    KrabkaSubmitChangeResponse::decode_v0(&mut cursor).expect("decode SubmitChange")
+}
+
+fn describe_quorum() -> Bytes {
+    encode(
+        &DescribeQuorumRequest {
+            topics: vec![TopicData {
+                topic_name: "__cluster_metadata".to_owned(),
+                partitions: vec![PartitionData {
+                    partition_index: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        describe_quorum_request::MAX_VERSION,
+    )
+}
+
+/// A `PLAINTEXT` controller listener authorizes every request for
+/// `ANONYMOUS`.
+///
+/// Without a grant, `Vote`, the private `SubmitChange` and `BrokerHeartbeat`
+/// get `CLUSTER_AUTHORIZATION_FAILED`, and no record is committed. The
+/// connection stays open. After an ACL grants `ClusterAction` to
+/// `User:ANONYMOUS`, the next `SubmitChange` on the same connection commits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plaintext_controller_listener_authorizes_every_request_for_anonymous() {
+    let (broker, _dir) = start(ListenerProtocol::Plaintext, &[]).await;
+    let mut stream = TcpStream::connect(broker.controller_addr())
+        .await
+        .expect("connect controller listener");
+
+    let vote_version = vote_request::MAX_VERSION;
+    let vote = exchange(
+        &mut stream,
+        vote_request::API_KEY,
+        vote_version,
+        true,
+        &encode(&VoteRequest::default(), vote_version),
+    )
+    .await;
+    check!(
+        decode::<VoteResponse>(&vote, vote_version)
+            == VoteResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            }
+    );
+
+    let refused = exchange(
+        &mut stream,
+        API_KEY_SUBMIT_CHANGE,
+        0,
+        true,
+        &submit_change("anonymous-denied"),
+    )
+    .await;
+    check!(
+        submit_change_response(&refused)
+            == KrabkaSubmitChangeResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                leader_hint: -1,
+                result: Bytes::new(),
+            }
+    );
+    check!(
+        broker
+            .controller_image_for_test()
+            .topic("anonymous-denied")
+            .is_none()
+    );
+
+    let heartbeat_version = broker_heartbeat_request::MAX_VERSION;
+    let heartbeat = exchange(
+        &mut stream,
+        broker_heartbeat_request::API_KEY,
+        heartbeat_version,
+        true,
+        &encode(
+            &BrokerHeartbeatRequest {
+                broker_id: 1,
+                broker_epoch: -1,
+                ..Default::default()
+            },
+            heartbeat_version,
+        ),
+    )
+    .await;
+    check!(
+        decode::<BrokerHeartbeatResponse>(&heartbeat, heartbeat_version).error_code
+            == CLUSTER_AUTHORIZATION_FAILED
+    );
+
+    allow(&broker, "User:ANONYMOUS", AclOperation::ClusterAction).await;
+    let applied = exchange(
+        &mut stream,
+        API_KEY_SUBMIT_CHANGE,
+        0,
+        true,
+        &submit_change("anonymous-allowed"),
+    )
+    .await;
+    check!(submit_change_response(&applied).error_code == 0);
+    check!(
+        broker
+            .controller_image_for_test()
+            .topic("anonymous-allowed")
+            .is_some()
+    );
+
+    broker.shutdown().await;
+}
+
+/// A `SASL_PLAINTEXT` controller listener keeps a connection whose principal
+/// lacks `ClusterAction`, and it authorizes each request for that principal.
+///
+/// - `creator` holds `Create` on the cluster: `CreateTopics` creates the
+///   topic. Before #684 the handshake dropped the connection.
+/// - `replicator` holds `ClusterAction`: `MetadataFetch` is served, and
+///   `DescribeQuorum`, which needs `Describe`, is refused.
+/// - `reader` holds `Describe`: `DescribeQuorum` is served, and
+///   `DescribeCluster`, which needs `Alter` on a controller, is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() {
+    const CREATOR: (&str, &str) = ("creator", "creator-secret");
+    const REPLICATOR: (&str, &str) = ("replicator", "replicator-secret");
+    const READER: (&str, &str) = ("reader", "reader-secret");
+
+    let (broker, _dir) = start(
+        ListenerProtocol::SaslPlaintext,
+        &[CREATOR, REPLICATOR, READER],
+    )
+    .await;
+    allow(&broker, "User:creator", AclOperation::Create).await;
+    allow(&broker, "User:replicator", AclOperation::ClusterAction).await;
+    allow(&broker, "User:reader", AclOperation::Describe).await;
+
+    let mut creator = TcpStream::connect(broker.controller_addr())
+        .await
+        .expect("connect");
+    sasl_plain(&mut creator, CREATOR.0, CREATOR.1).await;
+    let create_version = create_topics_request::MAX_VERSION;
+    let created = exchange(
+        &mut creator,
+        create_topics_request::API_KEY,
+        create_version,
+        true,
+        &encode(
+            &CreateTopicsRequest {
+                topics: vec![CreatableTopic {
+                    name: "created-by-creator".to_owned(),
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    ..Default::default()
+                }],
+                timeout_ms: 5_000,
+                ..Default::default()
+            },
+            create_version,
+        ),
+    )
+    .await;
+    let created = decode::<CreateTopicsResponse>(&created, create_version);
+    check!(
+        created
+            .topics
+            .iter()
+            .map(|topic: &CreatableTopicResult| (topic.name.as_str(), topic.error_code))
+            .collect::<Vec<_>>()
+            == vec![("created-by-creator", 0)]
+    );
+
+    let mut replicator = TcpStream::connect(broker.controller_addr())
+        .await
+        .expect("connect");
+    sasl_plain(&mut replicator, REPLICATOR.0, REPLICATOR.1).await;
+    let mut fetch = Vec::new();
+    KrabkaMetadataFetchRequest {
+        fetch_offset: 0,
+        max_bytes: 1024,
+    }
+    .encode_v0(&mut fetch);
+    let fetched = exchange(&mut replicator, API_KEY_METADATA_FETCH, 0, true, &fetch).await;
+    let mut cursor: &[u8] = &fetched;
+    check!(
+        KrabkaMetadataFetchResponse::decode_v0(&mut cursor)
+            .expect("decode MetadataFetch")
+            .error_code
+            == 0
+    );
+    let quorum_version = describe_quorum_request::MAX_VERSION;
+    let refused = exchange(
+        &mut replicator,
+        describe_quorum_request::API_KEY,
+        quorum_version,
+        true,
+        &describe_quorum(),
+    )
+    .await;
+    check!(
+        decode::<DescribeQuorumResponse>(&refused, quorum_version)
+            == DescribeQuorumResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }
+    );
+
+    let mut reader = TcpStream::connect(broker.controller_addr())
+        .await
+        .expect("connect");
+    sasl_plain(&mut reader, READER.0, READER.1).await;
+    let served = exchange(
+        &mut reader,
+        describe_quorum_request::API_KEY,
+        quorum_version,
+        true,
+        &describe_quorum(),
+    )
+    .await;
+    check!(decode::<DescribeQuorumResponse>(&served, quorum_version).error_code == 0);
+    let cluster_version = describe_cluster_request::MAX_VERSION;
+    let refused = exchange(
+        &mut reader,
+        describe_cluster_request::API_KEY,
+        cluster_version,
+        true,
+        &encode(
+            &DescribeClusterRequest {
+                endpoint_type: 2,
+                ..Default::default()
+            },
+            cluster_version,
+        ),
+    )
+    .await;
+    check!(
+        decode::<DescribeClusterResponse>(&refused, cluster_version)
+            == DescribeClusterResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }
+    );
+
+    broker.shutdown().await;
+}
