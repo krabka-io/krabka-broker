@@ -29,8 +29,8 @@ use crate::{RaftError, kraft::KraftController};
 const SUCCESS: i16 = 0;
 const UNKNOWN_SERVER_ERROR: i16 = -1;
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
+const UNSUPPORTED_VERSION: i16 = 35;
 const NOT_CONTROLLER: i16 = 41;
-const UNKNOWN_CONTROLLER_ID: i16 = 116;
 const INVALID_REGISTRATION: i16 = 119;
 
 /// The lifecycle API keys this module answers. The versions they are served at

@@ -1,9 +1,11 @@
-//! The `ControllerRegistration` API (KIP-919): records a quorum voter's
+//! The `ControllerRegistration` API (KIP-919): records a controller's
 //! endpoints and supported feature ranges in the metadata log.
 //!
-//! Unlike a broker, a controller must already be a voter before it may
-//! register, and every refusal carries a message rather than a bare code, so
-//! the checks and the feature-range decoding live together here.
+//! Kafka's `ClusterControlManager.registerController` registers any controller
+//! id the request names. A KIP-853 controller starts as an observer and joins
+//! the voter set later, so the id need not be a voter. The registration needs
+//! `metadata.version` 3.7-IV0 (level 15) or later, and the record always says
+//! `zkMigrationReady` false.
 
 use std::collections::BTreeMap;
 
@@ -15,10 +17,14 @@ use krabka_protocol::{
 
 use super::{
     CLUSTER_AUTHORIZATION_FAILED, INVALID_REGISTRATION, NOT_CONTROLLER, SUCCESS,
-    UNKNOWN_CONTROLLER_ID, is_leader, listeners::decode_controller_listeners, raft_error_code,
+    UNSUPPORTED_VERSION, is_leader, listeners::decode_controller_listeners, raft_error_code,
     response::controller_registration_response,
 };
 use crate::{RaftError, kraft::KraftController};
+
+/// `MetadataVersion.IBP_3_7_IV0`, the first level that supports controller
+/// registrations.
+const CONTROLLER_REGISTRATION_MIN_LEVEL: i16 = 15;
 
 pub(super) async fn controller_registration(
     version: i16,
@@ -38,6 +44,24 @@ pub(super) async fn controller_registration(
     if !is_leader(engine) {
         return controller_registration_response(version, NOT_CONTROLLER, None);
     }
+    // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the
+    // bootstrap records commit there is no finalized level, and Kafka's
+    // `metadataVersionOrThrow` refuses the registration as well: a record
+    // written now could precede a bootstrap level that does not support it.
+    if engine
+        .current_image()
+        .finalized_metadata_version()
+        .is_none_or(|level| level < CONTROLLER_REGISTRATION_MIN_LEVEL)
+    {
+        return controller_registration_response(
+            version,
+            UNSUPPORTED_VERSION,
+            Some(
+                "The current MetadataVersion is too old to support controller registrations."
+                    .into(),
+            ),
+        );
+    }
     let node_id = match u64::try_from(request.controller_id) {
         Ok(id) => NodeId(id),
         Err(_) => {
@@ -48,16 +72,6 @@ pub(super) async fn controller_registration(
             );
         }
     };
-    if !engine.quorum_snapshot().voters.contains(node_id) {
-        return controller_registration_response(
-            version,
-            UNKNOWN_CONTROLLER_ID,
-            Some(format!(
-                "controller {} is not a quorum voter",
-                request.controller_id
-            )),
-        );
-    }
     let endpoints = match decode_controller_listeners(&request.listeners) {
         Ok(endpoints) => endpoints,
         Err(message) => {
@@ -73,7 +87,9 @@ pub(super) async fn controller_registration(
     let record = ControllerRegistrationRecord {
         node_id,
         incarnation_id: uuid::Uuid::from_bytes(request.incarnation_id.0),
-        zk_migration_ready: request.zk_migration_ready,
+        // ZooKeeper migration is gone. Kafka writes false whatever the request
+        // says.
+        zk_migration_ready: false,
         endpoints,
         features,
     };
@@ -203,5 +219,142 @@ mod tests {
         check!(decoded.len() == 2);
         check!(decoded.get("kraft.version") == Some(&(0, 1)));
         check!(decoded.get("metadata.version") == Some(&(7, 25)));
+    }
+
+    /// One row per registration, each on a fresh single-voter controller
+    /// (node 1) finalized at `level`: the whole response, and the record the
+    /// image holds afterwards.
+    #[tokio::test]
+    async fn any_controller_registers_from_metadata_version_15() {
+        use krabka_protocol::{
+            Encode as _, owned::controller_registration_response::ControllerRegistrationResponse,
+        };
+
+        use crate::server::test_support::{single_voter_engine, wait_for_leader};
+
+        let version = controller_registration_request::MAX_VERSION;
+        let incarnation = uuid::Uuid::from_u128(0xC0);
+        let listener = controller_registration_request::Listener {
+            name: "CONTROLLER".into(),
+            host: "controller-7".into(),
+            port: 9093,
+            security_protocol: 0,
+            ..Default::default()
+        };
+        let expected_record = |id: u64| ControllerRegistrationRecord {
+            node_id: NodeId(id),
+            incarnation_id: incarnation,
+            zk_migration_ready: false,
+            endpoints: vec![krabka_metadata::BrokerEndpoint {
+                name: "CONTROLLER".into(),
+                host: "controller-7".into(),
+                port: 9093,
+                protocol: krabka_security::ListenerProtocol::Plaintext,
+            }],
+            features: BTreeMap::from([("kraft.version".to_owned(), (0, 1))]),
+        };
+        let too_old = ControllerRegistrationResponse {
+            error_code: UNSUPPORTED_VERSION,
+            error_message: Some(
+                "The current MetadataVersion is too old to support controller registrations."
+                    .into(),
+            ),
+            ..Default::default()
+        };
+
+        // (label, controller id, metadata.version, zkMigrationReady sent,
+        // response, record afterwards)
+        let rows = [
+            (
+                "a voter",
+                1,
+                Some(15),
+                false,
+                ControllerRegistrationResponse::default(),
+                Some(expected_record(1)),
+            ),
+            (
+                "a controller that is not a voter",
+                7,
+                Some(15),
+                false,
+                ControllerRegistrationResponse::default(),
+                Some(expected_record(7)),
+            ),
+            (
+                "zkMigrationReady is stored as false",
+                7,
+                Some(25),
+                true,
+                ControllerRegistrationResponse::default(),
+                Some(expected_record(7)),
+            ),
+            (
+                "metadata.version 14",
+                7,
+                Some(14),
+                false,
+                too_old.clone(),
+                None,
+            ),
+            (
+                "metadata.version 14, a voter",
+                1,
+                Some(14),
+                false,
+                too_old.clone(),
+                None,
+            ),
+            (
+                "no finalized metadata.version",
+                7,
+                None,
+                false,
+                too_old,
+                None,
+            ),
+        ];
+        for (label, controller_id, level, zk_migration_ready, expected, record) in rows {
+            let (engine, _dir) = single_voter_engine();
+            wait_for_leader(&engine).await;
+            if let Some(level) = level {
+                engine
+                    .submit_change(vec![MetadataRecord::V1FeatureLevel(
+                        krabka_metadata::FeatureLevelRecord {
+                            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                .into(),
+                            level,
+                        },
+                    )])
+                    .await
+                    .expect("finalize metadata.version");
+            }
+            let request = ControllerRegistrationRequest {
+                controller_id,
+                incarnation_id: krabka_protocol::primitives::uuid::Uuid(*incarnation.as_bytes()),
+                zk_migration_ready,
+                listeners: vec![listener.clone()],
+                features: vec![feature("kraft.version", 0, 1)],
+                ..Default::default()
+            };
+            let mut body = bytes::BytesMut::new();
+            request.encode(&mut body, version).expect("encode");
+
+            let answer = controller_registration(version, &body, &engine, true)
+                .await
+                .expect("an answer");
+
+            check!(
+                ControllerRegistrationResponse::decode(&mut &answer[..], version).expect("decode")
+                    == expected,
+                "{label}"
+            );
+            let id = NodeId(u64::try_from(controller_id).expect("non-negative id"));
+            check!(
+                engine.current_image().controller(id).cloned() == record,
+                "{label}"
+            );
+            engine.shutdown().await;
+        }
     }
 }
