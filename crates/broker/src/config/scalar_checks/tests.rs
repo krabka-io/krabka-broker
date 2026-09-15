@@ -226,9 +226,6 @@ fn rejects_invalid_additional_runtime_scalars() {
             "streams_internal_topic_replication_factor must be positive",
             |c| c.streams_group.internal_topic_replication_factor = 0,
         ),
-        ("transaction_min_timeout must be positive", |c| {
-            c.transaction_min_timeout = <Time as TimeExt>::ZERO;
-        }),
         ("transaction_max_timeout must be positive", |c| {
             c.transaction_max_timeout = <Time as TimeExt>::ZERO;
         }),

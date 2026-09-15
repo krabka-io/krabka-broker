@@ -2791,15 +2791,6 @@
             "null"
           ]
         },
-        "transaction_min_timeout": {
-          "default": null,
-          "description": "Minimum transaction timeout a producer may request.",
-          "format": "duration",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "transaction_recovery_read_max": {
           "default": null,
           "description": "Maximum bytes requested by one `__transaction_state` recovery read.",

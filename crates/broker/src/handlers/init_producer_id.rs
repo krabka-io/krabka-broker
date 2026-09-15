@@ -157,6 +157,16 @@ pub(crate) async fn handle(
             if req.keep_prepared_txn && (req.producer_id != -1 || req.producer_epoch != -1) {
                 return encode_err(version, codes::INVALID_REQUEST);
             }
+            // Kafka validates the timeout before the coordinator lookup, so a
+            // broker that does not coordinate the id answers the same code.
+            let txn_timeout = match crate::txn::two_pc::resolve_txn_timeout(
+                req.enable2_pc,
+                req.transaction_timeout_ms,
+                broker.config.transaction_max_timeout.millis_i32(),
+            ) {
+                Ok(timeout) => timeout,
+                Err(error_code) => return encode_err(version, error_code),
+            };
             if (req.enable2_pc || req.keep_prepared_txn) && !txnv.two_phase() {
                 return encode_err(version, codes::UNSUPPORTED_VERSION);
             }
@@ -201,12 +211,6 @@ pub(crate) async fn handle(
             if let Some(error_code) = coord.coordinator_error(tid).await {
                 return encode_err(version, error_code);
             }
-            let txn_timeout = crate::txn::two_pc::resolve_txn_timeout(
-                req.enable2_pc,
-                req.transaction_timeout_ms,
-                broker.config.transaction_min_timeout.millis_i32(),
-                broker.config.transaction_max_timeout.millis_i32(),
-            );
             let handled = handle_transactional(
                 &coord,
                 tid,

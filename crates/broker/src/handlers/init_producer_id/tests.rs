@@ -53,12 +53,81 @@ async fn enable_transaction_version_3(broker: &Broker) {
     );
 }
 
+/// The timeout table of Kafka's `validateTransactionTimeoutMs`, checked
+/// against a live broker whose `transaction.max.timeout.ms` is 8 s.
+async fn check_timeout_answers(
+    broker: &std::sync::Arc<Broker>,
+    context: &crate::handlers::RequestContext<'_>,
+    tids: [&str; 4],
+) {
+    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    for (tid, requested_ms, enable_2pc, expected) in [
+        (tids[0], 500, false, Ok(500)),
+        (
+            tids[1],
+            10_000,
+            false,
+            Err(codes::INVALID_TRANSACTION_TIMEOUT),
+        ),
+        (tids[2], 500, true, Ok(i32::MAX)),
+        (tids[3], 0, false, Err(codes::INVALID_TRANSACTION_TIMEOUT)),
+    ] {
+        let request = InitProducerIdRequest {
+            transactional_id: Some(tid.to_string()),
+            transaction_timeout_ms: requested_ms,
+            enable2_pc: enable_2pc,
+            ..Default::default()
+        };
+        let response = handle(
+            broker,
+            version,
+            2,
+            &crate::test_support::encode_request(&request, version),
+            context,
+        )
+        .await
+        .expect("initialize transactional producer");
+        let response: InitProducerIdResponse =
+            crate::test_support::decode_response(&response, version);
+        match expected {
+            Ok(expected_ms) => {
+                assert!(
+                    response
+                        == InitProducerIdResponse {
+                            producer_id: response.producer_id,
+                            producer_epoch: 0,
+                            ..Default::default()
+                        },
+                    "{tid}: {response:?}"
+                );
+                let entry = broker
+                    .txn_coordinator
+                    .get(tid)
+                    .expect("persisted transaction entry");
+                assert!(entry.lock().await.txn_timeout_ms == expected_ms, "{tid}");
+            }
+            Err(error_code) => {
+                assert!(
+                    response
+                        == InitProducerIdResponse {
+                            error_code,
+                            producer_id: -1,
+                            producer_epoch: -1,
+                            ..Default::default()
+                        },
+                    "{tid}: {response:?}"
+                );
+                assert!(broker.txn_coordinator.get(tid).is_none(), "{tid}");
+            }
+        }
+    }
+}
+
 #[tokio::test]
-async fn handler_persists_configured_timeout_bounds_and_2pc_sentinel() {
+async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     let (broker_handle, _dir) = start_broker_with(|config| {
         config.audit_enabled = false;
         config.transaction_state_num_partitions = 7;
-        config.transaction_min_timeout = secs(2);
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
     })
@@ -67,7 +136,7 @@ async fn handler_persists_configured_timeout_bounds_and_2pc_sentinel() {
     let principal = principal("admin");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "txn-client");
-    let tids = ["txn-below-min", "txn-above-max", "txn-2pc"];
+    let tids = ["txn-small", "txn-above-max", "txn-2pc", "txn-zero"];
 
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
     enable_transaction_version_3(&broker).await;
@@ -96,36 +165,11 @@ async fn handler_persists_configured_timeout_bounds_and_2pc_sentinel() {
             .all(|coordinator| coordinator.error_code == codes::NONE)
     );
 
-    for (tid, requested_ms, enable_2pc, expected_ms) in [
-        (tids[0], 500, false, 2_000),
-        (tids[1], 10_000, false, 8_000),
-        (tids[2], 500, true, i32::MAX),
-    ] {
-        let request = InitProducerIdRequest {
-            transactional_id: Some(tid.to_string()),
-            transaction_timeout_ms: requested_ms,
-            enable2_pc: enable_2pc,
-            ..Default::default()
-        };
-        let response = handle(
-            &broker,
-            version,
-            2,
-            &crate::test_support::encode_request(&request, version),
-            &context,
-        )
-        .await
-        .expect("initialize transactional producer");
-        let response: InitProducerIdResponse =
-            crate::test_support::decode_response(&response, version);
-        assert!(response.error_code == codes::NONE, "{tid}: {response:?}");
-
-        let entry = broker
-            .txn_coordinator
-            .get(tid)
-            .expect("persisted transaction entry");
-        assert!(entry.lock().await.txn_timeout_ms == expected_ms, "{tid}");
-    }
+    // Kafka `validateTransactionTimeoutMs`: a timeout above
+    // `transaction.max.timeout.ms`, or one that is not positive, is refused.
+    // Every other value is stored as the client sent it, and 2PC stores the
+    // sentinel whatever the request asks for.
+    check_timeout_answers(&broker, &context, tids).await;
 
     let ongoing = broker
         .txn_coordinator
@@ -292,7 +336,6 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
     let (broker_handle, _dir) = start_broker_with(|config| {
         config.audit_enabled = false;
         config.transaction_state_num_partitions = 7;
-        config.transaction_min_timeout = secs(2);
         config.transaction_max_timeout = secs(8);
         config.features.transaction_two_phase_commit_enable = true;
     })
@@ -375,6 +418,69 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
     assert!(response.error_code == codes::NONE);
     assert!(response.ongoing_txn_producer_id == finite_pid.get());
     assert!(response.ongoing_txn_producer_epoch == finite_epoch);
-    assert!(finite.lock().await.txn_timeout_ms == 2_000);
+    assert!(finite.lock().await.txn_timeout_ms == 500);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka validates the timeout in `TransactionCoordinator.handleInitProducerId`
+/// before it looks the coordinator up, so a broker that does not coordinate the
+/// id answers `INVALID_TRANSACTION_TIMEOUT` too.
+#[tokio::test]
+async fn the_timeout_check_runs_before_the_coordinator_check() {
+    let (broker_handle, _dir) = start_broker_with(|config| {
+        config.audit_enabled = false;
+        config.transaction_max_timeout = secs(8);
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    enable_transaction_version_3(&broker).await;
+    let principal = principal("admin");
+    let peer = peer();
+    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    // No FindCoordinator ran, so `__transaction_state` does not exist and this
+    // broker coordinates nothing.
+    let tid = "txn-no-coordinator";
+
+    let answers = [
+        (
+            "a valid timeout reaches the coordinator check",
+            5_000,
+            codes::NOT_COORDINATOR,
+        ),
+        (
+            "an invalid timeout answers before it",
+            9_000,
+            codes::INVALID_TRANSACTION_TIMEOUT,
+        ),
+    ];
+    for (name, requested_ms, expected) in answers {
+        let request = InitProducerIdRequest {
+            transactional_id: Some(tid.to_string()),
+            transaction_timeout_ms: requested_ms,
+            ..Default::default()
+        };
+        let response = handle(
+            &broker,
+            version,
+            2,
+            &crate::test_support::encode_request(&request, version),
+            &context,
+        )
+        .await
+        .expect("initialize transactional producer");
+        let response: InitProducerIdResponse =
+            crate::test_support::decode_response(&response, version);
+        assert!(
+            response
+                == InitProducerIdResponse {
+                    error_code: expected,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                    ..Default::default()
+                },
+            "{name}: {response:?}"
+        );
+    }
     broker_handle.shutdown().await;
 }
