@@ -59,6 +59,7 @@ fn prepare_raft_transport(
         audit_log: Arc::clone(&audit_cell),
         max_frame_bytes: config.socket_request_max.bytes_usize(),
         authorizer: Arc::clone(&config.authorizer),
+        principal_mapper: config.tls_principal_mapper.clone(),
     }) as Arc<dyn krabka_raft::RaftListenerHandshake>);
     let server_name = config
         .controller_server_name

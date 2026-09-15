@@ -82,6 +82,10 @@ pub struct BrokerRaftHandshake {
     /// default `AllowAllAuthorizer` allows every principal.
     /// `SimpleAclAuthorizer` allows super-users and ACL grants.
     pub authorizer: Arc<dyn crate::authorizer::Authorizer>,
+    /// KIP-371 `ssl.principal.mapping.rules` from the top-level
+    /// `[tls_config]`, which map the Subject DN of a peer certificate to the
+    /// connection principal.
+    pub principal_mapper: crate::SslPrincipalMapper,
 }
 
 #[async_trait::async_trait]
@@ -105,7 +109,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
                 .accept(stream)
                 .await
                 .map_err(|e| RaftHandshakeError::Tls(e.to_string()))?;
-            certificate_principal = peer_certificate_principal(&tls)?;
+            certificate_principal = peer_certificate_principal(&tls, &self.principal_mapper)?;
             Box::new(tls)
         } else {
             Box::new(stream)
@@ -152,33 +156,37 @@ fn anonymous() -> krabka_security::Principal {
 
 /// The mTLS principal of a controller-listener connection, or `None` when the
 /// peer presented no certificate.
-///
-/// The Subject DN goes through Kafka's `DEFAULT` `ssl.principal.mapping.rules`,
-/// under which the DN itself is the principal. That is the rule a broker
-/// listener without its own rules applies.
 fn peer_certificate_principal<S>(
     stream: &tokio_rustls::server::TlsStream<S>,
+    mapper: &crate::SslPrincipalMapper,
 ) -> Result<Option<krabka_security::Principal>, RaftHandshakeError> {
     let (_, server_connection) = stream.get_ref();
-    let Some(distinguished_name) = server_connection
+    server_connection
         .peer_certificates()
         .and_then(<[_]>::first)
         .and_then(|certificate| krabka_security::extract_principal_from_cert(certificate.as_ref()))
-    else {
-        return Ok(None);
-    };
-    let name = crate::SslPrincipalMapper::default()
-        .apply(&distinguished_name)
-        .ok_or_else(|| {
-            RaftHandshakeError::Tls(format!(
-                "no ssl.principal.mapping.rules rule matched {distinguished_name}"
-            ))
-        })?;
-    Ok(Some(krabka_security::Principal {
+        .map(|distinguished_name| certificate_principal(mapper, &distinguished_name))
+        .transpose()
+}
+
+/// The principal of a certificate with `distinguished_name` as its Subject
+/// DN, mapped with the configured `ssl.principal.mapping.rules`, as a broker
+/// listener maps it. A DN that no rule matches fails the handshake, as
+/// Kafka's `SslPrincipalMapper` does.
+fn certificate_principal(
+    mapper: &crate::SslPrincipalMapper,
+    distinguished_name: &str,
+) -> Result<krabka_security::Principal, RaftHandshakeError> {
+    let name = mapper.apply(distinguished_name).ok_or_else(|| {
+        RaftHandshakeError::Tls(format!(
+            "no ssl.principal.mapping.rules rule matched {distinguished_name}"
+        ))
+    })?;
+    Ok(krabka_security::Principal {
         name,
         auth_method: krabka_security::AuthMethod::MTls,
         groups: Vec::new(),
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -209,11 +217,42 @@ mod tests {
             audit_log: Arc::new(OnceCell::new()),
             max_frame_bytes: 4096,
             authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+            principal_mapper: crate::SslPrincipalMapper::default(),
         };
         // `upgrade(TcpStream)` requires a real TCP socket, so we
         // exercise the short-circuit predicates directly here. The full
         // upgrade-path is exercised end-to-end in integration tests.
         assert!(!cfg.protocol.requires_tls());
         assert!(!cfg.protocol.requires_sasl());
+    }
+
+    /// The controller listener maps a certificate DN with the configured
+    /// rules. A DN that no rule matches fails the handshake.
+    #[test]
+    fn a_certificate_principal_follows_the_configured_mapping_rules() {
+        let dn = "CN=node-1,OU=brokers,O=krabka";
+        let cases = [
+            ("DEFAULT", vec!["DEFAULT"], Some(dn)),
+            (
+                "a rule that matches",
+                vec!["RULE:^CN=(.*?),OU=brokers,.*$/$1/L"],
+                Some("node-1"),
+            ),
+            (
+                "a rule that does not match",
+                vec!["RULE:^CN=(.*?),OU=clients,.*$/$1/"],
+                None,
+            ),
+        ];
+        for (name, rules, expected) in cases {
+            let mapper = crate::SslPrincipalMapper::parse(&rules).expect("rules parse");
+            let actual = certificate_principal(&mapper, dn).ok();
+            let expected = expected.map(|principal| krabka_security::Principal {
+                name: principal.to_owned(),
+                auth_method: krabka_security::AuthMethod::MTls,
+                groups: Vec::new(),
+            });
+            assert!(actual == expected, "{name}");
+        }
     }
 }
