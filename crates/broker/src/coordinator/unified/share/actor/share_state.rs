@@ -1,7 +1,14 @@
-//! The KIP-932 share-state lifecycle hook. It drives `Initialize` and `Delete`
-//! on the share persister for the partitions the group gained or dropped, and
-//! it stands apart from the membership state machine because it is
-//! best-effort work that runs after reconciliation rather than inside it.
+//! The KIP-932 share-state lifecycle hook. It drives `Initialize` on the share
+//! persister for the partitions the group gained, and it stands apart from the
+//! membership state machine because it is best-effort work that runs after
+//! reconciliation rather than inside it.
+//!
+//! The hook never deletes share state. Kafka deletes it only for
+//! `DeleteShareGroupOffsets`, `DeleteGroups` and a deleted topic
+//! (`GroupMetadataManager.sharePartitionsEligibleForOffsetDeletion`,
+//! `shareGroupBuildPartitionDeleteRequest`, `maybeCleanupShareGroupState`). A
+//! partition that no member is assigned keeps its share-partition start
+//! offset, so consumers that subscribe again continue from it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -60,12 +67,7 @@ pub(super) async fn reconcile_share_state(
         .copied()
         .filter(|tp| !state.initialized.contains(tp))
         .collect();
-    // Keep initialized state while the group is empty. Its SPSO is the durable
-    // queue cursor and its backlog metric is what lets KEDA scale consumers
-    // back up from zero. With live members, an unassigned partition really did
-    // leave the subscription and can be deleted.
-    let to_delete = share_states_to_delete(state, &assigned);
-    if to_init.is_empty() && to_delete.is_empty() {
+    if to_init.is_empty() {
         return;
     }
 
@@ -74,11 +76,7 @@ pub(super) async fn reconcile_share_state(
     // the same source Kafka's `GroupMetadataManager.attachInitValue` reads. The
     // snapshot is taken once per lifecycle pass, and only when the pass has a
     // partition to initialize.
-    let topic_names = if to_init.is_empty() {
-        HashMap::new()
-    } else {
-        topic_names_by_id(coordinator.metadata.as_ref())
-    };
+    let topic_names = topic_names_by_id(coordinator.metadata.as_ref());
 
     let state_epoch = state.group_epoch;
     let mut changed = false;
@@ -112,28 +110,6 @@ pub(super) async fn reconcile_share_state(
             }
         }
     }
-    for (tid, partition) in to_delete {
-        let topic_uuid = uuid::Uuid::from_bytes(tid.0);
-        match persister
-            .delete(&state.group_id, topic_uuid, partition)
-            .await
-        {
-            Ok(()) => {
-                state.initialized.remove(&(tid, partition));
-                changed = true;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    group_id = %state.group_id,
-                    topic_id = %topic_uuid,
-                    partition,
-                    error = %e,
-                    "share-state Delete failed; will retry next heartbeat",
-                );
-            }
-        }
-    }
-
     if changed {
         state.forget_unused_topic_names();
         let pending = PendingShareRecords {
@@ -162,27 +138,12 @@ fn topic_names_by_id(metadata: &dyn MetadataProvider) -> HashMap<Uuid, String> {
         .collect()
 }
 
-fn share_states_to_delete(
-    state: &ShareGroupState,
-    assigned: &HashSet<(Uuid, i32)>,
-) -> Vec<(Uuid, i32)> {
-    if state.members.is_empty() {
-        return Vec::new();
-    }
-    state
-        .initialized
-        .iter()
-        .copied()
-        .filter(|tp| !assigned.contains(tp))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::{reconciler::ReconcileInput, share::state::ShareMemberState};
+    use crate::coordinator::unified::reconciler::ReconcileInput;
 
     #[derive(Debug)]
     struct Metadata(Vec<(&'static str, Uuid)>);
@@ -211,27 +172,5 @@ mod tests {
             topic_names_by_id(&metadata)
                 == HashMap::from([(orders, "orders".to_owned()), (carts, "carts".to_owned()),])
         );
-    }
-
-    #[test]
-    fn empty_group_preserves_initialized_share_state() {
-        let topic = Uuid([8; 16]);
-        let mut state = ShareGroupState::new("g");
-        state.initialized.insert((topic, 0));
-
-        assert!(share_states_to_delete(&state, &HashSet::new()).is_empty());
-    }
-
-    #[test]
-    fn live_group_deletes_share_state_removed_from_subscription() {
-        let topic = Uuid([9; 16]);
-        let mut state = ShareGroupState::new("g");
-        state.initialized.insert((topic, 0));
-        state.members.insert(
-            "m1".into(),
-            ShareMemberState::joining("m1", "client", "host", HashSet::new()),
-        );
-
-        assert!(share_states_to_delete(&state, &HashSet::new()) == vec![(topic, 0)]);
     }
 }

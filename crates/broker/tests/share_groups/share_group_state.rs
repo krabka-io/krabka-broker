@@ -271,3 +271,114 @@ async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
         }
     }
 }
+
+/// Heartbeats until the share state of every partition in `partitions` of
+/// `topic` exists. Each member in `members` sends one heartbeat per pass,
+/// with its own subscription.
+async fn heartbeat_until_initialized(
+    broker: &krabka_broker::BrokerHandle,
+    client: &krabka_client_core::Client,
+    group: &str,
+    members: &[(&str, i32, &str)],
+    topic: uuid::Uuid,
+    partitions: std::ops::Range<i32>,
+) {
+    let initialized = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            for (member_id, member_epoch, subscription) in members {
+                let mut hb = heartbeat(group, member_id, *member_epoch);
+                hb.subscribed_topic_names = Some(vec![(*subscription).to_owned()]);
+                let _ = client.send(hb).await.unwrap();
+            }
+            let mut all = true;
+            for p in partitions.clone() {
+                all &= broker
+                    .share_state_summary_for_test(group, topic, p)
+                    .await
+                    .is_some();
+            }
+            if all {
+                break;
+            }
+        }
+    })
+    .await;
+    assert!(
+        initialized.is_ok(),
+        "share state of {group} never initialized"
+    );
+}
+
+/// A partition that no member is assigned keeps its share state, as in Kafka:
+/// the heartbeat only initializes. Rows: the only consumer of one of two
+/// topics leaves while a consumer of the other topic stays, and a member
+/// moves its subscription from one topic to the other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unassigned_partitions_keep_their_share_state() {
+    // (group, the second member subscribes to `b` from the start, the first
+    //  member moves to `b` instead of leaving)
+    let rows = [("g-keep-leave", true, false), ("g-keep-move", false, true)];
+    for (group, second_member, move_subscription) in rows {
+        let (broker, bootstrap, _d) = boot().await;
+        let client = connect(&bootstrap).await;
+        create_topic(&client, "a", 2).await;
+        create_topic(&client, "b", 2).await;
+        let topic_a = topic_id(&broker, "a");
+        let topic_b = topic_id(&broker, "b");
+
+        let join = |member_id: &str, topic: &str| {
+            let mut hb = heartbeat(group, member_id, 0);
+            hb.subscribed_topic_names = Some(vec![topic.to_owned()]);
+            hb
+        };
+        let first = client.send(join("member-a", "a")).await.unwrap();
+        assert!(first.error_code == 0, "{group}: first join failed");
+        heartbeat_until_initialized(
+            &broker,
+            &client,
+            group,
+            &[("member-a", first.member_epoch, "a")],
+            topic_a,
+            0..2,
+        )
+        .await;
+
+        if second_member {
+            let second = client.send(join("member-b", "b")).await.unwrap();
+            assert!(second.error_code == 0, "{group}: second join failed");
+            let left = client.send(heartbeat(group, "member-a", -1)).await.unwrap();
+            assert!(left.error_code == 0, "{group}: leave failed");
+            heartbeat_until_initialized(
+                &broker,
+                &client,
+                group,
+                &[("member-b", second.member_epoch, "b")],
+                topic_b,
+                0..2,
+            )
+            .await;
+        }
+        if move_subscription {
+            heartbeat_until_initialized(
+                &broker,
+                &client,
+                group,
+                &[("member-a", first.member_epoch, "b")],
+                topic_b,
+                0..2,
+            )
+            .await;
+        }
+
+        for p in 0..2 {
+            assert!(
+                broker
+                    .share_state_summary_for_test(group, topic_a, p)
+                    .await
+                    .is_some(),
+                "{group}: share state of a-{p} was deleted"
+            );
+        }
+        broker.shutdown().await;
+    }
+}
