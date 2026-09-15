@@ -199,11 +199,19 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
+    share_fetch_as(broker, "share-consumer", &request).await
+}
+
+async fn share_fetch_as(
+    broker: &BrokerHandle,
+    user: &str,
+    request: &ShareFetchRequest,
+) -> ShareFetchResponse {
     let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
+    let user = principal(user);
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(&request, VERSION);
+    let request_bytes = encode_request(request, VERSION);
     let response = handle(&shared, VERSION, 7, &request_bytes, &ctx)
         .await
         .expect("handle share fetch");
@@ -445,5 +453,93 @@ async fn renew_acknowledgements_renew_only_the_renew_offsets() {
     }
 
     assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// The principal that [`DenyTopicReadToOne`] refuses.
+const NO_TOPIC_READ: &str = "no-topic-read";
+
+/// Denies topic `Read` to [`NO_TOPIC_READ`] and allows everything else.
+#[derive(Debug)]
+struct DenyTopicReadToOne;
+
+impl crate::authorizer::Authorizer for DenyTopicReadToOne {
+    fn authorize(
+        &self,
+        _source: &dyn crate::authorizer::AclSource,
+        request: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        if request.principal.name == NO_TOPIC_READ
+            && request.resource_type == krabka_metadata::ResourceType::Topic
+            && request.operation == krabka_metadata::AclOperation::Read
+        {
+            crate::authorizer::AuthorizationResult::Deny
+        } else {
+            crate::authorizer::AuthorizationResult::Allow
+        }
+    }
+}
+
+/// A renew-ack fetch runs only the acknowledgement path, so a denied topic
+/// `Read` is the acknowledge error of the row, and the fetch error stays
+/// `NONE`.
+#[tokio::test]
+async fn a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error() {
+    let (broker, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(DenyTopicReadToOne);
+        cfg.share_group.enable = true;
+    })
+    .await;
+    let topic_id = create_topic(&broker, "renew-denied").await;
+    let request = |epoch, is_renew_ack, limits: Limits, batches: &[Batch]| ShareFetchRequest {
+        group_id: Some("renew-denied".into()),
+        member_id: Some("member".into()),
+        share_session_epoch: epoch,
+        max_bytes: limits.max_bytes,
+        max_records: limits.max_records,
+        batch_size: limits.max_records,
+        is_renew_ack,
+        topics: vec![FetchTopic {
+            topic_id,
+            partitions: vec![FetchPartition {
+                partition_index: 0,
+                acknowledgement_batches: batches
+                    .iter()
+                    .map(
+                        |&(first_offset, last_offset, types)| FetchAcknowledgeBatch {
+                            first_offset,
+                            last_offset,
+                            acknowledge_types: types.to_vec(),
+                            ..Default::default()
+                        },
+                    )
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let opened = share_fetch_as(&broker, NO_TOPIC_READ, &request(0, false, FETCH, &[])).await;
+    let renewed = share_fetch_as(
+        &broker,
+        NO_TOPIC_READ,
+        &request(1, true, NO_FETCH, &[(0, 0, &[RENEW])]),
+    )
+    .await;
+
+    let row = |response: &ShareFetchResponse| {
+        let partition = &response.responses[0].partitions[0];
+        (partition.error_code, partition.acknowledge_error_code)
+    };
+    assert!(
+        (row(&opened), row(&renewed))
+            == (
+                (codes::TOPIC_AUTHORIZATION_FAILED, codes::NONE),
+                (codes::NONE, codes::TOPIC_AUTHORIZATION_FAILED)
+            )
+    );
     broker.shutdown().await;
 }

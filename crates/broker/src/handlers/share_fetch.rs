@@ -224,7 +224,13 @@ pub(crate) async fn handle(
 
         // Per-topic `Read` ACL — mirrors `fetch::handle`'s authorize call.
         if topic_read_denied(broker, &image, ctx, name) {
-            out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            // A renew-ack fetch runs only the acknowledgement path, so the
+            // denial is an acknowledge error.
+            if renew_only {
+                out.acknowledge_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            } else {
+                out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            }
             pending.push(PendingPartition {
                 topic_id,
                 topic_name,
