@@ -33,6 +33,12 @@ pub(super) struct PreparedBatch {
     pub(super) producer_id: i64,
     pub(super) producer_epoch: i16,
     pub(super) base_sequence: i32,
+    /// The index in the batch of every record that has no key, when the topic
+    /// is compacted. Kafka's `LogValidator.validateKey` refuses each one, and
+    /// the pipeline answers the batch with one `record_errors` row per index
+    /// once the leadership gate has passed. Empty on a topic that is not
+    /// compacted, because the walk does not look at keys there.
+    pub(super) keyless_records: Vec<i32>,
     /// The append source. It is either the producer's verbatim bytes on the
     /// passthrough path, or the decoded owned batch on the fallback path. On
     /// the verbatim path the writer stamps the leader epoch at append time. On
@@ -52,8 +58,9 @@ pub(super) enum PreparedSource {
 }
 
 impl PreparedBatch {
-    fn from_header(header: ValidatedHeader, bytes: Bytes) -> Self {
+    fn from_header(header: ValidatedHeader, bytes: Bytes, keyless_records: Vec<i32>) -> Self {
         Self {
+            keyless_records,
             attributes: header.attributes,
             last_offset_delta: header.last_offset_delta,
             max_timestamp: header.max_timestamp,
@@ -64,8 +71,20 @@ impl PreparedBatch {
         }
     }
 
-    fn from_owned(batch: RecordBatch) -> Self {
+    fn from_owned(batch: RecordBatch, compacted_topic: bool) -> Self {
+        let keyless_records = if compacted_topic {
+            batch
+                .records
+                .iter()
+                .enumerate()
+                .filter(|(_, record)| record.key.is_none())
+                .map(|(index, _)| i32::try_from(index).unwrap_or(i32::MAX))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Self {
+            keyless_records,
             attributes: batch.attributes,
             last_offset_delta: batch.last_offset_delta,
             max_timestamp: batch.max_timestamp,
@@ -154,6 +173,7 @@ pub(super) fn prepare_batch(
     payload: PartitionPayload,
     topic_compression: Option<krabka_compression::CompressionType>,
     timestamps: TimestampPolicy,
+    compacted_topic: bool,
     topic_name: &Arc<str>,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
@@ -163,8 +183,8 @@ pub(super) fn prepare_batch(
         PartitionPayload::Owned(rp) => {
             let batch = decode_owned_batch(rp, topic_name, metrics, policy)?;
             validate_owned_client_batch(&batch)?;
-            validate_owned_record_timestamps(&batch, timestamps)?;
-            return Ok(PreparedBatch::from_owned(batch));
+            validate_owned_record_timestamps(&batch, timestamps, compacted_topic)?;
+            return Ok(PreparedBatch::from_owned(batch, compacted_topic));
         }
         PartitionPayload::Null => return Err(codes::INVALID_REQUEST),
         PartitionPayload::Slice(b) => b,
@@ -175,7 +195,16 @@ pub(super) fn prepare_batch(
     // move or the final `Verbatim(bytes)` construction.
     let validated = match validate_one_v2_batch(&bytes) {
         Ok(batch) if batch.total_len == bytes.len() => batch,
-        _ => return owned_fallback(bytes, timestamps, topic_name, metrics, policy),
+        _ => {
+            return owned_fallback(
+                bytes,
+                timestamps,
+                compacted_topic,
+                topic_name,
+                metrics,
+                policy,
+            );
+        }
     };
     let header = ValidatedHeader::from(&validated);
     let attributes = header.attributes;
@@ -185,17 +214,33 @@ pub(super) fn prepare_batch(
     if let Some(target) = topic_compression
         && target != attributes.compression()
     {
-        return owned_fallback(bytes, timestamps, topic_name, metrics, policy);
+        return owned_fallback(
+            bytes,
+            timestamps,
+            compacted_topic,
+            topic_name,
+            metrics,
+            policy,
+        );
     }
-    if timestamps.bounds_records() {
+    let mut keyless_records = Vec::new();
+    if timestamps.bounds_records() || compacted_topic {
         let now_ms = crate::time_util::now_ms();
         let mut invalid_timestamp = false;
+        let mut index = 0_i32;
         validated
             .validate_records_with(policy, |record| {
-                invalid_timestamp |= timestamps.rejects_record(
-                    header.base_timestamp.saturating_add(record.timestamp_delta),
-                    now_ms,
-                );
+                // Kafka's `LogValidator.validateRecord` checks the key first
+                // and checks the timestamp only of a record whose key passed.
+                if compacted_topic && record.key.is_none() {
+                    keyless_records.push(index);
+                } else {
+                    invalid_timestamp |= timestamps.rejects_record(
+                        header.base_timestamp.saturating_add(record.timestamp_delta),
+                        now_ms,
+                    );
+                }
+                index = index.saturating_add(1);
             })
             .map_err(|_| codes::INVALID_RECORD)?;
         if invalid_timestamp {
@@ -206,7 +251,7 @@ pub(super) fn prepare_batch(
             .validate_records(policy)
             .map_err(|_| codes::INVALID_RECORD)?;
     }
-    Ok(PreparedBatch::from_header(header, bytes))
+    Ok(PreparedBatch::from_header(header, bytes, keyless_records))
 }
 
 /// Apply the topic's `message.timestamp.before.max.ms` and
@@ -225,19 +270,26 @@ pub(super) fn prepare_batch(
 fn validate_owned_record_timestamps(
     batch: &RecordBatch,
     timestamps: TimestampPolicy,
+    compacted_topic: bool,
 ) -> Result<(), i16> {
     if !timestamps.bounds_records() {
         return Ok(());
     }
     let now_ms = crate::time_util::now_ms();
-    batch.records.iter().try_for_each(|record| {
-        let timestamp_ms = batch.base_timestamp.saturating_add(record.timestamp_delta);
-        if timestamps.rejects_record(timestamp_ms, now_ms) {
-            Err(codes::INVALID_TIMESTAMP)
-        } else {
-            Ok(())
-        }
-    })
+    batch
+        .records
+        .iter()
+        // A keyless record on a compacted topic fails its key check, and
+        // Kafka then does not check its timestamp.
+        .filter(|record| !compacted_topic || record.key.is_some())
+        .try_for_each(|record| {
+            let timestamp_ms = batch.base_timestamp.saturating_add(record.timestamp_delta);
+            if timestamps.rejects_record(timestamp_ms, now_ms) {
+                Err(codes::INVALID_TIMESTAMP)
+            } else {
+                Ok(())
+            }
+        })
 }
 
 /// The owned-decode fallback for a v≥3 records slice that the verbatim
@@ -252,6 +304,7 @@ fn validate_owned_record_timestamps(
 pub(super) fn owned_fallback(
     bytes: Bytes,
     timestamps: TimestampPolicy,
+    compacted_topic: bool,
     topic_name: &Arc<str>,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
@@ -259,8 +312,8 @@ pub(super) fn owned_fallback(
     match RecordsPayload::from_bytes_with_policy(bytes, policy) {
         Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
             validate_owned_client_batch(&batch)?;
-            validate_owned_record_timestamps(&batch, timestamps)?;
-            Ok(PreparedBatch::from_owned(batch))
+            validate_owned_record_timestamps(&batch, timestamps, compacted_topic)?;
+            Ok(PreparedBatch::from_owned(batch, compacted_topic))
         }),
         Err(_) => Err(codes::INVALID_RECORD),
     }

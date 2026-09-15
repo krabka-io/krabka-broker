@@ -5,7 +5,9 @@
 use std::{sync::Arc, time::Duration};
 
 use krabka_compression::RecordDecompressionPolicy;
-use krabka_protocol::owned::produce_response::PartitionProduceResponse;
+use krabka_protocol::owned::produce_response::{
+    BatchIndexAndErrorMessage, PartitionProduceResponse,
+};
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{
@@ -17,7 +19,7 @@ use super::{
         BrokerProducePolicy, current_leader_hint, diskless_role_ready, replica_state_matches_image,
         replication_target_matches_image, validate_partition_gate,
     },
-    prepare::prepare_batch,
+    prepare::{PreparedBatch, prepare_batch},
     producer_checks::{DedupOutcome, handle_duplicate, validate_transactional_produce},
     schema::{SCHEMA_REJECTION_MESSAGE, validate_batch_schemas},
     topic_settings::TimestampPolicy,
@@ -49,6 +51,9 @@ pub(super) struct PartitionInput<'a> {
     /// `message.timestamp.{before,after}.max.ms` windows. The default admits
     /// every timestamp and costs one boolean test per batch.
     pub(super) timestamps: TimestampPolicy,
+    /// Whether the topic's `cleanup.policy` holds `compact`, resolved once per
+    /// topic. Kafka's `LogValidator` then refuses a record with no key.
+    pub(super) compacted_topic: bool,
     /// The topic's `max.message.bytes`, resolved once per topic, with the
     /// broker's `message.max.bytes` behind it. Every topic has one, so unlike
     /// the gates below it is a value and not an `Option`.
@@ -151,6 +156,7 @@ pub(super) async fn process_partition(
         part_data,
         topic_compression,
         timestamps,
+        compacted_topic,
         max_message_bytes,
         delivery,
         schema,
@@ -261,6 +267,7 @@ pub(super) async fn process_partition(
         part_data.payload,
         topic_compression,
         timestamps,
+        compacted_topic,
         &shared_topic,
         metrics,
         record_decompression_policy,
@@ -292,8 +299,8 @@ pub(super) async fn process_partition(
     if let Some(stored) = prepared.stored_len(topic_compression)
         && stored > max_message_bytes.bytes_usize()
     {
+        // `out` already carries the -1 `base_offset` sentinel.
         out.error_code = codes::MESSAGE_TOO_LARGE;
-        out.base_offset = INVALID_OFFSET;
         return Ok(PartitionOutcome::Done(out));
     }
 
@@ -351,6 +358,11 @@ pub(super) async fn process_partition(
         out.current_leader =
             current_leader_hint(image.partition(topic_name, idx).expect("gate checked"));
         return Ok(PartitionOutcome::Done(out));
+    }
+
+    // ── compacted topic: Kafka's `LogValidator.validateKey` ──────────
+    if let Some(refusal) = keyless_record_refusal(&out, &prepared, &part, topic_name) {
+        return Ok(PartitionOutcome::Done(refusal));
     }
 
     // ── KFC-7 schema validation ──────────────────────────────────────
@@ -496,6 +508,71 @@ pub(super) async fn process_partition(
             transition,
         )),
     })
+}
+
+/// The row Kafka answers for a batch that holds a record with no key on a
+/// compacted topic, or `None` when every record has a key.
+///
+/// Compaction keeps the last record per key, so a record with no key would be
+/// acknowledged and later removed by the cleaner. Kafka refuses the whole
+/// batch: `RecordValidationException` carries one `RecordError` per keyless
+/// record, with `LogValidator.validateKey`'s message, and the row carries the
+/// log start offset.
+fn keyless_record_refusal(
+    out: &PartitionProduceResponse,
+    prepared: &PreparedBatch,
+    part: &crate::partition::Partition,
+    topic_name: &str,
+) -> Option<PartitionProduceResponse> {
+    if prepared.keyless_records.is_empty() {
+        return None;
+    }
+    let partition_label = format!("{topic_name}-{}", out.index);
+    let mut out = out.clone();
+    out.error_code = codes::INVALID_RECORD;
+    out.record_errors = prepared
+        .keyless_records
+        .iter()
+        .map(|&batch_index| BatchIndexAndErrorMessage {
+            batch_index,
+            batch_index_error_message: Some(format!(
+                "Compacted topic cannot accept message without key in topic partition \
+                 {partition_label}"
+            )),
+            ..Default::default()
+        })
+        .collect();
+    out.error_message = Some(record_errors_message(&out.record_errors));
+    // Kafka's `processFailedRecord` reads the log start offset for the row.
+    out.log_start_offset = part.log_start_offset().0;
+    Some(out)
+}
+
+/// The message of the `InvalidRecordException` that Kafka's
+/// `LogValidator.processRecordErrors` throws, which the partition row carries
+/// as `error_message`. Java's `List.toString` renders at most the first three
+/// `RecordError`s.
+fn record_errors_message(errors: &[BatchIndexAndErrorMessage]) -> String {
+    let shown: Vec<String> = errors
+        .iter()
+        .take(3)
+        .map(|error| {
+            let message = error
+                .batch_index_error_message
+                .as_deref()
+                .map_or_else(|| "null".to_owned(), |message| format!("'{message}'"));
+            format!(
+                "RecordError(batchIndex={}, message={message})",
+                error.batch_index
+            )
+        })
+        .collect();
+    format!(
+        "One or more records have been rejected due to {} record errors in total, and only \
+         showing the first three errors at most: [{}]",
+        errors.len(),
+        shown.join(", ")
+    )
 }
 
 #[cfg(test)]

@@ -169,6 +169,7 @@ mod tests {
             producer_id,
             producer_epoch,
             base_sequence: 0,
+            keyless_records: Vec::new(),
             source: crate::handlers::produce::prepare::PreparedSource::Owned(RecordBatch::default()),
         }
     }
@@ -417,6 +418,7 @@ mod tests {
                 },
                 topic_compression: None,
                 timestamps: TimestampPolicy::default(),
+                compacted_topic: false,
                 max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 topic_name: "orders".into(),
