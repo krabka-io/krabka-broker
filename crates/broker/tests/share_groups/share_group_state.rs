@@ -272,30 +272,43 @@ async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
     }
 }
 
-/// Heartbeats until the share state of every partition in `partitions` of
-/// `topic` exists. Each member in `members` sends one heartbeat per pass,
-/// with its own subscription.
-async fn heartbeat_until_initialized(
+/// Heartbeats until `done` holds for the share state of every partition in
+/// `partitions` of `topic`. Each member in `members` sends one heartbeat per
+/// pass, with its own subscription and with the member epoch of its last
+/// accepted response, so a heartbeat that bumps the epoch does not stop the
+/// retries.
+async fn heartbeat_until(
     broker: &krabka_broker::BrokerHandle,
     client: &krabka_client_core::Client,
     group: &str,
-    members: &[(&str, i32, &str)],
+    members: &[(&str, i32, &[&str])],
     topic: uuid::Uuid,
     partitions: std::ops::Range<i32>,
+    present: bool,
 ) {
-    let initialized = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let mut epochs: Vec<i32> = members.iter().map(|(_, epoch, _)| *epoch).collect();
+    let reached = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            for (member_id, member_epoch, subscription) in members {
-                let mut hb = heartbeat(group, member_id, *member_epoch);
-                hb.subscribed_topic_names = Some(vec![(*subscription).to_owned()]);
-                let _ = client.send(hb).await.unwrap();
+            for ((member_id, _, subscription), epoch) in members.iter().zip(epochs.iter_mut()) {
+                let mut hb = heartbeat(group, member_id, *epoch);
+                hb.subscribed_topic_names = Some(
+                    subscription
+                        .iter()
+                        .map(|topic| (*topic).to_owned())
+                        .collect(),
+                );
+                let resp = client.send(hb).await.unwrap();
+                if resp.error_code == 0 {
+                    *epoch = resp.member_epoch;
+                }
             }
             let mut all = true;
             for p in partitions.clone() {
                 all &= broker
                     .share_state_summary_for_test(group, topic, p)
                     .await
-                    .is_some();
+                    .is_some()
+                    == present;
             }
             if all {
                 break;
@@ -304,9 +317,76 @@ async fn heartbeat_until_initialized(
     })
     .await;
     assert!(
-        initialized.is_ok(),
-        "share state of {group} never initialized"
+        reached.is_ok(),
+        "share state of {group} never reached present={present}"
     );
+}
+
+/// Heartbeats until the share state of every partition in `partitions` of
+/// `topic` exists.
+async fn heartbeat_until_initialized(
+    broker: &krabka_broker::BrokerHandle,
+    client: &krabka_client_core::Client,
+    group: &str,
+    members: &[(&str, i32, &str)],
+    topic: uuid::Uuid,
+    partitions: std::ops::Range<i32>,
+) {
+    let subscriptions: Vec<[&str; 1]> = members.iter().map(|(_, _, topic)| [*topic]).collect();
+    let members: Vec<(&str, i32, &[&str])> = members
+        .iter()
+        .zip(subscriptions.iter())
+        .map(|((member_id, epoch, _), subscription)| (*member_id, *epoch, &subscription[..]))
+        .collect();
+    heartbeat_until(broker, client, group, &members, topic, partitions, true).await;
+}
+
+/// A topic that is deleted loses its share state, as Kafka's
+/// `GroupMetadataManager.maybeCleanupShareGroupState` deletes it on the
+/// metadata update. The share state of the other subscribed topic stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deleted_topic_loses_its_share_state() {
+    use krabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest};
+
+    let (broker, bootstrap, _d) = boot().await;
+    let client = connect(&bootstrap).await;
+    create_topic(&client, "doomed", 2).await;
+    create_topic(&client, "kept", 2).await;
+    let doomed = topic_id(&broker, "doomed");
+    let kept = topic_id(&broker, "kept");
+    let subscription: &[&str] = &["doomed", "kept"];
+
+    let mut join = heartbeat("g-doomed", "member-a", 0);
+    join.subscribed_topic_names = Some(vec!["doomed".into(), "kept".into()]);
+    let joined = client.send(join).await.unwrap();
+    assert!(joined.error_code == 0, "join failed");
+    let members = [("member-a", joined.member_epoch, subscription)];
+    heartbeat_until(&broker, &client, "g-doomed", &members, doomed, 0..2, true).await;
+    heartbeat_until(&broker, &client, "g-doomed", &members, kept, 0..2, true).await;
+
+    let deleted = client
+        .send(DeleteTopicsRequest {
+            topics: vec![DeleteTopicState {
+                name: Some("doomed".into()),
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("DeleteTopics");
+    assert!(deleted.responses[0].error_code == 0, "{deleted:?}");
+
+    heartbeat_until(&broker, &client, "g-doomed", &members, doomed, 0..2, false).await;
+    for p in 0..2 {
+        assert!(
+            broker
+                .share_state_summary_for_test("g-doomed", kept, p)
+                .await
+                .is_some(),
+            "share state of kept-{p} was deleted"
+        );
+    }
 }
 
 /// A partition that no member is assigned keeps its share state, as in Kafka:

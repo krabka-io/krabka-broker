@@ -3,12 +3,14 @@
 //! membership state machine because it is best-effort work that runs after
 //! reconciliation rather than inside it.
 //!
-//! The hook never deletes share state. Kafka deletes it only for
-//! `DeleteShareGroupOffsets`, `DeleteGroups` and a deleted topic
-//! (`GroupMetadataManager.sharePartitionsEligibleForOffsetDeletion`,
-//! `shareGroupBuildPartitionDeleteRequest`, `maybeCleanupShareGroupState`). A
-//! partition that no member is assigned keeps its share-partition start
-//! offset, so consumers that subscribe again continue from it.
+//! The hook deletes share state only for a topic that the metadata image no
+//! longer holds, as Kafka's `GroupMetadataManager.maybeCleanupShareGroupState`
+//! does for a deleted topic. Kafka deletes share state otherwise only for
+//! `DeleteShareGroupOffsets` and `DeleteGroups`
+//! (`sharePartitionsEligibleForOffsetDeletion`,
+//! `shareGroupBuildPartitionDeleteRequest`). A partition that no member is
+//! assigned keeps its share-partition start offset, so consumers that
+//! subscribe again continue from it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -62,21 +64,21 @@ pub(super) async fn reconcile_share_state(
         }
     }
 
-    let to_init: Vec<(Uuid, i32)> = assigned
-        .iter()
-        .copied()
-        .filter(|tp| !state.initialized.contains(tp))
-        .collect();
-    if to_init.is_empty() {
-        return;
-    }
-
     // KIP-932 names every topic the ShareGroupStatePartitionMetadata record
     // lists, and the metadata image is the authority on the name behind an id,
     // the same source Kafka's `GroupMetadataManager.attachInitValue` reads. The
-    // snapshot is taken once per lifecycle pass, and only when the pass has a
-    // partition to initialize.
+    // snapshot is taken once per lifecycle pass.
     let topic_names = topic_names_by_id(coordinator.metadata.as_ref());
+
+    let to_init: Vec<(Uuid, i32)> = assigned
+        .iter()
+        .copied()
+        .filter(|tp| !state.initialized.contains(tp) && topic_names.contains_key(&tp.0))
+        .collect();
+    let to_delete = deleted_topic_partitions(&state.initialized, &topic_names);
+    if to_init.is_empty() && to_delete.is_empty() {
+        return;
+    }
 
     let state_epoch = state.group_epoch;
     let mut changed = false;
@@ -110,6 +112,27 @@ pub(super) async fn reconcile_share_state(
             }
         }
     }
+    for (tid, partition) in to_delete {
+        let topic_uuid = uuid::Uuid::from_bytes(tid.0);
+        match persister
+            .delete(&state.group_id, topic_uuid, partition)
+            .await
+        {
+            Ok(()) => {
+                state.initialized.remove(&(tid, partition));
+                changed = true;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    group_id = %state.group_id,
+                    topic_id = %topic_uuid,
+                    partition,
+                    error = %e,
+                    "share-state Delete of a deleted topic failed; will retry next heartbeat",
+                );
+            }
+        }
+    }
     if changed {
         state.forget_unused_topic_names();
         let pending = PendingShareRecords {
@@ -124,6 +147,24 @@ pub(super) async fn reconcile_share_state(
             );
         }
     }
+}
+
+/// The initialized partitions whose topic the metadata snapshot no longer
+/// holds, sorted. An empty snapshot (no image yet) deletes nothing.
+fn deleted_topic_partitions(
+    initialized: &HashSet<(Uuid, i32)>,
+    topic_names: &HashMap<Uuid, String>,
+) -> Vec<(Uuid, i32)> {
+    if topic_names.is_empty() {
+        return Vec::new();
+    }
+    let mut deleted: Vec<(Uuid, i32)> = initialized
+        .iter()
+        .copied()
+        .filter(|(topic_id, _)| !topic_names.contains_key(topic_id))
+        .collect();
+    deleted.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
+    deleted
 }
 
 /// Invert the metadata snapshot's `name → id` map into the `id → name` lookup
@@ -159,6 +200,25 @@ mod tests {
                 partitions_per_topic: HashMap::new(),
                 partition_racks: HashMap::new(),
             }
+        }
+    }
+
+    #[test]
+    fn only_partitions_of_a_topic_missing_from_the_image_are_deleted() {
+        let kept = Uuid([5; 16]);
+        let deleted = Uuid([6; 16]);
+        let initialized = HashSet::from([(kept, 0), (deleted, 1), (deleted, 0)]);
+        let image = HashMap::from([(kept, "kept".to_owned())]);
+        // (topic names in the snapshot, expected deletes)
+        let rows = [
+            (image, vec![(deleted, 0), (deleted, 1)]),
+            (HashMap::new(), vec![]),
+        ];
+        for (index, (topic_names, expected)) in rows.into_iter().enumerate() {
+            assert!(
+                deleted_topic_partitions(&initialized, &topic_names) == expected,
+                "row {index}"
+            );
         }
     }
 
