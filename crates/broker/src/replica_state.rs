@@ -111,13 +111,23 @@ impl ReplicaState {
     /// Kafka's `Partition.lowWatermarkIfLeader`: the lowest log start offset
     /// of the leader and of every other replica whose broker is alive.
     ///
+    /// `replicas` is the partition's assignment as the metadata image holds
+    /// it, and `leader` is this broker. The caller passes the assignment
+    /// rather than the replica set installed here, because a broker that just
+    /// became leader publishes its leadership before it installs that set.
     /// `alive` holds the brokers that are registered and not fenced. A replica
     /// that has not fetched since this broker became leader counts as -1, so
     /// a live replica that never reported holds the low watermark down.
-    pub(crate) fn low_watermark(&self, leader_log_start: Offset, alive: &HashSet<u64>) -> Offset {
-        self.replicas
+    pub(crate) fn low_watermark(
+        &self,
+        leader: NodeId,
+        leader_log_start: Offset,
+        replicas: &[NodeId],
+        alive: &HashSet<u64>,
+    ) -> Offset {
+        replicas
             .iter()
-            .filter(|replica| self.leader != Some(**replica) && alive.contains(&replica.0))
+            .filter(|replica| **replica != leader && alive.contains(&replica.0))
             .map(|replica| {
                 self.follower_log_start
                     .get(replica)
@@ -603,35 +613,30 @@ mod tests {
             for (follower, log_start) in reported {
                 s.record_follower_log_start(NodeId(follower), o(log_start));
             }
-            assert2::check!(s.low_watermark(o(50), alive) == o(expected), "{label}");
+            assert2::check!(
+                s.low_watermark(NodeId(1), o(50), &[NodeId(1), NodeId(2), NodeId(3)], alive)
+                    == o(expected),
+                "{label}"
+            );
         }
     }
 
     /// A new leadership forgets what the followers reported to the old one,
-    /// and a reassignment forgets a replica that left.
+    /// and the low watermark reads the assignment it is given, not the replica
+    /// set installed here: a broker that just became leader and has not
+    /// installed its replica set yet still waits for every assigned follower.
     #[test]
-    fn follower_log_starts_do_not_outlive_the_leadership_or_the_assignment() {
+    fn follower_log_starts_do_not_outlive_the_leadership() {
         let alive: HashSet<u64> = [1, 2, 3].into_iter().collect();
+        let assignment = [NodeId(1), NodeId(2), NodeId(3)];
         let mut s = fresh();
-        let all = [NodeId(1), NodeId(2), NodeId(3)];
-        s.install_isr(&all, &all, NodeId(1), now());
+        s.install_isr(&assignment, &assignment, NodeId(1), now());
         s.record_follower_log_start(NodeId(2), o(50));
         s.record_follower_log_start(NodeId(3), o(50));
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            now(),
-        );
-        assert2::check!(s.low_watermark(o(50), &alive) == o(50));
+        assert2::check!(s.low_watermark(NodeId(1), o(50), &assignment, &alive) == o(50));
+
         s.reset_for_leader(NodeId(1));
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            now(),
-        );
-        assert2::check!(s.low_watermark(o(50), &alive) == o(-1));
+        assert2::check!(s.low_watermark(NodeId(1), o(50), &assignment, &alive) == o(-1));
     }
 }
 

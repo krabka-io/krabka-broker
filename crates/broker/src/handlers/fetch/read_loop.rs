@@ -719,6 +719,7 @@ mod tests {
             current_leader_epoch: -1,
             last_fetched_epoch: -1,
             fetch_offset: 0,
+            log_start_offset: -1,
             partition_max_bytes: 1024,
         };
         let mut pending = [super::PendingRead::planned(

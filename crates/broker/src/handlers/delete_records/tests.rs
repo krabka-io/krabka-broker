@@ -785,6 +785,20 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
     let retry = delete_to(&broker, topic, 5, 0).await;
     check!(retry == one_row(topic, 6, codes::NONE));
 
+    // A leadership this broker has published but not installed yet (no
+    // replica set, no follower progress) still waits for the follower the
+    // metadata image assigns, whose log start it does not know.
+    {
+        let mut state = partition.replica_state.lock().await;
+        let high_watermark = state.hw;
+        *state = crate::replica_state::ReplicaState::new();
+        state.hw = high_watermark;
+    }
+    let not_installed = delete_to(&broker, topic, 7, 200).await;
+    check!(not_installed == one_row(topic, -1, codes::REQUEST_TIMED_OUT));
+    // The follower's next fetch reports its progress to the new leadership.
+    follower_fetch(&broker, topic, APPENDED, 7).await;
+
     // A fenced follower is not live, so its old log start does not count.
     fence_follower(&broker_handle).await;
     let fenced = delete_to(&broker, topic, 8, 10_000).await;

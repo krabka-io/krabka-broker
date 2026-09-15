@@ -47,11 +47,21 @@ pub(super) struct Waiting {
 pub(super) async fn current(broker: &Broker, part: &Partition) -> Offset {
     let image = broker.controller.current_image();
     let alive = crate::handlers::offline_replicas::live_brokers(broker, &image).await;
+    // The assignment comes from the image: a broker that just became leader
+    // publishes its leadership before it installs the replica set in
+    // `ReplicaState`, and a trim in that gap must still wait for the
+    // followers.
+    let replicas = image
+        .partition(&part.topic, part.index.get())
+        .map(|record| record.replicas.clone())
+        .unwrap_or_default();
     let leader_log_start = part.log_start_offset();
-    part.replica_state
-        .lock()
-        .await
-        .low_watermark(leader_log_start, &alive)
+    part.replica_state.lock().await.low_watermark(
+        broker.config.node_id,
+        leader_log_start,
+        &replicas,
+        &alive,
+    )
 }
 
 /// Wait until every row in `waiting` reaches its required offset, or until
