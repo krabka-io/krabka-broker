@@ -141,6 +141,16 @@ pub enum GroupActorMessage {
         reply: oneshot::Sender<ReapOutcome>,
     },
 
+    /// Tombstone the committed offsets and the open transactional offsets of
+    /// `topics`, which the metadata image no longer holds. The reply names
+    /// the `(topic, partition)` keys that the actor tombstoned, sorted, and is
+    /// empty when the append fails.
+    DeleteTopicOffsets {
+        /// The name and the topic id of each deleted topic.
+        topics: Vec<(String, uuid::Uuid)>,
+        reply: oneshot::Sender<Vec<(String, i32)>>,
+    },
+
     // ── in-flight transactional offsets (KIP-447) ──
     /// Record that `producer_id`'s open transaction has durably written
     /// offset commits for `keys` at offsets-log position `written_at`. Until
@@ -214,13 +224,16 @@ pub struct TxnOffsetReservation {
 }
 
 impl TxnOffsetReservation {
-    pub(super) fn apply(self, group: &mut CoordinatorGroup) {
+    /// Applies the reservation and replies. Returns the actor's keep-running
+    /// flag, which is always `true`.
+    pub(super) fn apply(self, group: &mut CoordinatorGroup) -> bool {
         if self.reserve {
             group.reserve_txn_offsets(self.producer_id, self.keys);
         } else {
             group.release_txn_offsets(self.producer_id, &self.keys);
         }
         let _ = self.reply.send(());
+        true
     }
 }
 

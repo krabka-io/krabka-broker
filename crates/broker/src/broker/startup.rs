@@ -275,6 +275,15 @@ impl Broker {
             runtime.supervisor_shutdown.child_token(),
         );
 
+        // Tombstone the committed offsets of every deleted topic, as Kafka's
+        // `GroupCoordinatorService.onMetadataUpdate` does.
+        crate::coordinator::topic_deletion::spawn(
+            config.node_id,
+            Arc::clone(&controller),
+            Arc::clone(&group_coordinator),
+            runtime.supervisor_shutdown.child_token(),
+        );
+
         // KIP-211. Every broker sweeps the groups whose offsets partition it
         // leads, and the tombstones are idempotent, so the sweep needs no
         // config gate of its own.

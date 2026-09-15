@@ -286,6 +286,7 @@ fn apply_record_at_timestamp(
                     metadata: v.metadata,
                     commit_timestamp_ms: v.commit_timestamp_ms,
                     expire_timestamp_ms: v.expire_timestamp_ms,
+                    topic_id: None,
                 },
             );
         }

@@ -83,6 +83,7 @@ fn scan_pending_offset_entries(
                                 metadata: value.metadata,
                                 commit_timestamp_ms: value.commit_timestamp_ms,
                                 expire_timestamp_ms: value.expire_timestamp_ms,
+                                topic_id: None,
                             },
                         ));
                     }
@@ -247,6 +248,7 @@ mod tests {
             metadata: String::new(),
             commit_timestamp_ms: 0,
             expire_timestamp_ms: None,
+            topic_id: None,
         }
     }
 
