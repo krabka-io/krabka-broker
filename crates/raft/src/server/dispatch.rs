@@ -151,20 +151,18 @@ mod tests {
             pre_vote: false,
         }
         .encode();
-        let mut malformed_vote = vote.to_vec();
-        malformed_vote.push(0);
+        // A truncated body does not decode. Kafka closes such a connection,
+        // so the engine sends no answer.
+        let malformed_vote = vote.slice(..vote.len() - 1);
         let vote_resp = super::dispatch(ApiKey(api_key::VOTE), vote, &engine)
             .await
             .expect("vote dispatch");
         assert2::assert!(PeerResponse::decode_vote(&vote_resp).is_some());
-        let malformed_vote_resp =
-            super::dispatch(ApiKey(api_key::VOTE), Bytes::from(malformed_vote), &engine)
+        assert2::assert!(
+            super::dispatch(ApiKey(api_key::VOTE), malformed_vote, &engine)
                 .await
-                .expect("malformed vote dispatch returns a denial");
-        assert2::assert!(matches!(
-            PeerResponse::decode_vote(&malformed_vote_resp),
-            Some(PeerResponse::Vote { granted: false, .. })
-        ));
+                .is_err()
+        );
 
         let fetch = PeerRequest::Fetch {
             from: NodeId(2),
@@ -206,6 +204,7 @@ mod tests {
         let end = PeerRequest::EndQuorumEpoch {
             leader_id: NodeId(1),
             leader_epoch: 1,
+            preferred_candidates: Vec::new(),
         }
         .encode();
         let end_resp = super::dispatch(ApiKey(api_key::END_QUORUM_EPOCH), end, &engine)

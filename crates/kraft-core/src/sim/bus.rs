@@ -142,6 +142,7 @@ impl Sim {
                             Event::ReceiveEndQuorumEpoch {
                                 leader_id: id,
                                 leader_epoch: epoch,
+                                successor_rank: crate::event::SuccessorRank::default(),
                             },
                         );
                     }

@@ -9,7 +9,8 @@ use bytes::Bytes;
 use krabka_protocol::{
     Decode,
     owned::{
-        begin_quorum_epoch_response::BeginQuorumEpochResponse,
+        begin_quorum_epoch_response::{self as bqe_resp, BeginQuorumEpochResponse},
+        end_quorum_epoch_response::{self as eqe_resp, EndQuorumEpochResponse},
         fetch_response::{self as fetch_resp, FetchResponse},
         fetch_snapshot_response::{self as fs_resp, FetchSnapshotResponse},
         vote_response::{self as vote_resp, VoteResponse},
@@ -66,6 +67,163 @@ pub enum PeerResponse {
         bytes: Bytes,
         error_code: i16,
     },
+}
+
+/// What a quorum RPC response says about the responder's view of the leader,
+/// as Kafka's `RaftUtil.singleton*Response` helpers fill it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuorumLeader {
+    /// The leader of the epoch, or `None` (wire -1) while it is unknown.
+    pub leader_id: Option<NodeId>,
+    /// The responder's epoch.
+    pub epoch: Epoch,
+    /// The leader's controller-listener host and port. The response carries it
+    /// in `NodeEndpoints` only when the leader is known.
+    pub endpoint: Option<(String, u16)>,
+}
+
+impl QuorumLeader {
+    fn leader_id_to_wire(&self) -> i32 {
+        self.leader_id.map_or(-1, node_to_wire)
+    }
+
+    /// The `NodeEndpoints` entry, when the leader and its endpoint are known.
+    fn node_endpoint(&self) -> Option<(i32, String, u16)> {
+        let leader_id = self.leader_id?;
+        let (host, port) = self.endpoint.clone()?;
+        Some((node_to_wire(leader_id), host, port))
+    }
+}
+
+/// Encodes a Vote response body (api 52).
+///
+/// A `top_level_error` other than 0 is Kafka's bare error response: the code
+/// and nothing else. Otherwise the body names the metadata partition with
+/// `partition_error`, the grant and the responder's leader view.
+#[must_use]
+pub fn encode_vote_response(
+    top_level_error: i16,
+    partition_error: i16,
+    vote_granted: bool,
+    leader: &QuorumLeader,
+) -> Bytes {
+    let resp = if top_level_error == 0 {
+        VoteResponse {
+            topics: vec![vote_resp::TopicData {
+                topic_name: METADATA_TOPIC.to_string(),
+                partitions: vec![vote_resp::PartitionData {
+                    partition_index: METADATA_PARTITION,
+                    error_code: partition_error,
+                    leader_id: leader.leader_id_to_wire(),
+                    leader_epoch: epoch_to_wire(leader.epoch),
+                    vote_granted,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            node_endpoints: leader
+                .node_endpoint()
+                .map(|(node_id, host, port)| vote_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }
+    } else {
+        VoteResponse {
+            error_code: top_level_error,
+            ..Default::default()
+        }
+    };
+    encode_body(&resp, VOTE_VERSION)
+}
+
+/// Encodes a `BeginQuorumEpoch` response body (api 53), with the same shape
+/// rules as [`encode_vote_response`].
+#[must_use]
+pub fn encode_begin_quorum_epoch_response(
+    top_level_error: i16,
+    partition_error: i16,
+    leader: &QuorumLeader,
+) -> Bytes {
+    let resp = if top_level_error == 0 {
+        BeginQuorumEpochResponse {
+            topics: vec![bqe_resp::TopicData {
+                topic_name: METADATA_TOPIC.to_string(),
+                partitions: vec![bqe_resp::PartitionData {
+                    partition_index: METADATA_PARTITION,
+                    error_code: partition_error,
+                    leader_id: leader.leader_id_to_wire(),
+                    leader_epoch: epoch_to_wire(leader.epoch),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            node_endpoints: leader
+                .node_endpoint()
+                .map(|(node_id, host, port)| bqe_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }
+    } else {
+        BeginQuorumEpochResponse {
+            error_code: top_level_error,
+            ..Default::default()
+        }
+    };
+    encode_body(&resp, QUORUM_EPOCH_VERSION)
+}
+
+/// Encodes an `EndQuorumEpoch` response body (api 54), with the same shape
+/// rules as [`encode_vote_response`].
+#[must_use]
+pub fn encode_end_quorum_epoch_response(
+    top_level_error: i16,
+    partition_error: i16,
+    leader: &QuorumLeader,
+) -> Bytes {
+    let resp = if top_level_error == 0 {
+        EndQuorumEpochResponse {
+            topics: vec![eqe_resp::TopicData {
+                topic_name: METADATA_TOPIC.to_string(),
+                partitions: vec![eqe_resp::PartitionData {
+                    partition_index: METADATA_PARTITION,
+                    error_code: partition_error,
+                    leader_id: leader.leader_id_to_wire(),
+                    leader_epoch: epoch_to_wire(leader.epoch),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            node_endpoints: leader
+                .node_endpoint()
+                .map(|(node_id, host, port)| eqe_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }
+    } else {
+        EndQuorumEpochResponse {
+            error_code: top_level_error,
+            ..Default::default()
+        }
+    };
+    encode_body(&resp, QUORUM_EPOCH_VERSION)
 }
 
 /// Encodes a `FetchSnapshot` response body (api 59).

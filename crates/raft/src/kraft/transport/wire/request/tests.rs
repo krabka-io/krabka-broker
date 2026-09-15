@@ -208,6 +208,10 @@ fn begin_end_round_trip() {
     let end = PeerRequest::EndQuorumEpoch {
         leader_id: NodeId(1),
         leader_epoch: 4,
+        preferred_candidates: vec![
+            (NodeId(3), uuid::Uuid::from_u128(3)),
+            (NodeId(2), uuid::Uuid::from_u128(2)),
+        ],
     };
     assert2::assert!(decode_end(&end.encode()) == Some(end));
 }
@@ -232,6 +236,7 @@ fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
     let end = PeerRequest::EndQuorumEpoch {
         leader_id: NodeId(1),
         leader_epoch: 4,
+        preferred_candidates: vec![(NodeId(2), uuid::Uuid::from_u128(2))],
     };
     let mut end_cur = &end.encode()[..];
     let raw_end = EndQuorumEpochRequest::decode(&mut end_cur, QUORUM_EPOCH_VERSION)
@@ -240,6 +245,18 @@ fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
     assert2::assert!(raw_end.cluster_id.as_ref() == None);
     assert2::assert!(end_partition.leader_id == 1);
     assert2::assert!(end_partition.leader_epoch == 4);
+    assert2::assert!(
+        end_partition.preferred_candidates
+            == vec![
+                krabka_protocol::owned::end_quorum_epoch_request::ReplicaInfo {
+                    candidate_id: 2,
+                    candidate_directory_id: krabka_protocol::primitives::uuid::Uuid(
+                        *uuid::Uuid::from_u128(2).as_bytes()
+                    ),
+                    ..Default::default()
+                }
+            ]
+    );
 }
 
 #[test]

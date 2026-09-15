@@ -28,73 +28,21 @@ impl Engine {
         // Decode the request body, run it through the core, and encode the
         // produced reply back onto the oneshot.
         match inbound {
+            // A body that does not decode drops `reply`, which closes the
+            // connection, as Kafka's `RequestContext.parseRequest` does.
             Inbound::Vote { req, reply } => {
-                let response = if let Some(wire::PeerRequest::Vote {
-                    cluster_id,
-                    voter_id,
-                    voter_directory_id,
-                    candidate_epoch,
-                    candidate,
-                    candidate_directory_id,
-                    last_epoch,
-                    last_offset,
-                    pre_vote,
-                }) = wire::decode_vote(&req)
-                {
-                    let event = Event::ReceiveVoteRequest {
-                        from: candidate,
-                        cluster_id,
-                        voter_id,
-                        voter_directory_id,
-                        candidate_epoch,
-                        candidate,
-                        candidate_directory_id,
-                        candidate_log_end: LogEnd {
-                            last_epoch,
-                            last_offset,
-                        },
-                        pre_vote,
-                    };
-                    self.run_inbound_reply(event)
-                } else {
-                    wire::PeerResponse::Vote {
-                        epoch: self.core.quorum_state().leader_epoch,
-                        granted: false,
-                    }
-                    .encode()
-                };
-                let _ = reply.send(response);
+                if let Some(response) = self.answer_vote(&req) {
+                    let _ = reply.send(response);
+                }
             }
             Inbound::BeginQuorumEpoch { req, reply } => {
-                if let Some(wire::PeerRequest::BeginQuorumEpoch {
-                    leader_id,
-                    leader_epoch,
-                }) = wire::decode_begin(&req)
-                {
-                    self.on_event(Event::ReceiveBeginQuorumEpoch {
-                        leader_id,
-                        leader_epoch,
-                    });
-                    let ack = wire::PeerResponse::Ack {
-                        epoch: self.core.quorum_state().leader_epoch,
-                    };
-                    let _ = reply.send(ack.encode());
+                if let Some(response) = self.answer_begin_quorum_epoch(&req) {
+                    let _ = reply.send(response);
                 }
             }
             Inbound::EndQuorumEpoch { req, reply } => {
-                if let Some(wire::PeerRequest::EndQuorumEpoch {
-                    leader_id,
-                    leader_epoch,
-                }) = wire::decode_end(&req)
-                {
-                    self.on_event(Event::ReceiveEndQuorumEpoch {
-                        leader_id,
-                        leader_epoch,
-                    });
-                    let ack = wire::PeerResponse::Ack {
-                        epoch: self.core.quorum_state().leader_epoch,
-                    };
-                    let _ = reply.send(ack.encode());
+                if let Some(response) = self.answer_end_quorum_epoch(&req) {
+                    let _ = reply.send(response);
                 }
             }
             Inbound::Fetch { req, reply } => {
@@ -241,21 +189,21 @@ impl Engine {
         }
     }
 
-    /// Run an inbound event whose actions include a `ReplyVote`, returning the
-    /// encoded response body (the loop side-effects from non-reply actions are
-    /// applied too).
-    pub fn run_inbound_reply(&mut self, event: Event) -> bytes::Bytes {
+    /// Run an inbound `ReceiveVoteRequest` and return whether the vote was
+    /// granted. The loop side effects of the other actions apply as well.
+    pub fn run_vote_request(&mut self, event: Event) -> bool {
         let now = self.now();
         let prev_role = self.core.role().name();
         let actions = self.core.on_event(event, &self.log, now);
-        let mut resp = wire::PeerResponse::Vote {
-            epoch: self.core.quorum_state().leader_epoch,
-            granted: false,
-        };
+        let mut granted = false;
         let mut local = Vec::new();
         for action in actions {
-            if let Action::ReplyVote { epoch, granted, .. } = action {
-                resp = wire::PeerResponse::Vote { epoch, granted };
+            if let Action::ReplyVote {
+                granted: reply_granted,
+                ..
+            } = action
+            {
+                granted = reply_granted;
             } else {
                 local.push(action);
             }
@@ -263,6 +211,6 @@ impl Engine {
         self.execute_local_only(local);
         self.reconcile_timers(prev_role);
         self.publish_leader();
-        resp.encode()
+        granted
     }
 }

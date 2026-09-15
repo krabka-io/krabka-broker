@@ -246,7 +246,8 @@ impl QuorumStateMachine {
             Event::ReceiveEndQuorumEpoch {
                 leader_id,
                 leader_epoch,
-            } => self.handle_end_quorum_epoch(log, leader_id, leader_epoch, now),
+                successor_rank,
+            } => self.handle_end_quorum_epoch(log, leader_id, leader_epoch, successor_rank, now),
             Event::ReceiveFetch {
                 from,
                 fetch_epoch,

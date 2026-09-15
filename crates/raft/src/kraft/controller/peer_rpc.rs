@@ -84,11 +84,36 @@ impl Engine {
         let body = wire::PeerRequest::EndQuorumEpoch {
             leader_id: self.me,
             leader_epoch: epoch,
+            preferred_candidates: self.preferred_candidates(),
         }
         .encode();
         for peer in self.other_voters() {
             self.spawn_send(peer, api_key::END_QUORUM_EPOCH, body.clone());
         }
+    }
+
+    /// The other voters in order of replication progress, most caught up
+    /// first, as Kafka's `LeaderState.nonLeaderVotersByDescendingFetchOffset`
+    /// orders the `PreferredCandidates` of a resigning leader. A voter with no
+    /// recorded fetch sorts last, and equal offsets keep node id order.
+    pub fn preferred_candidates(&self) -> Vec<(NodeId, uuid::Uuid)> {
+        let voters = &self.core.quorum_state().voters;
+        let mut candidates: Vec<(i64, NodeId, uuid::Uuid)> = self
+            .other_voters()
+            .into_iter()
+            .map(|id| {
+                (
+                    self.replica_fetch_offsets.get(&id).copied().unwrap_or(-1),
+                    id,
+                    voters.get(id).map_or(uuid::Uuid::nil(), |v| v.directory_id),
+                )
+            })
+            .collect();
+        candidates.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+        candidates
+            .into_iter()
+            .map(|(_, id, directory_id)| (id, directory_id))
+            .collect()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(node = self.me.0, leader_id = leader_id.0, fetch_offset = self.log.end_offset()))]

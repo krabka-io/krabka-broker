@@ -267,9 +267,17 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
             Some(wire::PeerRequest::EndQuorumEpoch {
                 leader_id,
                 leader_epoch,
+                preferred_candidates,
             }) => {
                 assert2::assert!(leader_id == NodeId(1));
                 assert2::assert!(leader_epoch == 4);
+                assert2::assert!(
+                    preferred_candidates
+                        == vec![
+                            (NodeId(2), uuid::Uuid::nil()),
+                            (NodeId(3), uuid::Uuid::nil())
+                        ]
+                );
             }
             other => panic!("unexpected end quorum request: {other:?}"),
         }
@@ -494,6 +502,7 @@ async fn rejected_fetch_responses_leave_log_watermark_and_snapshot_unchanged() {
             engine.on_event(Event::ReceiveEndQuorumEpoch {
                 leader_id: NodeId(2),
                 leader_epoch: 3,
+                successor_rank: crate::kraft::event::SuccessorRank::default(),
             });
             assert2::assert!(matches!(engine.core.role(), Role::Prospective { .. }));
         }

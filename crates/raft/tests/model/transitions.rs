@@ -84,6 +84,7 @@ impl ConsensusModel {
                             event: Event::ReceiveEndQuorumEpoch {
                                 leader_id: id,
                                 leader_epoch: epoch,
+                                successor_rank: krabka_raft::kraft::event::SuccessorRank::default(),
                             },
                         });
                     }

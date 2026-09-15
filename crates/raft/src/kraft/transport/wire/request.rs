@@ -59,6 +59,9 @@ pub enum PeerRequest {
     EndQuorumEpoch {
         leader_id: NodeId,
         leader_epoch: Epoch,
+        /// The voters in order of replication progress, most caught up first,
+        /// each with its directory id: `PreferredCandidates` (KIP-853).
+        preferred_candidates: Vec<(NodeId, uuid::Uuid)>,
     },
     Fetch {
         from: NodeId,
@@ -155,6 +158,7 @@ impl PeerRequest {
             PeerRequest::EndQuorumEpoch {
                 leader_id,
                 leader_epoch,
+                ref preferred_candidates,
             } => {
                 let req = EndQuorumEpochRequest {
                     topics: vec![eqe_req::TopicData {
@@ -163,6 +167,16 @@ impl PeerRequest {
                             partition_index: METADATA_PARTITION,
                             leader_id: node_to_wire(leader_id),
                             leader_epoch: epoch_to_wire(leader_epoch),
+                            preferred_candidates: preferred_candidates
+                                .iter()
+                                .map(|&(candidate, directory_id)| eqe_req::ReplicaInfo {
+                                    candidate_id: node_to_wire(candidate),
+                                    candidate_directory_id: krabka_protocol::primitives::uuid::Uuid(
+                                        *directory_id.as_bytes(),
+                                    ),
+                                    ..Default::default()
+                                })
+                                .collect(),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -229,6 +243,39 @@ impl PeerRequest {
     }
 }
 
+/// Decodes a request body at `version`. The inbound handlers run Kafka's
+/// request checks on the result, so this does not refuse a field value: only a
+/// body that does not decode gives `None`. Kafka's
+/// `RequestContext.parseRequest` fails such a request, and the connection
+/// closes. Like that parser, this ignores bytes after the message.
+fn decode_request<T>(buf: &[u8], version: i16) -> Option<T>
+where
+    T: for<'de> Decode<'de>,
+{
+    let mut cur = buf;
+    T::decode(&mut cur, version).ok()
+}
+
+/// Decodes a Vote request body (api 52) without checking its fields.
+#[must_use]
+pub fn decode_vote_request(buf: &[u8]) -> Option<VoteRequest> {
+    decode_request(buf, VOTE_VERSION)
+}
+
+/// Decodes a `BeginQuorumEpoch` request body (api 53) without checking its
+/// fields.
+#[must_use]
+pub fn decode_begin_quorum_epoch_request(buf: &[u8]) -> Option<BeginQuorumEpochRequest> {
+    decode_request(buf, QUORUM_EPOCH_VERSION)
+}
+
+/// Decodes an `EndQuorumEpoch` request body (api 54) without checking its
+/// fields.
+#[must_use]
+pub fn decode_end_quorum_epoch_request(buf: &[u8]) -> Option<EndQuorumEpochRequest> {
+    decode_request(buf, QUORUM_EPOCH_VERSION)
+}
+
 /// Decodes a Vote request body (api 52).
 #[must_use]
 pub fn decode_vote(buf: &[u8]) -> Option<PeerRequest> {
@@ -269,7 +316,8 @@ pub fn decode_vote(buf: &[u8]) -> Option<PeerRequest> {
     })
 }
 
-fn parse_cluster_id(value: &str) -> Option<uuid::Uuid> {
+/// Parses a request `ClusterId`: Kafka's base64 form, or the hyphenated form.
+pub(crate) fn parse_cluster_id(value: &str) -> Option<uuid::Uuid> {
     uuid::Uuid::parse_str(value).ok().or_else(|| {
         let bytes: [u8; 16] = URL_SAFE_NO_PAD.decode(value).ok()?.try_into().ok()?;
         Some(uuid::Uuid::from_bytes(bytes))
@@ -297,6 +345,16 @@ pub fn decode_end(buf: &[u8]) -> Option<PeerRequest> {
     Some(PeerRequest::EndQuorumEpoch {
         leader_id: node_from_wire(p.leader_id),
         leader_epoch: epoch_from_wire(p.leader_epoch),
+        preferred_candidates: p
+            .preferred_candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    node_from_wire(candidate.candidate_id),
+                    uuid::Uuid::from_bytes(candidate.candidate_directory_id.0),
+                )
+            })
+            .collect(),
     })
 }
 
