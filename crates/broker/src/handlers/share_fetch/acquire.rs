@@ -14,7 +14,10 @@ use super::{
     acknowledge::apply_one_ack,
     long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
-    records::{pending_activation_ranges, populate_acquired_response, unreadable_batch_ranges},
+    records::{
+        AcquireRequest, acquire_read_records, pending_activation_ranges, read_budget,
+        unreadable_batch_ranges,
+    },
 };
 use crate::{
     broker::Broker, codes, error::BrokerError,
@@ -266,6 +269,9 @@ async fn acquire_pass(
         } else {
             hwm
         };
+        // A released or expired record at the delivery limit is archived
+        // first, so it cannot hold the window shut.
+        st.archive_exhausted(cfg.max_delivery_attempts);
         grow_readable_window(
             &mut st,
             &part,
@@ -290,23 +296,19 @@ async fn acquire_pass(
             st.defer_internal(first, last);
         }
         let remaining_records = remaining_record_budget(max_records, total);
-        let acquired = if remaining_records > 0 {
-            st.acquire(
+        let acquired_count = if remaining_records > 0 {
+            let request = AcquireRequest {
                 member,
-                remaining_records,
-                max_bytes,
+                max_records: remaining_records,
+                max_bytes: read_budget(p.partition_max_bytes, max_bytes),
+                upper,
                 now,
-                cfg.record_lock_duration,
-                cfg.max_delivery_attempts,
-            )
+                lock_duration: cfg.record_lock_duration,
+                max_attempts: cfg.max_delivery_attempts,
+            };
+            acquire_read_records(&mut p.out, &part, &mut st, &request).await?
         } else {
-            Vec::new()
-        };
-
-        let acquired_count = if acquired.is_empty() {
             0
-        } else {
-            populate_acquired_response(p, &part, &acquired, upper, max_bytes).await?
         };
 
         p.out.error_code = codes::NONE;
@@ -456,7 +458,7 @@ mod tests {
                 .acquire(
                     "m",
                     500,
-                    i32::MAX,
+                    Offset(4),
                     std::time::Instant::now(),
                     std::time::Duration::from_secs(30),
                     5,
