@@ -368,3 +368,71 @@ async fn leave_removes_member() {
         "leave batch must contain at least one tombstone"
     );
 }
+
+/// A heartbeat applies the member fields that it carries, a rejoin at epoch 0
+/// included, and keeps the fields that it leaves out
+/// (`StreamsGroupMember.Builder.maybeUpdate*`). Each row sends one heartbeat
+/// and compares the persisted `(process_id, rack_id, rebalance_timeout_ms,
+/// user endpoint)` of the member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heartbeat_applies_member_metadata() {
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::endpoint::Endpoint;
+
+    let (coord, _log) = make_coordinator();
+    let handle = coord.get_or_create_streams("g");
+    let request =
+        |member_epoch, process: Option<&str>, rack: Option<&str>, timeout, port: Option<u16>| {
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch,
+                process_id: process.map(str::to_owned),
+                rack_id: rack.map(str::to_owned),
+                rebalance_timeout_ms: timeout,
+                user_endpoint: port.map(|port| Endpoint {
+                    host: "h".into(),
+                    port,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        };
+    let joined = heartbeat(&handle, request(0, Some("p1"), Some("r1"), 1_000, Some(1))).await;
+    check!(joined.error_code == codes::NONE);
+    let epoch = joined.member_epoch;
+    // (request, expected (process id, rack id, rebalance timeout, endpoint port))
+    let rows = [
+        (
+            request(0, Some("p2"), Some("r2"), 2_000, None),
+            ("p2", Some("r2"), 2_000, None),
+        ),
+        (
+            request(-2, None, None, -1, Some(7)),
+            ("p2", Some("r2"), 2_000, Some(7)),
+        ),
+        (
+            request(-2, Some("p3"), None, 3_000, None),
+            ("p3", Some("r2"), 3_000, Some(7)),
+        ),
+    ];
+    for (index, (mut req, (process, rack, timeout, port))) in rows.into_iter().enumerate() {
+        if req.member_epoch == -2 {
+            req.member_epoch = coord
+                .cached_streams_seed("g")
+                .and_then(|seed| seed.current_per_member.get("m1").map(|c| c.member_epoch))
+                .unwrap_or(epoch);
+        }
+        let resp = heartbeat(&handle, req).await;
+        check!(resp.error_code == codes::NONE, "row {index}");
+        let member = coord.cached_streams_seed("g").expect("seed cached").members["m1"].clone();
+        check!(
+            (
+                member.process_id.as_str(),
+                member.rack_id.as_deref(),
+                member.rebalance_timeout_ms,
+                member.user_endpoint.map(|endpoint| endpoint.port),
+            ) == (process, rack, timeout, port),
+            "row {index}"
+        );
+    }
+}

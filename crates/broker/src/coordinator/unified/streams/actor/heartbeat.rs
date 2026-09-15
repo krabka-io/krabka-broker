@@ -123,14 +123,30 @@ pub(super) async fn handle_heartbeat(
     }
 
     // ─── Existing-member: validate epoch ─────────────────────────
-    let owned_active = req.active_tasks.as_deref().map(task_ids_to_map);
-    let owned_standby = req.standby_tasks.as_deref().map(task_ids_to_map);
-    let owned_warmup = req.warmup_tasks.as_deref().map(task_ids_to_map);
-    let owned = OwnedTasks {
-        active: owned_active.as_ref(),
-        standby: owned_standby.as_ref(),
-        warmup: owned_warmup.as_ref(),
-    };
+    // The owned-task maps matter only for a heartbeat at the previous member
+    // epoch, so a heartbeat at epoch 0 or at the member epoch builds none.
+    let needs_owned = actor.state.members.get(&req.member_id).is_some_and(|m| {
+        req.member_epoch != 0
+            && req.member_epoch != m.member_epoch
+            && req.member_epoch == m.previous_member_epoch
+    });
+    let owned_maps = needs_owned.then(|| {
+        (
+            req.active_tasks.as_deref().map(task_ids_to_map),
+            req.standby_tasks.as_deref().map(task_ids_to_map),
+            req.warmup_tasks.as_deref().map(task_ids_to_map),
+        )
+    });
+    let owned =
+        owned_maps
+            .as_ref()
+            .map_or_else(OwnedTasks::default, |(active, standby, warmup)| {
+                OwnedTasks {
+                    active: active.as_ref(),
+                    standby: standby.as_ref(),
+                    warmup: warmup.as_ref(),
+                }
+            });
     let cur_epoch =
         match actor
             .state
@@ -219,6 +235,13 @@ fn update_member_steady_state(
         m.client_host = client_host.to_string();
         changed = true;
     }
+    if update_member_metadata(m, req) {
+        // Kafka's `hasStreamsMemberMetadataChanged`: a changed member bumps
+        // the group epoch, so the assignor sees the new process, rack, tags
+        // and endpoint.
+        actor.state.dirty = true;
+        changed = true;
+    }
 
     if let Some(offsets) = &req.task_offsets {
         let map = task_offsets_to_map(offsets);
@@ -235,6 +258,64 @@ fn update_member_steady_state(
         }
     }
     changed
+}
+
+/// Applies the member fields of a heartbeat to a known member, as Kafka's
+/// `StreamsGroupMember.Builder.maybeUpdate*` calls do: a field that the
+/// request carries replaces the stored value, and an absent field (or a
+/// rebalance timeout of -1) keeps it. A rejoin at epoch 0 sets the user
+/// endpoint also when the request has none. Returns `true` if a field changed.
+fn update_member_metadata(
+    m: &mut crate::coordinator::unified::streams::state::StreamsMemberState,
+    req: &StreamsGroupHeartbeatRequest,
+) -> bool {
+    let before = (
+        m.instance_id.clone(),
+        m.rack_id.clone(),
+        m.rebalance_timeout_ms,
+        m.topology_epoch,
+        m.process_id.clone(),
+        m.user_endpoint.clone(),
+        m.client_tags.clone(),
+    );
+    if req.instance_id.is_some() {
+        m.instance_id.clone_from(&req.instance_id);
+    }
+    if req.rack_id.is_some() {
+        m.rack_id.clone_from(&req.rack_id);
+    }
+    if req.rebalance_timeout_ms != -1 {
+        m.rebalance_timeout_ms = req.rebalance_timeout_ms;
+    }
+    if let Some(topology) = &req.topology {
+        m.topology_epoch = topology.epoch;
+    }
+    if let Some(process_id) = &req.process_id {
+        m.process_id.clone_from(process_id);
+    }
+    let endpoint = req
+        .user_endpoint
+        .as_ref()
+        .map(|endpoint| (endpoint.host.clone(), endpoint.port));
+    if req.member_epoch == 0 || endpoint.is_some() {
+        m.user_endpoint = endpoint;
+    }
+    if let Some(tags) = &req.client_tags {
+        m.client_tags = tags
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+    }
+    before
+        != (
+            m.instance_id.clone(),
+            m.rack_id.clone(),
+            m.rebalance_timeout_ms,
+            m.topology_epoch,
+            m.process_id.clone(),
+            m.user_endpoint.clone(),
+            m.client_tags.clone(),
+        )
 }
 
 /// Handles a leave-group heartbeat, where `member_epoch == -1`.
