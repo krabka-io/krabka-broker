@@ -124,6 +124,7 @@ async fn writer_truncate_drops_records() {
         tx.send(WriterMessage::Produce(ProduceJob {
             data: ProduceData::Owned(sample_batch(2)),
             ack,
+            producer_check: None,
         }))
         .await
         .expect("send produce");

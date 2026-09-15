@@ -348,12 +348,12 @@ pub struct FileConfig {
     /// `RenewDelegationToken`, `ExpireDelegationToken`) require a principal
     /// that authenticated with SASL or mTLS, and answer
     /// `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or
-    /// one-way-TLS connection whatever this list holds. Listing
-    /// `"ANONYMOUS"` is therefore rejected by `BrokerConfig::validate`: it
-    /// cannot enable token issuance, and it would make every unauthenticated
-    /// client a super-user for all operations. Give the token-minting client
-    /// a SASL credential or a client certificate and list that principal
-    /// here.
+    /// one-way-TLS connection whatever this list holds.
+    ///
+    /// An entry may use Kafka's `User:<name>` form. As in Kafka,
+    /// `User:ANONYMOUS` is accepted: it makes every unauthenticated client a
+    /// super user, and a `PLAINTEXT` controller listener with a deny-capable
+    /// authorizer needs it.
     ///
     /// `None` and `Some(empty)` are equivalent — both leave
     /// `BrokerConfig.super_users` empty.

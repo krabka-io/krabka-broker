@@ -5,7 +5,7 @@
 //! Every submodule of `coordinator` needs the same live partition logs, so the
 //! builders live in one place instead of once per test module.
 
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig, Offset};
@@ -62,9 +62,5 @@ pub(super) fn coordinator(dir: &Path) -> (ShareCoordinator, Arc<PartitionRegistr
 }
 
 pub(super) async fn lead_all(coord: &ShareCoordinator) {
-    let mut set = HashSet::new();
-    for p in 0..coord.config.state_topic_num_partitions {
-        set.insert(PartitionIndex(p));
-    }
-    *coord.leader_partitions.write().await = set;
+    coord.lead_all_partitions_for_test().await;
 }

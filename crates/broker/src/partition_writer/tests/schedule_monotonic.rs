@@ -74,6 +74,7 @@ async fn a_backwards_delivery_time_in_one_writer_group_is_refused() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS + 60_000)),
         ack: later_ack,
+        producer_check: None,
     }))
     .await
     .expect("queue the later batch");
@@ -81,6 +82,7 @@ async fn a_backwards_delivery_time_in_one_writer_group_is_refused() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS)),
         ack: earlier_ack,
+        producer_check: None,
     }))
     .await
     .expect("queue the earlier batch");
@@ -131,6 +133,7 @@ async fn a_backwards_delivery_time_is_admitted_without_the_setting() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS + 60_000)),
         ack: later_ack,
+        producer_check: None,
     }))
     .await
     .expect("queue the later batch");
@@ -138,6 +141,7 @@ async fn a_backwards_delivery_time_is_admitted_without_the_setting() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS)),
         ack: earlier_ack,
+        producer_check: None,
     }))
     .await
     .expect("queue the earlier batch");

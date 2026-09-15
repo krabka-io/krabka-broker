@@ -120,7 +120,6 @@ mod tests {
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
             throttle: crate::quota::ThrottleSlot::default(),
-            listener_authorized_cluster_action: false,
         };
 
         audit_admin(
@@ -188,7 +187,6 @@ mod tests {
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
             throttle: crate::quota::ThrottleSlot::default(),
-            listener_authorized_cluster_action: false,
         };
 
         audit_admin_success(log.as_ref(), &ctx, "AlterConfigs", Vec::new());

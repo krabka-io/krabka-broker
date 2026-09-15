@@ -139,6 +139,12 @@ macro_rules! security_fields {
             /// TLS configuration. `None` means no TLS, and is the default.
             pub tls_config: Option<TlsConfig>,
 
+            /// KIP-371 `ssl.principal.mapping.rules` of the top-level
+            /// `[tls_config]`. The controller listener maps the Subject DN of an
+            /// mTLS peer certificate to its principal with these rules. The
+            /// default is `DEFAULT`, under which the DN is the principal.
+            pub tls_principal_mapper: crate::network::auth::SslPrincipalMapper,
+
             /// Which SASL mechanisms are enabled. An empty set means no SASL.
             pub enabled_sasl_mechanisms: Vec<SaslMechanism>,
 

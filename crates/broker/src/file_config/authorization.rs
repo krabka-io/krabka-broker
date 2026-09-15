@@ -31,7 +31,8 @@ pub struct FileAuthorizationConfig {
     pub authz_type: AuthzType,
     /// Principals that bypass every ACL check, Kafka's `super.users`. The
     /// active authorizer and the delegation-token `act-as` gate both read it.
-    /// Empty is the default and grants no bypass.
+    /// An entry may use Kafka's `User:<name>` form. `User:ANONYMOUS` is
+    /// accepted, as in Kafka. Empty is the default and grants no bypass.
     #[serde(default)]
     pub super_users: Vec<String>,
     /// `Some` iff `authz_type == Opa`. Required in that case;
@@ -39,6 +40,15 @@ pub struct FileAuthorizationConfig {
     /// [`FileConfigError::MissingSection`][crate::file_config::FileConfigError::MissingSection]
     /// when omitted.
     pub opa: Option<FileOpaConfig>,
+}
+
+/// The principal name that a `super_users` entry names.
+///
+/// Kafka writes `super.users` entries as `User:<name>`, and an authorizer
+/// matches the principal name of a connection, so the `User:` type prefix is
+/// removed. An entry without the prefix is the name itself.
+pub(super) fn super_user_name(entry: &str) -> String {
+    entry.strip_prefix("User:").unwrap_or(entry).to_string()
 }
 
 /// Which [`crate::authorizer::Authorizer`] impl to instantiate.
@@ -108,6 +118,40 @@ mod tests {
 
     use super::*;
     use crate::file_config::FileConfig;
+
+    /// Both `super_users` lists take Kafka's `User:<name>` form, and
+    /// `User:ANONYMOUS` is a super user as in Kafka.
+    #[test]
+    fn super_users_take_the_kafka_principal_form() {
+        let cases = [
+            (
+                "top level",
+                r#"super_users = ["User:admin", "User:ANONYMOUS", "operator"]"#,
+            ),
+            (
+                "[authorization]",
+                r#"
+[authorization]
+type = "simple"
+super_users = ["User:admin", "User:ANONYMOUS", "operator"]
+"#,
+            ),
+        ];
+        for (case, toml) in cases {
+            let file: FileConfig = toml::from_str(toml).unwrap();
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).unwrap();
+
+            let expected: std::collections::HashSet<String> = [
+                "admin".to_string(),
+                "ANONYMOUS".to_string(),
+                "operator".to_string(),
+            ]
+            .into();
+            assert!(cfg.super_users == expected, "{case}");
+            assert!(cfg.validate().is_ok(), "{case}");
+        }
+    }
 
     #[test]
     fn super_users_toml_populates_broker_config_set() {
