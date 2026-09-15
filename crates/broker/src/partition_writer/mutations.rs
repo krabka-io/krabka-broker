@@ -40,34 +40,51 @@ pub(super) async fn handle_replicate(
         .then_some(krabka_log::ProducerId(batch.producer_id))
         .filter(|producer_id| producer_id.get() >= 0);
     let log_for_blocking = Arc::clone(log);
+    // Read the mirror entry inside this same closure, under the lock the
+    // append already takes here through `run_log_mutation`, rather than by a
+    // second, separate `lock_log` call afterward on the calling async task. A
+    // `std::sync::Mutex` acquired directly on that task blocks its worker
+    // thread for as long as whatever else holds the lock -- for example a
+    // diskless flush's trim, itself running in `run_log_mutation` on a
+    // different thread -- and does not yield the thread back to the runtime
+    // the way an uncontended `.await` would. On a freshly promoted leader
+    // catching up on replicated markers across many partitions at once, that
+    // can starve this broker's own heartbeat-sending task past the
+    // controller's liveness timeout.
     let result = run_log_mutation(
         move || {
-            lock_log(&log_for_blocking)
+            let mut guard = lock_log(&log_for_blocking);
+            guard
                 .append_at(&mut batch, Offset(offset))
-                .map_err(crate::error::BrokerError::from)
+                .map_err(crate::error::BrokerError::from)?;
+            Ok(control_producer.and_then(|producer_id| guard.producer_state_entry(producer_id)))
         },
         "replicate task panicked",
         storage_status,
     )
     .await;
-    let succeeded = result.is_ok();
-    if succeeded {
-        // A follower must mirror a replicated marker's producer-state effect
-        // too, not only a marker it appends as leader: a leadership change
-        // does not rebuild producer state from the log, so a follower
-        // promoted after replicating a transaction-version-2 marker would
-        // otherwise keep an empty or pre-marker tracker, and could accept an
-        // old-epoch retry the marker fenced, or an empty tracker could accept
-        // a nonzero first sequence at the new epoch.
-        if let Some(producer_id) = control_producer {
-            let entry = lock_log(log).producer_state_entry(producer_id);
-            producer_state
-                .mirror_log_entries(identity.0, identity.1, entry.into_iter().collect())
-                .await;
+    match result {
+        Ok(entry) => {
+            // A follower must mirror a replicated marker's producer-state
+            // effect too, not only a marker it appends as leader: a
+            // leadership change does not rebuild producer state from the
+            // log, so a follower promoted after replicating a
+            // transaction-version-2 marker would otherwise keep an empty or
+            // pre-marker tracker, and could accept an old-epoch retry the
+            // marker fenced, or an empty tracker could accept a nonzero
+            // first sequence at the new epoch.
+            if let Some(entry) = entry {
+                producer_state
+                    .mirror_log_entries(identity.0, identity.1, vec![entry])
+                    .await;
+            }
+            append_notify.notify_waiters();
+            let _ = ack.send(Ok(()));
         }
-        append_notify.notify_waiters();
+        Err(error) => {
+            let _ = ack.send(Err(error));
+        }
     }
-    let _ = ack.send(result);
 }
 
 pub(super) async fn handle_replicate_verbatim(

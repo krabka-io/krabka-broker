@@ -28,10 +28,11 @@ pub(super) async fn append_source(
     Vec<Result<crate::partition::AppendedBatch, BrokerError>>,
     Offset,
 ) {
-    crate::partition_writer::run_produce_append_batch(
+    let (results, leo, _) = crate::partition_writer::run_produce_append_batch(
         store.source.clone(),
         vec![crate::partition::ProduceData::Owned(batch(records))],
     )
     .await
-    .unwrap()
+    .unwrap();
+    (results, leo)
 }
