@@ -9,6 +9,7 @@ pub struct ShareCoordinatorConfig {
     pub state_topic_num_partitions: i32,
     pub state_topic_replication_factor: i16,
     pub state_topic_min_isr: i32,
+    pub state_topic_segment_bytes: ByteSize,
     pub snapshot_update_records_per_snapshot: u32,
     pub recovery_read_max: ByteSize,
 }
@@ -18,7 +19,8 @@ impl Default for ShareCoordinatorConfig {
         Self {
             state_topic_num_partitions: 50,
             state_topic_replication_factor: 3,
-            state_topic_min_isr: 1,
+            state_topic_min_isr: 2,
+            state_topic_segment_bytes: mebibytes(100),
             snapshot_update_records_per_snapshot: 50,
             recovery_read_max: mebibytes(1),
         }
@@ -36,7 +38,8 @@ mod tests {
         let expected = ShareCoordinatorConfig {
             state_topic_num_partitions: 50,
             state_topic_replication_factor: 3,
-            state_topic_min_isr: 1,
+            state_topic_min_isr: 2,
+            state_topic_segment_bytes: mebibytes(100),
             snapshot_update_records_per_snapshot: 50,
             recovery_read_max: mebibytes(1),
         };

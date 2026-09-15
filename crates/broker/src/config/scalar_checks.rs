@@ -453,6 +453,11 @@ impl BrokerConfig {
                 self.barrier_state_num_partitions,
             ),
             ("barrier_retained_cuts", self.barrier_retained_cuts),
+            ("transaction_state_min_isr", self.transaction_state_min_isr),
+            (
+                "share_state_min_isr",
+                self.share_coordinator.state_topic_min_isr,
+            ),
         ] {
             if value <= 0 {
                 return Err(BrokerError::InvalidRuntimeConfig(format!(
@@ -498,6 +503,28 @@ impl BrokerConfig {
                     "{name} must be positive"
                 )));
             }
+        }
+        // Each value becomes the `segment.bytes` topic config of its internal
+        // topic, so it must pass the topic-config check.
+        for (name, value) in [
+            (
+                "offsets_topic_segment_bytes",
+                self.offsets_topic_segment_bytes,
+            ),
+            (
+                "transaction_state_segment_bytes",
+                self.transaction_state_segment_bytes,
+            ),
+            (
+                "share_state_segment_bytes",
+                self.share_coordinator.state_topic_segment_bytes,
+            ),
+        ] {
+            crate::config_keys::validate_topic_config(
+                crate::config_keys::SEGMENT_BYTES,
+                &value.bytes_u64().to_string(),
+            )
+            .map_err(|reason| BrokerError::InvalidRuntimeConfig(format!("{name}: {reason}")))?;
         }
         Ok(())
     }
