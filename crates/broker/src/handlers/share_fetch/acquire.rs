@@ -16,7 +16,10 @@ use super::{
     pending::PendingPartition,
     records::{control_batch_ranges, pending_activation_ranges, populate_acquired_response},
 };
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{
+    broker::Broker, codes, error::BrokerError,
+    share_partition::manager::persistence::fences_the_partition,
+};
 
 /// KFC-1: the most not-yet-due records an acquire pass leaves in one share
 /// partition's window.
@@ -135,35 +138,58 @@ async fn acquire_pass(
         p.out.records = None;
         p.out.acquired_records.clear();
 
-        let cell = mgr.get_or_load(group, p.topic_id, p.partition_index).await;
+        let has_acks = apply_acks && !p.ack_batches.is_empty();
+        // A failed state read fails the partition and caches nothing, as
+        // Kafka's `SharePartitionManager.handleInitializationException` does.
+        let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
+            Ok(cell) => cell,
+            Err(code) => {
+                fail_partition(p, has_acks, code);
+                continue;
+            }
+        };
         let mut st = cell.lock().await;
 
         // Apply piggybacked acknowledgements (first pass only). When the
         // request is a renew-ack, each batch RENEWs the lock on its range
-        // rather than acknowledging it.
-        if apply_acks && !p.ack_batches.is_empty() {
-            let mut ack_err = codes::NONE;
-            for (first, last, types) in &p.ack_batches {
-                let res = if is_renew_ack {
-                    st.renew(
-                        member,
-                        Offset(*first),
-                        Offset(*last),
-                        now,
-                        cfg.record_lock_duration,
-                    )
-                } else {
-                    apply_one_ack(&mut st, member, *first, *last, types, now)
-                };
-                if let Err(code) = res {
-                    ack_err = code;
-                }
+        // rather than acknowledging it. The change is durable before the
+        // acquisition runs, or it is rolled back and the write error becomes
+        // the acknowledge error.
+        if has_acks {
+            let ack_batches = &p.ack_batches;
+            let code = mgr
+                .apply_durably(group, p.topic_id, p.partition_index, &mut st, |st| {
+                    let mut ack_err = codes::NONE;
+                    for (first, last, types) in ack_batches {
+                        let res = if is_renew_ack {
+                            st.renew(
+                                member,
+                                Offset(*first),
+                                Offset(*last),
+                                now,
+                                cfg.record_lock_duration,
+                            )
+                        } else {
+                            apply_one_ack(st, member, *first, *last, types, now)
+                        };
+                        if let Err(code) = res {
+                            ack_err = code;
+                        }
+                    }
+                    ack_err
+                })
+                .await;
+            p.out.acknowledge_error_code = code;
+            if fences_the_partition(code) {
+                fail_partition(p, true, code);
+                continue;
             }
-            p.out.acknowledge_error_code = ack_err;
         }
 
         if !p.fetchable {
-            mgr.persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
+            // Best-effort: a failed write keeps the state dirty for a retry.
+            let _ = mgr
+                .persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
                 .await;
             continue;
         }
@@ -179,7 +205,9 @@ async fn acquire_pass(
             // Lost the partition between the leadership check and here.
             p.out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
             p.leadable = false;
-            mgr.persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
+            // Best-effort: a failed write keeps the state dirty for a retry.
+            let _ = mgr
+                .persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
                 .await;
             continue;
         };
@@ -234,15 +262,43 @@ async fn acquire_pass(
             Vec::new()
         };
 
-        if !acquired.is_empty() {
-            total += populate_acquired_response(p, &part, &acquired, upper, max_bytes).await?;
-        }
+        let acquired_count = if acquired.is_empty() {
+            0
+        } else {
+            populate_acquired_response(p, &part, &acquired, upper, max_bytes).await?
+        };
 
         p.out.error_code = codes::NONE;
-        mgr.persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
-            .await;
+        // The acquisition itself is not durable state (an acquired record
+        // persists as available), so a failed write keeps the state dirty for
+        // a retry. A fenced write drops the cell, and the records acquired on
+        // it must not reach the client.
+        match mgr
+            .persist_if_dirty(group, p.topic_id, p.partition_index, &mut st)
+            .await
+        {
+            Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
+            _ => total += acquired_count,
+        }
     }
     Ok(total)
+}
+
+/// Fails one partition row with a share-partition error, and leaves it out of
+/// any later acquire pass.
+///
+/// The fetch error goes on a row of the share session, and the acknowledge
+/// error on a row that carried acknowledgements.
+fn fail_partition(p: &mut PendingPartition, has_acks: bool, code: i16) {
+    p.out.records = None;
+    p.out.acquired_records.clear();
+    if p.fetchable {
+        p.out.error_code = code;
+    }
+    if has_acks {
+        p.out.acknowledge_error_code = code;
+    }
+    p.leadable = false;
 }
 
 #[cfg(test)]

@@ -15,7 +15,10 @@ use krabka_log::Offset;
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use super::SharePartitionLeaderManager;
+use super::{
+    SharePartitionLeaderManager,
+    persistence::{fences_the_partition, persister_error_code},
+};
 use crate::{
     coordinator::unified::streams::config::ShareAutoOffsetReset,
     share_partition::state::AcquisitionState,
@@ -34,15 +37,24 @@ impl SharePartitionLeaderManager {
     /// loader that loses the insert race adopts the cell of the winner.
     ///
     /// The `ShareFetch` and `ShareAcknowledge` handlers call this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns the mapped error code
+    /// ([`persister_error_code`](super::persistence::persister_error_code))
+    /// when the state read fails, and leaves no cell behind, so the next
+    /// request reads again. Kafka's `SharePartition.maybeInitialize` fails the
+    /// same way, and `SharePartitionManager` removes the partition from its
+    /// cache. A read error never becomes a start offset.
     pub(crate) async fn get_or_load(
         &self,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Arc<Mutex<AcquisitionState>> {
+    ) -> Result<Arc<Mutex<AcquisitionState>>, i16> {
         let key = (group.to_string(), topic_id, partition);
         if let Some(cell) = self.leaders.get(&key) {
-            return cell.value().clone();
+            return Ok(cell.value().clone());
         }
 
         // Miss: load from the persister WITHOUT holding any DashMap guard.
@@ -81,22 +93,29 @@ impl SharePartitionLeaderManager {
                 st
             }
             Err(e) => {
+                let code = persister_error_code(&e);
                 warn!(
                     group,
-                    %topic_id, partition, error = %e,
-                    "share-partition state load failed; starting from empty window"
+                    %topic_id, partition, error = %e, code,
+                    "share-partition state load failed"
                 );
-                let mut st = AcquisitionState::new(Offset(0));
-                st.leader_epoch = leader_epoch;
-                st
+                return Err(code);
             }
         };
 
-        self.persist_if_dirty(group, topic_id, partition, &mut loaded)
-            .await;
+        // The resolved start of a partition with no state is best-effort
+        // durable: a failed write keeps `dirty` set for a retry. A fenced
+        // write means another writer owns the state, so no cell is cached.
+        if let Err(code) = self
+            .persist_if_dirty(group, topic_id, partition, &mut loaded)
+            .await
+            && fences_the_partition(code)
+        {
+            return Err(code);
+        }
         let cell = Arc::new(Mutex::new(loaded));
         // Adopt the winner if another task loaded the same key concurrently.
-        self.leaders.entry(key).or_insert(cell).value().clone()
+        Ok(self.leaders.entry(key).or_insert(cell).value().clone())
     }
 
     /// Where a share partition with no persisted state starts.
@@ -167,6 +186,21 @@ impl SharePartitionLeaderManager {
             .map(|c| c.value().clone())
     }
 
+    /// Test-only: caches `state` as the live cell, with no persister read.
+    #[cfg(test)]
+    pub(crate) fn insert_for_test(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+        state: AcquisitionState,
+    ) -> Arc<Mutex<AcquisitionState>> {
+        let cell = Arc::new(Mutex::new(state));
+        self.leaders
+            .insert((group.to_string(), topic_id, partition), Arc::clone(&cell));
+        cell
+    }
+
     /// Drops the cached acquisition-state cell for
     /// `(group, topic_id, partition)`.
     ///
@@ -204,9 +238,13 @@ mod tests {
     };
 
     use crate::{
+        codes,
         coordinator::unified::streams::config::KEY_SHARE_AUTO_OFFSET_RESET,
-        share_partition::manager::test_support::{
-            manager, manager_with_image_and_partitions, open_data_partition,
+        share_partition::{
+            manager::test_support::{
+                manager, manager_with_image_and_partitions, open_data_partition,
+            },
+            state::AcquisitionState,
         },
     };
 
@@ -292,23 +330,25 @@ mod tests {
         }
     }
 
+    /// A state read that fails never becomes a start offset. Over a
+    /// broker-less image the persister cannot create a share-state topic, so
+    /// no coordinator can serve the read: the load answers
+    /// `COORDINATOR_NOT_AVAILABLE` and caches no cell, so the next request
+    /// reads again.
     #[tokio::test]
-    async fn get_or_load_fresh_returns_empty_window_and_caches() {
+    async fn a_failed_state_read_answers_an_error_and_caches_nothing() {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([21; 16]);
 
-        // The image knows no such topic, so there is no log to resolve the
-        // group's strategy against and the window starts at 0. The write-back
-        // of that decision cannot reach a share-state topic over a broker-less
-        // image, so `dirty` stays set for the retry, which
-        // `persist_if_dirty_keeps_dirty_on_write_failure` covers.
-        let cell = mgr.get_or_load("g1", tid, 0).await;
-        let st = cell.lock().await;
-        assert!(st.start_offset == 0);
-        drop(st);
-        // A second call returns the same cached cell.
-        let cell2 = mgr.get_or_load("g1", tid, 0).await;
-        assert!(Arc::ptr_eq(&cell, &cell2));
+        let loads = [
+            mgr.get_or_load("g1", tid, 0).await.err(),
+            mgr.get_or_load("g1", tid, 0).await.err(),
+        ];
+
+        assert!(
+            (loads, mgr.peek_for_test("g1", tid, 0).is_none())
+                == ([Some(codes::COORDINATOR_NOT_AVAILABLE); 2], true)
+        );
     }
 
     #[tokio::test]
@@ -316,11 +356,12 @@ mod tests {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([24; 16]);
 
-        // Populate the cache, then invalidate; a subsequent load yields a
-        // fresh, distinct cell.
-        let cell = mgr.get_or_load("g1", tid, 0).await;
+        let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
+        let cached = mgr
+            .peek_for_test("g1", tid, 0)
+            .is_some_and(|peeked| Arc::ptr_eq(&cell, &peeked));
         mgr.invalidate("g1", tid, 0);
-        let cell2 = mgr.get_or_load("g1", tid, 0).await;
-        assert!(!Arc::ptr_eq(&cell, &cell2));
+
+        assert!((cached, mgr.peek_for_test("g1", tid, 0).is_none()) == (true, true));
     }
 }
