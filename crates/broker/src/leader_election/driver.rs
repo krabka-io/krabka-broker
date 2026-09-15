@@ -97,15 +97,17 @@ pub(crate) async fn run_liveness_tick(
 ) {
     let leader_now = is_controller_leader(controller, node_id);
     if leader_now {
-        let registered: Vec<u64> = controller
-            .current_image()
-            .brokers()
-            .map(|broker| broker.node_id.0)
-            .collect();
+        let image = controller.current_image();
         if !state.was_leader {
-            liveness.seed_brokers(registered.clone()).await;
+            liveness
+                .seed_brokers(crate::heartbeat::controller_state::replicated_fences(
+                    &image,
+                ))
+                .await;
         }
-        liveness.track_registered(registered).await;
+        liveness
+            .track_registered(image.brokers().map(|broker| broker.node_id.0))
+            .await;
     } else {
         state.clean_sweep = None;
     }

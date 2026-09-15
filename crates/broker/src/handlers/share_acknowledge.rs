@@ -181,24 +181,37 @@ async fn process_topics(
                 continue;
             }
 
-            let cell = mgr.get_or_load(group, topic_id, ap.partition_index).await;
-            let mut st = cell.lock().await;
-            let mut err = codes::NONE;
-            for batch in &ap.acknowledgement_batches {
-                if let Err(code) = apply_one_ack(
-                    &mut st,
-                    member,
-                    batch.first_offset,
-                    batch.last_offset,
-                    &batch.acknowledge_types,
-                    now,
-                    renewal,
-                ) {
-                    err = code;
+            // A failed state read fails the partition and caches nothing.
+            let cell = match mgr.get_or_load(group, topic_id, ap.partition_index).await {
+                Ok(cell) => cell,
+                Err(code) => {
+                    out.error_code = code;
+                    parts.push(out);
+                    continue;
                 }
-            }
-            out.error_code = err;
-            mgr.persist_if_dirty(group, topic_id, ap.partition_index, &mut st)
+            };
+            let mut st = cell.lock().await;
+            // The acknowledgement is durable before the answer, or it is rolled
+            // back and the write error is the partition error, as Kafka's
+            // `SharePartition.rollbackOrProcessStateUpdates` does.
+            out.error_code = mgr
+                .apply_durably(group, topic_id, ap.partition_index, &cell, &mut st, |st| {
+                    let mut err = codes::NONE;
+                    for batch in &ap.acknowledgement_batches {
+                        if let Err(code) = apply_one_ack(
+                            st,
+                            member,
+                            batch.first_offset,
+                            batch.last_offset,
+                            &batch.acknowledge_types,
+                            now,
+                            renewal,
+                        ) {
+                            err = code;
+                        }
+                    }
+                    err
+                })
                 .await;
             parts.push(out);
         }

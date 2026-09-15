@@ -1,9 +1,10 @@
 //! Share fetches under `ShareIsolationLevel::ReadCommitted`. The acquire
 //! window is clamped to the last stable offset, so the records of an open
 //! transaction stay invisible until that transaction commits, and the broker
-//! surfaces them afterwards rather than losing them.
+//! surfaces them afterwards rather than losing them. The data of an aborted
+//! transaction is archived and never acquired.
 
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use assert2::assert;
 use krabka_broker::{Broker, coordinator::unified::share::config::ShareIsolationLevel};
@@ -12,7 +13,7 @@ use krabka_client_producer::{Producer, ProducerRecord};
 use crate::{
     harness::{
         bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
-        topic_id, wait_for_share_init,
+        produce_n, topic_id, wait_for_share_init,
     },
     share_rpc::{acquired_count, share_fetch},
 };
@@ -115,4 +116,143 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     );
 
     producer.close().await.unwrap();
+}
+
+/// What a share group sees of one transaction followed by one plain record:
+/// the offsets it acquired and the record values that it got.
+#[derive(Debug, PartialEq, Eq)]
+struct Seen {
+    acquired: BTreeSet<i64>,
+    values: BTreeSet<String>,
+}
+
+/// Kafka's `SharePartition.filterAbortedTransactionalAcquiredRecords`: under
+/// `read_committed`, a share group never acquires the data of an aborted
+/// transaction. The share consumer cannot drop it itself, because a
+/// `ShareFetch` response has no aborted-transactions field.
+///
+/// Each row writes a transaction of three records at offsets 0-2 and ends it,
+/// which puts the marker at offset 3. It then produces one plain record `v0`
+/// at offset 4. The marker is never acquired.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn aborted_transaction_data_is_archived_under_read_committed() {
+    let cases = [
+        (
+            "read_committed, commit",
+            ShareIsolationLevel::ReadCommitted,
+            true,
+            Seen {
+                acquired: BTreeSet::from([0, 1, 2, 4]),
+                values: ["a", "b", "c", "v0"].map(String::from).into(),
+            },
+        ),
+        (
+            "read_committed, abort",
+            ShareIsolationLevel::ReadCommitted,
+            false,
+            Seen {
+                acquired: BTreeSet::from([4]),
+                values: ["v0"].map(String::from).into(),
+            },
+        ),
+        (
+            "read_uncommitted, abort",
+            ShareIsolationLevel::ReadUncommitted,
+            false,
+            Seen {
+                acquired: BTreeSet::from([0, 1, 2, 4]),
+                values: ["a", "b", "c", "v0"].map(String::from).into(),
+            },
+        ),
+    ];
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, isolation_level, commit, want) in cases {
+        actual.push((name, transaction_then_record(isolation_level, commit).await));
+        expected.push((name, want));
+    }
+    assert!(actual == expected);
+}
+
+async fn transaction_then_record(isolation_level: ShareIsolationLevel, commit: bool) -> Seen {
+    let _permit = broker_test_permit().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut cfg = broker_config(dir.path().to_path_buf());
+    cfg.share_group.isolation_level = isolation_level;
+    let broker = Broker::start(cfg).await.unwrap();
+    let bootstrap = broker.listen_addr().to_string();
+    let client = connect(&bootstrap).await;
+    create_topic(&broker, &client, "t", 1).await;
+    let tid = topic_id(&broker, "t");
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
+
+    let producer = Producer::builder()
+        .bootstrap(bootstrap.clone())
+        .transactional_id("share-aborted-tid")
+        .build()
+        .await
+        .unwrap();
+    producer.init_transactions().await.unwrap();
+    let txn = producer.begin_transaction().await.unwrap();
+    for v in ["a", "b", "c"] {
+        drop(
+            producer
+                .send(ProducerRecord {
+                    topic: "t".into(),
+                    value: Some(bytes::Bytes::from(v.to_string())),
+                    ..Default::default()
+                })
+                .await,
+        );
+    }
+    producer.flush().await.unwrap();
+    if commit {
+        txn.commit().await.unwrap();
+    } else {
+        txn.abort().await.unwrap();
+    }
+    produce_n(&client, "t", tid, 0, 1).await;
+
+    let (member, member_epoch) = join(&client, "g1", "t").await;
+    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+
+    // The member never acknowledges, so each offset is acquired at most once
+    // while its lock holds. Fetch until the plain record at offset 4 arrives.
+    let mut seen = Seen {
+        acquired: BTreeSet::new(),
+        values: BTreeSet::new(),
+    };
+    for epoch in 0..30 {
+        let row = share_fetch(&client, "g1", &member, tid, 0, epoch, 0).await;
+        let row_acquired: BTreeSet<i64> = row
+            .acquired_records
+            .iter()
+            .flat_map(|range| range.first_offset..=range.last_offset)
+            .collect();
+        if let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2()) {
+            for batch in batches {
+                for record in &batch.records {
+                    let offset = batch.base_offset + i64::from(record.offset_delta);
+                    if let Some(value) = record.value.as_ref()
+                        && row_acquired.contains(&offset)
+                    {
+                        seen.values
+                            .insert(String::from_utf8_lossy(value).into_owned());
+                    }
+                }
+            }
+        }
+        seen.acquired.extend(row_acquired);
+        if seen.acquired.contains(&4) {
+            break;
+        }
+        // intentional: bounded RPC poll for the LSO to pass the marker and the
+        // plain record to become acquirable; no image or metric signals it.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    producer.close().await.unwrap();
+    broker.shutdown().await;
+    seen
 }

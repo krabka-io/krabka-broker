@@ -13,10 +13,10 @@ use bytes::Bytes;
 #[derive(Debug, Clone)]
 pub struct Member {
     pub id: String,
-    /// KIP-345 static-membership pin. When `Some`, the broker keeps this
-    /// member's slot across session timeouts, and matches a reconnecting
-    /// client by `group_instance_id` instead of creating a fresh
-    /// `member_id`.
+    /// KIP-345 static-membership pin. When `Some`, a client that rejoins
+    /// inside its session timeout takes this member's slot back by
+    /// `group_instance_id` without a rebalance. A static member whose session
+    /// expires is removed like a dynamic one.
     pub group_instance_id: Option<String>,
     pub client_id: String,
     pub host: String,

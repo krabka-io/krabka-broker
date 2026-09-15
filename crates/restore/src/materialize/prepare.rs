@@ -430,6 +430,7 @@ mod tests {
         };
         log.append_at(batch, Offset(1)).expect("append marker");
         check!(log.pending_transaction_start(ProducerId(7)) == None);
-        check!(log.lso() == log.log_end_offset());
+        let log_end = log.log_end_offset();
+        check!(log.last_stable_offset(log_end) == log_end);
     }
 }
