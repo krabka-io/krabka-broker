@@ -6,7 +6,18 @@ use krabka_client_producer::{Producer, ProducerRecord};
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lists_groups_and_committed_offsets() {
     let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
+    // `ListGroups` goes to every broker of the metadata, as Kafka's
+    // `KafkaAdminClient.listGroups` does. The broker registers
+    // `listen_addr.port()` before it binds the data plane, so a `for_tests`
+    // config publishes port 0 and the client cannot dial it. Bind the data
+    // listener first and hand it over, which is what
+    // `Broker::start_with_listeners` is for.
+    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let data_addr = data_listener.local_addr().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.listen_addr = data_addr;
+    config.advertised_listener = data_addr.to_string();
+    let broker = Broker::start_with_listeners(config, None, Some(data_listener))
         .await
         .unwrap();
     let bootstrap = broker.listen_addr().to_string();
@@ -22,7 +33,7 @@ async fn lists_groups_and_committed_offsets() {
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
             }],
-            krabka_units::secs(5),
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .unwrap();
@@ -58,8 +69,13 @@ async fn lists_groups_and_committed_offsets() {
     let _ = consumer.poll(krabka_units::secs(2)).await.unwrap();
     consumer.commit_sync().await.unwrap();
 
-    let groups = admin.list_groups().await.unwrap();
-    assert2::assert!(groups.iter().any(|g| g == "g1"));
+    let groups = admin
+        .list_groups(&krabka_client_admin::groups::ListGroupsOptions::default())
+        .await
+        .unwrap()
+        .all()
+        .unwrap();
+    assert2::assert!(groups.iter().any(|g| g.group_id == "g1"));
 
     let offsets = admin.list_consumer_group_offsets("g1").await.unwrap();
     let committed = offsets.get(&("t1".to_string(), 0)).copied();

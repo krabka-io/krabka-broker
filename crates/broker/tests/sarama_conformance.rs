@@ -831,7 +831,7 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
                 replicas: 1,
                 configs: BTreeMap::default(),
             }],
-            krabka_units::secs(5),
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .expect("create conformance topic");
