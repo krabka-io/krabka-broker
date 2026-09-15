@@ -214,6 +214,12 @@ kafka_codes! {
     /// `StreamsGroupHeartbeat` cannot be configured, for example because a
     /// repartition source topic is never a sink topic.
     STREAMS_INVALID_TOPOLOGY = 130;
+    /// `STREAMS_INVALID_TOPOLOGY_EPOCH` (131, KIP-1071): the topology epoch of
+    /// a `StreamsGroupHeartbeat` is not valid.
+    STREAMS_INVALID_TOPOLOGY_EPOCH = 131;
+    /// `STREAMS_TOPOLOGY_FENCED` (132, KIP-1071): the topology of the member
+    /// is older than the topology of the group.
+    STREAMS_TOPOLOGY_FENCED = 132;
     /// `SHARE_SESSION_LIMIT_REACHED` (133, KIP-932): the per-broker share
     /// session cache is full. 133 is the last code the pinned image assigns.
     SHARE_SESSION_LIMIT_REACHED = 133;

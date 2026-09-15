@@ -217,15 +217,18 @@ fn topology(source_topic: &str) -> Topology {
     }
 }
 
-/// First-join heartbeat: empty member id (server mints one), epoch 0,
+/// First-join heartbeat: a client-generated member id, epoch 0,
 /// process id, rebalance timeout, and the supplied topology.
 fn first_join(group: &str, topo: Topology) -> StreamsGroupHeartbeatRequest {
     StreamsGroupHeartbeatRequest {
         group_id: group.into(),
-        member_id: String::new(),
+        member_id: uuid::Uuid::new_v4().to_string(),
         member_epoch: 0,
         process_id: Some("p1".into()),
         rebalance_timeout_ms: 30_000,
+        active_tasks: Some(Vec::new()),
+        standby_tasks: Some(Vec::new()),
+        warmup_tasks: Some(Vec::new()),
         topology: Some(topo),
         ..Default::default()
     }
@@ -243,6 +246,8 @@ fn follow_up(
         group_id: group.into(),
         member_id: member_id.into(),
         member_epoch: epoch,
+        standby_tasks: active.as_ref().map(|_| Vec::new()),
+        warmup_tasks: active.as_ref().map(|_| Vec::new()),
         active_tasks: active,
         ..Default::default()
     }

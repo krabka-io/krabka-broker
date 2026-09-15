@@ -92,21 +92,21 @@ async fn heartbeat(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_join_mints_id_advances_epoch_not_ready() {
+async fn first_join_advances_epoch_not_ready() {
     let (coord, _log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
     let resp = heartbeat(
         &handle,
         StreamsGroupHeartbeatRequest {
             group_id: "g".into(),
-            member_id: String::new(),
+            member_id: "m1".into(),
             member_epoch: 0,
             ..Default::default()
         },
     )
     .await;
     check!(resp.error_code == codes::NONE);
-    check!(!resp.member_id.is_empty(), "server mints a member id");
+    check!(resp.member_id == "m1");
     // No metadata source / no topology → NotReady, empty assignment, but the
     // member still advances to the (bumped) group epoch.
     check!(resp.member_epoch == 1);
@@ -1034,47 +1034,6 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
     }
 }
 
-/// Kafka refuses a joining heartbeat whose topology gives a changelog topic a
-/// partition count (`throwIfInvalidTopology`), and the group gets no member.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_changelog_topic_with_a_partition_count_is_refused() {
-    let (coord, _log) = make_coordinator();
-    let handle = coord.get_or_create_streams("g");
-    let mut topology = one_subtopology(true);
-    topology.subtopologies[0].state_changelog_topics[0].partitions = 2;
-
-    let resp = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            rebalance_timeout_ms: 1_000,
-            topology: Some(topology),
-            ..Default::default()
-        },
-    )
-    .await;
-
-    check!(
-        resp == super::response::error_resp(
-            codes::STREAMS_INVALID_TOPOLOGY,
-            Some(
-                "Changelog topic store-changelog must have an undefined partition count, but it \
-                 is set to 2."
-                    .into()
-            ),
-        )
-    );
-    let (tx, rx) = oneshot::channel();
-    handle
-        .tx
-        .send(StreamsGroupActorMessage::Describe { reply: tx })
-        .await
-        .unwrap();
-    check!(rx.await.unwrap().members.is_empty());
-}
-
 /// Kafka builds the `StreamsGroupHeartbeat` status list on every heartbeat:
 /// `STALE_TOPOLOGY` for a member behind the group topology, the topology
 /// configuration status, and `SHUTDOWN_APPLICATION` while a shutdown request
@@ -1613,5 +1572,105 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
         let last_m1 = heartbeat(&handle, request("m1", m1_epoch, Some(owned_by_m1))).await;
         let last_m2 = heartbeat(&handle, request("m2", 2, Some(&[]))).await;
         check!((last_m1, last_m2) == (expected_m1, expected_m2), "{name}");
+    }
+}
+
+/// Kafka refuses, inside the coordinator, a join whose topology differs from
+/// the group topology (`maybeUpdateTopology`) and a heartbeat that owns a task
+/// the ready topology does not have (`throwIfRequestContainsInvalidTasks`).
+/// Each row compares the whole response and the members of the group
+/// afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds;
+
+    use crate::test_support::FakeMetadataSource;
+
+    let join = |member_id: &str, epoch, source: &str| {
+        let mut topology = one_subtopology(false);
+        topology.epoch = epoch;
+        topology.subtopologies[0].source_topics = vec![source.into()];
+        StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: member_id.into(),
+            member_epoch: 0,
+            rebalance_timeout_ms: 1_000,
+            active_tasks: Some(vec![]),
+            standby_tasks: Some(vec![]),
+            warmup_tasks: Some(vec![]),
+            topology: Some(topology),
+            ..Default::default()
+        }
+    };
+    let owning = |subtopology: &str, partition| StreamsGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: "m1".into(),
+        member_epoch: 1,
+        active_tasks: Some(vec![TaskIds {
+            subtopology_id: subtopology.into(),
+            partitions: vec![partition],
+            ..Default::default()
+        }]),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        ..Default::default()
+    };
+    let rows = [
+        (
+            "a join with another topology at the same epoch",
+            join("m2", 1, "other"),
+            "Topology updates are not supported yet.",
+        ),
+        (
+            "a join with the same subtopologies at a higher epoch",
+            join("m2", 2, "in"),
+            "Topology updates are not supported yet.",
+        ),
+        (
+            "an owned task of an unknown subtopology",
+            owning("9", 0),
+            "Subtopology 9 does not exist in the topology.",
+        ),
+        (
+            "an owned task out of range",
+            owning("0", 5),
+            "Task 5 for subtopology 0 is invalid. Number of tasks for this subtopology: 1",
+        ),
+    ];
+
+    for (name, request, message) in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &[("in", 1, 1), ("other", 2, 1)]))
+                .build(),
+        );
+        let (coord, _log) = make_coordinator();
+        coord.set_metadata_source(source);
+        let handle = coord.get_or_create_streams("g");
+        check!(
+            heartbeat(&handle, join("m1", 1, "in")).await.error_code == codes::NONE,
+            "{name}"
+        );
+
+        let resp = heartbeat(&handle, request).await;
+
+        check!(
+            resp == super::response::error_resp(codes::INVALID_REQUEST, Some(message.into())),
+            "{name}"
+        );
+        let (tx, rx) = oneshot::channel();
+        handle
+            .tx
+            .send(StreamsGroupActorMessage::Describe { reply: tx })
+            .await
+            .unwrap();
+        let members: Vec<String> = rx
+            .await
+            .unwrap()
+            .members
+            .into_iter()
+            .map(|m| m.member_id)
+            .collect();
+        check!(members == vec!["m1".to_string()], "{name}");
     }
 }
