@@ -69,9 +69,7 @@ fn serve(
             let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
             let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
             for pd in topic.partitions {
-                let state_partition =
-                    coordinator.state_partition_for(&group_id, &topic_id, pd.partition);
-                let error_code = if coordinator.is_leader(state_partition).await {
+                let error_code = {
                     let batches: Vec<StateBatch> = pd
                         .state_batches
                         .iter()
@@ -96,8 +94,6 @@ fn serve(
                         Ok(()) => codes::NONE,
                         Err(code) => code,
                     }
-                } else {
-                    codes::NOT_COORDINATOR
                 };
                 partitions.push(PartitionResult {
                     partition: pd.partition,
@@ -219,6 +215,7 @@ mod tests {
             .share_coordinator
             .read_summary("share-group", topic_id, 4)
             .await
+            .expect("state partition is active")
             .expect("written state is readable");
         assert!(summary == (17, 3, Offset(101), 9));
         broker_handle.shutdown().await;

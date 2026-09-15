@@ -359,6 +359,8 @@ async fn share_state_rpcs_need_cluster_action() {
     broker
         .share_coordinator
         .refresh_leader_partitions(&broker.controller.current_image())
+        .await
+        .finished()
         .await;
 
     let initialized = || {
