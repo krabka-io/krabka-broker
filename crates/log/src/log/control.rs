@@ -288,6 +288,8 @@ mod tests {
                 "case {name}: the barrier holds the LSO"
             );
             log.append(&mut marker).unwrap(); // offset 3
+            // A high watermark past the marker releases the transaction.
+            log.release_replicated_transactions(Offset(4));
 
             check!(
                 partition_state(&log, &[1000])
@@ -338,13 +340,17 @@ mod tests {
 
             partition_state(&log, &ids)
         };
-        // The open transaction of producer 3000 holds the LSO at its first
-        // offset, and the barrier that follows does not release it.
-        check!(before.lso == Offset(8));
+        // No high watermark has passed a marker yet, so the committed
+        // transaction of producer 1000 still holds the LSO at its first offset.
+        check!(before.lso == Offset(1));
 
-        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
         check!(partition_state(&reopened, &ids) == before);
         check!(reopened.log_end_offset() == Offset(10));
+        // Once the high watermark passes both markers, the open transaction of
+        // producer 3000 holds the LSO at its first offset, and the barrier that
+        // follows does not release it.
+        check!(reopened.last_stable_offset(Offset(10)) == Offset(8));
     }
 
     /// Recovery rebuilds a transaction's stamp ranges across a barrier
@@ -374,7 +380,8 @@ mod tests {
 
         reopened.append(&mut commit_marker(1000, 2)).unwrap(); // offset 3
 
-        check!(reopened.lso() == Offset(4));
+        check!(reopened.lso() == Offset(0));
+        check!(reopened.last_stable_offset(Offset(4)) == Offset(4));
         let stamps: Vec<Option<u64>> = (0..4)
             .map(|offset| reopened.stamp_for_offset(Offset(offset)))
             .collect();
