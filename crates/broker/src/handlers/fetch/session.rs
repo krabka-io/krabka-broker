@@ -128,6 +128,7 @@ fn snapshot_response_state(
                 .or_else(|| by_name.get(&(tr.topic.clone(), p.partition_index)));
             if let Some(ep) = ep {
                 state.fetch_offset = ep.fetch_offset;
+                state.log_start_offset = ep.log_start_offset;
                 state.max_bytes = ep.partition_max_bytes;
                 state.current_leader_epoch = ep.current_leader_epoch;
                 state.last_fetched_epoch = ep.last_fetched_epoch;
@@ -454,5 +455,46 @@ mod tests {
             .collect();
         assert!(surviving == vec![("b".to_owned(), 99)]);
         assert!(sent.len() == 1);
+    }
+
+    /// A new session caches what the fetcher asked for, the log start offset
+    /// included, so a follower that leaves an unchanged partition out of its
+    /// next incremental request still counts at the log start it reported
+    /// (#746).
+    #[test]
+    fn a_new_session_caches_the_requested_log_start_offset() {
+        let effective = [EffectiveTopic {
+            topic: "orders".to_owned(),
+            topic_id: WireUuid([7; 16]),
+            partitions: vec![EffectivePartition {
+                partition: 0,
+                current_leader_epoch: 3,
+                last_fetched_epoch: 2,
+                fetch_offset: 40,
+                log_start_offset: 25,
+                partition_max_bytes: 1024,
+            }],
+        }];
+
+        let snapshot = snapshot_response_state(&effective, &[topic_response("orders", 7, 42)]);
+
+        assert!(
+            snapshot
+                == vec![(
+                    FetchSessionKey {
+                        topic_name: "orders".to_owned(),
+                        topic_id: WireUuid([7; 16]),
+                        partition: 0,
+                    },
+                    CachedPartitionState {
+                        fetch_offset: 40,
+                        last_fetched_epoch: 2,
+                        current_leader_epoch: 3,
+                        max_bytes: 1024,
+                        log_start_offset: 25,
+                        ..sent_state(42)
+                    },
+                )]
+        );
     }
 }
