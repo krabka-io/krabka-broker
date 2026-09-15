@@ -212,6 +212,47 @@ impl GroupState {
         fenced
     }
 
+    /// Moves the static member `previous` to the id `member_id` at epoch 0, as
+    /// Kafka's `getOrMaybeSubscribeStaticConsumerGroupMember` copies a
+    /// released static member for the member that rejoins with its instance
+    /// id. The member keeps its subscription, target and assignment, and the
+    /// group does not rebalance for the change.
+    pub fn replace_static_member(&mut self, previous: &str, member_id: &str) {
+        let Some(mut member) = self.members.remove(previous) else {
+            return;
+        };
+        self.rebalance_deadlines.remove(previous);
+        // Kafka writes the copy under `member_id` over any member that already
+        // has that id. Remove that member through `remove_member`, so its
+        // instance id does not keep pointing at the copy.
+        if member_id != previous {
+            self.remove_member(member_id);
+        }
+        member.member_id = member_id.to_string();
+        member.member_epoch = 0;
+        member.previous_member_epoch = 0;
+        member.classic = None;
+        if let Some(instance_id) = &member.instance_id {
+            self.instance_to_member
+                .insert(instance_id.clone(), member_id.to_string());
+        }
+        if let Some(target) = self.target.per_member.remove(previous) {
+            self.target.per_member.insert(member_id.to_string(), target);
+        }
+        self.members.insert(member_id.to_string(), member);
+    }
+
+    /// Sets a static member that leaves for a while to epoch -2, as Kafka's
+    /// `consumerGroupStaticMemberGroupLeave` does. It keeps its assignment
+    /// and drops the partitions it had still to revoke.
+    pub fn release_static_member(&mut self, member_id: &str) {
+        self.rebalance_deadlines.remove(member_id);
+        if let Some(member) = self.members.get_mut(member_id) {
+            member.member_epoch = -2;
+            member.partitions_pending_revocation.clear();
+        }
+    }
+
     pub fn advance_member_epoch(&mut self, member_id: &str) {
         if let Some(m) = self.members.get_mut(member_id) {
             m.previous_member_epoch = m.member_epoch;
@@ -406,6 +447,39 @@ mod tests {
             g.fence_rebalance_timeouts(start + Duration::from_mins(1))
                 == vec!["classic".to_string()]
         );
+    }
+
+    /// A static replacement whose member id another member already holds
+    /// takes that id over: the other member and its instance id go, and the
+    /// instance index stays coherent.
+    #[test]
+    fn static_replacement_over_an_occupied_member_id_keeps_the_index_coherent() {
+        let mut g = GroupState::new("g");
+        let mut released = member("s1");
+        released.instance_id = Some("i1".into());
+        released.member_epoch = -2;
+        g.add_or_update_member(released);
+        let mut occupant = member("m1");
+        occupant.instance_id = Some("i2".into());
+        g.add_or_update_member(occupant);
+
+        g.replace_static_member("s1", "m1");
+
+        let mut members: Vec<(&str, Option<&str>, i32)> = g
+            .members
+            .values()
+            .map(|m| {
+                (
+                    m.member_id.as_str(),
+                    m.instance_id.as_deref(),
+                    m.member_epoch,
+                )
+            })
+            .collect();
+        members.sort_unstable();
+        assert!(members == vec![("m1", Some("i1"), 0)]);
+        assert!(g.current_member_for_instance("i1") == Some("m1"));
+        assert!(g.current_member_for_instance("i2") == None);
     }
 
     #[test]

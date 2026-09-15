@@ -152,7 +152,7 @@ fn re2j_unsupported_inline_flag(pattern: &str) -> Option<char> {
 /// against every topic name on every metadata refresh, where RE2J's and
 /// `regex`'s linear-time guarantee is what keeps a subscription from becoming
 /// a denial of service.
-fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
+pub(super) fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
     if re2j_unsupported_inline_flag(pattern).is_some() {
         return Err(format!(
             "SubscribedTopicRegex `{pattern}` is not a valid regular expression: \
@@ -208,6 +208,16 @@ pub(super) fn update_member_state(
         }
         if m.client_host != client.host {
             m.client_host = client.host.to_string();
+            member_metadata_changed = true;
+        }
+        // Kafka's `maybeUpdateRackId` and `maybeUpdateServerAssignorName`: an
+        // absent value keeps the stored one. Neither changes the group epoch.
+        if req.rack_id.is_some() && req.rack_id != m.rack_id {
+            m.rack_id.clone_from(&req.rack_id);
+            member_metadata_changed = true;
+        }
+        if req.server_assignor.is_some() && req.server_assignor != m.server_assignor {
+            m.server_assignor.clone_from(&req.server_assignor);
             member_metadata_changed = true;
         }
         // Kafka's `maybeUpdateRebalanceTimeoutMs(ofSentinel(..))`: -1 keeps the
