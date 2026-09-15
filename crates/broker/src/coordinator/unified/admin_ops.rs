@@ -79,7 +79,8 @@ impl GroupCoordinator {
     /// Drop a **classic**, **streams** or **share** group from the registry.
     ///
     /// The actor atomically verifies that a classic group is empty and appends
-    /// its durable k2 tombstone before removing it from the registry. The
+    /// the durable tombstones of its offsets and its k2 record before the
+    /// method removes it from the registry. The
     /// method returns `NonEmpty` when the group still has live members. It
     /// returns `NotFound` when the group is unknown or is a consumer group.
     /// # Errors

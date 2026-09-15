@@ -553,6 +553,7 @@ mod tests {
                     metadata: "retained".into(),
                     commit_timestamp_ms: i64::MAX,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 },
             )],
         );

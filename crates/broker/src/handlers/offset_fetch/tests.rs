@@ -61,6 +61,7 @@ async fn seed_committed_offset(
                 metadata: String::new(),
                 commit_timestamp_ms: crate::time_util::now_ms(),
                 expire_timestamp_ms: None,
+                topic_id: None,
             },
         )],
         reply: tx,
@@ -279,6 +280,7 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
                 metadata: String::new(),
                 commit_timestamp_ms: crate::time_util::now_ms(),
                 expire_timestamp_ms: None,
+                topic_id: None,
             },
         )],
     )
@@ -384,6 +386,7 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
                 metadata: String::new(),
                 commit_timestamp_ms: crate::time_util::now_ms(),
                 expire_timestamp_ms: None,
+                topic_id: None,
             },
         )],
     )

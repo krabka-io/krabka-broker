@@ -3,13 +3,14 @@
 //! Both remove state from a group and both must persist the result before they
 //! answer: a leave that empties a classic group bumps and rewrites its
 //! generation, a leave against an upgraded group tombstones the departed
-//! member's next-gen records, and a delete appends the classic k2 tombstone
-//! that stops the actor.
+//! member's next-gen records, and a delete appends the tombstones of the
+//! group's offsets and its classic k2 record, which stops the actor.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
-use krabka_protocol::owned::{
-    leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
+use krabka_protocol::{
+    owned::{leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse},
+    records::RecordBatch,
 };
 use tokio::sync::oneshot;
 
@@ -17,8 +18,8 @@ use super::{
     ActorServices, ErrorCode, ParkedWaiters, chrono_now_ms,
     downgrade::maybe_downgrade,
     member_state::run_reconcile,
-    pending_records::PendingRecords,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
+    retention::tombstone_batch,
     waiters::{drain_removed_classic_waiters, maybe_complete_classic},
 };
 use crate::{
@@ -170,6 +171,19 @@ fn resolve_consumer_classic_leave(
     (responses, removed)
 }
 
+/// The `ClassicDelete` mailbox arm: delete an empty classic group and every
+/// offset it holds, in one batch.
+///
+/// The batch follows Kafka's `GroupCoordinatorShard.deleteGroups`. It starts
+/// with an `OffsetCommit` tombstone for each committed offset
+/// (`OffsetMetadataManager.deleteAllOffsets`), then one for each key that an
+/// open transaction wrote and that has no committed offset, and ends with the
+/// k2 `GroupMetadata` tombstone. The open transaction keys include the ones a
+/// `TxnOffsetCommit` has reserved but not marked yet. Without the offset tombstones the commits stay
+/// live in `__consumer_offsets`, and a replay seeds the deleted group again
+/// from them.
+///
+/// Returns the actor's keep-running flag: a deleted group stops its actor.
 pub(super) async fn handle_classic_delete_message(
     group: &CoordinatorGroup,
     offsets_log: &dyn OffsetsLog,
@@ -184,11 +198,7 @@ pub(super) async fn handle_classic_delete_message(
         return true;
     }
     let group_id = state.group_id.clone();
-    let batch = PendingRecords {
-        classic_group_metadata_tombstone: true,
-        ..PendingRecords::default()
-    }
-    .to_batch(&group_id, chrono_now_ms());
+    let batch = delete_group_batch(group, chrono_now_ms());
     match offsets_log.append(&group_id, batch).await {
         Ok(()) => {
             let _ = reply.send(Ok(()));
@@ -200,4 +210,19 @@ pub(super) async fn handle_classic_delete_message(
             true
         }
     }
+}
+
+/// The records that delete `group`: its offset tombstones, then its group
+/// tombstone. The offset keys are sorted, so the batch does not depend on map
+/// order.
+fn delete_group_batch(group: &CoordinatorGroup, now_ms: i64) -> RecordBatch {
+    let keys: Vec<(String, i32)> = group
+        .committed_offsets
+        .keys()
+        .cloned()
+        .chain(group.unresolved_txn_keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    tombstone_batch(&group.group_id, &keys, Some(&group.kind), now_ms)
 }
