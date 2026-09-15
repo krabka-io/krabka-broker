@@ -181,6 +181,35 @@ fn image_leader(
         })
 }
 
+/// The refused row when `required_leader` names this node and this node does
+/// not lead the partition, or `None` when the read may go on.
+///
+/// The partition's installed local role must name this node, and the metadata
+/// image must not name another leader. The image can name a new leader before
+/// the supervisor installs the new role, and the installed role can lag the
+/// other way while a promotion prepares the log. Kafka checks the one
+/// partition state that its metadata publisher updates; this broker has two,
+/// so it checks both.
+pub(super) fn leader_refusal(
+    image: &krabka_metadata::MetadataImage,
+    (topic, partition_index): (&str, i32),
+    partition: &Partition,
+    required_leader: Option<krabka_metadata::NodeId>,
+) -> Option<PartitionData> {
+    let node_id = required_leader?;
+    let installed = partition
+        .current_leader
+        .load(std::sync::atomic::Ordering::Acquire)
+        == node_id.0;
+    let committed_elsewhere = image
+        .partition(topic, partition_index)
+        .is_some_and(|record| record.leader != node_id);
+    (!installed || committed_elsewhere).then(|| PartitionData {
+        current_leader: image_leader(image, topic, partition_index),
+        ..refused_read(partition_index, codes::NOT_LEADER_OR_FOLLOWER)
+    })
+}
+
 /// What a fetch may read from one local partition.
 #[derive(Clone, Copy)]
 pub(super) struct ReadRole<'a> {
@@ -221,16 +250,10 @@ pub(super) fn apply_epoch_checks(
         };
         return true;
     }
-    if let Some(node_id) = required_leader
-        && partition
-            .current_leader
-            .load(std::sync::atomic::Ordering::Acquire)
-            != node_id.0
+    if let Some(refused) =
+        leader_refusal(image, (topic, partition_index), partition, required_leader)
     {
-        *output = PartitionData {
-            current_leader: image_leader(image, topic, partition_index),
-            ..refused_read(partition_index, codes::NOT_LEADER_OR_FOLLOWER)
-        };
+        *output = refused;
         return true;
     }
     if !assigned_follower {
@@ -363,6 +386,14 @@ pub(super) async fn plan_partition_read(
     // fetch below v11, which has no client metadata.
     let fetch_only_leader = context.mode.1 || context.version < FIRST_CLIENT_METADATA_VERSION;
     let node_id = context.broker.config.node_id;
+    // A follower fetch holds the partition's replication-target read guard
+    // from the leader check through the follower progress update, as Kafka's
+    // `Partition.fetchRecords` holds `leaderIsrUpdateLock`. A leadership
+    // change takes the write guard, so it cannot land in between.
+    let _transition = match partition.as_ref() {
+        Some(partition) if context.mode.1 => Some(partition.lock_produce_transition().await),
+        _ => None,
+    };
     if let Some(partition) = partition.as_ref()
         && apply_epoch_checks(
             context.image,
@@ -660,5 +691,54 @@ mod tests {
             assert!(got == want, "{name}: got {got}, want {want}");
         }
         broker_handle.shutdown().await;
+    }
+
+    /// The leader check needs this node in the installed local role, and no
+    /// other leader in the committed image. `stretch_image` names node 1 as the
+    /// leader of `orders`-0.
+    #[tokio::test]
+    async fn a_read_needs_the_installed_role_and_the_image_to_name_this_node() {
+        let image = stretch_image(&[]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let partition = crate::broker::spawn_partition(
+            "orders".to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(dir.path(), LogConfig::default()).expect("open partition log"),
+            crate::log_dir_status::LogDirRegistry::default(),
+            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        );
+        let refused = |leader_id| super::PartitionData {
+            current_leader: super::LeaderIdAndEpoch {
+                leader_id,
+                leader_epoch: 0,
+                ..Default::default()
+            },
+            ..super::refused_read(0, crate::codes::NOT_LEADER_OR_FOLLOWER)
+        };
+        let cases = [
+            ("installed and committed", 1, 1, None),
+            (
+                "installed, committed to another node",
+                2,
+                2,
+                Some(refused(1)),
+            ),
+            ("committed, not installed yet", 1, 2, Some(refused(1))),
+        ];
+        for (name, node, installed, want) in cases {
+            partition
+                .install_replication_target(None, installed, 0)
+                .await;
+            let got = super::leader_refusal(
+                &image,
+                ("orders", 0),
+                &partition,
+                Some(krabka_metadata::NodeId(node)),
+            );
+            assert!(got == want, "{name}");
+        }
+        assert!(super::leader_refusal(&image, ("orders", 0), &partition, None) == None);
     }
 }

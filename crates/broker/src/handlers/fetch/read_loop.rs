@@ -11,7 +11,7 @@ use krabka_units::convert::ByteSizeExt as _;
 use tokio::sync::Notify;
 
 use super::{
-    plan::{PendingRead, ReadRole, apply_epoch_checks, required_leader},
+    plan::{PendingRead, ReadRole, apply_epoch_checks, leader_refusal, required_leader},
     read::{ReadRequest, do_read},
     remote::try_remote_read,
     request::EffectivePartition,
@@ -85,6 +85,13 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
             continue;
         };
         waits.push(arm_wait(index, part.append_notify.clone()));
+        // A leadership change fires `hw_advance_notify`. A fetch that only the
+        // leader may serve wakes on it, so a parked follower fetch answers
+        // `NOT_LEADER_OR_FOLLOWER` at once, as Kafka's `DelayedFetch` completes
+        // on a leader change.
+        if read.is_follower_fetch && read.fetch_only_leader {
+            waits.push(arm_wait(index, part.hw_advance_notify.clone()));
+        }
         // KIP-392: a consumer reading from a follower becomes unblocked
         // when the follower's HW advances (via set_follower_hw), not only
         // on raw append. Follower (inter-broker) fetches don't need this.
@@ -145,6 +152,18 @@ pub(super) async fn execute_pending_reads(
         let Some(partition) = read.partition.clone() else {
             continue;
         };
+        // Check the leader again right before the first read, so a leadership
+        // change after planning does not serve a follower fetch or an old
+        // consumer fetch from this replica.
+        if let Some(refused) = leader_refusal(
+            &broker.controller.current_image(),
+            (&read.topic_name, read.partition_index),
+            &partition,
+            required_leader(read.fetch_only_leader, broker.config.node_id, &partition),
+        ) {
+            read.out = refused;
+            continue;
+        }
         let started = std::time::Instant::now();
         state.bytes[index] = do_read(
             &partition,
@@ -660,6 +679,79 @@ mod tests {
         completed.expect("long poll");
 
         assert!(pending[0].out.error_code == crate::codes::OFFSET_OUT_OF_RANGE);
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `DelayedFetch.tryComplete` completes a parked follower fetch
+    /// when the partition's leader changes. A follower fetch parked below its
+    /// `min_bytes` floor on a partition that then moves to another leader
+    /// answers `NOT_LEADER_OR_FOLLOWER` at once, not after `max_wait_ms`.
+    #[tokio::test]
+    async fn a_leader_change_completes_a_parked_follower_fetch() {
+        const TOPIC: &str = "long-poll-leader-change";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
+            dir.path().to_path_buf(),
+        ))
+        .await
+        .expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+        let part_dir = dir.path().join(format!("{TOPIC}-0"));
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let part = crate::broker::spawn_partition(
+            TOPIC.to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+        let node_id = broker.config.node_id.0;
+        part.install_replication_target(None, node_id, 0).await;
+        let request = super::EffectivePartition {
+            partition: 0,
+            current_leader_epoch: -1,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            partition_max_bytes: 1024,
+        };
+        let mut pending = [super::PendingRead::planned(
+            TOPIC,
+            WireUuid::ZERO,
+            &request,
+            (false, true),
+            Some(std::sync::Arc::clone(&part)),
+            super::PartitionData {
+                partition_index: 0,
+                ..Default::default()
+            },
+        )];
+
+        let waits = super::arm_waits(&pending);
+        let phases = RequestPhases::default();
+        let mut state = state_for(&pending, 4096, 30_000);
+        let demoted = std::sync::Arc::clone(&part);
+        let demote = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            demoted
+                .install_replication_target(None, node_id + 1, 0)
+                .await;
+        });
+        let completed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            super::long_poll_then_reread(&broker, &mut pending, waits, &mut state, &phases),
+        )
+        .await
+        .expect("the leader change completes the long poll");
+        completed.expect("long poll");
+        demote.await.expect("demote task");
+
+        assert!(
+            pending[0].out
+                == super::super::plan::refused_read(0, crate::codes::NOT_LEADER_OR_FOLLOWER)
+        );
         broker_handle.shutdown().await;
     }
 
