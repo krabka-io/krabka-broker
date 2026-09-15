@@ -1781,6 +1781,12 @@ async fn a_static_member_follows_kafka_static_membership() {
             ],
         ),
         (
+            "a replacement takes over a member id that another member holds",
+            vec![join("m2", "i2"), beat("m1", -2, "i1"), join("m2", "i1")],
+            assigned("m2", 3),
+            vec![("m2".to_string(), 3, vec![0])],
+        ),
+        (
             "a static member leaves for good",
             vec![beat("m1", -1, "i1")],
             StreamsGroupHeartbeatResponse {

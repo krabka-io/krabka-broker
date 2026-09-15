@@ -735,12 +735,19 @@ fn static_member_error(
 /// Kafka's static member replacement: the joining member `member_id` takes
 /// the place of the released member `previous`, with its assignment, its
 /// target and its metadata, at epoch 0. The group epoch does not change.
+///
+/// Kafka writes the copy over any member that already holds `member_id`. That
+/// member goes first, with its target, so that it leaves nothing of its own
+/// behind and the group reassigns its tasks.
 fn replace_static_member(actor: &mut ActorState, previous: &str, member_id: &str) {
     let state = &mut actor.state;
     let Some(mut member) = state.members.remove(previous) else {
         return;
     };
     state.rebalance_deadlines.remove(previous);
+    if member_id != previous {
+        state.remove_member(member_id);
+    }
     member.member_id = member_id.to_string();
     member.member_epoch = 0;
     member.previous_member_epoch = 0;
@@ -749,8 +756,13 @@ fn replace_static_member(actor: &mut ActorState, previous: &str, member_id: &str
         &mut state.target.standby,
         &mut state.target.warmup,
     ] {
-        if let Some(tasks) = role.remove(previous) {
-            role.insert(member_id.to_string(), tasks);
+        match role.remove(previous) {
+            Some(tasks) => {
+                role.insert(member_id.to_string(), tasks);
+            }
+            None => {
+                role.remove(member_id);
+            }
         }
     }
     state.members.insert(member_id.to_string(), member);
