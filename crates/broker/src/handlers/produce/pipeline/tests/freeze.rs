@@ -233,6 +233,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 part_data: FramedPartition { index: 0, payload },
                 topic_compression: None,
                 timestamps: TimestampPolicy::default(),
+                compacted_topic: false,
                 max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 schema: None,
