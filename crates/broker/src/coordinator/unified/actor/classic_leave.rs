@@ -178,7 +178,8 @@ fn resolve_consumer_classic_leave(
 /// with an `OffsetCommit` tombstone for each committed offset
 /// (`OffsetMetadataManager.deleteAllOffsets`), then one for each key that an
 /// open transaction wrote and that has no committed offset, and ends with the
-/// k2 `GroupMetadata` tombstone. Without the offset tombstones the commits stay
+/// k2 `GroupMetadata` tombstone. The open transaction keys include the ones a
+/// `TxnOffsetCommit` has reserved but not marked yet. Without the offset tombstones the commits stay
 /// live in `__consumer_offsets`, and a replay seeds the deleted group again
 /// from them.
 ///
@@ -215,11 +216,11 @@ pub(super) async fn handle_classic_delete_message(
 /// tombstone. The offset keys are sorted, so the batch does not depend on map
 /// order.
 fn delete_group_batch(group: &CoordinatorGroup, now_ms: i64) -> RecordBatch {
-    let offsets = group.offsets();
-    let keys: Vec<(String, i32)> = offsets
-        .committed
-        .into_keys()
-        .chain(offsets.pending_txn)
+    let keys: Vec<(String, i32)> = group
+        .committed_offsets
+        .keys()
+        .cloned()
+        .chain(group.unresolved_txn_keys())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();

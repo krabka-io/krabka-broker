@@ -157,6 +157,8 @@ pub enum GroupActorMessage {
         keys: Vec<(String, i32)>,
         reply: oneshot::Sender<()>,
     },
+    /// Reserve or release the keys a `TxnOffsetCommit` is about to append.
+    TxnOffsetReservation(TxnOffsetReservation),
     /// Resolve `producer_id`'s transaction, whose marker is at offsets-log
     /// position `resolved_through`: publish `committed` and drop the
     /// producer's pending marks in the same turn. An abort marker sends an
@@ -193,6 +195,33 @@ pub enum GroupActorMessage {
     TestEmptySinceMs {
         reply: oneshot::Sender<Option<i64>>,
     },
+}
+
+/// A `TxnOffsetCommit` reservation: the keys of `producer_id` that the handler
+/// reserves before its transactional append, or releases after a failed one.
+///
+/// The reservation is what orders the append against `DeleteGroups` on the
+/// actor: a delete that runs after the reservation tombstones the keys, and a
+/// delete that runs before it stops the actor, so the reservation fails and
+/// nothing is appended.
+#[derive(Debug)]
+pub struct TxnOffsetReservation {
+    pub producer_id: i64,
+    pub keys: Vec<(String, i32)>,
+    /// `true` reserves the keys, `false` releases them.
+    pub reserve: bool,
+    pub reply: oneshot::Sender<()>,
+}
+
+impl TxnOffsetReservation {
+    pub(super) fn apply(self, group: &mut CoordinatorGroup) {
+        if self.reserve {
+            group.reserve_txn_offsets(self.producer_id, self.keys);
+        } else {
+            group.release_txn_offsets(self.producer_id, &self.keys);
+        }
+        let _ = self.reply.send(());
+    }
 }
 
 /// Structured `JoinGroup` result for the handler, which encodes it for the

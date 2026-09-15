@@ -183,6 +183,10 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
+        GroupActorMessage::TxnOffsetReservation(reservation) => {
+            reservation.apply(group);
+            true
+        }
         GroupActorMessage::ResolveTxnOffsets {
             producer_id,
             resolved_through,
