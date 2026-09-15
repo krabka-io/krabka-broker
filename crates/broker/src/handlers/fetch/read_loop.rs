@@ -254,6 +254,8 @@ fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
             current_leader_epoch: read.current_leader_epoch,
             last_fetched_epoch: read.last_fetched_epoch,
             fetch_offset: read.fetch_offset,
+            // The epoch recheck reads no log start.
+            log_start_offset: -1,
             partition_max_bytes: read.max_bytes,
         };
         let mut fresh = PartitionData {
@@ -544,6 +546,7 @@ mod tests {
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
             fetch_offset: 0,
+            log_start_offset: -1,
             partition_max_bytes: 1024,
         };
         let mut pending = [super::PendingRead::planned(
@@ -614,6 +617,7 @@ mod tests {
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
             fetch_offset: 0,
+            log_start_offset: -1,
             partition_max_bytes: 1024,
         };
         let mut pending = [super::PendingRead::planned(
@@ -738,6 +742,7 @@ mod tests {
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
             fetch_offset: 0,
+            log_start_offset: -1,
             partition_max_bytes: i32::try_from(one_batch * 8).expect("small budget"),
         };
         let pending = vec![super::PendingRead::planned(
@@ -798,6 +803,7 @@ mod tests {
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
             fetch_offset: 0,
+            log_start_offset: -1,
             partition_max_bytes: 1024,
         };
         let mut pending = [super::PendingRead::planned(

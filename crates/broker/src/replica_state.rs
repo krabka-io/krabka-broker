@@ -27,6 +27,11 @@ pub(crate) struct ReplicaState {
     pub(crate) isr: HashSet<NodeId>,
     replicas: HashSet<NodeId>,
     pub(crate) per_follower: HashMap<NodeId, FollowerStats>,
+    /// KIP-107: the log start offset each follower reported in its last
+    /// Fetch. A replica with no entry has not fetched since this broker
+    /// became its leader, which Kafka's `ReplicaState` holds as
+    /// `UNKNOWN_OFFSET` (-1).
+    follower_log_start: HashMap<NodeId, Offset>,
     pub(crate) hw: Offset,
     pub(crate) current_leader_epoch: LeaderEpoch,
     leader: Option<NodeId>,
@@ -38,6 +43,7 @@ impl ReplicaState {
             isr: HashSet::new(),
             replicas: HashSet::new(),
             per_follower: HashMap::new(),
+            follower_log_start: HashMap::new(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
             leader: None,
@@ -83,12 +89,42 @@ impl ReplicaState {
             }
         }
         self.per_follower.retain(|k, _| self.replicas.contains(k));
+        self.follower_log_start
+            .retain(|k, _| self.replicas.contains(k) && *k != leader);
     }
 
     pub(crate) fn reset_for_leader(&mut self, leader: NodeId) {
         self.leader = Some(leader);
         self.replicas.insert(leader);
         self.per_follower.clear();
+        self.follower_log_start.clear();
+    }
+
+    /// Record the log start offset a follower's Fetch reported, as Kafka's
+    /// `Replica.updateFetchStateOrThrow` does.
+    pub(crate) fn record_follower_log_start(&mut self, follower: NodeId, log_start: Offset) {
+        if self.leader != Some(follower) {
+            self.follower_log_start.insert(follower, log_start);
+        }
+    }
+
+    /// Kafka's `Partition.lowWatermarkIfLeader`: the lowest log start offset
+    /// of the leader and of every other replica whose broker is alive.
+    ///
+    /// `alive` holds the brokers that are registered and not fenced. A replica
+    /// that has not fetched since this broker became leader counts as -1, so
+    /// a live replica that never reported holds the low watermark down.
+    pub(crate) fn low_watermark(&self, leader_log_start: Offset, alive: &HashSet<u64>) -> Offset {
+        self.replicas
+            .iter()
+            .filter(|replica| self.leader != Some(**replica) && alive.contains(&replica.0))
+            .map(|replica| {
+                self.follower_log_start
+                    .get(replica)
+                    .copied()
+                    .unwrap_or(Offset(-1))
+            })
+            .fold(leader_log_start, std::cmp::min)
     }
 
     pub(crate) fn leader_and_replicas(&self) -> (Option<NodeId>, &HashSet<NodeId>) {
@@ -206,6 +242,7 @@ mod tests {
             isr: HashSet::new(),
             replicas: HashSet::new(),
             per_follower: HashMap::new(),
+            follower_log_start: HashMap::new(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
             leader: None,
@@ -236,6 +273,7 @@ mod tests {
             per_follower: [(NodeId(2), seeded), (NodeId(3), seeded)]
                 .into_iter()
                 .collect(),
+            follower_log_start: HashMap::new(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
             leader: Some(NodeId(1)),
@@ -529,6 +567,71 @@ mod tests {
         let t_caught_out_of_isr = t_lagging + Duration::from_millis(10);
         s.update_follower_leo(NodeId(3), o(10), o(10), t_caught_out_of_isr);
         assert!(s.per_follower.get(&NodeId(3)).unwrap().last_caught_up == t_caught_out_of_isr);
+    }
+
+    /// Kafka's `Partition.lowWatermarkIfLeader` over a leader at log start
+    /// 50 and followers 2 and 3.
+    #[test]
+    fn low_watermark_is_the_lowest_live_replica_log_start() {
+        let alive_all: HashSet<u64> = [1, 2, 3].into_iter().collect();
+        let only_2: HashSet<u64> = [1, 2].into_iter().collect();
+        for (label, reported, alive, expected) in [
+            ("no follower reported yet", vec![], &alive_all, -1),
+            ("one follower reported", vec![(2, 50)], &alive_all, -1),
+            (
+                "both followers caught up",
+                vec![(2, 50), (3, 60)],
+                &alive_all,
+                50,
+            ),
+            ("a follower behind", vec![(2, 40), (3, 60)], &alive_all, 40),
+            ("a dead follower does not count", vec![(2, 50)], &only_2, 50),
+            (
+                "the leader's own start is the ceiling",
+                vec![(2, 70), (3, 80)],
+                &alive_all,
+                50,
+            ),
+        ] {
+            let mut s = fresh();
+            s.install_isr(
+                &[NodeId(1), NodeId(2), NodeId(3)],
+                &[NodeId(1), NodeId(2), NodeId(3)],
+                NodeId(1),
+                now(),
+            );
+            for (follower, log_start) in reported {
+                s.record_follower_log_start(NodeId(follower), o(log_start));
+            }
+            assert2::check!(s.low_watermark(o(50), alive) == o(expected), "{label}");
+        }
+    }
+
+    /// A new leadership forgets what the followers reported to the old one,
+    /// and a reassignment forgets a replica that left.
+    #[test]
+    fn follower_log_starts_do_not_outlive_the_leadership_or_the_assignment() {
+        let alive: HashSet<u64> = [1, 2, 3].into_iter().collect();
+        let mut s = fresh();
+        let all = [NodeId(1), NodeId(2), NodeId(3)];
+        s.install_isr(&all, &all, NodeId(1), now());
+        s.record_follower_log_start(NodeId(2), o(50));
+        s.record_follower_log_start(NodeId(3), o(50));
+        s.install_isr(
+            &[NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(2)],
+            NodeId(1),
+            now(),
+        );
+        assert2::check!(s.low_watermark(o(50), &alive) == o(50));
+        s.reset_for_leader(NodeId(1));
+        s.install_isr(
+            &[NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(2)],
+            NodeId(1),
+            now(),
+        );
+        assert2::check!(s.low_watermark(o(50), &alive) == o(-1));
     }
 }
 
