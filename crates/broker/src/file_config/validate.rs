@@ -345,6 +345,7 @@ mod tests {
                 crate::config::StaticConfigOrigins {
                     txn_id_expiration: false,
                     txn_id_expiration_cleanup_interval: false,
+                    topic_creation: crate::config::TopicCreationOrigins::default(),
                 },
             ),
             (
@@ -353,6 +354,7 @@ mod tests {
                 crate::config::StaticConfigOrigins {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: false,
+                    topic_creation: crate::config::TopicCreationOrigins::default(),
                 },
             ),
             (
@@ -362,6 +364,19 @@ mod tests {
                 crate::config::StaticConfigOrigins {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: true,
+                    topic_creation: crate::config::TopicCreationOrigins::default(),
+                },
+            ),
+            (
+                "the KIP-464 topic-creation defaults supplied, at Kafka's own default value",
+                "[runtime]\nnum_partitions = 1\ndefault_replication_factor = 1\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: false,
+                    txn_id_expiration_cleanup_interval: false,
+                    topic_creation: crate::config::TopicCreationOrigins {
+                        num_partitions: true,
+                        default_replication_factor: true,
+                    },
                 },
             ),
         ] {

@@ -31,9 +31,10 @@ use super::{
     SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
     broker_scope::{
         BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS, CONNECTIONS_MAX_REAUTH_MS,
-        OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
-        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
-        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
+        DEFAULT_REPLICATION_FACTOR, NUM_PARTITIONS, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+        OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+        TRANSACTIONAL_ID_EXPIRATION_MS,
     },
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
@@ -190,8 +191,9 @@ impl ConfigKey {
     ///
     /// The broker synthesises the rest: `write.freeze` comes from the freeze
     /// registry, and `node.id`, the two KIP-211 retention keys, the two
-    /// KIP-98 transactional-id expiry keys and the idle window come from the
-    /// broker's own static configuration, which no metadata record holds.
+    /// KIP-98 transactional-id expiry keys, the two KIP-464 topic-creation
+    /// defaults and the idle window come from the broker's own static
+    /// configuration, which no metadata record holds.
     pub(crate) fn is_stored(&self) -> bool {
         !matches!(
             self.name,
@@ -203,6 +205,8 @@ impl ConfigKey {
                 | CONNECTIONS_MAX_REAUTH_MS
                 | TRANSACTIONAL_ID_EXPIRATION_MS
                 | TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
+                | NUM_PARTITIONS
+                | DEFAULT_REPLICATION_FACTOR
         )
     }
 
@@ -932,6 +936,30 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Long,
             Some("0"),
             "How long an authenticated SASL session may live before the client must re-authenticate in band. Zero disables re-authentication. The process reads it at startup, so no alter path can change it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-464"),
+        read_only: true,
+        ..key(
+            NUM_PARTITIONS,
+            ConfigScope::Broker,
+            ConfigType::Int,
+            Some("1"),
+            "The partition count `CreateTopics` gives a topic that asks for `num_partitions = -1`, which is what `kafka-topics --create` sends without `--partitions`. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-464"),
+        read_only: true,
+        ..key(
+            DEFAULT_REPLICATION_FACTOR,
+            ConfigScope::Broker,
+            ConfigType::Int,
+            Some("1"),
+            "The replication factor `CreateTopics` gives a topic that asks for `replication_factor = -1`, which is what `kafka-topics --create` sends without `--replication-factor`. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
             ValueCheck::NotAltered,
         )
     },
