@@ -107,7 +107,7 @@ fn completion_decision_accepts_only_the_exact_prepared_snapshot() {
     );
 }
 
-fn image(leader: NodeId) -> MetadataImage {
+fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: bootstrap::TOPIC.to_owned(),
@@ -121,6 +121,7 @@ fn image(leader: NodeId) -> MetadataImage {
         leader,
         replicas: vec![leader],
         isr: vec![leader],
+        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
         ..Default::default()
     }));
     image
@@ -170,13 +171,16 @@ async fn coordinator(
         krabka_units::mebibytes(1),
     );
     coordinator
-        .refresh_leader_partitions(&image(NodeId(1)))
+        .refresh_leader_partitions(&image(NodeId(1), 0))
         .await;
     coordinator
         .put(entry, TxnVersion::Verified)
         .await
         .expect("seed __transaction_state");
-    coordinator.refresh_leader_partitions(&image(leader)).await;
+    // The election of `leader` comes at a higher leader epoch.
+    coordinator
+        .refresh_leader_partitions(&image(leader, 1))
+        .await;
     (coordinator, dir)
 }
 
@@ -265,7 +269,7 @@ async fn recovery_queues_every_prepared_transaction_for_completion() {
     assert!(coordinator.take_completion_requests().is_empty());
 
     coordinator
-        .recover(&image(NodeId(1)))
+        .recover(&image(NodeId(1), 0))
         .await
         .expect("replay __transaction_state");
 

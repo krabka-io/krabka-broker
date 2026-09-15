@@ -196,10 +196,8 @@ mod tests {
     async fn install_entry(coordinator: &TxnCoordinator, entry: TxnEntry) {
         let coordinator_partition = coordinator.partition_for(&entry.transactional_id);
         coordinator
-            .leader_partitions
-            .write()
-            .await
-            .insert(coordinator_partition);
+            .lead_state_partition_for_test(coordinator_partition)
+            .await;
         coordinator
             .state
             .insert(entry.transactional_id.clone(), Arc::new(Mutex::new(entry)));
@@ -247,10 +245,8 @@ mod tests {
                 == crate::codes::NOT_COORDINATOR
         );
         coordinator
-            .leader_partitions
-            .write()
-            .await
-            .insert(coordinator.partition_for("tid-a"));
+            .lead_state_partition_for_test(coordinator.partition_for("tid-a"))
+            .await;
         check!(
             coordinator
                 .register_partitions(
