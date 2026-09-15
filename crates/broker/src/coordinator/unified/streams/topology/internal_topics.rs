@@ -130,6 +130,14 @@ pub async fn ensure_internal_topics(
         if spec.partitions <= 0 {
             continue;
         }
+        // The client names these topics in its topology. Kafka's
+        // `ConfiguredInternalTopic` refuses a name that `Topic.validate`
+        // refuses, and the name becomes part of a partition directory path,
+        // so such a topic is never created. It stays in the missing list.
+        if let Err(invalid) = krabka_log::topic_name::validate_topic_name(&spec.name) {
+            tracing::warn!(topic = %spec.name, error = %invalid, "refusing to create streams internal topic");
+            continue;
+        }
         if brokers.is_empty() {
             return Err(BrokerError::Txn(format!(
                 "no brokers registered; cannot create internal topic '{}'",

@@ -92,8 +92,16 @@ pub(crate) fn is_internal_topic(config: &BrokerConfig, name: &str) -> bool {
 ///
 /// # Errors
 ///
-/// Returns `Err` when `name` does not start with [`INTERNAL_TOPIC_PREFIX`].
+/// Returns `Err` when `name` fails Kafka's topic-name rules
+/// ([`krabka_log::topic_name::validate_topic_name`]), because the broker
+/// creates a partition directory from it, or when `name` does not start with
+/// [`INTERNAL_TOPIC_PREFIX`].
 pub(crate) fn validate_audit_topic_name(name: &str) -> Result<(), BrokerError> {
+    if let Err(invalid) = krabka_log::topic_name::validate_topic_name(name) {
+        return Err(BrokerError::InvalidRuntimeConfig(format!(
+            "audit_topic {name:?}: {invalid}"
+        )));
+    }
     if name.starts_with(INTERNAL_TOPIC_PREFIX) {
         return Ok(());
     }
@@ -199,7 +207,7 @@ mod tests {
     fn an_audit_topic_outside_the_convention_is_rejected() {
         check!(validate_audit_topic_name(crate::config::DEFAULT_AUDIT_TOPIC).is_ok());
         check!(validate_audit_topic_name("__house_audit").is_ok());
-        for name in ["audit", "_audit", ""] {
+        for name in ["audit", "_audit", "", "__../x", "__a/b"] {
             assert!(let Err(error) = validate_audit_topic_name(name), "{name}");
             check!(error.to_string().contains("audit_topic"), "{name}");
         }

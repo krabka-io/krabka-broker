@@ -276,6 +276,9 @@ pub(super) fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
     // concurrent replicators for the same partition can never both build it.
     cfg.partitions
         .materialize_if_vacant(&cfg.topic, cfg.partition, || {
+            // A name that fails the check would put the directory outside
+            // the log directory.
+            krabka_log::topic_name::validate_topic_name(&cfg.topic).map_err(|e| e.to_string())?;
             let dir =
                 crate::log_dir::place_partition_dir(&cfg.log_dirs, &cfg.topic, cfg.partition.get());
             std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
