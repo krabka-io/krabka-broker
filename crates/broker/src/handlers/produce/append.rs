@@ -318,6 +318,12 @@ async fn finalize_ack(
         return AppendOutcome::Answered(out);
     };
     commit.base_offset = base_offset;
+    // Kafka's retained `BatchMetadata.timestamp` is the batch's max timestamp
+    // after the log stamped it, which is the append time on a `LogAppendTime`
+    // topic. A duplicate answers with it.
+    if let Some(stamped) = log_append_time_ms {
+        commit.max_timestamp = stamped;
+    }
     // Unwrap the assigned `Offset` into the wire `base_offset` response field.
     out.base_offset = base_offset.0;
     // KIP-32's `logAppendTimeMs`. Kafka fills it from

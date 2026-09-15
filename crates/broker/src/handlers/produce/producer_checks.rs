@@ -78,16 +78,20 @@ pub(super) async fn handle_duplicate(
     if batch.producer_id < 0 {
         return DedupOutcome::Append;
     }
-    let decision = producer_state
-        .check(
+    let crate::producer_state::Checked {
+        decision,
+        duplicate,
+    } = producer_state
+        .check_batch(
             topic_name,
             krabka_ids::PartitionIndex(partition_index),
-            batch.producer_id,
-            batch.producer_epoch,
-            batch.base_sequence,
-            batch.last_offset_delta,
+            (batch.producer_id, batch.producer_epoch),
+            (batch.base_sequence, batch.last_offset_delta),
         )
         .await;
+    // Kafka's `UnifiedLog.append` answers a duplicate with the retained
+    // batch's offsets and puts the batch's timestamp in `logAppendTime`.
+    let duplicate_timestamp = duplicate.map_or(super::NO_LOG_APPEND_TIME, |batch| batch.timestamp);
     // A recognized retry is an accepted produce, so its row carries the
     // partition's real log start offset just like a fresh append's does. The
     // two refusals below happen before any append and keep the
@@ -95,7 +99,7 @@ pub(super) async fn handle_duplicate(
     // `apache/kafka:4.3.1` on a partition whose low watermark `DeleteRecords`
     // had moved off 0 answered the duplicate with that same real value, not
     // with the sentinel.
-    let (error_code, base_offset, log_start_offset) = match decision {
+    let (error_code, base_offset, log_append_time_ms, log_start_offset) = match decision {
         crate::producer_state::Decision::Duplicate { base_offset } => {
             let Some(target) = durability_frontier(base_offset, batch.last_offset_delta) else {
                 return DedupOutcome::Answered(PartitionProduceResponse {
@@ -110,22 +114,30 @@ pub(super) async fn handle_duplicate(
                     response: PartitionProduceResponse {
                         index: partition_index,
                         base_offset,
+                        log_append_time_ms: duplicate_timestamp,
                         log_start_offset: partition.log_start_offset().0,
                         ..Default::default()
                     },
                     target,
                 };
             }
-            (codes::NONE, base_offset, partition.log_start_offset().0)
+            (
+                codes::NONE,
+                base_offset,
+                duplicate_timestamp,
+                partition.log_start_offset().0,
+            )
         }
         crate::producer_state::Decision::OutOfOrder => (
             codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
             INVALID_OFFSET,
+            super::NO_LOG_APPEND_TIME,
             INVALID_OFFSET,
         ),
         crate::producer_state::Decision::Fenced => (
             codes::INVALID_PRODUCER_EPOCH,
             INVALID_OFFSET,
+            super::NO_LOG_APPEND_TIME,
             INVALID_OFFSET,
         ),
         crate::producer_state::Decision::Append => return DedupOutcome::Append,
@@ -134,6 +146,7 @@ pub(super) async fn handle_duplicate(
         index: partition_index,
         error_code,
         base_offset,
+        log_append_time_ms,
         log_start_offset,
         ..Default::default()
     })
@@ -463,5 +476,153 @@ mod tests {
             resp.error_code == crate::codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
             "HW 2 < target 3 must time out; a `-1` mutant would target offset 1 and return NONE"
         );
+    }
+
+    /// Kafka's `ProducerStateEntry` retains a producer's last five batches
+    /// (`NUM_BATCHES_TO_RETAIN`), and `UnifiedLog.append` answers a retry of
+    /// any of them as a duplicate: `NONE`, the original base offset, and the
+    /// retained batch timestamp in `logAppendTime`. A retry of a batch that
+    /// left the five is out of order.
+    #[tokio::test]
+    async fn a_retry_of_any_of_the_last_five_batches_is_a_duplicate() {
+        use krabka_protocol::owned::produce_response::PartitionProduceResponse;
+
+        const PRODUCER_ID: i64 = 4242;
+
+        let dir = tempfile::tempdir().unwrap();
+        let image = Arc::new(image_with_topic("orders", &[1]));
+        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
+            krabka_audit::NodeId(1),
+            Arc::clone(&partitions),
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            50,
+            krabka_units::mebibytes(1),
+        ));
+        let producer_state = Arc::new(crate::producer_state::ProducerState::new());
+        let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
+        std::fs::create_dir_all(&part_dir).unwrap();
+        let part = crate::broker::spawn_partition(
+            "orders".to_string(),
+            krabka_ids::PartitionIndex(0),
+            dir.path().to_path_buf(),
+            krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap(),
+            log_dir_status.clone(),
+            Arc::clone(&producer_state),
+            false,
+        );
+        let record = image.partition("orders", 0).expect("partition");
+        part.install_replication_target(Some(Uuid::nil()), record.leader.0, record.leader_epoch.0)
+            .await;
+        part.install_isr(&record.isr, &record.replicas, record.leader)
+            .await;
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
+
+        // Batch `n` holds two records with sequences `2n` and `2n + 1`, and
+        // the max timestamp `1000 + n`.
+        let produce = |batch_index: i32| {
+            let payload = encode_batch(&RecordBatch {
+                producer_id: PRODUCER_ID,
+                producer_epoch: 0,
+                base_sequence: batch_index * 2,
+                last_offset_delta: 1,
+                max_timestamp: 1000 + i64::from(batch_index),
+                records: (0..2)
+                    .map(|offset_delta| Record {
+                        offset_delta,
+                        timestamp_delta: i64::from(batch_index),
+                        value: Some(Bytes::from_static(b"v")),
+                        ..Default::default()
+                    })
+                    .collect(),
+                base_timestamp: 1000,
+                ..Default::default()
+            });
+            let partitions = &partitions;
+            let txn_coordinator = &txn_coordinator;
+            let producer_state = &producer_state;
+            let log_dir_status = &log_dir_status;
+            let image = &image;
+            let metrics = &metrics;
+            async move {
+                process_partition(
+                    PartitionInput {
+                        schema: None,
+                        part_data: FramedPartition {
+                            index: 0,
+                            payload: PartitionPayload::Slice(payload),
+                        },
+                        topic_compression: None,
+                        timestamps: TimestampPolicy::default(),
+                        max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
+                        delivery: None,
+                        topic_name: "orders".into(),
+                        freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
+                        txn_id_denied: false,
+                        acks: 1,
+                        timeout: Duration::from_secs(5),
+                    },
+                    PartitionServices {
+                        schema_validator: None,
+                        partitions,
+                        txn_coordinator,
+                        producer_state,
+                        log_dir_status,
+                        image,
+                        broker_policy: BrokerProducePolicy {
+                            node_id: krabka_audit::NodeId(1),
+                            default_min_insync_replicas: 1,
+                            is_witness: false,
+                        },
+                        record_decompression_policy: RecordDecompressionPolicy::default(),
+                        metrics,
+                        phases: &crate::metrics::RequestPhases::default(),
+                    },
+                )
+                .await
+                .expect("process partition")
+                .expect_done()
+            }
+        };
+
+        for batch_index in 0..5 {
+            let appended = produce(batch_index).await;
+            assert!(
+                appended
+                    == PartitionProduceResponse {
+                        index: 0,
+                        base_offset: i64::from(batch_index) * 2,
+                        log_append_time_ms: -1,
+                        log_start_offset: 0,
+                        ..Default::default()
+                    }
+            );
+        }
+
+        let duplicate = |batch_index: i32| PartitionProduceResponse {
+            index: 0,
+            base_offset: i64::from(batch_index) * 2,
+            log_append_time_ms: 1000 + i64::from(batch_index),
+            log_start_offset: 0,
+            ..Default::default()
+        };
+        for batch_index in 0..5 {
+            let replayed = produce(batch_index).await;
+            assert!(replayed == duplicate(batch_index), "batch {batch_index}");
+        }
+
+        // A sixth batch pushes batch 0 out of the five.
+        produce(5).await;
+        let out_of_order = PartitionProduceResponse {
+            index: 0,
+            error_code: crate::codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
+            base_offset: -1,
+            log_start_offset: -1,
+            ..Default::default()
+        };
+        let replays = [produce(0).await, produce(1).await, produce(5).await];
+        assert!(replays == [out_of_order, duplicate(1), duplicate(5)]);
     }
 }
