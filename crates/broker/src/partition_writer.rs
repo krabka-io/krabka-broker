@@ -178,7 +178,7 @@ pub async fn run_with_sequencer(
                     (&topic, partition),
                     &log,
                     (&log_dir, &log_dir_status),
-                    &producer_state,
+                    (&producer_state, &replica_state),
                     batch,
                     ack,
                     &append_notify,

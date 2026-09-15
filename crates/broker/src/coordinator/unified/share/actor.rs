@@ -24,6 +24,7 @@ use tokio::{
 
 mod admin_offsets;
 mod assignment;
+mod delete;
 mod describe;
 mod heartbeat;
 mod records;
@@ -73,6 +74,11 @@ pub enum ShareGroupActorMessage {
     DeleteOffsets {
         requests: Vec<DeleteTopic>,
         reply: oneshot::Sender<Result<Vec<i16>, i16>>,
+    },
+    /// `DeleteGroups`. On success the actor stops, and the coordinator drops
+    /// its registry entries.
+    Delete {
+        reply: oneshot::Sender<Result<(), crate::coordinator::DeleteGroupError>>,
     },
     Seed(super::super::ShareGroupSeed),
     Shutdown(oneshot::Sender<()>),
@@ -163,6 +169,14 @@ async fn actor_loop(
                     ShareGroupActorMessage::DeleteOffsets { requests, reply } => {
                         let result = delete_offsets(&mut state, &coordinator, requests).await;
                         let _ = reply.send(result);
+                    }
+                    ShareGroupActorMessage::Delete { reply } => {
+                        let result = delete::delete_group(&mut state, &*offsets_log, &coordinator).await;
+                        let deleted = result.is_ok();
+                        let _ = reply.send(result);
+                        if deleted {
+                            break;
+                        }
                     }
                     ShareGroupActorMessage::Seed(seed) => {
                         apply_seed(&mut state, seed);

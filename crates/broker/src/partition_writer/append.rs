@@ -65,6 +65,7 @@ fn at_offset(base_offset: Offset) -> AppendedBatch {
 /// sequential base offsets, so the function keeps the order across the group.
 fn append_produce_batch(
     log: &Mutex<Log>,
+    high_watermark: Option<Offset>,
     datas: Vec<ProduceData>,
 ) -> (
     Vec<Result<AppendedBatch, crate::error::BrokerError>>,
@@ -72,6 +73,9 @@ fn append_produce_batch(
     Vec<krabka_log::ProducerSnapshotEntry>,
 ) {
     let mut guard = lock_log(log);
+    if let Some(high_watermark) = high_watermark {
+        guard.release_replicated_transactions(high_watermark);
+    }
     let target = guard.config_snapshot().compression_type;
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
@@ -125,6 +129,7 @@ fn append_produce_batch(
 fn append_produce_batch_at(
     log: &Mutex<Log>,
     base: Offset,
+    high_watermark: Option<Offset>,
     datas: Vec<ProduceData>,
 ) -> (
     Vec<Result<AppendedBatch, crate::error::BrokerError>>,
@@ -132,6 +137,9 @@ fn append_produce_batch_at(
     Vec<krabka_log::ProducerSnapshotEntry>,
 ) {
     let mut guard = lock_log(log);
+    if let Some(high_watermark) = high_watermark {
+        guard.release_replicated_transactions(high_watermark);
+    }
     let target = guard.config_snapshot().compression_type;
     let mut next = base;
     let mut results = Vec::with_capacity(datas.len());
@@ -191,6 +199,7 @@ fn append_produce_batch_at(
 /// order does not change.
 pub(crate) async fn run_produce_append_batch(
     log: Arc<Mutex<Log>>,
+    high_watermark: Option<Offset>,
     datas: Vec<ProduceData>,
 ) -> Result<
     (
@@ -202,10 +211,10 @@ pub(crate) async fn run_produce_append_batch(
 > {
     match Handle::current().runtime_flavor() {
         RuntimeFlavor::MultiThread => catch_unwind(AssertUnwindSafe(|| {
-            tokio::task::block_in_place(move || append_produce_batch(&log, datas))
+            tokio::task::block_in_place(move || append_produce_batch(&log, high_watermark, datas))
         }))
         .map_err(|_| storage_failure_error("append task panicked", "block_in_place panic")),
-        _ => tokio::task::spawn_blocking(move || append_produce_batch(&log, datas))
+        _ => tokio::task::spawn_blocking(move || append_produce_batch(&log, high_watermark, datas))
             .await
             .map_err(|join_err| storage_failure_error("append task panicked", &join_err)),
     }
@@ -214,6 +223,7 @@ pub(crate) async fn run_produce_append_batch(
 pub(crate) async fn run_produce_append_batch_at(
     log: Arc<Mutex<Log>>,
     base: Offset,
+    high_watermark: Option<Offset>,
     datas: Vec<ProduceData>,
 ) -> Result<
     (
@@ -225,12 +235,16 @@ pub(crate) async fn run_produce_append_batch_at(
 > {
     match Handle::current().runtime_flavor() {
         RuntimeFlavor::MultiThread => catch_unwind(AssertUnwindSafe(|| {
-            tokio::task::block_in_place(move || append_produce_batch_at(&log, base, datas))
+            tokio::task::block_in_place(move || {
+                append_produce_batch_at(&log, base, high_watermark, datas)
+            })
         }))
         .map_err(|_| storage_failure_error("append task panicked", "block_in_place panic")),
-        _ => tokio::task::spawn_blocking(move || append_produce_batch_at(&log, base, datas))
-            .await
-            .map_err(|join_err| storage_failure_error("append task panicked", &join_err)),
+        _ => tokio::task::spawn_blocking(move || {
+            append_produce_batch_at(&log, base, high_watermark, datas)
+        })
+        .await
+        .map_err(|join_err| storage_failure_error("append task panicked", &join_err)),
     }
 }
 
@@ -275,6 +289,7 @@ mod tests {
 
         let (results, leo, _) = append_produce_batch(
             &log,
+            None,
             vec![
                 ProduceData::Owned(sample_batch(1)),
                 ProduceData::Owned(sample_batch(1)),
@@ -304,6 +319,7 @@ mod tests {
         let (results, leo, _) = append_produce_batch_at(
             &log,
             Offset(0),
+            None,
             vec![
                 ProduceData::Owned(sample_batch(1)),
                 ProduceData::Owned(sample_batch(1)),
@@ -318,8 +334,12 @@ mod tests {
         ));
         assert!(leo == Offset(1));
 
-        let (results, leo, _) =
-            append_produce_batch_at(&log, Offset(2), vec![ProduceData::Owned(sample_batch(1))]);
+        let (results, leo, _) = append_produce_batch_at(
+            &log,
+            Offset(2),
+            None,
+            vec![ProduceData::Owned(sample_batch(1))],
+        );
 
         assert!(results[0].as_ref().unwrap().base_offset == Offset(2));
         assert!(leo == Offset(3));
@@ -342,7 +362,8 @@ mod tests {
         let original = sample_batch(2);
         assert!(original.attributes.compression() == CompressionType::None);
 
-        let (results, leo, _) = append_produce_batch(&log, vec![ProduceData::Owned(original)]);
+        let (results, leo, _) =
+            append_produce_batch(&log, None, vec![ProduceData::Owned(original)]);
         assert!(results.len() == 1);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
         assert!(assigned.base_offset == 0);
@@ -383,7 +404,7 @@ mod tests {
         assert!(marker.attributes.compression() == CompressionType::None);
 
         let (results, _, control_entries) =
-            append_produce_batch(&log, vec![ProduceData::OwnedControl(marker)]);
+            append_produce_batch(&log, None, vec![ProduceData::OwnedControl(marker)]);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
         assert!(assigned.base_offset == 0);
 
@@ -403,6 +424,63 @@ mod tests {
         assert!(read.batches.len() == 1);
         check!(read.batches[0].attributes.compression() == CompressionType::None);
         check!(read.batches[0].attributes.is_control_batch());
+    }
+
+    /// A group that carries a transaction marker first releases every
+    /// complete transaction whose marker the given high watermark passed, so
+    /// a partition that no reader fetches from does not keep them forever.
+    #[test]
+    fn a_marker_group_releases_transactions_below_the_high_watermark() {
+        fn data(producer_id: i64) -> ProduceData {
+            let mut batch = sample_batch(1);
+            batch.producer_id = producer_id;
+            batch.attributes = batch.attributes.with_transactional(true);
+            ProduceData::Owned(batch)
+        }
+        fn commit(producer_id: i64) -> ProduceData {
+            let mut batch = sample_batch(1);
+            batch.producer_id = producer_id;
+            batch.attributes = batch.attributes.with_transactional(true).with_control(true);
+            batch.records[0].key = Some(bytes::Bytes::from_static(&[0, 0, 0, 1]));
+            batch.records[0].value = Some(bytes::Bytes::from_static(&[0, 0, 0, 0, 0, 0]));
+            ProduceData::OwnedControl(batch)
+        }
+        for (name, high_watermark, want_first_unstable) in [
+            ("no high watermark", None, Offset(0)),
+            (
+                "high watermark at the first marker",
+                Some(Offset(1)),
+                Offset(0),
+            ),
+            (
+                "high watermark past the first marker",
+                Some(Offset(2)),
+                Offset(2),
+            ),
+        ] {
+            for at_offset in [false, true] {
+                let dir = tempdir().expect("tempdir");
+                let log =
+                    Mutex::new(Log::open(dir.path(), LogConfig::default()).expect("open log"));
+                let append = |high_watermark, datas: Vec<ProduceData>| {
+                    let base = lock_log(&log).log_end_offset();
+                    let (results, _, _) = if at_offset {
+                        append_produce_batch_at(&log, base, high_watermark, datas)
+                    } else {
+                        append_produce_batch(&log, high_watermark, datas)
+                    };
+                    assert!(results.iter().all(Result::is_ok), "{name}");
+                };
+                append(None, vec![data(7), commit(7)]); // offsets 0 and 1
+                append(None, vec![data(8)]); // offset 2
+                append(high_watermark, vec![commit(8)]); // offset 3
+
+                check!(
+                    lock_log(&log).lso() == want_first_unstable,
+                    "{name}, at offset {at_offset}"
+                );
+            }
+        }
     }
 
     /// The follower path makes the same promise as the leader path. A
@@ -427,8 +505,12 @@ mod tests {
         marker.producer_id = 7;
         marker.producer_epoch = 3;
 
-        let (results, _, control_entries) =
-            append_produce_batch_at(&log, Offset(0), vec![ProduceData::OwnedControl(marker)]);
+        let (results, _, control_entries) = append_produce_batch_at(
+            &log,
+            Offset(0),
+            None,
+            vec![ProduceData::OwnedControl(marker)],
+        );
         assert!(
             results
                 .into_iter()
