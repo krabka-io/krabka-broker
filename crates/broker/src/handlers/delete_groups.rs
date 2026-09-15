@@ -75,6 +75,7 @@ pub(crate) async fn handle(
             Ok(()) => codes::NONE,
             Err(DeleteGroupError::NotFound) => codes::GROUP_ID_NOT_FOUND,
             Err(DeleteGroupError::NonEmpty) => codes::NON_EMPTY_GROUP,
+            Err(DeleteGroupError::ShareState(error_code)) => error_code,
             Err(DeleteGroupError::Internal) => codes::UNKNOWN_SERVER_ERROR,
         };
         results.push(DeletableGroupResult {
