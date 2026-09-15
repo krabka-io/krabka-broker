@@ -1,13 +1,21 @@
 //! The `ApiVersions` handshake that every controller-listener connection begins
 //! with: the advertised API table, the supported and finalized feature ranges,
-//! and the KIP-1242 routing-identity check that tells a client it dialled the
-//! wrong node.
+//! and the request checks of Kafka's `ControllerApis.handleApiVersionsRequest`.
 
 use bytes::{Bytes, BytesMut};
+use krabka_protocol::{
+    Decode, Encode,
+    owned::{
+        api_versions_request::{self, ApiVersionsRequest},
+        api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
+    },
+};
 
+pub use self::client_software::is_valid_client_info;
 use self::table::CONTROLLER_LISTENER_APIS;
 use crate::error::RaftError;
 
+mod client_software;
 pub(super) mod table;
 
 /// Kafka's `ApiVersions` API key. The controller TCP listener answers this
@@ -15,49 +23,102 @@ pub(super) mod table;
 /// handshake before any other request.
 pub(super) const API_KEY_API_VERSIONS: i16 = 18;
 
+/// Lowest `ApiVersions` request version this listener speaks.
+const API_VERSIONS_MIN_VERSION: i16 = api_versions_request::MIN_VERSION;
 /// Highest `ApiVersions` request version this listener speaks: the clamp
 /// applied to the response body codec, and the same generated maximum the
 /// `api_keys` table advertises for API 18 (current JVM controllers dial at v5;
 /// Krabka's own client at v0).
-const API_VERSIONS_MAX_VERSION: i16 = krabka_protocol::owned::api_versions_request::MAX_VERSION;
-/// First `ApiVersions` version that carries KIP-1242 routing identity.
+const API_VERSIONS_MAX_VERSION: i16 = api_versions_request::MAX_VERSION;
+/// First `ApiVersions` version that carries the KIP-511 client software name
+/// and version.
+const API_VERSIONS_CLIENT_SOFTWARE_MIN_VERSION: i16 = 3;
+/// First `ApiVersions` version that carries the KIP-1242 cluster id and node
+/// id.
 const API_VERSIONS_ROUTING_MIN_VERSION: i16 = 5;
+const API_VERSIONS_UNSUPPORTED_VERSION: i16 = 35;
 const API_VERSIONS_INVALID_REQUEST: i16 = 42;
-const API_VERSIONS_REBOOTSTRAP_REQUIRED: i16 = 129;
 /// First `ApiVersions` response version where JVM clients accept a zero minimum
 /// for `kraft.version`.
 const KRAFT_ZERO_MIN_API_VERSION: i16 = 4;
 
-/// Validate the KIP-1242 routing identity carried by `ApiVersions` v5.
-pub(super) fn api_versions_routing_error(
+/// Answers one controller-listener `ApiVersions` request with the response
+/// body. The body always goes out behind a v0 response header.
+///
+/// The checks follow Kafka's `ControllerApis.handleApiVersionsRequest` and
+/// `SaslServerAuthenticator.handleApiVersionsRequest`, which answer the same
+/// way:
+///
+/// 1. A version outside `MIN..=MAX` is not decoded. Kafka's `RequestContext`
+///    parses it as an empty v0 request, and `ApiVersionsRequest.getErrorResponse`
+///    answers `UNSUPPORTED_VERSION` in a v0 body with one `api_keys` entry, the
+///    `ApiVersions` range, so the client retries at a version the listener
+///    serves.
+/// 2. `ApiVersionsRequest.isValid` fails, and the answer is `INVALID_REQUEST`
+///    with an empty table. From v5 the cluster id and the node id must be
+///    both set or both unset. From v3 the client software name and version
+///    must match the KIP-511 pattern.
+/// 3. Otherwise the answer is the full controller-listener table.
+///
+/// Kafka's controller does not run the KIP-1242 `REBOOTSTRAP_REQUIRED` check.
+/// Only `KafkaApis` on the broker listener runs it.
+///
+/// # Errors
+/// Returns the decode error for a supported version whose body does not
+/// decode. Kafka's `RequestContext.parseRequest` also fails such a request,
+/// and the connection closes.
+pub(crate) fn api_versions_response(
     req_version: i16,
     body: &[u8],
-    expected_cluster_id: &str,
-    expected_node_id: u64,
-) -> Result<i16, RaftError> {
-    use krabka_protocol::{Decode, owned::api_versions_request::ApiVersionsRequest};
-
-    if req_version < API_VERSIONS_ROUTING_MIN_VERSION {
-        return Ok(0);
+    image: &krabka_metadata::MetadataImage,
+    admin_router: Option<&dyn crate::ControllerAdminRouter>,
+) -> Result<Bytes, RaftError> {
+    if !(API_VERSIONS_MIN_VERSION..=API_VERSIONS_MAX_VERSION).contains(&req_version) {
+        return Ok(encode_body(
+            &ApiVersionsResponse {
+                error_code: API_VERSIONS_UNSUPPORTED_VERSION,
+                api_keys: vec![ApiVersionEntry {
+                    api_key: API_KEY_API_VERSIONS,
+                    min_version: API_VERSIONS_MIN_VERSION,
+                    max_version: API_VERSIONS_MAX_VERSION,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            0,
+        ));
     }
+    let request = ApiVersionsRequest::decode(&mut &body[..], req_version)?;
+    if !is_valid_request(&request, req_version) {
+        return Ok(encode_body(
+            &ApiVersionsResponse {
+                error_code: API_VERSIONS_INVALID_REQUEST,
+                ..Default::default()
+            },
+            req_version,
+        ));
+    }
+    Ok(api_versions_response_body(req_version, image, admin_router))
+}
 
-    let mut cur = body;
-    let request = ApiVersionsRequest::decode(&mut cur, req_version)?;
-    let expected_node_id = i32::try_from(expected_node_id).map_err(|_| {
-        RaftError::Protocol(krabka_protocol::ProtocolError::InvalidValue(
-            "controller node id exceeds the Kafka wire range",
-        ))
-    })?;
-    Ok(match (&request.cluster_id, request.node_id) {
-        (None, -1) => 0,
-        (Some(_), -1) | (None, _) => API_VERSIONS_INVALID_REQUEST,
-        (Some(cluster_id), node_id)
-            if cluster_id != expected_cluster_id || node_id != expected_node_id =>
-        {
-            API_VERSIONS_REBOOTSTRAP_REQUIRED
-        }
-        (Some(_), _) => 0,
-    })
+/// Kafka's `ApiVersionsRequest.isValid`.
+fn is_valid_request(request: &ApiVersionsRequest, version: i16) -> bool {
+    if version >= API_VERSIONS_ROUTING_MIN_VERSION
+        && (request.cluster_id.is_none() != (request.node_id == -1))
+    {
+        return false;
+    }
+    version < API_VERSIONS_CLIENT_SOFTWARE_MIN_VERSION
+        || (is_valid_client_info(&request.client_software_name)
+            && is_valid_client_info(&request.client_software_version))
+}
+
+fn encode_body(response: &ApiVersionsResponse, version: i16) -> Bytes {
+    let mut body = BytesMut::with_capacity(response.encoded_len(version));
+    // The version is in the generated range, and the fields are defaults or
+    // table entries, so the encoder has nothing to refuse.
+    let _ = response.encode(&mut body, version);
+    body.freeze()
 }
 
 /// `ApiVersionsResponse` advertising the controller-listener APIs.
@@ -81,24 +142,8 @@ pub(super) fn api_versions_response_body(
     req_version: i16,
     image: &krabka_metadata::MetadataImage,
     admin_router: Option<&dyn crate::ControllerAdminRouter>,
-    error_code: i16,
 ) -> Bytes {
-    use krabka_protocol::{
-        Encode,
-        owned::api_versions_response::{
-            ApiVersion as ApiVersionEntry, ApiVersionsResponse, FinalizedFeatureKey,
-            SupportedFeatureKey,
-        },
-    };
-    if error_code != 0 {
-        let response = ApiVersionsResponse {
-            error_code,
-            ..Default::default()
-        };
-        let mut body = BytesMut::new();
-        let _ = response.encode(&mut body, req_version.clamp(0, API_VERSIONS_MAX_VERSION));
-        return body.freeze();
-    }
+    use krabka_protocol::owned::api_versions_response::{FinalizedFeatureKey, SupportedFeatureKey};
     let entry = |version: &crate::ControllerApiVersion| ApiVersionEntry {
         api_key: version.api_key,
         min_version: version.min_version,
@@ -164,10 +209,7 @@ pub(super) fn api_versions_response_body(
     // v0-shaped body, req v>=3 → flexible (compact) body. The v0 ApiVersions
     // response HEADER asymmetry lives in the framing (`write_response_no_tagged_fields`),
     // not here.
-    let body_version = req_version.clamp(0, API_VERSIONS_MAX_VERSION);
-    let mut buf = BytesMut::new();
-    let _ = resp.encode(&mut buf, body_version);
-    buf.freeze()
+    encode_body(&resp, req_version.clamp(0, API_VERSIONS_MAX_VERSION))
 }
 
 #[cfg(test)]
@@ -187,7 +229,7 @@ mod tests {
             level: 24,
         }));
         for req_v in [0i16, 4i16] {
-            let body = super::api_versions_response_body(req_v, &image, None, 0);
+            let body = super::api_versions_response_body(req_v, &image, None);
             let v = req_v.clamp(0, 4);
             let mut cur = &body[..];
             let resp = ApiVersionsResponse::decode(&mut cur, v).expect("decode body");
@@ -266,7 +308,7 @@ mod tests {
         }
 
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let body = super::api_versions_response_body(4, &image, Some(&HeartbeatRouter), 0);
+        let body = super::api_versions_response_body(4, &image, Some(&HeartbeatRouter));
         let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode body");
 
         let heartbeat = resp
@@ -283,48 +325,154 @@ mod tests {
         );
     }
 
+    /// One row per `ApiVersions` request shape: Kafka's unsupported-version
+    /// answer, the `isValid` refusals, and the full table. A request whose
+    /// version is not served carries a body that does not decode, because
+    /// Kafka does not read it.
     #[test]
-    fn api_versions_v5_validates_controller_routing_identity() {
-        use krabka_protocol::{
-            Encode,
-            owned::{
-                api_versions_request::ApiVersionsRequest,
-                api_versions_response::ApiVersionsResponse,
-            },
-        };
+    fn api_versions_response_runs_kafka_request_checks() {
+        use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
 
-        let request = |cluster_id: Option<&str>, node_id| {
-            let request = ApiVersionsRequest {
-                client_software_name: "krabka-test".into(),
-                client_software_version: "1.0.0".into(),
+        struct Row {
+            label: &'static str,
+            version: i16,
+            request: Option<ApiVersionsRequest>,
+            expected: Option<(i16, ApiVersionsResponse)>,
+        }
+        let request = |name: &str, software_version: &str, cluster_id: Option<&str>, node_id| {
+            Some(ApiVersionsRequest {
+                client_software_name: name.into(),
+                client_software_version: software_version.into(),
                 cluster_id: cluster_id.map(str::to_string),
                 node_id,
                 ..Default::default()
-            };
-            let mut body = bytes::BytesMut::new();
-            request.encode(&mut body, 5).expect("encode ApiVersions v5");
-            body.freeze()
+            })
         };
-
-        for (cluster_id, node_id, expected) in [
-            (None, -1, 0),
-            (Some("cluster"), -1, API_VERSIONS_INVALID_REQUEST),
-            (None, 7, API_VERSIONS_INVALID_REQUEST),
-            (Some("cluster"), 7, 0),
-            (Some("wrong-cluster"), 7, API_VERSIONS_REBOOTSTRAP_REQUIRED),
-            (Some("cluster"), 8, API_VERSIONS_REBOOTSTRAP_REQUIRED),
-        ] {
-            let error =
-                super::api_versions_routing_error(5, &request(cluster_id, node_id), "cluster", 7)
-                    .expect("decode ApiVersions v5");
-            assert2::assert!(error == expected);
-        }
+        let unsupported = Some((
+            0,
+            ApiVersionsResponse {
+                error_code: API_VERSIONS_UNSUPPORTED_VERSION,
+                api_keys: vec![ApiVersionEntry {
+                    api_key: 18,
+                    min_version: 0,
+                    max_version: 5,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ));
+        let invalid = |version| {
+            Some((
+                version,
+                ApiVersionsResponse {
+                    error_code: API_VERSIONS_INVALID_REQUEST,
+                    ..Default::default()
+                },
+            ))
+        };
+        let rows = [
+            Row {
+                label: "v6",
+                version: 6,
+                request: None,
+                expected: unsupported.clone(),
+            },
+            Row {
+                label: "i16::MAX",
+                version: i16::MAX,
+                request: None,
+                expected: unsupported.clone(),
+            },
+            Row {
+                label: "negative",
+                version: -1,
+                request: None,
+                expected: unsupported,
+            },
+            Row {
+                label: "v3 empty name",
+                version: 3,
+                request: request("", "1.0", None, -1),
+                expected: invalid(3),
+            },
+            Row {
+                label: "v4 name with a space",
+                version: 4,
+                request: request("a b", "1.0", None, -1),
+                expected: invalid(4),
+            },
+            Row {
+                label: "v3 empty software version",
+                version: 3,
+                request: request("krabka", "", None, -1),
+                expected: invalid(3),
+            },
+            Row {
+                label: "v5 cluster id without node id",
+                version: 5,
+                request: request("krabka", "1.0", Some("cluster"), -1),
+                expected: invalid(5),
+            },
+            Row {
+                label: "v5 node id without cluster id",
+                version: 5,
+                request: request("krabka", "1.0", None, 7),
+                expected: invalid(5),
+            },
+            Row {
+                label: "v5 another cluster and node, no KIP-1242 check",
+                version: 5,
+                request: request("krabka", "1.0", Some("other"), 8),
+                expected: None,
+            },
+            Row {
+                label: "v5 valid",
+                version: 5,
+                request: request("krabka", "1.0", None, -1),
+                expected: None,
+            },
+            Row {
+                label: "v0",
+                version: 0,
+                request: Some(ApiVersionsRequest::default()),
+                expected: None,
+            },
+        ];
 
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let body =
-            super::api_versions_response_body(5, &image, None, API_VERSIONS_REBOOTSTRAP_REQUIRED);
-        let response = ApiVersionsResponse::decode(&mut body.as_ref(), 5).unwrap();
-        assert2::assert!(response.error_code == API_VERSIONS_REBOOTSTRAP_REQUIRED);
-        assert2::assert!(response.api_keys.is_empty());
+        for row in rows {
+            let body = row.request.map_or_else(
+                || bytes::Bytes::from_static(&[0xff]),
+                |request| {
+                    let mut body = BytesMut::new();
+                    request.encode(&mut body, row.version).expect("encode");
+                    body.freeze()
+                },
+            );
+            let answer =
+                super::api_versions_response(row.version, &body, &image, None).expect("answer");
+            let (version, expected) = row.expected.unwrap_or_else(|| {
+                let full = super::api_versions_response_body(row.version, &image, None);
+                (
+                    row.version,
+                    ApiVersionsResponse::decode(&mut &full[..], row.version).expect("full"),
+                )
+            });
+            let mut cur = &answer[..];
+            let decoded = ApiVersionsResponse::decode(&mut cur, version).expect("decode");
+            assert2::check!(cur.is_empty(), "{}", row.label);
+            assert2::check!(decoded == expected, "{}", row.label);
+            if expected.error_code == 0 {
+                assert2::check!(!decoded.api_keys.is_empty(), "{}", row.label);
+            }
+        }
+    }
+
+    /// A served version whose body does not decode fails the request, as
+    /// Kafka's `RequestContext.parseRequest` does.
+    #[test]
+    fn api_versions_response_refuses_a_malformed_body() {
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        assert2::assert!(super::api_versions_response(3, &[0xff], &image, None).is_err());
     }
 }

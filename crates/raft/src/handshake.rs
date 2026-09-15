@@ -5,6 +5,7 @@
 //! trait abstraction keeps `krabka-raft` free of any dependency on
 //! `krabka-broker` and `krabka-security`.
 
+use bytes::Bytes;
 use krabka_client_core::ClientDuplex;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -44,5 +45,33 @@ pub enum RaftHandshakeError {
 /// listener then drops the connection at debug level.
 #[async_trait::async_trait]
 pub trait RaftListenerHandshake: Send + Sync {
-    async fn upgrade(&self, stream: TcpStream) -> Result<RaftConnection, RaftHandshakeError>;
+    /// Upgrades one accepted connection.
+    ///
+    /// A SASL listener answers the `ApiVersions` requests that arrive before
+    /// authentication with `api_versions`, which gives the same answer as the
+    /// listener gives after authentication. Kafka's `SocketServer` hands the
+    /// same `apiVersionSupplier` to `SaslServerAuthenticator`.
+    async fn upgrade(
+        &self,
+        stream: TcpStream,
+        api_versions: &dyn ControllerApiVersions,
+    ) -> Result<RaftConnection, RaftHandshakeError>;
+}
+
+/// The controller listener's `ApiVersions` answer, for a handshake that
+/// answers `ApiVersions` before the listener gets the connection.
+pub trait ControllerApiVersions: Send + Sync {
+    /// Answers one `ApiVersions` request with the response body. The body goes
+    /// out behind a v0 response header, at the version the body was encoded
+    /// at: the request version, or v0 for a version the listener does not
+    /// serve.
+    ///
+    /// # Errors
+    /// Returns [`RaftHandshakeError::Protocol`] when the body of a served
+    /// version does not decode. Kafka closes such a connection.
+    fn respond(
+        &self,
+        request_version: i16,
+        request_body: &[u8],
+    ) -> Result<Bytes, RaftHandshakeError>;
 }

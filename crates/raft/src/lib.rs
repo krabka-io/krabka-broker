@@ -84,10 +84,13 @@ pub use controller::{
     metadata_log_nonempty,
 };
 pub use error::RaftError;
-pub use handshake::{RaftConnection, RaftHandshakeError, RaftListenerHandshake};
+pub use handshake::{
+    ControllerApiVersions, RaftConnection, RaftHandshakeError, RaftListenerHandshake,
+};
 pub use kraft::MetadataFetchSlice;
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};
+pub use server::is_valid_client_info;
 pub use types::{
     AppData, AppDataResponse, DelegationTokenMutation, Node, NodeId, OffsetReservation,
     SubmitChangeResult,
