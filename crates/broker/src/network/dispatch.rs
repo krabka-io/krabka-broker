@@ -296,7 +296,15 @@ where
             return AfterResponse::Close;
         }
     };
-    let response = apply_request_quota(broker, response, parsed, shape, auth, started);
+    let response = apply_request_quota(
+        broker,
+        response,
+        parsed,
+        shape,
+        auth,
+        started.elapsed(),
+        None,
+    );
     if let Err(error) = framed.send(response.bytes).await {
         tracing::warn!(%error, "framed.send error, closing");
         return AfterResponse::Close;
@@ -536,7 +544,7 @@ async fn serve_connection_stream<S>(
 
         capture_client_software(&parsed, &mut client_software.0, &mut client_software.1);
 
-        let (started, _in_flight) = begin_request(&broker, &parsed);
+        let (_, _in_flight) = begin_request(&broker, &parsed);
 
         if matches!(entry.kind(), crate::handlers::DispatchKind::Fetch) {
             match dispatch_fetch(
@@ -567,7 +575,7 @@ async fn serve_connection_stream<S>(
             client_software_name: &client_software.0,
             client_software_version: &client_software.1,
         };
-        match send_registry_response(&mut framed, entry, context, req_span, started).await {
+        match send_registry_response(&mut framed, entry, context, req_span).await {
             AfterResponse::Close => break,
             AfterResponse::Mute(window) => mute_until = mute_deadline(window),
         }

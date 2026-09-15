@@ -23,15 +23,16 @@ pub(super) async fn send_registry_response<S>(
     entry: crate::handlers::DispatchEntry,
     context: DispatchContext<'_, '_>,
     request_span: tracing::Span,
-    started: std::time::Instant,
 ) -> AfterResponse
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut response = match dispatch_registry_response(entry, context)
-        .instrument(request_span)
-        .await
-    {
+    // KIP-124 meters the time a request holds a handler thread. A handler
+    // future that is parked (on a group rebalance, a replication wait, a raft
+    // commit) holds none, so only the time spent polling it is charged.
+    let (dispatched, handler_time) =
+        with_active_time(dispatch_registry_response(entry, context).instrument(request_span)).await;
+    let mut response = match dispatched {
         Ok(Some(response)) => response,
         Ok(None) => {
             tracing::warn!("registry entry has no ordinary dispatcher, closing connection");
@@ -56,10 +57,9 @@ where
     if entry.quota_policy() == crate::handlers::RequestQuotaPolicy::ApplyFallbackAccounting {
         // Kafka mutes the channel once per request, for the longest window
         // any quota asked for, so a handler-charged window is folded in with
-        // `max` rather than added. No handler reaches this branch with a
-        // window today: no `ApplyFallbackAccounting` handler charges a quota
-        // of its own. Combining here keeps the rule in the one place that has
-        // both windows, should one of them ever charge one.
+        // `max` rather than added. A handler that deferred its own charge
+        // (`CreateTopics`, `CreatePartitions`, `DeleteTopics` with KIP-599)
+        // has it resolved with the request quota in the same metrics call.
         let handler_throttle = response.throttle;
         response = apply_request_quota(
             context.broker,
@@ -67,7 +67,8 @@ where
             context.parsed,
             ResponseShape::mirroring_request(context.parsed),
             context.auth,
-            started,
+            handler_time,
+            response.deferred_charge,
         );
         response.throttle = response.throttle.max(handler_throttle);
     }
@@ -208,6 +209,23 @@ async fn dispatch_registered_bytes(
     }
 }
 
+/// Awaits `future` and reports, beside its output, the time spent inside its
+/// `poll` calls. The time the future is parked between polls is not counted.
+pub(super) async fn with_active_time<F: std::future::Future>(
+    future: F,
+) -> (F::Output, std::time::Duration) {
+    let mut future = std::pin::pin!(future);
+    let mut active = std::time::Duration::ZERO;
+    let output = std::future::poll_fn(|cx| {
+        let polled_at = std::time::Instant::now();
+        let poll = future.as_mut().poll(cx);
+        active += polled_at.elapsed();
+        poll
+    })
+    .await;
+    (output, active)
+}
+
 /// Pairs a handler's framed bytes with the KIP-219 window that handler
 /// recorded on its [`crate::handlers::RequestContext`].
 fn with_recorded_throttle(
@@ -215,7 +233,12 @@ fn with_recorded_throttle(
     encoded: Result<Bytes, BrokerError>,
 ) -> Result<ThrottledResponse, BrokerError> {
     let throttle = ctx.take_throttle();
-    encoded.map(|bytes| ThrottledResponse { bytes, throttle })
+    let deferred_charge = ctx.throttle.deferred();
+    encoded.map(|bytes| ThrottledResponse {
+        bytes,
+        throttle,
+        deferred_charge,
+    })
 }
 
 /// Wraps the bytes of a handler kind that has no `RequestContext` and so can
@@ -270,5 +293,34 @@ async fn dispatch_registry_response(
             }
             _ => Ok(None),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use assert2::check;
+
+    use super::with_active_time;
+
+    /// KIP-124 meters the time a request holds a handler thread, so a handler
+    /// parked on a timer, a channel or a raft commit is not charged for the
+    /// wait. Only the time spent inside `poll` counts.
+    #[tokio::test]
+    async fn active_time_counts_polling_and_not_parking() {
+        let (value, parked) = with_active_time(async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            7
+        })
+        .await;
+        check!(value == 7);
+        check!(parked < Duration::from_millis(100), "{parked:?}");
+
+        let ((), working) = with_active_time(async {
+            std::thread::sleep(Duration::from_millis(60));
+        })
+        .await;
+        check!(working >= Duration::from_millis(60), "{working:?}");
     }
 }
