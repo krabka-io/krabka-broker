@@ -49,6 +49,12 @@ pub(crate) async fn handle(
     if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
         return response(version, codes::NOT_CONTROLLER, -1);
     }
+    // Kafka's controller decides one registration at a time on its event
+    // thread. Hold the registration turn from the session check to the
+    // session replacement, so two registrations of one broker id, or of one
+    // log directory, cannot both pass against the same image.
+    let turn = broker.liveness.registration_turn().await;
+    let image = broker.controller.current_image();
 
     let node_id = match u64::try_from(req.broker_id) {
         Ok(id) => NodeId(id),
@@ -134,7 +140,7 @@ pub(crate) async fn handle(
         {
             return response(version, raft_error_code(&error), -1);
         }
-        return registered_response(broker, version, node_id);
+        return registered_response(broker, version, node_id, incarnation_id);
     }
     let clean_restart = clean_shutdown_proven(&req, version, &image, node_id);
     // KIP-966: a broker that cannot prove it stopped gracefully may have lost
@@ -171,6 +177,14 @@ pub(crate) async fn handle(
     {
         return response(version, raft_error_code(&error), -1);
     }
+    // The session of the previous incarnation, if there was one, belongs to
+    // a process that is gone. `ClusterControlManager.registerBroker` removes
+    // it and registers the new incarnation fenced. It happens at once, inside
+    // the registration turn, so no heartbeat of the new process can come
+    // before it.
+    broker.liveness.replace_incarnation(node_id.0).await;
+    let answer = registered_response(broker, version, node_id, incarnation_id);
+    drop(turn);
     // KIP-966: a partition whose topic opted into an offset-aware recovery
     // strategy is handed to the Unclean Recovery Manager, the same way the
     // dead-broker failover hands one over. Fire and forget.
@@ -190,24 +204,22 @@ pub(crate) async fn handle(
             .await;
     }
 
-    // The session of the previous incarnation, if there was one, belongs to
-    // a process that is gone. `ClusterControlManager.registerBroker` removes
-    // it and registers the new incarnation fenced.
-    broker.liveness.replace_incarnation(node_id.0).await;
-    registered_response(broker, version, node_id)
+    answer
 }
 
 /// The answer to an accepted registration: the epoch the image now holds for
-/// `node_id`.
+/// `node_id`, if the registration it holds is this incarnation's.
 fn registered_response(
     broker: &Broker,
     version: i16,
     node_id: NodeId,
+    incarnation_id: uuid::Uuid,
 ) -> Result<Bytes, BrokerError> {
     let epoch = broker
         .controller
         .current_image()
         .broker(node_id)
+        .filter(|registration| registration.incarnation_id == incarnation_id)
         .map_or(-1, |registration| registration.broker_epoch);
     response(
         version,

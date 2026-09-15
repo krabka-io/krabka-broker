@@ -64,6 +64,9 @@ pub(crate) struct ControllerLivenessState {
     /// these brokers and returns `should_shut_down=true` once every
     /// partition has been re-led.
     pub(super) wants_shutdown: Mutex<HashSet<u64>>,
+    /// Serializes `BrokerRegistration`: see
+    /// [`registration_turn`](Self::registration_turn).
+    pub(super) registrations: Mutex<()>,
 }
 
 impl ControllerLivenessState {
@@ -73,6 +76,7 @@ impl ControllerLivenessState {
             timeout: timeout.to_std(),
             clock: Clock::Real,
             brokers: Mutex::new(HashMap::new()),
+            registrations: Mutex::new(()),
             wants_shutdown: Mutex::new(HashSet::new()),
         }
     }
@@ -85,6 +89,7 @@ impl ControllerLivenessState {
             timeout,
             clock,
             brokers: Mutex::new(HashMap::new()),
+            registrations: Mutex::new(()),
             wants_shutdown: Mutex::new(HashSet::new()),
         }
     }

@@ -107,26 +107,33 @@ impl ControllerLivenessState {
         }
     }
 
-    /// Seed the liveness registry with the given broker ids as `Alive` with
-    /// `last_heartbeat = now`. The broker calls this when it becomes the raft
-    /// leader. Live peers then get a full timeout window to redirect their
-    /// heartbeat loop at the new controller. [`tick`](Self::tick) still
-    /// detects dead peers after `timeout` ms.
-    pub(crate) async fn seed_brokers(&self, broker_ids: impl IntoIterator<Item = u64>) {
+    /// Seed the liveness registry when this node becomes the controller
+    /// leader. `brokers` pairs every registered broker id with the fence the
+    /// metadata image replicates for it. Every entry becomes `Alive` with
+    /// `last_heartbeat = now`, so live peers get a full timeout window to
+    /// redirect their heartbeat loop at the new controller, and
+    /// [`tick`](Self::tick) still detects dead peers after `timeout`.
+    ///
+    /// This is `ClusterControlManager.activate`: a broker keeps the fence the
+    /// cluster replicated for it, and only an unfenced one starts with a
+    /// heartbeat session. A broker the previous controller had fenced has no
+    /// session until it heartbeats, so a new incarnation of it may register.
+    pub(crate) async fn seed_brokers(&self, brokers: impl IntoIterator<Item = (u64, bool)>) {
         let mut map = self.brokers.lock().await;
         let now = self.clock.now();
-        for id in broker_ids {
+        for (id, replicated_fence) in brokers {
             map.entry(id)
                 .and_modify(|entry| {
                     entry.last_heartbeat = now;
                     entry.state = BrokerLivenessState::Alive;
+                    entry.fenced = entry.fenced || replicated_fence;
                     entry.contact = !entry.fenced;
                 })
                 .or_insert(BrokerEntry {
                     last_heartbeat: now,
                     state: BrokerLivenessState::Alive,
-                    fenced: false,
-                    contact: true,
+                    fenced: replicated_fence,
+                    contact: !replicated_fence,
                 });
         }
     }
@@ -158,21 +165,36 @@ impl ControllerLivenessState {
         }
     }
 
-    /// Close the session of the previous incarnation of `broker_id`, which a
-    /// new incarnation just replaced. The broker starts fenced until it
-    /// catches up to its new registration record, as Kafka registers a new
-    /// incarnation with `Fenced = true` after it removes the old session.
+    /// Wait for the turn to decide one broker registration. Kafka's controller
+    /// decides registrations one at a time on its event thread; the holder
+    /// checks the session, commits the registration and replaces the session
+    /// before the next registration may look at any of them.
     ///
-    /// The death clock and the liveness state stay as they are. A broker that
-    /// was already dead still revives on its first heartbeat, and one whose
-    /// old session is past the timeout still expires on the next tick if the
-    /// new process never heartbeats.
+    /// Registrations are rare, and the guard is a `tokio` mutex, so a waiter
+    /// yields its worker thread and no heartbeat waits on it.
+    pub(crate) async fn registration_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.registrations.lock().await
+    }
+
+    /// Replace the session of the previous incarnation of `broker_id` with a
+    /// fresh entry for the new one. Kafka removes the old session and
+    /// registers the new incarnation with `Fenced = true`.
+    ///
+    /// The new entry is alive and fenced, with no session: the new process
+    /// gets one full timeout window for its first heartbeat, nothing treats
+    /// it as the dead process it replaced, and nothing elects it before it
+    /// catches up to its new registration record.
     pub(crate) async fn replace_incarnation(&self, broker_id: u64) {
-        let mut map = self.brokers.lock().await;
-        if let Some(entry) = map.get_mut(&broker_id) {
-            entry.fenced = true;
-            entry.contact = false;
-        }
+        let now = self.clock.now();
+        self.brokers.lock().await.insert(
+            broker_id,
+            BrokerEntry {
+                last_heartbeat: now,
+                state: BrokerLivenessState::Alive,
+                fenced: true,
+                contact: false,
+            },
+        );
     }
 }
 
@@ -273,7 +295,7 @@ mod tests {
         let _ = liveness.tick().await;
         assert!(liveness.dead_snapshot().await.contains(&4));
 
-        liveness.seed_brokers([4]).await;
+        liveness.seed_brokers([(4, false)]).await;
 
         assert!(liveness.dead_snapshot().await.is_empty());
     }
@@ -283,7 +305,7 @@ mod tests {
         let clock = TestClock::new();
         let liveness =
             ControllerLivenessState::with_clock(Duration::from_millis(50), clock.clock());
-        liveness.seed_brokers([7]).await;
+        liveness.seed_brokers([(7, false)]).await;
         // Well within the 50ms window — deterministically still alive.
         clock.advance(Duration::from_millis(1));
 
@@ -303,7 +325,7 @@ mod tests {
         clock.advance(Duration::from_millis(20));
 
         // ...a normal re-seed must REFRESH the existing entry to a full window,
-        liveness.seed_brokers([7]).await;
+        liveness.seed_brokers([(7, false)]).await;
         // so 1ms later it is nowhere near expiry. Were the refresh missing, the
         // entry would be ~21ms stale here and `tick` would mark it dead — which
         // is exactly the regression this test guards.
@@ -330,12 +352,14 @@ mod tests {
             Fence,
             Discover,
             Seed,
+            SeedFenced,
             ReplaceIncarnation,
             Advance(u64),
             Tick,
         }
         use Step::{
-            Advance, Discover, Fence, FencedHeartbeat, Heartbeat, ReplaceIncarnation, Seed, Tick,
+            Advance, Discover, Fence, FencedHeartbeat, Heartbeat, ReplaceIncarnation, Seed,
+            SeedFenced, Tick,
         };
 
         let cases: &[(&str, &[Step], bool)] = &[
@@ -378,6 +402,16 @@ mod tests {
                 false,
             ),
             (
+                "a broker the image replicates as fenced",
+                &[SeedFenced],
+                false,
+            ),
+            (
+                "a heartbeating broker the image replicates as fenced",
+                &[Heartbeat, SeedFenced],
+                false,
+            ),
+            (
                 "a new incarnation replaced the session",
                 &[Heartbeat, ReplaceIncarnation],
                 false,
@@ -408,7 +442,8 @@ mod tests {
                         liveness.apply_fencing(BROKER, true, true).await;
                     }
                     Discover => liveness.track_registered([BROKER]).await,
-                    Seed => liveness.seed_brokers([BROKER]).await,
+                    Seed => liveness.seed_brokers([(BROKER, false)]).await,
+                    SeedFenced => liveness.seed_brokers([(BROKER, true)]).await,
                     ReplaceIncarnation => liveness.replace_incarnation(BROKER).await,
                     Advance(millis) => clock.advance(Duration::from_millis(*millis)),
                     Tick => {
@@ -420,18 +455,39 @@ mod tests {
         }
     }
 
-    /// A new incarnation starts fenced until it catches up, whatever its
-    /// previous incarnation had reached.
+    /// A new incarnation starts alive, fenced and without a session, whatever
+    /// its previous incarnation had reached: nothing elects it before it
+    /// catches up, and nothing treats it as the dead process it replaced.
     #[tokio::test]
-    async fn a_new_incarnation_starts_fenced() {
-        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
-        liveness.record_heartbeat(7).await;
-        assert!(liveness.is_alive(7).await);
+    async fn a_new_incarnation_starts_alive_fenced_and_without_a_session() {
+        const TIMEOUT: Duration = Duration::from_millis(10);
 
-        liveness.replace_incarnation(7).await;
+        // (what the previous incarnation reached, is it past the timeout)
+        let cases = [("alive and unfenced", false), ("dead", true)];
+        for (what, expired) in cases {
+            let clock = TestClock::new();
+            let liveness = ControllerLivenessState::with_test_clock(TIMEOUT, &clock);
+            liveness.record_heartbeat(7).await;
+            if expired {
+                clock.advance(Duration::from_millis(11));
+                liveness.tick().await;
+            }
 
-        assert!(!liveness.is_alive(7).await);
-        assert!(liveness.unavailable_snapshot().await.contains(&7));
+            liveness.replace_incarnation(7).await;
+
+            assert2::check!(
+                (
+                    liveness.state(7).await,
+                    liveness.is_alive(7).await,
+                    liveness.unavailable_snapshot().await.contains(&7),
+                    liveness.has_valid_session(7).await,
+                ) == (Some(BrokerLivenessState::Alive), false, true, false),
+                "{what}"
+            );
+            // It gets a whole window for its first heartbeat.
+            clock.advance(Duration::from_millis(10));
+            assert2::check!(liveness.tick().await == vec![], "{what}");
+        }
     }
 
     #[tokio::test]
