@@ -35,8 +35,9 @@ connections_max_idle = "10m"
 inter_broker_listener_name = "INTERNAL"
 controller_listener_protocol = "Plaintext"
 
-# Principals that bypass authorization.
-super_users = ["User:admin"]
+# Principals that bypass authorization. The `[authorization]` table below
+# replaces this list when it is present.
+super_users = ["User:admin", "User:ANONYMOUS"]
 
 # The client-facing listeners. `name` is the Kafka listener name, `protocol`
 # is one of `Plaintext`, `Ssl`, `SaslPlaintext`, or `SaslSsl`.
@@ -116,9 +117,16 @@ replication = 1
 # The cluster authorizer. `simple` is the ACL authorizer; `allow_all` turns
 # authorization off; `opa` delegates to Open Policy Agent, see the three-node
 # example.
+#
+# The controller listener above is PLAINTEXT, so the controller and this
+# node's own broker heartbeats reach it as `User:ANONYMOUS`. Every controller
+# request needs `ClusterAction` on the cluster, as in Kafka, so the
+# unauthenticated principal is a super user here. That also makes every
+# unauthenticated client on a PLAINTEXT listener a super user. Use a SASL or
+# SSL controller listener, and list its principal, to avoid that.
 [authorization]
 type = "simple"
-super_users = ["User:admin"]
+super_users = ["User:admin", "User:ANONYMOUS"]
 
 # KIP-48 delegation tokens. The HMAC key comes from the environment variable
 # `KRABKA_DELEGATION_TOKEN_SECRET_KEY` when it is set, which is the preferred

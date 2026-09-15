@@ -84,7 +84,10 @@ pub use controller::{
     metadata_log_nonempty,
 };
 pub use error::RaftError;
-pub use handshake::{RaftConnection, RaftHandshakeError, RaftListenerHandshake};
+pub use handshake::{
+    AllowAllGrants, ClusterGrants, ClusterOperation, RaftConnection, RaftHandshakeError,
+    RaftListenerHandshake,
+};
 pub use kraft::MetadataFetchSlice;
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};
@@ -120,5 +123,6 @@ pub fn deserialize_metadata_snapshot(
 pub use wire::{
     API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
     KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
-    KrabkaSubmitChangeResponse, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+    KrabkaSubmitChangeResponse, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+    SUBMIT_CHANGE_UNCOMMITTED_TAIL,
 };

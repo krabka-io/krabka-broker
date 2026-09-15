@@ -150,6 +150,10 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
         super_users: maplit::hashset! {MAPPED_PRINCIPAL.to_string()},
         ..BrokerConfig::default()
     };
+    // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
+    // heartbeats reach it. Every data listener here authenticates, so this
+    // super user reaches only the controller listener.
+    config.super_users.insert("ANONYMOUS".to_string());
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         config.super_users.clone(),
     ));

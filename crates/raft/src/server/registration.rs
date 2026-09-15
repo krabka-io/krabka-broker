@@ -28,7 +28,6 @@ use crate::{RaftError, kraft::KraftController};
 
 const SUCCESS: i16 = 0;
 const UNKNOWN_SERVER_ERROR: i16 = -1;
-const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
 const NOT_CONTROLLER: i16 = 41;
 const UNKNOWN_CONTROLLER_ID: i16 = 116;
 const INVALID_REGISTRATION: i16 = 119;
@@ -47,11 +46,10 @@ pub(super) async fn dispatch(
     version: i16,
     body: &[u8],
     engine: &KraftController,
-    authorized: bool,
 ) -> Result<Bytes, RaftError> {
     match api_key {
         controller_registration_request::API_KEY => {
-            controller_registration(version, body, engine, authorized).await
+            controller_registration(version, body, engine).await
         }
         _ => Err(RaftError::Protocol(
             krabka_protocol::ProtocolError::InvalidValue("unknown controller lifecycle API"),
