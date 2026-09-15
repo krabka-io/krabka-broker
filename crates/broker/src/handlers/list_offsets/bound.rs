@@ -45,8 +45,9 @@ pub(super) const fn fetch_bound(replica_id: i32, isolation_level: i8) -> FetchBo
 /// The high watermark keeps a client's answer inside what the ISR has
 /// acknowledged, and the last stable offset additionally pins a
 /// `read_committed` client in front of the oldest transaction that has not
-/// resolved. Kafka's `UnifiedLog.lastStableOffset` is itself
-/// `min(first offset of the oldest open transaction, high watermark)`, so the
+/// resolved, or whose marker the high watermark has not passed. Kafka's
+/// `UnifiedLog.lastStableOffset` is itself
+/// `min(first unstable offset, high watermark)`, so the
 /// minimum below is what makes [`FetchBound::LastStable`] that same value
 /// rather than a first-offset that could sit above the watermark.
 ///
@@ -61,8 +62,9 @@ pub(super) async fn last_fetchable_offset(
     partition: &crate::partition::Partition,
     bound: FetchBound,
 ) -> Option<i64> {
-    let high_watermark = partition.high_watermark().await.0;
-    let last_stable = partition.lso().0;
+    let high_watermark = partition.high_watermark().await;
+    let last_stable = partition.last_stable_offset(high_watermark).0;
+    let high_watermark = high_watermark.0;
     let log_end = partition.log_end_offset().0;
     checked_bound(bound, log_end, high_watermark, last_stable)
 }

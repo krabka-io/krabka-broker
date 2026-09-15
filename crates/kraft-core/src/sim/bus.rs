@@ -53,7 +53,7 @@ impl Sim {
         };
         if let Some(follower) = fetch_from {
             let diverging = actions.iter().find_map(|a| match a {
-                Action::TruncateTo(point) => Some(*point),
+                Action::ReplyDivergingEpoch(point) => Some(*point),
                 _ => None,
             });
             let leader_epoch = self.nodes[&id].machine.quorum_state().leader_epoch;
@@ -75,9 +75,6 @@ impl Sim {
             }
         }
         for action in actions {
-            if fetch_from.is_some() && matches!(action, Action::TruncateTo(_)) {
-                continue;
-            }
             self.apply_action(id, action);
         }
         self.reconcile_timers_for_role(id);
@@ -192,7 +189,10 @@ impl Sim {
                     TimerKind::CheckQuorum => node.check_quorum_deadline = Some(deadline),
                 }
             }
-            Action::TransitionedTo(_) | Action::PersistQuorumState => {}
+            Action::TransitionedTo(_)
+            | Action::PersistQuorumState
+            // Carried in the fetch response built when the leader serves it.
+            | Action::ReplyDivergingEpoch(_) => {}
         }
     }
 

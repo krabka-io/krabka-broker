@@ -121,12 +121,13 @@ impl Engine {
                         &self.log,
                         now,
                     );
-                    // A Fetch may yield a TruncateTo (divergence hint) for the
-                    // follower, or AdvanceHighWatermark for the leader. Encode
-                    // the divergence into the response; apply HWM locally.
+                    // A Fetch may yield a diverging epoch for the follower, or
+                    // AdvanceHighWatermark for the leader. Encode the divergence
+                    // into the response; apply HWM locally. The diverging epoch
+                    // is a reply only: the leader's log keeps its records.
                     let mut diverging = None;
                     for action in &actions {
-                        if let Action::TruncateTo(point) = action {
+                        if let Action::ReplyDivergingEpoch(point) = action {
                             diverging = Some(*point);
                         }
                     }

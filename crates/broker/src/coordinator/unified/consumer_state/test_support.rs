@@ -8,7 +8,7 @@ use std::{
 use super::member::MemberState;
 use crate::coordinator::unified::persistence_next_gen::MemberAssignmentState;
 
-pub(super) fn member(id: &str) -> MemberState {
+pub(crate) fn member(id: &str) -> MemberState {
     MemberState {
         member_id: id.into(),
         instance_id: None,

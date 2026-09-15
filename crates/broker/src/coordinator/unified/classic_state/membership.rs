@@ -1,9 +1,9 @@
 //! Membership transitions on a [`ClassicGroup`]: adding, removing, and
 //! session-timeout expiry of members.
 //!
-//! These carry the KIP-345 static-membership rules, where a static slot
-//! survives a session timeout and a rejoin replaces it in place, and the
-//! per-round join bookkeeping the `JoinGroup` handler reads.
+//! These carry the KIP-345 static-membership rules, where a rejoin inside the
+//! session timeout replaces a static slot in place, and the per-round join
+//! bookkeeping the `JoinGroup` handler reads.
 
 use std::time::{Duration, Instant};
 
@@ -117,15 +117,17 @@ impl ClassicGroup {
         }
     }
 
-    /// Drops any **dynamic** member whose `last_heartbeat` is older than its
+    /// Drops every member whose `last_heartbeat` is older than its
     /// `session_timeout`. It returns the dropped member IDs. The group moves
     /// to `PreparingRebalance` when it dropped at least one member and still
     /// has members. It moves to `Empty` when it became empty.
     ///
-    /// KIP-345: this method **skips** static members, those with
-    /// `group_instance_id.is_some()`. Their slot survives the session timeout,
-    /// so a restarting client reclaims its assignment on rejoin without a
-    /// rebalance for the rest of the group.
+    /// KIP-345: a static member, one with `group_instance_id.is_some()`,
+    /// expires like a dynamic one, and its `static_members` entry goes with
+    /// it. Kafka's `GroupMetadataManager.expireClassicGroupMemberHeartbeat`
+    /// has no static exception. A static client that restarts inside its
+    /// session timeout still takes its slot back without a rebalance; a
+    /// static client that does not come back frees its partitions.
     pub fn expire_dead_members(
         &mut self,
         now: Instant,
@@ -150,21 +152,15 @@ impl ClassicGroup {
         let dropped: Vec<String> = self
             .members
             .iter()
-            .filter(|(_, m)| {
-                !m.is_static() && now.duration_since(m.last_heartbeat) > m.session_timeout
-            })
+            .filter(|(_, m)| now.duration_since(m.last_heartbeat) > m.session_timeout)
             .map(|(id, _)| id.clone())
             .collect();
         for id in &dropped {
-            // Dynamic members only — no static_members entry to clear.
-            self.members.remove(id);
-            // Keep per-round join tracking consistent with `members`: a member
-            // expired mid-`PreparingRebalance` (it joined this round, then timed
-            // out) must not linger in `joined_this_round`, or the
-            // `joined_this_round ⊆ members` invariant breaks and
-            // `all_members_joined_this_round` could count a ghost. Mirrors the
-            // cleanup `remove_member` already performs.
-            self.joined_this_round.remove(id);
+            // `remove_member` also clears the member's `static_members` entry
+            // and its `joined_this_round` mark, so a member expired
+            // mid-`PreparingRebalance` does not linger as a ghost that
+            // `all_members_joined_this_round` counts.
+            self.remove_member(id);
         }
         if !dropped.is_empty() {
             if self.members.is_empty() {
@@ -250,22 +246,93 @@ mod tests {
         check!(g.current_member_id_for_instance("inst-a") == Some("m2"));
     }
 
+    /// Kafka expires a static member on session timeout like a dynamic one
+    /// (`GroupMetadataManager.expireClassicGroupMemberHeartbeat`), removes its
+    /// instance id from the static index (`ClassicGroup.remove`), and
+    /// rebalances the rest of the group.
     #[test]
-    fn static_member_timeout_is_suppressed() {
-        let mut g = ClassicGroup::new("g");
-        let mut m = static_member("m1", "inst-a");
-        m.session_timeout = Duration::from_millis(1);
-        m.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
-        g.add_member(m);
-        g.complete_rebalance("range");
-        g.state = GroupState::Stable;
+    fn session_timeout_expires_static_and_dynamic_members() {
+        struct Row {
+            name: &'static str,
+            instance_id: Option<&'static str>,
+            with_survivor: bool,
+            timed_out: bool,
+            dropped: Vec<String>,
+            members: Vec<&'static str>,
+            state: GroupState,
+            index: Option<&'static str>,
+        }
+        let rows = [
+            Row {
+                name: "static member alone, timed out",
+                instance_id: Some("inst-a"),
+                with_survivor: false,
+                timed_out: true,
+                dropped: vec!["m1".into()],
+                members: vec![],
+                state: GroupState::Empty,
+                index: None,
+            },
+            Row {
+                name: "static member with a survivor, timed out",
+                instance_id: Some("inst-a"),
+                with_survivor: true,
+                timed_out: true,
+                dropped: vec!["m1".into()],
+                members: vec!["survivor"],
+                state: GroupState::PreparingRebalance,
+                index: None,
+            },
+            Row {
+                name: "static member inside its session",
+                instance_id: Some("inst-a"),
+                with_survivor: true,
+                timed_out: false,
+                dropped: vec![],
+                members: vec!["m1", "survivor"],
+                state: GroupState::Stable,
+                index: Some("m1"),
+            },
+            Row {
+                name: "dynamic member with a survivor, timed out",
+                instance_id: None,
+                with_survivor: true,
+                timed_out: true,
+                dropped: vec!["m1".into()],
+                members: vec!["survivor"],
+                state: GroupState::PreparingRebalance,
+                index: None,
+            },
+        ];
+        for row in rows {
+            let mut g = ClassicGroup::new("g");
+            let mut m = sample_member("m1").with_instance_id(row.instance_id.map(str::to_string));
+            m.session_timeout = Duration::from_millis(1);
+            if row.timed_out {
+                m.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+            } else {
+                m.session_timeout = Duration::from_mins(1);
+            }
+            g.add_member(m);
+            if row.with_survivor {
+                g.add_member(sample_member("survivor"));
+            }
+            g.complete_rebalance("range");
+            g.state = GroupState::Stable;
 
-        let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
-        check!(dropped.is_empty(), "static member must NOT be expired");
-        check!(g.state == GroupState::Stable);
-        check!(g.members.contains_key("m1"));
-        // Index entry retained.
-        check!(g.current_member_id_for_instance("inst-a") == Some("m1"));
+            let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
+
+            let mut members: Vec<&str> = g.members.keys().map(String::as_str).collect();
+            members.sort_unstable();
+            check!(dropped == row.dropped, "{}", row.name);
+            check!(members == row.members, "{}", row.name);
+            check!(g.state == row.state, "{}", row.name);
+            check!(
+                g.current_member_id_for_instance("inst-a") == row.index,
+                "{}",
+                row.name
+            );
+        }
     }
 
     #[test]
