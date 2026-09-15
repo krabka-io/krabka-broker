@@ -70,6 +70,7 @@ async fn share_group_records_replay_into_seed() {
             }),
             sp::ShareGroupCurrentMemberAssignmentValue {
                 member_epoch: 4,
+                previous_member_epoch: 3,
                 assigned_partitions: vec![(tid, vec![0, 1])],
             }
             .encode(),

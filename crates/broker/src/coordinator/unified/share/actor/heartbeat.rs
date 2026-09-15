@@ -27,7 +27,6 @@ use crate::{
             persistence::ShareGroupMetadataValue,
             state::{ShareGroupState, ShareMemberState},
         },
-        validate_member_epoch,
     },
 };
 
@@ -52,7 +51,8 @@ pub(super) async fn handle_heartbeat(
     // KIP-932 mirrors KIP-848: the client mints its own member UUID and
     // sends it with `member_epoch == 0`. Treat epoch 0 from an unknown member
     // as a first-join, adopting the client-supplied id; an empty id is
-    // tolerated by minting a server-side UUID.
+    // tolerated by minting a server-side UUID. Epoch 0 from a known member is
+    // a rejoin and takes the existing-member path below.
     if req.member_epoch == 0 && !state.members.contains_key(&req.member_id) {
         if state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
@@ -72,10 +72,7 @@ pub(super) async fn handle_heartbeat(
     }
 
     // ─── Existing-member: validate epoch ─────────────────────────
-    let cur_epoch = match validate_member_epoch(
-        state.members.get(&req.member_id).map(|m| m.member_epoch),
-        req.member_epoch,
-    ) {
+    let cur_epoch = match state.validate_member_epoch(&req.member_id, req.member_epoch) {
         Ok(epoch) => epoch,
         Err(error_code) => return Ok(error_resp(error_code, config)),
     };
@@ -377,37 +374,59 @@ mod tests {
         assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
     }
 
+    /// The member epoch rule of Kafka's `throwIfShareGroupMemberEpochIsInvalid`.
+    /// Member `m1` is at epoch 3 with previous epoch 1: it joins at epoch 1,
+    /// `m2` and `m3` join (group epochs 2 and 3), and `m1` heartbeats once at
+    /// epoch 1. Each row sends one heartbeat on a fresh group and compares the
+    /// whole response.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn known_member_epoch_zero_is_stale_not_first_join() {
-        let (metadata, _id) = metadata_with_topic("t", 4);
-        let (coord, _log) = make_coordinator(metadata);
-        let handle = coord.get_or_create_share("g");
-        let joined = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(joined.member_epoch == 1);
+    async fn member_epoch_rule_matches_kafka() {
+        let request = |member_id: &str, member_epoch| ShareGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: member_id.into(),
+            member_epoch,
+            subscribed_topic_names: Some(vec!["t".into()]),
+            ..Default::default()
+        };
+        // (member id, request epoch, accepted)
+        let rows = [
+            ("m1", 0, true),
+            ("m1", 1, true),
+            ("m1", 2, false),
+            ("m1", 3, true),
+            ("m1", 4, false),
+            ("m9", 3, false),
+        ];
 
-        let resp = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
+        for (index, (member_id, member_epoch, accepted)) in rows.into_iter().enumerate() {
+            let (metadata, _id) = metadata_with_topic("t", 4);
+            let (coord, _log) = make_coordinator(metadata);
+            let handle = coord.get_or_create_share("g");
+            check!(heartbeat(&handle, request("m1", 0)).await.member_epoch == 1);
+            check!(heartbeat(&handle, request("m2", 0)).await.member_epoch == 2);
+            check!(heartbeat(&handle, request("m3", 0)).await.member_epoch == 3);
+            let advanced = heartbeat(&handle, request("m1", 1)).await;
+            check!(advanced.member_epoch == 3);
 
-        assert!(resp.error_code == codes::STALE_MEMBER_EPOCH);
+            let resp = heartbeat(&handle, request(member_id, member_epoch)).await;
+
+            let config = ShareGroupConfig::default();
+            let expected = if accepted {
+                // A rejoin and the previous epoch get the current epoch and
+                // the full assignment, as a current heartbeat does.
+                ShareGroupHeartbeatResponse {
+                    member_id: Some("m1".into()),
+                    member_epoch: 3,
+                    assignment: advanced.assignment.clone(),
+                    ..super::super::response::base_resp(codes::NONE, 3, &config)
+                }
+            } else if member_id == "m1" {
+                super::super::response::error_resp(codes::FENCED_MEMBER_EPOCH, &config)
+            } else {
+                super::super::response::error_resp(codes::UNKNOWN_MEMBER_ID, &config)
+            };
+            check!(resp == expected, "row {index}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
