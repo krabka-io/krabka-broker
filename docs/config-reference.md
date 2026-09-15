@@ -448,6 +448,7 @@ Validated operational policy loaded from `[runtime]`.
 | `offsets_topic_metadata_wait_timeout` | string | broker default | duration | Maximum wait for `__consumer_offsets` metadata before a request fails. |
 | `offsets_topic_num_partitions` | integer (int32) | broker default |  | Partition count of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.num.partitions`. |
 | `offsets_topic_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.replication.factor`. |
+| `offsets_topic_segment_bytes` | string | broker default | byte size | `segment.bytes` of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.segment.bytes`. |
 | `opa_http_timeout` | string | broker default | duration | Timeout for one OPA authorization request. |
 | `operator_recovery_deadline` | string | broker default | duration | Deadline for an operator-triggered unclean recovery. |
 | `partition_disk_scan_interval` | string | broker default | duration | Cadence of the partition disk-usage scan that feeds the `partition_disk_bytes` gauge. Zero disables the scanner and spawns no background task. |
@@ -493,8 +494,10 @@ Validated operational policy loaded from `[runtime]`.
 | `share_group_session_timeout` | string | broker default | duration | Default share-group session timeout, Kafka's `group.share.session.timeout.ms`. |
 | `share_recovery_read_max` | string | broker default | byte size | Maximum bytes read by one share-state recovery read. |
 | `share_session_cache_max_when_unlimited` | integer (uint) | broker default |  | Ceiling on the share-session cache when the group count is unlimited. |
+| `share_state_min_isr` | integer (int32) | broker default |  | `min.insync.replicas` of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.min.isr`. |
 | `share_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.num.partitions`. |
 | `share_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.replication.factor`. |
+| `share_state_segment_bytes` | string | broker default | byte size | `segment.bytes` of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.segment.bytes`. |
 | `socket_receive_buffer` | string | broker default | byte size | Broker socket receive-buffer size, Kafka's `socket.receive.buffer.bytes`. |
 | `socket_request_max` | string | broker default | byte size | Maximum encoded request size accepted from a socket, Kafka's `socket.request.max.bytes`. |
 | `socket_send_buffer` | string | broker default | byte size | Broker socket send-buffer size, Kafka's `socket.send.buffer.bytes`. |
@@ -517,8 +520,10 @@ Validated operational policy loaded from `[runtime]`.
 | `transaction_max_timeout` | string | broker default | duration | Maximum transaction timeout a producer may request, Kafka's `transaction.max.timeout.ms`. |
 | `transaction_min_timeout` | string | broker default | duration | Minimum transaction timeout a producer may request. |
 | `transaction_recovery_read_max` | string | broker default | byte size | Maximum bytes requested by one `__transaction_state` recovery read. |
+| `transaction_state_min_isr` | integer (int32) | broker default |  | `min.insync.replicas` of the `__transaction_state` internal topic, Kafka's `transaction.state.log.min.isr`. |
 | `transaction_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__transaction_state` internal topic, Kafka's `transaction.state.log.num.partitions`. |
 | `transaction_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__transaction_state` internal topic, Kafka's `transaction.state.log.replication.factor`. |
+| `transaction_state_segment_bytes` | string | broker default | byte size | `segment.bytes` of the `__transaction_state` internal topic, Kafka's `transaction.state.log.segment.bytes`. |
 | `txn_abort_cleanup_interval` | string | broker default | duration | KIP-98: how often the idle-transaction reaper scans for `Ongoing` transactions whose timeout has elapsed and aborts them. Kafka's `transaction.abort.timed.out.transaction.cleanup.interval.ms`. Zero disables the reaper and spawns no background task. |
 | `txn_id_expiration` | string | broker default | duration | KIP-98: how long a transactional id may sit in a terminal or idle state before the coordinator tombstones it out of `__transaction_state`. Kafka's `transactional.id.expiration.ms`. |
 | `txn_id_expiration_cleanup_interval` | string | broker default | duration | KIP-98: how often the transactional-id expiry sweep scans the `__transaction_state` partitions this broker leads. Kafka's `transaction.remove.expired.transaction.cleanup.interval.ms`. Zero disables the sweep and spawns no background task. |

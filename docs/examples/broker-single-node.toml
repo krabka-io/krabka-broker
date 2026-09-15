@@ -96,6 +96,8 @@ tls_reload_interval = "30s"
 txn_id_expiration = "168h"
 offsets_topic_replication_factor = 1
 transaction_state_replication_factor = 1
+transaction_state_min_isr = 1
+share_state_min_isr = 1
 default_min_insync_replicas = 1
 
 # Tiered storage (KIP-405). A single node keeps the tier on the local

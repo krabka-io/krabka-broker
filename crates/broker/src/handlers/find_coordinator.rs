@@ -143,6 +143,10 @@ pub(crate) async fn handle(
                     &controller,
                     broker.config.transaction_state_num_partitions,
                     broker.config.transaction_state_replication_factor,
+                    &crate::txn::bootstrap::topic_configs(
+                        broker.config.transaction_state_segment_bytes,
+                        broker.config.transaction_state_min_isr,
+                    ),
                 )
                 .await
                 {
@@ -166,6 +170,9 @@ pub(crate) async fn handle(
                         .config
                         .share_coordinator
                         .state_topic_replication_factor,
+                    &crate::share_coordinator::bootstrap::topic_configs(
+                        &broker.config.share_coordinator,
+                    ),
                 )
                 .await;
                 if let Err(error) = topic_ready {

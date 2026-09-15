@@ -3,12 +3,12 @@
 //! The module makes sure that the topic exists at startup. It then replays
 //! every record synchronously into the in-memory `GroupCoordinator`.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use krabka_ids::PartitionIndex;
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord};
 use krabka_raft::RaftError;
-use krabka_units::convert::TimeExt as _;
+use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
 use crate::{
     broker::spawn_partition, config::BrokerConfig, coordinator::GroupCoordinator,
@@ -53,6 +53,22 @@ pub const OFFSETS_NUM_PARTITIONS: i32 = 50;
 /// `BrokerConfig::audit_topic` instead. Tests that boot a default broker use
 /// this.
 pub const AUDIT_TOPIC: &str = crate::config::DEFAULT_AUDIT_TOPIC;
+
+/// The topic configs Kafka writes when it creates `__consumer_offsets`
+/// (`GroupCoordinatorService.groupMetadataTopicConfigs`). Offsets and group
+/// metadata are keyed records, so the topic is compacted, never deleted by
+/// time.
+pub(crate) fn offsets_topic_configs(config: &BrokerConfig) -> BTreeMap<String, String> {
+    use crate::config_keys::{CLEANUP_POLICY, COMPRESSION_TYPE, SEGMENT_BYTES};
+    BTreeMap::from([
+        (CLEANUP_POLICY.to_owned(), "compact".to_owned()),
+        (COMPRESSION_TYPE.to_owned(), "producer".to_owned()),
+        (
+            SEGMENT_BYTES.to_owned(),
+            config.offsets_topic_segment_bytes.bytes_u64().to_string(),
+        ),
+    ])
+}
 
 /// Ensure `__consumer_offsets` exists, open every partition assigned to this
 /// broker, spawn its writer task, and replay each local log into the supplied
@@ -148,6 +164,10 @@ pub async fn bootstrap(
                     partition_epoch: 0,
                 }));
             }
+            records.push(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: OFFSETS_TOPIC.to_string(),
+                overrides: offsets_topic_configs(config),
+            }));
             match controller.submit_change(records).await {
                 // An earlier boot of ours already registered it (single
                 // writer, so no conflicting-id race) — treat as success.

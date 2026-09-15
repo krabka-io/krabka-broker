@@ -8,8 +8,8 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        positive_i16, positive_i32, positive_time, positive_usize, whole_bytes_usize,
-        whole_millis_i32_time, whole_millis_i64_time,
+        kafka_int_bytes, positive_i16, positive_i32, positive_time, positive_usize,
+        whole_bytes_usize, whole_millis_i32_time, whole_millis_i64_time,
     },
 };
 
@@ -56,6 +56,17 @@ impl RuntimeFileConfig {
             cfg.share_coordinator.state_topic_replication_factor =
                 positive_i16("share_state_replication_factor", value)?;
         }
+        set_runtime_size_bytes!(
+            runtime,
+            share_state_segment_bytes,
+            cfg.share_coordinator.state_topic_segment_bytes,
+            kafka_int_bytes
+        );
+        set_runtime_i32!(
+            runtime,
+            share_state_min_isr,
+            cfg.share_coordinator.state_topic_min_isr
+        );
         set_runtime_i32!(
             runtime,
             offsets_topic_num_partitions,
@@ -65,6 +76,12 @@ impl RuntimeFileConfig {
             cfg.offsets_topic_replication_factor =
                 positive_i16("offsets_topic_replication_factor", value)?;
         }
+        set_runtime_size_bytes!(
+            runtime,
+            offsets_topic_segment_bytes,
+            cfg.offsets_topic_segment_bytes,
+            kafka_int_bytes
+        );
         // These two carry the operator's intent, not just a value: `Some`
         // means the key was named, which is what `DescribeConfigs` reports as
         // `STATIC_BROKER_CONFIG`.
@@ -90,6 +107,17 @@ impl RuntimeFileConfig {
             cfg.transaction_state_replication_factor =
                 positive_i16("transaction_state_replication_factor", value)?;
         }
+        set_runtime_size_bytes!(
+            runtime,
+            transaction_state_segment_bytes,
+            cfg.transaction_state_segment_bytes,
+            kafka_int_bytes
+        );
+        set_runtime_i32!(
+            runtime,
+            transaction_state_min_isr,
+            cfg.transaction_state_min_isr
+        );
         set_runtime_time_millis!(
             runtime,
             transaction_min_timeout,

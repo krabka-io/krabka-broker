@@ -92,6 +92,7 @@ impl RuntimeArgs {
             diskless_wal_hot_tail_max_size,
             diskless_wal_trim_safety_lag,
             diskless_wal_index_projection_timeout,
+            share_state_segment_bytes,
         );
         copy_refined_runtime!(
             self,
@@ -102,6 +103,7 @@ impl RuntimeArgs {
             share_session_cache_max_when_unlimited,
             share_state_num_partitions,
             share_state_replication_factor,
+            share_state_min_isr,
         );
     }
 
@@ -125,6 +127,8 @@ impl RuntimeArgs {
             audit_tail_read_max,
             future_log_move_read_chunk,
             transaction_recovery_read_max,
+            offsets_topic_segment_bytes,
+            transaction_state_segment_bytes,
         );
         copy_refined_runtime!(
             self,
@@ -139,6 +143,7 @@ impl RuntimeArgs {
             offsets_topic_replication_factor,
             transaction_state_num_partitions,
             transaction_state_replication_factor,
+            transaction_state_min_isr,
         );
     }
 
