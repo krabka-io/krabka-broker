@@ -307,6 +307,13 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
         let topic = format!("byte-limit-{}", case.name);
         let group = format!("group-{}", case.name);
         let topic_id = create_topic(&broker, &topic).await;
+        crate::test_support::initialize_share_state(
+            &broker,
+            &group,
+            uuid::Uuid::from_bytes(topic_id.0),
+            0,
+        )
+        .await;
         // Open both sessions on the empty log, so the share partition starts
         // at offset 0 under the default `latest` reset.
         for member in ["limited", "unlimited"] {
@@ -365,6 +372,13 @@ const RELEASE: i8 = 2;
 async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
     let (broker, _dir) = start_with_delivery_attempts(1).await;
     let topic_id = create_topic(&broker, "delivery-limit").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        "g",
+        uuid::Uuid::from_bytes(topic_id.0),
+        0,
+    )
+    .await;
     let opened = share_fetch(&broker, "g", "m", 0, topic_id, (500, 1 << 20), &[]).await;
     assert!(partition(&opened).error_code == codes::NONE, "{opened:?}");
     produce_batches(&broker, "delivery-limit").await;
