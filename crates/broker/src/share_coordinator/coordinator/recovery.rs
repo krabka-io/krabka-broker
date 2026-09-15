@@ -43,9 +43,8 @@ impl ShareCoordinator {
     ///
     /// # Errors
     ///
-    /// This method does not fail at present. A per-partition read error is
-    /// logged, and the partition becomes active with the records read before
-    /// the error.
+    /// This method does not fail at present. A partition whose replay fails
+    /// is logged and stays failed until the next refresh loads it again.
     pub(crate) async fn recover(
         self: &Arc<Self>,
         image: &MetadataImage,
@@ -61,18 +60,47 @@ impl ShareCoordinator {
     /// Replays `state_partition` and installs the result for term
     /// `generation`.
     ///
-    /// The install runs under the write guard of the leadership map. When the
-    /// partition is no longer led, or a newer term started, the method drops
-    /// the replayed state.
+    /// The replay reads the log on the blocking thread pool, because
+    /// `Partition::read_log` takes the log mutex and reads from disk.
     pub(super) async fn load_partition(&self, state_partition: PartitionIndex, generation: u64) {
+        let read_max = self.config.recovery_read_max;
         let replayed = match self.partitions.get(bootstrap::TOPIC, state_partition) {
-            Some(part) => self.replay_partition(&part, state_partition),
-            None => HashMap::new(),
+            Some(part) => tokio::task::spawn_blocking(move || {
+                replay_partition(&part, state_partition, read_max)
+            })
+            .await
+            .unwrap_or_else(|error| {
+                Err(BrokerError::Share(format!(
+                    "__share_group_state-{state_partition} replay task failed: {error}"
+                )))
+            }),
+            None => Err(BrokerError::Share(format!(
+                "__share_group_state-{state_partition} is not open locally"
+            ))),
         };
+        self.install_load(state_partition, generation, replayed)
+            .await;
+    }
+
+    /// Ends the load of term `generation` of `state_partition`.
+    ///
+    /// The install runs under the write guard of the leadership map, and only
+    /// while the partition still loads that term. A replayed map goes into the
+    /// state map, and the partition becomes active. A failed replay installs
+    /// nothing, and the partition becomes failed: it answers
+    /// `NOT_COORDINATOR`, as Kafka's `CoordinatorRuntime` answers for a
+    /// `FAILED` shard, and the next refresh loads it again. A partial map is
+    /// never served.
+    pub(super) async fn install_load(
+        &self,
+        state_partition: PartitionIndex,
+        generation: u64,
+        replayed: Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError>,
+    ) {
         let mut led = self.leader_partitions.write().await;
         let Some(entry) = led
             .get_mut(&state_partition)
-            .filter(|entry| entry.generation == generation)
+            .filter(|entry| entry.generation == generation && entry.status == LoadStatus::Loading)
         else {
             info!(
                 partition = state_partition.get(),
@@ -80,76 +108,82 @@ impl ShareCoordinator {
             );
             return;
         };
-        let keys_loaded = replayed.len();
-        for (key, state) in replayed {
-            self.state.insert(key, Arc::new(Mutex::new(state)));
-        }
-        entry.status = LoadStatus::Active;
-        info!(
-            partition = state_partition.get(),
-            keys_loaded, "__share_group_state partition loaded"
-        );
-    }
-
-    /// Reads the whole log of `state_partition` and folds it into a new map.
-    fn replay_partition(
-        &self,
-        part: &Partition,
-        state_partition: PartitionIndex,
-    ) -> HashMap<ShareStateKey3, SharePartitionState> {
-        let mut replayed = HashMap::new();
-        let read_max = self.config.recovery_read_max;
-        let mut offset = part.log_start_offset();
-        loop {
-            let out = match part.read_log(offset, read_max) {
-                Ok(o) => o,
-                Err(e) => {
-                    warn!(
-                        partition = state_partition.get(),
-                        error = %e,
-                        "read error during __share_group_state load; stopping the replay"
-                    );
-                    break;
+        match replayed {
+            Ok(replayed) => {
+                let keys_loaded = replayed.len();
+                for (key, state) in replayed {
+                    self.state.insert(key, Arc::new(Mutex::new(state)));
                 }
-            };
-
-            if out.batches.is_empty() {
-                break;
+                entry.status = LoadStatus::Active;
+                info!(
+                    partition = state_partition.get(),
+                    keys_loaded, "__share_group_state partition loaded"
+                );
             }
-
-            for batch in &out.batches {
-                for rec in &batch.records {
-                    let rec_offset = Offset(batch.base_offset + i64::from(rec.offset_delta));
-                    let Some(key_bytes) = rec.key.as_ref() else {
-                        continue;
-                    };
-                    let key = match parse_state_key(key_bytes) {
-                        Ok(k) => k,
-                        Err(e) => {
-                            warn!(
-                                partition = state_partition.get(),
-                                error = %e,
-                                "invalid share-state key; skipping record"
-                            );
-                            continue;
-                        }
-                    };
-                    let map_key = (key.group_id.clone(), key.topic_id, key.partition);
-
-                    // Tombstone: drop the entry.
-                    let Some(value) = rec.value.as_ref() else {
-                        replayed.remove(&map_key);
-                        continue;
-                    };
-
-                    let st = replayed.entry(map_key).or_default();
-                    replay_value(st, &key, value, rec_offset, state_partition);
-                }
-                offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+            Err(error) => {
+                entry.status = LoadStatus::Failed;
+                warn!(
+                    partition = state_partition.get(),
+                    %error,
+                    "__share_group_state load failed; the next refresh loads it again"
+                );
             }
         }
-        replayed
     }
+}
+
+/// Reads the whole log of `state_partition` and folds it into a new map.
+///
+/// # Errors
+///
+/// Returns the read error of the log. The caller must not serve a partial
+/// replay.
+fn replay_partition(
+    part: &Partition,
+    state_partition: PartitionIndex,
+    read_max: krabka_units::ByteSize,
+) -> Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError> {
+    let mut replayed = HashMap::new();
+    let mut offset = part.log_start_offset();
+    loop {
+        let out = part.read_log(offset, read_max)?;
+
+        if out.batches.is_empty() {
+            break;
+        }
+
+        for batch in &out.batches {
+            for rec in &batch.records {
+                let rec_offset = Offset(batch.base_offset + i64::from(rec.offset_delta));
+                let Some(key_bytes) = rec.key.as_ref() else {
+                    continue;
+                };
+                let key = match parse_state_key(key_bytes) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        warn!(
+                            partition = state_partition.get(),
+                            error = %e,
+                            "invalid share-state key; skipping record"
+                        );
+                        continue;
+                    }
+                };
+                let map_key = (key.group_id.clone(), key.topic_id, key.partition);
+
+                // Tombstone: drop the entry.
+                let Some(value) = rec.value.as_ref() else {
+                    replayed.remove(&map_key);
+                    continue;
+                };
+
+                let st = replayed.entry(map_key).or_default();
+                replay_value(st, &key, value, rec_offset, state_partition);
+            }
+            offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+        }
+    }
+    Ok(replayed)
 }
 
 /// Folds one replayed record value into `st`.
