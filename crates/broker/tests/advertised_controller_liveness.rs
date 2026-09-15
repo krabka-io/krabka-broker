@@ -27,6 +27,7 @@ use krabka_protocol::owned::{
     describe_cluster_response::DescribeClusterResponse, metadata_request::MetadataRequest,
     metadata_response::MetadataResponse,
 };
+use krabka_units::convert::TimeExt as _;
 
 mod support;
 
@@ -245,4 +246,46 @@ async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<u64>) 
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// A broker booted from `BrokerConfig::for_tests` must keep its heartbeat
+/// session, as a Kafka broker does.
+///
+/// `for_tests` asks for port 0 on the controller listener and names that same
+/// `127.0.0.1:0` as its own voter endpoint. The heartbeat client dials the
+/// controller leader through the voter endpoint, so if the broker does not
+/// publish the port it bound, no heartbeat ever arrives. The controller then
+/// fences the broker and expires its session one `heartbeat_timeout` after
+/// start, and every single-broker test runs against a fenced broker.
+///
+/// The test waits for three session timeouts and a liveness tick, so an
+/// expired session has been decided and published before it reads the state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_for_tests_broker_keeps_its_heartbeat_session() {
+    support::init_tracing();
+
+    let dir = tempfile::tempdir().expect("log dir");
+    let config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let session = config.heartbeat_timeout.to_std();
+    let tick = config.liveness_tick_interval.to_std();
+    let broker = krabka_broker::Broker::start(config)
+        .await
+        .expect("start broker");
+    let node = broker.node_id();
+
+    tokio::time::sleep(session * 3 + tick).await;
+
+    let published = broker.metrics().controller_fencing_publications_total.get();
+    broker
+        .wait_for_metrics("a fencing publication after the session window", |m| {
+            m.controller_fencing_publications_total.get() > published
+        })
+        .await;
+    let state = (
+        broker.broker_alive_for_test(node).await,
+        broker.fenced_broker_ids_for_test(),
+    );
+    assert!(state == (true, BTreeSet::new()));
+
+    broker.shutdown().await;
 }
