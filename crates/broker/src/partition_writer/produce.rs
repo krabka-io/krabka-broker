@@ -65,9 +65,16 @@ pub(super) async fn handle_produce(
 
     let mut acks = Vec::with_capacity(jobs.len());
     let mut datas = Vec::with_capacity(jobs.len());
-    for ProduceJob { data, ack } in jobs {
+    let mut checks = Vec::with_capacity(jobs.len());
+    for ProduceJob {
+        data,
+        ack,
+        producer_check,
+    } in jobs
+    {
         acks.push(ack);
         datas.push(data);
+        checks.push(producer_check);
     }
 
     let append_result = if wal.is_some() {
@@ -82,7 +89,7 @@ pub(super) async fn handle_produce(
         };
         let count = datas.iter().map(ProduceData::record_count).sum();
         match sequencer.assign(identity.0, identity.1, count).await {
-            Ok(base) => run_produce_append_batch_at(Arc::clone(log), base, datas).await,
+            Ok(base) => run_produce_append_batch_at(Arc::clone(log), base, (datas, checks)).await,
             Err(error) => {
                 for ack in acks {
                     let _ = ack.send(Err(storage_failure_error(
@@ -94,7 +101,7 @@ pub(super) async fn handle_produce(
             }
         }
     } else {
-        run_produce_append_batch(Arc::clone(log), datas).await
+        run_produce_append_batch(Arc::clone(log), (datas, checks)).await
     };
     let (results, leo, control_entries) = match append_result {
         Ok(value) => value,

@@ -40,6 +40,7 @@ mod timestamp;
 mod transaction;
 mod truncate;
 mod verbatim;
+mod verification;
 
 pub use self::{
     compaction::CompactionContext,
@@ -47,6 +48,7 @@ pub use self::{
     read::{RawRead, ReadOutput},
     tiering::SegmentExport,
     verbatim::VerbatimBatch,
+    verification::{TransactionAppendRefusal, TransactionalBatch, VerificationGuard},
 };
 
 crate::sendfile_cfg! {
@@ -127,6 +129,11 @@ pub struct Log {
     /// producer's currently-open txn. The log clears the entry when it
     /// applies a commit or abort marker for that `producer_id`.
     pending: HashMap<ProducerId, Offset>,
+
+    /// KIP-890 verification state per producer, from the start of a
+    /// transaction verification to the producer's next transactional append.
+    /// See [`VerificationGuard`].
+    verification_states: HashMap<ProducerId, verification::VerificationState>,
 
     /// Exact data-batch ranges for each in-flight transaction. A commit
     /// marker stamps only these ranges, so interleaved transactions and

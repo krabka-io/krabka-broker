@@ -70,6 +70,7 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(3)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");
@@ -148,6 +149,7 @@ async fn diskless_acked_record_survives_reopen() {
         tx.send(WriterMessage::Produce(ProduceJob {
             data: ProduceData::Owned(sample_batch(1)),
             ack,
+            producer_check: None,
         }))
         .await
         .expect("send job");

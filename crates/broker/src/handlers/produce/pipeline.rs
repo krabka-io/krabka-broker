@@ -20,7 +20,9 @@ use super::{
         replication_target_matches_image, validate_partition_gate,
     },
     prepare::{PreparedBatch, prepare_batch},
-    producer_checks::{DedupOutcome, handle_duplicate, validate_transactional_produce},
+    producer_checks::{
+        DedupOutcome, TransactionRequest, handle_duplicate, verify_transactional_produce,
+    },
     schema::{SCHEMA_REJECTION_MESSAGE, validate_batch_schemas},
     topic_settings::TimestampPolicy,
 };
@@ -74,6 +76,8 @@ pub(super) struct PartitionInput<'a> {
     /// Only `Frozen` carries registry detail, after authorization succeeded.
     pub(super) freeze: FreezeMutationResolution<'a>,
     pub(super) txn_id_denied: bool,
+    /// The request fields of the KIP-890 transaction check.
+    pub(super) transaction: TransactionRequest<'a>,
     pub(super) acks: i16,
     pub(super) timeout: Duration,
 }
@@ -148,6 +152,28 @@ async fn local_replica_is_ready(
     true
 }
 
+/// The KIP-890 transaction check of one batch, after the diskless refusal:
+/// a diskless partition takes no transactional batch. A refusal fills the
+/// pre-append row `refused`.
+async fn verify_before_append(
+    prepared: &super::prepare::PreparedBatch,
+    part: &crate::partition::Partition,
+    txn_coordinator: &crate::txn::coordinator::TxnCoordinator,
+    topic: (&krabka_metadata::MetadataImage, &str),
+    (transaction, mut refused): (TransactionRequest<'_>, PartitionProduceResponse),
+) -> Result<Option<crate::partition::ProducerAppendCheck>, Box<PartitionProduceResponse>> {
+    let verified = if prepared.attributes.is_transactional() && part.diskless {
+        Err((codes::INVALID_TXN_STATE, None))
+    } else {
+        verify_transactional_produce(prepared, part, txn_coordinator, topic, transaction).await
+    };
+    verified.map_err(|(code, message)| {
+        refused.error_code = code;
+        refused.error_message = message;
+        Box::new(refused)
+    })
+}
+
 pub(super) async fn process_partition(
     input: PartitionInput<'_>,
     services: PartitionServices<'_>,
@@ -163,6 +189,7 @@ pub(super) async fn process_partition(
         topic_name,
         freeze,
         txn_id_denied,
+        transaction,
         acks,
         timeout,
     } = input;
@@ -388,9 +415,28 @@ pub(super) async fn process_partition(
         return Ok(PartitionOutcome::Done(out));
     }
 
+    // ── KIP-890 transaction verification ─────────────────────
+    // Kafka verifies before the append starts, and before the duplicate
+    // lookup, with a coordinator call that may cross the network. It runs
+    // outside the transition barrier for that reason; the log checks the
+    // guard again under the append's own lock.
+    let producer_check = match verify_before_append(
+        &prepared,
+        &part,
+        txn_coordinator,
+        (image, topic_name),
+        (transaction, out.clone()),
+    )
+    .await
+    {
+        Ok(check) => check,
+        Err(refused) => return Ok(PartitionOutcome::Done(*refused)),
+    };
+
     // Hold the transition barrier through dedup, enqueue, append, and ack.
-    // Schema validation released it around network I/O, so repeat the local
-    // readiness proof before admitting this batch to any stateful gate.
+    // Schema validation and the transaction verification released it around
+    // network I/O, so repeat the local readiness proof before admitting this
+    // batch to any stateful gate.
     let transition = part.lock_produce_transition().await;
     let record = image.partition(topic_name, idx).expect("gate checked");
     let topic_id = image.topic(topic_name).map(|topic| topic.topic_id);
@@ -412,24 +458,6 @@ pub(super) async fn process_partition(
     let leader_epoch = part
         .current_leader_epoch
         .load(std::sync::atomic::Ordering::Acquire);
-
-    // ── transactional produce verify (KIP-1319 v2) ──────────
-    // This check is more authoritative than idempotent dedup,
-    // so it runs first. Non-transactional batches (pid < 0 or
-    // is_transactional=false) skip directly to the dedup gate.
-    // All header fields below come from `prepared` — sourced from the v2
-    // batch HEADER on the verbatim path, or from the decoded owned
-    // `RecordBatch` header on the fallback path.
-    if prepared.attributes.is_transactional() && part.diskless {
-        out.error_code = codes::INVALID_TXN_STATE;
-        return Ok(PartitionOutcome::Done(out));
-    }
-    if let Some(code) =
-        validate_transactional_produce(&prepared, txn_coordinator, image, topic_name, idx).await
-    {
-        out.error_code = code;
-        return Ok(PartitionOutcome::Done(out));
-    }
 
     // ── idempotent-producer dedup gate ───────────────────────
     match handle_duplicate(&prepared, producer_state, &part, topic_name, idx, acks).await {
@@ -490,6 +518,7 @@ pub(super) async fn process_partition(
             timeout,
             leader_epoch,
             phases,
+            producer_check,
         },
         &shared_topic,
     )

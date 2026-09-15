@@ -173,6 +173,7 @@ impl Log {
             compacted_once: false,
             lso,
             pending: HashMap::new(),
+            verification_states: HashMap::new(),
             pending_stamp_ranges: HashMap::new(),
             coordinator_epochs: HashMap::new(),
             producer_state: HashMap::new(),

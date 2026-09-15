@@ -13,7 +13,7 @@ use krabka_log::{Log, Offset};
 use tokio::runtime::{Handle, RuntimeFlavor};
 
 use super::storage::{lock_log, storage_failure_error};
-use crate::partition::{AppendedBatch, ProduceData};
+use crate::partition::{AppendedBatch, ProduceData, ProducerAppendCheck};
 
 /// The writer's answer for a batch the log both placed and, when the partition
 /// asks for it, stamped.
@@ -35,6 +35,19 @@ fn at_offset(base_offset: Offset) -> AppendedBatch {
         base_offset,
         log_append_time_ms: None,
     }
+}
+
+/// The refusal for a client batch whose producer transaction check fails, or
+/// `None` when the batch may append. The check runs under the append's own
+/// lock, so no marker can land between the check and the append.
+fn refuse_transactional_append(
+    log: &Log,
+    check: Option<&Option<ProducerAppendCheck>>,
+) -> Option<crate::error::BrokerError> {
+    let check = check.copied().flatten()?;
+    log.check_transactional_append(check.batch, check.guard)
+        .err()
+        .map(crate::error::BrokerError::TransactionAppend)
 }
 
 /// Append a whole group of produce jobs under a single lock acquisition.
@@ -65,7 +78,7 @@ fn at_offset(base_offset: Offset) -> AppendedBatch {
 /// sequential base offsets, so the function keeps the order across the group.
 fn append_produce_batch(
     log: &Mutex<Log>,
-    datas: Vec<ProduceData>,
+    (datas, checks): (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
 ) -> (
     Vec<Result<AppendedBatch, crate::error::BrokerError>>,
     Offset,
@@ -75,8 +88,12 @@ fn append_produce_batch(
     let target = guard.config_snapshot().compression_type;
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
-    for data in datas {
+    for (index, data) in datas.into_iter().enumerate() {
         let control_producer = data.control_producer_id();
+        if let Some(refused) = refuse_transactional_append(&guard, checks.get(index)) {
+            results.push(Err(refused));
+            continue;
+        }
         let r = match data {
             ProduceData::Verbatim(batch) => guard
                 .append_verbatim(&batch)
@@ -125,7 +142,7 @@ fn append_produce_batch(
 fn append_produce_batch_at(
     log: &Mutex<Log>,
     base: Offset,
-    datas: Vec<ProduceData>,
+    (datas, checks): (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
 ) -> (
     Vec<Result<AppendedBatch, crate::error::BrokerError>>,
     Offset,
@@ -136,36 +153,40 @@ fn append_produce_batch_at(
     let mut next = base;
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
-    for data in datas {
+    for (index, data) in datas.into_iter().enumerate() {
         let count = i64::from(data.record_count());
         let control_producer = data.control_producer_id();
-        let result = match data {
-            ProduceData::Verbatim(batch) => guard
-                .append_verbatim_at(&batch, next)
-                .map(at_offset)
-                .map_err(crate::error::BrokerError::from),
-            ProduceData::Owned(mut batch) => {
-                if let Some(target) = target
-                    && batch.attributes.compression() != target
-                {
-                    batch.attributes = batch.attributes.with_compression(target);
+        let result = if let Some(refused) = refuse_transactional_append(&guard, checks.get(index)) {
+            Err(refused)
+        } else {
+            match data {
+                ProduceData::Verbatim(batch) => guard
+                    .append_verbatim_at(&batch, next)
+                    .map(at_offset)
+                    .map_err(crate::error::BrokerError::from),
+                ProduceData::Owned(mut batch) => {
+                    if let Some(target) = target
+                        && batch.attributes.compression() != target
+                    {
+                        batch.attributes = batch.attributes.with_compression(target);
+                    }
+                    guard
+                        .append_at(&mut batch, next)
+                        .map(|()| at_offset(next))
+                        .map_err(crate::error::BrokerError::from)
                 }
-                guard
+                ProduceData::OwnedControl(mut batch) => guard
                     .append_at(&mut batch, next)
                     .map(|()| at_offset(next))
-                    .map_err(crate::error::BrokerError::from)
+                    .map_err(crate::error::BrokerError::from),
+                ProduceData::OwnedCommitMarker {
+                    mut batch,
+                    commit_stamp,
+                } => guard
+                    .append_at_with_commit_stamp(&mut batch, next, commit_stamp)
+                    .map(|()| at_offset(next))
+                    .map_err(crate::error::BrokerError::from),
             }
-            ProduceData::OwnedControl(mut batch) => guard
-                .append_at(&mut batch, next)
-                .map(|()| at_offset(next))
-                .map_err(crate::error::BrokerError::from),
-            ProduceData::OwnedCommitMarker {
-                mut batch,
-                commit_stamp,
-            } => guard
-                .append_at_with_commit_stamp(&mut batch, next, commit_stamp)
-                .map(|()| at_offset(next))
-                .map_err(crate::error::BrokerError::from),
         };
         if result.is_ok()
             && let Some(producer_id) = control_producer
@@ -191,7 +212,7 @@ fn append_produce_batch_at(
 /// order does not change.
 pub(crate) async fn run_produce_append_batch(
     log: Arc<Mutex<Log>>,
-    datas: Vec<ProduceData>,
+    datas: (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
 ) -> Result<
     (
         Vec<Result<AppendedBatch, crate::error::BrokerError>>,
@@ -214,7 +235,7 @@ pub(crate) async fn run_produce_append_batch(
 pub(crate) async fn run_produce_append_batch_at(
     log: Arc<Mutex<Log>>,
     base: Offset,
-    datas: Vec<ProduceData>,
+    datas: (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
 ) -> Result<
     (
         Vec<Result<AppendedBatch, crate::error::BrokerError>>,
@@ -275,10 +296,13 @@ mod tests {
 
         let (results, leo, _) = append_produce_batch(
             &log,
-            vec![
-                ProduceData::Owned(sample_batch(1)),
-                ProduceData::Owned(sample_batch(1)),
-            ],
+            (
+                vec![
+                    ProduceData::Owned(sample_batch(1)),
+                    ProduceData::Owned(sample_batch(1)),
+                ],
+                Vec::new(),
+            ),
         );
 
         assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
@@ -304,10 +328,13 @@ mod tests {
         let (results, leo, _) = append_produce_batch_at(
             &log,
             Offset(0),
-            vec![
-                ProduceData::Owned(sample_batch(1)),
-                ProduceData::Owned(sample_batch(1)),
-            ],
+            (
+                vec![
+                    ProduceData::Owned(sample_batch(1)),
+                    ProduceData::Owned(sample_batch(1)),
+                ],
+                Vec::new(),
+            ),
         );
 
         assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
@@ -318,8 +345,11 @@ mod tests {
         ));
         assert!(leo == Offset(1));
 
-        let (results, leo, _) =
-            append_produce_batch_at(&log, Offset(2), vec![ProduceData::Owned(sample_batch(1))]);
+        let (results, leo, _) = append_produce_batch_at(
+            &log,
+            Offset(2),
+            (vec![ProduceData::Owned(sample_batch(1))], Vec::new()),
+        );
 
         assert!(results[0].as_ref().unwrap().base_offset == Offset(2));
         assert!(leo == Offset(3));
@@ -342,7 +372,8 @@ mod tests {
         let original = sample_batch(2);
         assert!(original.attributes.compression() == CompressionType::None);
 
-        let (results, leo, _) = append_produce_batch(&log, vec![ProduceData::Owned(original)]);
+        let (results, leo, _) =
+            append_produce_batch(&log, (vec![ProduceData::Owned(original)], Vec::new()));
         assert!(results.len() == 1);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
         assert!(assigned.base_offset == 0);
@@ -383,7 +414,7 @@ mod tests {
         assert!(marker.attributes.compression() == CompressionType::None);
 
         let (results, _, control_entries) =
-            append_produce_batch(&log, vec![ProduceData::OwnedControl(marker)]);
+            append_produce_batch(&log, (vec![ProduceData::OwnedControl(marker)], Vec::new()));
         let assigned = results.into_iter().next().unwrap().expect("append ok");
         assert!(assigned.base_offset == 0);
 
@@ -427,8 +458,11 @@ mod tests {
         marker.producer_id = 7;
         marker.producer_epoch = 3;
 
-        let (results, _, control_entries) =
-            append_produce_batch_at(&log, Offset(0), vec![ProduceData::OwnedControl(marker)]);
+        let (results, _, control_entries) = append_produce_batch_at(
+            &log,
+            Offset(0),
+            (vec![ProduceData::OwnedControl(marker)], Vec::new()),
+        );
         assert!(
             results
                 .into_iter()

@@ -79,6 +79,10 @@ kafka_codes! {
     /// `AlterReplicaLogDirs` request is not one of this broker's configured
     /// `log.dirs`.
     LOG_DIR_NOT_FOUND = 57;
+    /// `NETWORK_EXCEPTION` (13): the server disconnected before a response
+    /// arrived. A broker reports it for an inter-broker call it could not
+    /// complete, as Kafka's `AddPartitionsToTxnManager` does.
+    NETWORK_EXCEPTION = 13;
     COORDINATOR_NOT_AVAILABLE = 15;
     /// `COORDINATOR_LOAD_IN_PROGRESS` (14, KIP-848): the group coordinator is
     /// still loading state from `__consumer_offsets`. Clients should retry
@@ -545,7 +549,16 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         BrokerError::GroupInvalidState { .. } => REBALANCE_IN_PROGRESS,
         BrokerError::UnknownMember { .. } => UNKNOWN_MEMBER_ID,
         BrokerError::GenerationMismatch { .. } => ILLEGAL_GENERATION,
-        BrokerError::ProducerEpochFenced { .. } => INVALID_PRODUCER_EPOCH,
+        BrokerError::ProducerEpochFenced { .. }
+        | BrokerError::TransactionAppend(
+            krabka_log::TransactionAppendRefusal::StaleProducerEpoch,
+        ) => INVALID_PRODUCER_EPOCH,
+        BrokerError::TransactionAppend(
+            krabka_log::TransactionAppendRefusal::InvalidTransactionState,
+        ) => INVALID_TXN_STATE,
+        BrokerError::TransactionAppend(
+            krabka_log::TransactionAppendRefusal::OutOfOrderSequence,
+        ) => OUT_OF_ORDER_SEQUENCE_NUMBER,
         BrokerError::CoordinatorEpochFenced { .. } => TRANSACTION_COORDINATOR_FENCED,
         BrokerError::FencedLeaderEpoch { .. } => FENCED_LEADER_EPOCH,
         BrokerError::UnknownLeaderEpoch(_) => UNKNOWN_LEADER_EPOCH,
