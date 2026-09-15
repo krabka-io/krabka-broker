@@ -36,10 +36,12 @@ impl ControllerLivenessState {
             last_heartbeat: now,
             state: BrokerLivenessState::Alive,
             fenced: initially_fenced,
+            contact: true,
         });
         let prev = entry.state;
         entry.last_heartbeat = now;
         entry.state = BrokerLivenessState::Alive;
+        entry.contact = true;
         if prev == BrokerLivenessState::Dead {
             tracing::info!(
                 broker_id,
@@ -100,6 +102,7 @@ impl ControllerLivenessState {
                 last_heartbeat: now,
                 state: BrokerLivenessState::Alive,
                 fenced: true,
+                contact: false,
             });
         }
     }
@@ -117,12 +120,58 @@ impl ControllerLivenessState {
                 .and_modify(|entry| {
                     entry.last_heartbeat = now;
                     entry.state = BrokerLivenessState::Alive;
+                    entry.contact = !entry.fenced;
                 })
                 .or_insert(BrokerEntry {
                     last_heartbeat: now,
                     state: BrokerLivenessState::Alive,
                     fenced: false,
+                    contact: true,
                 });
+        }
+    }
+
+    /// Whether `broker_id` still holds a heartbeat session: the broker was in
+    /// contact with this controller within the timeout. Kafka's
+    /// `BrokerHeartbeatManager.hasValidSession`, which
+    /// `ClusterControlManager.registerBroker` asks before it refuses a new
+    /// incarnation with `DUPLICATE_BROKER_REGISTRATION`.
+    ///
+    /// Fencing does not matter here. A fenced broker that still heartbeats is
+    /// still running, and a second process must not take its id.
+    pub(crate) async fn has_valid_session(&self, broker_id: u64) -> bool {
+        let map = self.brokers.lock().await;
+        let now = self.clock.now();
+        map.get(&broker_id).is_some_and(|entry| {
+            entry.contact
+                && entry.state == BrokerLivenessState::Alive
+                && now.saturating_duration_since(entry.last_heartbeat) <= self.timeout
+        })
+    }
+
+    /// End the session of `broker_id` without touching its fence or its
+    /// death clock, as if the broker stopped heartbeating long enough ago.
+    #[cfg(test)]
+    pub(crate) async fn end_session(&self, broker_id: u64) {
+        if let Some(entry) = self.brokers.lock().await.get_mut(&broker_id) {
+            entry.contact = false;
+        }
+    }
+
+    /// Close the session of the previous incarnation of `broker_id`, which a
+    /// new incarnation just replaced. The broker starts fenced until it
+    /// catches up to its new registration record, as Kafka registers a new
+    /// incarnation with `Fenced = true` after it removes the old session.
+    ///
+    /// The death clock and the liveness state stay as they are. A broker that
+    /// was already dead still revives on its first heartbeat, and one whose
+    /// old session is past the timeout still expires on the next tick if the
+    /// new process never heartbeats.
+    pub(crate) async fn replace_incarnation(&self, broker_id: u64) {
+        let mut map = self.brokers.lock().await;
+        if let Some(entry) = map.get_mut(&broker_id) {
+            entry.fenced = true;
+            entry.contact = false;
         }
     }
 }
@@ -263,6 +312,126 @@ mod tests {
 
         assert!(transitions.is_empty());
         assert!(liveness.state(7).await == Some(BrokerLivenessState::Alive));
+    }
+
+    /// krabka-io/krabka-broker#822: a broker id is held against a new
+    /// incarnation only while the broker is in contact, as Kafka's
+    /// `BrokerHeartbeatTracker.hasValidSession` decides.
+    #[tokio::test]
+    async fn a_session_is_valid_only_while_the_broker_is_in_contact() {
+        const TIMEOUT: Duration = Duration::from_millis(10);
+        const BROKER: u64 = 7;
+
+        /// What the registry saw of the broker, and when.
+        #[derive(Debug, Clone, Copy)]
+        enum Step {
+            Heartbeat,
+            FencedHeartbeat,
+            Fence,
+            Discover,
+            Seed,
+            ReplaceIncarnation,
+            Advance(u64),
+            Tick,
+        }
+        use Step::{
+            Advance, Discover, Fence, FencedHeartbeat, Heartbeat, ReplaceIncarnation, Seed, Tick,
+        };
+
+        let cases: &[(&str, &[Step], bool)] = &[
+            ("never seen", &[], false),
+            ("a heartbeat", &[Heartbeat], true),
+            (
+                "a heartbeat at the edge of the timeout",
+                &[Heartbeat, Advance(10)],
+                true,
+            ),
+            (
+                "a heartbeat past the timeout, before the tick",
+                &[Heartbeat, Advance(11)],
+                false,
+            ),
+            (
+                "a heartbeat past the timeout, after the tick",
+                &[Heartbeat, Advance(11), Tick],
+                false,
+            ),
+            (
+                "a fenced broker that still heartbeats",
+                &[FencedHeartbeat],
+                true,
+            ),
+            (
+                "a broker fenced on request that still heartbeats",
+                &[Heartbeat, Fence],
+                true,
+            ),
+            ("a broker only discovered in the image", &[Discover], false),
+            (
+                "an unfenced broker seeded by a new controller",
+                &[Seed],
+                true,
+            ),
+            (
+                "a fenced broker seeded by a new controller",
+                &[FencedHeartbeat, Seed],
+                false,
+            ),
+            (
+                "a new incarnation replaced the session",
+                &[Heartbeat, ReplaceIncarnation],
+                false,
+            ),
+            (
+                "the new incarnation heartbeats",
+                &[Heartbeat, ReplaceIncarnation, FencedHeartbeat],
+                true,
+            ),
+            (
+                "a dead broker revived by a heartbeat",
+                &[Heartbeat, Advance(11), Tick, Heartbeat],
+                true,
+            ),
+        ];
+        for (what, steps, valid) in cases {
+            let clock = TestClock::new();
+            let liveness = ControllerLivenessState::with_test_clock(TIMEOUT, &clock);
+            for step in *steps {
+                match step {
+                    Heartbeat => {
+                        liveness.record_heartbeat(BROKER).await;
+                    }
+                    FencedHeartbeat => {
+                        liveness.record_fenced_heartbeat(BROKER).await;
+                    }
+                    Fence => {
+                        liveness.apply_fencing(BROKER, true, true).await;
+                    }
+                    Discover => liveness.track_registered([BROKER]).await,
+                    Seed => liveness.seed_brokers([BROKER]).await,
+                    ReplaceIncarnation => liveness.replace_incarnation(BROKER).await,
+                    Advance(millis) => clock.advance(Duration::from_millis(*millis)),
+                    Tick => {
+                        liveness.tick().await;
+                    }
+                }
+            }
+            assert2::check!(liveness.has_valid_session(BROKER).await == *valid, "{what}");
+        }
+    }
+
+    /// A new incarnation starts fenced until it catches up, whatever its
+    /// previous incarnation had reached.
+    #[tokio::test]
+    async fn a_new_incarnation_starts_fenced() {
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
+        liveness.record_heartbeat(7).await;
+        assert!(liveness.is_alive(7).await);
+
+        liveness.replace_incarnation(7).await;
+
+        assert!(!liveness.is_alive(7).await);
+        assert!(liveness.unavailable_snapshot().await.contains(&7));
     }
 
     #[tokio::test]

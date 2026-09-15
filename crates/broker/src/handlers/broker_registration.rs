@@ -30,14 +30,20 @@ pub(crate) async fn handle(
     let req = BrokerRegistrationRequest::decode(&mut cur, version)?;
     let image = broker.controller.current_image();
 
-    if crate::handlers::acl_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        ResourceType::Cluster,
-        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-        AclOperation::ClusterAction,
-    ) {
+    // Skipped when the listener already authorized the connection for
+    // `ClusterAction`, which is how the controller listener works, exactly as
+    // `BrokerHeartbeat` does. See
+    // `RequestContext::listener_authorized_cluster_action`.
+    if !ctx.listener_authorized_cluster_action
+        && crate::handlers::acl_denied(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            ResourceType::Cluster,
+            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            AclOperation::ClusterAction,
+        )
+    {
         return response(version, codes::CLUSTER_AUTHORIZATION_FAILED, -1);
     }
     if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
@@ -48,60 +54,89 @@ pub(crate) async fn handle(
         Ok(id) => NodeId(id),
         Err(_) => return response(version, codes::INVALID_REGISTRATION, -1),
     };
+    // The checks run in the order of `ClusterControlManager.registerBroker`,
+    // so a request with more than one fault gets Kafka's error code.
     if !cluster_id_matches(&req.cluster_id, image.cluster_id()) {
         return response(version, codes::INCONSISTENT_CLUSTER_ID, -1);
     }
+    let incarnation_id = uuid::Uuid::from_bytes(req.incarnation_id.0);
+    let existing = image.broker(node_id);
+    // A new incarnation is refused only while the previous one still holds a
+    // heartbeat session. A restarted broker has a new incarnation id, and it
+    // registers once the session of the process it replaced expires.
+    if let Some(existing) = existing
+        && existing.incarnation_id != incarnation_id
+        && broker.liveness.has_valid_session(node_id.0).await
+    {
+        return response(version, codes::DUPLICATE_BROKER_REGISTRATION, -1);
+    }
     if req.is_migrating_zk_broker {
         return response(version, codes::BROKER_ID_NOT_REGISTERED, -1);
+    }
+    let directory_assignment = image.finalized_metadata_version().is_some_and(|level| {
+        level >= krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
+    });
+    if directory_assignment && let Err(code) = validate_log_dirs(&req, &image, node_id) {
+        return response(version, code, -1);
     }
     let endpoints = match decode_listeners(&req.listeners) {
         Ok(endpoints) => endpoints,
         Err(code) => return response(version, code, -1),
     };
-    if !features_support_finalized(&req, &image) {
-        return response(version, codes::UNSUPPORTED_VERSION, -1);
+    if let Err(code) = validate_features(&req, &image) {
+        return response(version, code, -1);
     }
-
-    let incarnation_id = uuid::Uuid::from_bytes(req.incarnation_id.0);
-    if let Some(existing) = image.broker(node_id) {
-        if existing.incarnation_id == incarnation_id {
-            // Retried registration from the same process. Kafka preserves its
-            // epoch; returning it makes the operation idempotent.
-            return response(version, 0, existing.broker_epoch);
-        }
-        if broker.liveness.is_alive(node_id.0).await {
-            return response(version, codes::DUPLICATE_BROKER_REGISTRATION, -1);
-        }
-    }
-    let clean_restart = clean_shutdown_proven(&req, version, &image, node_id);
 
     let first = &endpoints[0];
     let features = req
         .features
-        .into_iter()
+        .iter()
         .map(|feature| {
             (
-                feature.name,
+                feature.name.clone(),
                 (feature.min_supported_version, feature.max_supported_version),
             )
         })
         .collect();
-    let log_dirs = req
-        .log_dirs
-        .iter()
-        .map(|directory| uuid::Uuid::from_bytes(directory.0))
-        .collect();
+    let log_dirs = if directory_assignment {
+        req.log_dirs
+            .iter()
+            .map(|directory| uuid::Uuid::from_bytes(directory.0))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let record = BrokerRegistrationRecord {
         node_id,
-        broker_epoch: 0,
+        // An amend keeps the epoch it registered at. The controller stamps a
+        // new epoch on any other registration, and on an amend it sees the
+        // same incarnation and epoch and keeps them.
+        broker_epoch: existing
+            .filter(|existing| existing.incarnation_id == incarnation_id)
+            .map_or(0, |existing| existing.broker_epoch),
         incarnation_id,
         host: first.host.clone(),
         port: first.port,
-        rack: req.rack,
+        rack: req.rack.clone(),
         endpoints,
         log_dirs,
         features,
     };
+    if existing.is_some_and(|existing| existing.incarnation_id == incarnation_id) {
+        // The same process registered again, after a lost response or a
+        // controller change. Kafka rewrites the record with the listeners and
+        // features the request carries and keeps the epoch; nothing about the
+        // broker's log changed, so no restart handling runs.
+        if let Err(error) = broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1BrokerRegistration(record)])
+            .await
+        {
+            return response(version, raft_error_code(&error), -1);
+        }
+        return registered_response(broker, version, node_id);
+    }
+    let clean_restart = clean_shutdown_proven(&req, version, &image, node_id);
     // KIP-966: a broker that cannot prove it stopped gracefully may have lost
     // an unflushed log tail, so nothing the cluster still believes about that
     // log holds -- not its ELR membership, and not its ISR seat either.
@@ -155,6 +190,20 @@ pub(crate) async fn handle(
             .await;
     }
 
+    // The session of the previous incarnation, if there was one, belongs to
+    // a process that is gone. `ClusterControlManager.registerBroker` removes
+    // it and registers the new incarnation fenced.
+    broker.liveness.replace_incarnation(node_id.0).await;
+    registered_response(broker, version, node_id)
+}
+
+/// The answer to an accepted registration: the epoch the image now holds for
+/// `node_id`.
+fn registered_response(
+    broker: &Broker,
+    version: i16,
+    node_id: NodeId,
+) -> Result<Bytes, BrokerError> {
     let epoch = broker
         .controller
         .current_image()
@@ -245,17 +294,77 @@ fn protocol_from_wire(protocol: i16) -> Option<ListenerProtocol> {
     }
 }
 
-fn features_support_finalized(
+/// Kafka's directory checks in `ClusterControlManager.registerBroker`, which
+/// apply from `metadata.version` `3.7-IV2` (KIP-858): at least one directory,
+/// none of the hundred reserved ids, no id twice, and no id that another
+/// broker already registered.
+fn validate_log_dirs(
     req: &BrokerRegistrationRequest,
     image: &krabka_metadata::MetadataImage,
-) -> bool {
-    image.finalized_features().iter().all(|(name, level)| {
-        req.features.iter().any(|feature| {
-            feature.name == *name
-                && feature.min_supported_version <= *level
-                && *level <= feature.max_supported_version
-        })
-    })
+    node_id: NodeId,
+) -> Result<(), i16> {
+    let directories: Vec<uuid::Uuid> = req
+        .log_dirs
+        .iter()
+        .map(|directory| uuid::Uuid::from_bytes(directory.0))
+        .collect();
+    if directories.is_empty() || directories.iter().copied().any(reserved_directory_id) {
+        return Err(codes::INVALID_REGISTRATION);
+    }
+    let distinct: HashSet<uuid::Uuid> = directories.iter().copied().collect();
+    if distinct.len() != directories.len() {
+        return Err(codes::INVALID_REGISTRATION);
+    }
+    let owned_by_another = image
+        .brokers()
+        .filter(|registered| registered.node_id != node_id)
+        .any(|registered| registered.log_dirs.iter().any(|id| distinct.contains(id)));
+    if owned_by_another {
+        return Err(codes::INVALID_REGISTRATION);
+    }
+    Ok(())
+}
+
+/// Kafka's `DirectoryId.reserved`: the first hundred ids, which include
+/// `MIGRATING`, `UNASSIGNED` and `LOST`.
+fn reserved_directory_id(id: uuid::Uuid) -> bool {
+    id.as_u128() < 100
+}
+
+/// Kafka's feature checks in `ClusterControlManager.registerBroker`, in its
+/// order.
+///
+/// Every feature the broker names must support the level the cluster
+/// finalized, and a feature the cluster has not finalized is at level 0
+/// (`UNSUPPORTED_VERSION`). The broker must name `metadata.version`
+/// (`INVALID_REGISTRATION`). Last, every feature the cluster finalized above
+/// level 0 must be one the broker names (`UNSUPPORTED_VERSION`).
+fn validate_features(
+    req: &BrokerRegistrationRequest,
+    image: &krabka_metadata::MetadataImage,
+) -> Result<(), i16> {
+    let finalized = |name: &str| image.finalized_feature(name).unwrap_or(0);
+    let unsupported = req.features.iter().any(|feature| {
+        let level = finalized(&feature.name);
+        !(feature.min_supported_version..=feature.max_supported_version).contains(&level)
+    });
+    if unsupported {
+        return Err(codes::UNSUPPORTED_VERSION);
+    }
+    let names_metadata_version = req
+        .features
+        .iter()
+        .any(|feature| feature.name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE);
+    if !names_metadata_version {
+        return Err(codes::INVALID_REGISTRATION);
+    }
+    let missing = image.finalized_features().iter().any(|(name, level)| {
+        *level != 0 && !req.features.iter().any(|feature| feature.name == *name)
+    });
+    if missing {
+        return Err(codes::UNSUPPORTED_VERSION);
+    }
+    Ok(())
 }
 
 fn raft_error_code(error: &RaftError) -> i16 {
@@ -314,27 +423,146 @@ mod tests {
         );
     }
 
+    /// krabka-io/krabka-broker#822: the feature checks of
+    /// `ClusterControlManager.registerBroker`, in Kafka's order. The cluster
+    /// has finalized `metadata.version` 25 and `group.version` 1.
     #[test]
-    fn finalized_features_must_fit_request_ranges() {
+    fn features_are_checked_as_kafka_checks_them() {
+        type Case<'a> = (&'a str, &'a [(&'a str, i16, i16)], Result<(), i16>);
+        let cases: &[Case<'_>] = &[
+            (
+                "both finalized features in range",
+                &[("metadata.version", 7, 25), ("group.version", 0, 1)],
+                Ok(()),
+            ),
+            (
+                "metadata.version below the finalized level",
+                &[("metadata.version", 7, 24), ("group.version", 0, 1)],
+                Err(codes::UNSUPPORTED_VERSION),
+            ),
+            (
+                "a feature the cluster left at level 0 that the broker cannot run at 0",
+                &[
+                    ("metadata.version", 7, 25),
+                    ("group.version", 0, 1),
+                    ("share.version", 1, 1),
+                ],
+                Err(codes::UNSUPPORTED_VERSION),
+            ),
+            (
+                "an unfinalized feature that includes level 0",
+                &[
+                    ("metadata.version", 7, 25),
+                    ("group.version", 0, 1),
+                    ("share.version", 0, 1),
+                ],
+                Ok(()),
+            ),
+            (
+                "no metadata.version",
+                &[("group.version", 0, 1)],
+                Err(codes::INVALID_REGISTRATION),
+            ),
+            ("no features at all", &[], Err(codes::INVALID_REGISTRATION)),
+            (
+                "a finalized feature the broker does not name",
+                &[("metadata.version", 7, 25)],
+                Err(codes::UNSUPPORTED_VERSION),
+            ),
+            (
+                "an unsupported feature wins over a missing metadata.version",
+                &[("group.version", 2, 3)],
+                Err(codes::UNSUPPORTED_VERSION),
+            ),
+        ];
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(
-            krabka_metadata::FeatureLevelRecord {
-                name: "metadata.version".into(),
-                level: 25,
-            },
-        ));
-        let mut req = BrokerRegistrationRequest {
-            features: vec![Feature {
-                name: "metadata.version".into(),
-                min_supported_version: 7,
-                max_supported_version: 25,
+        for (name, level) in [("metadata.version", 25), ("group.version", 1)] {
+            image.apply(&MetadataRecord::V1FeatureLevel(
+                krabka_metadata::FeatureLevelRecord {
+                    name: name.into(),
+                    level,
+                },
+            ));
+        }
+        for (what, features, expected) in cases {
+            let req = BrokerRegistrationRequest {
+                features: features
+                    .iter()
+                    .map(|&(name, min, max)| Feature {
+                        name: name.into(),
+                        min_supported_version: min,
+                        max_supported_version: max,
+                        ..Default::default()
+                    })
+                    .collect(),
                 ..Default::default()
-            }],
-            ..Default::default()
-        };
-        assert2::assert!(features_support_finalized(&req, &image));
-        req.features[0].max_supported_version = 24;
-        assert2::assert!(!features_support_finalized(&req, &image));
+            };
+            assert2::check!(validate_features(&req, &image) == *expected, "{what}");
+        }
+    }
+
+    /// krabka-io/krabka-broker#822: the KIP-858 directory checks of
+    /// `ClusterControlManager.registerBroker`. Broker 1 already registered
+    /// directory 500, and broker 2 is registering.
+    #[test]
+    fn log_dirs_are_checked_as_kafka_checks_them() {
+        let cases: &[(&str, &[u128], Result<(), i16>)] = &[
+            ("one fresh directory", &[1000], Ok(())),
+            ("two fresh directories", &[1000, 1001], Ok(())),
+            ("no directory", &[], Err(codes::INVALID_REGISTRATION)),
+            ("MIGRATING", &[0], Err(codes::INVALID_REGISTRATION)),
+            (
+                "the last reserved id",
+                &[99],
+                Err(codes::INVALID_REGISTRATION),
+            ),
+            ("the first id past the reserved range", &[100], Ok(())),
+            (
+                "one id twice",
+                &[1000, 1000],
+                Err(codes::INVALID_REGISTRATION),
+            ),
+            (
+                "a directory another broker registered",
+                &[1000, 500],
+                Err(codes::INVALID_REGISTRATION),
+            ),
+            ("a directory it registered itself", &[600], Ok(())),
+        ];
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        for (node, directory) in [(1, 500), (2, 600)] {
+            image.apply(&MetadataRecord::V1BrokerRegistration(
+                BrokerRegistrationRecord {
+                    node_id: NodeId(node),
+                    broker_epoch: 10,
+                    incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
+                    host: "broker".into(),
+                    port: 9092,
+                    rack: None,
+                    endpoints: vec![],
+                    log_dirs: vec![uuid::Uuid::from_u128(directory)],
+                    features: std::collections::BTreeMap::new(),
+                },
+            ));
+        }
+        for (what, directories, expected) in cases {
+            let req = BrokerRegistrationRequest {
+                broker_id: 2,
+                log_dirs: directories
+                    .iter()
+                    .map(|&id| {
+                        krabka_protocol::primitives::uuid::Uuid(
+                            *uuid::Uuid::from_u128(id).as_bytes(),
+                        )
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            assert2::check!(
+                validate_log_dirs(&req, &image, NodeId(2)) == *expected,
+                "{what}"
+            );
+        }
     }
 }
 
@@ -419,7 +647,7 @@ mod wire_tests {
                     port: 9092,
                     protocol: ListenerProtocol::Plaintext,
                 }],
-                log_dirs: vec![uuid::Uuid::from_u128(11)],
+                log_dirs: vec![uuid::Uuid::from_u128(1011)],
                 features: krabka_metadata::supported_feature_ranges(),
             }),
             MetadataRecord::V1Topic(TopicRecord {
@@ -486,14 +714,10 @@ mod wire_tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
         broker.controller.submit_change(seed).await.expect("seed");
-        // This fixture represents a stopped old broker. Make that state
-        // explicit instead of racing the controller's leadership seeding.
-        assert!(
-            broker
-                .liveness
-                .apply_fencing(REGISTERED.0, true, true)
-                .await
-        );
+        // This fixture represents a stopped old broker, whose heartbeat
+        // session is over. End it once the liveness ticker has seeded this
+        // term, so the seeding cannot open it again afterwards.
+        crate::test_support::end_heartbeat_session(&broker, REGISTERED.0).await;
 
         let image = broker.controller.current_image();
         let previous_broker_epoch = match offer {
@@ -526,7 +750,7 @@ mod wire_tests {
                 })
                 .collect(),
             log_dirs: vec![krabka_protocol::primitives::uuid::Uuid(
-                uuid::Uuid::from_u128(11).into_bytes(),
+                uuid::Uuid::from_u128(1011).into_bytes(),
             )],
             previous_broker_epoch,
             ..Default::default()
