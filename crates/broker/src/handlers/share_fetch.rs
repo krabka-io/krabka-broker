@@ -48,9 +48,11 @@ mod response;
 #[cfg(test)]
 mod group_authorization_tests;
 #[cfg(test)]
+mod renew_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::acknowledge::apply_one_ack;
+pub(crate) use self::acknowledge::{Renewal, apply_one_ack, renew_acknowledge_enabled};
 use self::{
     acquire::{AcquireContext, acquire_records},
     authorization::{member_is_valid, topic_read_denied},
@@ -62,6 +64,12 @@ use self::{
     },
 };
 use crate::{broker::Broker, codes, error::BrokerError, handlers::group_read_denied};
+
+/// Whether a renew-ack `ShareFetch` asks for no records and no wait:
+/// `MaxBytes`, `MinBytes`, `MaxRecords` and `MaxWaitMs` are all 0.
+fn renew_fetch_fields_are_zero(req: &ShareFetchRequest) -> bool {
+    req.max_bytes == 0 && req.min_bytes == 0 && req.max_records == 0 && req.max_wait_ms == 0
+}
 
 #[tracing::instrument(
     name = "handle_share_fetch",
@@ -104,6 +112,14 @@ pub(crate) async fn handle(
     // present actor with an absent member is the only hard failure.
     if !member_is_valid(broker, &group, &member).await {
         return encode_error_response(version, codes::UNKNOWN_MEMBER_ID);
+    }
+
+    // KIP-1222: a renew-ack fetch renews locks and fetches no records, so
+    // Kafka's `KafkaApis.handleShareFetchRequest` refuses one that asks for
+    // records or a wait. The error response carries no message.
+    let renew_only = version >= 2 && req.is_renew_ack;
+    if renew_only && !renew_fetch_fields_are_zero(&req) {
+        return encode_error_response(version, codes::INVALID_REQUEST);
     }
 
     let mgr = broker.share_partition_leaders.clone();
@@ -170,7 +186,10 @@ pub(crate) async fn handle(
     for (topic_id, partition_index) in effective_order {
         let topic_name = mgr.topic_name_for(topic_id);
         let request_row = request_rows.get(&(topic_id, partition_index));
-        let fetchable = session.partitions.contains(&(topic_id, partition_index));
+        // A renew-ack fetch acquires nothing: a fetch that took longer than
+        // the renewed lock would let the lock run out before the response
+        // arrives.
+        let fetchable = !renew_only && session.partitions.contains(&(topic_id, partition_index));
 
         let mut out = partition_response(partition_index);
         let ack_batches = request_row.map_or_else(Vec::new, collect_ack_batches);
@@ -254,11 +273,15 @@ pub(crate) async fn handle(
         member: &member,
         max_records: req.max_records,
         max_bytes: req.max_bytes,
-        is_renew_ack: req.is_renew_ack,
+        renewal: Renewal {
+            requested: req.is_renew_ack,
+            enabled: renew_acknowledge_enabled(&image, &group),
+            lock_duration: cfg.record_lock_duration,
+        },
         config: &cfg,
     };
 
-    let max_wait_ms = if session.final_request {
+    let max_wait_ms = if session.final_request || renew_only {
         0
     } else {
         req.max_wait_ms
@@ -269,6 +292,12 @@ pub(crate) async fn handle(
             .await;
     }
     acquire_result?;
+
+    // A renew-ack fetch answers only the partitions that carried
+    // acknowledgements, because Kafka runs no fetch for it.
+    if renew_only {
+        pending.retain(|p| !p.ack_batches.is_empty());
+    }
 
     // Group pending rows back into per-topic responses, preserving first-seen
     // topic order.
