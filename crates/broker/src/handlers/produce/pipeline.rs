@@ -135,21 +135,34 @@ async fn local_replica_is_ready(
     topic_name: &str,
     idx: i32,
 ) -> bool {
+    ready_transition(part, image, topic_name, idx)
+        .await
+        .is_some()
+}
+
+/// The partition's transition barrier, held, when the local replica is ready
+/// to lead the partition as the image names it, or `None` when it is not.
+async fn ready_transition(
+    part: &Arc<crate::partition::Partition>,
+    image: &krabka_metadata::MetadataImage,
+    topic_name: &str,
+    idx: i32,
+) -> Option<tokio::sync::OwnedRwLockReadGuard<crate::partition::ReplicationTarget>> {
     let transition = part.lock_produce_transition().await;
     let record = image.partition(topic_name, idx).expect("gate checked");
     let topic_id = image.topic(topic_name).map(|topic| topic.topic_id);
     if !replication_target_matches_image(&transition, topic_id, record)
         || (part.diskless && !diskless_role_ready(part, record))
     {
-        return false;
+        return None;
     }
     if !part.diskless {
         let replica_state = part.replica_state.lock().await;
         if !replica_state_matches_image(&replica_state, record) {
-            return false;
+            return None;
         }
     }
-    true
+    Some(transition)
 }
 
 /// The KIP-890 transaction check of one batch, after the diskless refusal:
@@ -415,11 +428,8 @@ pub(super) async fn process_partition(
         return Ok(PartitionOutcome::Done(out));
     }
 
-    // ── KIP-890 transaction verification ─────────────────────
-    // Kafka verifies before the append starts, and before the duplicate
-    // lookup, with a coordinator call that may cross the network. It runs
-    // outside the transition barrier for that reason; the log checks the
-    // guard again under the append's own lock.
+    // KIP-890: verify before the duplicate lookup, outside the barrier (a
+    // coordinator call); the log checks the guard under the append lock.
     let producer_check = match verify_before_append(
         &prepared,
         &part,
@@ -434,27 +444,14 @@ pub(super) async fn process_partition(
     };
 
     // Hold the transition barrier through dedup, enqueue, append, and ack.
-    // Schema validation and the transaction verification released it around
-    // network I/O, so repeat the local readiness proof before admitting this
-    // batch to any stateful gate.
-    let transition = part.lock_produce_transition().await;
-    let record = image.partition(topic_name, idx).expect("gate checked");
-    let topic_id = image.topic(topic_name).map(|topic| topic.topic_id);
-    if !replication_target_matches_image(&transition, topic_id, record)
-        || (part.diskless && !diskless_role_ready(&part, record))
-    {
+    // Schema validation and verification released it around network I/O, so
+    // repeat the local readiness proof before admitting any stateful gate.
+    let Some(transition) = ready_transition(&part, image, topic_name, idx).await else {
         out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-        out.current_leader = current_leader_hint(record);
+        out.current_leader =
+            current_leader_hint(image.partition(topic_name, idx).expect("gate checked"));
         return Ok(PartitionOutcome::Done(out));
-    }
-    if !part.diskless {
-        let replica_state = part.replica_state.lock().await;
-        if !replica_state_matches_image(&replica_state, record) {
-            out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-            out.current_leader = current_leader_hint(record);
-            return Ok(PartitionOutcome::Done(out));
-        }
-    }
+    };
     let leader_epoch = part
         .current_leader_epoch
         .load(std::sync::atomic::Ordering::Acquire);

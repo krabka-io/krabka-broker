@@ -1,4 +1,5 @@
 use assert2::assert;
+use krabka_ids::Offset;
 use tempfile::tempdir;
 
 use super::*;
@@ -252,4 +253,29 @@ fn an_append_and_the_expiration_window_clear_the_guard() {
     log.maybe_start_transaction_verification(later, false, (CLOCK.0 + CLOCK.1, CLOCK.1))
         .unwrap();
     assert!(log.verification_states.keys().copied().collect::<Vec<_>>() == vec![ProducerId(3000)]);
+}
+
+/// A truncation and a hard reset drop the verification state, as a reopen of
+/// the log does, so a verification from before them cannot refuse a batch
+/// after them.
+#[test]
+fn a_truncation_and_a_reset_clear_the_verification_state() {
+    for name in ["truncate", "reset"] {
+        let (_dir, mut log) = log_at(Start::Empty);
+        log.append(&mut sample_batch(2)).unwrap();
+        let guard = log
+            .maybe_start_transaction_verification(batch(0, 5, true), true, CLOCK)
+            .unwrap();
+        if name == "truncate" {
+            log.truncate_to(Offset(1)).unwrap();
+        } else {
+            log.reset_to(Offset(1)).unwrap();
+        }
+        assert!(log.verification_states.is_empty(), "{name}");
+        assert!(
+            log.check_transactional_append(batch(0, 5, true), guard)
+                == Err(TransactionAppendRefusal::InvalidTransactionState),
+            "{name}"
+        );
+    }
 }

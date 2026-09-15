@@ -234,6 +234,7 @@ impl Log {
     /// producer state.
     pub(super) fn rebuild_producer_and_transaction_state(&mut self) -> Result<(), LogError> {
         self.pending.clear();
+        self.verification_states.clear();
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();
         self.producer_state.clear();
