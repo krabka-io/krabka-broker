@@ -155,7 +155,7 @@ impl<L: SimNodeLog> Sim<L> {
         // steady-state fetch loop deterministically.
         if let Some(follower) = fetch_from {
             let diverging = actions.iter().find_map(|a| match a {
-                Action::TruncateTo(point) => Some(*point),
+                Action::ReplyDivergingEpoch(point) => Some(*point),
                 _ => None,
             });
             let leader_epoch = self.nodes[&id].machine.quorum_state().leader_epoch;
@@ -177,12 +177,6 @@ impl<L: SimNodeLog> Sim<L> {
             }
         }
         for action in actions {
-            // A leader-side `TruncateTo` emitted while serving a fetch is a hint
-            // *for the follower* (carried in the fetch response's `diverging`),
-            // not an instruction to truncate the leader's own log — skip it.
-            if fetch_from.is_some() && matches!(action, Action::TruncateTo(_)) {
-                continue;
-            }
             self.apply_action(id, action);
         }
         self.reconcile_timers_for_role(id);

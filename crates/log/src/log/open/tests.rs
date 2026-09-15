@@ -393,7 +393,8 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
             .pending_transaction_start(ProducerId(1000))
             .is_none()
     );
-    assert2::assert!(reopened.lso() == reopened.log_end_offset());
+    let log_end = reopened.log_end_offset();
+    assert2::assert!(reopened.last_stable_offset(log_end) == log_end);
 
     reopened
         .append(&mut transactional_batch(1000, 4, &["next"]))

@@ -22,10 +22,13 @@ pub(crate) use unified::GroupCoordinator;
 /// Result of [`GroupCoordinator::delete_group`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeleteGroupError {
-    /// No classic group with this id exists.
+    /// No group with this id exists.
     NotFound,
     /// The group still has at least one live member.
     NonEmpty,
+    /// The delete of the KIP-932 share state of a share group failed with this
+    /// error code. The group is kept.
+    ShareState(i16),
     /// A durable side effect of the delete failed, for example the tombstone
     /// append.
     Internal,

@@ -28,10 +28,9 @@ use crate::{
         offsets_log::OffsetsLog,
         streams::{
             config::StreamsGroupConfig,
-            state::StoredTopologyHandle,
+            state::{OwnedTasks, StoredTopologyHandle},
             topology::{self, status as topo_status},
         },
-        validate_member_epoch,
     },
     metadata_source::MetadataSource,
 };
@@ -96,6 +95,8 @@ pub(super) async fn handle_heartbeat(
     // ─── First-join path ─────────────────────────────────────────
     // KIP-1071 mirrors KIP-848: epoch 0 from an unknown member is a first
     // join. The client may supply its own id; an empty id mints a server UUID.
+    // Epoch 0 from a known member is a rejoin and takes the existing-member
+    // path below.
     if req.member_epoch == 0 && !actor.state.members.contains_key(&req.member_id) {
         if actor.state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
@@ -122,17 +123,38 @@ pub(super) async fn handle_heartbeat(
     }
 
     // ─── Existing-member: validate epoch ─────────────────────────
-    let cur_epoch = match validate_member_epoch(
-        actor
+    // The owned-task maps matter only for a heartbeat at the previous member
+    // epoch, so a heartbeat at epoch 0 or at the member epoch builds none.
+    let needs_owned = actor.state.members.get(&req.member_id).is_some_and(|m| {
+        req.member_epoch != 0
+            && req.member_epoch != m.member_epoch
+            && req.member_epoch == m.previous_member_epoch
+    });
+    let owned_maps = needs_owned.then(|| {
+        (
+            req.active_tasks.as_deref().map(task_ids_to_map),
+            req.standby_tasks.as_deref().map(task_ids_to_map),
+            req.warmup_tasks.as_deref().map(task_ids_to_map),
+        )
+    });
+    let owned =
+        owned_maps
+            .as_ref()
+            .map_or_else(OwnedTasks::default, |(active, standby, warmup)| {
+                OwnedTasks {
+                    active: active.as_ref(),
+                    standby: standby.as_ref(),
+                    warmup: warmup.as_ref(),
+                }
+            });
+    let cur_epoch =
+        match actor
             .state
-            .members
-            .get(&req.member_id)
-            .map(|m| m.member_epoch),
-        req.member_epoch,
-    ) {
-        Ok(epoch) => epoch,
-        Err(error_code) => return Ok(error_resp(error_code, config)),
-    };
+            .validate_heartbeat_epoch(&req.member_id, req.member_epoch, owned)
+        {
+            Ok(epoch) => epoch,
+            Err(error_code) => return Ok(error_resp(error_code, config)),
+        };
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
@@ -213,6 +235,13 @@ fn update_member_steady_state(
         m.client_host = client_host.to_string();
         changed = true;
     }
+    if update_member_metadata(m, req) {
+        // Kafka's `hasStreamsMemberMetadataChanged`: a changed member bumps
+        // the group epoch, so the assignor sees the new process, rack, tags
+        // and endpoint.
+        actor.state.dirty = true;
+        changed = true;
+    }
 
     if let Some(offsets) = &req.task_offsets {
         let map = task_offsets_to_map(offsets);
@@ -231,6 +260,64 @@ fn update_member_steady_state(
     changed
 }
 
+/// Applies the member fields of a heartbeat to a known member, as Kafka's
+/// `StreamsGroupMember.Builder.maybeUpdate*` calls do: a field that the
+/// request carries replaces the stored value, and an absent field (or a
+/// rebalance timeout of -1) keeps it. A rejoin at epoch 0 sets the user
+/// endpoint also when the request has none. Returns `true` if a field changed.
+fn update_member_metadata(
+    m: &mut crate::coordinator::unified::streams::state::StreamsMemberState,
+    req: &StreamsGroupHeartbeatRequest,
+) -> bool {
+    let before = (
+        m.instance_id.clone(),
+        m.rack_id.clone(),
+        m.rebalance_timeout_ms,
+        m.topology_epoch,
+        m.process_id.clone(),
+        m.user_endpoint.clone(),
+        m.client_tags.clone(),
+    );
+    if req.instance_id.is_some() {
+        m.instance_id.clone_from(&req.instance_id);
+    }
+    if req.rack_id.is_some() {
+        m.rack_id.clone_from(&req.rack_id);
+    }
+    if req.rebalance_timeout_ms != -1 {
+        m.rebalance_timeout_ms = req.rebalance_timeout_ms;
+    }
+    if let Some(topology) = &req.topology {
+        m.topology_epoch = topology.epoch;
+    }
+    if let Some(process_id) = &req.process_id {
+        m.process_id.clone_from(process_id);
+    }
+    let endpoint = req
+        .user_endpoint
+        .as_ref()
+        .map(|endpoint| (endpoint.host.clone(), endpoint.port));
+    if req.member_epoch == 0 || endpoint.is_some() {
+        m.user_endpoint = endpoint;
+    }
+    if let Some(tags) = &req.client_tags {
+        m.client_tags = tags
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+    }
+    before
+        != (
+            m.instance_id.clone(),
+            m.rack_id.clone(),
+            m.rebalance_timeout_ms,
+            m.topology_epoch,
+            m.process_id.clone(),
+            m.user_endpoint.clone(),
+            m.client_tags.clone(),
+        )
+}
+
 /// Handles a leave-group heartbeat, where `member_epoch == -1`.
 async fn handle_leave(
     actor: &mut ActorState,
@@ -241,23 +328,21 @@ async fn handle_leave(
     req: &StreamsGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<StreamsGroupHeartbeatResponse, crate::error::BrokerError> {
-    let was_member = actor.state.members.contains_key(&req.member_id);
-    actor.state.remove_member(&req.member_id);
-    // `remove_member` set `dirty`; reconcile owns the single `bump_epoch`. If
-    // the leaver was unknown (not a member) the group is clean, so force a
-    // reconcile to still re-stamp/bump as the leave path expects.
-    actor.state.dirty = true;
+    // Kafka's `streamsGroupLeave` looks the member up with `getMemberOrThrow`:
+    // an unknown member gets `UNKNOWN_MEMBER_ID`, and nothing is written.
+    if actor.state.remove_member(&req.member_id).is_none() {
+        return Ok(error_resp(codes::UNKNOWN_MEMBER_ID, config));
+    }
+    // `remove_member` set `dirty`; reconcile owns the single `bump_epoch`.
     reconcile(actor, config, metadata_source).await;
     let mut pending = snapshot_pending_after_change(actor, &[]);
-    if was_member {
-        pending.member_metadata.push((req.member_id.clone(), None));
-        pending
-            .target_per_member
-            .push((req.member_id.clone(), None));
-        pending
-            .current_per_member
-            .push((req.member_id.clone(), None));
-    }
+    pending.member_metadata.push((req.member_id.clone(), None));
+    pending
+        .target_per_member
+        .push((req.member_id.clone(), None));
+    pending
+        .current_per_member
+        .push((req.member_id.clone(), None));
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     Ok(base_resp(codes::NONE, -1, config))
 }

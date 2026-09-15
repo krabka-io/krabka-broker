@@ -34,24 +34,9 @@ pub(crate) fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> S
     let protocol_type = state.protocol_type.clone();
     let protocol_name = state.protocol_name.clone();
 
-    // KIP-345 fence.
-    if req.group_instance_id.as_deref().is_some_and(|iid| {
-        state
-            .current_member_id_for_instance(iid)
-            .is_none_or(|pinned| pinned != req.member_id)
-    }) {
-        return SyncAction::Immediate(sync_err(
-            codes::FENCED_INSTANCE_ID,
-            protocol_type,
-            protocol_name,
-        ));
-    }
-    if !state.members.contains_key(&req.member_id) {
-        return SyncAction::Immediate(sync_err(
-            codes::UNKNOWN_MEMBER_ID,
-            protocol_type,
-            protocol_name,
-        ));
+    // KIP-345 fence, as Kafka's `ClassicGroup.validateMember`.
+    if let Err(code) = state.validate_member(&req.member_id, req.group_instance_id.as_deref()) {
+        return SyncAction::Immediate(sync_err(code, protocol_type, protocol_name));
     }
     if state.generation_id != req.generation_id {
         return SyncAction::Immediate(sync_err(
@@ -163,6 +148,23 @@ mod tests {
         match handle_sync(&mut g, &sync_req("m1", cur_gen + 9)) {
             SyncAction::Immediate(r) => assert!(r.error_code == codes::ILLEGAL_GENERATION),
             _ => panic!("expected ILLEGAL_GENERATION"),
+        }
+        // KIP-345, as Kafka's `ClassicGroup.validateMember`: an instance id no
+        // member holds (a static member whose session expired) is unknown, and
+        // an instance id another member holds is fenced.
+        g.static_members.insert("i2".into(), "m2".into());
+        for (member, instance, want) in [
+            ("m1", "i-expired", codes::UNKNOWN_MEMBER_ID),
+            ("m1", "i2", codes::FENCED_INSTANCE_ID),
+        ] {
+            let req = SyncGroupRequest {
+                group_instance_id: Some(instance.into()),
+                ..sync_req(member, cur_gen)
+            };
+            match handle_sync(&mut g, &req) {
+                SyncAction::Immediate(r) => assert!(r.error_code == want, "{member} {instance}"),
+                _ => panic!("expected an immediate error for {member} {instance}"),
+            }
         }
     }
 
