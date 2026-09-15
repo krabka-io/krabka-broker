@@ -78,6 +78,10 @@ pub(super) async fn handle_heartbeat(
     let now = Instant::now();
     let now_ms = chrono_now_ms();
 
+    if let Some(resp) = changelog_partition_count_error(req) {
+        return Ok(resp);
+    }
+
     // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
         return handle_leave(
@@ -217,6 +221,31 @@ pub(super) async fn handle_heartbeat(
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
     Ok(build_assignment_resp(&actor.state, &req.member_id, config))
+}
+
+/// Kafka's `GroupCoordinatorService.throwIfInvalidTopology`, which runs on a
+/// joining heartbeat before the coordinator: a changelog topic must leave its
+/// partition count undefined, because the coordinator decides it.
+fn changelog_partition_count_error(
+    req: &StreamsGroupHeartbeatRequest,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    if req.member_epoch != 0 {
+        return None;
+    }
+    let topic = req
+        .topology
+        .iter()
+        .flat_map(|topology| topology.subtopologies.iter())
+        .flat_map(|subtopology| subtopology.state_changelog_topics.iter())
+        .find(|topic| topic.partitions != 0)?;
+    Some(StreamsGroupHeartbeatResponse {
+        error_code: codes::STREAMS_INVALID_TOPOLOGY,
+        error_message: Some(format!(
+            "Changelog topic {} must have an undefined partition count, but it is set to {}.",
+            topic.name, topic.partitions
+        )),
+        ..Default::default()
+    })
 }
 
 /// The error response for a topology that Kafka's `configureTopics` refuses

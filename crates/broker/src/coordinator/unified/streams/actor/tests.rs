@@ -991,3 +991,45 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
         check!(resp == expected, "{}", row.name);
     }
 }
+
+/// Kafka refuses a joining heartbeat whose topology gives a changelog topic a
+/// partition count (`throwIfInvalidTopology`), and the group gets no member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changelog_topic_with_a_partition_count_is_refused() {
+    let (coord, _log) = make_coordinator();
+    let handle = coord.get_or_create_streams("g");
+    let mut topology = one_subtopology(true);
+    topology.subtopologies[0].state_changelog_topics[0].partitions = 2;
+
+    let resp = heartbeat(
+        &handle,
+        StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch: 0,
+            rebalance_timeout_ms: 1_000,
+            topology: Some(topology),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    check!(
+        resp == StreamsGroupHeartbeatResponse {
+            error_code: codes::STREAMS_INVALID_TOPOLOGY,
+            error_message: Some(
+                "Changelog topic store-changelog must have an undefined partition count, but it \
+                 is set to 2."
+                    .into()
+            ),
+            ..Default::default()
+        }
+    );
+    let (tx, rx) = oneshot::channel();
+    handle
+        .tx
+        .send(StreamsGroupActorMessage::Describe { reply: tx })
+        .await
+        .unwrap();
+    check!(rx.await.unwrap().members.is_empty());
+}
