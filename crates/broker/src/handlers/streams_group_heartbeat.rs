@@ -92,23 +92,20 @@ pub(crate) async fn handle(
             return crate::handlers::encode_response(&error(error_code), version);
         }
 
-        // KIP-1071 cold upgrade: a StreamsGroupHeartbeat for a drained classic group
-        // converts it in place; a classic group with live members is rejected (online
-        // streams migration is unsupported). Non-classic group_ids pass through.
-        match ng
-            .try_convert_classic_to_streams(&req.group_id, now_ms())
-            .await
+        // Kafka creates a streams group only on a join, in place of nothing or of
+        // an empty classic group (a KIP-1071 cold upgrade converts it here), and
+        // answers GROUP_ID_NOT_FOUND to anything else.
+        if let Some(message) = ng
+            .streams_group_lookup_error(&req.group_id, req.member_epoch, now_ms())
+            .await?
         {
-            Ok(
-                crate::coordinator::unified::streams::migration::ConvertOutcome::RejectLiveMembers,
-            ) => {
-                return crate::handlers::encode_response(
-                    &error(codes::GROUP_ID_NOT_FOUND),
-                    version,
-                );
-            }
-            Ok(_) => {} // NotClassic | Converted → serve normally below
-            Err(e) => return Err(e),
+            return crate::handlers::encode_response(
+                &crate::coordinator::unified::streams::actor::response::error_resp(
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some(message),
+                ),
+                version,
+            );
         }
 
         ng.mark_streams(&req.group_id);
@@ -176,6 +173,84 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    /// Kafka creates a streams group only on a join, and answers
+    /// `GROUP_ID_NOT_FOUND` to a heartbeat or a leave for a group that does not
+    /// exist and to any heartbeat for a group of another type
+    /// (`getOrCreateStreamsGroup`, `getStreamsGroupOrThrow`, `streamsGroup`).
+    /// Each row sends one request for its own group id, compares the whole
+    /// response, and checks whether a streams group exists afterwards.
+    #[tokio::test]
+    async fn handle_finds_or_creates_the_streams_group_as_kafka_does() {
+        use crate::coordinator::unified::{
+            actor::GroupKindTag, streams::actor::response::error_resp,
+        };
+
+        let version = streams_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = start_broker(true).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
+        broker.group_coordinator.mark_share("share");
+        let _consumer = broker
+            .group_coordinator
+            .get_or_create_group("consumer", GroupKindTag::Consumer);
+        let heartbeat = |group_id: &str, member_epoch| StreamsGroupHeartbeatRequest {
+            group_id: group_id.into(),
+            member_id: "m1".into(),
+            member_epoch,
+            ..Default::default()
+        };
+        let not_found =
+            |message: String| Some(error_resp(codes::GROUP_ID_NOT_FOUND, Some(message)));
+        // (group id, request, expected error response or None for success,
+        // a streams group exists afterwards)
+        let rows = [
+            (
+                "absent-heartbeat",
+                heartbeat("absent-heartbeat", 3),
+                not_found("Streams group absent-heartbeat not found.".into()),
+                false,
+            ),
+            (
+                "absent-leave",
+                heartbeat("absent-leave", -1),
+                not_found("Group absent-leave not found.".into()),
+                false,
+            ),
+            (
+                "share",
+                request("share"),
+                not_found("Group share is not a streams group.".into()),
+                false,
+            ),
+            (
+                "consumer",
+                request("consumer"),
+                not_found("Group consumer is not a streams group.".into()),
+                false,
+            ),
+            ("absent-join", request("absent-join"), None, true),
+        ];
+
+        for (group_id, req, expected, exists) in rows {
+            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes);
+            match expected {
+                Some(expected) => assert!(resp == expected, "{group_id}"),
+                None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
+            }
+            assert!(
+                broker.group_coordinator.find_streams(group_id).is_some() == exists,
+                "{group_id}"
+            );
+        }
+        broker_handle.shutdown().await;
     }
 
     /// Kafka's `GroupCoordinatorService` refuses an invalid request before the

@@ -86,7 +86,8 @@ pub(super) async fn handle_heartbeat(
     let group_existed = actor.state.group_epoch > 0;
 
     // ─── Leave path ──────────────────────────────────────────────
-    if req.member_epoch == -1 {
+    // -1 leaves, and -2 is the temporary leave of a static member.
+    if req.member_epoch < 0 {
         return handle_leave(
             actor,
             config,
@@ -99,11 +100,33 @@ pub(super) async fn handle_heartbeat(
         .await;
     }
 
+    // ─── Static membership ───────────────────────────────────────
+    // Kafka's `getOrMaybeCreateStaticStreamsGroupMember`: resolve the instance
+    // id before the member id. A released static member is replaced by the
+    // joining member.
+    let mut replaced = None;
+    if let Some(instance_id) = &req.instance_id {
+        let existing = static_member_id(actor, instance_id);
+        if let Some(resp) = static_member_error(req, instance_id, existing.as_deref(), actor) {
+            return Ok(resp);
+        }
+        if req.member_epoch == 0
+            && let Some(previous) = existing
+        {
+            if let Some(resp) = topology_error(actor, req, metadata_source) {
+                return Ok(resp);
+            }
+            replace_static_member(actor, &previous, &req.member_id);
+            replaced = Some(previous);
+        }
+    }
+
     // ─── First-join path ─────────────────────────────────────────
     // KIP-1071 mirrors KIP-848: epoch 0 from an unknown member is a first
     // join, with the member id that the client generated. Epoch 0 from a
     // known member is a rejoin and takes the existing-member path below.
     if req.member_epoch == 0 && !actor.state.members.contains_key(&req.member_id) {
+        // Kafka's `throwIfStreamsGroupIsFull` does not count a known member.
         if actor.state.members.len() >= config.max_size {
             return Ok(error_resp(
                 codes::GROUP_MAX_SIZE_REACHED,
@@ -211,8 +234,14 @@ pub(super) async fn handle_heartbeat(
         actor.state.request_shutdown(&req.member_id);
     }
 
-    if changed {
-        let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
+    if changed || replaced.is_some() {
+        let mut pending =
+            snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
+        if let Some(previous) = replaced.filter(|previous| *previous != req.member_id) {
+            pending.member_metadata.push((previous.clone(), None));
+            pending.target_per_member.push((previous.clone(), None));
+            pending.current_per_member.push((previous, None));
+        }
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
     Ok(accepted_response(
@@ -497,11 +526,23 @@ fn update_member_steady_state(
         m.client_host = client_host.to_string();
         changed = true;
     }
+    let epoch_relevant = |m: &crate::coordinator::unified::streams::state::StreamsMemberState| {
+        (
+            m.topology_epoch,
+            m.rack_id.clone(),
+            m.client_tags.clone(),
+            m.process_id.clone(),
+        )
+    };
+    let before = epoch_relevant(m);
     if update_member_metadata(m, req) {
         // Kafka's `hasStreamsMemberMetadataChanged`: a changed member bumps
         // the group epoch, so the assignor sees the new process, rack, tags
-        // and endpoint.
-        actor.state.dirty = true;
+        // and endpoint. A static member bumps it only for a change that the
+        // assignment reads (`hasEpochRelevantMemberConfigChanged`).
+        if req.instance_id.is_none() || before != epoch_relevant(m) {
+            actor.state.dirty = true;
+        }
         changed = true;
     }
 
@@ -591,10 +632,19 @@ async fn handle_leave(
     now_ms: i64,
 ) -> Result<StreamsGroupHeartbeatResponse, crate::error::BrokerError> {
     // Kafka's `streamsGroupLeave` records the shutdown request before it looks
-    // the member up with `getMemberOrThrow`: an unknown member gets
-    // `UNKNOWN_MEMBER_ID`, and nothing is written.
+    // the member up: an unknown member gets `UNKNOWN_MEMBER_ID`, and nothing
+    // is written.
     if req.shutdown_application {
         actor.state.request_shutdown(&req.member_id);
+    }
+    if let Some(instance_id) = &req.instance_id {
+        let existing = static_member_id(actor, instance_id);
+        if let Some(resp) = static_member_error(req, instance_id, existing.as_deref(), actor) {
+            return Ok(resp);
+        }
+        if req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
+            return leave_static_member(actor, offsets_log, coordinator, req, now_ms).await;
+        }
     }
     if actor.state.remove_member(&req.member_id).is_none() {
         return Ok(error_resp(
@@ -621,6 +671,113 @@ async fn handle_leave(
     Ok(StreamsGroupHeartbeatResponse {
         member_id: req.member_id.clone(),
         member_epoch: req.member_epoch,
+        status: Some(Vec::new()),
+        ..Default::default()
+    })
+}
+
+/// `LEAVE_GROUP_STATIC_MEMBER_EPOCH`: the epoch of a static member that left
+/// for a while and keeps its assignment.
+const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
+
+/// The id of the member that holds `instance_id`.
+fn static_member_id(actor: &ActorState, instance_id: &str) -> Option<String> {
+    actor
+        .state
+        .members
+        .values()
+        .find(|member| member.instance_id.as_deref() == Some(instance_id))
+        .map(|member| member.member_id.clone())
+}
+
+/// Kafka's static member checks: a join may not take an instance id that a
+/// member still holds (`throwIfInstanceIdIsUnreleased`), and any other
+/// heartbeat must come from the member that holds a known instance id
+/// (`throwIfStaticMemberIsUnknown`, `throwIfInstanceIdIsFenced`).
+fn static_member_error(
+    req: &StreamsGroupHeartbeatRequest,
+    instance_id: &str,
+    existing: Option<&str>,
+    actor: &ActorState,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    if req.member_epoch == 0 {
+        let existing = existing?;
+        let released =
+            actor.state.members[existing].member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH;
+        return (!released).then(|| {
+            error_resp(
+                codes::UNRELEASED_INSTANCE_ID,
+                Some(format!(
+                    "Static member {} with instance id {instance_id} cannot join the group \
+                     because the instance id is owned by {existing} member.",
+                    req.member_id
+                )),
+            )
+        });
+    }
+    let Some(existing) = existing else {
+        return Some(error_resp(
+            codes::UNKNOWN_MEMBER_ID,
+            Some(format!("Instance id {instance_id} is unknown.")),
+        ));
+    };
+    (existing != req.member_id).then(|| {
+        error_resp(
+            codes::FENCED_INSTANCE_ID,
+            Some(format!(
+                "Static member {} with instance id {instance_id} was fenced by member {existing}.",
+                req.member_id
+            )),
+        )
+    })
+}
+
+/// Kafka's static member replacement: the joining member `member_id` takes
+/// the place of the released member `previous`, with its assignment, its
+/// target and its metadata, at epoch 0. The group epoch does not change.
+fn replace_static_member(actor: &mut ActorState, previous: &str, member_id: &str) {
+    let state = &mut actor.state;
+    let Some(mut member) = state.members.remove(previous) else {
+        return;
+    };
+    state.rebalance_deadlines.remove(previous);
+    member.member_id = member_id.to_string();
+    member.member_epoch = 0;
+    member.previous_member_epoch = 0;
+    for role in [
+        &mut state.target.active,
+        &mut state.target.standby,
+        &mut state.target.warmup,
+    ] {
+        if let Some(tasks) = role.remove(previous) {
+            role.insert(member_id.to_string(), tasks);
+        }
+    }
+    state.members.insert(member_id.to_string(), member);
+}
+
+/// Kafka's `streamsGroupStaticMemberGroupLeave`: the static member stays in
+/// the group at epoch -2 with its assignment, so that its instance can come
+/// back without a rebalance. Its tasks pending revocation are dropped.
+async fn leave_static_member(
+    actor: &mut ActorState,
+    offsets_log: &dyn OffsetsLog,
+    coordinator: &GroupCoordinator,
+    req: &StreamsGroupHeartbeatRequest,
+    now_ms: i64,
+) -> Result<StreamsGroupHeartbeatResponse, crate::error::BrokerError> {
+    if let Some(member) = actor.state.members.get_mut(&req.member_id) {
+        member.member_epoch = LEAVE_GROUP_STATIC_MEMBER_EPOCH;
+        member.active_pending_revocation.clear();
+        member.standby_pending_revocation.clear();
+        member.warmup_pending_revocation.clear();
+    }
+    actor.state.rebalance_deadlines.remove(&req.member_id);
+    let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
+    flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
+    Ok(StreamsGroupHeartbeatResponse {
+        member_id: req.member_id.clone(),
+        member_epoch: LEAVE_GROUP_STATIC_MEMBER_EPOCH,
         status: Some(Vec::new()),
         ..Default::default()
     })
