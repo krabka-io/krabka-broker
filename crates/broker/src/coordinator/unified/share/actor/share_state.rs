@@ -35,11 +35,13 @@ use crate::{
 /// The hook is best-effort. A persister error leaves the partition
 /// un-recorded, so the next heartbeat retries it, and the error never fails
 /// the heartbeat. `state_epoch` is the group epoch, which is monotonic and
-/// bumps on every membership change. `start_offset` is `-1`, Kafka's
+/// bumps on every membership change. For a topic that the group sees for the
+/// first time, `start_offset` is `-1`, Kafka's
 /// `PartitionFactory.UNINITIALIZED_START_OFFSET`: the coordinator records that
 /// the partition exists without deciding where it starts, and the share
 /// partition itself resolves the group's `share.auto.offset.reset` when it is
-/// first loaded, exactly as `SharePartition.maybeInitialize` does.
+/// first loaded, exactly as `SharePartition.maybeInitialize` does. A new
+/// partition of a topic that the group already initialized starts at `0`.
 pub(super) async fn reconcile_share_state(
     state: &mut ShareGroupState,
     offsets_log: &dyn OffsetsLog,
@@ -78,6 +80,17 @@ pub(super) async fn reconcile_share_state(
     // partition to initialize.
     let topic_names = topic_names_by_id(coordinator.metadata.as_ref());
 
+    // Kafka's `buildInitializeShareGroupStateRequest`: a new partition of a
+    // topic that the group already knows starts at offset 0, so the records
+    // produced to it before its share partition loads are delivered. The
+    // partitions of a topic that the group sees for the first time start at
+    // -1, and the share partition resolves `share.auto.offset.reset`. The set
+    // is taken before this pass initializes anything.
+    let known_topics: HashSet<Uuid> = state
+        .initialized
+        .iter()
+        .map(|(topic_id, _)| *topic_id)
+        .collect();
     let state_epoch = state.group_epoch;
     let mut changed = false;
     for (tid, partition) in to_init {
@@ -88,7 +101,7 @@ pub(super) async fn reconcile_share_state(
                 topic_uuid,
                 partition,
                 state_epoch,
-                krabka_log::Offset(UNINITIALIZED_START_OFFSET),
+                krabka_log::Offset(initial_start_offset(&known_topics, tid)),
             )
             .await
         {
@@ -126,6 +139,17 @@ pub(super) async fn reconcile_share_state(
     }
 }
 
+/// The start offset that a new share partition of `topic_id` is initialized
+/// at: 0 for a topic in `known_topics`, [`UNINITIALIZED_START_OFFSET`] for a
+/// new topic.
+fn initial_start_offset(known_topics: &HashSet<Uuid>, topic_id: Uuid) -> i64 {
+    if known_topics.contains(&topic_id) {
+        0
+    } else {
+        UNINITIALIZED_START_OFFSET
+    }
+}
+
 /// Invert the metadata snapshot's `name → id` map into the `id → name` lookup
 /// the share-state record needs. A topic the image does not hold has no entry,
 /// and the record writer falls back to Kafka's `<UNKNOWN>`.
@@ -160,6 +184,16 @@ mod tests {
                 partition_racks: HashMap::new(),
             }
         }
+    }
+
+    #[test]
+    fn new_partitions_of_a_known_topic_start_at_zero() {
+        let known = Uuid([3; 16]);
+        let new = Uuid([4; 16]);
+        let known_topics = HashSet::from([known]);
+
+        assert!(initial_start_offset(&known_topics, known) == 0);
+        assert!(initial_start_offset(&known_topics, new) == UNINITIALIZED_START_OFFSET);
     }
 
     #[test]
