@@ -33,6 +33,9 @@ use crate::{
 /// `KafkaApis` does.
 const MAX_ERRORS_TO_INCLUDE: usize = 3;
 
+/// `DefaultAutoTopicCreationManager.DEFAULT_TOPIC_ERROR_CACHE_CAPACITY`.
+const ERROR_CACHE_CAPACITY: usize = 1_000;
+
 /// The per-broker state of Kafka's `DefaultAutoTopicCreationManager` for the
 /// streams internal topics: the topics whose creation is in flight, and the
 /// failures that the next heartbeats report.
@@ -62,15 +65,29 @@ impl StreamsInternalTopics {
             .collect()
     }
 
-    fn finish(&self, name: &str, error: Option<String>, expires_at_ms: i64) {
+    /// Records the outcome of one creation. Kafka's `ExpiringErrorCache.put`
+    /// caches the failure with its time to live, drops the entries that have
+    /// expired, and keeps the cache at its capacity.
+    fn finish(&self, name: &str, error: Option<String>, now_ms: i64, ttl_ms: i64) {
         self.in_flight.remove(name);
-        match error {
-            Some(error) => {
-                self.errors.insert(name.to_string(), (error, expires_at_ms));
-            }
-            None => {
-                self.errors.remove(name);
-            }
+        let Some(error) = error else {
+            self.errors.remove(name);
+            return;
+        };
+        self.errors
+            .insert(name.to_string(), (error, now_ms.saturating_add(ttl_ms)));
+        self.errors
+            .retain(|_, (_, expires_at_ms)| now_ms < *expires_at_ms);
+        while self.errors.len() > ERROR_CACHE_CAPACITY {
+            let Some(earliest) = self
+                .errors
+                .iter()
+                .min_by_key(|entry| entry.value().1)
+                .map(|entry| entry.key().clone())
+            else {
+                break;
+            };
+            self.errors.remove(&earliest);
         }
     }
 
@@ -105,21 +122,27 @@ pub(super) async fn create_internal_topics(
 ) -> Result<(), BrokerError> {
     let creator = &broker.streams_internal_topics;
     let now_ms = crate::time_util::now_ms();
-    // Kafka caches a failure for twice the heartbeat interval of the group.
-    let expires_at_ms = now_ms.saturating_add(
-        2 * i64::try_from(broker.config.streams_group.heartbeat_interval.as_millis())
-            .unwrap_or(i64::MAX),
-    );
+    // Kafka caches a failure for twice the heartbeat interval of the group,
+    // which the response carries.
+    let ttl_ms = 2 * i64::from(response.heartbeat_interval_ms.max(0));
     let creatable = creator.take_creatable(specs, now_ms);
     if !creatable.is_empty() {
         let results = create_topics(broker, ctx, &creatable).await;
+        // Kafka caches the failures when the creation answers, so the time
+        // the controller took does not eat into the back-off.
+        let cached_at_ms = crate::time_util::now_ms();
         for spec in &creatable {
-            creator.finish(&spec.name, results.get(&spec.name).cloned(), expires_at_ms);
+            creator.finish(
+                &spec.name,
+                results.get(&spec.name).cloned(),
+                cached_at_ms,
+                ttl_ms,
+            );
         }
     }
 
     let names: Vec<String> = specs.iter().map(|spec| spec.name.clone()).collect();
-    let errors = creator.errors_of(&names, now_ms);
+    let errors = creator.errors_of(&names, crate::time_util::now_ms());
     if errors.is_empty() {
         return Ok(());
     }
@@ -213,4 +236,62 @@ async fn create_topics(
             (topic.name, message)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+
+    fn spec(name: &str) -> InternalTopicSpec {
+        InternalTopicSpec {
+            name: name.into(),
+            partitions: 1,
+            replication_factor: 0,
+            configs: BTreeMap::new(),
+        }
+    }
+
+    /// Kafka's `DefaultAutoTopicCreationManager`: a topic whose creation is in
+    /// flight or whose last failure has not expired is not created again, and
+    /// the failure of a creation holds for its time to live.
+    #[test]
+    fn the_cache_holds_a_failure_for_its_time_to_live() {
+        let creator = StreamsInternalTopics::default();
+        let specs = [spec("a"), spec("b")];
+
+        // Both go out, and a second request finds them in flight.
+        check!(creator.take_creatable(&specs, 0) == specs.to_vec());
+        check!(creator.take_creatable(&specs, 0) == vec![]);
+
+        // `a` failed and `b` was created.
+        creator.finish("a", Some("no brokers".into()), 100, 1_000);
+        creator.finish("b", None, 100, 1_000);
+        check!(
+            creator.errors_of(&["a".into(), "b".into()], 200)
+                == vec![("a".into(), "no brokers".into())]
+        );
+        check!(creator.take_creatable(&specs, 200) == vec![spec("b")]);
+        creator.finish("b", None, 200, 1_000);
+
+        // The failure of `a` expires, so the next heartbeat creates it again
+        // and no longer reports it.
+        check!(creator.errors_of(&["a".into()], 1_101) == vec![]);
+        check!(creator.take_creatable(&specs, 1_101) == specs.to_vec());
+    }
+
+    /// The cache keeps at most `ERROR_CACHE_CAPACITY` failures, as Kafka's
+    /// `ExpiringErrorCache` does, and drops the ones that expired.
+    #[test]
+    fn the_cache_is_bounded() {
+        let creator = StreamsInternalTopics::default();
+        for index in 0..=ERROR_CACHE_CAPACITY {
+            creator.finish(&format!("t{index}"), Some("no brokers".into()), 100, 1_000);
+        }
+        check!(creator.errors.len() == ERROR_CACHE_CAPACITY);
+
+        creator.finish("late", Some("no brokers".into()), 2_000, 1_000);
+        check!(creator.errors.len() == 1);
+    }
 }
