@@ -95,6 +95,7 @@ mod tests {
         let w = wal(dir.path());
         let (results, leo, _) = crate::partition_writer::run_produce_append_batch(
             w.log.clone(),
+            None,
             (vec![sample_owned(2), sample_owned(3)], Vec::new()),
         )
         .await
@@ -122,6 +123,7 @@ mod tests {
         let w = wal(dir.path());
         let (_results, leo, _) = crate::partition_writer::run_produce_append_batch(
             w.log.clone(),
+            None,
             (vec![sample_owned(3)], Vec::new()),
         )
         .await

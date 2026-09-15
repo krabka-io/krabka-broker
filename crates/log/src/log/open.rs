@@ -174,6 +174,7 @@ impl Log {
             lso,
             pending: HashMap::new(),
             verification_states: HashMap::new(),
+            unreplicated: BTreeMap::new(),
             pending_stamp_ranges: HashMap::new(),
             coordinator_epochs: HashMap::new(),
             producer_state: HashMap::new(),
@@ -235,6 +236,7 @@ impl Log {
     pub(super) fn rebuild_producer_and_transaction_state(&mut self) -> Result<(), LogError> {
         self.pending.clear();
         self.verification_states.clear();
+        self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();
         self.producer_state.clear();
@@ -322,8 +324,12 @@ impl Log {
                 is_abort,
                 is_commit,
                 self.pending.contains_key(&producer_id),
-            ) {
-                self.pending.remove(&producer_id);
+            ) && let Some(first_offset) = self.pending.remove(&producer_id)
+            {
+                self.unreplicated.insert(
+                    first_offset,
+                    Offset(batch.base_offset + i64::from(batch.last_offset_delta)),
+                );
             }
             if (is_abort || is_commit)
                 && let Some(epoch) = batch

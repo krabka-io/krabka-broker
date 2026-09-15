@@ -46,17 +46,18 @@ impl QuorumStateMachine {
         // demonstrably still talking to us, and resigning the quorum over a
         // truncation round would cost an election for no reason.
         let mut actions: Vec<Action> = self.record_quorum_contact(from, now).into_iter().collect();
-        // Divergence check: if the follower claims to have replicated `fetch_epoch`
-        // beyond where that epoch ends in our log, it must truncate.
-        if fetch_offset > 0
-            && let Some(div_end) = log.end_offset_for_epoch(fetch_epoch)
-            && fetch_offset > div_end
-        {
-            actions.push(Action::TruncateTo(LogOffsetMetadata {
-                offset: div_end,
-                epoch: fetch_epoch,
-            }));
-            return actions;
+        // Divergence check, Kafka's `RaftLog.validateOffsetAndEpoch`: the fetch
+        // is consistent only if our log holds `fetch_epoch` itself and that
+        // epoch reaches `fetch_offset`. An epoch we do not hold (a leader that
+        // lost the election appended it) diverges as well: its records are
+        // not ours, so the follower's offset must not count toward the high
+        // watermark. Kafka records replica progress only for a valid fetch.
+        if fetch_offset > 0 {
+            let end = log.end_offset_for_epoch(fetch_epoch);
+            if end.epoch != fetch_epoch || end.offset < fetch_offset {
+                actions.push(Action::ReplyDivergingEpoch(end));
+                return actions;
+            }
         }
         // Consistent: record the follower's fetch offset and recompute the HWM.
         let log_end = log.end_offset();
@@ -252,8 +253,9 @@ impl QuorumStateMachine {
 
     /// Follower side: the leader answered our Fetch.
     ///
-    /// A diverging hint means that we must truncate. Without a hint, we re-arm
-    /// the fetch timer and fetch again.
+    /// A diverging hint means that we must truncate, to the offset Kafka's
+    /// `RaftLog.truncateToEndOffset` picks from the hint and our own log.
+    /// Without a hint, we re-arm the fetch timer and fetch again.
     #[tracing::instrument(
         level = "debug",
         skip_all,
@@ -261,13 +263,17 @@ impl QuorumStateMachine {
     )]
     pub(super) fn handle_fetch_response(
         &mut self,
+        log: &dyn LogView,
         leader_id: NodeId,
         _leader_epoch: Epoch,
         diverging: Option<LogOffsetMetadata>,
         now: SimInstant,
     ) -> Vec<Action> {
         if let Some(point) = diverging {
-            return vec![Action::TruncateTo(point)];
+            return vec![Action::TruncateTo(LogOffsetMetadata {
+                offset: point.follower_truncation_offset(log),
+                epoch: point.epoch,
+            })];
         }
         let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
         vec![

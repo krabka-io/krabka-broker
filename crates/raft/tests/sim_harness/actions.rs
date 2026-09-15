@@ -138,7 +138,10 @@ impl<L: SimNodeLog> Sim<L> {
                 }
             }
             // Pure bookkeeping signals with no cross-node effect in the sim.
-            Action::TransitionedTo(_) | Action::PersistQuorumState => {}
+            Action::TransitionedTo(_)
+            | Action::PersistQuorumState
+            // Carried in the fetch response built when the leader serves it.
+            | Action::ReplyDivergingEpoch(_) => {}
         }
     }
 

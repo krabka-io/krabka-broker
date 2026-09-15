@@ -173,6 +173,7 @@ impl Log {
         let stamp_index_path = new_active.stamp_index_path();
         self.pending.clear(); // reset_to is a hard reset (after divergence)
         self.verification_states.clear();
+        self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();
         self.producer_state.clear();
@@ -216,10 +217,13 @@ impl Log {
             .fold(active, |total, seg| total + seg.size())
     }
 
-    /// Last-Stable-Offset: the highest offset that consumers in
-    /// `read_committed` isolation may see. Advances only when no
-    /// transactions are in flight; held back at the first offset of any
-    /// open (uncommitted/unaborted) transactional batch.
+    /// First unstable offset: the first offset of the earliest transaction
+    /// that is open, or complete with a marker the high watermark has not
+    /// passed. It is the log end offset when there is no such transaction.
+    ///
+    /// This value does not know the high watermark. A reader must use
+    /// [`Log::last_stable_offset`], which releases replicated transactions
+    /// and caps the answer at the high watermark.
     #[must_use]
     pub fn lso(&self) -> Offset {
         self.lso

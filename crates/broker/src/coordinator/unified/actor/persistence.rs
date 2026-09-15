@@ -51,7 +51,7 @@ fn member_metadata_value(member: &MemberState) -> MemberMetadataValue {
     }
 }
 
-fn current_assignment_value(member: &MemberState) -> CurrentMemberAssignmentValue {
+pub(super) fn current_assignment_value(member: &MemberState) -> CurrentMemberAssignmentValue {
     use crate::coordinator::unified::persistence_next_gen::AssignedTopicPartitions;
     CurrentMemberAssignmentValue {
         member_epoch: member.member_epoch,
@@ -76,7 +76,9 @@ fn current_assignment_value(member: &MemberState) -> CurrentMemberAssignmentValu
     }
 }
 
-fn target_assignment_value(target: &HashMap<Uuid, Vec<i32>>) -> TargetAssignmentMemberValue {
+pub(super) fn target_assignment_value(
+    target: &HashMap<Uuid, Vec<i32>>,
+) -> TargetAssignmentMemberValue {
     use crate::coordinator::unified::persistence_next_gen::AssignedTopicPartitions;
     TargetAssignmentMemberValue {
         topic_partitions: target

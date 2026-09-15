@@ -120,9 +120,10 @@ pub struct Log {
     /// sides of a restart.
     compacted_once: bool,
 
-    /// Last-Stable-Offset: the offset before the first record of any
-    /// in-flight transaction. Defaults to `log_end_offset()` when no
-    /// transactions are in flight.
+    /// First unstable offset: the first offset of the earliest transaction
+    /// that is open, or that is complete but whose marker is not yet below the
+    /// high watermark. It is `log_end_offset()` when there is no such
+    /// transaction. [`Log::last_stable_offset`] caps it at the high watermark.
     lso: Offset,
 
     /// In-flight transactions: `producer_id` → first offset of this
@@ -134,6 +135,13 @@ pub struct Log {
     /// transaction verification to the producer's next transactional append.
     /// See [`VerificationGuard`].
     verification_states: HashMap<ProducerId, verification::VerificationState>,
+    /// Complete transactions whose marker the high watermark has not passed:
+    /// first offset of the transaction → last offset of its marker. They still
+    /// hold the last stable offset, as Kafka's `unreplicatedTxns` does, so a
+    /// `read_committed` reader never sees a transaction whose outcome a leader
+    /// change can still truncate away. [`Log::last_stable_offset`] releases
+    /// an entry once its marker is below the high watermark.
+    unreplicated: BTreeMap<Offset, Offset>,
 
     /// Exact data-batch ranges for each in-flight transaction. A commit
     /// marker stamps only these ranges, so interleaved transactions and

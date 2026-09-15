@@ -128,17 +128,19 @@ impl Partition {
         }
     }
 
-    /// Last Stable Offset: the highest offset at or before which all records
-    /// in all in-flight transactions have been resolved (committed or aborted).
+    /// Last Stable Offset at `high_watermark`: Kafka's
+    /// `UnifiedLog.lastStableOffset`. A transaction that is open, or complete
+    /// with a marker that `high_watermark` has not passed, holds it at the
+    /// transaction's first offset. See [`Log::last_stable_offset`].
     /// Cheap: takes the `Arc<Mutex<Log>>` briefly.
     ///
     /// Returns 0 if the log mutex is poisoned, that is, if the writer task
     /// panicked. The caller treats that as no progress, and the
     /// writer-died path later reports a clearer error.
     #[must_use]
-    pub fn lso(&self) -> Offset {
+    pub fn last_stable_offset(&self, high_watermark: Offset) -> Offset {
         match self.log.lock() {
-            Ok(g) => g.lso(),
+            Ok(mut g) => g.last_stable_offset(high_watermark),
             Err(_) => Offset(0),
         }
     }

@@ -30,6 +30,7 @@ pub(super) async fn append_source(
 ) {
     let (results, leo, _) = crate::partition_writer::run_produce_append_batch(
         store.source.clone(),
+        None,
         (
             vec![crate::partition::ProduceData::Owned(batch(records))],
             Vec::new(),

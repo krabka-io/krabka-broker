@@ -141,6 +141,18 @@ pub enum BrokerError {
     #[error("share: {0}")]
     Share(String),
 
+    /// The share-state coordinator answered a KIP-932 persister call for one
+    /// partition with a non-zero error code, for example `NOT_COORDINATOR` or
+    /// `FENCED_STATE_EPOCH`. The share-partition leader maps `code` to the
+    /// error that it gives the client.
+    #[error("share state partition error (code {code}): {message}")]
+    SharePartitionState {
+        /// The partition error code that the coordinator answered.
+        code: i16,
+        /// What failed, for the log.
+        message: String,
+    },
+
     /// Two listeners share the same `bind_addr`.
     #[error("listener bind conflict: {a} and {b} share bind_addr")]
     ListenerConflict { a: String, b: String },

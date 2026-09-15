@@ -76,10 +76,30 @@ pub(super) async fn handle_groups(
             continue;
         }
 
-        // Fetch the group's offset state from its actor (a classic actor
-        // is created for an unknown id; offsets are protocol-agnostic, so an
-        // existing actor of either kind serves `FetchOffsets` the same way).
-        let offsets = fetch_offsets(broker, &grp.group_id).await;
+        // Fetch the group's offset state from its actor. An unknown id reads
+        // as a group with no offsets and creates nothing. A consumer group
+        // checks the v9+ member id and epoch first, and a refusal is the
+        // group's error code with no topics (Kafka's
+        // `OffsetFetchResponse.groupError`).
+        let offsets = match fetch_offsets(
+            broker,
+            &grp.group_id,
+            grp.member_id.as_deref(),
+            grp.member_epoch,
+        )
+        .await
+        {
+            Ok(offsets) => offsets,
+            Err(error_code) => {
+                groups_out.push(OffsetFetchResponseGroup {
+                    group_id: grp.group_id.clone(),
+                    topics: Vec::new(),
+                    error_code,
+                    ..Default::default()
+                });
+                continue;
+            }
+        };
         let image = broker.controller.current_image();
 
         // Named/id'd topics: resolve id→name (v10) and read each requested

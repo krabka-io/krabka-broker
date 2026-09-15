@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use krabka_ids::LeaderEpoch;
-use krabka_kraft_core::{Epoch, LogView};
+use krabka_kraft_core::{Epoch, LogOffsetMetadata, LogView};
 use krabka_log::Log;
 
 /// A durable WAL-replica log exposed through [`LogView`].
@@ -44,17 +44,13 @@ impl LogView for ShardLog {
         u32::try_from(latest.0).unwrap_or(0)
     }
 
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
-        let epoch = LeaderEpoch(i32::try_from(epoch).ok()?);
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
         let log = self.lock();
-        match log
-            .epoch_checkpoint()
-            .end_offset_for_epoch(epoch, log.log_end_offset())
-            .0
-        {
-            -1 => None,
-            offset => Some(offset),
-        }
+        krabka_raft::kraft::log::end_offset_for_epoch_in(
+            log.epoch_checkpoint(),
+            log.log_end_offset(),
+            epoch,
+        )
     }
 }
 
@@ -78,8 +74,20 @@ mod tests {
 
         assert!(view.end_offset() == 3);
         assert!(view.last_epoch() == 2);
-        assert!(view.end_offset_for_epoch(2) == Some(3));
-        assert!(view.end_offset_for_epoch(1).is_none());
+        assert!(
+            view.end_offset_for_epoch(2)
+                == LogOffsetMetadata {
+                    offset: 3,
+                    epoch: 2
+                }
+        );
+        assert!(
+            view.end_offset_for_epoch(3)
+                == LogOffsetMetadata {
+                    offset: 3,
+                    epoch: 2
+                }
+        );
     }
 
     fn batch(records: i32, epoch: i32) -> RecordBatch {

@@ -48,6 +48,8 @@ mod response;
 #[cfg(test)]
 mod group_authorization_tests;
 #[cfg(test)]
+mod persister_error_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 pub(crate) use self::acknowledge::apply_one_ack;
