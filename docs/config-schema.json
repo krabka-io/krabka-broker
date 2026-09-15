@@ -2172,6 +2172,15 @@
             "null"
           ]
         },
+        "offsets_topic_segment_bytes": {
+          "default": null,
+          "description": "`segment.bytes` of the `__consumer_offsets` internal topic, Kafka's\n`offsets.topic.segment.bytes`.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "opa_http_timeout": {
           "default": null,
           "description": "Timeout for one OPA authorization request.",
@@ -2573,6 +2582,14 @@
             "null"
           ]
         },
+        "share_state_min_isr": {
+          "description": "`min.insync.replicas` of the `__share_group_state` internal topic,\nKafka's `share.coordinator.state.topic.min.isr`.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "share_state_num_partitions": {
           "description": "Partition count of the `__share_group_state` internal topic, Kafka's\n`share.coordinator.state.topic.num.partitions`.",
           "format": "int32",
@@ -2588,6 +2605,15 @@
           "minimum": -32768,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "share_state_segment_bytes": {
+          "default": null,
+          "description": "`segment.bytes` of the `__share_group_state` internal topic, Kafka's\n`share.coordinator.state.topic.segment.bytes`.",
+          "format": "byte-size",
+          "type": [
+            "string",
             "null"
           ]
         },
@@ -2783,6 +2809,14 @@
             "null"
           ]
         },
+        "transaction_state_min_isr": {
+          "description": "`min.insync.replicas` of the `__transaction_state` internal topic,\nKafka's `transaction.state.log.min.isr`.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "transaction_state_num_partitions": {
           "description": "Partition count of the `__transaction_state` internal topic, Kafka's\n`transaction.state.log.num.partitions`.",
           "format": "int32",
@@ -2798,6 +2832,15 @@
           "minimum": -32768,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "transaction_state_segment_bytes": {
+          "default": null,
+          "description": "`segment.bytes` of the `__transaction_state` internal topic, Kafka's\n`transaction.state.log.segment.bytes`.",
+          "format": "byte-size",
+          "type": [
+            "string",
             "null"
           ]
         },

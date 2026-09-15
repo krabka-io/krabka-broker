@@ -65,6 +65,21 @@ context_dispatches!(register_context_dispatches;
     (describe_quorum_adapter, DescribeQuorum, describe_quorum_request, crate::handlers::describe_quorum::handle),
 );
 
+// The inter-broker apis that were plain dispatches until they needed a
+// principal to authorize. The dispatch loop still charges them to the request
+// quota.
+fallback_accounted_context_dispatches!(register_fallback_accounted_context_dispatches;
+    (allocate_producer_ids_adapter, AllocateProducerIds, allocate_producer_ids_request, crate::handlers::allocate_producer_ids::handle),
+    (add_offsets_to_txn_adapter, AddOffsetsToTxn, add_offsets_to_txn_request, crate::txn::handlers::add_offset_commits_to_txn::handle),
+    (write_txn_markers_adapter, WriteTxnMarkers, write_txn_markers_request, crate::txn::handlers::write_txn_markers::handle),
+    (fetch_snapshot_adapter, FetchSnapshot, fetch_snapshot_request, crate::handlers::fetch_snapshot::handle),
+    (initialize_share_group_state_adapter, InitializeShareGroupState, initialize_share_group_state_request, crate::share_coordinator::handlers::initialize::handle),
+    (read_share_group_state_adapter, ReadShareGroupState, read_share_group_state_request, crate::share_coordinator::handlers::read::handle),
+    (write_share_group_state_adapter, WriteShareGroupState, write_share_group_state_request, crate::share_coordinator::handlers::write::handle),
+    (delete_share_group_state_adapter, DeleteShareGroupState, delete_share_group_state_request, crate::share_coordinator::handlers::delete::handle),
+    (read_share_group_state_summary_adapter, ReadShareGroupStateSummary, read_share_group_state_summary_request, crate::share_coordinator::handlers::read_summary::handle),
+);
+
 sync_context_dispatches!(register_sync_context_dispatches;
     (list_config_resources_adapter, ListConfigResources, list_config_resources_request, crate::handlers::list_config_resources::handle),
     (get_replica_log_info_adapter, GetReplicaLogInfo, get_replica_log_info_request, crate::handlers::get_replica_log_info::handle),

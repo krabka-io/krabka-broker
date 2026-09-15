@@ -432,12 +432,25 @@ pub struct RuntimeFileConfig {
     /// Replication factor of the `__share_group_state` internal topic, Kafka's
     /// `share.coordinator.state.topic.replication.factor`.
     pub share_state_replication_factor: Option<i16>,
+    /// `segment.bytes` of the `__share_group_state` internal topic, Kafka's
+    /// `share.coordinator.state.topic.segment.bytes`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub share_state_segment_bytes: Option<ByteSize>,
+    /// `min.insync.replicas` of the `__share_group_state` internal topic,
+    /// Kafka's `share.coordinator.state.topic.min.isr`.
+    pub share_state_min_isr: Option<i32>,
     /// Partition count of the `__consumer_offsets` internal topic, Kafka's
     /// `offsets.topic.num.partitions`.
     pub offsets_topic_num_partitions: Option<i32>,
     /// Replication factor of the `__consumer_offsets` internal topic, Kafka's
     /// `offsets.topic.replication.factor`.
     pub offsets_topic_replication_factor: Option<i16>,
+    /// `segment.bytes` of the `__consumer_offsets` internal topic, Kafka's
+    /// `offsets.topic.segment.bytes`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub offsets_topic_segment_bytes: Option<ByteSize>,
     /// How long a committed consumer offset is kept after its group becomes
     /// empty, Kafka's `offsets.retention.minutes`. It must be a whole number
     /// of minutes.
@@ -459,6 +472,14 @@ pub struct RuntimeFileConfig {
     /// Replication factor of the `__transaction_state` internal topic, Kafka's
     /// `transaction.state.log.replication.factor`.
     pub transaction_state_replication_factor: Option<i16>,
+    /// `segment.bytes` of the `__transaction_state` internal topic, Kafka's
+    /// `transaction.state.log.segment.bytes`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub transaction_state_segment_bytes: Option<ByteSize>,
+    /// `min.insync.replicas` of the `__transaction_state` internal topic,
+    /// Kafka's `transaction.state.log.min.isr`.
+    pub transaction_state_min_isr: Option<i32>,
     /// Minimum transaction timeout a producer may request.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]

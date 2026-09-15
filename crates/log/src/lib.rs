@@ -108,6 +108,7 @@ mod retention;
 mod segment;
 mod stamp_index;
 mod stamp_source;
+pub mod topic_name;
 mod txn_index;
 
 pub use config::{

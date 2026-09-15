@@ -4,9 +4,10 @@
 use krabka_protocol::records::TimestampType;
 
 use crate::config_keys::{
-    COMPRESSION_TYPE, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
-    MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
-    configured_min_insync_replicas, parse_compression_type,
+    CLEANUP_POLICY, COMPRESSION_TYPE, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED,
+    MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE,
+    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, configured_min_insync_replicas, parse_cleanup_policy,
+    parse_compression_type,
 };
 
 /// Resolve `min.insync.replicas` for a topic from the metadata image.
@@ -217,6 +218,26 @@ fn parse_timestamp_window(value: Option<&str>) -> Option<i64> {
     value
         .and_then(|raw| raw.parse::<i64>().ok())
         .filter(|ms| *ms != i64::MAX)
+}
+
+/// Whether a topic's effective `cleanup.policy` holds `compact`, which is
+/// Kafka's `LogConfig.compact` and the `compactedTopic` flag of
+/// `LogValidator`.
+///
+/// The topic override wins. A topic that sets none, or whose stored value does
+/// not parse, takes `broker_default`, the policy the partition writer applies
+/// through its base `LogConfig`.
+pub(super) fn resolve_compacted_topic(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+    broker_default: krabka_log::CleanupPolicy,
+) -> bool {
+    image
+        .topic_config(topic)
+        .and_then(|configs| configs.get(CLEANUP_POLICY))
+        .and_then(|value| parse_cleanup_policy(value).ok())
+        .unwrap_or(broker_default)
+        .contains_compact()
 }
 
 #[cfg(test)]

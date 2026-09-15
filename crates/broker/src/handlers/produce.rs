@@ -25,7 +25,9 @@ use self::{
     pipeline::{PartitionInput, PartitionOutcome, PartitionServices, process_partition},
     response::build_topic_error_response,
     throttle::{finish_produce_response, produce_bytes_by_qos_tier},
-    topic_settings::{resolve_timestamp_policy, resolve_topic_compression},
+    topic_settings::{
+        resolve_compacted_topic, resolve_timestamp_policy, resolve_topic_compression,
+    },
 };
 use crate::{
     broker::Broker,
@@ -58,6 +60,8 @@ mod topic_settings;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(test)]
+mod compacted_key_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 
@@ -293,6 +297,11 @@ pub(crate) async fn handle(
         // every partition one boolean test and reads no clock.
         let timestamps = resolve_timestamp_policy(&image, &topic_name);
 
+        // Kafka's `LogConfig.compact`, resolved once per topic: a compacted
+        // topic refuses a record with no key.
+        let compacted_topic =
+            resolve_compacted_topic(&image, &topic_name, broker.config.log_config.cleanup_policy);
+
         // KFC-7, resolved here for the same reason: schema validation is a
         // property of the topic. `None` is the default, and every partition of
         // such a topic then skips the check without reading a record body.
@@ -326,6 +335,7 @@ pub(crate) async fn handle(
                     part_data,
                     topic_compression,
                     timestamps,
+                    compacted_topic,
                     max_message_bytes,
                     delivery,
                     schema,

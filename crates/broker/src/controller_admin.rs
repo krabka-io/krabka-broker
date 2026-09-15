@@ -262,13 +262,10 @@ async fn invoke_registered_handler(
     })?;
     match entry.kind() {
         // A plain handler takes no session at all. `AssignReplicasToDirs` (73)
-        // reaches it straight off the listener, and `AllocateProducerIds` (67)
-        // through the `Envelope` path -- 67 is the one api key that is both
-        // `ApiKeys.forwardable` and registered this way, and a JVM broker
-        // forwards it to obtain a producer-id block before any producer of its
-        // own can initialise, so the `Envelope` path has to reach it. The
-        // envelope's `ClusterAction` gate has already run by the time this is
-        // called.
+        // is the one key that reaches it, straight off the listener.
+        // `AllocateProducerIds` (67), which a JVM broker forwards in an
+        // `Envelope`, is a context dispatch: its handler checks `ClusterAction`
+        // for the principal that the envelope names.
         DispatchKind::Plain(handler) => handler(broker, api_version, correlation_id, body).await,
         DispatchKind::Context(handler) => {
             let context = RequestContext::new(

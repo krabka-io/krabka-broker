@@ -2,13 +2,39 @@
 //!
 //! This mirrors the `__consumer_offsets` bootstrap.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
-use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord};
 use krabka_raft::RaftError;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use uuid::Uuid;
 
 pub const TOPIC: &str = "__transaction_state";
+
+/// The topic configs Kafka writes when it creates `__transaction_state`
+/// (`TransactionCoordinator.transactionStateTopicConfigs`).
+///
+/// `segment_bytes` is `transaction.state.log.segment.bytes` and `min_isr` is
+/// `transaction.state.log.min.isr`.
+pub(crate) fn topic_configs(segment_bytes: ByteSize, min_isr: i32) -> BTreeMap<String, String> {
+    use crate::config_keys::{
+        CLEANUP_POLICY, COMPRESSION_TYPE, MIN_INSYNC_REPLICAS, SEGMENT_BYTES,
+        UNCLEAN_LEADER_ELECTION_ENABLE,
+    };
+    BTreeMap::from([
+        (
+            UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(),
+            "false".to_owned(),
+        ),
+        (COMPRESSION_TYPE.to_owned(), "uncompressed".to_owned()),
+        (CLEANUP_POLICY.to_owned(), "compact".to_owned()),
+        (MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_string()),
+        (
+            SEGMENT_BYTES.to_owned(),
+            segment_bytes.bytes_u64().to_string(),
+        ),
+    ])
+}
 
 /// Make sure `__transaction_state` exists in the controller's metadata.
 ///
@@ -19,6 +45,7 @@ pub(crate) async fn ensure_topic(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     num_partitions: i32,
     replication_factor: i16,
+    topic_configs: &BTreeMap<String, String>,
 ) -> Result<(), crate::error::BrokerError> {
     let image = controller.current_image();
     if image.topic(TOPIC).is_some() {
@@ -68,6 +95,11 @@ pub(crate) async fn ensure_topic(
         }));
     }
 
+    records.push(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: TOPIC.to_string(),
+        overrides: topic_configs.clone(),
+    }));
+
     match controller.submit_change(records).await {
         Ok(_) | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => Ok(()),
         Err(e) => Err(crate::error::BrokerError::Txn(format!(
@@ -92,9 +124,17 @@ mod tests {
             .expect("start broker");
         let broker = handle.broker_arc_for_test();
 
-        ensure_topic(&broker.controller, 7, 3)
-            .await
-            .expect("create transaction-state topic");
+        ensure_topic(
+            &broker.controller,
+            7,
+            3,
+            &topic_configs(
+                broker.config.transaction_state_segment_bytes,
+                broker.config.transaction_state_min_isr,
+            ),
+        )
+        .await
+        .expect("create transaction-state topic");
 
         let image = handle.controller_image_for_test();
         let topic = image.topic(TOPIC).expect("transaction-state topic");

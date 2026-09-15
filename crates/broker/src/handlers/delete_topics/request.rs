@@ -107,19 +107,24 @@ pub(super) fn resolve_topic_names(
         }
     }
 
+    // Each duplicate name or id answers once, in the order of its first row.
+    // The sets make that check O(1) per row, so a request full of duplicates
+    // costs O(n) before authorization.
     let mut topics = Vec::with_capacity(references.len());
     let mut duplicate_names: Vec<&str> = Vec::new();
+    let mut seen_duplicate_names: HashSet<&str> = HashSet::new();
     let mut duplicate_ids: Vec<WireUuid> = Vec::new();
+    let mut seen_duplicate_ids: HashSet<WireUuid> = HashSet::new();
     for reference in references {
         match reference {
             Reference::Name(name) if name_rows[name] > 1 => {
-                if !duplicate_names.contains(&name) {
+                if seen_duplicate_names.insert(name) {
                     duplicate_names.push(name);
                 }
             }
             Reference::Name(name) => topics.push((Some(name.to_string()), false, WireUuid::ZERO)),
             Reference::Id(id) if id_rows[&id] > 1 => {
-                if !duplicate_ids.contains(&id) {
+                if seen_duplicate_ids.insert(id) {
                     duplicate_ids.push(id);
                 }
             }
@@ -143,7 +148,7 @@ pub(super) fn resolve_topic_names(
     ValidatedTopics {
         topics,
         invalid,
-        duplicate_ids: duplicate_ids.into_iter().collect(),
+        duplicate_ids: seen_duplicate_ids,
     }
 }
 
@@ -313,6 +318,29 @@ mod tests {
                 invalid: vec![invalid(Some("orders"), WireUuid::ZERO, DUPLICATE_NAME)],
             },
             Case {
+                label: "interleaved duplicates answer once each in first-row order",
+                request: v6(vec![
+                    state(Some("b"), WireUuid::ZERO),
+                    state(None, OTHER_ID),
+                    state(Some("a"), WireUuid::ZERO),
+                    state(None, ORDERS_ID),
+                    state(Some("b"), WireUuid::ZERO),
+                    state(None, OTHER_ID),
+                    state(Some("a"), WireUuid::ZERO),
+                    state(Some("c"), WireUuid::ZERO),
+                    state(None, ORDERS_ID),
+                    state(Some("b"), WireUuid::ZERO),
+                ]),
+                denied: &[],
+                topics: vec![(Some("c".into()), false, WireUuid::ZERO)],
+                invalid: vec![
+                    invalid(Some("b"), WireUuid::ZERO, DUPLICATE_NAME),
+                    invalid(Some("a"), WireUuid::ZERO, DUPLICATE_NAME),
+                    invalid(None, OTHER_ID, DUPLICATE_ID),
+                    invalid(None, ORDERS_ID, DUPLICATE_ID),
+                ],
+            },
+            Case {
                 label: "a duplicate id answers once with no name",
                 request: v6(vec![state(None, ORDERS_ID), state(None, ORDERS_ID)]),
                 denied: &[],
@@ -369,5 +397,38 @@ mod tests {
             expected.push((case.label, case.topics, case.invalid));
         }
         assert!(actual == expected);
+    }
+
+    /// A request of many distinct names and ids, each sent twice, answers one
+    /// `INVALID_REQUEST` row per name and per id, in first-row order, and
+    /// keeps no row to delete.
+    #[test]
+    fn many_duplicates_answer_once_each_in_first_row_order() {
+        const DISTINCT: u16 = 5_000;
+        let names: Vec<String> = (0..DISTINCT).map(|i| format!("topic-{i}")).collect();
+        let ids: Vec<WireUuid> = (0..DISTINCT)
+            .map(|i| {
+                let mut bytes = [0xee; 16];
+                bytes[..2].copy_from_slice(&i.to_be_bytes());
+                WireUuid(bytes)
+            })
+            .collect();
+        let rows: Vec<DeleteTopicState> = (0..2)
+            .flat_map(|_| {
+                names
+                    .iter()
+                    .zip(&ids)
+                    .flat_map(|(name, id)| [state(Some(name), WireUuid::ZERO), state(None, *id)])
+            })
+            .collect();
+
+        let validated = resolve_topic_names(&v6(rows), &image());
+
+        let expected: Vec<DeletableTopicResult> = names
+            .iter()
+            .map(|name| invalid(Some(name), WireUuid::ZERO, DUPLICATE_NAME))
+            .chain(ids.iter().map(|id| invalid(None, *id, DUPLICATE_ID)))
+            .collect();
+        assert!((validated.topics, validated.invalid) == (Vec::new(), expected));
     }
 }

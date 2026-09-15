@@ -94,6 +94,7 @@ pub fn append_one_batch(
             PartitionPayload::Slice(records),
             settings.topic_compression,
             settings.timestamps,
+            false,
             &settings.topic_name,
             settings.metrics,
             settings.decompression_policy,
@@ -101,6 +102,7 @@ pub fn append_one_batch(
         PathChoice::ForceOwned => owned_fallback(
             records,
             settings.timestamps,
+            false,
             &settings.topic_name,
             settings.metrics,
             settings.decompression_policy,

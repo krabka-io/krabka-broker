@@ -75,6 +75,23 @@ impl DispatchEntry {
         }
     }
 
+    /// A context dispatch that the dispatch loop charges to the KIP-124
+    /// request quota, as it does a plain dispatch.
+    ///
+    /// The inter-broker apis that moved from plain to context dispatches to
+    /// get a principal use it, so their request-quota accounting stays the
+    /// same.
+    pub(crate) fn fallback_accounted_context(
+        api_key: ApiKeyCode,
+        flexible_min: ApiVersion,
+        handler: ContextHandler,
+    ) -> Self {
+        Self {
+            quota_policy: RequestQuotaPolicy::ApplyFallbackAccounting,
+            ..Self::context(api_key, flexible_min, handler)
+        }
+    }
+
     /// A context dispatch whose handler charges the KIP-124 request quota
     /// itself and reports the KIP-219 window on its own typed response.
     ///

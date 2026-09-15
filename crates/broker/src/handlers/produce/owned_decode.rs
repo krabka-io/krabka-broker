@@ -175,6 +175,7 @@ mod tests {
             PartitionPayload::Owned(RecordsPayload::Legacy(legacy.freeze())),
             None,
             crate::handlers::produce::hot_path::TimestampPolicy::default(),
+            false,
             &Arc::from("orders"),
             &crate::metrics::BrokerMetrics::new(),
             RecordDecompressionPolicy::default(),

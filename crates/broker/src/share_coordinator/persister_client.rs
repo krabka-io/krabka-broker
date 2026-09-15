@@ -220,6 +220,7 @@ impl SharePersister {
             &self.controller,
             self.share_coordinator.state_topic_num_partitions(),
             self.share_coordinator.state_topic_replication_factor(),
+            &self.share_coordinator.state_topic_configs(),
         )
         .await?;
 

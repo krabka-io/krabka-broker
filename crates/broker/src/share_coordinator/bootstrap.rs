@@ -1,13 +1,38 @@
 //! Lazy creation of the `__share_group_state` internal topic (KIP-932).
 //! Mirrors the `__transaction_state` bootstrap.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
-use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord};
 use krabka_raft::RaftError;
+use krabka_units::convert::ByteSizeExt as _;
 use uuid::Uuid;
 
 pub const TOPIC: &str = "__share_group_state";
+
+/// The topic configs Kafka writes when it creates `__share_group_state`
+/// (`ShareCoordinatorService.shareGroupStateTopicConfigs`, as KIP-932
+/// defines them).
+pub(crate) fn topic_configs(
+    config: &crate::share_coordinator::config::ShareCoordinatorConfig,
+) -> BTreeMap<String, String> {
+    use crate::config_keys::{
+        CLEANUP_POLICY, COMPRESSION_TYPE, MIN_INSYNC_REPLICAS, RETENTION_MS, SEGMENT_BYTES,
+    };
+    BTreeMap::from([
+        (CLEANUP_POLICY.to_owned(), "delete".to_owned()),
+        (COMPRESSION_TYPE.to_owned(), "producer".to_owned()),
+        (
+            SEGMENT_BYTES.to_owned(),
+            config.state_topic_segment_bytes.bytes_u64().to_string(),
+        ),
+        (
+            MIN_INSYNC_REPLICAS.to_owned(),
+            config.state_topic_min_isr.to_string(),
+        ),
+        (RETENTION_MS.to_owned(), "-1".to_owned()),
+    ])
+}
 
 /// Make sure `__share_group_state` exists in the controller's metadata.
 /// This is a no-op if the topic already exists. It tolerates `TopicExists`,
@@ -16,6 +41,7 @@ pub(crate) async fn ensure_topic(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     num_partitions: i32,
     replication_factor: i16,
+    topic_configs: &BTreeMap<String, String>,
 ) -> Result<(), crate::error::BrokerError> {
     let image = controller.current_image();
     if image.topic(TOPIC).is_some() {
@@ -65,6 +91,11 @@ pub(crate) async fn ensure_topic(
         }));
     }
 
+    records.push(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: TOPIC.to_string(),
+        overrides: topic_configs.clone(),
+    }));
+
     match controller.submit_change(records).await {
         Ok(_) | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => Ok(()),
         Err(e) => Err(crate::error::BrokerError::Share(format!(
@@ -89,9 +120,14 @@ mod tests {
             .expect("start broker");
         let broker = handle.broker_arc_for_test();
 
-        ensure_topic(&broker.controller, 7, 3)
-            .await
-            .expect("create share-state topic");
+        ensure_topic(
+            &broker.controller,
+            7,
+            3,
+            &topic_configs(&broker.config.share_coordinator),
+        )
+        .await
+        .expect("create share-state topic");
 
         let image = handle.controller_image_for_test();
         let topic = image.topic(TOPIC).expect("share-state topic");

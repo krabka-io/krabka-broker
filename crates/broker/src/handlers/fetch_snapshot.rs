@@ -51,7 +51,40 @@ fn err_partition(index: i32, error_code: i16) -> PartitionSnapshot {
     }
 }
 
-pub(crate) fn handle(
+/// Checks `ClusterAction` on the cluster, then serves the byte range.
+///
+/// The snapshot is the serialized metadata image, with every ACL, config,
+/// SCRAM credential and delegation token record. Kafka's
+/// `ControllerApis.handleFetchSnapshot` calls
+/// `authorizeClusterOperation(request, CLUSTER_ACTION)` first, and a denial
+/// becomes `FetchSnapshotRequest.getErrorResponse`: a top-level
+/// `CLUSTER_AUTHORIZATION_FAILED` and no topics.
+pub(crate) async fn handle(
+    broker: &Broker,
+    version: i16,
+    correlation_id: i32,
+    req_bytes: &[u8],
+    ctx: &crate::handlers::RequestContext<'_>,
+) -> Result<Bytes, BrokerError> {
+    if crate::handlers::cluster_action_denied(
+        broker.config.authorizer.as_ref(),
+        &broker.controller.current_image(),
+        ctx,
+    ) {
+        let mut cur: &[u8] = req_bytes;
+        FetchSnapshotRequest::decode(&mut cur, version)?;
+        return crate::handlers::encode_response(
+            &FetchSnapshotResponse {
+                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            },
+            version,
+        );
+    }
+    serve(broker, version, correlation_id, req_bytes).await
+}
+
+fn serve(
     broker: &Broker,
     version: i16,
     _correlation_id: i32,
@@ -146,6 +179,89 @@ mod tests {
     use krabka_raft::SnapshotSlice;
 
     use super::*;
+
+    /// A broker listener serves `FetchSnapshot` only to a principal with
+    /// `ClusterAction` on the cluster (#682). Kafka's
+    /// `ControllerApis.handleFetchSnapshot` authorizes first, and a denial is
+    /// `FetchSnapshotRequest.getErrorResponse`: a top-level
+    /// `CLUSTER_AUTHORIZATION_FAILED` and no snapshot bytes.
+    #[tokio::test]
+    async fn fetch_snapshot_needs_cluster_action() {
+        use krabka_protocol::owned::{
+            fetch_snapshot_request::{
+                self, PartitionSnapshot as ReqPartition, TopicSnapshot as ReqTopic,
+            },
+            fetch_snapshot_response,
+        };
+
+        let (handle, _dir) = crate::test_support::start_broker_with(|config| {
+            config.audit_enabled = false;
+            config.authorizer = std::sync::Arc::new(crate::test_support::GrantsInPrincipalName);
+        })
+        .await;
+        let broker = handle.broker_arc_for_test();
+        let request = FetchSnapshotRequest {
+            replica_id: -1,
+            max_bytes: 1024,
+            topics: vec![ReqTopic {
+                name: CLUSTER_METADATA_TOPIC.into(),
+                partitions: vec![ReqPartition {
+                    partition: 0,
+                    position: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // With ClusterAction the handler reads the controller checkpoint,
+        // exactly as the unauthorized handler did.
+        let served = build_response(
+            broker.controller.current_image().cluster_id(),
+            &request,
+            &|position, max_bytes| broker.controller.read_snapshot_range(position, max_bytes),
+        );
+        let refused = FetchSnapshotResponse {
+            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+            ..Default::default()
+        };
+        let cases = [
+            ("none", refused.clone()),
+            ("Cluster:Describe+Cluster:Alter+Topic:Read", refused),
+            ("Cluster:ClusterAction", served),
+        ];
+
+        let address = crate::test_support::peer();
+        for version in [
+            fetch_snapshot_response::MIN_VERSION,
+            fetch_snapshot_response::MAX_VERSION,
+        ] {
+            for (grants, expected) in &cases {
+                let user = crate::test_support::principal(grants);
+                let ctx = crate::test_support::request_context(&user, &address, "snapshot-test");
+                let bytes = crate::test_support::dispatch_context(
+                    &broker,
+                    fetch_snapshot_request::API_KEY,
+                    version,
+                    &crate::test_support::encode_request(&request, version),
+                    &ctx,
+                )
+                .await;
+                // The records decode to their wire form, so the expected
+                // response goes through the same encode and decode.
+                let expected = crate::test_support::decode_response::<FetchSnapshotResponse>(
+                    &crate::handlers::encode_response(expected, version).expect("encode"),
+                    version,
+                );
+                check!(
+                    crate::test_support::decode_response::<FetchSnapshotResponse>(&bytes, version)
+                        == expected,
+                    "v{version} {grants}"
+                );
+            }
+        }
+        handle.shutdown().await;
+    }
 
     #[test]
     fn build_response_serves_requested_range() {

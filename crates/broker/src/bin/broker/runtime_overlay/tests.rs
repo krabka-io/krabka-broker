@@ -342,3 +342,43 @@ fn explicit_env_default_runtime_values_override_file() {
         },
     );
 }
+
+/// The five settings Kafka writes into the coordinator topics' configs reach
+/// the broker config from the command line, and a segment size outside
+/// Kafka's `int` range is refused at parse time.
+#[test]
+fn internal_topic_config_settings_apply_from_cli() {
+    let _guard = env_guard();
+
+    assert!(Args::try_parse_from(["krabka-broker", "--offsets-topic-segment-bytes=2GiB"]).is_err());
+    assert!(Args::try_parse_from(["krabka-broker", "--transaction-state-min-isr=0"]).is_err());
+
+    let args = Args::try_parse_from([
+        "krabka-broker",
+        "--offsets-topic-segment-bytes=2MiB",
+        "--transaction-state-segment-bytes=3MiB",
+        "--transaction-state-min-isr=1",
+        "--share-state-segment-bytes=4MiB",
+        "--share-state-min-isr=3",
+    ])
+    .expect("parse internal topic settings");
+    let mut config = BrokerConfig::default();
+    args.apply_runtime_to(&mut config, None)
+        .expect("overlay CLI runtime");
+
+    assert!(
+        (
+            config.offsets_topic_segment_bytes,
+            config.transaction_state_segment_bytes,
+            config.transaction_state_min_isr,
+            config.share_coordinator.state_topic_segment_bytes,
+            config.share_coordinator.state_topic_min_isr,
+        ) == (
+            krabka_units::mebibytes(2),
+            krabka_units::mebibytes(3),
+            1,
+            krabka_units::mebibytes(4),
+            3,
+        )
+    );
+}

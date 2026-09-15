@@ -273,6 +273,7 @@ mod tests {
             producer_id: -1,
             producer_epoch: -1,
             base_sequence: -1,
+            keyless_records: Vec::new(),
             source: PreparedSource::Verbatim(bytes),
         };
         // No request reaches the registry: the record fails to decode before

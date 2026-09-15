@@ -102,3 +102,78 @@ async fn second_bootstrap_does_not_duplicate_offsets_topic() {
         "topic_id changed across boots — a duplicate TopicRecord was submitted"
     );
 }
+
+/// Kafka creates each coordinator topic with an explicit config map:
+/// `GroupCoordinatorService.groupMetadataTopicConfigs`,
+/// `TransactionCoordinator.transactionStateTopicConfigs` and
+/// `ShareCoordinatorService.shareGroupStateTopicConfigs`. The values below are
+/// Kafka's defaults for `offsets.topic.segment.bytes`,
+/// `transaction.state.log.segment.bytes`, `transaction.state.log.min.isr`,
+/// `share.coordinator.state.topic.segment.bytes` and
+/// `share.coordinator.state.topic.min.isr`.
+#[tokio::test]
+async fn internal_topics_are_created_with_kafkas_topic_configs() {
+    let dir = tempdir().unwrap();
+    let handle = crate::broker::Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
+        .await
+        .expect("start broker");
+    let broker = handle.broker_arc_for_test();
+    crate::txn::bootstrap::ensure_topic(
+        &broker.controller,
+        1,
+        1,
+        &crate::txn::bootstrap::topic_configs(
+            broker.config.transaction_state_segment_bytes,
+            broker.config.transaction_state_min_isr,
+        ),
+    )
+    .await
+    .expect("create transaction-state topic");
+    crate::share_coordinator::bootstrap::ensure_topic(
+        &broker.controller,
+        1,
+        1,
+        &crate::share_coordinator::bootstrap::topic_configs(&broker.config.share_coordinator),
+    )
+    .await
+    .expect("create share-state topic");
+
+    let image = handle.controller_image_for_test();
+    for (topic, expected) in [
+        (
+            OFFSETS_TOPIC,
+            vec![
+                ("cleanup.policy", "compact"),
+                ("compression.type", "producer"),
+                ("segment.bytes", "104857600"),
+            ],
+        ),
+        (
+            crate::txn::bootstrap::TOPIC,
+            vec![
+                ("cleanup.policy", "compact"),
+                ("compression.type", "uncompressed"),
+                ("min.insync.replicas", "2"),
+                ("segment.bytes", "104857600"),
+                ("unclean.leader.election.enable", "false"),
+            ],
+        ),
+        (
+            crate::share_coordinator::bootstrap::TOPIC,
+            vec![
+                ("cleanup.policy", "delete"),
+                ("compression.type", "producer"),
+                ("min.insync.replicas", "2"),
+                ("retention.ms", "-1"),
+                ("segment.bytes", "104857600"),
+            ],
+        ),
+    ] {
+        let expected: std::collections::BTreeMap<String, String> = expected
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect();
+        check!(image.topic_config(topic) == Some(&expected), "{topic}");
+    }
+    handle.shutdown().await;
+}

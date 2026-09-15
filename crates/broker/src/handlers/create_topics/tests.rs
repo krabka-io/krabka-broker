@@ -971,3 +971,141 @@ async fn v4_response_encodes_without_the_kip_525_fields() {
     );
     broker_handle.shutdown().await;
 }
+
+/// Every file and directory under `root`, as paths relative to it, sorted.
+fn tree(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read dir") {
+            let path = entry.expect("dir entry").path();
+            out.push(path.strip_prefix(root).expect("under root").to_path_buf());
+            if path.is_dir() {
+                walk(root, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// Kafka's topic-name rules: `ControllerApis` refuses `__cluster_metadata`,
+/// and `ReplicationControlManager.validateNewTopicNames` refuses a name that
+/// `Topic.validate` refuses or that collides with an existing topic. A refused
+/// name commits nothing and creates no directory, inside the log directory or
+/// outside it.
+#[tokio::test]
+async fn handle_refuses_invalid_and_colliding_topic_names() {
+    /// One row: the requested name, and the error code and message it gets.
+    type NameCase = (String, i16, Option<String>);
+
+    let (broker_handle, dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.log_dir = cfg.log_dir.join("logs");
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let existing = drive(&broker, &request(vec![topic("a_b", 1, 1)]), &p, &peer).await;
+    assert!(existing.topics[0].error_code == codes::NONE);
+
+    let absolute = format!("{}/escape", dir.path().display());
+    let too_long = "a".repeat(250);
+    let illegal = |name: &str| {
+        Some(format!(
+            "Topic name is invalid: '{name}' contains one or more characters other than ASCII \
+             alphanumerics, '.', '_' and '-'"
+        ))
+    };
+    let cases: Vec<NameCase> = vec![
+        (
+            String::new(),
+            codes::INVALID_TOPIC_EXCEPTION,
+            Some("Topic name is invalid: the empty string is not allowed".into()),
+        ),
+        (
+            ".".into(),
+            codes::INVALID_TOPIC_EXCEPTION,
+            Some("Topic name is invalid: '.' is not allowed".into()),
+        ),
+        (
+            "..".into(),
+            codes::INVALID_TOPIC_EXCEPTION,
+            Some("Topic name is invalid: '..' is not allowed".into()),
+        ),
+        (
+            too_long.clone(),
+            codes::INVALID_TOPIC_EXCEPTION,
+            Some(format!(
+                "Topic name is invalid: the length of '{too_long}' is longer than the max \
+                 allowed length 249"
+            )),
+        ),
+        ("a/b".into(), codes::INVALID_TOPIC_EXCEPTION, illegal("a/b")),
+        (
+            "../x".into(),
+            codes::INVALID_TOPIC_EXCEPTION,
+            illegal("../x"),
+        ),
+        (
+            absolute.clone(),
+            codes::INVALID_TOPIC_EXCEPTION,
+            illegal(&absolute),
+        ),
+        ("a b".into(), codes::INVALID_TOPIC_EXCEPTION, illegal("a b")),
+        (
+            "a.b".into(),
+            codes::INVALID_TOPIC_EXCEPTION,
+            Some("Topic 'a.b' collides with existing topic: a_b".into()),
+        ),
+        (
+            "__cluster_metadata".into(),
+            codes::INVALID_REQUEST,
+            Some("Creation of internal topic __cluster_metadata is prohibited.".into()),
+        ),
+    ];
+
+    let before = tree(dir.path());
+    for validate_only in [true, false] {
+        for (name, error_code, error_message) in &cases {
+            let req = CreateTopicsRequest {
+                validate_only,
+                ..request(vec![topic(name, 1, 1)])
+            };
+
+            let resp = drive(&broker, &req, &p, &peer).await;
+
+            let expected = CreateTopicsResponse {
+                throttle_time_ms: 0,
+                topics: vec![CreatableTopicResult {
+                    name: name.clone(),
+                    topic_id: ProtoUuid([0; 16]),
+                    error_code: *error_code,
+                    error_message: error_message.clone(),
+                    num_partitions: -1,
+                    replication_factor: -1,
+                    configs: None,
+                    topic_config_error_code: 0,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }],
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            };
+            check!(resp == expected, "{name:?} validate_only={validate_only}");
+            check!(
+                broker_handle
+                    .controller_image_for_test()
+                    .topic(name)
+                    .is_none(),
+                "{name:?}"
+            );
+        }
+    }
+    check!(tree(dir.path()) == before);
+
+    // The longest legal name is accepted.
+    let longest = "a".repeat(249);
+    let created = drive(&broker, &request(vec![topic(&longest, 1, 1)]), &p, &peer).await;
+    check!(created.topics[0].error_code == codes::NONE);
+    broker_handle.shutdown().await;
+}
