@@ -359,6 +359,106 @@ mod tests {
         }
     }
 
+    /// The actor wakes at a member's rebalance deadline instead of waiting
+    /// for the session tick, and a heartbeat's `rebalance_timeout_ms` replaces
+    /// the stored timeout before the deadline is armed. The session tick here
+    /// never fires, so only the deadline wake can fence the member.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_actor_fences_at_the_rebalance_deadline_between_session_ticks() {
+        use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
+        use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
+
+        use crate::coordinator::unified::actor::{GroupActorMessage, test_support::StaticMetadata};
+
+        let topic = krabka_protocol::primitives::uuid::Uuid([42; 16]);
+        let clock = ManualMonotonicClock::new_shared();
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig {
+                timer: clock.new_timer(),
+                session_expiry_tick: Duration::from_hours(1),
+                ..NextGenConfig::default()
+            },
+            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+            Arc::new(StaticMetadata {
+                input: crate::coordinator::unified::reconciler::ReconcileInput {
+                    topic_id_by_name: [("t".to_string(), topic)].into(),
+                    partitions_per_topic: [(topic, 2)].into(),
+                    ..Default::default()
+                },
+            }),
+            Arc::new(InMemoryOffsetsLog::default()),
+            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        ));
+        let handle = coord.get_or_create_consumer("g");
+        let heartbeat = |member_id: &'static str,
+                         member_epoch: i32,
+                         rebalance_timeout_ms: i32,
+                         owned: Option<Vec<i32>>| {
+            let handle = Arc::clone(&handle);
+            async move {
+                let (reply, response) = tokio::sync::oneshot::channel();
+                handle
+                    .tx
+                    .send(GroupActorMessage::Heartbeat {
+                        request: ConsumerGroupHeartbeatRequest {
+                            group_id: "g".into(),
+                            member_id: member_id.into(),
+                            member_epoch,
+                            subscribed_topic_names: Some(vec!["t".into()]),
+                            rebalance_timeout_ms,
+                            topic_partitions: owned.map(|partitions| {
+                                vec![TopicPartitions {
+                                    topic_id: topic,
+                                    partitions,
+                                    ..Default::default()
+                                }]
+                            }),
+                            ..Default::default()
+                        },
+                        client_id: "c".into(),
+                        client_host: "h".into(),
+                        reply,
+                    })
+                    .await
+                    .unwrap();
+                response.await.unwrap()
+            }
+        };
+
+        // m1 joins with a long timeout and owns both partitions.
+        let joined = heartbeat("m1", 0, 600_000, Some(vec![])).await;
+        let owned = heartbeat("m1", joined.member_epoch, -1, Some(vec![0, 1])).await;
+        heartbeat("m2", 0, 600_000, Some(vec![])).await;
+        // m1 shortens its timeout to 50 ms and keeps both partitions.
+        let kept = heartbeat("m1", owned.member_epoch, 50, Some(vec![0, 1])).await;
+        check!(kept.error_code == crate::codes::NONE);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (reply, view) = tokio::sync::oneshot::channel();
+            handle
+                .tx
+                .send(GroupActorMessage::Describe { reply })
+                .await
+                .unwrap();
+            let members: Vec<String> = view
+                .await
+                .unwrap()
+                .members
+                .into_iter()
+                .map(|member| member.member_id)
+                .collect();
+            if members == vec!["m2".to_string()] {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "m1 was not fenced at its rebalance deadline: {members:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     /// KIP-848 live migration: the tick must dispatch on the LIVE
     /// `group.kind`, not on the captured spawn-time kind. This test spawns a
     /// classic actor, flips it to a consumer group in place, and fires a tick.

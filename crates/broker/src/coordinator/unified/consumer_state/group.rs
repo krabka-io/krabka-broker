@@ -126,19 +126,16 @@ impl GroupState {
     /// Arms or cancels the rebalance timeout of `member_id` after a
     /// reconciliation, as Kafka's `GroupMetadataManager.maybeReconcile` does.
     ///
-    /// A member of the consumer protocol that enters the state with partitions
-    /// to revoke gets a timeout of its `rebalance_timeout_ms`. The timeout
-    /// stays armed while the member stays in that state, so a member that keeps
-    /// its partitions cannot push the deadline back with more heartbeats. Kafka
-    /// gets the same effect because the member epoch does not move while the
-    /// member still owns revoked partitions. Any other state cancels the
-    /// timeout. A classic member hosted in the group has only the join and sync
-    /// timers in Kafka, so it gets none.
+    /// A member that enters the state with partitions to revoke gets a timeout
+    /// of its `rebalance_timeout_ms`. The timeout stays armed while the member
+    /// stays in that state, so a member that keeps its partitions cannot push
+    /// the deadline back with more heartbeats. Kafka gets the same effect
+    /// because the member epoch does not move while the member still owns
+    /// revoked partitions. Any other state cancels the timeout.
     pub fn track_rebalance_timeout(&mut self, member_id: &str, now: Instant) {
         match self.members.get(member_id) {
             Some(member)
-                if !member.is_classic()
-                    && member.assignment_state == MemberAssignmentState::UnrevokedPartitions =>
+                if member.assignment_state == MemberAssignmentState::UnrevokedPartitions =>
             {
                 let timeout = member.rebalance_timeout;
                 self.rebalance_deadlines
@@ -151,6 +148,28 @@ impl GroupState {
         }
     }
 
+    /// Cancels the rebalance timeout of every member that no longer has
+    /// partitions to revoke.
+    ///
+    /// A reconciliation can end the obligation of a member that did not send
+    /// the heartbeat, for example when another member leaves and the target
+    /// gives the pending partition back. Without this pass, a later revocation
+    /// of that member would reuse the old, maybe already expired, deadline.
+    pub fn prune_rebalance_timeouts(&mut self) {
+        let members = &self.members;
+        self.rebalance_deadlines.retain(|member_id, _| {
+            members.get(member_id).is_some_and(|member| {
+                member.assignment_state == MemberAssignmentState::UnrevokedPartitions
+            })
+        });
+    }
+
+    /// The earliest armed rebalance deadline, so the actor can wake at it.
+    #[must_use]
+    pub fn next_rebalance_deadline(&self) -> Option<Instant> {
+        self.rebalance_deadlines.values().min().copied()
+    }
+
     /// Removes every member whose rebalance timeout fired at `now` while the
     /// member still had partitions to revoke. Returns the removed member ids,
     /// sorted.
@@ -158,16 +177,32 @@ impl GroupState {
     /// This is the fence of Kafka's `scheduleConsumerGroupRebalanceTimeout`
     /// (`consumerGroupFenceMember`). The removal frees the partitions the
     /// member did not revoke, so their new owners can take them.
+    ///
+    /// A hosted classic member never sends `ConsumerGroupHeartbeat`, so no
+    /// heartbeat arms its timeout. This pass arms it the first time it sees
+    /// the member with partitions to revoke. Kafka bounds the same member with
+    /// its join and sync timers, which also use the rebalance timeout. The
+    /// pass also cancels the deadlines that no longer apply, so a past
+    /// deadline never stays armed.
     pub fn fence_rebalance_timeouts(&mut self, now: Instant) -> Vec<String> {
+        self.prune_rebalance_timeouts();
+        let unarmed_classic: Vec<String> = self
+            .members
+            .values()
+            .filter(|member| {
+                member.is_classic()
+                    && member.assignment_state == MemberAssignmentState::UnrevokedPartitions
+                    && !self.rebalance_deadlines.contains_key(&member.member_id)
+            })
+            .map(|member| member.member_id.clone())
+            .collect();
+        for member_id in &unarmed_classic {
+            self.track_rebalance_timeout(member_id, now);
+        }
         let mut fenced: Vec<String> = self
             .rebalance_deadlines
             .iter()
-            .filter(|(member_id, deadline)| {
-                now >= **deadline
-                    && self.members.get(*member_id).is_some_and(|member| {
-                        member.assignment_state == MemberAssignmentState::UnrevokedPartitions
-                    })
-            })
+            .filter(|(_, deadline)| now >= **deadline)
             .map(|(member_id, _)| member_id.clone())
             .collect();
         fenced.sort_unstable();
@@ -291,11 +326,11 @@ mod tests {
                 fenced: vec![],
             },
             Row {
-                name: "hosted classic member",
+                name: "hosted classic member, same rule",
                 classic: true,
                 second_state: MemberAssignmentState::UnrevokedPartitions,
                 check_after_secs: 60,
-                fenced: vec![],
+                fenced: vec!["m1".into()],
             },
         ];
         for row in rows {
@@ -329,6 +364,48 @@ mod tests {
                 row.name
             );
         }
+    }
+
+    /// A reconciliation that ends a member's revocation cancels its deadline,
+    /// so a later revocation gets a fresh one. A hosted classic member, which
+    /// no heartbeat arms, is armed by the fence pass itself.
+    #[test]
+    fn stale_deadlines_are_pruned_and_classic_members_are_armed_by_the_sweep() {
+        let start = Instant::now();
+        let mut g = GroupState::new("g");
+        let mut native = member("native");
+        native.assignment_state = MemberAssignmentState::UnrevokedPartitions;
+        g.add_or_update_member(native);
+        g.track_rebalance_timeout("native", start);
+        // Another member's change gives the partition back, then takes it
+        // away again 50 s later.
+        g.members.get_mut("native").unwrap().assignment_state = MemberAssignmentState::Stable;
+        g.prune_rebalance_timeouts();
+        g.members.get_mut("native").unwrap().assignment_state =
+            MemberAssignmentState::UnrevokedPartitions;
+        g.track_rebalance_timeout("native", start + Duration::from_secs(50));
+        assert!(g.next_rebalance_deadline() == Some(start + Duration::from_secs(110)));
+        assert!(
+            g.fence_rebalance_timeouts(start + Duration::from_secs(60))
+                .is_empty()
+        );
+
+        let mut classic = member("classic");
+        classic.assignment_state = MemberAssignmentState::UnrevokedPartitions;
+        classic.classic = Some(super::super::ClassicMemberFacade {
+            generation_id: 1,
+            supported_protocols: vec![],
+            session_timeout: Duration::from_secs(45),
+            last_synced_assignment: bytes::Bytes::new(),
+            awaiting_sync: true,
+        });
+        g.add_or_update_member(classic);
+        assert!(g.fence_rebalance_timeouts(start).is_empty());
+        assert!(g.next_rebalance_deadline() == Some(start + Duration::from_mins(1)));
+        assert!(
+            g.fence_rebalance_timeouts(start + Duration::from_mins(1))
+                == vec!["classic".to_string()]
+        );
     }
 
     #[test]

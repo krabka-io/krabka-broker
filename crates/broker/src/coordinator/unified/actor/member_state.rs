@@ -210,6 +210,15 @@ pub(super) fn update_member_state(
             m.client_host = client.host.to_string();
             member_metadata_changed = true;
         }
+        // Kafka's `maybeUpdateRebalanceTimeoutMs(ofSentinel(..))`: -1 keeps the
+        // stored timeout, and any other value replaces it.
+        if let Ok(millis) = u64::try_from(req.rebalance_timeout_ms) {
+            let timeout = Duration::from_millis(millis);
+            if m.rebalance_timeout != timeout {
+                m.rebalance_timeout = timeout;
+                member_metadata_changed = true;
+            }
+        }
         if let Some(ref names) = req.subscribed_topic_names {
             let set: std::collections::HashSet<String> = names.iter().cloned().collect();
             if set != m.subscribed_topic_names {
@@ -273,6 +282,9 @@ pub(super) fn run_reconcile(
     let input = metadata.snapshot();
     let assignor = pick_assignor(state, config);
     reconciler::reconcile_if_dirty(state, &input, &*assignor);
+    // A new target can end the revocation of any member, not only the one
+    // whose heartbeat got here.
+    state.prune_rebalance_timeouts();
 }
 
 fn pick_assignor(state: &GroupState, config: &NextGenConfig) -> Arc<dyn Assignor> {
