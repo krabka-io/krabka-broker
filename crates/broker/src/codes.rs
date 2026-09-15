@@ -562,6 +562,7 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::Startup(_)
         | BrokerError::Txn(_)
         | BrokerError::Share(_)
+        | BrokerError::SharePartitionState { .. }
         | BrokerError::ListenerConflict { .. }
         | BrokerError::InvalidInterBrokerListener { .. }
         | BrokerError::EmptyRoles
