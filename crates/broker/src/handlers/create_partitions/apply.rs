@@ -24,17 +24,20 @@ pub(super) fn partition_records(
     topic: &str,
     indices: &[i32],
     assignments: &[Vec<NodeId>],
+    isrs: &[Vec<NodeId>],
 ) -> Vec<MetadataRecord> {
+    // Kafka's `buildPartitionRegistration`: the leader is the first ISR
+    // member, and the ISR holds only the replicas that were active.
     indices
         .iter()
-        .zip(assignments)
-        .map(|(index, replicas)| {
+        .zip(assignments.iter().zip(isrs))
+        .map(|(index, (replicas, isr))| {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: topic.to_string(),
                 partition: *index,
-                leader: replicas[0],
+                leader: isr[0],
                 replicas: replicas.clone(),
-                isr: replicas.clone(),
+                isr: isr.clone(),
                 leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
@@ -69,8 +72,9 @@ pub(super) async fn materialize_new_partitions(
     topic: &str,
     indices: &[i32],
     assignments: &[Vec<NodeId>],
+    isrs: &[Vec<NodeId>],
 ) {
-    for (index, replicas) in indices.iter().zip(assignments) {
+    for (index, (replicas, isr)) in indices.iter().zip(assignments.iter().zip(isrs)) {
         if !should_materialize_locally(replicas, context.node_id) {
             continue;
         }
@@ -108,10 +112,10 @@ pub(super) async fn materialize_new_partitions(
         else {
             continue;
         };
-        let leader = replicas[0];
+        let leader = isr[0];
         partition.install_leader_change(leader.0, 0).await;
         if is_local_leader(leader, context.node_id) {
-            partition.install_isr(replicas, replicas, leader).await;
+            partition.install_isr(isr, replicas, leader).await;
         }
     }
 }

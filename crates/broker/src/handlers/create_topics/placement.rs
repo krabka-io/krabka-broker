@@ -87,6 +87,44 @@ fn manual_replicas(
     Ok(by_partition.into_values().collect())
 }
 
+/// The initial ISR of each partition of a manual assignment.
+///
+/// Kafka's `ReplicationControlManager` builds the ISR of a manually assigned
+/// partition from the listed brokers that are active (registered, not fenced
+/// and not in controlled shutdown), in the listed order, and
+/// `buildPartitionRegistration` makes the first of them the leader. The
+/// replica list stays as the client sent it. `unavailable` is
+/// [`crate::handlers::offline_replicas::unavailable_brokers`].
+///
+/// `first_partition` is the index of the first partition in `assignments`:
+/// 0 for `CreateTopics`, the current partition count for `CreatePartitions`.
+/// When no listed broker of a partition is active, the result is Kafka's
+/// `INVALID_REPLICA_ASSIGNMENT` message for the first such partition.
+pub(crate) fn active_isrs(
+    assignments: &[Vec<krabka_raft::NodeId>],
+    unavailable: &std::collections::HashSet<u64>,
+    first_partition: i32,
+) -> Result<Vec<Vec<krabka_raft::NodeId>>, String> {
+    let mut partition = first_partition;
+    let mut isrs = Vec::with_capacity(assignments.len());
+    for replicas in assignments {
+        let isr = replicas
+            .iter()
+            .copied()
+            .filter(|replica| !unavailable.contains(&replica.0))
+            .collect::<Vec<_>>();
+        if isr.is_empty() {
+            return Err(format!(
+                "All brokers specified in the manual partition assignment for partition \
+                 {partition} are fenced or in controlled shutdown."
+            ));
+        }
+        isrs.push(isr);
+        partition = partition.saturating_add(1);
+    }
+    Ok(isrs)
+}
+
 /// The registered brokers as the site-aware placement sees them, in node-id
 /// order.
 ///

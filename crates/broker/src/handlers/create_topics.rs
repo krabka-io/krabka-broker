@@ -38,7 +38,7 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::placement::{round_robin_replicas, site_broker_views};
+pub(crate) use self::placement::{active_isrs, round_robin_replicas, site_broker_views};
 use self::{
     authorization::{cluster_create_denied, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
@@ -238,15 +238,16 @@ pub(crate) async fn handle(
         // site and the witness role of each broker. `site_broker_views` sorts
         // by node id for determinism, and it covers the race in which the
         // self-registration record has not reached the local image yet.
-        let unavailable = if topic_req.assignments.is_empty() {
-            super::offline_replicas::unavailable_brokers(broker, &image).await
-        } else {
-            std::collections::HashSet::new()
-        };
+        // The automatic placement never picks an unavailable broker. A manual
+        // assignment may name one, because Kafka checks only that the broker
+        // is registered, and the ISR below leaves it out.
+        let unavailable = super::offline_replicas::unavailable_brokers(broker, &image).await;
+        let manual = !topic_req.assignments.is_empty();
+        let no_exclusion = std::collections::HashSet::new();
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
-            &unavailable,
+            if manual { &no_exclusion } else { &unavailable },
         );
 
         let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
@@ -268,6 +269,22 @@ pub(crate) async fn handle(
             ));
             continue;
         }
+
+        let isrs = if manual {
+            match active_isrs(&assignments, &unavailable, 0) {
+                Ok(isrs) => isrs,
+                Err(message) => {
+                    results.push(topic_error_result(
+                        name,
+                        codes::INVALID_REPLICA_ASSIGNMENT,
+                        Some(message),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            assignments.clone()
+        };
 
         if diskless
             && let Some(reason) =
@@ -319,7 +336,8 @@ pub(crate) async fn handle(
             codes::NONE
         } else {
             // Build the batch: one TopicRecord + N PartitionRecords.
-            let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
+            let records =
+                topic_records(&topic_req, topic_id, &assignments, &isrs, &config_overrides);
 
             match controller.submit_change(records).await {
                 Ok(_) => {
@@ -347,6 +365,7 @@ pub(crate) async fn handle(
                         },
                         &name,
                         &assignments,
+                        &isrs,
                     )
                     .await;
                     codes::NONE

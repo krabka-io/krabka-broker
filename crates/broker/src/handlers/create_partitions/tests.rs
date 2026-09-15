@@ -278,3 +278,158 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
     );
     broker_handle.shutdown().await;
 }
+
+/// Commit topic `grow` with one partition on the remote brokers 3 and 4, so
+/// its replication factor is 2.
+async fn seed_remote_topic(handle: &crate::broker::BrokerHandle) {
+    let replicas = vec![krabka_raft::NodeId(3), krabka_raft::NodeId(4)];
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![
+            krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+                name: "grow".into(),
+                topic_id: uuid::Uuid::new_v4(),
+                partitions: 1,
+                replication_factor: 2,
+            }),
+            krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                topic: "grow".into(),
+                partition: 0,
+                leader: replicas[0],
+                replicas: replicas.clone(),
+                isr: replicas,
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 0,
+            }),
+        ])
+        .await
+        .expect("seed topic");
+}
+
+/// A manual assignment for a new partition keeps its replica list, but its
+/// ISR holds only the listed brokers that are active, and its leader is the
+/// first of them (#745). Kafka's `ReplicationControlManager.createPartitions`
+/// filters the ISR with `ClusterControlManager.isActive`, and answers
+/// `INVALID_REPLICA_ASSIGNMENT` when no listed broker is active.
+///
+/// Brokers 2, 3 and 4 are remote registrations. A fenced heartbeat on the
+/// controller makes a broker unavailable, as a real fenced broker is.
+#[tokio::test]
+async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
+    /// One row: the fenced brokers, the replica list of each new partition,
+    /// and the expected error code, error message and `(leader, isr)` per new
+    /// partition.
+    type Row = (
+        &'static [u64],
+        &'static [&'static [i32]],
+        i16,
+        Option<&'static str>,
+        Vec<(krabka_raft::NodeId, Vec<krabka_raft::NodeId>)>,
+    );
+    let n = krabka_raft::NodeId;
+    let rows: [Row; 4] = [
+        (
+            &[],
+            &[&[2, 3]],
+            codes::NONE,
+            None,
+            vec![(n(2), vec![n(2), n(3)])],
+        ),
+        (
+            &[2],
+            &[&[2, 3]],
+            codes::NONE,
+            None,
+            vec![(n(3), vec![n(3)])],
+        ),
+        (
+            &[2],
+            &[&[4, 2], &[2, 3]],
+            codes::NONE,
+            None,
+            vec![(n(4), vec![n(4)]), (n(3), vec![n(3)])],
+        ),
+        (
+            &[2, 3],
+            &[&[2, 3]],
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(
+                "All brokers specified in the manual partition assignment for partition 1 are \
+                 fenced or in controlled shutdown.",
+            ),
+            vec![],
+        ),
+    ];
+
+    for (fenced, lists, error_code, error_message, partitions) in rows {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        for node_id in [2, 3, 4] {
+            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+        }
+        seed_remote_topic(&broker_handle).await;
+        for &node_id in fenced {
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
+        }
+        let broker = broker_handle.broker_arc_for_test();
+        let count = 1 + i32::try_from(lists.len()).expect("count");
+        let req = request(
+            vec![topic_req(
+                "grow",
+                count,
+                Some(lists.iter().map(|ids| assn(ids)).collect()),
+            )],
+            false,
+        );
+
+        let resp = drive(&broker, &req, &principal("admin"), &peer()).await;
+
+        let expected = CreatePartitionsResponse {
+            throttle_time_ms: 0,
+            results: vec![CreatePartitionsTopicResult {
+                name: "grow".into(),
+                error_code,
+                error_message: error_message.map(str::to_owned),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "fenced {fenced:?}, assignment {lists:?}");
+
+        let image = broker_handle.controller_image_for_test();
+        let added = (1..)
+            .map_while(|index| image.partition("grow", index).cloned())
+            .collect::<Vec<_>>();
+        let expected_records = partitions
+            .into_iter()
+            .zip(lists)
+            .zip(1..)
+            .map(
+                |(((leader, isr), replicas), partition)| krabka_metadata::PartitionRecord {
+                    topic: "grow".into(),
+                    partition,
+                    leader,
+                    replicas: replicas
+                        .iter()
+                        .map(|&id| n(u64::try_from(id).expect("broker id")))
+                        .collect(),
+                    isr,
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 0,
+                },
+            )
+            .collect::<Vec<_>>();
+        check!(
+            added == expected_records,
+            "fenced {fenced:?}, assignment {lists:?}"
+        );
+        broker_handle.shutdown().await;
+    }
+}

@@ -46,7 +46,7 @@ use crate::{
     codes,
     config_keys::resolve_preferred_leader_site,
     error::BrokerError,
-    handlers::create_topics::{diskless_wal_placement_error, site_broker_views},
+    handlers::create_topics::{active_isrs, diskless_wal_placement_error, site_broker_views},
 };
 
 #[tracing::instrument(
@@ -155,15 +155,20 @@ pub(crate) async fn handle(
             continue;
         }
 
-        let unavailable = if t.assignments.is_none() {
-            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await
-        } else {
-            std::collections::HashSet::new()
-        };
+        // The automatic placement never picks an unavailable broker. A manual
+        // assignment may name one, because Kafka checks only that the broker
+        // is registered, and the ISR below leaves it out.
+        let unavailable =
+            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+        let no_exclusion = std::collections::HashSet::new();
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
-            &unavailable,
+            if t.assignments.is_some() {
+                &no_exclusion
+            } else {
+                &unavailable
+            },
         );
         let rf = topic_rec.replication_factor;
         let new_count = t.count;
@@ -184,6 +189,20 @@ pub(crate) async fn handle(
                 results.push(out);
                 continue;
             }
+        };
+
+        let isrs = if t.assignments.is_some() {
+            match active_isrs(&new_assignments, &unavailable, existing) {
+                Ok(isrs) => isrs,
+                Err(message) => {
+                    out.error_code = codes::INVALID_REPLICA_ASSIGNMENT;
+                    out.error_message = Some(message);
+                    results.push(out);
+                    continue;
+                }
+            }
+        } else {
+            new_assignments.clone()
         };
 
         if diskless
@@ -208,7 +227,7 @@ pub(crate) async fn handle(
         // grown count from the partitions map as these apply. (Re-submitting a
         // `V1Topic` would round-trip back to the pre-grow count and be rejected
         // by the strict-expansion `validate` on the apply path.)
-        let records = partition_records(&t.name, &new_partition_indices, &new_assignments);
+        let records = partition_records(&t.name, &new_partition_indices, &new_assignments, &isrs);
 
         match broker.controller.submit_change(records).await {
             Ok(_) => {
@@ -235,6 +254,7 @@ pub(crate) async fn handle(
                     &t.name,
                     &new_partition_indices,
                     &new_assignments,
+                    &isrs,
                 )
                 .await;
             }

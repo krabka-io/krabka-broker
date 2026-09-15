@@ -1109,3 +1109,163 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
     check!(created.topics[0].error_code == codes::NONE);
     broker_handle.shutdown().await;
 }
+
+/// A manual assignment keeps its replica list, but its ISR holds only the
+/// listed brokers that are active, and its leader is the first of them
+/// (#741). Kafka's `ReplicationControlManager.createTopic` filters the ISR
+/// with `ClusterControlManager.isActive`, and answers
+/// `INVALID_REPLICA_ASSIGNMENT` when no listed broker is active.
+///
+/// Brokers 2, 3 and 4 are remote registrations. A fenced heartbeat on the
+/// controller makes a broker unavailable, as a real fenced broker is.
+#[tokio::test]
+async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
+    const V4: i16 = 4;
+
+    /// One row: the fenced brokers, the replica list of each partition, and
+    /// the expected error code, error message and `(leader, isr)` per
+    /// partition.
+    type Row = (
+        &'static [u64],
+        &'static [&'static [i32]],
+        i16,
+        Option<&'static str>,
+        Vec<(krabka_raft::NodeId, Vec<krabka_raft::NodeId>)>,
+    );
+    let n = krabka_raft::NodeId;
+    let rows: [Row; 5] = [
+        (
+            &[],
+            &[&[2, 3, 4]],
+            codes::NONE,
+            None,
+            vec![(n(2), vec![n(2), n(3), n(4)])],
+        ),
+        (
+            &[2],
+            &[&[2, 3, 4]],
+            codes::NONE,
+            None,
+            vec![(n(3), vec![n(3), n(4)])],
+        ),
+        (
+            &[2, 3],
+            &[&[3, 2, 4], &[4, 3, 2]],
+            codes::NONE,
+            None,
+            vec![(n(4), vec![n(4)]), (n(4), vec![n(4)])],
+        ),
+        (
+            &[2],
+            &[&[2]],
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(
+                "All brokers specified in the manual partition assignment for partition 0 are \
+                 fenced or in controlled shutdown.",
+            ),
+            vec![],
+        ),
+        (
+            &[3],
+            &[&[2], &[3]],
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(
+                "All brokers specified in the manual partition assignment for partition 1 are \
+                 fenced or in controlled shutdown.",
+            ),
+            vec![],
+        ),
+    ];
+
+    for (fenced, lists, error_code, error_message, partitions) in rows {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        for node_id in [2, 3, 4] {
+            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+        }
+        for &node_id in fenced {
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
+        }
+        let topic = CreatableTopic {
+            name: "manual".into(),
+            num_partitions: -1,
+            replication_factor: -1,
+            assignments: lists
+                .iter()
+                .enumerate()
+                .map(|(index, broker_ids)| {
+                    krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
+                        partition_index: i32::try_from(index).expect("index"),
+                        broker_ids: broker_ids.to_vec(),
+                        ..Default::default()
+                    }
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let bytes = handle(
+            &broker,
+            V4,
+            123,
+            &crate::test_support::encode_request(&request(vec![topic]), V4),
+            &ctx,
+        )
+        .await
+        .expect("handle");
+        let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, V4);
+
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            topics: vec![CreatableTopicResult {
+                name: "manual".into(),
+                topic_id: ProtoUuid([0; 16]),
+                error_code,
+                error_message: error_message.map(str::to_owned),
+                num_partitions: -1,
+                replication_factor: -1,
+                configs: None,
+                topic_config_error_code: 0,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "fenced {fenced:?}, assignment {lists:?}");
+
+        let image = broker_handle.controller_image_for_test();
+        let committed = (0..)
+            .map_while(|index| image.partition("manual", index).cloned())
+            .collect::<Vec<_>>();
+        let expected_records = partitions
+            .into_iter()
+            .zip(lists)
+            .enumerate()
+            .map(
+                |(index, ((leader, isr), replicas))| krabka_metadata::PartitionRecord {
+                    topic: "manual".into(),
+                    partition: i32::try_from(index).expect("index"),
+                    leader,
+                    replicas: replicas
+                        .iter()
+                        .map(|&id| n(u64::try_from(id).expect("broker id")))
+                        .collect(),
+                    isr,
+                    leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 0,
+                },
+            )
+            .collect::<Vec<_>>();
+        check!(
+            committed == expected_records,
+            "fenced {fenced:?}, assignment {lists:?}"
+        );
+        broker_handle.shutdown().await;
+    }
+}

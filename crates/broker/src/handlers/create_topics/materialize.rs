@@ -42,8 +42,9 @@ pub(super) async fn materialize_topic(
     context: TopicMaterialization<'_>,
     topic: &str,
     assignments: &[Vec<krabka_raft::NodeId>],
+    isrs: &[Vec<krabka_raft::NodeId>],
 ) {
-    for (index, replicas) in assignments.iter().enumerate() {
+    for (index, (replicas, isr)) in assignments.iter().zip(isrs).enumerate() {
         if !should_materialize_locally(replicas, context.node_id) {
             continue;
         }
@@ -82,12 +83,12 @@ pub(super) async fn materialize_topic(
         else {
             continue;
         };
-        let leader = replicas[0];
+        let leader = isr[0];
         partition
             .install_leader_change(leader.0, INITIAL_LEADER_EPOCH)
             .await;
         if is_local_leader(leader, context.node_id) {
-            partition.install_isr(replicas, replicas, leader).await;
+            partition.install_isr(isr, replicas, leader).await;
         }
     }
 }
