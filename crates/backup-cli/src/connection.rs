@@ -7,7 +7,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use clap::Args;
-use krabka_client_core::security::{ClientSecurity, SaslCredentials, TlsConnectorConfig};
+use krabka_client_core::security::{
+    ClientSecurity, KeyStore, SaslCredentials, TlsConnectorConfig, TrustStore,
+};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 
 use crate::BackupError;
@@ -171,24 +173,30 @@ fn tls_config(properties: &BTreeMap<String, String>) -> Result<TlsConnectorConfi
             return invalid(&format!("{key}={kind} is unsupported; expected PEM"));
         }
     }
-    let client_identity = match (
+    let key_store = match (
         properties.get("ssl.keystore.location"),
         properties.get("ssl.key.location"),
     ) {
-        (Some(cert), Some(key)) => Some((PathBuf::from(cert), PathBuf::from(key))),
+        (Some(cert), Some(key)) => Some(KeyStore::PemFiles {
+            certificate_chain: PathBuf::from(cert),
+            private_key: PathBuf::from(key),
+            key_password: None,
+        }),
         (None, None) => None,
         _ => {
             return invalid("ssl.keystore.location and ssl.key.location must be provided together");
         }
     };
-    Ok(TlsConnectorConfig {
-        trust_roots_pem: properties.get("ssl.truststore.location").map(PathBuf::from),
-        server_name: properties
-            .get("ssl.server.name")
-            .cloned()
-            .unwrap_or_default(),
-        client_identity,
-    })
+    let mut tls = TlsConnectorConfig::default();
+    if let Some(location) = properties.get("ssl.truststore.location") {
+        tls.trust_store = TrustStore::PemFile(PathBuf::from(location));
+    }
+    tls.key_store = key_store;
+    tls.server_name = properties
+        .get("ssl.server.name")
+        .cloned()
+        .unwrap_or_default();
+    Ok(tls)
 }
 
 fn sasl_credentials(properties: &BTreeMap<String, String>) -> Result<SaslCredentials, BackupError> {
@@ -320,7 +328,7 @@ mod tests {
 
         check!(policy.protocol == ListenerProtocol::SaslSsl);
         let tls = policy.tls.expect("TLS policy");
-        check!(tls.trust_roots_pem == Some(PathBuf::from("/etc/krabka/ca.pem")));
+        check!(tls.trust_store == TrustStore::PemFile(PathBuf::from("/etc/krabka/ca.pem")));
         check!(tls.server_name == "broker.example");
         assert!(let Some(SaslCredentials::Scram {
             mechanism: SaslMechanism::ScramSha512,
