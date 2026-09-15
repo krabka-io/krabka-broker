@@ -207,7 +207,7 @@ async fn vote_runs_kafka_request_checks() {
         (
             "voter key names another replica",
             vote_request(|r| r.voter_id = 2),
-            vote_answer(124),
+            vote_answer(125),
         ),
         (
             "pre-vote while a leader is known",
@@ -286,7 +286,7 @@ async fn vote_refuses_a_voter_key_with_another_directory_id() {
     );
 
     for (label, directory_id, want_error) in [
-        ("another directory", Uuid::from_u128(12), 124),
+        ("another directory", Uuid::from_u128(12), 125),
         ("the local directory", Uuid::from_u128(11), 0),
         ("no directory", Uuid::nil(), 0),
     ] {
@@ -391,7 +391,7 @@ async fn begin_quorum_epoch_runs_kafka_request_checks() {
         (
             "voter key names another replica, after the transition",
             begin_request(|r| r.voter_id = 2),
-            begin_answer(124, 3, 6),
+            begin_answer(125, 3, 6),
         ),
         ("a new leader", begin_request(|_| {}), begin_answer(0, 3, 6)),
     ];
@@ -708,12 +708,12 @@ async fn fetch_snapshot_runs_kafka_request_checks() {
         (
             "negative position",
             fetch_snapshot_request(|_, p| p.position = -1),
-            fetch_snapshot_answer(metadata, 123, leader, None),
+            fetch_snapshot_answer(metadata, 99, leader, None),
         ),
         (
             "position at the size",
             fetch_snapshot_request(|_, p| p.position = 10),
-            fetch_snapshot_answer(metadata, 123, leader, None),
+            fetch_snapshot_answer(metadata, 99, leader, None),
         ),
         (
             "last byte",

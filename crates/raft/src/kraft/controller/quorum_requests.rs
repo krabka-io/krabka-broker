@@ -32,9 +32,9 @@ const INVALID_REQUEST: i16 = 42;
 const FENCED_LEADER_EPOCH: i16 = 74;
 const UNKNOWN_LEADER_EPOCH: i16 = 75;
 const SNAPSHOT_NOT_FOUND: i16 = 98;
+const POSITION_OUT_OF_RANGE: i16 = 99;
 const INCONSISTENT_CLUSTER_ID: i16 = 104;
-const POSITION_OUT_OF_RANGE: i16 = 123;
-const INVALID_VOTER_KEY: i16 = 124;
+const INVALID_VOTER_KEY: i16 = 125;
 
 /// Kafka's `BOOTSTRAP_SNAPSHOT_ID`. The bootstrap checkpoint is not
 /// replicated.
