@@ -212,6 +212,41 @@ impl GroupState {
         fenced
     }
 
+    /// Moves the static member `previous` to the id `member_id` at epoch 0, as
+    /// Kafka's `getOrMaybeSubscribeStaticConsumerGroupMember` copies a
+    /// released static member for the member that rejoins with its instance
+    /// id. The member keeps its subscription, target and assignment, and the
+    /// group does not rebalance for the change.
+    pub fn replace_static_member(&mut self, previous: &str, member_id: &str) {
+        let Some(mut member) = self.members.remove(previous) else {
+            return;
+        };
+        self.rebalance_deadlines.remove(previous);
+        member.member_id = member_id.to_string();
+        member.member_epoch = 0;
+        member.previous_member_epoch = 0;
+        member.classic = None;
+        if let Some(instance_id) = &member.instance_id {
+            self.instance_to_member
+                .insert(instance_id.clone(), member_id.to_string());
+        }
+        if let Some(target) = self.target.per_member.remove(previous) {
+            self.target.per_member.insert(member_id.to_string(), target);
+        }
+        self.members.insert(member_id.to_string(), member);
+    }
+
+    /// Sets a static member that leaves for a while to epoch -2, as Kafka's
+    /// `consumerGroupStaticMemberGroupLeave` does. It keeps its assignment
+    /// and drops the partitions it had still to revoke.
+    pub fn release_static_member(&mut self, member_id: &str) {
+        self.rebalance_deadlines.remove(member_id);
+        if let Some(member) = self.members.get_mut(member_id) {
+            member.member_epoch = -2;
+            member.partitions_pending_revocation.clear();
+        }
+    }
+
     pub fn advance_member_epoch(&mut self, member_id: &str) {
         if let Some(m) = self.members.get_mut(member_id) {
             m.previous_member_epoch = m.member_epoch;

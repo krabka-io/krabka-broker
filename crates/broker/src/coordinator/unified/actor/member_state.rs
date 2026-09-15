@@ -152,7 +152,7 @@ fn re2j_unsupported_inline_flag(pattern: &str) -> Option<char> {
 /// against every topic name on every metadata refresh, where RE2J's and
 /// `regex`'s linear-time guarantee is what keeps a subscription from becoming
 /// a denial of service.
-fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
+pub(super) fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
     if re2j_unsupported_inline_flag(pattern).is_some() {
         return Err(format!(
             "SubscribedTopicRegex `{pattern}` is not a valid regular expression: \

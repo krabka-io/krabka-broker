@@ -111,52 +111,376 @@ async fn member_limit_rejects_only_new_members() {
     check!(existing.member_epoch == joined.member_epoch);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn known_member_id_epoch_zero_is_stale() {
-    let (coord, _log) = make_coordinator();
-    let handle = coord.get_or_create_consumer("g");
-    // First join with a client id, epoch 0 → succeeds, epoch advances.
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "client-uuid-2".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    assert!(rx.await.unwrap().error_code == 0);
+const IDENTITY_TOPIC: Uuid = Uuid([9; 16]);
 
-    // Same id re-sending epoch 0 is now a known member at a higher epoch →
-    // stale, not a re-join.
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "client-uuid-2".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
+/// One row of [`heartbeat_identity_rules_follow_kafka`].
+struct IdentityRow {
+    name: &'static str,
+    /// Send a -2 leave for `s1` before the row's request.
+    release_s1_first: bool,
+    member_id: &'static str,
+    instance_id: Option<&'static str>,
+    member_epoch: i32,
+    owned: Option<Vec<i32>>,
+    expected: ConsumerGroupHeartbeatResponse,
+    /// `(member id, member epoch)` of every member after, sorted.
+    members_after: Vec<(&'static str, i32)>,
+    /// The member that owns instance `i1` after.
+    i1_after: Option<&'static str>,
+}
+
+impl IdentityRow {
+    fn new(
+        name: &'static str,
+        (member_id, instance_id, member_epoch): (&'static str, Option<&'static str>, i32),
+        owned: Option<Vec<i32>>,
+        expected: ConsumerGroupHeartbeatResponse,
+    ) -> Self {
+        Self {
+            name,
+            release_s1_first: false,
+            member_id,
+            instance_id,
+            member_epoch,
+            owned,
+            expected,
+            members_after: vec![("m1", 5), ("s1", 5)],
+            i1_after: Some("s1"),
+        }
+    }
+}
+
+fn heartbeat_interval_ms() -> i32 {
+    i32::try_from(NextGenConfig::default().heartbeat_interval.as_millis()).unwrap()
+}
+
+fn identity_ok(
+    member_id: &str,
+    member_epoch: i32,
+    partitions: Option<Vec<i32>>,
+) -> ConsumerGroupHeartbeatResponse {
+    use krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions;
+
+    ConsumerGroupHeartbeatResponse {
+        member_id: Some(member_id.into()),
+        member_epoch,
+        heartbeat_interval_ms: heartbeat_interval_ms(),
+        assignment: partitions.map(|partitions| RespAssignment {
+            topic_partitions: vec![TopicPartitions {
+                topic_id: IDENTITY_TOPIC,
+                partitions,
                 ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    assert!(rx.await.unwrap().error_code == codes::STALE_MEMBER_EPOCH);
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+fn identity_error(error_code: i16, message: &str) -> ConsumerGroupHeartbeatResponse {
+    ConsumerGroupHeartbeatResponse {
+        error_code,
+        error_message: Some(message.into()),
+        heartbeat_interval_ms: heartbeat_interval_ms(),
+        ..Default::default()
+    }
+}
+
+fn fenced_epoch(direction: &str, received: i32) -> ConsumerGroupHeartbeatResponse {
+    identity_error(
+        codes::FENCED_MEMBER_EPOCH,
+        &format!(
+            "The consumer group member has a {direction} member epoch ({received}) than the one \
+             known by the group coordinator (5). The member must abandon all its partitions and \
+             rejoin."
+        ),
+    )
+}
+
+fn identity_rows() -> Vec<IdentityRow> {
+    let fenced_instance = || {
+        identity_error(
+            codes::FENCED_INSTANCE_ID,
+            "Static member m9 with instance id i1 was fenced by member s1.",
+        )
+    };
+    vec![
+        IdentityRow {
+            members_after: vec![("m1", 5), ("s1", -2)],
+            ..IdentityRow::new(
+                "static member leaves with epoch -2",
+                ("s1", Some("i1"), -2),
+                None,
+                identity_ok("s1", -2, None),
+            )
+        },
+        IdentityRow {
+            release_s1_first: true,
+            members_after: vec![("m1", 5), ("s2", 5)],
+            i1_after: Some("s2"),
+            ..IdentityRow::new(
+                "new member takes a released instance id",
+                ("s2", Some("i1"), 0),
+                Some(vec![]),
+                identity_ok("s2", 5, Some(vec![2, 3])),
+            )
+        },
+        IdentityRow::new(
+            "new member with an unreleased instance id",
+            ("s2", Some("i1"), 0),
+            Some(vec![]),
+            identity_error(
+                codes::UNRELEASED_INSTANCE_ID,
+                "Static member s2 with instance id i1 cannot join the group because the instance \
+                 id is owned by s1 member.",
+            ),
+        ),
+        IdentityRow::new(
+            "known member rejoins with epoch 0",
+            ("m1", None, 0),
+            Some(vec![]),
+            identity_ok("m1", 5, Some(vec![0, 1])),
+        ),
+        IdentityRow::new(
+            "previous epoch with a subset of the assignment",
+            ("m1", None, 4),
+            Some(vec![0]),
+            identity_ok("m1", 5, Some(vec![0, 1])),
+        ),
+        IdentityRow::new(
+            "previous epoch with a superset of the assignment",
+            ("m1", None, 4),
+            Some(vec![0, 1, 2]),
+            fenced_epoch("smaller", 4),
+        ),
+        IdentityRow::new(
+            "epoch older than the previous epoch",
+            ("m1", None, 3),
+            Some(vec![0]),
+            fenced_epoch("smaller", 3),
+        ),
+        IdentityRow::new(
+            "greater epoch",
+            ("m1", None, 6),
+            Some(vec![0, 1]),
+            fenced_epoch("greater", 6),
+        ),
+        IdentityRow::new(
+            "leave of an unknown member",
+            ("ghost", None, -1),
+            None,
+            identity_error(
+                codes::UNKNOWN_MEMBER_ID,
+                "Member ghost is not a member of group g.",
+            ),
+        ),
+        IdentityRow {
+            members_after: vec![("s1", 5)],
+            ..IdentityRow::new(
+                "dynamic member leaves with epoch -1",
+                ("m1", None, -1),
+                None,
+                identity_ok("m1", -1, None),
+            )
+        },
+        IdentityRow::new(
+            "static heartbeat from another member id",
+            ("m9", Some("i1"), 5),
+            Some(vec![2, 3]),
+            fenced_instance(),
+        ),
+        IdentityRow::new(
+            "static leave from another member id",
+            ("m9", Some("i1"), -2),
+            None,
+            fenced_instance(),
+        ),
+        IdentityRow::new(
+            "static heartbeat with an unknown instance id",
+            ("s1", Some("i9"), 5),
+            Some(vec![2, 3]),
+            identity_error(codes::UNKNOWN_MEMBER_ID, "Instance id i9 is unknown."),
+        ),
+    ]
+}
+
+fn identity_request(
+    member_id: &str,
+    instance_id: Option<&str>,
+    member_epoch: i32,
+    owned: Option<Vec<i32>>,
+) -> ConsumerGroupHeartbeatRequest {
+    use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
+
+    ConsumerGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        instance_id: instance_id.map(str::to_string),
+        member_epoch,
+        subscribed_topic_names: Some(vec!["t".into()]),
+        rebalance_timeout_ms: 60_000,
+        topic_partitions: owned.map(|partitions| {
+            vec![TopicPartitions {
+                topic_id: IDENTITY_TOPIC,
+                partitions,
+                ..Default::default()
+            }]
+        }),
+        ..Default::default()
+    }
+}
+
+/// A group with a dynamic member `m1` on partitions 0 and 1 and a static
+/// member `s1` (instance `i1`) on partitions 2 and 3, both at epoch 5 with
+/// previous epoch 4, and a settled target.
+fn identity_group() -> GroupState {
+    let mut state = GroupState::new("g");
+    state.group_epoch = 5;
+    for (member_id, instance_id, partitions) in
+        [("m1", None, vec![0, 1]), ("s1", Some("i1"), vec![2, 3])]
+    {
+        let mut member = build_member(
+            member_id,
+            &identity_request(member_id, instance_id, 0, None),
+            crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
+            Instant::now(),
+        );
+        member.member_epoch = 5;
+        member.previous_member_epoch = 4;
+        member.assigned_partitions = HashMap::from([(IDENTITY_TOPIC, partitions.clone())]);
+        state.add_or_update_member(member);
+        state.target.per_member.insert(
+            member_id.to_string(),
+            HashMap::from([(IDENTITY_TOPIC, partitions)]),
+        );
+    }
+    state.target.epoch = 5;
+    state.dirty = false;
+    state
+}
+
+/// Kafka's KIP-848 identity rules for `ConsumerGroupHeartbeat`
+/// (`GroupMetadataManager.consumerGroupHeartbeat`, `consumerGroupLeave`,
+/// `throwIfConsumerGroupMemberEpochIsInvalid`, the instance checks and
+/// `getOrMaybeSubscribeStaticConsumerGroupMember`). Each row starts from
+/// [`identity_group`] and compares the whole response and the members after.
+#[test]
+fn heartbeat_identity_rules_follow_kafka() {
+    let config = NextGenConfig::default();
+    let metadata = StaticMetadata {
+        input: ReconcileInput {
+            topic_id_by_name: HashMap::from([("t".to_string(), IDENTITY_TOPIC)]),
+            partitions_per_topic: HashMap::from([(IDENTITY_TOPIC, 4)]),
+            ..Default::default()
+        },
+    };
+    let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
+
+    for row in identity_rows() {
+        let mut state = identity_group();
+        if row.release_s1_first {
+            let released = step_heartbeat(
+                &mut state,
+                &config,
+                &metadata,
+                &identity_request("s1", Some("i1"), -2, None),
+                client,
+                Instant::now(),
+            );
+            check!(released.response.error_code == codes::NONE, "{}", row.name);
+        }
+
+        let step = step_heartbeat(
+            &mut state,
+            &config,
+            &metadata,
+            &identity_request(row.member_id, row.instance_id, row.member_epoch, row.owned),
+            client,
+            Instant::now(),
+        );
+
+        let mut members: Vec<(&str, i32)> = state
+            .members
+            .values()
+            .map(|member| (member.member_id.as_str(), member.member_epoch))
+            .collect();
+        members.sort_unstable();
+        check!(step.response == row.expected, "{}", row.name);
+        check!(members == row.members_after, "{}", row.name);
+        check!(
+            state.current_member_for_instance("i1") == row.i1_after,
+            "{}",
+            row.name
+        );
+    }
+}
+
+/// The member ids a record list writes, each with `true` for a value and
+/// `false` for a tombstone, sorted.
+fn written<T>(records: &[(String, Option<T>)]) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = records
+        .iter()
+        .map(|(id, value)| (id.clone(), value.is_some()))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// A static member that leaves with -2 writes only its current assignment at
+/// epoch -2. A new member with the same instance id then writes its own
+/// records and the released member's tombstones in one batch, as Kafka's
+/// `replaceMember` does.
+#[test]
+fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
+    let config = NextGenConfig::default();
+    let metadata = empty_metadata();
+    let client = crate::coordinator::unified::ClientIdentity { id: "c", host: "h" };
+    let join = |member_id: &str, member_epoch: i32| {
+        identity_request(member_id, Some("i1"), member_epoch, Some(vec![]))
+    };
+    let mut state = GroupState::new("g");
+    let joined = step_heartbeat(
+        &mut state,
+        &config,
+        &*metadata,
+        &join("s1", 0),
+        client,
+        Instant::now(),
+    );
+    check!(joined.response.error_code == codes::NONE);
+
+    let left = step_heartbeat(
+        &mut state,
+        &config,
+        &*metadata,
+        &join("s1", -2),
+        client,
+        Instant::now(),
+    );
+    let current: Vec<(&str, Option<i32>)> = left
+        .pending
+        .current_per_member
+        .iter()
+        .map(|(id, value)| (id.as_str(), value.as_ref().map(|value| value.member_epoch)))
+        .collect();
+    check!(current == vec![("s1", Some(-2))]);
+    check!(left.pending.member_metadata.is_empty());
+    check!(left.pending.group_metadata.is_none());
+
+    let replaced = step_heartbeat(
+        &mut state,
+        &config,
+        &*metadata,
+        &join("s2", 0),
+        client,
+        Instant::now(),
+    );
+    check!(replaced.response.error_code == codes::NONE);
+    check!(replaced.response.member_epoch == joined.response.member_epoch);
+    let expected = vec![("s1".to_string(), false), ("s2".to_string(), true)];
+    check!(written(&replaced.pending.member_metadata) == expected);
+    check!(written(&replaced.pending.target_per_member) == expected);
+    check!(written(&replaced.pending.current_per_member) == expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
