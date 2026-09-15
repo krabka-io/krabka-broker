@@ -101,6 +101,9 @@ pub(super) async fn handle_heartbeat(
         if actor.state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
         }
+        if let Some(resp) = topology_error(actor, req, metadata_source) {
+            return Ok(resp);
+        }
         let new_member_id = first_join_member_id(&req.member_id);
         let m = build_member(&new_member_id, req, client_id, client_host, now);
         actor.state.add_or_update_member(m);
@@ -155,6 +158,9 @@ pub(super) async fn handle_heartbeat(
             Ok(epoch) => epoch,
             Err(error_code) => return Ok(error_resp(error_code, config)),
         };
+    if let Some(resp) = topology_error(actor, req, metadata_source) {
+        return Ok(resp);
+    }
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
@@ -211,6 +217,39 @@ pub(super) async fn handle_heartbeat(
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
     Ok(build_assignment_resp(&actor.state, &req.member_id, config))
+}
+
+/// The error response for a topology that Kafka's `configureTopics` refuses
+/// against the current metadata image, or `None` when the topology can be
+/// configured.
+///
+/// The topology is the one that this heartbeat leaves the group with: the
+/// topology of the request when the group has none or an older one, else the
+/// topology of the group. Kafka configures the topology inside the heartbeat
+/// and answers the exception with its code and message, and it writes nothing.
+fn topology_error(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    let source = metadata_source?;
+    let from_request = req
+        .topology
+        .as_ref()
+        .filter(|wire| {
+            actor
+                .topology
+                .as_ref()
+                .is_none_or(|group| wire.epoch > group.epoch)
+        })
+        .map(topology::to_stored_topology);
+    let topology = from_request.as_ref().or(actor.topology.as_ref())?;
+    let error = topology::configure_topics(topology, &source.current_image()).err()?;
+    Some(StreamsGroupHeartbeatResponse {
+        error_code: error.error_code(),
+        error_message: error.error_message(),
+        ..Default::default()
+    })
 }
 
 /// Marks the group for a reconcile when a topic that the topology needs

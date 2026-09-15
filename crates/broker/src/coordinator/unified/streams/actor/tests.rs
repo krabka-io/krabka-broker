@@ -587,7 +587,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             active: vec![],
             status: Some(vec![Status {
                 status_code: status::MISSING_SOURCE_TOPICS,
-                status_detail: "subtopology '0' references missing source topic 'in'".into(),
+                status_detail: "Source topics in are missing.".into(),
                 ..Default::default()
             }]),
         },
@@ -853,4 +853,141 @@ async fn a_seeded_group_creates_its_missing_internal_topics_again() {
         ..super::response::base_resp(codes::NONE, 2, &StreamsGroupConfig::default())
     };
     check!(resp == expected);
+}
+
+/// Kafka sizes the internal topics with `InternalTopicManager`: a repartition
+/// topic takes the partition count of its writer, and a copartition group
+/// coerces it to the partition count of the external topics. Each row joins
+/// one member with a two-subtopology topology on a one-broker cluster and
+/// compares the partition counts of the created topics and the whole
+/// response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_join_sizes_the_internal_topics_as_kafka_does() {
+    use krabka_protocol::owned::{
+        common::{
+            streams_group_heartbeat_request::topic_info::TopicInfo,
+            streams_group_heartbeat_response::task_ids::TaskIds,
+        },
+        streams_group_heartbeat_request::{CopartitionGroup, Subtopology, Topology},
+    };
+
+    use crate::test_support::FakeMetadataSource;
+
+    struct Row {
+        name: &'static str,
+        /// The partition counts of `orders` and `customers`.
+        partitions: (i32, i32),
+        copartitioned: bool,
+        /// The expected partition counts of `rp` and `store-changelog`, and
+        /// the expected task counts of subtopologies 0 and 1.
+        rp: i32,
+        changelog: i32,
+        tasks: (i32, i32),
+    }
+    let rows = [
+        Row {
+            name: "copartition coerces rp to the customers topic",
+            partitions: (6, 3),
+            copartitioned: true,
+            rp: 3,
+            changelog: 3,
+            tasks: (6, 3),
+        },
+        Row {
+            name: "rp takes the partition count of its writer",
+            partitions: (4, 8),
+            copartitioned: false,
+            rp: 4,
+            changelog: 8,
+            tasks: (4, 8),
+        },
+    ];
+
+    for row in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(
+                    None,
+                    &[
+                        ("orders", 1, row.partitions.0),
+                        ("customers", 2, row.partitions.1),
+                    ],
+                ))
+                .commit_submits()
+                .build(),
+        );
+        let (coord, _log) = make_coordinator();
+        coord.set_metadata_source(source.clone());
+        let handle = coord.get_or_create_streams("g");
+        let topology = Topology {
+            epoch: 1,
+            subtopologies: vec![
+                Subtopology {
+                    subtopology_id: "0".into(),
+                    source_topics: vec!["orders".into()],
+                    repartition_sink_topics: vec!["rp".into()],
+                    ..Default::default()
+                },
+                Subtopology {
+                    subtopology_id: "1".into(),
+                    source_topics: vec!["customers".into()],
+                    repartition_source_topics: vec![TopicInfo {
+                        name: "rp".into(),
+                        ..Default::default()
+                    }],
+                    state_changelog_topics: vec![TopicInfo {
+                        name: "store-changelog".into(),
+                        ..Default::default()
+                    }],
+                    copartition_groups: if row.copartitioned {
+                        vec![CopartitionGroup {
+                            source_topics: vec![0],
+                            repartition_source_topics: vec![0],
+                            ..Default::default()
+                        }]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let resp = heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                rebalance_timeout_ms: 1_000,
+                topology: Some(topology),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let image = source.current_image();
+        check!(
+            (
+                image.topic_partition_count("rp"),
+                image.topic_partition_count("store-changelog")
+            ) == (row.rp, row.changelog),
+            "{}",
+            row.name
+        );
+        let tasks = |subtopology: &str, count: i32| TaskIds {
+            subtopology_id: subtopology.into(),
+            partitions: (0..count).collect(),
+            ..Default::default()
+        };
+        let expected = StreamsGroupHeartbeatResponse {
+            member_id: "m1".into(),
+            active_tasks: Some(vec![tasks("0", row.tasks.0), tasks("1", row.tasks.1)]),
+            standby_tasks: Some(vec![]),
+            warmup_tasks: Some(vec![]),
+            ..super::response::base_resp(codes::NONE, 1, &StreamsGroupConfig::default())
+        };
+        check!(resp == expected, "{}", row.name);
+    }
 }
