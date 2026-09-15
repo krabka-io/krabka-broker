@@ -68,10 +68,13 @@ pub(super) async fn handle_legacy(
         );
     }
 
-    // Fetch the group's offset state from its actor (a classic actor is
-    // created for an unknown id; offsets are protocol-agnostic, so an existing
-    // actor of either kind serves `FetchOffsets` the same way).
-    let offsets = fetch_offsets(broker, &req.group_id).await;
+    // Fetch the group's offset state from its actor. An unknown id reads as a
+    // group with no offsets and creates nothing. The legacy shape carries no
+    // member fields, and Kafka validates it as a fetch with no member id and
+    // epoch -1, which every group accepts.
+    let offsets = fetch_offsets(broker, &req.group_id, None, -1)
+        .await
+        .unwrap_or_default();
 
     // A `None` `topics` field (v ≥ 2) is the "fetch all" sentinel:
     // return every committed offset stored for this group.

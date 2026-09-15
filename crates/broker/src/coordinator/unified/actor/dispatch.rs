@@ -166,6 +166,10 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(group.offsets());
             true
         }
+        GroupActorMessage::FetchOffsetsForMember { member, reply } => {
+            let _ = reply.send(group.offsets_for_member(&member));
+            true
+        }
         GroupActorMessage::RemoveCommitted { keys, reply } => {
             for key in keys {
                 group.committed_offsets.remove(&key);
