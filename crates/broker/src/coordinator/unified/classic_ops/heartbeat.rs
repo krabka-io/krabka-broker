@@ -16,15 +16,8 @@ use crate::{
 /// Port of `handlers/heartbeat.rs`. It returns the error code, and it refreshes
 /// `last_heartbeat` on success.
 pub(crate) fn handle_heartbeat(state: &mut ClassicState, req: &HeartbeatRequest) -> i16 {
-    let instance_fenced = req.group_instance_id.as_deref().is_some_and(|iid| {
-        state
-            .current_member_id_for_instance(iid)
-            .is_none_or(|pinned| pinned != req.member_id)
-    });
-    if instance_fenced {
-        codes::FENCED_INSTANCE_ID
-    } else if !state.members.contains_key(&req.member_id) {
-        codes::UNKNOWN_MEMBER_ID
+    if let Err(code) = state.validate_member(&req.member_id, req.group_instance_id.as_deref()) {
+        code
     } else if state.generation_id != req.generation_id {
         codes::ILLEGAL_GENERATION
     } else if !matches!(state.state, GroupState::Stable) {
@@ -65,6 +58,24 @@ mod tests {
             ("m1", cur_gen, codes::NONE),
         ] {
             assert!(handle_heartbeat(&mut g, &hb(member, gen_id)) == want);
+        }
+        // KIP-345, as Kafka's `ClassicGroup.validateMember`: an instance id no
+        // member holds (a static member whose session expired) is unknown, and
+        // an instance id another member holds is fenced.
+        g.static_members.insert("i2".into(), "m2".into());
+        for (member, instance, want) in [
+            ("m1", "i-expired", codes::UNKNOWN_MEMBER_ID),
+            ("m1", "i2", codes::FENCED_INSTANCE_ID),
+            ("m2", "i2", codes::NONE),
+        ] {
+            let req = HeartbeatRequest {
+                group_instance_id: Some(instance.into()),
+                ..hb(member, cur_gen)
+            };
+            assert!(
+                handle_heartbeat(&mut g, &req) == want,
+                "{member} {instance}"
+            );
         }
     }
 }

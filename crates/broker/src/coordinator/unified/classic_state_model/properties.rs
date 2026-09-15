@@ -18,7 +18,7 @@ use super::{
     invariants::{index_coherent, single_owner},
     state::{Act, GrpState},
 };
-use crate::coordinator::unified::classic_state::{ClassicGroup, GroupState, Member};
+use crate::coordinator::unified::classic_state::{ClassicGroup, GroupState};
 
 impl Model for ClassicModel {
     type State = GrpState;
@@ -123,11 +123,15 @@ impl Model for ClassicModel {
             }
             Act::ExpireTick => {
                 s.clock += 1;
-                let dropped = s.g.expire_dead_members(at(s.clock), Duration::from_secs(3));
-                for id in &dropped {
+                let now = at(s.clock);
+                let dropped = s.g.expire_dead_members(now, Duration::from_secs(3));
+                // KIP-345 gives a static member no exception: every member
+                // past its session timeout goes, and only those.
+                for (id, member) in &last.g.members {
                     assert2::assert!(
-                        !last.g.members.get(id).is_some_and(Member::is_static),
-                        "static member {id} was expired"
+                        dropped.contains(id)
+                            == (now.duration_since(member.last_heartbeat) > member.session_timeout),
+                        "member {id} expiry disagrees with its session timeout"
                     );
                 }
             }
