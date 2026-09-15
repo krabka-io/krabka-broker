@@ -34,7 +34,7 @@ use crate::{
 
 mod cells;
 mod metadata_lookup;
-mod persistence;
+pub(crate) mod persistence;
 mod sessions;
 mod sweeper;
 

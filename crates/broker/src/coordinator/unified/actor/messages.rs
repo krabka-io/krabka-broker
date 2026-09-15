@@ -23,7 +23,7 @@ use crate::{
         unified::{
             GroupSeed,
             classic_state::OffsetEntry,
-            group::{CoordinatorGroup, GroupOffsets},
+            group::{CoordinatorGroup, GroupOffsets, OffsetFetchMember},
         },
     },
 };
@@ -118,6 +118,14 @@ pub enum GroupActorMessage {
     /// in one turn, for `OffsetFetch`.
     FetchOffsets {
         reply: oneshot::Sender<GroupOffsets>,
+    },
+    /// `FetchOffsets` for an `OffsetFetch` request that names a member (v9+).
+    /// A consumer group validates the member first, as Kafka's
+    /// `ConsumerGroup.validateOffsetFetch` does, and replies with the error
+    /// code when it refuses the fetch.
+    FetchOffsetsForMember {
+        member: OffsetFetchMember,
+        reply: oneshot::Sender<Result<GroupOffsets, ErrorCode>>,
     },
     RemoveCommitted {
         keys: Vec<(String, i32)>,

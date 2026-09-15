@@ -41,8 +41,13 @@ pub enum Action {
     AppendLeaderChange { epoch: Epoch },
     /// Leader advanced the high watermark.
     AdvanceHighWatermark(i64),
-    /// Follower must truncate its log to this diverging point.
+    /// Truncate this node's own log to this point. A follower emits it when
+    /// the leader answered its Fetch with a diverging epoch.
     TruncateTo(LogOffsetMetadata),
+    /// Leader answers the Fetch it is serving with this diverging epoch. It is
+    /// a reply for the follower, and it changes nothing in the leader's own
+    /// log: the leader holds the records the follower must truncate to.
+    ReplyDivergingEpoch(LogOffsetMetadata),
     /// Arm or re-arm a timer to fire at `deadline`.
     ResetTimer {
         kind: TimerKind,

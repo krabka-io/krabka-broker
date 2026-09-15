@@ -2,11 +2,10 @@
 //! per-topic `Write` ACL sweep.
 //!
 //! A topic that a write freeze covers never joins the transaction's partition
-//! set. [`frozen_topics`] reads the registry once per transaction entry, for
-//! the same reason [`denied_topics`](super::authz::denied_topics) runs once,
-//! and [`topic_refusal`] is where the two gates meet: the ACL deny outranks
-//! the freeze, so a caller with no right to read a topic learns nothing about
-//! its freeze state.
+//! set. [`frozen_topics`] reads the registry once per transaction entry, and
+//! [`topic_refusal`] is where the ACL gate and the freeze meet: the ACL deny
+//! outranks the freeze, so a caller with no right to read a topic learns
+//! nothing about its freeze state.
 
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic;
@@ -19,13 +18,10 @@ use crate::{
 
 /// Builds the set of topic names that a KFC-9 write freeze covers.
 ///
-/// It runs once per transaction entry, beside [`denied_topics`] and for the
-/// same reason: a freeze is a property of the topic, not of a partition, so
-/// each partition row then costs one set lookup. On a cluster with no freeze
-/// the image answers every topic in two emptiness tests and the set stays
-/// empty.
-///
-/// [`denied_topics`]: super::authz::denied_topics
+/// It runs once per transaction entry: a freeze is a property of the topic,
+/// not of a partition, so each partition row then costs one set lookup. On a
+/// cluster with no freeze the image answers every topic in two emptiness
+/// tests and the set stays empty.
 pub(super) fn frozen_topics(
     image: &MetadataImage,
     topics: &[AddPartitionsToTxnTopic],
@@ -288,6 +284,20 @@ mod tests {
         )
         .await
         .expect("bootstrap __transaction_state");
+        // The two topics exist, so the existence check lets them through to
+        // the freeze gate.
+        crate::txn::handlers::add_partitions_to_txn::test_support::seed_topic(
+            &broker,
+            FROZEN_TOPIC,
+            2,
+        )
+        .await;
+        crate::txn::handlers::add_partitions_to_txn::test_support::seed_topic(
+            &broker,
+            UNFROZEN_TOPIC,
+            1,
+        )
+        .await;
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1TopicFreeze(freeze_record(
@@ -425,7 +435,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_tells_an_unauthorized_principal_it_is_unauthorized_and_not_that_it_is_frozen() {
-        for (label, version) in [("v3", 3), ("v4", 4)] {
+        // Only a client version checks topic `Write`. A v4+ request comes from
+        // a broker that holds `ClusterAction`, and it checks no topic ACL.
+        for (label, version) in [("v3", 3)] {
             let (broker_handle, _dir) = start_frozen_coordinator(
                 Arc::new(DenyTopicWrites),
                 (FROZEN_TOPIC, PatternType::Literal),

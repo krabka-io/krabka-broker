@@ -1,4 +1,4 @@
-//! Broker registration and heartbeat admission decisions.
+//! Broker heartbeat admission decisions.
 
 #[cfg(creusot)]
 use std::clone::Clone;
@@ -6,75 +6,6 @@ use std::clone::Clone;
 #[cfg(creusot)]
 use creusot_std::prelude::DeepModel;
 use creusot_std::prelude::ensures;
-
-/// Action selected for a broker registration after parsing its wire fields.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BrokerRegistrationDecision {
-    RejectCompatibility,
-    Register,
-    Idempotent(i64),
-    DuplicateIncarnation,
-}
-
-/// Admit a new compatible broker, preserve the exact epoch for an idempotent
-/// retry of the same incarnation, and reject a competing incarnation.
-#[ensures((result == BrokerRegistrationDecision::RejectCompatibility) == (
-    !compatibility.0
-        || !compatibility.1
-        || !compatibility.2
-        || !compatibility.3
-        || !compatibility.4
-))]
-#[ensures((result == BrokerRegistrationDecision::Register) == (
-    compatibility.0
-        && compatibility.1
-        && compatibility.2
-        && compatibility.3
-        && compatibility.4
-        && existing_epoch == None
-))]
-#[ensures(forall<epoch: i64> result == BrokerRegistrationDecision::Idempotent(epoch) == (
-    compatibility.0
-        && compatibility.1
-        && compatibility.2
-        && compatibility.3
-        && compatibility.4
-        && existing_epoch == Some(epoch)
-        && incarnation_matches
-))]
-#[ensures((result == BrokerRegistrationDecision::DuplicateIncarnation) == (
-    compatibility.0
-        && compatibility.1
-        && compatibility.2
-        && compatibility.3
-        && compatibility.4
-        && existing_epoch != None
-        && !incarnation_matches
-))]
-#[must_use]
-pub fn broker_registration_decision(
-    compatibility: (bool, bool, bool, bool, bool),
-    existing_epoch: Option<i64>,
-    incarnation_matches: bool,
-) -> BrokerRegistrationDecision {
-    let (identity_valid, cluster_matches, migration_allowed, listeners_valid, features_compatible) =
-        compatibility;
-    if !identity_valid
-        || !cluster_matches
-        || !migration_allowed
-        || !listeners_valid
-        || !features_compatible
-    {
-        BrokerRegistrationDecision::RejectCompatibility
-    } else {
-        match existing_epoch {
-            None => BrokerRegistrationDecision::Register,
-            Some(epoch) if incarnation_matches => BrokerRegistrationDecision::Idempotent(epoch),
-            Some(_) => BrokerRegistrationDecision::DuplicateIncarnation,
-        }
-    }
-}
 
 /// Registration state established by one broker heartbeat.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -151,33 +82,7 @@ pub fn broker_heartbeat_decision(
 mod tests {
     use assert2::check;
 
-    use super::{
-        BrokerHeartbeatRegistration, BrokerRegistrationDecision, broker_heartbeat_decision,
-        broker_registration_decision,
-    };
-
-    #[test]
-    fn registration_is_compatible_idempotent_and_incarnation_fenced() {
-        use BrokerRegistrationDecision::{
-            DuplicateIncarnation, Idempotent, Register, RejectCompatibility,
-        };
-
-        check!(
-            broker_registration_decision((true, true, true, true, true), None, false) == Register
-        );
-        check!(
-            broker_registration_decision((true, true, true, true, true), Some(17), true)
-                == Idempotent(17)
-        );
-        check!(
-            broker_registration_decision((true, true, true, true, true), Some(17), false)
-                == DuplicateIncarnation
-        );
-        check!(
-            broker_registration_decision((true, false, true, true, true), None, false)
-                == RejectCompatibility
-        );
-    }
+    use super::{BrokerHeartbeatRegistration, broker_heartbeat_decision};
 
     #[test]
     fn heartbeat_fences_exact_epochs_and_preserves_shutdown() {

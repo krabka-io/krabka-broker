@@ -225,6 +225,41 @@ impl StreamsGroupState {
         }
     }
 
+    /// Validates the `member_epoch` of a heartbeat from `member_id`, as Kafka's
+    /// `throwIfStreamsGroupMemberEpochIsInvalid` does, and returns the member
+    /// epoch that the group holds.
+    ///
+    /// Epoch 0 from a known member is a rejoin, and the member epoch is
+    /// accepted. The previous member epoch is accepted only when the owned
+    /// active, standby and warmup tasks of the request are all in the current
+    /// assignment of the member; an absent owned-task list does not count as
+    /// contained. Any other epoch gets `FENCED_MEMBER_EPOCH`, and an unknown
+    /// member gets `UNKNOWN_MEMBER_ID`. This API never answers
+    /// `STALE_MEMBER_EPOCH`: the Streams client treats it as fatal.
+    ///
+    /// # Errors
+    ///
+    /// Returns the wire error code of a refused heartbeat.
+    pub fn validate_heartbeat_epoch(
+        &self,
+        member_id: &str,
+        requested_epoch: i32,
+        owned: OwnedTasks<'_>,
+    ) -> Result<i32, i16> {
+        let Some(member) = self.members.get(member_id) else {
+            return Err(crate::codes::UNKNOWN_MEMBER_ID);
+        };
+        let lost_bump = requested_epoch == member.previous_member_epoch
+            && tasks_contained(owned.active, &member.active)
+            && tasks_contained(owned.standby, &member.standby)
+            && tasks_contained(owned.warmup, &member.warmup);
+        if requested_epoch == 0 || requested_epoch == member.member_epoch || lost_bump {
+            Ok(member.member_epoch)
+        } else {
+            Err(crate::codes::FENCED_MEMBER_EPOCH)
+        }
+    }
+
     /// Advances a member to the current assignment epoch and gives it the full
     /// target that the latest reconcile allotted to it.
     ///
@@ -392,6 +427,32 @@ fn task_map_covers(
             assigned
                 .get(subtopology)
                 .is_some_and(|assigned| assigned.contains(partition))
+        })
+    })
+}
+
+/// The tasks that a `StreamsGroupHeartbeat` reports as owned: `None` when the
+/// request leaves the list out.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OwnedTasks<'a> {
+    pub active: Option<&'a BTreeMap<String, Vec<i32>>>,
+    pub standby: Option<&'a BTreeMap<String, Vec<i32>>>,
+    pub warmup: Option<&'a BTreeMap<String, Vec<i32>>>,
+}
+
+/// Kafka's `areOwnedTasksContainedInAssignedTasks`: every owned partition of
+/// every owned subtopology is assigned. An absent list is not contained.
+fn tasks_contained(
+    owned: Option<&BTreeMap<String, Vec<i32>>>,
+    assigned: &BTreeMap<String, Vec<i32>>,
+) -> bool {
+    owned.is_some_and(|owned| {
+        owned.iter().all(|(subtopology, partitions)| {
+            assigned.get(subtopology).is_some_and(|assigned| {
+                partitions
+                    .iter()
+                    .all(|partition| assigned.contains(partition))
+            })
         })
     })
 }

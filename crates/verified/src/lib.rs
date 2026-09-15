@@ -196,8 +196,7 @@ pub use recovery::{
     replay_record_decision, should_capture_first_downgrade,
 };
 pub use registration::{
-    BrokerHeartbeatDecision, BrokerHeartbeatRegistration, BrokerRegistrationDecision,
-    broker_heartbeat_decision, broker_registration_decision,
+    BrokerHeartbeatDecision, BrokerHeartbeatRegistration, broker_heartbeat_decision,
 };
 pub use remote_metadata::{remote_metadata_partition, remote_metadata_resume_cursor};
 pub use remote_read::{
