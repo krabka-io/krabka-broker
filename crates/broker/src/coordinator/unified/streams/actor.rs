@@ -201,6 +201,14 @@ struct ActorState {
     /// Partition metadata from the most recent reconcile. The actor persists
     /// it as the group's `StreamsGroupPartitionMetadataValue`.
     partition_metadata: Option<StreamsGroupPartitionMetadataValue>,
+    /// Kafka's `StreamsGroup.metadataHash`: the hash of the required topics in
+    /// the image that the most recent reconcile configured the topology
+    /// against. A heartbeat that sees another hash reconciles again.
+    metadata_hash: i64,
+    /// The internal topics that the most recent reconcile could not create.
+    /// Every heartbeat tries them again, as Kafka's `KafkaApis` sends the
+    /// `internalTopicsToBeCreated` of each heartbeat to the controller.
+    missing_internal_topics: Vec<super::topology::InternalTopicSpec>,
 }
 
 impl ActorState {
@@ -209,6 +217,8 @@ impl ActorState {
             state: StreamsGroupState::new(group_id),
             topology: None,
             partition_metadata: None,
+            metadata_hash: 0,
+            missing_internal_topics: Vec::new(),
         }
     }
 }

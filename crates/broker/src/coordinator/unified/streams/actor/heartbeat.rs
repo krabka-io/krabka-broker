@@ -175,6 +175,7 @@ pub(super) async fn handle_heartbeat(
     if apply_shutdown_application(actor, req) {
         changed = true;
     }
+    refresh_topic_metadata(actor, config, metadata_source).await;
 
     if actor.state.dirty {
         reconcile(actor, config, metadata_source).await;
@@ -210,6 +211,43 @@ pub(super) async fn handle_heartbeat(
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
     Ok(build_assignment_resp(&actor.state, &req.member_id, config))
+}
+
+/// Marks the group for a reconcile when a topic that the topology needs
+/// changed since the last reconcile.
+///
+/// Kafka's `onMetadataUpdate` requests a metadata refresh for every streams
+/// group that uses a created, changed or deleted topic, and the next heartbeat
+/// computes the metadata hash again. A new hash configures the topology again
+/// and bumps the group epoch. This function first tries again to create the
+/// internal topics that the last reconcile could not create, as Kafka creates
+/// the missing internal topics on every heartbeat.
+async fn refresh_topic_metadata(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) {
+    let (Some(source), Some(topology)) = (metadata_source, actor.topology.as_ref()) else {
+        return;
+    };
+    if !actor.state.dirty
+        && !actor.missing_internal_topics.is_empty()
+        && let Err(error) = topology::ensure_internal_topics(
+            source,
+            &actor.missing_internal_topics,
+            config.internal_topic_replication_factor,
+        )
+        .await
+    {
+        tracing::warn!(
+            group_id = %actor.state.group_id,
+            %error,
+            "streams internal topic creation failed again",
+        );
+    }
+    if topology::metadata_hash(topology, &source.current_image()) != actor.metadata_hash {
+        actor.state.dirty = true;
+    }
 }
 
 /// Updates a steady-state member's reported ownership, catch-up offsets, and

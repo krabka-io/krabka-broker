@@ -27,6 +27,7 @@
 pub mod status;
 
 mod internal_topics;
+mod metadata_hash;
 mod stored;
 mod tasks;
 mod validation;
@@ -36,6 +37,7 @@ mod test_support;
 
 pub use self::{
     internal_topics::{InternalTopicSpec, ensure_internal_topics, required_internal_topics},
+    metadata_hash::{metadata_hash, required_topics},
     stored::to_stored_topology,
     tasks::{DerivedTasks, derive_tasks, task_set},
     validation::validate_topology,

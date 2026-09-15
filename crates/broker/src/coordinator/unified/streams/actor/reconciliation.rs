@@ -54,6 +54,8 @@ pub(super) async fn reconcile(
     };
 
     let image = source.current_image();
+    actor.metadata_hash = topology::metadata_hash(&topology, &image);
+    actor.missing_internal_topics.clear();
 
     // 1. Validation status (missing source / copartition mismatch).
     let mut status = topology::validate_topology(&topology, &image);
@@ -73,6 +75,11 @@ pub(super) async fn reconcile(
         .await
         {
             Ok(still_missing) => {
+                actor.missing_internal_topics = specs
+                    .iter()
+                    .filter(|spec| still_missing.contains(&spec.name))
+                    .cloned()
+                    .collect();
                 if !still_missing.is_empty() {
                     status.push((
                         topo_status::MISSING_INTERNAL_TOPICS,
@@ -84,6 +91,7 @@ pub(super) async fn reconcile(
                 }
             }
             Err(e) => {
+                actor.missing_internal_topics.clone_from(&specs);
                 status.push((
                     topo_status::MISSING_INTERNAL_TOPICS,
                     format!("internal-topic creation failed: {e}"),

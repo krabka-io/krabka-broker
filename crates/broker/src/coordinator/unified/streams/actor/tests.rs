@@ -436,3 +436,290 @@ async fn heartbeat_applies_member_metadata() {
         );
     }
 }
+
+/// Builds the metadata image of one broker, `broker_rack` its rack, that
+/// holds each `(name, id byte, partitions)` topic.
+fn image_of(
+    broker_rack: Option<&str>,
+    topics: &[(&str, u8, i32)],
+) -> krabka_metadata::MetadataImage {
+    use krabka_metadata::{
+        BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord,
+    };
+
+    let broker = krabka_audit::NodeId(1);
+    let mut records = vec![MetadataRecord::V1BrokerRegistration(
+        BrokerRegistrationRecord {
+            node_id: broker,
+            broker_epoch: 0,
+            incarnation_id: uuid::Uuid::nil(),
+            host: "127.0.0.1".into(),
+            port: 9092,
+            rack: broker_rack.map(str::to_owned),
+            endpoints: vec![],
+            log_dirs: vec![],
+            features: std::collections::BTreeMap::new(),
+        },
+    )];
+    for &(name, id, partitions) in topics {
+        records.push(MetadataRecord::V1Topic(TopicRecord {
+            name: name.into(),
+            topic_id: uuid::Uuid::from_bytes([id; 16]),
+            partitions,
+            replication_factor: 1,
+        }));
+        for partition in 0..partitions {
+            records.push(MetadataRecord::V1Partition(PartitionRecord {
+                topic: name.into(),
+                partition,
+                leader: broker,
+                replicas: vec![broker],
+                isr: vec![broker],
+                leader_epoch: LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 0,
+            }));
+        }
+    }
+    krabka_metadata::MetadataImage::from_records(uuid::Uuid::nil(), &records)
+}
+
+/// A topology with one subtopology `0` that reads `in` and, when `stateful`,
+/// keeps the changelog topic `store-changelog`.
+fn one_subtopology(
+    stateful: bool,
+) -> krabka_protocol::owned::streams_group_heartbeat_request::Topology {
+    use krabka_protocol::owned::{
+        common::streams_group_heartbeat_request::topic_info::TopicInfo,
+        streams_group_heartbeat_request::{Subtopology, Topology},
+    };
+
+    Topology {
+        epoch: 1,
+        subtopologies: vec![Subtopology {
+            subtopology_id: "0".into(),
+            source_topics: vec!["in".into()],
+            state_changelog_topics: if stateful {
+                vec![TopicInfo {
+                    name: "store-changelog".into(),
+                    ..Default::default()
+                }]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// Kafka refreshes the topic metadata of a streams group on the next
+/// heartbeat after a change (`onMetadataUpdate`, `hasMetadataExpired`,
+/// `computeMetadataHash`) and bumps the group epoch when the hash or the
+/// member metadata changed (`hasStreamsMemberMetadataChanged`). Each row joins
+/// one member, applies one change, sends one heartbeat at the member epoch, and
+/// compares the whole response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
+    use std::sync::atomic::AtomicUsize;
+
+    use krabka_protocol::owned::common::streams_group_heartbeat_response::{
+        status::Status, task_ids::TaskIds,
+    };
+
+    use crate::{
+        coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
+    };
+
+    enum Change {
+        Image(Box<krabka_metadata::MetadataImage>),
+        Rack(&'static str),
+        Process(&'static str),
+        /// No change: the heartbeat itself retries the internal topics.
+        None,
+    }
+    struct Row {
+        name: &'static str,
+        initial: krabka_metadata::MetadataImage,
+        stateful: bool,
+        /// `submit_change` fails this many times before it succeeds.
+        failed_submits: usize,
+        change: Change,
+        /// The owned active tasks of the heartbeat, when it reports them.
+        owned_active: Option<Vec<i32>>,
+        epoch: i32,
+        active: Vec<i32>,
+        status: Option<Vec<Status>>,
+    }
+    let rows = [
+        Row {
+            name: "the missing source topic is created",
+            initial: image_of(None, &[]),
+            stateful: false,
+            failed_submits: 0,
+            change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
+            owned_active: None,
+            epoch: 2,
+            active: vec![0, 1],
+            status: None,
+        },
+        Row {
+            name: "partitions are added to the source topic",
+            initial: image_of(None, &[("in", 1, 1)]),
+            stateful: false,
+            failed_submits: 0,
+            change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
+            owned_active: Some(vec![0]),
+            epoch: 2,
+            active: vec![0, 1],
+            status: None,
+        },
+        Row {
+            name: "the source topic is deleted",
+            initial: image_of(None, &[("in", 1, 2)]),
+            stateful: false,
+            failed_submits: 0,
+            change: Change::Image(Box::new(image_of(None, &[]))),
+            owned_active: Some(vec![]),
+            epoch: 2,
+            active: vec![],
+            status: Some(vec![Status {
+                status_code: status::MISSING_SOURCE_TOPICS,
+                status_detail: "subtopology '0' references missing source topic 'in'".into(),
+                ..Default::default()
+            }]),
+        },
+        Row {
+            name: "the member sends a new rack id",
+            initial: image_of(None, &[("in", 1, 1)]),
+            stateful: false,
+            failed_submits: 0,
+            change: Change::Rack("rack-b"),
+            owned_active: Some(vec![0]),
+            epoch: 2,
+            active: vec![0],
+            status: None,
+        },
+        Row {
+            name: "the member sends a new process id",
+            initial: image_of(None, &[("in", 1, 1)]),
+            stateful: false,
+            failed_submits: 0,
+            change: Change::Process("process-b"),
+            owned_active: Some(vec![0]),
+            epoch: 2,
+            active: vec![0],
+            status: None,
+        },
+        Row {
+            name: "the internal topic creation failed once",
+            initial: image_of(None, &[("in", 1, 1)]),
+            stateful: true,
+            failed_submits: 1,
+            change: Change::None,
+            owned_active: Some(vec![]),
+            epoch: 2,
+            active: vec![0],
+            status: None,
+        },
+    ];
+
+    for row in rows {
+        let failures = Arc::new(AtomicUsize::new(row.failed_submits));
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(row.initial)
+                .commit_submits()
+                .on_submit({
+                    let failures = failures.clone();
+                    move |_| {
+                        if failures
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                                left.checked_sub(1)
+                            })
+                            .is_ok()
+                        {
+                            Err(krabka_raft::RaftError::LeaderUnknown)
+                        } else {
+                            Ok(krabka_raft::SubmitChangeResult::default())
+                        }
+                    }
+                })
+                .build(),
+        );
+        let (coord, _log) = make_coordinator();
+        coord.set_metadata_source(source.clone());
+        let handle = coord.get_or_create_streams("g");
+        let request = |member_epoch, rack: &str, process: &str| StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch,
+            rack_id: Some(rack.into()),
+            process_id: Some(process.into()),
+            rebalance_timeout_ms: 1_000,
+            ..Default::default()
+        };
+        let joined = heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                topology: Some(one_subtopology(row.stateful)),
+                ..request(0, "rack-a", "process-a")
+            },
+        )
+        .await;
+        check!(joined.member_epoch == 1, "{}", row.name);
+
+        let (rack, process) = match row.change {
+            Change::Image(image) => {
+                source.set_image(*image);
+                ("rack-a", "process-a")
+            }
+            Change::Rack(rack) => (rack, "process-a"),
+            Change::Process(process) => ("rack-a", process),
+            Change::None => ("rack-a", "process-a"),
+        };
+        let owned = row.owned_active.map(|partitions| {
+            vec![
+                krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds {
+                    subtopology_id: "0".into(),
+                    partitions,
+                    ..Default::default()
+                },
+            ]
+        });
+        let resp = heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                standby_tasks: owned.as_ref().map(|_| vec![]),
+                warmup_tasks: owned.as_ref().map(|_| vec![]),
+                active_tasks: owned,
+                ..request(joined.member_epoch, rack, process)
+            },
+        )
+        .await;
+
+        let tasks = |partitions: Vec<i32>| {
+            if partitions.is_empty() {
+                vec![]
+            } else {
+                vec![TaskIds {
+                    subtopology_id: "0".into(),
+                    partitions,
+                    ..Default::default()
+                }]
+            }
+        };
+        let expected = StreamsGroupHeartbeatResponse {
+            member_id: "m1".into(),
+            status: row.status,
+            active_tasks: Some(tasks(row.active)),
+            standby_tasks: Some(vec![]),
+            warmup_tasks: Some(vec![]),
+            ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
+        };
+        check!(resp == expected, "{}", row.name);
+        check!(failures.load(Ordering::SeqCst) == 0, "{}", row.name);
+    }
+}
