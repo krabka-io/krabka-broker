@@ -23,6 +23,43 @@ fn connection_creation_delay(rate: f64, maximum: Time) -> Time {
     Time::from_micros(i64::try_from(delay_micros).unwrap_or(i64::MAX)).min(maximum)
 }
 
+/// The throttle for a new connection from `peer_ip`, or `None` when the
+/// connection may be served.
+///
+/// A connection is throttled when the peer's `ip` entity has a positive
+/// `connection_creation_rate` and its token bucket is empty. The bucket spends
+/// no token on a throttled connection, as Kafka's
+/// `recordIpConnectionMaybeThrottle` un-records it.
+fn connection_creation_throttle(broker: &Broker, peer_ip: std::net::IpAddr) -> Option<Time> {
+    let image = broker.controller.current_image();
+    let (entity_key, rate) = crate::quota::lookup_ip_quota_with_key(
+        &image,
+        peer_ip,
+        CONNECTION_CREATION_RATE_QUOTA_KEY,
+    )?;
+    if rate <= 0.0 {
+        return None;
+    }
+    let initial_rate = crate::quota::positive_f64_to_u64(rate).max(1);
+    let bucket = broker.quota_buckets.get_or_create(
+        CONNECTION_CREATION_RATE_QUOTA_KEY,
+        &entity_key,
+        "",
+        "",
+        initial_rate,
+    );
+    (bucket.try_consume(1) == 0)
+        .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
+}
+
+/// Hold a throttled socket for `delay`, then close it without reading a
+/// request. Kafka's acceptor keeps the socket in `throttledSockets` until
+/// the throttle ends, so the client does not reconnect at once.
+async fn close_after(stream: tokio::net::TcpStream, delay: Time) {
+    tokio::time::sleep(delay.to_std()).await;
+    drop(stream);
+}
+
 async fn shutdown_connection_tasks(connections: &mut JoinSet<()>) {
     connections.shutdown().await;
 }
@@ -58,6 +95,31 @@ pub(super) async fn accept_loop(
                             broker.config.socket_receive_buffer,
                         );
 
+                        // KIP-612 `connection_creation_rate`, checked before
+                        // the connection takes a slot, as Kafka's
+                        // `ConnectionQuotas.inc` records the ip rate before
+                        // it counts the connection. A connection over the
+                        // rate is never served: the broker holds the socket
+                        // for the throttle time and then closes it, so the
+                        // client backs off and reconnects later. The hold
+                        // runs as a task of its own, so the accept loop keeps
+                        // accepting other connections meanwhile, as Kafka's
+                        // acceptor does with `throttledSockets`.
+                        if let Some(delay) = connection_creation_throttle(&broker, peer_ip) {
+                            broker.metrics.observe_quota_throttle(
+                                crate::metrics::QuotaType::ConnectionCreation,
+                                delay.secs_f64(),
+                            );
+                            tracing::debug!(
+                                %peer,
+                                name = %spec.name,
+                                delay_ms = delay.millis_i64(),
+                                "connection_creation_rate exceeded; closing connection after the throttle"
+                            );
+                            connections.spawn(close_after(stream, delay));
+                            continue;
+                        }
+
                         // `max.connections` / `max.connections.per.ip` caps.
                         // Reserve a slot before doing any work; on rejection
                         // close the socket immediately (Kafka silently drops
@@ -87,38 +149,6 @@ pub(super) async fn accept_loop(
                             }
                         };
 
-                        // KIP-612 connection_creation_rate enforcement. Applies
-                        // to both IPv4 and IPv6 peers — the quota is keyed by the
-                        // peer IP's string form for either family.
-                        let image = broker.controller.current_image();
-                        if let Some((entity_key, rate)) =
-                            crate::quota::lookup_ip_quota_with_key(
-                                &image,
-                                peer_ip,
-                                CONNECTION_CREATION_RATE_QUOTA_KEY,
-                            )
-                            && rate > 0.0
-                        {
-                            let initial_rate = crate::quota::positive_f64_to_u64(rate).max(1);
-                            let bucket = broker.quota_buckets.get_or_create(
-                                CONNECTION_CREATION_RATE_QUOTA_KEY,
-                                &entity_key,
-                                "",
-                                "",
-                                initial_rate,
-                            );
-                            if bucket.try_consume(1) == 0 {
-                                let delay = connection_creation_delay(
-                                    rate,
-                                    broker.config.connection_creation_throttle_max,
-                                );
-                                broker.metrics.observe_quota_throttle(
-                                    crate::metrics::QuotaType::ConnectionCreation,
-                                    delay.secs_f64(),
-                                );
-                                tokio::time::sleep(delay.to_std()).await;
-                            }
-                        }
                         let b = broker.clone();
                         let s = spec.clone();
                         connections.spawn(async move {
