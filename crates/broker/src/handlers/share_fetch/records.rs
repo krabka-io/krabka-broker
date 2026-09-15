@@ -4,11 +4,13 @@
 //! An acquire pass hands this module a partition's acquisition state. The
 //! module reads the log first, locks only the offsets inside the bytes that
 //! the read returned, and gives back those batch bytes plus the
-//! `acquired_records` rows that describe them. The same log-scan shape answers the two questions the pass
-//! asks before it acquires: which offsets hold control batches, and which
-//! offsets KFC-1 scheduled delivery has not released yet.
+//! `acquired_records` rows that describe them. The same log-scan shape
+//! answers the two questions the pass asks before it acquires: which offsets
+//! hold control batches or aborted transactional data, and which offsets
+//! KFC-1 scheduled delivery has not released yet.
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -196,16 +198,30 @@ async fn read_raw(
     Ok((raw.total > 0).then_some(raw))
 }
 
-/// Returns the control-batch offset ranges in `[start, end)`.
+/// The byte budget, in bytes, of one log read while
+/// [`unreadable_batch_ranges`] walks a window.
+const UNREADABLE_SCAN_CHUNK_BYTES: u64 = 1 << 20;
+
+/// Returns the offset ranges in `[start, end)` that a share consumer must
+/// never get: every control batch, and under `read_committed` every data
+/// batch of an aborted transaction.
 ///
 /// Share acquisition state is offset-based and therefore materializes log
 /// control markers along with data unless the handler explicitly archives
 /// them. The decoded log read keeps this classification out of the raw-byte
 /// response path.
-pub(super) async fn control_batch_ranges(
+///
+/// A `ShareFetch` response has no aborted-transactions field, so the share
+/// consumer cannot drop an aborted batch itself. Kafka's
+/// `SharePartition.filterAbortedTransactionalAcquiredRecords` archives those
+/// batches for a `read_committed` share group. A batch is aborted when it is
+/// transactional and its producer has an aborted transaction whose range, up
+/// to the abort marker, holds the batch.
+pub(super) async fn unreadable_batch_ranges(
     part: &crate::partition::Partition,
     start: Offset,
     end: Offset,
+    read_committed: bool,
 ) -> Result<Vec<(Offset, Offset)>, BrokerError> {
     if end <= start {
         return Ok(Vec::new());
@@ -213,19 +229,52 @@ pub(super) async fn control_batch_ranges(
     let log = part.log.clone();
     let join = tokio::task::spawn_blocking(move || {
         let log = log.lock().expect("log mutex poisoned");
-        let read = log.read(start, ByteSize::from_bytes(u64::MAX))?;
-        Ok::<_, krabka_log::LogError>(
-            read.batches
-                .into_iter()
-                .filter(|batch| batch.attributes.is_control_batch())
-                .filter_map(|batch| {
-                    let first = Offset(batch.base_offset).max(start);
-                    let last =
-                        Offset(batch.base_offset + i64::from(batch.last_offset_delta)).min(end - 1);
-                    (first <= last).then_some((first, last))
-                })
-                .collect(),
-        )
+        // Aborted transactions by producer, as `(first offset, abort marker)`.
+        let mut aborted: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
+        if read_committed {
+            for txn in log.aborted_in_range(start, end) {
+                aborted
+                    .entry(txn.producer_id.get())
+                    .or_default()
+                    .push((txn.start_offset.0, txn.last_offset.0));
+            }
+        }
+        let is_aborted = |base: i64, last: i64, producer_id: i64| {
+            aborted.get(&producer_id).is_some_and(|txns| {
+                txns.iter()
+                    .any(|&(first, marker)| first <= base && last <= marker)
+            })
+        };
+        // Read the window in bounded chunks, and stop at `end`, so a window
+        // far behind the log end does not decode the rest of the log.
+        let mut ranges = Vec::new();
+        let mut cursor = start;
+        while cursor < end {
+            let read = log.read(cursor, ByteSize::from_bytes(UNREADABLE_SCAN_CHUNK_BYTES))?;
+            let Some(last_batch) = read.batches.last() else {
+                break;
+            };
+            let next = Offset(last_batch.base_offset + i64::from(last_batch.last_offset_delta) + 1);
+            for batch in &read.batches {
+                let last = batch.base_offset + i64::from(batch.last_offset_delta);
+                if batch.base_offset >= end.0 {
+                    break;
+                }
+                let unreadable = batch.attributes.is_control_batch()
+                    || (batch.attributes.is_transactional()
+                        && is_aborted(batch.base_offset, last, batch.producer_id));
+                let first = Offset(batch.base_offset).max(start);
+                let last = Offset(last).min(end - 1);
+                if unreadable && first <= last {
+                    ranges.push((first, last));
+                }
+            }
+            if next <= cursor {
+                break;
+            }
+            cursor = next;
+        }
+        Ok::<_, krabka_log::LogError>(ranges)
     });
     match join.await {
         Ok(result) => result.map_err(BrokerError::from),

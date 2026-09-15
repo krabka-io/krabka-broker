@@ -90,7 +90,7 @@
 //! On timeout the producer gets per-partition
 //! `NOT_ENOUGH_REPLICAS_AFTER_APPEND` (code 20). Consumer Fetches
 //! (`replica_id == -1`) clamp visible batches and `last_stable_offset`
-//! at HW. The `read_committed` LSO becomes `min(HW, log.lso())`.
+//! at HW. The `read_committed` LSO becomes `Log::last_stable_offset(HW)`.
 //!
 //! On its own, this leaves a remaining bulletproof-EOS gap: a leader
 //! crash mid-transaction still loses records. KIP-101 leader-epoch

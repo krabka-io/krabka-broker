@@ -127,7 +127,11 @@ impl ConsensusModel {
             }
             // Timer arming is modeled by the `Timeout` action set; durable-state
             // + role-transition signals have no cross-node effect in the model.
-            Action::ResetTimer { .. } | Action::TransitionedTo(_) | Action::PersistQuorumState => {}
+            // A diverging epoch rides in the fetch response built above.
+            Action::ResetTimer { .. }
+            | Action::TransitionedTo(_)
+            | Action::PersistQuorumState
+            | Action::ReplyDivergingEpoch(_) => {}
         }
     }
 
@@ -188,7 +192,7 @@ impl ConsensusModel {
         };
         if let Some(follower) = fetch_from {
             let diverging = actions.iter().find_map(|a| match a {
-                Action::TruncateTo(point) => Some(*point),
+                Action::ReplyDivergingEpoch(point) => Some(*point),
                 _ => None,
             });
             if state.nodes[&dst].machine.role().is_leader() && state.nodes.contains_key(&follower) {
@@ -209,11 +213,6 @@ impl ConsensusModel {
             }
         }
         for action in actions {
-            // A leader-side TruncateTo while serving a fetch is a hint for the
-            // FOLLOWER (carried in the response's `diverging`), not the leader.
-            if fetch_from.is_some() && matches!(action, Action::TruncateTo(_)) {
-                continue;
-            }
             self.apply_action(state, dst, &action);
         }
     }

@@ -64,7 +64,9 @@ impl SharePartitionLeaderManager {
             };
             let mut state = cell.lock().await;
             state.release_member(member);
-            self.persist_if_dirty(group, topic_id, partition, &mut state)
+            // Best-effort: a failed write keeps the state dirty for a retry.
+            let _ = self
+                .persist_if_dirty(group, topic_id, partition, Some(&cell), &mut state)
                 .await;
         }
     }
@@ -142,7 +144,12 @@ mod tests {
     async fn disconnect_releases_the_sessions_acquired_records() {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([27; 16]);
-        let cell = mgr.get_or_load("g1", tid, 0).await;
+        let cell = mgr.insert_for_test(
+            "g1",
+            tid,
+            0,
+            crate::share_partition::state::AcquisitionState::new(Offset(0)),
+        );
         {
             let mut state = cell.lock().await;
             state.materialize(Offset(1), 100);

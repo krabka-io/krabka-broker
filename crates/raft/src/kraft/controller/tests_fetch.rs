@@ -765,3 +765,68 @@ async fn a_metadata_fetch_below_the_pruned_log_start_returns_the_snapshot_id() {
     let retained = engine.metadata_fetch_slice(log_start.0, DEFAULT_METADATA_RAFT_FETCH_MAX);
     assert!(retained.snapshot_id == None);
 }
+
+/// krabka-io/krabka-broker#912: the diverging epoch a leader answers a Fetch
+/// with is a hint for the follower. The leader must not apply it to its own
+/// log.
+///
+/// Node 1 holds epoch 1 over offsets 0 to 5, and it wins epoch 3, which
+/// appends its leader-change record at offset 5. Node 2 fetches at epoch 1
+/// and offset 8: it kept an epoch 1 tail that this leader never had, which is
+/// what a crashed leader brings back. The leader answers that epoch 1 ends at
+/// offset 5. Applied to its own log, the same hint would delete the epoch 3
+/// records, the leader-change record included, and move the high watermark
+/// back.
+#[tokio::test]
+async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    for offset in 0..5 {
+        engine
+            .log
+            .append(&mut one_offset_batch(offset, 1, b"epoch-1"), 0)
+            .expect("append an epoch 1 record");
+    }
+    become_follower(&mut engine, NodeId(2), 2);
+    engine.on_event(Event::ElectionTimeout);
+    for epoch in [2, 3] {
+        for from in [NodeId(2), NodeId(3)] {
+            engine.on_event(Event::ReceiveVoteResponse {
+                from,
+                epoch,
+                vote_granted: true,
+            });
+        }
+    }
+    assert!(engine.core.role().is_leader());
+    let leader_epoch = engine.core.quorum_state().leader_epoch;
+    let log_end = engine.log.log_end_offset();
+    assert!(log_end > Offset(5), "the leader appended in its own epoch");
+
+    let (reply, mut response) = oneshot::channel();
+    engine.on_inbound(Inbound::Fetch {
+        req: wire::PeerRequest::Fetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 8,
+            replica_directory_id: uuid::Uuid::nil(),
+        }
+        .encode(),
+        reply,
+    });
+
+    let body = response.try_recv().expect("the leader answered the Fetch");
+    let diverging = match wire::PeerResponse::decode_fetch(&body) {
+        Some(wire::PeerResponse::Fetch { diverging, .. }) => diverging,
+        other => panic!("expected a Fetch response, got {other:?}"),
+    };
+    assert2::check!(
+        diverging
+            == Some(LogOffsetMetadata {
+                offset: 5,
+                epoch: 1
+            })
+    );
+    assert2::check!(engine.log.log_end_offset() == log_end);
+    assert2::check!(engine.core.role().is_leader());
+    assert2::check!(engine.core.quorum_state().leader_epoch == leader_epoch);
+}

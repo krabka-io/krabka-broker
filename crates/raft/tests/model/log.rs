@@ -4,7 +4,7 @@
 
 use krabka_raft::kraft::{
     event::LogEnd,
-    types::{Epoch, LogView},
+    types::{Epoch, LogOffsetMetadata, LogView},
 };
 
 /// In-memory replicated log, where `epochs[i]` is the leader epoch of offset
@@ -54,15 +54,7 @@ impl LogView for ModelLog {
     fn last_epoch(&self) -> Epoch {
         self.epochs.last().copied().unwrap_or(0)
     }
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
-        if epoch > self.last_epoch() {
-            return None;
-        }
-        for (i, &e) in self.epochs.iter().enumerate() {
-            if e > epoch {
-                return Some(i64::try_from(i).expect("offset fits in i64"));
-            }
-        }
-        Some(self.end_offset())
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
+        LogOffsetMetadata::end_of_epoch_in(&self.epochs, epoch)
     }
 }
