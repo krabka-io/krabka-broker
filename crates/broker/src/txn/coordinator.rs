@@ -6,7 +6,7 @@
 //! On `Broker::start` it recovers the state by replaying those partitions.
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::BTreeSet,
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::{
     partition_registry::PartitionRegistry,
-    txn::{bootstrap, partitioner::partition_for_tid, state::TxnEntry},
+    txn::{partitioner::partition_for_tid, state::TxnEntry},
 };
 
 /// KIP-98 transactional-id expiry: the decision core and the sweep over the
@@ -33,6 +33,7 @@ pub(crate) mod completion;
 pub(crate) mod expiry;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fanout_gate;
+mod leadership;
 mod markers;
 mod persistence;
 mod pid_index;
@@ -57,8 +58,9 @@ pub(crate) struct TxnCoordinator {
     /// The reaper holds the matching lock across its post-marker recheck and
     /// completion append so no staged writer can slip between them.
     state_partition_writes: Vec<Mutex<()>>,
-    /// Set of `__transaction_state` partition indices this broker leads.
-    leader_partitions: RwLock<HashSet<PartitionIndex>>,
+    /// The newest known leadership of each `__transaction_state` partition.
+    /// [`leadership::apply_image`] orders updates by leader epoch.
+    leader_partitions: RwLock<leadership::StatePartitionLeaders>,
     /// Reverse lookup: `producer_id` → `transactional_id`. The Produce
     /// handler reads it to verify transactional batches (KIP-1319 v2).
     pid_to_tid: DashMap<ProducerId, String>,
@@ -107,7 +109,7 @@ impl TxnCoordinator {
             recovery_read_max,
             state: DashMap::new(),
             state_partition_writes: (0..state_partition_count).map(|_| Mutex::new(())).collect(),
-            leader_partitions: RwLock::new(HashSet::new()),
+            leader_partitions: RwLock::new(leadership::StatePartitionLeaders::new()),
             pid_to_tid: DashMap::new(),
             pid_install: StdMutex::new(()),
             recovery_valid: AtomicBool::new(true),
@@ -139,9 +141,9 @@ impl TxnCoordinator {
         self.group_coordinator = Some(group_coordinator);
     }
 
-    /// Recomputes which `__transaction_state` partitions this broker leads,
-    /// from the current `MetadataImage`. `recover` calls it, and so does
-    /// every metadata change.
+    /// Applies the `__transaction_state` leadership of `image`. `recover` calls
+    /// it, and so does every metadata change and every transaction handler.
+    /// An image that is older than one already applied changes nothing.
     pub(crate) async fn refresh_leader_partitions(&self, image: &MetadataImage) {
         if !self.recovery_valid.load(Ordering::Acquire) {
             self.leader_partitions.write().await.clear();
@@ -151,13 +153,23 @@ impl TxnCoordinator {
     }
 
     async fn install_leader_partitions(&self, image: &MetadataImage) {
-        let mut set = HashSet::new();
-        for p in image.partitions_of(bootstrap::TOPIC) {
-            if p.leader == self.node_id {
-                set.insert(PartitionIndex(p.partition));
-            }
-        }
-        *self.leader_partitions.write().await = set;
+        leadership::apply_image(
+            &mut *self.leader_partitions.write().await,
+            self.node_id,
+            image,
+        );
+    }
+
+    /// Test-only: makes this broker the leader of `partition` without an image.
+    #[cfg(test)]
+    pub(crate) async fn lead_state_partition_for_test(&self, partition: PartitionIndex) {
+        self.leader_partitions.write().await.insert(
+            partition,
+            leadership::StatePartitionLeadership {
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                leads: true,
+            },
+        );
     }
 
     /// Returns the `__transaction_state` partition index responsible for `tid`.
@@ -167,8 +179,10 @@ impl TxnCoordinator {
 
     /// Returns `true` if this broker is the transaction coordinator for `tid`.
     pub(crate) async fn is_coordinator_for(&self, tid: &str) -> bool {
-        let p = self.partition_for(tid);
-        self.leader_partitions.read().await.contains(&p)
+        leadership::leads(
+            &*self.leader_partitions.read().await,
+            self.partition_for(tid),
+        )
     }
 
     /// Returns the locked `TxnEntry` for `tid`, or `None` if `tid` is
@@ -234,6 +248,96 @@ mod tests {
         check!(coordinator.partition_for("my-tid") == PartitionIndex(20));
         check!(coordinator.partition_for("producer-1") == PartitionIndex(30));
         check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(16));
+    }
+
+    /// An image with no `__transaction_state` topic, as the image before the
+    /// topic was created is.
+    fn image_without_state_topic() -> MetadataImage {
+        MetadataImage::new(uuid::Uuid::nil())
+    }
+
+    fn image_with_leader(leader: krabka_metadata::NodeId, leader_epoch: i32) -> MetadataImage {
+        use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord};
+
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: crate::txn::bootstrap::TOPIC.to_string(),
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: crate::txn::bootstrap::TOPIC.to_string(),
+            partition: 0,
+            leader,
+            replicas: vec![leader],
+            isr: vec![leader],
+            leader_epoch: LeaderEpoch(leader_epoch),
+            ..Default::default()
+        }));
+        image
+    }
+
+    /// Many tasks apply the image that each one read, so an older image can
+    /// arrive after a newer one. Before the fix, the reconcile loop applied
+    /// the image from before `__transaction_state` existed after
+    /// `InitProducerId` had applied a newer one, and a transactional Produce
+    /// got `NOT_COORDINATOR` (#975).
+    #[tokio::test]
+    async fn only_a_higher_leader_epoch_changes_the_coordinator_leadership() {
+        const THIS_BROKER: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
+        const OTHER_BROKER: krabka_metadata::NodeId = krabka_metadata::NodeId(2);
+        struct Step {
+            name: &'static str,
+            image: MetadataImage,
+            coordinates: bool,
+        }
+        let steps = [
+            Step {
+                name: "an image before the topic exists",
+                image: image_without_state_topic(),
+                coordinates: false,
+            },
+            Step {
+                name: "this broker is elected at epoch 0",
+                image: image_with_leader(THIS_BROKER, 0),
+                coordinates: true,
+            },
+            Step {
+                name: "a stale image from before the topic existed",
+                image: image_without_state_topic(),
+                coordinates: true,
+            },
+            Step {
+                name: "another broker is elected at epoch 1",
+                image: image_with_leader(OTHER_BROKER, 1),
+                coordinates: false,
+            },
+            Step {
+                name: "a stale image of epoch 0",
+                image: image_with_leader(THIS_BROKER, 0),
+                coordinates: false,
+            },
+            Step {
+                name: "a stale image from before the topic existed, after a resignation",
+                image: image_without_state_topic(),
+                coordinates: false,
+            },
+            Step {
+                name: "this broker is elected again at epoch 2",
+                image: image_with_leader(THIS_BROKER, 2),
+                coordinates: true,
+            },
+        ];
+        let coordinator = test_coordinator_with_partitions(1);
+        for step in steps {
+            coordinator.refresh_leader_partitions(&step.image).await;
+            check!(
+                coordinator.is_coordinator_for("any-tid").await == step.coordinates,
+                "{}",
+                step.name
+            );
+        }
     }
 
     #[test]
