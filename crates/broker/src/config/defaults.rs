@@ -201,6 +201,7 @@ impl Default for BrokerConfig {
             break_glass: BreakGlassConfig::default(),
             topic_policy: crate::topic_policy::TopicPolicy::default(),
             tls_config: None,
+            tls_principal_mapper: crate::network::auth::SslPrincipalMapper::default(),
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             gssapi: None,

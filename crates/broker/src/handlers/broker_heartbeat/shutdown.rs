@@ -1,158 +1,181 @@
-//! The controlled-shutdown drain: it moves leadership off a broker that asks
-//! to shut down and reports when nothing transferable is left.
+//! The records a heartbeat writes when it fences a broker, lets it shut down,
+//! or moves it into controlled shutdown.
 //!
-//! The heartbeat client retries on every tick, so the drain is idempotent and
-//! reports `false` while leadership is still moving.
+//! Kafka writes the same partition changes for all three
+//! (`ReplicationControlManager.handleBrokerFenced` and
+//! `handleBrokerInControlledShutdown` both run
+//! `generateLeaderAndIsrUpdates` with the broker to remove): the broker leaves
+//! the ISR of every partition it is in, and every partition it leads elects a
+//! new leader. That is what the dead-broker failover scan computes, so this
+//! module asks it about the broker.
 
 use std::sync::Arc;
 
 use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_raft::NodeId;
 
-use crate::{
-    error::BrokerError, heartbeat::controller_state::ControllerLivenessState,
-    leader_election::select_replacement_leader_for_shutdown,
-};
+use crate::heartbeat::controller_state::ControllerLivenessState;
 
-/// Scan partitions where `shutting_down` is currently leader, submit a
-/// replacement-leader record for each one where a live ISR alternative
-/// exists, and return `true` once every *transferable* partition has a new
-/// leader, which means the broker is safe to shut down. A partition with no
-/// other live replica, such as a single-replica internal topic like
-/// `__consumer_offsets` or `__krabka_audit`, cannot transfer leadership
-/// anywhere, so this function does not count it. A count of those partitions
-/// would block controlled shutdown forever. The function returns
-/// `false` while transferable leadership is still moving, and the client
-/// retries on the next heartbeat tick.
+/// The partition changes that take `broker` out of every ISR and every
+/// leadership, and whether it still leads a partition that another replica
+/// can take (Kafka's `BrokerToIsrs.hasLeaderships`).
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct LeaveIsrs {
+    pub(super) changes: Vec<MetadataRecord>,
+    pub(super) has_leaderships: bool,
+}
+
+/// Compute [`LeaveIsrs`] for `broker` against `image`.
 ///
-/// The function is pure by construction. `MetadataImage` is read-only, and the
-/// controller is the only side-effect channel. On a submit failure it logs and
-/// returns `Ok(false)`, so the client retries rather than crashes.
-pub(super) async fn drain_leaderships_for_shutdown(
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+/// A partition that no other replica can lead (a single-replica internal
+/// topic, or an ISR whose other members are witnesses or down) is left alone
+/// and does not count as a leadership. Kafka marks it leaderless, but it has
+/// no other replica to serve it either way, and counting it would hold the
+/// controlled shutdown for ever.
+///
+/// The scan does not hand a partition to the offset-aware recovery manager.
+/// The broker is still running and still holds its log, so there is nothing
+/// to recover yet.
+pub(super) async fn leave_isrs(
+    image: &MetadataImage,
+    broker: NodeId,
     liveness: &Arc<ControllerLivenessState>,
-    shutting_down: NodeId,
-) -> Result<bool, BrokerError> {
-    let image: Arc<MetadataImage> = controller.current_image();
-
-    let mut leader_count: usize = 0;
-    let mut changes: Vec<MetadataRecord> = Vec::new();
-    // Witness nodes serve no client, so leadership never drains to one. Build
-    // the set once per tick, not once per partition.
-    let witnesses = crate::config_keys::witness_node_ids(&image);
-    // One lock acquisition for the whole drain rather than one per partition;
-    // the set is exactly `is_alive` over every broker the registry knows.
-    let alive = liveness.alive_snapshot().await;
-    // Single O(P) walk over every partition — this runs on every heartbeat
-    // tick during a controlled shutdown.
-    for pr in image.all_partitions() {
-        if pr.leader != shutting_down {
-            continue;
-        }
-        if let Ok(new_pr) = select_replacement_leader_for_shutdown(
-            &image,
-            &alive,
-            &witnesses,
-            &pr.topic,
-            pr.partition,
-            shutting_down,
-        ) {
-            // A live replica can take over: transfer leadership and keep
-            // the broker waiting until the new leadership is visible.
-            leader_count += 1;
-            changes.push(MetadataRecord::V1Partition(new_pr));
-        }
-        // Else: no live alternative ISR member to transfer to — e.g. the
-        // single-replica internal topics (__consumer_offsets,
-        // __transaction_state, __krabka_audit), of which every broker
-        // leads its own copy, or an ISR whose only survivors are witnesses.
-        // Leadership cannot move anywhere, so counting
-        // it would block controlled shutdown forever; and the broker is
-        // stopping regardless (the partition has no other replica to serve
-        // it either way). Do NOT count it toward the drain gate.
+    metrics: &crate::metrics::BrokerMetrics,
+) -> LeaveIsrs {
+    let plan =
+        crate::leader_election::compute_failover_changes(image, broker, liveness, metrics).await;
+    let has_leaderships = plan.changes.iter().any(|change| {
+        matches!(change, MetadataRecord::V1Partition(moved)
+            if moved.leader != broker
+                && image
+                    .partition(&moved.topic, moved.partition)
+                    .is_some_and(|current| current.leader == broker))
+    });
+    LeaveIsrs {
+        changes: plan.changes,
+        has_leaderships,
     }
-
-    // KIP-966: a drained leadership can shrink the ISR below min ISR, which
-    // leaves the replicas it dropped eligible to lead.
-    crate::elr::ElrPublisher::new(&image).extend(&mut changes);
-
-    if !changes.is_empty()
-        && let Err(e) = controller.submit_change(changes).await
-    {
-        tracing::warn!(error = %e, "controlled shutdown: submit_change failed");
-        return Ok(false);
-    }
-
-    // `leader_count` was computed against the pre-submit image and counts
-    // only transferable partitions. The submit above (if any) only takes
-    // effect on a subsequent heartbeat once the new image is visible — so we
-    // report `should_shut_down=true` only when this broker was already not
-    // leading any transferable partition.
-    Ok(leader_count == 0)
 }
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::check;
+    use krabka_metadata::{LeaderEpoch, PartitionRecord};
     use uuid::Uuid;
 
     use super::*;
     use crate::handlers::broker_heartbeat::test_support::{
-        fake_source, image_with_dir_partition, liveness_with,
+        image_with_dir_partition, liveness_with,
     };
 
-    #[tokio::test]
-    async fn single_replica_partition_does_not_block_controlled_shutdown() {
-        // Broker 1 leads an RF=1 partition (replicas=[1], isr=[1]) — exactly
-        // the shape of the broker-affinity internal topics __consumer_offsets
-        // / __krabka_audit. There is nowhere to transfer leadership, so the
-        // drain gate must still report "safe to shut down" (regression: this
-        // used to count the partition forever and time out controlled
-        // shutdown at 30s).
-        let img = image_with_dir_partition(
-            krabka_audit::NodeId(1),
-            &[krabka_audit::NodeId(1)],
-            &[krabka_audit::NodeId(1)],
-            &[Uuid::nil()],
-        );
-        let source = fake_source(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
-        let liveness = liveness_with(&[krabka_audit::NodeId(1)]).await;
-
-        let drained =
-            drain_leaderships_for_shutdown(&controller, &liveness, krabka_audit::NodeId(1))
-                .await
-                .unwrap();
-
-        assert!(drained); // untransferable partition is not counted
-        assert!(source.submitted_records().is_empty()); // nothing to transfer
+    /// One partition, and what leaving its ISR does to it.
+    struct Case {
+        what: &'static str,
+        leader: u64,
+        isr: &'static [u64],
+        alive: &'static [u64],
+        witnesses: &'static [u64],
+        expected_leader_and_isr: Option<(u64, &'static [u64])>,
+        has_leaderships: bool,
     }
 
+    /// krabka-io/krabka-broker#824: broker 1 leaves every ISR, not only the
+    /// partitions it leads.
     #[tokio::test]
-    async fn transferable_partition_blocks_until_leadership_moves() {
-        // Broker 1 leads an RF=2 partition with broker 2 alive in ISR: it can
-        // and must transfer, so the broker is not yet safe to shut down.
-        let img = image_with_dir_partition(
-            krabka_audit::NodeId(1),
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[Uuid::nil(), Uuid::nil()],
-        );
-        let source = fake_source(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
-        let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
+    async fn a_broker_leaves_every_isr_and_every_transferable_leadership() {
+        let cases = [
+            Case {
+                what: "a partition it leads, with a live follower",
+                leader: 1,
+                isr: &[1, 2],
+                alive: &[1, 2],
+                witnesses: &[],
+                expected_leader_and_isr: Some((2, &[2])),
+                has_leaderships: true,
+            },
+            Case {
+                what: "a partition it only follows",
+                leader: 2,
+                isr: &[2, 1],
+                alive: &[1, 2],
+                witnesses: &[],
+                expected_leader_and_isr: Some((2, &[2])),
+                has_leaderships: false,
+            },
+            Case {
+                what: "a partition no other replica can lead",
+                leader: 1,
+                isr: &[1],
+                alive: &[1, 2],
+                witnesses: &[],
+                expected_leader_and_isr: None,
+                has_leaderships: false,
+            },
+            Case {
+                what: "a partition whose other ISR member is a witness",
+                leader: 1,
+                isr: &[1, 2],
+                alive: &[1, 2],
+                witnesses: &[2],
+                expected_leader_and_isr: None,
+                has_leaderships: false,
+            },
+            Case {
+                what: "a partition it is not in",
+                leader: 2,
+                isr: &[2],
+                alive: &[1, 2],
+                witnesses: &[],
+                expected_leader_and_isr: None,
+                has_leaderships: false,
+            },
+        ];
+        for case in cases {
+            let node = |id: &u64| NodeId(*id);
+            let isr: Vec<NodeId> = case.isr.iter().map(node).collect();
+            let mut image = image_with_dir_partition(
+                NodeId(case.leader),
+                &[NodeId(1), NodeId(2)],
+                &isr,
+                &[Uuid::nil(), Uuid::nil()],
+            );
+            crate::leader_election::test_support::mark_witnesses_in_image(
+                &mut image,
+                case.witnesses,
+            );
+            let alive: Vec<NodeId> = case.alive.iter().map(node).collect();
+            let liveness = liveness_with(&alive).await;
+            let metrics = crate::metrics::BrokerMetrics::new();
 
-        let drained =
-            drain_leaderships_for_shutdown(&controller, &liveness, krabka_audit::NodeId(1))
-                .await
-                .unwrap();
+            let left = leave_isrs(&image, NodeId(1), &liveness, &metrics).await;
 
-        assert!(!drained); // still leading a transferable partition pre-submit
-        let changes = source.submitted_records();
-        assert!(changes.len() == 1);
-        let MetadataRecord::V1Partition(pr) = &changes[0] else {
-            panic!("expected V1Partition change")
-        };
-        assert!(pr.leader == krabka_audit::NodeId(2)); // leadership handed to the live ISR replica
+            let expected_changes: Vec<MetadataRecord> = case
+                .expected_leader_and_isr
+                .iter()
+                .map(|(leader, isr)| {
+                    let before = image.partition("t", 0).expect("the partition");
+                    let moved = *leader != case.leader;
+                    MetadataRecord::V1Partition(PartitionRecord {
+                        leader: NodeId(*leader),
+                        isr: isr.iter().map(node).collect(),
+                        leader_epoch: if moved {
+                            LeaderEpoch(before.leader_epoch.0 + 1)
+                        } else {
+                            before.leader_epoch
+                        },
+                        partition_epoch: before.partition_epoch + 1,
+                        ..before.clone()
+                    })
+                })
+                .collect();
+            check!(
+                left == LeaveIsrs {
+                    changes: expected_changes,
+                    has_leaderships: case.has_leaderships,
+                },
+                "{}",
+                case.what
+            );
+        }
     }
 }
