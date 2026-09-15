@@ -50,7 +50,9 @@ fn a_compacted_segment_keeps_the_maximum_of_the_records_it_kept() {
     let stale_ms = now_ms - hours(2).millis_i64();
 
     let config = LogConfig {
-        cleanup_policy: CleanupPolicy::Compact,
+        // Compaction needs `compact`, and time retention runs only when the
+        // policy also holds `delete`.
+        cleanup_policy: CleanupPolicy::CompactAndDelete,
         // One batch per segment, so compaction has sealed segments to merge.
         segment_size: bytes(1),
         // Index every batch: the rewritten segment's unindexed tail is its

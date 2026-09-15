@@ -277,9 +277,17 @@ mod tests {
             broker.controller.current_image().brokers().next().is_some()
         })
         .await;
-        crate::txn::bootstrap::ensure_topic(&broker.controller, 1, 1)
-            .await
-            .expect("bootstrap __transaction_state");
+        crate::txn::bootstrap::ensure_topic(
+            &broker.controller,
+            1,
+            1,
+            &crate::txn::bootstrap::topic_configs(
+                broker.config.transaction_state_segment_bytes,
+                broker.config.transaction_state_min_isr,
+            ),
+        )
+        .await
+        .expect("bootstrap __transaction_state");
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1TopicFreeze(freeze_record(

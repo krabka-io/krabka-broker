@@ -36,6 +36,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         PartitionPayload::Slice(wire.clone()),
         None,
         TimestampPolicy::default(),
+        false,
         &topic(),
         &metrics,
         policy,
@@ -47,6 +48,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         PartitionPayload::Slice(wire.clone()),
         Some(CompressionType::Zstd),
         TimestampPolicy::default(),
+        false,
         &topic(),
         &metrics,
         policy,
@@ -58,6 +60,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
             PartitionPayload::Slice(wire),
             Some(CompressionType::Zstd),
             TimestampPolicy::default(),
+            false,
             &topic(),
             &metrics,
             RecordDecompressionPolicy::default(),
@@ -105,3 +108,9 @@ mod verbatim;
 // passthrough, which reads the timestamps out of the producer's own bytes, and
 // the owned fallback, which reads them off the decoded batch.
 mod timestamp_window;
+
+// ── compacted topic: the key check ─────────────────────────────────────
+//
+// Kafka's `LogValidator.validateKey` runs before the timestamp check of the
+// same record, on both append shapes.
+mod keyless_records;

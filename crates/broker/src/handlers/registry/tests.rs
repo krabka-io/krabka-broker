@@ -12,12 +12,11 @@ use crate::handlers::{self, ApiKeyCode};
 fn registry_registers_plain_handlers() {
     let registry = build_registry();
 
-    for key in [25, 27, 59, 73, 83, 84, 85, 86, 87] {
-        let entry = registry
-            .get(key)
-            .unwrap_or_else(|| panic!("registered api_key {key}"));
-        assert!(entry.is_plain(), "api_key {key}");
-    }
+    let key = ApiKey::AssignReplicasToDirs as i16;
+    let entry = registry
+        .get(key)
+        .unwrap_or_else(|| panic!("registered api_key {key}"));
+    assert!(entry.is_plain(), "api_key {key}");
 }
 
 #[test]
@@ -75,6 +74,15 @@ fn registry_registers_raw_context_handlers() {
         ApiKey::AddPartitionsToTxn as i16,
         ApiKey::EndTxn as i16,
         ApiKey::TxnOffsetCommit as i16,
+        ApiKey::AddOffsetsToTxn as i16,
+        ApiKey::WriteTxnMarkers as i16,
+        ApiKey::FetchSnapshot as i16,
+        ApiKey::AllocateProducerIds as i16,
+        ApiKey::InitializeShareGroupState as i16,
+        ApiKey::ReadShareGroupState as i16,
+        ApiKey::WriteShareGroupState as i16,
+        ApiKey::DeleteShareGroupState as i16,
+        ApiKey::ReadShareGroupStateSummary as i16,
     ] {
         let key = api_key;
         let entry = registry

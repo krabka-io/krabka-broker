@@ -290,6 +290,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             PartitionInput {
                 schema: None,
                 timestamps: crate::handlers::produce::topic_settings::TimestampPolicy::default(),
+                compacted_topic: false,
                 part_data: FramedPartition {
                     index: 0,
                     payload: PartitionPayload::Slice(encode_batch(&batch_delivered_at(

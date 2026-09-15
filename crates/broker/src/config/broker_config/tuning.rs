@@ -213,12 +213,21 @@ macro_rules! tuning_fields {
             pub offsets_retention_check_interval_override: Option<Time>,
             /// Desired replication factor for the consumer-offsets internal topic.
             pub offsets_topic_replication_factor: i16,
+            /// `segment.bytes` of the consumer-offsets internal topic. Kafka's
+            /// `offsets.topic.segment.bytes`.
+            pub offsets_topic_segment_bytes: ByteSize,
             /// Partition count for the transaction-state internal topic.
             pub transaction_state_num_partitions: i32,
             /// Maximum bytes requested by each transaction-state recovery read.
             pub transaction_recovery_read_max: ByteSize,
             /// Desired replication factor for the transaction-state internal topic.
             pub transaction_state_replication_factor: i16,
+            /// `segment.bytes` of the transaction-state internal topic. Kafka's
+            /// `transaction.state.log.segment.bytes`.
+            pub transaction_state_segment_bytes: ByteSize,
+            /// `min.insync.replicas` of the transaction-state internal topic.
+            /// Kafka's `transaction.state.log.min.isr`.
+            pub transaction_state_min_isr: i32,
             /// Minimum accepted transaction timeout.
             pub transaction_min_timeout: Time,
             /// Maximum accepted transaction timeout.

@@ -256,6 +256,30 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("barrier_injection_timeout must be positive", |c| {
             c.barrier_injection_timeout = <Time as TimeExt>::ZERO;
         }),
+        ("transaction_state_min_isr must be positive", |c| {
+            c.transaction_state_min_isr = 0;
+        }),
+        ("share_state_min_isr must be positive", |c| {
+            c.share_coordinator.state_topic_min_isr = 0;
+        }),
+        (
+            "offsets_topic_segment_bytes: value `1024` must be >= 1048576",
+            |c| {
+                c.offsets_topic_segment_bytes = krabka_units::kibibytes(1);
+            },
+        ),
+        (
+            "transaction_state_segment_bytes: value `1024` must be >= 1048576",
+            |c| {
+                c.transaction_state_segment_bytes = krabka_units::kibibytes(1);
+            },
+        ),
+        (
+            "share_state_segment_bytes: value `1024` must be >= 1048576",
+            |c| {
+                c.share_coordinator.state_topic_segment_bytes = krabka_units::kibibytes(1);
+            },
+        ),
     ];
 
     for (expected, invalidate) in cases {

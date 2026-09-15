@@ -460,6 +460,266 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
     }
 }
 
+/// Refuses every request of the principal `CN=bad`, and allows every other
+/// principal. It stands for a DENY ACL on the certificate principal next to an
+/// ALLOW ACL on `User:*`.
+#[derive(Debug)]
+struct DenyCertificatePrincipal;
+
+/// The certificate principal that [`DenyCertificatePrincipal`] refuses.
+const DENIED_CERTIFICATE_PRINCIPAL: &str = "CN=bad";
+
+impl crate::authorizer::Authorizer for DenyCertificatePrincipal {
+    fn authorize(
+        &self,
+        _source: &dyn crate::authorizer::AclSource,
+        request: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        if request.principal.name == DENIED_CERTIFICATE_PRINCIPAL {
+            crate::authorizer::AuthorizationResult::Deny
+        } else {
+            crate::authorizer::AuthorizationResult::Allow
+        }
+    }
+}
+
+/// Encodes one request frame: the request header and the encoded `body`.
+fn encoded_request_frame<T: krabka_protocol::Encode>(
+    api_key: i16,
+    api_version: i16,
+    correlation_id: i32,
+    flexible: bool,
+    body: &T,
+) -> bytes::Bytes {
+    let mut encoded = BytesMut::with_capacity(body.encoded_len(api_version));
+    body.encode(&mut encoded, api_version)
+        .expect("encode request body");
+    request_frame(
+        api_key,
+        api_version,
+        correlation_id,
+        None,
+        flexible.then_some(0),
+        &encoded,
+    )
+    .freeze()
+}
+
+/// The response of one SASL frame that a non-SASL listener received.
+#[derive(Debug, PartialEq)]
+enum SaslAnswer {
+    Handshake(krabka_protocol::owned::sasl_handshake_response::SaslHandshakeResponse),
+    Authenticate(krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse),
+}
+
+/// A `PLAINTEXT` or `SSL` listener decides the principal when it accepts the
+/// connection, and no SASL exchange can change it (#761).
+///
+/// Kafka's `KafkaApis.handleSaslHandshakeRequest` answers `ILLEGAL_SASL_STATE`
+/// with no mechanisms, and `KafkaApis.handleSaslAuthenticateRequest` answers
+/// `ILLEGAL_SASL_STATE` with a fixed message. The connection stays open, and
+/// its next request runs under the same principal. On the `SSL` rows the
+/// certificate principal is refused and `ANONYMOUS` is allowed, so a
+/// `Metadata` row with `TOPIC_AUTHORIZATION_FAILED` proves that the principal
+/// did not change.
+#[tokio::test]
+async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
+    use krabka_protocol::{
+        Decode as _,
+        owned::{
+            metadata_request::{MetadataRequest, MetadataRequestTopic},
+            metadata_response::{MetadataResponse, MetadataResponseTopic},
+            sasl_authenticate_request::SaslAuthenticateRequest,
+            sasl_authenticate_response::SaslAuthenticateResponse,
+            sasl_handshake_request::SaslHandshakeRequest,
+            sasl_handshake_response::SaslHandshakeResponse,
+        },
+    };
+
+    const TOPIC: &str = "no-such-topic";
+    const HANDSHAKE: i16 = 17;
+    const AUTHENTICATE: i16 = 36;
+    const METADATA: i16 = 3;
+
+    let handshake = |mechanism: &str| {
+        encoded_request_frame(
+            HANDSHAKE,
+            1,
+            1,
+            false,
+            &SaslHandshakeRequest {
+                mechanism: mechanism.to_string(),
+                ..Default::default()
+            },
+        )
+    };
+    let authenticate = || {
+        encoded_request_frame(
+            AUTHENTICATE,
+            2,
+            1,
+            true,
+            &SaslAuthenticateRequest {
+                auth_bytes: bytes::Bytes::from_static(b"\0alice\0wonderland"),
+                ..Default::default()
+            },
+        )
+    };
+    let refused_handshake = SaslAnswer::Handshake(SaslHandshakeResponse {
+        error_code: codes::ILLEGAL_SASL_STATE,
+        mechanisms: Vec::new(),
+        ..Default::default()
+    });
+    let refused_authenticate = SaslAnswer::Authenticate(SaslAuthenticateResponse {
+        error_code: codes::ILLEGAL_SASL_STATE,
+        error_message: Some(
+            "SaslAuthenticate request received after successful authentication".to_string(),
+        ),
+        ..Default::default()
+    });
+    let certificate = krabka_security::Principal {
+        name: DENIED_CERTIFICATE_PRINCIPAL.to_string(),
+        auth_method: krabka_security::AuthMethod::MTls,
+        groups: vec![],
+    };
+
+    let cases = [
+        (
+            "SSL, SaslHandshake PLAIN",
+            krabka_security::ListenerProtocol::Ssl,
+            Some(certificate.clone()),
+            handshake("PLAIN"),
+            &refused_handshake,
+            codes::TOPIC_AUTHORIZATION_FAILED,
+        ),
+        (
+            "SSL, SaslHandshake SCRAM-SHA-512",
+            krabka_security::ListenerProtocol::Ssl,
+            Some(certificate.clone()),
+            handshake("SCRAM-SHA-512"),
+            &refused_handshake,
+            codes::TOPIC_AUTHORIZATION_FAILED,
+        ),
+        (
+            "SSL, SaslAuthenticate",
+            krabka_security::ListenerProtocol::Ssl,
+            Some(certificate.clone()),
+            authenticate(),
+            &refused_authenticate,
+            codes::TOPIC_AUTHORIZATION_FAILED,
+        ),
+        (
+            "PLAINTEXT, SaslHandshake PLAIN",
+            krabka_security::ListenerProtocol::Plaintext,
+            None,
+            handshake("PLAIN"),
+            &refused_handshake,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+        ),
+        (
+            "PLAINTEXT, SaslAuthenticate",
+            krabka_security::ListenerProtocol::Plaintext,
+            None,
+            authenticate(),
+            &refused_authenticate,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+        ),
+    ];
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    cfg.authorizer = std::sync::Arc::new(DenyCertificatePrincipal);
+    cfg.plain_credentials
+        .insert("alice".to_string(), "wonderland".to_string());
+    let handle = Broker::start(cfg).await.expect("start broker");
+
+    for (case, protocol, mtls_principal, sasl_frame, expected_answer, expected_topic_error) in cases
+    {
+        let broker = handle.broker_arc_for_test();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            let spec = crate::config::ListenerSpec {
+                name: "TESTS".to_string(),
+                bind_addr: addr,
+                advertised: "127.0.0.1:9092".to_string(),
+                protocol,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: crate::SslPrincipalMapper::default(),
+            };
+            serve_connection_stream(broker, stream, spec, peer, mtls_principal).await;
+        });
+        let client = TcpStream::connect(addr).await.expect("connect");
+        let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+
+        let sasl_key = i16::from_be_bytes([sasl_frame[0], sasl_frame[1]]);
+        framed.send(sasl_frame).await.expect("send SASL frame");
+        let response = framed
+            .next()
+            .await
+            .expect("a SASL response, and the connection stays open")
+            .expect("SASL response frame");
+        let answer = if sasl_key == HANDSHAKE {
+            let body = &response[crate::network::response_header_len(HANDSHAKE, false)..];
+            SaslAnswer::Handshake(
+                SaslHandshakeResponse::decode(&mut &body[..], 1).expect("decode SaslHandshake"),
+            )
+        } else {
+            let body = &response[crate::network::response_header_len(AUTHENTICATE, true)..];
+            SaslAnswer::Authenticate(
+                SaslAuthenticateResponse::decode(&mut &body[..], 2)
+                    .expect("decode SaslAuthenticate"),
+            )
+        };
+        check!(&answer == expected_answer, "{case}");
+
+        framed
+            .send(encoded_request_frame(
+                METADATA,
+                12,
+                2,
+                true,
+                &MetadataRequest {
+                    topics: Some(vec![MetadataRequestTopic {
+                        name: Some(TOPIC.to_string()),
+                        ..Default::default()
+                    }]),
+                    allow_auto_topic_creation: false,
+                    ..Default::default()
+                },
+            ))
+            .await
+            .expect("send Metadata");
+        let response = framed
+            .next()
+            .await
+            .expect("a Metadata response")
+            .expect("Metadata response frame");
+        let body = &response[crate::network::response_header_len(METADATA, true)..];
+        let metadata = MetadataResponse::decode(&mut &body[..], 12).expect("decode Metadata");
+        check!(
+            metadata.topics
+                == vec![MetadataResponseTopic {
+                    error_code: expected_topic_error,
+                    name: Some(TOPIC.to_string()),
+                    topic_authorized_operations: i32::MIN,
+                    ..Default::default()
+                }],
+            "{case}"
+        );
+
+        drop(framed);
+        server
+            .await
+            .expect("serve loop joins after the client closes");
+    }
+    handle.shutdown().await;
+}
+
 /// The `queued.max.requests` / `queued.max.request.bytes` budgets of #412.
 ///
 /// Every test here drives `serve_connection_stream` over a loopback socket,

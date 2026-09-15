@@ -23,7 +23,35 @@ use crate::{
     broker::Broker, codes, error::BrokerError, share_coordinator::persistence::StateBatch,
 };
 
-pub(crate) fn handle(
+/// Checks `ClusterAction` on the cluster, then serves the request.
+///
+/// Kafka's `KafkaApis` answers a denied principal with
+/// `WriteShareGroupStateResponse.toGlobalErrorResponse`: `CLUSTER_AUTHORIZATION_FAILED` on
+/// every requested partition, and the share coordinator does not run.
+pub(crate) async fn handle(
+    broker: &Broker,
+    version: i16,
+    correlation_id: i32,
+    req_bytes: &[u8],
+    ctx: &crate::handlers::RequestContext<'_>,
+) -> Result<Bytes, BrokerError> {
+    if super::cluster_action_denied(broker, ctx) {
+        let mut cur: &[u8] = req_bytes;
+        let req = WriteShareGroupStateRequest::decode(&mut cur, version)?;
+        let resp = super::cluster_authorization_failed!(
+            req,
+            WriteShareGroupStateResponse,
+            WriteStateResult,
+            PartitionResult
+        );
+        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
+        resp.encode(&mut buf, version)?;
+        return Ok(buf.freeze());
+    }
+    serve(broker, version, correlation_id, req_bytes).await
+}
+
+fn serve(
     broker: &Broker,
     version: i16,
     _correlation_id: i32,
@@ -167,7 +195,7 @@ mod tests {
             .share_coordinator
             .lead_all_partitions_for_test()
             .await;
-        let bytes = super::handle(&broker, VERSION, 123, &req_bytes)
+        let bytes = super::serve(&broker, VERSION, 123, &req_bytes)
             .await
             .expect("handle");
         let resp = decode(&bytes);
@@ -204,7 +232,7 @@ mod tests {
         let req = request("share-group", topic_id, 8);
         let req_bytes = encode_request(&req);
 
-        let bytes = super::handle(&broker, VERSION, 123, &req_bytes)
+        let bytes = super::serve(&broker, VERSION, 123, &req_bytes)
             .await
             .expect("handle");
         let resp = decode(&bytes);

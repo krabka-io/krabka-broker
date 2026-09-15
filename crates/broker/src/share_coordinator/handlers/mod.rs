@@ -5,15 +5,68 @@
 //! otherwise. It then delegates to the matching coordinator method and maps the
 //! result to a per-partition `error_code`.
 //!
-//! These are inter-broker RPCs, and they carry no per-connection ACL context,
-//! so the plain 4-arg [`crate::handlers::HandlerFn`] form fits. See
-//! [`crate::txn::handlers::write_txn_markers`].
+//! These are inter-broker RPCs. As in Kafka, every handler first checks
+//! `ClusterAction` on `Cluster("kafka-cluster")` for the principal of the
+//! connection. A broker that calls them needs that grant, or super-user
+//! status.
 
 pub(crate) mod delete;
 pub(crate) mod initialize;
 pub(crate) mod read;
 pub(crate) mod read_summary;
 pub(crate) mod write;
+
+#[cfg(test)]
+mod authorization_tests;
+
+use crate::{broker::Broker, handlers::RequestContext};
+
+/// Kafka's message for `CLUSTER_AUTHORIZATION_FAILED`, which
+/// `toGlobalErrorResponse` puts on every partition row.
+const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = "Cluster authorization failed.";
+
+/// Whether the authorizer denies `ClusterAction` on the cluster to the
+/// principal of `ctx`.
+fn cluster_action_denied(broker: &Broker, ctx: &RequestContext<'_>) -> bool {
+    crate::handlers::cluster_action_denied(
+        broker.config.authorizer.as_ref(),
+        &broker.controller.current_image(),
+        ctx,
+    )
+}
+
+/// Builds Kafka's `toGlobalErrorResponse` for a share-state request: one
+/// result row for each requested topic, and one partition row with
+/// `CLUSTER_AUTHORIZATION_FAILED` and Kafka's message for each requested
+/// partition.
+macro_rules! cluster_authorization_failed {
+    ($request:expr, $response:ident, $result:ident, $partition:ident) => {
+        $response {
+            results: $request
+                .topics
+                .iter()
+                .map(|topic| $result {
+                    topic_id: topic.topic_id,
+                    partitions: topic
+                        .partitions
+                        .iter()
+                        .map(|partition| $partition {
+                            partition: partition.partition,
+                            error_code: $crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+                            error_message: Some(
+                                super::CLUSTER_AUTHORIZATION_FAILED_MESSAGE.to_string(),
+                            ),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    };
+}
+use cluster_authorization_failed;
 
 #[cfg(test)]
 pub(crate) mod test_support {

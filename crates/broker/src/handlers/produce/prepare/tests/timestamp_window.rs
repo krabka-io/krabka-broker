@@ -101,6 +101,7 @@ fn prepare(
         PartitionPayload::Slice(encode_batch(batch)),
         topic_compression,
         timestamps,
+        false,
         &Arc::from("t"),
         &metrics,
         RecordDecompressionPolicy::default(),

@@ -29,11 +29,35 @@ pub(super) struct SaslFrameOutcome {
     pub(super) close_after: bool,
 }
 
+/// The message Kafka's `KafkaApis.handleSaslAuthenticateRequest` puts on the
+/// `ILLEGAL_SASL_STATE` answer to a `SaslAuthenticate` that reaches the
+/// request handlers.
+const AUTHENTICATE_AFTER_AUTHENTICATION: &str =
+    "SaslAuthenticate request received after successful authentication";
+
+/// The SASL frames of one connection: the listener kind and the mechanisms
+/// that the listener enables.
+pub(super) struct SaslListener<'a> {
+    /// Whether the listener runs SASL (`SASL_PLAINTEXT` or `SASL_SSL`).
+    pub(super) is_sasl: bool,
+    /// The mechanisms that the listener enables.
+    pub(super) mechanisms: &'a [krabka_security::SaslMechanism],
+    /// The KIP-368 re-authentication window of the listener.
+    pub(super) max_reauth: Option<krabka_units::Time>,
+}
+
 /// Handles a `SaslHandshake` (17) or `SaslAuthenticate` (36) request inline.
 ///
-/// For those two `api_key` values, the function mutates `auth` and returns a
+/// For those two `api_key` values, the function returns a
 /// [`SaslFrameOutcome`]. It returns `None` for every other `api_key`, and the
 /// caller then falls through to the regular registry dispatch.
+///
+/// On a SASL listener, the frame runs the exchange and mutates `auth`. A
+/// `PLAINTEXT` or `SSL` listener decided the principal when it accepted the
+/// connection, so no SASL exchange can start there. Kafka sends the two frames
+/// to `KafkaApis`, which answers `ILLEGAL_SASL_STATE` (34) and keeps the
+/// connection and its principal. This function does the same, and it does
+/// not touch `auth`.
 ///
 /// An error here closes the connection. Such errors are protocol violations,
 /// for example an undecodable header.
@@ -41,15 +65,71 @@ pub(super) async fn try_handle_sasl_frame(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
-    sasl_mechanisms: &[krabka_security::SaslMechanism],
-    max_reauth: Option<krabka_units::Time>,
+    listener: &SaslListener<'_>,
     peer: &SocketAddr,
 ) -> Option<Result<SaslFrameOutcome, BrokerError>> {
     let api_key = parsed.api_key;
     if api_key != SASL_HANDSHAKE_KEY && api_key != SASL_AUTHENTICATE_KEY {
         return None;
     }
-    Some(handle_sasl_frame(broker, parsed, auth, sasl_mechanisms, max_reauth, peer).await)
+    if !listener.is_sasl {
+        return Some(non_sasl_listener_response(broker, parsed));
+    }
+    Some(
+        handle_sasl_frame(
+            broker,
+            parsed,
+            auth,
+            listener.mechanisms,
+            listener.max_reauth,
+            peer,
+        )
+        .await,
+    )
+}
+
+/// Answers a SASL frame on a listener that runs no SASL, as Kafka's
+/// `KafkaApis.handleSaslHandshakeRequest` and
+/// `KafkaApis.handleSaslAuthenticateRequest` do.
+///
+/// `SaslHandshake` gets `ILLEGAL_SASL_STATE` and an empty mechanism list.
+/// `SaslAuthenticate` gets `ILLEGAL_SASL_STATE` and Kafka's message. The
+/// request body is not read, and the connection stays open.
+fn non_sasl_listener_response(
+    broker: &Broker,
+    parsed: &crate::network::request::ParsedRequest<'_>,
+) -> Result<SaslFrameOutcome, BrokerError> {
+    use krabka_protocol::Encode;
+
+    let mut body = BytesMut::new();
+    if parsed.api_key == SASL_HANDSHAKE_KEY {
+        let response = krabka_protocol::owned::sasl_handshake_response::SaslHandshakeResponse {
+            error_code: codes::ILLEGAL_SASL_STATE,
+            ..Default::default()
+        };
+        body.reserve(response.encoded_len(parsed.api_version));
+        response.encode(&mut body, parsed.api_version)?;
+    } else {
+        let response =
+            krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                error_code: codes::ILLEGAL_SASL_STATE,
+                error_message: Some(AUTHENTICATE_AFTER_AUTHENTICATION.into()),
+                ..Default::default()
+            };
+        body.reserve(response.encoded_len(parsed.api_version));
+        response.encode(&mut body, parsed.api_version)?;
+    }
+    let response_bytes = encode_response(
+        parsed.api_key,
+        parsed.correlation_id,
+        parsed.body_flexible,
+        &body,
+        broker.config.socket_request_max.bytes_usize(),
+    )?;
+    Ok(SaslFrameOutcome {
+        response_bytes,
+        close_after: false,
+    })
 }
 
 async fn handle_sasl_frame(
@@ -422,6 +502,14 @@ mod tests {
         assert!(rx.try_recv().is_err(), "exactly one row per refusal");
     }
 
+    fn sasl_listener(mechanisms: &[SaslMechanism]) -> SaslListener<'_> {
+        SaslListener {
+            is_sasl: true,
+            mechanisms,
+            max_reauth: None,
+        }
+    }
+
     fn parsed(
         api_key: ApiKeyCode,
         api_version: i16,
@@ -503,8 +591,7 @@ mod tests {
                 &broker,
                 &parsed(3, 12, &metadata, true),
                 &mut auth,
-                &mechanisms,
-                None,
+                &sasl_listener(&mechanisms),
                 &peer,
             )
             .await
@@ -523,8 +610,7 @@ mod tests {
             &broker,
             &parsed(SASL_HANDSHAKE_KEY, 1, &handshake, false),
             &mut auth,
-            &mechanisms,
-            None,
+            &sasl_listener(&mechanisms),
             &peer,
         )
         .await
@@ -539,8 +625,7 @@ mod tests {
             &broker,
             &parsed(SASL_AUTHENTICATE_KEY, 2, &good, true),
             &mut auth,
-            &mechanisms,
-            None,
+            &sasl_listener(&mechanisms),
             &peer,
         )
         .await
@@ -556,8 +641,7 @@ mod tests {
             &broker,
             &parsed(SASL_HANDSHAKE_KEY, 1, &handshake, false),
             &mut guessing,
-            &mechanisms,
-            None,
+            &sasl_listener(&mechanisms),
             &peer,
         )
         .await
@@ -568,8 +652,7 @@ mod tests {
             &broker,
             &parsed(SASL_AUTHENTICATE_KEY, 2, &bad, true),
             &mut guessing,
-            &mechanisms,
-            None,
+            &sasl_listener(&mechanisms),
             &peer,
         )
         .await
@@ -589,8 +672,7 @@ mod tests {
             &broker,
             &parsed(SASL_AUTHENTICATE_KEY, 2, &good, true),
             &mut bare,
-            &mechanisms,
-            None,
+            &sasl_listener(&mechanisms),
             &peer,
         )
         .await
@@ -619,8 +701,7 @@ mod tests {
             &broker,
             &parsed(SASL_HANDSHAKE_KEY, 1, &scram_handshake, false),
             &mut scram,
-            &[SaslMechanism::ScramSha512],
-            None,
+            &sasl_listener(&[SaslMechanism::ScramSha512]),
             &peer,
         )
         .await
@@ -638,8 +719,7 @@ mod tests {
             &broker,
             &parsed(SASL_AUTHENTICATE_KEY, 2, &client_first, true),
             &mut scram,
-            &[SaslMechanism::ScramSha512],
-            None,
+            &sasl_listener(&[SaslMechanism::ScramSha512]),
             &peer,
         )
         .await

@@ -74,6 +74,10 @@ pub(super) fn materialize_partition_with_replication_target(
     // under this lock too, so two concurrent materializations of the same
     // partition can never pick two different log dirs.
     partitions.materialize_if_vacant(topic, PartitionIndex(partition), || {
+        // The name comes from the metadata log. Refuse a name that would put
+        // the partition directory outside the log directory, whatever path
+        // wrote it there.
+        krabka_log::topic_name::validate_topic_name(topic).map_err(|e| e.to_string())?;
         let partition_index = PartitionIndex(partition);
         let preferred = topic_id.and_then(|id| partitions.preferred_log_dir(id, partition_index));
         if preferred
@@ -259,6 +263,59 @@ mod tests {
         .await;
         let st = part.replica_state.lock().await;
         assert!(st.isr.len() == 3);
+    }
+
+    /// A topic name reaches this function from the metadata log. A name that
+    /// would put the partition directory outside the log directory is
+    /// refused, and no directory appears anywhere.
+    #[tokio::test]
+    async fn materialization_refuses_a_topic_name_that_escapes_the_log_dir() {
+        let root = tempfile::tempdir().expect("root");
+        let log_dir = root.path().join("logs");
+        std::fs::create_dir_all(&log_dir).expect("log dir");
+        let escaping = "../outside".to_owned();
+        let absolute = format!("{}/abs", root.path().display());
+        for topic in [escaping.as_str(), absolute.as_str(), "..", ""] {
+            let partitions = Arc::new(PartitionRegistry::new());
+            let result = materialize_partition(MaterializePartitionConfig {
+                partitions: &partitions,
+                topic,
+                topic_id: None,
+                partition: 0,
+                log_dirs: std::slice::from_ref(&log_dir),
+                log_config: &LogConfig::default(),
+                log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
+                producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
+                producer_id_expiration: hours(24),
+                max_produce_group: 1_024,
+                partition_writer_queue_depth: 64,
+                diskless_wal_local_replica_count: 3,
+                diskless: false,
+                hot_tail: None,
+                wal_shards: None,
+                sequencer: None,
+            });
+            assert!(
+                result
+                    == Err(krabka_log::topic_name::validate_topic_name(topic)
+                        .expect_err("invalid name")
+                        .to_string()),
+                "{topic:?}"
+            );
+            assert!(partitions.get(topic, PartitionIndex(0)).is_none());
+        }
+        let mut entries: Vec<_> = std::fs::read_dir(root.path())
+            .expect("read root")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        entries.sort();
+        assert!(entries == vec![std::ffi::OsString::from("logs")]);
+        assert!(
+            std::fs::read_dir(&log_dir)
+                .expect("read log dir")
+                .next()
+                .is_none()
+        );
     }
 
     #[tokio::test]

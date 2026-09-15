@@ -16,10 +16,11 @@
 //! segments for as long as it follows, which is precisely the descriptor climb
 //! this loop exists to stop.
 //!
-//! **Cleanup policy.** There is none to test here either. `Log::tick` reads
-//! `retention.ms` and `retention.bytes` out of the partition's own config and
-//! decides for itself; a `compact` topic's config leaves both unset, and a
-//! `compact,delete` topic is meant to have both halves applied.
+//! **Cleanup policy.** The sweep does not test it. `Log::tick` reads
+//! `cleanup.policy` out of the partition's own config, as Kafka's
+//! `UnifiedLog.deleteOldSegments` does. Time and size retention run only
+//! when the policy holds `delete`. A compact-only log loses only the segments
+//! below its log start offset.
 //!
 //! **KFC-9 write freeze.** Refused, on the same grounds the cleaner refuses
 //! compaction on a frozen topic: the freeze rule refuses every operation that
