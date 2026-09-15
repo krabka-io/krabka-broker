@@ -682,3 +682,62 @@ async fn acks_zero_produce_is_exempt_from_the_request_quota() {
     server.await.expect("serve loop joins on client EOF");
     handle.shutdown().await;
 }
+
+/// A `CreateTopics` charges `controller_mutation_rate` in its handler and
+/// `request_percentage` in the dispatch loop. Kafka resolves the two as one
+/// throttle decision (`sendResponseMaybeThrottleWithControllerQuota`), so the
+/// per-api throttle metric observes the request once, not once per quota.
+#[tokio::test]
+async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation() {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+
+    const VERSION: i16 = 7;
+    let (handle, _dir) = broker_with_anonymous_quotas(
+        millis(1000),
+        &[
+            ("controller_mutation_rate", 1.0),
+            ("request_percentage", 0.0001),
+        ],
+    )
+    .await;
+    let (server, mut framed) = connect_to_serve_loop(&handle).await;
+
+    let body = encoded(
+        &CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "one-observation".to_owned(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        },
+        VERSION,
+    );
+    send_request(&mut framed, 19, VERSION, 1, &body).await;
+    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("the response must beat the client timeout")
+        .expect("a response frame")
+        .expect("response decode");
+    check!(response_correlation_id(&response) == 1);
+
+    let rendered = {
+        let metrics = &handle.broker_arc_for_test().metrics;
+        let registry = metrics.registry.lock().await;
+        let mut out = String::new();
+        prometheus_client::encoding::text::encode(&mut out, &registry).expect("encode registry");
+        out
+    };
+    check!(
+        rendered.contains(
+            "krabka_broker_request_throttle_duration_seconds_count{api_key=\"CreateTopics\"} 1\n"
+        ),
+        "{rendered}"
+    );
+
+    drop(framed);
+    server.await.expect("serve loop joins on client EOF");
+    handle.shutdown().await;
+}

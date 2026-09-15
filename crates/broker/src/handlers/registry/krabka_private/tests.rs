@@ -84,11 +84,11 @@ fn registry_dispatches_every_krabka_private_key_to_its_own_handler() {
 
         assert!(let DispatchKind::Context(handler) = entry.kind(), "{label}");
         check!(std::ptr::fn_addr_eq(handler, adapter), "{label}");
-        // Version 0 only, flexible framing, and charged to the request quota
-        // like every Kafka api that Kafka does not exempt.
+        // Version 0 only, flexible framing, and exempt from the
+        // request-quota accounting a Kafka client drives.
         check!(entry.body_flexible(0), "{label}");
         check!(
-            entry.quota_policy() == RequestQuotaPolicy::ApplyFallbackAccounting,
+            entry.quota_policy() == RequestQuotaPolicy::InlineExempt,
             "{label}"
         );
     }

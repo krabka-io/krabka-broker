@@ -134,6 +134,11 @@ macro_rules! krabka_private_context_dispatches {
                     registry.register(DispatchEntry::context(api_key, flexible_min, handler)),
                     "duplicate dispatch registration for api_key {api_key}"
                 );
+                // Kafka defines no krabka-private api, so no Kafka client
+                // quota applies to one. `WriteBarrierMarkers` is inter-broker
+                // traffic, and the operator apis are not what a
+                // `request_percentage` quota is written for.
+                registry.exempt_from_request_quota(api_key);
             }
         }
     };

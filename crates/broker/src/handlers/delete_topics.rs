@@ -320,18 +320,15 @@ pub(crate) async fn handle(
         deleted_topic_resources(&results),
     );
 
-    // KIP-599: report the controller_mutation_rate throttle in the response and
-    // hand the window to the connection loop, which mutes the connection once
-    // the response is written (KIP-219). The delay is the only throttle this
-    // api applies — the dispatch loop marks it quota-exempt and never charges
-    // it the request quota — so resolving it through the metric records the
-    // throttle phase and the quota that caused it exactly once per request.
-    let delay = broker.metrics.record_applied_throttle(
-        krabka_protocol::api_key::ApiKey::DeleteTopics as i16,
-        &[(crate::metrics::QuotaType::ControllerMutation, quota.delay()).into()],
-    );
+    // KIP-599: the controller-mutation delay goes to the dispatch loop, which
+    // resolves it with the KIP-124 request quota in one metrics call and
+    // reports the larger of the two, as Kafka's
+    // `sendResponseMaybeThrottleWithControllerQuota` does. The response
+    // carries the controller-mutation delay now; the dispatch loop raises it
+    // when the request quota asks for more.
+    let delay = quota.delay();
+    ctx.defer_quota_charge((crate::metrics::QuotaType::ControllerMutation, delay).into());
     let throttle_time_ms = crate::quota::throttle_time_ms(delay);
-    ctx.record_throttle(delay);
 
     let resp = delete_topics_response(results, throttle_time_ms);
     crate::handlers::encode_response(&resp, version)

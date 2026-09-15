@@ -23,6 +23,10 @@ use crate::{
 pub(super) struct ThrottledResponse {
     pub(super) bytes: Bytes,
     pub(super) throttle: Time,
+    /// A quota charge the handler left for [`apply_request_quota`] to resolve
+    /// together with the request quota. See
+    /// [`crate::quota::ThrottleSlot::defer`].
+    pub(super) deferred_charge: Option<crate::metrics::QuotaCharge>,
 }
 
 impl ThrottledResponse {
@@ -31,6 +35,7 @@ impl ThrottledResponse {
         Self {
             bytes,
             throttle: <Time as TimeExt>::ZERO,
+            deferred_charge: None,
         }
     }
 }
@@ -66,6 +71,12 @@ impl ResponseShape {
 /// Charges the KIP-124 request quota for a finished request and returns the
 /// response with the throttle window it earned.
 ///
+/// `handler_time` is the time the handler actually ran, not the time it was
+/// parked on a coordinator, a replication wait or a raft commit: Kafka meters
+/// request-handler thread time, and a request waiting in a purgatory holds no
+/// thread. `deferred_charge` is a quota the handler charged and left for this
+/// function, which resolves both in one metrics call.
+///
 /// The function does not wait. It patches the response's leading
 /// `ThrottleTimeMs` where the schema has one, so the client learns how long to
 /// back off, and returns the window so the caller can mute the connection
@@ -76,9 +87,10 @@ pub(super) fn apply_request_quota(
     parsed: &crate::network::request::ParsedRequest<'_>,
     shape: ResponseShape,
     auth: &crate::network::auth::ConnectionAuth,
-    started: std::time::Instant,
+    handler_time: std::time::Duration,
+    deferred_charge: Option<crate::metrics::QuotaCharge>,
 ) -> ThrottledResponse {
-    let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    let elapsed_micros = u64::try_from(handler_time.as_micros()).unwrap_or(u64::MAX);
     let self_accounts = matches!(
         ApiKey::from_i16(parsed.api_key),
         Some(ApiKey::Produce | ApiKey::Fetch)
@@ -106,13 +118,18 @@ pub(super) fn apply_request_quota(
                 )
             }
         };
-        // The request quota is the only one an api that does not account for
-        // itself is charged, so it is the only entry, and the delay it asks
-        // for is the window this request is muted for.
-        let delay = broker.metrics.record_applied_throttle(
-            parsed.api_key,
-            &[(crate::metrics::QuotaType::Request, charged).into()],
-        );
+        // One metrics call resolves the request quota and any quota the
+        // handler deferred, and the larger delay is the window this request is
+        // muted for.
+        let request_charge: crate::metrics::QuotaCharge =
+            (crate::metrics::QuotaType::Request, charged).into();
+        let quota_charges: Vec<crate::metrics::QuotaCharge> = deferred_charge
+            .into_iter()
+            .chain(std::iter::once(request_charge))
+            .collect();
+        let delay = broker
+            .metrics
+            .record_applied_throttle(parsed.api_key, &quota_charges);
         if delay > <Time as TimeExt>::ZERO {
             let delay_ms = crate::quota::throttle_time_ms(delay);
             if throttle_is_leading_field(parsed.api_key, shape.version) {
@@ -131,6 +148,7 @@ pub(super) fn apply_request_quota(
     ThrottledResponse {
         bytes: response_bytes,
         throttle,
+        deferred_charge: None,
     }
 }
 

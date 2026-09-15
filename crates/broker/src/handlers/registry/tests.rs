@@ -262,8 +262,9 @@ fn api_versions_is_a_self_accounted_context_dispatch() {
 /// KIP-124 (#692): Kafka charges the request quota for every request, and
 /// exempts only the apis it answers through `sendResponseExemptThrottle` and
 /// the SASL handshake, which its authenticator answers. `Produce`, `Fetch`
-/// and `ApiVersions` charge it in their handler, so every other registered
-/// api is charged by the dispatch loop.
+/// and `ApiVersions` charge it in their handler. Kafka defines no
+/// krabka-private api, so those are exempt. Every other registered api is
+/// charged by the dispatch loop.
 #[test]
 fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
     use std::collections::BTreeMap;
@@ -291,7 +292,9 @@ fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
         .map(|&api_key| {
             let policy = if self_accounted.iter().any(|api| *api as i16 == api_key) {
                 RequestQuotaPolicy::SelfAccounted
-            } else if exempt.iter().any(|api| *api as i16 == api_key) {
+            } else if exempt.iter().any(|api| *api as i16 == api_key)
+                || api_key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR
+            {
                 RequestQuotaPolicy::InlineExempt
             } else {
                 RequestQuotaPolicy::ApplyFallbackAccounting
