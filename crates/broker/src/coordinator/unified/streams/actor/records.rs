@@ -29,11 +29,22 @@ use crate::coordinator::unified::{
 ///
 /// The result always holds the current group epoch. It holds the topology and
 /// the partition metadata when both are present, and the target metadata once
-/// the actor has installed the target, that is, when `epoch > 0`.
+/// the actor has installed the target, that is, when `epoch > 0`. After a
+/// reconcile that installed a new target, it holds the records of every
+/// member, because the new target changed the assignment of all of them.
 pub(super) fn snapshot_pending_after_change(
-    actor: &ActorState,
+    actor: &mut ActorState,
     affected_members: &[String],
 ) -> PendingStreamsRecords {
+    let all_members: Vec<String>;
+    let affected_members = if std::mem::take(&mut actor.target_changed) {
+        let mut ids: Vec<String> = actor.state.members.keys().cloned().collect();
+        ids.sort_unstable();
+        all_members = ids;
+        all_members.as_slice()
+    } else {
+        affected_members
+    };
     let state = &actor.state;
     let mut pending = PendingStreamsRecords {
         group_metadata: Some(StreamsGroupMetadataValue {

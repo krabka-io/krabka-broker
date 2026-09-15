@@ -209,6 +209,15 @@ struct ActorState {
     /// Every heartbeat tries them again, as Kafka's `KafkaApis` sends the
     /// `internalTopicsToBeCreated` of each heartbeat to the controller.
     missing_internal_topics: Vec<super::topology::InternalTopicSpec>,
+    /// Set when a reconcile installed a new target. The next record batch then
+    /// carries the target and current assignment of every member, because the
+    /// new target changed all of them.
+    target_changed: bool,
+    /// Whether the topology was configured against the metadata image since
+    /// the actor started. A seeded actor has not, so its first heartbeat
+    /// configures the topology again, as Kafka does when the configured
+    /// topology of a loaded group is empty.
+    configured: bool,
 }
 
 impl ActorState {
@@ -219,6 +228,8 @@ impl ActorState {
             partition_metadata: None,
             metadata_hash: 0,
             missing_internal_topics: Vec::new(),
+            target_changed: false,
+            configured: false,
         }
     }
 }
@@ -322,7 +333,7 @@ async fn actor_loop(
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     actor.state.dirty = true;
                     reconcile(&mut actor, &config, metadata_source.as_ref()).await;
-                    let pending = snapshot_pending_after_change(&actor, &[]);
+                    let pending = snapshot_pending_after_change(&mut actor, &[]);
                     if flush_pending(
                         &actor,
                         pending,

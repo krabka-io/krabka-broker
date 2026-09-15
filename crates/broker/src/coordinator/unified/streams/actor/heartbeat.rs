@@ -16,7 +16,7 @@ use krabka_protocol::owned::{
 
 use super::{
     ActorState, chrono_now_ms,
-    reconciliation::reconcile,
+    reconciliation::{configure_after_load, reconcile},
     records::{flush_pending, snapshot_pending_after_change},
     request::{build_member, task_ids_to_map, task_offsets_to_map},
     response::{base_resp, build_assignment_resp, error_resp},
@@ -227,7 +227,13 @@ async fn refresh_topic_metadata(
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) {
-    let (Some(source), Some(topology)) = (metadata_source, actor.topology.as_ref()) else {
+    let Some(source) = metadata_source else {
+        return;
+    };
+    if !actor.state.dirty {
+        configure_after_load(actor, source);
+    }
+    let Some(topology) = actor.topology.as_ref() else {
         return;
     };
     if !actor.state.dirty

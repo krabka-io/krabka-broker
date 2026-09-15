@@ -723,3 +723,134 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         check!(failures.load(Ordering::SeqCst) == 0, "{}", row.name);
     }
 }
+
+/// A reconcile that installs a new target changes the assignment of every
+/// member, so the record batch of the heartbeat that ran it carries the
+/// target assignment of every member, as Kafka's `TargetAssignmentBuilder`
+/// writes one record for each member whose target changed. Without them a
+/// replay pairs the new assignment epoch with old member targets.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_target_persists_the_target_of_every_member() {
+    use crate::{
+        coordinator::unified::{persistence::Key, streams::persistence::StreamsGroupKey},
+        test_support::FakeMetadataSource,
+    };
+
+    let source = Arc::new(
+        FakeMetadataSource::builder()
+            .image(image_of(None, &[("in", 1, 2)]))
+            .build(),
+    );
+    let (coord, log) = make_coordinator();
+    coord.set_metadata_source(source.clone());
+    let handle = coord.get_or_create_streams("g");
+    let request = |member_id: &str, member_epoch| StreamsGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        member_epoch,
+        rebalance_timeout_ms: 1_000,
+        topology: (member_epoch == 0).then(|| one_subtopology(false)),
+        ..Default::default()
+    };
+    let m1 = heartbeat(&handle, request("m1", 0)).await;
+    let m2 = heartbeat(&handle, request("m2", 0)).await;
+    check!((m1.member_epoch, m2.member_epoch) == (1, 2));
+
+    source.set_image(image_of(None, &[("in", 1, 4)]));
+    let resp = heartbeat(&handle, request("m1", 1)).await;
+    check!(resp.member_epoch == 3);
+
+    let batches = log.batches().await;
+    let last = batches.last().expect("the heartbeat wrote a batch");
+    let mut targets: Vec<String> = last
+        .records
+        .iter()
+        .filter_map(|record| {
+            let key = record.key.as_deref()?;
+            match crate::coordinator::unified::persistence::parse_key(key) {
+                Ok(Key::Streams(StreamsGroupKey::TargetAssignmentMember { member_id, .. })) => {
+                    Some(member_id)
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    targets.sort();
+    check!(targets == vec!["m1".to_string(), "m2".to_string()]);
+}
+
+/// A seeded group whose internal topics are missing creates them again on
+/// the next heartbeat, as Kafka configures the topology of a loaded group on
+/// its first heartbeat and sends the missing internal topics to the
+/// controller. The seed carries the metadata hash, so the hash alone does not
+/// trigger it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seeded_group_creates_its_missing_internal_topics_again() {
+    use krabka_protocol::owned::common::streams_group_heartbeat_response::task_ids::TaskIds;
+
+    use crate::test_support::FakeMetadataSource;
+
+    let failing = Arc::new(
+        FakeMetadataSource::builder()
+            .image(image_of(None, &[("in", 1, 1)]))
+            .on_submit(|_| Err(krabka_raft::RaftError::LeaderUnknown))
+            .build(),
+    );
+    let (before, _log) = make_coordinator();
+    before.set_metadata_source(failing);
+    let joined = heartbeat(
+        &before.get_or_create_streams("g"),
+        StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch: 0,
+            rebalance_timeout_ms: 1_000,
+            topology: Some(one_subtopology(true)),
+            ..Default::default()
+        },
+    )
+    .await;
+    check!(joined.member_epoch == 1);
+    let seed = before
+        .cached_streams_seed("g")
+        .expect("the join cached a seed");
+
+    let source = Arc::new(
+        FakeMetadataSource::builder()
+            .image(image_of(None, &[("in", 1, 1)]))
+            .commit_submits()
+            .build(),
+    );
+    let (after, _log) = make_coordinator();
+    after.set_metadata_source(source.clone());
+    after.update_streams_cache("g", seed);
+    let resp = heartbeat(
+        &after.get_or_create_streams("g"),
+        StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+
+    check!(
+        source
+            .current_image()
+            .topic_partition_count("store-changelog")
+            == 1
+    );
+    let expected = StreamsGroupHeartbeatResponse {
+        member_id: "m1".into(),
+        active_tasks: Some(vec![TaskIds {
+            subtopology_id: "0".into(),
+            partitions: vec![0],
+            ..Default::default()
+        }]),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        ..super::response::base_resp(codes::NONE, 2, &StreamsGroupConfig::default())
+    };
+    check!(resp == expected);
+}

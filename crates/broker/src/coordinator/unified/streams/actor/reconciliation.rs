@@ -44,7 +44,65 @@ pub(super) async fn reconcile(
     if !actor.state.dirty {
         return;
     }
+    let target_epoch = actor.state.target.epoch;
+    reconcile_dirty(actor, config, metadata_source).await;
+    if actor.state.target.epoch != target_epoch {
+        actor.target_changed = true;
+    }
+}
 
+/// Configures the topology of a seeded group against the current image
+/// without a new target, as Kafka's first heartbeat after a load does.
+///
+/// The function records the topology status and the internal topics that the
+/// image does not hold, so that the heartbeat creates them again. It runs
+/// once per actor, and a reconcile makes it unnecessary.
+pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn MetadataSource>) {
+    if actor.configured {
+        return;
+    }
+    let Some(topology) = actor.topology.clone() else {
+        return;
+    };
+    actor.configured = true;
+    let image = source.current_image();
+    let mut status = topology::validate_topology(&topology, &image);
+    let derived = topology::derive_tasks(&topology, &image);
+    actor.missing_internal_topics =
+        topology::required_internal_topics(&topology, &derived.num_tasks)
+            .into_iter()
+            .filter(|spec| image.topic(&spec.name).is_none())
+            .collect();
+    if !actor.missing_internal_topics.is_empty() {
+        status.push((
+            topo_status::MISSING_INTERNAL_TOPICS,
+            format!(
+                "internal topics not yet created: {}",
+                actor
+                    .missing_internal_topics
+                    .iter()
+                    .map(|spec| spec.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    status.extend(
+        actor
+            .state
+            .status
+            .iter()
+            .filter(|(code, _)| *code == topo_status::SHUTDOWN_APPLICATION)
+            .cloned(),
+    );
+    actor.state.status = status;
+}
+
+async fn reconcile_dirty(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) {
     let (Some(source), Some(topology)) = (metadata_source, actor.topology.clone()) else {
         // No metadata source or no topology yet: cannot assign. Bump the epoch
         // and install an empty target so members still advance (to an empty
@@ -54,6 +112,7 @@ pub(super) async fn reconcile(
     };
 
     let image = source.current_image();
+    actor.configured = true;
     actor.metadata_hash = topology::metadata_hash(&topology, &image);
     actor.missing_internal_topics.clear();
 
