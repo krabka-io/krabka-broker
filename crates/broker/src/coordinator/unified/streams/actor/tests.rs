@@ -1354,7 +1354,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             },
         ),
         (
-            "a member whose tasks another member's join changed gets its tasks",
+            "a member that must revoke a task gets its tasks at its epoch",
             10,
             2,
             vec![
@@ -1362,10 +1362,10 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
                 Beat::Join("m2", None),
                 Beat::Heartbeat("m1", None),
             ],
-            accepted("m1", 2, Some(vec![0])),
+            accepted("m1", 1, Some(vec![0])),
         ),
         (
-            "a member with an endpoint whose tasks another member's join changed",
+            "a member with an endpoint that must revoke a task",
             10,
             2,
             vec![
@@ -1376,7 +1376,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             StreamsGroupHeartbeatResponse {
                 endpoint_information_epoch: 1,
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
-                ..accepted("m1", 2, Some(vec![0]))
+                ..accepted("m1", 1, Some(vec![0]))
             },
         ),
         (
@@ -1469,5 +1469,119 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             last = Some(resp);
         }
         check!(last == Some(expected), "{name}");
+    }
+}
+
+/// KIP-1071 reconciliation through the actor, as Kafka's
+/// `CurrentAssignmentBuilder` and `scheduleStreamsGroupRebalanceTimeout` run
+/// it. `m1` owns both tasks of a two-partition topic and `m2` joins, so the
+/// new target moves task 1 to `m2`. `m1` keeps its member epoch until it stops
+/// reporting task 1, and it is fenced when it does not revoke within its
+/// rebalance timeout. Each row compares the whole responses of a last
+/// heartbeat of `m1` and then of `m2`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeout() {
+    use krabka_protocol::owned::common::{
+        streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
+        streams_group_heartbeat_response::task_ids::TaskIds,
+    };
+
+    use crate::test_support::FakeMetadataSource;
+
+    let config = StreamsGroupConfig::default();
+    let accepted =
+        |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
+            member_id: member_id.into(),
+            status: Some(vec![]),
+            active_tasks: tasks.as_ref().map(|partitions| {
+                if partitions.is_empty() {
+                    vec![]
+                } else {
+                    vec![TaskIds {
+                        subtopology_id: "0".into(),
+                        partitions: partitions.clone(),
+                        ..Default::default()
+                    }]
+                }
+            }),
+            standby_tasks: tasks.as_ref().map(|_| vec![]),
+            warmup_tasks: tasks.as_ref().map(|_| vec![]),
+            ..super::response::base_resp(codes::NONE, member_epoch, &config)
+        };
+    // (name, rebalance timeout of m1, m1 revokes task 1, expected last m1 and
+    // m2 responses)
+    let rows = [
+        (
+            "revokes before the timeout",
+            600_000,
+            true,
+            accepted("m1", 2, None),
+            accepted("m2", 2, Some(vec![1])),
+        ),
+        (
+            "does not revoke, the timeout is not reached",
+            600_000,
+            false,
+            accepted("m1", 1, None),
+            accepted("m2", 2, None),
+        ),
+        (
+            "does not revoke within the timeout",
+            50,
+            false,
+            super::response::error_resp(
+                codes::UNKNOWN_MEMBER_ID,
+                Some("Member m1 is not a member of group g.".into()),
+            ),
+            accepted("m2", 3, Some(vec![0, 1])),
+        ),
+    ];
+
+    for (name, rebalance_timeout_ms, revokes, expected_m1, expected_m2) in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &[("in", 1, 2)]))
+                .build(),
+        );
+        let (coord, _log) = make_coordinator();
+        coord.set_metadata_source(source);
+        let handle = coord.get_or_create_streams("g");
+        let request =
+            |member_id: &str, member_epoch, owned: Option<&[i32]>| StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: member_id.into(),
+                member_epoch,
+                rebalance_timeout_ms,
+                topology: (member_epoch == 0).then(|| one_subtopology(false)),
+                active_tasks: owned.map(|partitions| {
+                    vec![OwnedTaskIds {
+                        subtopology_id: "0".into(),
+                        partitions: partitions.to_vec(),
+                        ..Default::default()
+                    }]
+                }),
+                standby_tasks: owned.map(|_| vec![]),
+                warmup_tasks: owned.map(|_| vec![]),
+                ..Default::default()
+            };
+
+        let m1 = heartbeat(&handle, request("m1", 0, Some(&[]))).await;
+        check!(m1 == accepted("m1", 1, Some(vec![0, 1])), "{name}");
+        let m2 = heartbeat(&handle, request("m2", 0, Some(&[]))).await;
+        check!(m2 == accepted("m2", 2, Some(vec![])), "{name}");
+        let m1 = heartbeat(&handle, request("m1", 1, Some(&[0, 1]))).await;
+        check!(m1 == accepted("m1", 1, Some(vec![0])), "{name}");
+        if revokes {
+            let m1 = heartbeat(&handle, request("m1", 1, Some(&[0]))).await;
+            check!(m1 == accepted("m1", 2, None), "{name}");
+        }
+        // Give a 50 ms rebalance timeout time to fire.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        let owned_by_m1: &[i32] = if revokes { &[0] } else { &[0, 1] };
+        let m1_epoch = if revokes { 2 } else { 1 };
+        let last_m1 = heartbeat(&handle, request("m1", m1_epoch, Some(owned_by_m1))).await;
+        let last_m2 = heartbeat(&handle, request("m2", 2, Some(&[]))).await;
+        check!((last_m1, last_m2) == (expected_m1, expected_m2), "{name}");
     }
 }

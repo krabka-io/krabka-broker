@@ -317,6 +317,11 @@ async fn actor_loop(
                     break;
                 }
             }
+            () = wait_for_rebalance_deadline(actor.state.next_rebalance_deadline()) => {
+                if handle_session_tick(&mut actor, &config, &*offsets_log, metadata_source.as_ref(), &coordinator).await.is_err() {
+                    break;
+                }
+            }
             image = wait_for_metadata_change(&mut metadata_rx) => {
                 let Some(image) = image else {
                     metadata_rx = None;
@@ -377,6 +382,14 @@ fn resolve_group_config_from_image(
             tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
             defaults.clone()
         }
+    }
+}
+
+/// Sleeps until `deadline`, or for ever when no rebalance timeout is armed.
+async fn wait_for_rebalance_deadline(deadline: Option<std::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+        None => std::future::pending().await,
     }
 }
 

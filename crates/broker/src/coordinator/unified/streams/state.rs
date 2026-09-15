@@ -2,19 +2,16 @@
 //!
 //! This module mirrors the overall shape of the KIP-932 share-group state
 //! machine (`super::super::share::state`): the `dirty` flag pattern,
-//! `evict_expired`, `bump_epoch`, `install_target`, and
-//! `advance_member_epoch`. It also mirrors the reconciliation mechanics of the
-//! KIP-848 next-gen consumer state machine
-//! (`super::super::consumer_state`): the `member_epoch` and
-//! `previous_member_epoch` epoch exchange, and the revoke-before-assign split.
-//! The difference is that streams members hold *tasks*
-//! `(subtopology, partition)` across three disjoint roles, **active**,
+//! `evict_expired`, `bump_epoch` and `install_target`. Streams members hold
+//! *tasks* `(subtopology, partition)` across three disjoint roles, **active**,
 //! **standby**, and **warmup**, instead of topic partitions.
 //!
-//! Only **active** tasks use the revoke-before-assign exchange. The current
-//! owner must revoke an active task before another member can take it as
-//! active. Standby and warmup tasks move freely, with no pending-revocation
-//! bookkeeping.
+//! A new target changes no member. Each member reconciles toward it in its
+//! own heartbeat, with Kafka's `CurrentAssignmentBuilder` rules
+//! (`current_assignment`): a member revokes the tasks of every role before it
+//! moves to the target epoch, and it gets a task only when no other member
+//! still owns it and no other member of its process still runs it in another
+//! role.
 //!
 //! A role's assignment is a `BTreeMap<String, Vec<i32>>`, from
 //! `subtopology_id` to a sorted, deduped partition list. Everything here uses
@@ -34,18 +31,19 @@
 //! [`StreamsGroupState`] and the epoch, membership, eviction, and target
 //! transitions on it, plus the target assignment and the stored-topology
 //! handle. Each child holds one concern: `member` the per-member state and its
-//! reconciliation-state enum, `phase` the group lifecycle phase and its Kafka
-//! group-state string, and `task_map` the normalization and revoke-split
-//! arithmetic over a role's task map.
+//! reconciliation-state enum, `current_assignment` the reconciliation of one
+//! member toward its target, `phase` the group lifecycle phase and its Kafka
+//! group-state string, and `task_map` the normalization of a role's task map.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     time::{Duration, Instant},
 };
 
-use self::task_map::{compute_active_revoke_split, normalize_task_map};
+use self::current_assignment::{TaskOwners, next_member_state};
 use super::super::expired_member_ids;
 
+mod current_assignment;
 mod member;
 mod phase;
 mod task_map;
@@ -54,6 +52,7 @@ mod task_map;
 mod test_support;
 
 pub use self::{
+    current_assignment::RoleTasks,
     member::{StreamsMemberAssignmentState, StreamsMemberState},
     phase::StreamsGroupStatePhase,
 };
@@ -105,6 +104,11 @@ pub struct StreamsGroupState {
     /// `ShutdownApplication`). Kafka keeps it in memory only and clears it
     /// when the group becomes empty.
     pub shutdown_request_member_id: Option<String>,
+    /// The armed rebalance timeouts, by member id: the instant each one fires
+    /// and the member epoch that armed it. Kafka's
+    /// `scheduleStreamsGroupRebalanceTimeout` keeps the same deadline in a
+    /// timer.
+    pub rebalance_deadlines: HashMap<String, (Instant, i32)>,
     /// Kafka's `StreamsGroup.endpointInformationEpoch`: bumped when the user
     /// endpoint of a member changes, or the tasks of a member with an
     /// endpoint change. A member whose last seen epoch differs gets the
@@ -126,6 +130,7 @@ impl StreamsGroupState {
             phase: StreamsGroupStatePhase::Empty,
             status: None,
             shutdown_request_member_id: None,
+            rebalance_deadlines: HashMap::new(),
             endpoint_information_epoch: 0,
         }
     }
@@ -163,6 +168,7 @@ impl StreamsGroupState {
     /// the group dirty only on a real removal.
     pub fn remove_member(&mut self, member_id: &str) -> Option<StreamsMemberState> {
         let m = self.members.remove(member_id);
+        self.rebalance_deadlines.remove(member_id);
         if m.is_some() {
             self.dirty = true;
             self.clear_shutdown_request_when_empty();
@@ -183,6 +189,7 @@ impl StreamsGroupState {
         );
         for id in &evicted {
             self.members.remove(id);
+            self.rebalance_deadlines.remove(id);
         }
         if !evicted.is_empty() {
             self.dirty = true;
@@ -212,48 +219,13 @@ impl StreamsGroupState {
     /// Installs a newly computed target assignment, stamped at the current
     /// group epoch, which becomes the new `assignment_epoch`.
     ///
-    /// For every current member, this method computes the **active**
-    /// revoke-split. Any active task the member owns that is *not* in its new
-    /// active target moves into `active_pending_revocation`. If the method
-    /// revoked anything, the member moves to
-    /// [`StreamsMemberAssignmentState::UnrevokedActiveTasks`]; otherwise it
-    /// stays at or returns to `Stable`. The method trims the member's assigned
-    /// `active` set to the tasks it keeps, the intersection of current and
-    /// target.
-    ///
-    /// This method does *not* install standby and warmup.
-    /// [`Self::advance_member_epoch`] hands those over as a whole, so the
-    /// member keeps serving its old standby and warmup tasks until it
-    /// advances.
+    /// The members keep their current assignment. Each one reconciles toward
+    /// the new target in its own heartbeat through [`Self::reconcile_member`],
+    /// as Kafka's `maybeReconcile` does.
     pub fn install_target(&mut self, target: StreamsTargetAssignment) {
         self.assignment_epoch = self.group_epoch;
         self.target = target;
         self.target.epoch = self.assignment_epoch;
-
-        for (mid, member) in &mut self.members {
-            let target_active = self.target.active.get(mid).cloned().unwrap_or_default();
-            let mut held = member.active.clone();
-            for (subtopology, partitions) in &member.active_pending_revocation {
-                held.entry(subtopology.clone())
-                    .or_default()
-                    .extend(partitions.iter().copied());
-            }
-            // `compute_active_revoke_split` returns (keep, revoke): tasks the
-            // member retains (current ∩ target) first, tasks it must give up
-            // (current \ target) second.
-            let (keep, revoke) = compute_active_revoke_split(&held, &target_active);
-            member.active = keep;
-            member.active_pending_revocation = revoke;
-            member.assignment_state = if member.active_pending_revocation.is_empty() {
-                if task_map_covers(&member.active, &target_active) {
-                    StreamsMemberAssignmentState::Stable
-                } else {
-                    StreamsMemberAssignmentState::UnreleasedActiveTasks
-                }
-            } else {
-                StreamsMemberAssignmentState::UnrevokedActiveTasks
-            };
-        }
     }
 
     /// Validates the `member_epoch` of a heartbeat from `member_id`, as Kafka's
@@ -291,175 +263,155 @@ impl StreamsGroupState {
         }
     }
 
-    /// Advances a member to the current assignment epoch and gives it the full
-    /// target that the latest reconcile allotted to it.
+    /// Kafka's `maybeReconcile`: moves the current assignment of `member_id`
+    /// toward its target at the assignment epoch. Returns `true` when the
+    /// member changed.
     ///
-    /// The method records `previous_member_epoch`, installs the member's
-    /// target standby and warmup sets as its assigned sets. Active tasks use
-    /// [`Self::reconcile_member`] so a task remains withheld while another
-    /// member still owns it or has it pending revocation.
-    pub fn advance_member_epoch(&mut self, member_id: &str) {
-        let standby = self
-            .target
-            .standby
-            .get(member_id)
-            .cloned()
-            .unwrap_or_default();
-        let warmup = self
-            .target
-            .warmup
-            .get(member_id)
-            .cloned()
-            .unwrap_or_default();
-        let epoch = self.assignment_epoch;
-        if let Some(m) = self.members.get_mut(member_id) {
-            m.previous_member_epoch = m.member_epoch;
-            m.member_epoch = epoch;
-            m.standby = normalize_task_map(standby);
-            m.warmup = normalize_task_map(warmup);
-        }
-    }
-
-    /// Reconciles one member's reported active ownership against the current
-    /// target and withholds tasks still held by another member.
-    ///
-    /// A report can release a task the member previously held, but it cannot
-    /// claim a task the coordinator never granted. Target tasks are granted
-    /// only when they are already held by this member or are free. The method
-    /// returns `true` when the current or pending assignment changed.
-    pub fn reconcile_member(
-        &mut self,
-        member_id: &str,
-        reported_active: &BTreeMap<String, Vec<i32>>,
-    ) -> bool {
-        let target = self
-            .target
-            .active
-            .get(member_id)
-            .cloned()
-            .unwrap_or_default();
+    /// `owned` holds the tasks that the heartbeat reports, and it is `Some`
+    /// only when the heartbeat reports all three roles. A member that must
+    /// revoke tasks keeps its epoch until a heartbeat no longer reports them.
+    pub fn reconcile_member(&mut self, member_id: &str, owned: Option<&RoleTasks>) -> bool {
         let Some(member) = self.members.get(member_id) else {
             return false;
         };
-
-        let mut previously_held = member.active.clone();
-        for (subtopology, partitions) in &member.active_pending_revocation {
-            previously_held
-                .entry(subtopology.clone())
-                .or_default()
-                .extend(partitions.iter().copied());
+        if member.assignment_state == StreamsMemberAssignmentState::Stable
+            && member.member_epoch == self.target.epoch
+        {
+            return false;
         }
-        let previously_held = normalize_task_map(previously_held);
-
-        let mut held_by_others = HashSet::new();
-        for (other_id, other) in &self.members {
-            if other_id == member_id {
-                continue;
-            }
-            for (subtopology, partitions) in other
+        let target = RoleTasks {
+            active: self
+                .target
                 .active
-                .iter()
-                .chain(other.active_pending_revocation.iter())
-            {
-                for &partition in partitions {
-                    held_by_others.insert((subtopology.clone(), partition));
-                }
-            }
-        }
-
-        let reported: HashSet<(String, i32)> = reported_active
-            .iter()
-            .flat_map(|(subtopology, partitions)| {
-                partitions
-                    .iter()
-                    .map(|&partition| (subtopology.clone(), partition))
-            })
-            .collect();
-        let held_here: HashSet<(String, i32)> = previously_held
-            .iter()
-            .flat_map(|(subtopology, partitions)| {
-                partitions
-                    .iter()
-                    .map(|&partition| (subtopology.clone(), partition))
-            })
-            .collect();
-
-        let mut active = BTreeMap::new();
-        let mut fully_assigned = true;
-        for (subtopology, partitions) in &target {
-            for &partition in partitions {
-                let task = (subtopology.clone(), partition);
-                let still_owned_here = held_here.contains(&task) && reported.contains(&task);
-                let free = !held_by_others.contains(&task);
-                if still_owned_here || free {
-                    active
-                        .entry(subtopology.clone())
-                        .or_insert_with(Vec::new)
-                        .push(partition);
-                } else {
-                    fully_assigned = false;
-                }
-            }
-        }
-
-        let mut pending = BTreeMap::new();
-        for (subtopology, partitions) in &previously_held {
-            let target_partitions: HashSet<i32> = target
-                .get(subtopology)
-                .into_iter()
-                .flatten()
-                .copied()
-                .collect();
-            for &partition in partitions {
-                let task = (subtopology.clone(), partition);
-                if reported.contains(&task) && !target_partitions.contains(&partition) {
-                    pending
-                        .entry(subtopology.clone())
-                        .or_insert_with(Vec::new)
-                        .push(partition);
-                }
-            }
-        }
-
-        let active = normalize_task_map(active);
-        let pending = normalize_task_map(pending);
-        let Some(member) = self.members.get_mut(member_id) else {
+                .get(member_id)
+                .cloned()
+                .unwrap_or_default(),
+            standby: self
+                .target
+                .standby
+                .get(member_id)
+                .cloned()
+                .unwrap_or_default(),
+            warmup: self
+                .target
+                .warmup
+                .get(member_id)
+                .cloned()
+                .unwrap_or_default(),
+        };
+        let owners = TaskOwners::of(self.members.values());
+        let Some(next) = next_member_state(member, self.target.epoch, &target, &owners, owned)
+        else {
             return false;
         };
-        let changed = member.active != active || member.active_pending_revocation != pending;
-        member.active = active;
-        member.active_pending_revocation = pending;
-        member.assignment_state = if !member.active_pending_revocation.is_empty() {
-            StreamsMemberAssignmentState::UnrevokedActiveTasks
-        } else if fully_assigned {
-            StreamsMemberAssignmentState::Stable
-        } else {
-            StreamsMemberAssignmentState::UnreleasedActiveTasks
-        };
-
-        if self.phase == StreamsGroupStatePhase::Reconciling
-            && self
-                .members
-                .values()
-                .all(|member| member.assignment_state == StreamsMemberAssignmentState::Stable)
-        {
-            self.phase = StreamsGroupStatePhase::Stable;
-        }
+        let changed = next.member_epoch != member.member_epoch
+            || next.previous_member_epoch != member.previous_member_epoch
+            || next.assignment_state != member.assignment_state
+            || next.active != member.active
+            || next.standby != member.standby
+            || next.warmup != member.warmup
+            || next.active_pending_revocation != member.active_pending_revocation
+            || next.standby_pending_revocation != member.standby_pending_revocation
+            || next.warmup_pending_revocation != member.warmup_pending_revocation;
+        self.members.insert(member_id.to_string(), next);
+        self.refresh_phase();
         changed
     }
-}
 
-fn task_map_covers(
-    assigned: &BTreeMap<String, Vec<i32>>,
-    target: &BTreeMap<String, Vec<i32>>,
-) -> bool {
-    target.iter().all(|(subtopology, partitions)| {
-        partitions.iter().all(|partition| {
-            assigned
-                .get(subtopology)
-                .is_some_and(|assigned| assigned.contains(partition))
-        })
-    })
+    /// Arms or cancels the rebalance timeout of `member_id` after its
+    /// assignment changed, as Kafka's `maybeReconcile` does: a member in
+    /// `UnrevokedTasks` must revoke within its `rebalance_timeout_ms`, and any
+    /// other state cancels the timeout.
+    pub fn track_rebalance_timeout(&mut self, member_id: &str, now: Instant) {
+        match self.members.get(member_id) {
+            Some(member)
+                if member.assignment_state == StreamsMemberAssignmentState::UnrevokedTasks =>
+            {
+                let timeout =
+                    Duration::from_millis(u64::try_from(member.rebalance_timeout_ms).unwrap_or(0));
+                self.rebalance_deadlines
+                    .insert(member_id.to_string(), (now + timeout, member.member_epoch));
+            }
+            _ => {
+                self.rebalance_deadlines.remove(member_id);
+            }
+        }
+    }
+
+    /// The earliest armed rebalance deadline, so that the actor can wake at
+    /// it.
+    #[must_use]
+    pub fn next_rebalance_deadline(&self) -> Option<Instant> {
+        self.rebalance_deadlines
+            .values()
+            .map(|(deadline, _)| *deadline)
+            .min()
+    }
+
+    /// Removes every member whose rebalance timeout fired at `now` while it
+    /// was still at the epoch that armed it, and returns the removed ids,
+    /// sorted. This is the fence of Kafka's
+    /// `scheduleStreamsGroupRebalanceTimeout`.
+    pub fn fence_rebalance_timeouts(&mut self, now: Instant) -> Vec<String> {
+        let mut fenced: Vec<String> = self
+            .rebalance_deadlines
+            .iter()
+            .filter(|(member_id, (deadline, epoch))| {
+                now >= *deadline
+                    && self
+                        .members
+                        .get(*member_id)
+                        .is_some_and(|member| member.member_epoch == *epoch)
+            })
+            .map(|(member_id, _)| member_id.clone())
+            .collect();
+        self.rebalance_deadlines
+            .retain(|_, (deadline, _)| now < *deadline);
+        fenced.sort_unstable();
+        for member_id in &fenced {
+            self.remove_member(member_id);
+        }
+        fenced
+    }
+
+    /// Arms the rebalance timeout of every member in `UnrevokedTasks`, as
+    /// Kafka's `onLoaded` does for a loaded group.
+    pub fn arm_loaded_rebalance_timeouts(&mut self, now: Instant) {
+        let unrevoked: Vec<String> = self
+            .members
+            .values()
+            .filter(|member| {
+                member.assignment_state == StreamsMemberAssignmentState::UnrevokedTasks
+            })
+            .map(|member| member.member_id.clone())
+            .collect();
+        for member_id in unrevoked {
+            self.track_rebalance_timeout(&member_id, now);
+        }
+    }
+
+    /// Kafka's `StreamsGroup.maybeUpdateGroupState` for a group with a ready
+    /// topology: `Empty` with no members, `Reconciling` while a member is not
+    /// reconciled to the assignment epoch, and `Stable` otherwise. A
+    /// `NotReady` group stays `NotReady` until a target is computed.
+    pub fn refresh_phase(&mut self) {
+        if self.members.is_empty() {
+            self.phase = StreamsGroupStatePhase::Empty;
+            return;
+        }
+        if self.phase == StreamsGroupStatePhase::NotReady {
+            return;
+        }
+        let reconciled = self.members.values().all(|member| {
+            member.assignment_state == StreamsMemberAssignmentState::Stable
+                && member.member_epoch == self.target.epoch
+        });
+        self.phase = if reconciled {
+            StreamsGroupStatePhase::Stable
+        } else {
+            StreamsGroupStatePhase::Reconciling
+        };
+    }
 }
 
 /// The tasks that a `StreamsGroupHeartbeat` reports as owned: `None` when the
@@ -585,153 +537,313 @@ mod tests {
         check!(g.dirty);
     }
 
-    #[test]
-    fn install_target_moves_vanished_active_to_pending_and_keeps_kept() {
-        let mut g = StreamsGroupState::new("g");
-        let mut m = StreamsMemberState::joining("m1", "c1", "h1");
-        m.active = task_map(&[("sub0", &[0, 1, 2])]);
-        g.add_or_update_member(m);
-        g.group_epoch = 7;
-
-        // New active target keeps {0,1} and drops {2}.
-        let mut target = StreamsTargetAssignment::default();
-        target
-            .active
-            .insert("m1".to_string(), task_map(&[("sub0", &[0, 1])]));
-        g.install_target(target);
-
-        let m = &g.members["m1"];
-        check!(g.assignment_epoch == 7);
-        check!(g.target.epoch == 7);
-        check!(m.active == task_map(&[("sub0", &[0, 1])]));
-        check!(m.active_pending_revocation == task_map(&[("sub0", &[2])]));
-        check!(m.assignment_state == StreamsMemberAssignmentState::UnrevokedActiveTasks);
+    /// A member of the table: its process id, state, epoch, and assigned and
+    /// pending tasks of subtopology `s`, active then standby.
+    struct Member {
+        id: &'static str,
+        process: &'static str,
+        state: StreamsMemberAssignmentState,
+        epoch: i32,
+        active: &'static [i32],
+        standby: &'static [i32],
+        active_pending: &'static [i32],
+        standby_pending: &'static [i32],
     }
 
-    #[test]
-    fn install_target_with_unreleased_task_waits() {
-        let mut g = StreamsGroupState::new("g");
-        let mut m = StreamsMemberState::joining("m1", "c1", "h1");
-        m.active = task_map(&[("sub0", &[0, 1])]);
-        g.add_or_update_member(m);
-        g.group_epoch = 2;
-
-        let mut target = StreamsTargetAssignment::default();
-        // Target is a superset — nothing to revoke.
-        target
-            .active
-            .insert("m1".to_string(), task_map(&[("sub0", &[0, 1, 2])]));
-        g.install_target(target);
-
-        let m = &g.members["m1"];
-        // Kept = intersection of current and target = {0,1}; the new {2} is not
-        // installed until the member advances its epoch.
-        check!(m.active == task_map(&[("sub0", &[0, 1])]));
-        check!(m.active_pending_revocation.is_empty());
-        check!(m.assignment_state == StreamsMemberAssignmentState::UnreleasedActiveTasks);
+    const fn stable(id: &'static str, process: &'static str, epoch: i32) -> Member {
+        Member {
+            id,
+            process,
+            state: StreamsMemberAssignmentState::Stable,
+            epoch,
+            active: &[],
+            standby: &[],
+            active_pending: &[],
+            standby_pending: &[],
+        }
     }
 
-    #[test]
-    fn install_target_retry_preserves_pending_revocation() {
-        let mut g = StreamsGroupState::new("g");
-        let mut m = StreamsMemberState::joining("m1", "c1", "h1");
-        m.active = task_map(&[("sub0", &[0, 1])]);
-        g.add_or_update_member(m);
-        g.group_epoch = 2;
-
-        let mut target = StreamsTargetAssignment::default();
-        target
-            .active
-            .insert("m1".to_string(), task_map(&[("sub0", &[0])]));
-        g.install_target(target.clone());
-        g.install_target(target);
-
-        let m = &g.members["m1"];
-        check!(m.active == task_map(&[("sub0", &[0])]));
-        check!(m.active_pending_revocation == task_map(&[("sub0", &[1])]));
-        check!(m.assignment_state == StreamsMemberAssignmentState::UnrevokedActiveTasks);
+    fn tasks_of(partitions: &[i32]) -> BTreeMap<String, Vec<i32>> {
+        if partitions.is_empty() {
+            BTreeMap::new()
+        } else {
+            task_map(&[("s", partitions)])
+        }
     }
 
-    #[test]
-    fn advance_member_epoch_installs_free_roles_and_reconcile_clears_revocation() {
-        let mut g = StreamsGroupState::new("g");
-        let mut m = StreamsMemberState::joining("m1", "c1", "h1");
-        m.active = task_map(&[("sub0", &[0, 1, 2])]);
-        g.add_or_update_member(m);
-        g.group_epoch = 9;
+    type Expected = (
+        bool,
+        StreamsMemberAssignmentState,
+        i32,
+        &'static [i32],
+        &'static [i32],
+        &'static [i32],
+        &'static [i32],
+    );
 
-        let mut target = StreamsTargetAssignment::default();
-        target
-            .active
-            .insert("m1".to_string(), task_map(&[("sub0", &[0, 1])]));
-        target
-            .standby
-            .insert("m1".to_string(), task_map(&[("sub1", &[3])]));
-        target
-            .warmup
-            .insert("m1".to_string(), task_map(&[("sub2", &[4, 5])]));
-        g.install_target(target);
+    /// One row: the name, `m1`, another member, the target active and standby
+    /// tasks of `m1`, the owned active and standby tasks of its heartbeat or
+    /// `None`, and the expected (changed, state, epoch, active, standby, active
+    /// pending, standby pending) of `m1`.
+    type BuilderRow = (
+        &'static str,
+        Member,
+        Option<Member>,
+        &'static [i32],
+        &'static [i32],
+        Option<(&'static [i32], &'static [i32])>,
+        Expected,
+    );
 
-        // After install the member is mid-revocation.
-        assert!(
-            g.members["m1"].assignment_state == StreamsMemberAssignmentState::UnrevokedActiveTasks
-        );
+    fn builder_rows() -> Vec<BuilderRow> {
+        use StreamsMemberAssignmentState::{Stable, UnreleasedTasks, UnrevokedTasks};
 
-        g.advance_member_epoch("m1");
-        let reported = task_map(&[("sub0", &[0, 1])]);
-        assert!(g.reconcile_member("m1", &reported));
-        let m = &g.members["m1"];
-        check!(m.member_epoch == 9);
-        check!(m.previous_member_epoch == 0);
-        check!(m.active == task_map(&[("sub0", &[0, 1])]));
-        check!(m.standby == task_map(&[("sub1", &[3])]));
-        check!(m.warmup == task_map(&[("sub2", &[4, 5])]));
-        check!(m.active_pending_revocation.is_empty());
-        check!(m.assignment_state == StreamsMemberAssignmentState::Stable);
+        vec![
+            (
+                "a stable member takes the new tasks at the target epoch",
+                Member {
+                    active: &[0],
+                    ..stable("m1", "p1", 1)
+                },
+                None,
+                &[0, 1],
+                &[],
+                Some((&[0], &[])),
+                (true, Stable, 2, &[0, 1], &[], &[], &[]),
+            ),
+            (
+                "a member keeps its epoch while it owns a revoked task",
+                Member {
+                    active: &[0, 1],
+                    ..stable("m1", "p1", 1)
+                },
+                None,
+                &[0],
+                &[],
+                Some((&[0, 1], &[])),
+                (true, UnrevokedTasks, 1, &[0], &[], &[1], &[]),
+            ),
+            (
+                "a member that reports no tasks has nothing to revoke",
+                Member {
+                    active: &[0, 1],
+                    ..stable("m1", "p1", 1)
+                },
+                None,
+                &[0],
+                &[],
+                Some((&[], &[])),
+                (true, Stable, 2, &[0], &[], &[], &[]),
+            ),
+            (
+                "an unrevoked member moves on once it stops reporting the task",
+                Member {
+                    state: UnrevokedTasks,
+                    active: &[0],
+                    active_pending: &[1],
+                    ..stable("m1", "p1", 1)
+                },
+                None,
+                &[0],
+                &[],
+                Some((&[0], &[])),
+                (true, Stable, 2, &[0], &[], &[], &[]),
+            ),
+            (
+                "an unrevoked member that still reports the task waits",
+                Member {
+                    state: UnrevokedTasks,
+                    active: &[0],
+                    active_pending: &[1],
+                    ..stable("m1", "p1", 1)
+                },
+                None,
+                &[0],
+                &[],
+                Some((&[0, 1], &[])),
+                (false, UnrevokedTasks, 1, &[0], &[], &[1], &[]),
+            ),
+            (
+                "an unrevoked member without owned tasks waits",
+                Member {
+                    state: UnrevokedTasks,
+                    active: &[0],
+                    active_pending: &[1],
+                    ..stable("m1", "p1", 1)
+                },
+                None,
+                &[0],
+                &[],
+                None,
+                (false, UnrevokedTasks, 1, &[0], &[], &[1], &[]),
+            ),
+            (
+                "an active task that another member still owns is held back",
+                stable("m1", "p1", 1),
+                Some(Member {
+                    state: UnrevokedTasks,
+                    active_pending: &[1],
+                    ..stable("m2", "p2", 1)
+                }),
+                &[0, 1],
+                &[],
+                Some((&[], &[])),
+                (true, UnreleasedTasks, 2, &[0], &[], &[], &[]),
+            ),
+            (
+                "a standby task that the same process runs as active is held back",
+                stable("m1", "p1", 1),
+                Some(Member {
+                    active: &[0],
+                    ..stable("m2", "p1", 1)
+                }),
+                &[],
+                &[0],
+                Some((&[], &[])),
+                (true, UnreleasedTasks, 2, &[], &[], &[], &[]),
+            ),
+            (
+                "a standby task that another process runs as active is given",
+                stable("m1", "p1", 1),
+                Some(Member {
+                    active: &[0],
+                    ..stable("m2", "p2", 1)
+                }),
+                &[],
+                &[0],
+                Some((&[], &[])),
+                (true, Stable, 2, &[], &[0], &[], &[]),
+            ),
+            (
+                "a revoked standby task waits for its release",
+                Member {
+                    standby: &[0],
+                    ..stable("m1", "p1", 1)
+                },
+                None,
+                &[],
+                &[],
+                Some((&[], &[0])),
+                (true, UnrevokedTasks, 1, &[], &[], &[], &[0]),
+            ),
+        ]
     }
 
+    /// Kafka's `CurrentAssignmentBuilder`. Each row puts `m1` and maybe a
+    /// second member in a group with a target at epoch 2, reconciles `m1`
+    /// with the owned tasks of its heartbeat, and compares the whole
+    /// reconciliation state of `m1` afterwards.
     #[test]
-    fn active_task_waits_for_previous_owner_to_release() {
-        let mut g = StreamsGroupState::new("g");
-        let mut owner = StreamsMemberState::joining("m1", "c1", "h1");
-        owner.active = task_map(&[("sub0", &[0, 1])]);
-        g.add_or_update_member(owner);
-        g.add_or_update_member(StreamsMemberState::joining("m2", "c2", "h2"));
-        g.group_epoch = 2;
+    fn reconcile_member_follows_kafka_current_assignment_builder() {
+        let rows = builder_rows();
+        for (name, m1, other, target_active, target_standby, owned, expected) in rows {
+            let mut group = StreamsGroupState::new("g");
+            group.group_epoch = 2;
+            for member in std::iter::once(m1).chain(other) {
+                let mut state = StreamsMemberState::joining(member.id, "c", "h");
+                state.process_id = member.process.to_string();
+                state.assignment_state = member.state;
+                state.member_epoch = member.epoch;
+                state.active = tasks_of(member.active);
+                state.standby = tasks_of(member.standby);
+                state.active_pending_revocation = tasks_of(member.active_pending);
+                state.standby_pending_revocation = tasks_of(member.standby_pending);
+                group.members.insert(member.id.to_string(), state);
+            }
+            let mut target = StreamsTargetAssignment::default();
+            target.active.insert("m1".into(), tasks_of(target_active));
+            target.standby.insert("m1".into(), tasks_of(target_standby));
+            group.install_target(target);
+            let owned = owned.map(|(active, standby)| RoleTasks {
+                active: tasks_of(active),
+                standby: tasks_of(standby),
+                warmup: BTreeMap::new(),
+            });
 
-        let mut target = StreamsTargetAssignment::default();
-        target
-            .active
-            .insert("m1".to_string(), task_map(&[("sub0", &[0])]));
-        target
-            .active
-            .insert("m2".to_string(), task_map(&[("sub0", &[1])]));
-        g.install_target(target);
+            let changed = group.reconcile_member("m1", owned.as_ref());
 
-        g.advance_member_epoch("m2");
-        g.reconcile_member("m2", &BTreeMap::new());
-        check!(g.members["m2"].active.is_empty());
-        check!(
-            g.members["m2"].assignment_state == StreamsMemberAssignmentState::UnreleasedActiveTasks
-        );
-
-        g.reconcile_member("m1", &task_map(&[("sub0", &[0])]));
-        g.reconcile_member("m2", &BTreeMap::new());
-        check!(g.members["m1"].active == task_map(&[("sub0", &[0])]));
-        check!(g.members["m2"].active == task_map(&[("sub0", &[1])]));
-        check!(g.members["m1"].active_pending_revocation.is_empty());
-        check!(g.members["m2"].assignment_state == StreamsMemberAssignmentState::Stable);
+            let m1 = &group.members["m1"];
+            let (
+                e_changed,
+                e_state,
+                e_epoch,
+                e_active,
+                e_standby,
+                e_active_pending,
+                e_standby_pending,
+            ) = expected;
+            check!(
+                (
+                    changed,
+                    m1.assignment_state,
+                    m1.member_epoch,
+                    m1.active.clone(),
+                    m1.standby.clone(),
+                    m1.active_pending_revocation.clone(),
+                    m1.standby_pending_revocation.clone(),
+                ) == (
+                    e_changed,
+                    e_state,
+                    e_epoch,
+                    tasks_of(e_active),
+                    tasks_of(e_standby),
+                    tasks_of(e_active_pending),
+                    tasks_of(e_standby_pending),
+                ),
+                "{name}"
+            );
+        }
     }
 
+    /// Kafka's `scheduleStreamsGroupRebalanceTimeout`: a member that enters
+    /// `UnrevokedTasks` must revoke within its rebalance timeout, or it is
+    /// removed. A member that left that state is not.
     #[test]
-    fn malformed_report_cannot_claim_ungranted_task() {
-        let mut g = StreamsGroupState::new("g");
-        g.add_or_update_member(StreamsMemberState::joining("m1", "c1", "h1"));
-        g.group_epoch = 1;
-        g.install_target(StreamsTargetAssignment::default());
+    fn a_member_past_its_rebalance_timeout_is_fenced() {
+        let rows = [
+            (
+                "still unrevoked at the deadline",
+                false,
+                vec!["m1".to_string()],
+            ),
+            ("revoked before the deadline", true, vec![]),
+        ];
+        for (name, revokes, fenced) in rows {
+            let mut group = StreamsGroupState::new("g");
+            let mut m1 = StreamsMemberState::joining("m1", "c", "h");
+            m1.member_epoch = 1;
+            m1.rebalance_timeout_ms = 100;
+            m1.active = tasks_of(&[0, 1]);
+            group.members.insert("m1".into(), m1);
+            group.group_epoch = 2;
+            let mut target = StreamsTargetAssignment::default();
+            target.active.insert("m1".into(), tasks_of(&[0]));
+            group.install_target(target);
+            let now = Instant::now();
+            let owned = |active: &[i32]| RoleTasks {
+                active: tasks_of(active),
+                ..RoleTasks::default()
+            };
 
-        g.reconcile_member("m1", &task_map(&[("unknown", &[-1, 99])]));
-        check!(g.members["m1"].active.is_empty());
-        check!(g.members["m1"].active_pending_revocation.is_empty());
+            check!(
+                group.reconcile_member("m1", Some(&owned(&[0, 1]))),
+                "{name}"
+            );
+            group.track_rebalance_timeout("m1", now);
+            if revokes && group.reconcile_member("m1", Some(&owned(&[0]))) {
+                group.track_rebalance_timeout("m1", now);
+            }
+
+            check!(
+                group
+                    .fence_rebalance_timeouts(now + Duration::from_millis(99))
+                    .is_empty(),
+                "{name}"
+            );
+            check!(
+                group.fence_rebalance_timeouts(now + Duration::from_millis(100)) == fenced,
+                "{name}"
+            );
+        }
     }
 }

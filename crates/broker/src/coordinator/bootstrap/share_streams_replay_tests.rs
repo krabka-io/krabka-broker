@@ -176,6 +176,8 @@ async fn streams_group_records_replay_into_seed() {
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),
                 active_pending_revocation: BTreeMap::new(),
+                standby_pending_revocation: BTreeMap::new(),
+                warmup_pending_revocation: BTreeMap::new(),
             }
             .encode(),
         ),
