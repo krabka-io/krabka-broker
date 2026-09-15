@@ -405,6 +405,7 @@ Validated operational policy loaded from `[runtime]`.
 | `coordinator_session_expiry_tick` | string | broker default | duration | Cadence of the consumer-group session expiry scan. |
 | `coordinator_shutdown_ack_timeout` | string | broker default | duration | Maximum wait for coordinator shutdown acknowledgements. |
 | `default_min_insync_replicas` | integer (int32) | broker default |  | Broker default for a topic's `min.insync.replicas`, Kafka's `min.insync.replicas`. A topic override wins over it. |
+| `default_replication_factor` | integer (int16) | broker default |  | Replication factor of a topic that `CreateTopics` creates with `replication_factor = -1`, Kafka's `default.replication.factor`. |
 | `delegation_token_default_renew_period` | string | broker default | duration | KIP-48: default renew period, Kafka's `delegation.token.expiry.time.ms`. It is the initial expiry offset at create time, and the implicit renew period when a `RenewDelegationToken` request asks for `-1`. |
 | `delegation_token_expiry_check_interval` | string | broker default | duration | KIP-48: cadence of the sweep that tombstones expired delegation tokens, Kafka's `delegation.token.expiry.check.interval.ms`. |
 | `delegation_token_max_lifetime` | string | broker default | duration | KIP-48: hard upper bound on a delegation token's lifetime, Kafka's `delegation.token.max.lifetime.ms`. A renew request is clamped to it. |
@@ -439,6 +440,7 @@ Validated operational policy loaded from `[runtime]`.
 | `metadata_raft_fetch_max` | string | broker default | byte size | Per-read and per-snapshot-request byte budget on the metadata Raft log. |
 | `metadata_snapshot_fetch_max` | string | broker default | byte size | Maximum metadata snapshot size a follower fetches. The Raft core enforces an immutable 1 GiB ceiling above it. |
 | `metadata_snapshot_interval_records` | integer (uint64) | broker default |  | KIP-630: snapshot the metadata log once the committed offset advances this many records past the last snapshot, then prune below it. |
+| `num_partitions` | integer (int32) | broker default |  | Partition count of a topic that `CreateTopics` creates with `num_partitions = -1`, Kafka's `num.partitions`. |
 | `oauth_jwks_http_timeout` | string | broker default | duration | Timeout for one OAuth JWKS fetch. |
 | `observer_fetch_max` | string | broker default | byte size | Maximum bytes fetched by one metadata observer request. |
 | `observer_lag_bound` | integer (uint64) | broker default |  | KIP-853: maximum log-entry lag an observer may have and still be promotable to a voter. |

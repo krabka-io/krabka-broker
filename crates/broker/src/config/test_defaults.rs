@@ -132,6 +132,8 @@ impl BrokerConfig {
             max_produce_group: 1_024,
             partition_writer_queue_depth: 64,
             default_min_insync_replicas: 1,
+            num_partitions: 1,
+            default_replication_factor: 1,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
             offsets_retention_override: None,

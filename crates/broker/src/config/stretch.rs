@@ -40,9 +40,8 @@ impl BrokerConfig {
     /// roles must agree with the site it names.
     ///
     /// The durability check reads the replication factor from
-    /// [`offsets_topic_replication_factor`][Self::offsets_topic_replication_factor].
-    /// The broker has no `default.replication.factor` knob, and that field is
-    /// the broker-wide replication factor it applies to the topics it creates
+    /// [`offsets_topic_replication_factor`][Self::offsets_topic_replication_factor],
+    /// the replication factor the broker applies to the topics it creates
     /// itself.
     pub(super) fn validate_stretch(&self) -> Result<(), BrokerError> {
         let Some(profile) = self.stretch.as_ref() else {
