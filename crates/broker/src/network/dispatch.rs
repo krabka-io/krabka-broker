@@ -119,7 +119,7 @@ use self::{
     guards::{ActiveConnectionGuard, InFlightGuard, QueuedRequestGuard},
     registry::{DispatchContext, send_registry_response},
     response::{ResponseShape, apply_request_quota, encode_response},
-    sasl::{SaslFrameOutcome, try_handle_sasl_frame},
+    sasl::{SaslFrameOutcome, SaslListener, try_handle_sasl_frame},
     session::{FrameWaitPolicy, initial_connection_auth, next_connection_frame},
 };
 use crate::{broker::Broker, codes, handlers::ApiKeyCode, network::codec};
@@ -343,7 +343,11 @@ async fn serve_connection_stream<S>(
     // Resolved once, like the idle window: the listener's KIP-368
     // re-authentication window, which every mechanism handler clamps its
     // session to.
-    let max_reauth = broker.config.connections_max_reauth_for(&spec.name);
+    let sasl_listener = SaslListener {
+        is_sasl: is_sasl_listener,
+        mechanisms: &sasl_mechanisms,
+        max_reauth: broker.config.connections_max_reauth_for(&spec.name),
+    };
     let frame_wait = FrameWaitPolicy {
         idle: broker.config.connections_max_idle_for(&spec.name),
         peer,
@@ -504,16 +508,10 @@ async fn serve_connection_stream<S>(
         // table because handlers receive only `&Broker` and have no way to
         // touch `auth`. Returning `Some(SaslFrameOutcome)` short-circuits
         // the normal registry path for that frame.
-        if let Some(outcome) = try_handle_sasl_frame(
-            &broker,
-            &parsed,
-            &mut auth,
-            &sasl_mechanisms,
-            max_reauth,
-            &peer,
-        )
-        .instrument(req_span.clone())
-        .await
+        if let Some(outcome) =
+            try_handle_sasl_frame(&broker, &parsed, &mut auth, &sasl_listener, &peer)
+                .instrument(req_span.clone())
+                .await
         {
             let SaslFrameOutcome {
                 response_bytes,
