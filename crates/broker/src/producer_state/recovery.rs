@@ -106,11 +106,17 @@ impl ProducerState {
             // The log keeps only the last batch. A marker that leaves the
             // producer at its epoch and its last batch (transaction version 1)
             // keeps the earlier batches too, as Kafka's retained batches do.
+            // The marker moves the log entry's timestamp to its own, but
+            // Kafka's `ProducerStateEntry.update` for a marker keeps the
+            // retained `BatchMetadata`, with the data batch's timestamp.
             if let Some(tracked) = state.entries.get(&entry.producer_id)
                 && tracked.epoch == mirrored.epoch
-                && tracked.last_batch() == mirrored.last_batch()
+                && tracked.last_sequence == mirrored.last_sequence
+                && tracked.base_offset == mirrored.base_offset
+                && tracked.last_offset == mirrored.last_offset
             {
                 mirrored.earlier = tracked.earlier;
+                mirrored.last_timestamp = tracked.last_timestamp;
             }
             state.entries.insert(entry.producer_id, mirrored);
         }

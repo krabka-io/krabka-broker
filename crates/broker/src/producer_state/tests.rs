@@ -363,7 +363,8 @@ async fn a_marker_mirror_keeps_the_earlier_batches_only_at_the_same_epoch() {
             last_sequence,
             last_offset: krabka_log::Offset(last_offset),
             offset_delta: 0,
-            timestamp: 2,
+            // The marker's own timestamp, which differs from the data batch.
+            timestamp: 9,
             coordinator_epoch: 0,
             current_txn_first_offset: None,
         };
@@ -372,14 +373,16 @@ async fn a_marker_mirror_keeps_the_earlier_batches_only_at_the_same_epoch() {
             "transaction version 1 marker",
             marker_entry(0, 1, 1),
             Decision::Duplicate { base_offset: 0 },
+            2,
         ),
         (
             "transaction version 2 marker",
             marker_entry(1, -1, -1),
             Decision::Fenced,
+            9,
         ),
     ];
-    for (name, entry, want) in cases {
+    for (name, entry, want, last_timestamp) in cases {
         let s = ProducerState::new();
         commit!(s, "t", PartitionIndex(0), 1000, 0, 0, 0, 0, 1).await;
         commit!(s, "t", PartitionIndex(0), 1000, 0, 1, 0, 1, 2).await;
@@ -387,6 +390,10 @@ async fn a_marker_mirror_keeps_the_earlier_batches_only_at_the_same_epoch() {
             .await;
         check!(
             s.check("t", PartitionIndex(0), 1000, 0, 0, 0).await == want,
+            "{name}"
+        );
+        check!(
+            s.snapshot("t", PartitionIndex(0)).await[0].1.last_timestamp == last_timestamp,
             "{name}"
         );
     }
