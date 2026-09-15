@@ -41,23 +41,42 @@ fn at_offset(base_offset: Offset) -> AppendedBatch {
 ///
 /// The function returns the per-job results, a base offset or an error, in
 /// input order. It also returns the log-end offset after the append, for the
-/// group's HW recompute. Verbatim jobs go straight to `append_verbatim`. The
-/// function recompresses owned jobs to the topic's configured codec, which it
-/// reads once under the same lock. Control jobs skip that rewrite, because
-/// Kafka never compresses a control batch that arrived uncompressed.
-/// Sequential appends stamp sequential base offsets, so the function keeps the
-/// order across the group.
+/// group's HW recompute, and the log's producer entry for every control batch
+/// that appended, for the produce-path tracker's mirror.
+///
+/// The mirror entries are read here, under the one lock this function already
+/// holds, rather than by a second, later lock acquisition. A `std::sync::
+/// Mutex` lock taken directly on the calling async task blocks its worker
+/// thread for as long as whichever task holds the lock, and does not yield it
+/// back to the runtime the way an uncontended `.await` would. This function
+/// itself already runs off the async worker pool (see
+/// [`run_produce_append_batch`]), so a second, separate acquisition later, on
+/// the worker pool, could block a worker thread behind a concurrent
+/// `spawn_blocking` log operation such as a diskless flush's trim, starving
+/// whatever else that thread was due to run -- including, on a freshly
+/// promoted leader catching up on replicated markers across many partitions
+/// at once, this broker's own heartbeat-sending task, past the controller's
+/// liveness timeout.
+///
+/// Verbatim jobs go straight to `append_verbatim`. The function recompresses
+/// owned jobs to the topic's configured codec, which it reads once under the
+/// same lock. Control jobs skip that rewrite, because Kafka never compresses a
+/// control batch that arrived uncompressed. Sequential appends stamp
+/// sequential base offsets, so the function keeps the order across the group.
 fn append_produce_batch(
     log: &Mutex<Log>,
     datas: Vec<ProduceData>,
 ) -> (
     Vec<Result<AppendedBatch, crate::error::BrokerError>>,
     Offset,
+    Vec<krabka_log::ProducerSnapshotEntry>,
 ) {
     let mut guard = lock_log(log);
     let target = guard.config_snapshot().compression_type;
     let mut results = Vec::with_capacity(datas.len());
+    let mut control_entries = Vec::new();
     for data in datas {
+        let control_producer = data.control_producer_id();
         let r = match data {
             ProduceData::Verbatim(batch) => guard
                 .append_verbatim(&batch)
@@ -89,12 +108,18 @@ fn append_produce_batch(
                 })
                 .map_err(crate::error::BrokerError::from),
         };
+        if r.is_ok()
+            && let Some(producer_id) = control_producer
+            && let Some(entry) = guard.producer_state_entry(producer_id)
+        {
+            control_entries.push(entry);
+        }
         results.push(r);
     }
     // Read the post-append LEO once under the same lock so the HW recompute
     // reflects the whole group.
     let leo = guard.log_end_offset();
-    (results, leo)
+    (results, leo, control_entries)
 }
 
 fn append_produce_batch_at(
@@ -104,13 +129,16 @@ fn append_produce_batch_at(
 ) -> (
     Vec<Result<AppendedBatch, crate::error::BrokerError>>,
     Offset,
+    Vec<krabka_log::ProducerSnapshotEntry>,
 ) {
     let mut guard = lock_log(log);
     let target = guard.config_snapshot().compression_type;
     let mut next = base;
     let mut results = Vec::with_capacity(datas.len());
+    let mut control_entries = Vec::new();
     for data in datas {
         let count = i64::from(data.record_count());
+        let control_producer = data.control_producer_id();
         let result = match data {
             ProduceData::Verbatim(batch) => guard
                 .append_verbatim_at(&batch, next)
@@ -139,12 +167,18 @@ fn append_produce_batch_at(
                 .map(|()| at_offset(next))
                 .map_err(crate::error::BrokerError::from),
         };
+        if result.is_ok()
+            && let Some(producer_id) = control_producer
+            && let Some(entry) = guard.producer_state_entry(producer_id)
+        {
+            control_entries.push(entry);
+        }
         next = Offset(next.0 + count);
         guard.reconcile_next_offset(next);
         results.push(result);
     }
     let leo = guard.log_end_offset();
-    (results, leo)
+    (results, leo, control_entries)
 }
 
 /// Run [`append_produce_batch`] away from normal async polling.
@@ -162,6 +196,7 @@ pub(crate) async fn run_produce_append_batch(
     (
         Vec<Result<AppendedBatch, crate::error::BrokerError>>,
         Offset,
+        Vec<krabka_log::ProducerSnapshotEntry>,
     ),
     crate::error::BrokerError,
 > {
@@ -184,6 +219,7 @@ pub(crate) async fn run_produce_append_batch_at(
     (
         Vec<Result<AppendedBatch, crate::error::BrokerError>>,
         Offset,
+        Vec<krabka_log::ProducerSnapshotEntry>,
     ),
     crate::error::BrokerError,
 > {
@@ -237,7 +273,7 @@ mod tests {
         }));
         let log = Mutex::new(log);
 
-        let (results, leo) = append_produce_batch(
+        let (results, leo, _) = append_produce_batch(
             &log,
             vec![
                 ProduceData::Owned(sample_batch(1)),
@@ -265,7 +301,7 @@ mod tests {
         }));
         let log = Mutex::new(log);
 
-        let (results, leo) = append_produce_batch_at(
+        let (results, leo, _) = append_produce_batch_at(
             &log,
             Offset(0),
             vec![
@@ -282,7 +318,7 @@ mod tests {
         ));
         assert!(leo == Offset(1));
 
-        let (results, leo) =
+        let (results, leo, _) =
             append_produce_batch_at(&log, Offset(2), vec![ProduceData::Owned(sample_batch(1))]);
 
         assert!(results[0].as_ref().unwrap().base_offset == Offset(2));
@@ -306,7 +342,7 @@ mod tests {
         let original = sample_batch(2);
         assert!(original.attributes.compression() == CompressionType::None);
 
-        let (results, leo) = append_produce_batch(&log, vec![ProduceData::Owned(original)]);
+        let (results, leo, _) = append_produce_batch(&log, vec![ProduceData::Owned(original)]);
         assert!(results.len() == 1);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
         assert!(assigned.base_offset == 0);
@@ -342,11 +378,22 @@ mod tests {
 
         let mut marker = sample_batch(1);
         marker.attributes = marker.attributes.with_control(true);
+        marker.producer_id = 7;
+        marker.producer_epoch = 3;
         assert!(marker.attributes.compression() == CompressionType::None);
 
-        let (results, _) = append_produce_batch(&log, vec![ProduceData::OwnedControl(marker)]);
+        let (results, _, control_entries) =
+            append_produce_batch(&log, vec![ProduceData::OwnedControl(marker)]);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
         assert!(assigned.base_offset == 0);
+
+        // The mirror entry comes from this same lock acquisition, not a
+        // second one: this is what keeps a produce-path mirror from ever
+        // blocking a worker thread behind a concurrent blocking-pool log
+        // operation.
+        assert!(control_entries.len() == 1);
+        check!(control_entries[0].producer_id == krabka_log::ProducerId(7));
+        check!(control_entries[0].producer_epoch == 3);
 
         let read = log
             .lock()
@@ -377,8 +424,10 @@ mod tests {
 
         let mut marker = sample_batch(1);
         marker.attributes = marker.attributes.with_control(true);
+        marker.producer_id = 7;
+        marker.producer_epoch = 3;
 
-        let (results, _) =
+        let (results, _, control_entries) =
             append_produce_batch_at(&log, Offset(0), vec![ProduceData::OwnedControl(marker)]);
         assert!(
             results
@@ -389,6 +438,9 @@ mod tests {
                 .base_offset
                 == 0
         );
+        assert!(control_entries.len() == 1);
+        check!(control_entries[0].producer_id == krabka_log::ProducerId(7));
+        check!(control_entries[0].producer_epoch == 3);
 
         let read = log
             .lock()

@@ -1,4 +1,4 @@
-(* #"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 20 27 20 32 *)
+(* #"/workspace/crates/verified/src/producer.rs" 20 27 20 32 *)
 
 (* <producer::ProducerDecision as std::clone::Clone> *)
 
@@ -11,7 +11,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ProducerDecision [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 20 27 20 32]
+let clone_ProducerDecision [#"/workspace/crates/verified/src/producer.rs" 20 27 20 32]
   (self: t_ProducerDecision) (return (x: t_ProducerDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ProducerDecision = Any.any_l () | & self: t_ProducerDecision = self ])

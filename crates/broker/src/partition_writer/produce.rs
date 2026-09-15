@@ -22,6 +22,7 @@ use super::{
 use crate::{
     log_dir_status::LogDirRegistry,
     partition::{ProduceData, ProduceJob, WriterMessage},
+    producer_state::ProducerState,
     replica_state::ReplicaState,
 };
 
@@ -30,7 +31,12 @@ pub(super) async fn handle_produce(
     group: (ProduceJob, usize),
     rx: &mut mpsc::Receiver<WriterMessage>,
     pending: &mut Option<WriterMessage>,
-    storage: (&Arc<Mutex<Log>>, &Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
+    storage: (
+        &Arc<Mutex<Log>>,
+        &Arc<ArcSwap<PathBuf>>,
+        &LogDirRegistry,
+        &ProducerState,
+    ),
     signals: (
         &Arc<Notify>,
         &Arc<tokio::sync::Mutex<ReplicaState>>,
@@ -43,7 +49,7 @@ pub(super) async fn handle_produce(
 ) {
     let (first, max_produce_group) = group;
     let (wal, sequencer) = diskless;
-    let (log, log_dir, log_dir_status) = storage;
+    let (log, log_dir, log_dir_status, producer_state) = storage;
     let (append_notify, replica_state, hw_advance_notify) = signals;
     let mut jobs = vec![first];
     while jobs.len() < max_produce_group {
@@ -90,7 +96,7 @@ pub(super) async fn handle_produce(
     } else {
         run_produce_append_batch(Arc::clone(log), datas).await
     };
-    let (results, leo) = match append_result {
+    let (results, leo, control_entries) = match append_result {
         Ok(value) => value,
         Err(err) => {
             flag_storage_failure(&err, log_dir, log_dir_status);
@@ -103,6 +109,21 @@ pub(super) async fn handle_produce(
             return;
         }
     };
+
+    // A transaction marker changes the producer state in the log. Without
+    // this copy the tracker keeps the state from before the marker until a
+    // restart rebuilds it from the log, and a produce gets a different
+    // answer before and after that restart. `control_entries` comes from the
+    // same lock acquisition the append itself already ran under
+    // `block_in_place`/`spawn_blocking` (see `append_produce_batch`'s doc
+    // comment): mirroring here takes no further `std::sync::Mutex` lock on
+    // this async task, only the `ProducerState` per-partition `tokio::sync::
+    // Mutex` this call already awaits cooperatively.
+    if !control_entries.is_empty() {
+        producer_state
+            .mirror_log_entries(identity.0, identity.1, control_entries)
+            .await;
+    }
 
     let mut any_ok = false;
     for (ack, result) in acks.into_iter().zip(results) {

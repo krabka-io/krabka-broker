@@ -20,6 +20,10 @@ mod entry;
 mod expiry;
 mod recovery;
 #[cfg(test)]
+mod replication_mirror;
+#[cfg(test)]
+mod restart_agreement;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -50,6 +54,19 @@ impl ProducerState {
     }
 
     /// Commit a successful append into the tracker.
+    ///
+    /// Skips the write, rather than overwrite, when the tracked entry already
+    /// carries a higher producer epoch. `AppendCommit::record` defers this
+    /// call until the `acks=all` high-watermark gate for its own append
+    /// resolves, so it can run long after the append itself, on a task
+    /// unrelated to the writer's serial handling of later messages on the
+    /// same partition. [`Self::mirror_log_entries`] mirrors a transaction
+    /// marker's epoch bump as soon as the marker is durable, with no such
+    /// wait. A commit for a batch from before that marker can therefore
+    /// resolve after the mirror already ran, and an unconditional overwrite
+    /// would put the pre-marker epoch back, undoing the fence. This is
+    /// Kafka's own invariant: `ProducerAppendInfo.checkProducerEpoch` never
+    /// lets a producer's tracked epoch move backward.
     pub async fn commit(
         &self,
         topic: &str,
@@ -63,6 +80,12 @@ impl ProducerState {
         let (base_offset, last_timestamp) = append;
         let handle = self.handle(topic, partition);
         let mut s = handle.lock().await;
+        if s.entries
+            .get(&ProducerId(producer_id))
+            .is_some_and(|existing| existing.epoch > producer_epoch)
+        {
+            return;
+        }
         let last_sequence = increment_sequence(base_sequence, last_offset_delta);
         let last_offset = base_offset + i64::from(last_offset_delta);
         s.entries.insert(
@@ -79,7 +102,8 @@ impl ProducerState {
     }
 
     /// Drop idempotent-producer entries whose last accepted batch was
-    /// truncated off the log, that is `last_offset >= offset`.
+    /// truncated off the log, that is `last_offset >= offset`. Also drop
+    /// every marker-only entry, whatever `offset` is.
     ///
     /// The broker calls this after it truncates the partition log below the
     /// recorded batch. Two paths do that: KIP-320 divergence truncation on
@@ -94,6 +118,20 @@ impl ProducerState {
     /// entry, the retry re-appends fresh instead. This mirrors Kafka's
     /// `ProducerStateManager.truncateAndReload`. It does not create state for a
     /// partition that the broker has never tracked.
+    ///
+    /// A marker-only entry (`last_offset < 0`, installed by
+    /// [`Self::mirror_log_entries`] after a transaction-version-2 marker
+    /// clears the retained batch) carries no offset of its own, so the
+    /// `last_offset >= offset` test cannot place it relative to the cut. Kafka
+    /// clears the batch metadata at the marker, not at a stored offset, so
+    /// this tracker cannot tell whether the marker itself survived a
+    /// divergent-tail truncation or was the very record that diverged. Every
+    /// marker-only entry is therefore dropped on any truncation of its
+    /// partition. Dropping is always safe: the next batch from that producer
+    /// is then treated the way an unknown producer's first batch is treated,
+    /// which never wrongly deduplicates or wrongly accepts a sequence. A
+    /// restart or a promotion rebuilds the exact state from the (correctly
+    /// truncated) log through [`Self::rebuild_from_log`].
     pub async fn truncate(&self, topic: &str, partition: PartitionIndex, offset: LogOffset) {
         let Some(parts) = self.by_topic.get(topic).map(|e| e.value().clone()) else {
             return;
@@ -102,7 +140,8 @@ impl ProducerState {
             return;
         };
         let mut s = handle.lock().await;
-        s.entries.retain(|_pid, e| e.last_offset < offset);
+        s.entries
+            .retain(|_pid, e| e.last_offset >= 0 && e.last_offset < offset);
     }
 
     /// Resolve the per-partition state handle, and create it on a miss.

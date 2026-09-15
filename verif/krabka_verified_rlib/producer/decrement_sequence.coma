@@ -1,10 +1,10 @@
-(* #"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 51 0 51 63 *)
+(* #"/workspace/crates/verified/src/producer.rs" 55 0 55 63 *)
 
-let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
-let%span sproducer = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 52 4 52 36
-let%span sproducer'0 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 52 39 52 47
-let%span sproducer'1 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 49 28 49 83
-let%span sproducer'2 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 45 16 45 49
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sproducer = "/workspace/crates/verified/src/producer.rs" 56 4 56 36
+let%span sproducer'0 = "/workspace/crates/verified/src/producer.rs" 56 39 56 47
+let%span sproducer'1 = "/workspace/crates/verified/src/producer.rs" 53 28 53 83
+let%span sproducer'2 = "/workspace/crates/verified/src/producer.rs" 49 16 49 49
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -15,14 +15,14 @@ let wrapping_sub (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
 
 constant const_MAX: Int32.t = (2147483647: Int32.t)
 
-function decrement_sequence_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 44 0 44 65] (sequence: Int32.t) (decrement: Int32.t) : Int32.t
+function decrement_sequence_model [#"/workspace/crates/verified/src/producer.rs" 48 0 48 65] (sequence: Int32.t) (decrement: Int32.t) : Int32.t
  = [%#sproducer'2] Int32.bw_and (Int32.sub sequence decrement) const_MAX
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let decrement_sequence [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 51 0 51 63]
+let decrement_sequence [#"/workspace/crates/verified/src/producer.rs" 55 0 55 63]
   (sequence: Int32.t) (decrement: Int32.t) (return (x: Int32.t)) = (! bb0
   [ bb0 = s0
     [ s0 = wrapping_sub [%#sproducer] {sequence} {decrement} (fun (_x: Int32.t) -> [ &_6 <- _x ] s1)

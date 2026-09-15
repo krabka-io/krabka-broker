@@ -93,7 +93,7 @@ mod tests {
     async fn append_assigns_sequential_offsets_then_sync_advances_durable() {
         let dir = tempfile::tempdir().unwrap();
         let w = wal(dir.path());
-        let (results, leo) = crate::partition_writer::run_produce_append_batch(
+        let (results, leo, _) = crate::partition_writer::run_produce_append_batch(
             w.log.clone(),
             vec![sample_owned(2), sample_owned(3)],
         )
@@ -120,7 +120,7 @@ mod tests {
     async fn trim_advances_the_local_wal_start() {
         let dir = tempfile::tempdir().unwrap();
         let w = wal(dir.path());
-        let (_results, leo) =
+        let (_results, leo, _) =
             crate::partition_writer::run_produce_append_batch(w.log.clone(), vec![sample_owned(3)])
                 .await
                 .unwrap();

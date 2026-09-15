@@ -48,6 +48,22 @@ pub enum ProduceData {
 }
 
 impl ProduceData {
+    /// The producer ID of an internally built control batch, or `None` for a
+    /// data batch.
+    ///
+    /// The writer reads the log's entry for this producer after the append,
+    /// because a marker can change the producer epoch and sequence state that
+    /// the produce path checks.
+    #[must_use]
+    pub(crate) fn control_producer_id(&self) -> Option<krabka_log::ProducerId> {
+        match self {
+            Self::Verbatim(_) | Self::Owned(_) => None,
+            Self::OwnedControl(batch) | Self::OwnedCommitMarker { batch, .. } => {
+                Some(krabka_log::ProducerId(batch.producer_id))
+            }
+        }
+    }
+
     #[must_use]
     pub(crate) fn record_count(&self) -> u32 {
         match self {

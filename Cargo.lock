@@ -3355,7 +3355,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-admin"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=cd4e53669d3de2cedadecec2746be0a2b920bcf8#cd4e53669d3de2cedadecec2746be0a2b920bcf8"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3376,7 +3376,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-consumer"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=cd4e53669d3de2cedadecec2746be0a2b920bcf8#cd4e53669d3de2cedadecec2746be0a2b920bcf8"
 dependencies = [
  "assert2",
  "bon",
@@ -3396,7 +3396,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-core"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=cd4e53669d3de2cedadecec2746be0a2b920bcf8#cd4e53669d3de2cedadecec2746be0a2b920bcf8"
 dependencies = [
  "async-trait",
  "bon",
@@ -3420,7 +3420,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-producer"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=756c8dd7bce318a70e8ee7f2e026e58a1a74645c#756c8dd7bce318a70e8ee7f2e026e58a1a74645c"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=cd4e53669d3de2cedadecec2746be0a2b920bcf8#cd4e53669d3de2cedadecec2746be0a2b920bcf8"
 dependencies = [
  "assert2",
  "async-trait",
