@@ -32,12 +32,9 @@ impl ControllerLivenessState {
     ) -> Option<LivenessTransition> {
         let mut map = self.brokers.lock().await;
         let now = self.clock.now();
-        let entry = map.entry(broker_id).or_insert(BrokerEntry {
-            last_heartbeat: now,
-            state: BrokerLivenessState::Alive,
-            fenced: initially_fenced,
-            contact: true,
-        });
+        let entry = map
+            .entry(broker_id)
+            .or_insert(BrokerEntry::new(now, initially_fenced, true));
         let prev = entry.state;
         entry.last_heartbeat = now;
         entry.state = BrokerLivenessState::Alive;
@@ -84,8 +81,8 @@ impl ControllerLivenessState {
     /// now`, so the broker gets one full timeout window to send its first
     /// heartbeat. It also starts fenced, as a first heartbeat would leave it:
     /// a broker that has not yet proved metadata catch-up must not be elected
-    /// or receive replicas, and only [`apply_fencing`](Self::apply_fencing)
-    /// with `is_caught_up` lifts the fence. Known entries keep their state,
+    /// or receive replicas, and only a caught-up heartbeat
+    /// ([`touch`](Self::touch)) lifts the fence. Known entries keep their state,
     /// their fence, and their death clock.
     ///
     /// The controller leader calls this on every liveness tick with the
@@ -98,12 +95,7 @@ impl ControllerLivenessState {
         let mut map = self.brokers.lock().await;
         let now = self.clock.now();
         for id in broker_ids {
-            map.entry(id).or_insert(BrokerEntry {
-                last_heartbeat: now,
-                state: BrokerLivenessState::Alive,
-                fenced: true,
-                contact: false,
-            });
+            map.entry(id).or_insert(BrokerEntry::new(now, true, false));
         }
     }
 
@@ -128,13 +120,11 @@ impl ControllerLivenessState {
                     entry.state = BrokerLivenessState::Alive;
                     entry.fenced = entry.fenced || replicated_fence;
                     entry.contact = !entry.fenced;
+                    if entry.fenced {
+                        entry.controlled_shutdown_offset = None;
+                    }
                 })
-                .or_insert(BrokerEntry {
-                    last_heartbeat: now,
-                    state: BrokerLivenessState::Alive,
-                    fenced: replicated_fence,
-                    contact: !replicated_fence,
-                });
+                .or_insert(BrokerEntry::new(now, replicated_fence, !replicated_fence));
         }
     }
 
@@ -186,15 +176,10 @@ impl ControllerLivenessState {
     /// catches up to its new registration record.
     pub(crate) async fn replace_incarnation(&self, broker_id: u64) {
         let now = self.clock.now();
-        self.brokers.lock().await.insert(
-            broker_id,
-            BrokerEntry {
-                last_heartbeat: now,
-                state: BrokerLivenessState::Alive,
-                fenced: true,
-                contact: false,
-            },
-        );
+        self.brokers
+            .lock()
+            .await
+            .insert(broker_id, BrokerEntry::new(now, true, false));
     }
 }
 
