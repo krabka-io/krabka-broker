@@ -105,6 +105,11 @@ pub struct StreamsGroupState {
     /// `ShutdownApplication`). Kafka keeps it in memory only and clears it
     /// when the group becomes empty.
     pub shutdown_request_member_id: Option<String>,
+    /// Kafka's `StreamsGroup.endpointInformationEpoch`: bumped when the user
+    /// endpoint of a member changes, or the tasks of a member with an
+    /// endpoint change. A member whose last seen epoch differs gets the
+    /// endpoint information of the group. Kafka keeps it in memory only.
+    pub endpoint_information_epoch: i32,
 }
 
 impl StreamsGroupState {
@@ -121,6 +126,7 @@ impl StreamsGroupState {
             phase: StreamsGroupStatePhase::Empty,
             status: None,
             shutdown_request_member_id: None,
+            endpoint_information_epoch: 0,
         }
     }
 

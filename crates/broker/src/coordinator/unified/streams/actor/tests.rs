@@ -235,9 +235,29 @@ async fn member_epoch_rule_matches_kafka() {
         let resp = heartbeat(&handle, request("m1", member_epoch, active_tasks)).await;
 
         let expected = if error_code == codes::NONE {
-            heartbeat(&handle, request("m1", 3, None)).await
+            // A rejoin at epoch 0 gets the task lists; a heartbeat with an
+            // unchanged assignment does not.
+            let rejoin = (member_epoch == 0).then(Vec::new);
+            StreamsGroupHeartbeatResponse {
+                active_tasks: rejoin.clone(),
+                standby_tasks: rejoin.clone(),
+                warmup_tasks: rejoin,
+                ..heartbeat(&handle, request("m1", 3, None)).await
+            }
         } else {
-            super::response::error_resp(error_code, &StreamsGroupConfig::default())
+            let relation = if member_epoch > 3 {
+                "greater"
+            } else {
+                "smaller"
+            };
+            super::response::error_resp(
+                error_code,
+                Some(format!(
+                    "The streams group member has a {relation} member epoch ({member_epoch}) than \
+                     the one known by the group coordinator (3). The member must abandon all its \
+                     partitions and rejoin."
+                )),
+            )
         };
         check!(resp == expected, "row {index}");
     }
@@ -276,7 +296,7 @@ async fn leave_of_an_unknown_member_is_refused_and_writes_nothing() {
     check!(
         resp == super::response::error_resp(
             codes::UNKNOWN_MEMBER_ID,
-            &StreamsGroupConfig::default()
+            Some("Member m9 is not a member of group g.".into())
         )
     );
     check!(log.batches().await == before);
@@ -550,7 +570,8 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         /// The owned active tasks of the heartbeat, when it reports them.
         owned_active: Option<Vec<i32>>,
         epoch: i32,
-        active: Vec<i32>,
+        /// The active tasks, when the response sends the task lists.
+        active: Option<Vec<i32>>,
         status: Option<Vec<Status>>,
     }
     let rows = [
@@ -562,7 +583,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: None,
             epoch: 2,
-            active: vec![0, 1],
+            active: Some(vec![0, 1]),
             status: Some(vec![]),
         },
         Row {
@@ -573,7 +594,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: Some(vec![0]),
             epoch: 2,
-            active: vec![0, 1],
+            active: Some(vec![0, 1]),
             status: Some(vec![]),
         },
         Row {
@@ -584,7 +605,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             change: Change::Image(Box::new(image_of(None, &[]))),
             owned_active: Some(vec![]),
             epoch: 2,
-            active: vec![],
+            active: Some(vec![]),
             status: Some(vec![Status {
                 status_code: status::MISSING_SOURCE_TOPICS,
                 status_detail: "Source topics in are missing.".into(),
@@ -599,7 +620,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             change: Change::Rack("rack-b"),
             owned_active: Some(vec![0]),
             epoch: 2,
-            active: vec![0],
+            active: None,
             status: Some(vec![]),
         },
         Row {
@@ -610,7 +631,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             change: Change::Process("process-b"),
             owned_active: Some(vec![0]),
             epoch: 2,
-            active: vec![0],
+            active: None,
             status: Some(vec![]),
         },
         Row {
@@ -621,7 +642,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             change: Change::None,
             owned_active: Some(vec![]),
             epoch: 2,
-            active: vec![0],
+            active: Some(vec![0]),
             status: Some(vec![]),
         },
     ];
@@ -714,9 +735,9 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         let expected = StreamsGroupHeartbeatResponse {
             member_id: "m1".into(),
             status: row.status,
-            active_tasks: Some(tasks(row.active)),
-            standby_tasks: Some(vec![]),
-            warmup_tasks: Some(vec![]),
+            standby_tasks: row.active.as_ref().map(|_| vec![]),
+            warmup_tasks: row.active.as_ref().map(|_| vec![]),
+            active_tasks: row.active.map(tasks),
             ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
         };
         check!(resp == expected, "{}", row.name);
@@ -1017,15 +1038,14 @@ async fn a_changelog_topic_with_a_partition_count_is_refused() {
     .await;
 
     check!(
-        resp == StreamsGroupHeartbeatResponse {
-            error_code: codes::STREAMS_INVALID_TOPOLOGY,
-            error_message: Some(
+        resp == super::response::error_resp(
+            codes::STREAMS_INVALID_TOPOLOGY,
+            Some(
                 "Changelog topic store-changelog must have an undefined partition count, but it \
                  is set to 2."
                     .into()
             ),
-            ..Default::default()
-        }
+        )
     );
     let (tx, rx) = oneshot::channel();
     handle
@@ -1071,7 +1091,8 @@ async fn the_heartbeat_status_list_follows_kafka() {
         beats: Vec<Beat>,
         member: &'static str,
         epoch: i32,
-        active: Vec<i32>,
+        /// The active tasks, when the response sends the task lists.
+        active: Option<Vec<i32>>,
         status: Vec<(i8, &'static str)>,
     }
     let rows = [
@@ -1081,7 +1102,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             beats: vec![Beat::Join("m1", 1)],
             member: "m1",
             epoch: 1,
-            active: vec![0],
+            active: Some(vec![0]),
             status: vec![],
         },
         Row {
@@ -1090,7 +1111,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             beats: vec![Beat::Join("m1", 1)],
             member: "m1",
             epoch: 1,
-            active: vec![],
+            active: Some(vec![]),
             status: vec![(
                 status::MISSING_SOURCE_TOPICS,
                 "Source topics a, b are missing.",
@@ -1102,7 +1123,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             beats: vec![Beat::Join("m1", 1), Beat::Heartbeat("m1", true)],
             member: "m1",
             epoch: 1,
-            active: vec![0],
+            active: None,
             status: vec![(
                 status::SHUTDOWN_APPLICATION,
                 "Streams group member m1 encountered a fatal error and requested a shutdown for \
@@ -1120,7 +1141,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             ],
             member: "m1",
             epoch: 3,
-            active: vec![0],
+            active: None,
             status: vec![(
                 status::SHUTDOWN_APPLICATION,
                 "Streams group member m2 encountered a fatal error and requested a shutdown for \
@@ -1138,7 +1159,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             ],
             member: "m2",
             epoch: 3,
-            active: vec![0],
+            active: Some(vec![0]),
             status: vec![],
         },
         Row {
@@ -1147,7 +1168,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             beats: vec![Beat::Join("m1", 2), Beat::Join("m2", 1)],
             member: "m2",
             epoch: 2,
-            active: vec![],
+            active: Some(vec![]),
             status: vec![(
                 status::STALE_TOPOLOGY,
                 "The member's topology epoch 1 is behind the group's topology epoch 2.",
@@ -1163,7 +1184,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             ],
             member: "m1",
             epoch: 2,
-            active: vec![0],
+            active: None,
             status: vec![],
         },
     ];
@@ -1223,19 +1244,198 @@ async fn the_heartbeat_status_list_follows_kafka() {
                     })
                     .collect(),
             ),
-            active_tasks: Some(if row.active.is_empty() {
-                vec![]
-            } else {
-                vec![TaskIds {
-                    subtopology_id: "0".into(),
-                    partitions: row.active,
-                    ..Default::default()
-                }]
+            standby_tasks: row.active.as_ref().map(|_| vec![]),
+            warmup_tasks: row.active.as_ref().map(|_| vec![]),
+            active_tasks: row.active.map(|partitions| {
+                if partitions.is_empty() {
+                    vec![]
+                } else {
+                    vec![TaskIds {
+                        subtopology_id: "0".into(),
+                        partitions,
+                        ..Default::default()
+                    }]
+                }
             }),
-            standby_tasks: Some(vec![]),
-            warmup_tasks: Some(vec![]),
             ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
         };
         check!(last == Some(expected), "{}", row.name);
+    }
+}
+
+/// The parts of Kafka's `StreamsGroupHeartbeat` response beyond the member
+/// epoch and the status: the task lists only on a join or a change, the
+/// endpoint information for Interactive Queries, the leave response and the
+/// error response. Each row runs its heartbeats on a fresh group with a
+/// one-partition source topic and compares the whole response of the last
+/// one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_heartbeat_response_carries_what_kafka_sends() {
+    use std::collections::HashMap;
+
+    use krabka_protocol::owned::{
+        common::{
+            streams_group_heartbeat_request::endpoint::Endpoint as RequestEndpoint,
+            streams_group_heartbeat_response::{
+                endpoint::Endpoint, task_ids::TaskIds, topic_partition::TopicPartition,
+            },
+        },
+        streams_group_heartbeat_response::EndpointToPartitions,
+    };
+
+    use crate::test_support::FakeMetadataSource;
+
+    #[derive(Clone, Copy)]
+    enum Beat {
+        /// A join with this user endpoint port.
+        Join(&'static str, Option<u16>),
+        /// A heartbeat at the member epoch, or at this epoch.
+        Heartbeat(&'static str, Option<i32>),
+        Leave(&'static str),
+    }
+    let endpoint = |port: u16, active: &[i32]| EndpointToPartitions {
+        user_endpoint: Endpoint {
+            host: "localhost".into(),
+            port,
+            ..Default::default()
+        },
+        active_partitions: if active.is_empty() {
+            vec![]
+        } else {
+            vec![TopicPartition {
+                topic: "in".into(),
+                partitions: active.to_vec(),
+                ..Default::default()
+            }]
+        },
+        standby_partitions: vec![],
+        ..Default::default()
+    };
+    let config = StreamsGroupConfig::default();
+    let accepted =
+        |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
+            member_id: member_id.into(),
+            status: Some(vec![]),
+            active_tasks: tasks.as_ref().map(|partitions| {
+                if partitions.is_empty() {
+                    vec![]
+                } else {
+                    vec![TaskIds {
+                        subtopology_id: "0".into(),
+                        partitions: partitions.clone(),
+                        ..Default::default()
+                    }]
+                }
+            }),
+            standby_tasks: tasks.as_ref().map(|_| vec![]),
+            warmup_tasks: tasks.as_ref().map(|_| vec![]),
+            ..super::response::base_resp(codes::NONE, member_epoch, &config)
+        };
+    let rows = [
+        (
+            "the joining member of a new group gets its endpoint information",
+            1,
+            vec![Beat::Join("m1", Some(1))],
+            StreamsGroupHeartbeatResponse {
+                partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
+                ..accepted("m1", 1, Some(vec![0]))
+            },
+        ),
+        (
+            "two members with endpoints",
+            10,
+            vec![Beat::Join("m1", Some(1)), Beat::Join("m2", Some(2))],
+            StreamsGroupHeartbeatResponse {
+                endpoint_information_epoch: 1,
+                partitions_by_user_endpoint: Some(vec![endpoint(1, &[0]), endpoint(2, &[])]),
+                ..accepted("m2", 2, Some(vec![]))
+            },
+        ),
+        (
+            "a heartbeat with an unchanged assignment",
+            10,
+            vec![Beat::Join("m1", None), Beat::Heartbeat("m1", None)],
+            accepted("m1", 1, None),
+        ),
+        (
+            "a leave",
+            10,
+            vec![Beat::Join("m1", None), Beat::Leave("m1")],
+            StreamsGroupHeartbeatResponse {
+                member_id: "m1".into(),
+                member_epoch: -1,
+                status: Some(vec![]),
+                ..Default::default()
+            },
+        ),
+        (
+            "a full group",
+            1,
+            vec![Beat::Join("m1", None), Beat::Join("m2", None)],
+            super::response::error_resp(
+                codes::GROUP_MAX_SIZE_REACHED,
+                Some("The streams group has reached its maximum capacity of 1 members.".into()),
+            ),
+        ),
+        (
+            "an unknown member",
+            10,
+            vec![Beat::Join("m1", None), Beat::Heartbeat("m9", Some(3))],
+            super::response::error_resp(
+                codes::UNKNOWN_MEMBER_ID,
+                Some("Member m9 is not a member of group g.".into()),
+            ),
+        ),
+    ];
+
+    for (name, max_size, beats, expected) in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &[("in", 1, 1)]))
+                .build(),
+        );
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            Arc::new(EmptyMetadata),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig {
+                max_size,
+                ..StreamsGroupConfig::default()
+            },
+        ));
+        coord.set_metadata_source(source);
+        let handle = coord.get_or_create_streams("g");
+        let mut epochs: HashMap<&str, i32> = HashMap::new();
+        let mut last = None;
+        for beat in beats {
+            let (member, member_epoch, port) = match beat {
+                Beat::Join(member, port) => (member, 0, port),
+                Beat::Heartbeat(member, epoch) => {
+                    (member, epoch.unwrap_or_else(|| epochs[member]), None)
+                }
+                Beat::Leave(member) => (member, -1, None),
+            };
+            let resp = heartbeat(
+                &handle,
+                StreamsGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: member.into(),
+                    member_epoch,
+                    rebalance_timeout_ms: 1_000,
+                    user_endpoint: port.map(|port| RequestEndpoint {
+                        host: "localhost".into(),
+                        port,
+                        ..Default::default()
+                    }),
+                    topology: (member_epoch == 0).then(|| one_subtopology(false)),
+                    ..Default::default()
+                },
+            )
+            .await;
+            epochs.insert(member, resp.member_epoch);
+            last = Some(resp);
+        }
+        check!(last == Some(expected), "{name}");
     }
 }

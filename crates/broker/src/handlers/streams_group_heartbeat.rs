@@ -122,11 +122,11 @@ pub(crate) async fn handle(
     }
 }
 
+/// Kafka's `StreamsGroupHeartbeatRequest.getErrorResponse`: the error code
+/// and the defaults of the generated response data, whose status list is
+/// empty.
 fn error(code: i16) -> StreamsGroupHeartbeatResponse {
-    StreamsGroupHeartbeatResponse {
-        error_code: code,
-        ..Default::default()
-    }
+    crate::coordinator::unified::streams::actor::response::error_resp(code, None)
 }
 
 #[cfg(test)]
