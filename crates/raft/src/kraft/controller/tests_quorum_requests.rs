@@ -529,24 +529,6 @@ async fn end_quorum_epoch_runs_kafka_request_checks() {
     }
 }
 
-/// A resigning leader names the other voters most caught up first.
-#[tokio::test]
-async fn preferred_candidates_follow_replication_progress() {
-    let (mut engine, _dir) =
-        build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
-    engine.replica_fetch_offsets.insert(NodeId(2), 5);
-    engine.replica_fetch_offsets.insert(NodeId(3), 9);
-
-    check!(
-        engine.preferred_candidates()
-            == vec![
-                (NodeId(3), Uuid::nil()),
-                (NodeId(2), Uuid::nil()),
-                (NodeId(4), Uuid::nil()),
-            ]
-    );
-}
-
 fn fetch_snapshot_request(
     edit: impl FnOnce(&mut FetchSnapshotRequest, &mut fs_req::PartitionSnapshot),
 ) -> FetchSnapshotRequest {
@@ -756,5 +738,28 @@ async fn fetch_snapshot_to_a_follower_names_the_leader() {
             &fetch_snapshot_answer((METADATA_TOPIC, 0), 6, Some((2, 5)), None),
             FETCH_SNAPSHOT_VERSION
         )
+    );
+}
+
+/// A leader that only the adjacent voter set of an uncommitted KIP-853 change
+/// names is followed, and its endpoint still goes into `NodeEndpoints`.
+#[tokio::test]
+async fn a_leader_from_the_adjacent_voter_set_keeps_its_endpoint() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let _ = engine.core.apply_voter_set(
+        voter_set(&[NodeId(1), NodeId(2)]),
+        crate::kraft::types::SimInstant(0),
+    );
+
+    let body = deliver(
+        &mut engine,
+        begin,
+        encode(&begin_request(|_| {}), QUORUM_EPOCH_VERSION),
+    )
+    .expect("an answer");
+
+    check!(
+        BeginQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION).expect("decode")
+            == begin_answer(0, 3, 6)
     );
 }

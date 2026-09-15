@@ -62,7 +62,7 @@ impl Engine {
         let state = self.core.quorum_state();
         let endpoint = state
             .leader_id
-            .and_then(|leader| state.voters.get(leader))
+            .and_then(|leader| self.core.current_or_adjacent_voter_entry(leader))
             .and_then(|voter| {
                 voter
                     .endpoints

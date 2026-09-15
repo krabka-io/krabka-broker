@@ -75,7 +75,7 @@ impl ConsensusModel {
                     }
                 }
             }
-            Action::SendEndQuorumEpoch { epoch } => {
+            Action::SendEndQuorumEpoch { epoch, .. } => {
                 for &peer in &self.voter_ids {
                     if peer != id {
                         state.network.insert(Envelope {

@@ -133,7 +133,7 @@ impl Sim {
                     }
                 }
             }
-            Action::SendEndQuorumEpoch { epoch } => {
+            Action::SendEndQuorumEpoch { epoch, .. } => {
                 for peer in self.all_node_ids() {
                     if peer != id {
                         self.send(

@@ -257,7 +257,7 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
     let mut sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
 
-    engine.broadcast_end_quorum_epoch(4);
+    engine.broadcast_end_quorum_epoch(4, &[NodeId(3), NodeId(2)]);
 
     let mut peers = Vec::new();
     for _ in 0..2 {
@@ -274,8 +274,8 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
                 assert2::assert!(
                     preferred_candidates
                         == vec![
-                            (NodeId(2), uuid::Uuid::nil()),
-                            (NodeId(3), uuid::Uuid::nil())
+                            (NodeId(3), uuid::Uuid::nil()),
+                            (NodeId(2), uuid::Uuid::nil())
                         ]
                 );
             }
