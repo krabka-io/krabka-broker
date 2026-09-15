@@ -195,13 +195,15 @@ mod tests {
             assert2::assert!(resp.error_code == 0);
             let keys: std::collections::BTreeSet<i16> =
                 resp.api_keys.iter().map(|k| k.api_key).collect();
-            for want in [1i16, 18, 52, 53, 54, 59, 62, 70] {
+            for want in [1i16, 18, 52, 53, 54, 59, 70] {
                 assert2::assert!(keys.contains(&want));
             }
-            // `BrokerHeartbeat` reaches the controller listener through the
-            // Admin router, so the native table must not advertise it on its
-            // own. `an_admin_router_contributes_its_own_api_versions` covers
-            // the other half: with a router bound, the key is advertised.
+            // `BrokerRegistration` and `BrokerHeartbeat` reach the controller
+            // listener through the Admin router, so the native table must not
+            // advertise them on its own.
+            // `an_admin_router_contributes_its_own_api_versions` covers the
+            // other half: with a router bound, a key is advertised.
+            assert2::assert!(!keys.contains(&62i16));
             assert2::assert!(!keys.contains(&63i16));
             // Vote is pinned to the one version the engine's codec speaks, so
             // the advertised range is that version on both ends.

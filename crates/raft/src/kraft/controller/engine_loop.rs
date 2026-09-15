@@ -246,6 +246,9 @@ impl Engine {
                     self.send_fetch(leader_id);
                     self.fetch_misses = 0;
                 }
+                // The Fetch handler reads it off the actions and sends it in
+                // the response. It changes nothing on this node.
+                Action::ReplyDivergingEpoch(_) => {}
                 other => self.execute_one_local(other),
             }
         }
@@ -264,7 +267,7 @@ impl Engine {
                     self.send_fetch(leader_id);
                     self.fetch_misses = 0;
                 }
-                Action::ReplyVote { .. } => {}
+                Action::ReplyVote { .. } | Action::ReplyDivergingEpoch(_) => {}
                 other => self.execute_one_local(other),
             }
         }
@@ -312,7 +315,8 @@ impl Engine {
             | Action::SendBeginQuorumEpoch { .. }
             | Action::SendEndQuorumEpoch { .. }
             | Action::SendFetch { .. }
-            | Action::ReplyVote { .. } => {
+            | Action::ReplyVote { .. }
+            | Action::ReplyDivergingEpoch(_) => {
                 assert2::assert!(false, "network/reply action routed to local executor");
             }
         }

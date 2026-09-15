@@ -97,4 +97,31 @@ impl ClassicGroup {
     pub fn current_member_id_for_instance(&self, instance_id: &str) -> Option<&str> {
         self.static_members.get(instance_id).map(String::as_str)
     }
+
+    /// Kafka's `ClassicGroup.validateMember`, the member check of the classic
+    /// `Heartbeat` and `SyncGroup`.
+    ///
+    /// An instance id that no member holds answers `UNKNOWN_MEMBER_ID`, so a
+    /// static member whose session expired can join again. An instance id that
+    /// another member holds answers `FENCED_INSTANCE_ID`. A member id the
+    /// group does not hold answers `UNKNOWN_MEMBER_ID`.
+    ///
+    /// # Errors
+    /// Returns the Kafka error code of the failed check.
+    pub fn validate_member(&self, member_id: &str, instance_id: Option<&str>) -> Result<(), i16> {
+        if let Some(instance_id) = instance_id {
+            match self.current_member_id_for_instance(instance_id) {
+                None => return Err(crate::codes::UNKNOWN_MEMBER_ID),
+                Some(pinned) if pinned != member_id => {
+                    return Err(crate::codes::FENCED_INSTANCE_ID);
+                }
+                Some(_) => {}
+            }
+        }
+        if self.members.contains_key(member_id) {
+            Ok(())
+        } else {
+            Err(crate::codes::UNKNOWN_MEMBER_ID)
+        }
+    }
 }

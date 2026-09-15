@@ -106,17 +106,21 @@ proptest! {
                 }
                 Op::Expire => {
                     clock += 1;
-                    let static_before: std::collections::HashSet<String> = g
+                    let now = at(clock);
+                    let expired: std::collections::HashSet<String> = g
                         .members
                         .iter()
-                        .filter(|(_, m)| m.is_static())
+                        .filter(|(_, m)| now.duration_since(m.last_heartbeat) > m.session_timeout)
                         .map(|(id, _)| id.clone())
                         .collect();
-                    let dropped =
-                        g.expire_dead_members(at(clock), Duration::from_secs(3));
-                    for id in &dropped {
-                        prop_assert!(!static_before.contains(id), "static member was expired");
-                    }
+                    let dropped = g.expire_dead_members(now, Duration::from_secs(3));
+                    // KIP-345 gives a static member no exception: every member
+                    // past its session timeout goes, and only those.
+                    prop_assert_eq!(
+                        dropped.into_iter().collect::<std::collections::HashSet<_>>(),
+                        expired,
+                        "expiry disagrees with the session timeouts"
+                    );
                 }
             }
             prop_assert!(index_coherent(&g), "index coherence");

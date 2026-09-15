@@ -236,7 +236,7 @@ async fn describe_after_join() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stale_epoch_rejected() {
+async fn an_old_epoch_is_fenced() {
     let (_b, bootstrap, _d) = boot().await;
     let client = Arc::new(
         Client::builder()
@@ -271,10 +271,13 @@ async fn stale_epoch_rejected() {
         "A should be at epoch 2 after catch-up"
     );
 
-    // Now A re-heartbeats at the OLD epoch 1; A's stored epoch is 2 → STALE.
+    // Now A re-heartbeats at the OLD epoch 1 and reports no owned partitions;
+    // A's stored epoch is 2. Kafka's `throwIfConsumerGroupMemberEpochIsInvalid`
+    // accepts the previous epoch only with owned partitions inside the
+    // assignment, so this heartbeat is fenced.
     let stale = heartbeat("g6", &mid, 1);
     let resp = client.send(stale).await.unwrap();
-    assert!(resp.error_code == krabka_broker::codes::STALE_MEMBER_EPOCH);
+    assert!(resp.error_code == krabka_broker::codes::FENCED_MEMBER_EPOCH);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1,34 +1,14 @@
-//! Encoders for the two registration responses the controller returns.
+//! The encoder for the controller registration response.
 //!
-//! Every refusal path in the broker and controller registration handlers ends
-//! in one of these, so the shape of a reply is decided in one place rather than
-//! at each early return.
+//! Every refusal path in the controller registration handler ends in it, so the
+//! shape of a reply is decided in one place rather than at each early return.
 
 use bytes::{Bytes, BytesMut};
 use krabka_protocol::{
-    Encode,
-    owned::{
-        broker_registration_response::BrokerRegistrationResponse,
-        controller_registration_response::ControllerRegistrationResponse,
-    },
+    Encode, owned::controller_registration_response::ControllerRegistrationResponse,
 };
 
 use crate::RaftError;
-
-pub(super) fn broker_registration_response(
-    version: i16,
-    error_code: i16,
-    broker_epoch: i64,
-) -> Result<Bytes, RaftError> {
-    encode(
-        &BrokerRegistrationResponse {
-            error_code,
-            broker_epoch,
-            ..Default::default()
-        },
-        version,
-    )
-}
 
 pub(super) fn controller_registration_response(
     version: i16,
@@ -56,34 +36,17 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::server::registration::{INVALID_REGISTRATION, NOT_CONTROLLER};
+    use crate::server::registration::NOT_CONTROLLER;
 
-    /// The two registration responses carry the error code and the epoch or
-    /// message the caller passed, and encode to bytes.
+    /// The controller registration response carries the error code and the
+    /// message the caller passed, and encodes to bytes.
     ///
-    /// These are one-line wrappers, which is exactly why nothing tested them:
+    /// This is a one-line wrapper, which is exactly why nothing tested it:
     /// swapping a field or dropping the encode leaves a function that still
     /// returns `Ok`.
     #[test]
-    fn registration_responses_carry_what_they_were_given() {
-        use krabka_protocol::{
-            Decode as _,
-            owned::{broker_registration_response, controller_registration_response},
-        };
-
-        let bytes = broker_registration_response(
-            broker_registration_response::MAX_VERSION,
-            INVALID_REGISTRATION,
-            42,
-        )
-        .expect("encode broker response");
-        let mut cursor = &bytes[..];
-        let decoded = BrokerRegistrationResponse::decode(
-            &mut cursor,
-            broker_registration_response::MAX_VERSION,
-        )
-        .expect("decode broker response");
-        check!((decoded.error_code, decoded.broker_epoch) == (INVALID_REGISTRATION, 42));
+    fn the_registration_response_carries_what_it_was_given() {
+        use krabka_protocol::{Decode as _, owned::controller_registration_response};
 
         let bytes = controller_registration_response(
             controller_registration_response::MAX_VERSION,
