@@ -176,8 +176,15 @@ mod tests {
             .expect("fetch dispatch");
         assert2::assert!(PeerResponse::decode_fetch(&fetch_resp).is_some());
 
+        let leader_epoch = engine
+            .quorum_state()
+            .await
+            .expect("quorum state")
+            .leader_epoch;
         let snapshot = PeerRequest::FetchSnapshot {
+            cluster_id: None,
             from: NodeId(2),
+            current_leader_epoch: i32::try_from(leader_epoch).expect("epoch fits i32"),
             snapshot_id: (10, 1),
             position: 0,
             max_bytes: 32,

@@ -156,8 +156,11 @@ impl Engine {
         if leader_id == self.me {
             return;
         }
+        let state = self.core.quorum_state();
         let body = wire::PeerRequest::FetchSnapshot {
+            cluster_id: Some(state.cluster_id),
             from: self.me,
+            current_leader_epoch: i32::try_from(state.leader_epoch).unwrap_or(i32::MAX),
             snapshot_id,
             position,
             // KIP-595 `FetchSnapshot.MaxBytes` is an `int32`; the quantity

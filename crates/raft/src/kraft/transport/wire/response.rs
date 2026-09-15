@@ -226,6 +226,86 @@ pub fn encode_end_quorum_epoch_response(
     encode_body(&resp, QUORUM_EPOCH_VERSION)
 }
 
+/// The one partition of a `FetchSnapshot` answer that names a partition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchSnapshotPartition {
+    /// The topic the request named. It is `__cluster_metadata` except in the
+    /// `UNKNOWN_TOPIC_OR_PARTITION` answer.
+    pub topic: String,
+    /// The partition the request named.
+    pub index: i32,
+    pub error_code: i16,
+    /// Whether `CurrentLeader` carries the responder's leader view. Kafka's
+    /// `addQuorumLeader` fills it in every answer except
+    /// `UNKNOWN_TOPIC_OR_PARTITION`.
+    pub current_leader: bool,
+    /// The snapshot id, size, position and bytes of a served chunk.
+    pub chunk: Option<((i64, i32), i64, i64, Bytes)>,
+}
+
+/// Encodes a `FetchSnapshot` response body (api 59), as Kafka's
+/// `RaftUtil.singletonFetchSnapshotResponse` builds it.
+///
+/// `partition` `None` is Kafka's bare top-level error response,
+/// `FetchSnapshotResponse.withTopLevelError`. Otherwise `NodeEndpoints` names
+/// the leader when the leader and its endpoint are known.
+#[must_use]
+pub fn encode_fetch_snapshot_answer(
+    top_level_error: i16,
+    partition: Option<FetchSnapshotPartition>,
+    leader: &QuorumLeader,
+) -> Bytes {
+    let Some(partition) = partition else {
+        let resp = FetchSnapshotResponse {
+            error_code: top_level_error,
+            ..Default::default()
+        };
+        return encode_body(&resp, FETCH_SNAPSHOT_VERSION);
+    };
+    let mut snapshot = fs_resp::PartitionSnapshot {
+        index: partition.index,
+        error_code: partition.error_code,
+        ..Default::default()
+    };
+    if partition.current_leader {
+        snapshot.current_leader = fs_resp::LeaderIdAndEpoch {
+            leader_id: leader.leader_id_to_wire(),
+            leader_epoch: epoch_to_wire(leader.epoch),
+            ..Default::default()
+        };
+    }
+    if let Some(((end_offset, epoch), size, position, bytes)) = partition.chunk {
+        snapshot.snapshot_id = fs_resp::SnapshotId {
+            end_offset,
+            epoch,
+            ..Default::default()
+        };
+        snapshot.size = size;
+        snapshot.position = position;
+        snapshot.unaligned_records = RecordsPayload::Raw(bytes);
+    }
+    let resp = FetchSnapshotResponse {
+        error_code: top_level_error,
+        topics: vec![fs_resp::TopicSnapshot {
+            name: partition.topic,
+            partitions: vec![snapshot],
+            ..Default::default()
+        }],
+        node_endpoints: leader
+            .node_endpoint()
+            .map(|(node_id, host, port)| fs_resp::NodeEndpoint {
+                node_id,
+                host,
+                port,
+                ..Default::default()
+            })
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    encode_body(&resp, FETCH_SNAPSHOT_VERSION)
+}
+
 /// Encodes a `FetchSnapshot` response body (api 59).
 fn encode_fetch_snapshot_response(
     snapshot_id: (i64, i32),

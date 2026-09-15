@@ -70,7 +70,12 @@ pub enum PeerRequest {
         replica_directory_id: uuid::Uuid,
     },
     FetchSnapshot {
+        /// The sender's cluster id, which the leader checks.
+        cluster_id: Option<uuid::Uuid>,
         from: NodeId,
+        /// The epoch the sender believes the leader holds:
+        /// `CurrentLeaderEpoch`, which the leader checks against its own.
+        current_leader_epoch: i32,
         snapshot_id: (i64, i32),
         position: i64,
         max_bytes: i32,
@@ -223,15 +228,18 @@ impl PeerRequest {
                 Some(encode_body(&req, FETCH_VERSION))
             }
             PeerRequest::FetchSnapshot {
+                cluster_id,
                 from,
+                current_leader_epoch,
                 snapshot_id,
                 position,
                 max_bytes,
             } => Some(encode_fetch_snapshot_request(
+                cluster_id,
                 from,
+                current_leader_epoch,
                 snapshot_id,
-                position,
-                max_bytes,
+                (position, max_bytes),
             )),
         }
     }
@@ -254,6 +262,13 @@ where
 {
     let mut cur = buf;
     T::decode(&mut cur, version).ok()
+}
+
+/// Decodes a `FetchSnapshot` request body (api 59) without checking its
+/// fields.
+#[must_use]
+pub fn decode_fetch_snapshot_request(buf: &[u8]) -> Option<FetchSnapshotRequest> {
+    decode_request(buf, FETCH_SNAPSHOT_VERSION)
 }
 
 /// Decodes a Vote request body (api 52) without checking its fields.
@@ -374,22 +389,25 @@ pub fn decode_fetch(buf: &[u8]) -> Option<PeerRequest> {
     })
 }
 
-/// Encodes a `FetchSnapshot` request body (api 59).
+/// Encodes a `FetchSnapshot` request body (api 59), as Kafka's
+/// `RaftUtil.singletonFetchSnapshotRequest` builds it.
 fn encode_fetch_snapshot_request(
+    cluster_id: Option<uuid::Uuid>,
     from: NodeId,
+    current_leader_epoch: i32,
     snapshot_id: (i64, i32),
-    position: i64,
-    max_bytes: i32,
+    (position, max_bytes): (i64, i32),
 ) -> Bytes {
     let (end_offset, epoch) = snapshot_id;
     let req = FetchSnapshotRequest {
+        cluster_id: cluster_id.map(|id| URL_SAFE_NO_PAD.encode(id.as_bytes())),
         replica_id: node_to_wire(from),
         max_bytes,
         topics: vec![fs_req::TopicSnapshot {
             name: METADATA_TOPIC.to_string(),
             partitions: vec![fs_req::PartitionSnapshot {
                 partition: METADATA_PARTITION,
-                current_leader_epoch: epoch,
+                current_leader_epoch,
                 snapshot_id: fs_req::SnapshotId {
                     end_offset,
                     epoch,
@@ -412,7 +430,12 @@ pub fn decode_fetch_snapshot(buf: &[u8]) -> Option<PeerRequest> {
     let req = FetchSnapshotRequest::decode(&mut cur, FETCH_SNAPSHOT_VERSION).ok()?;
     let p = req.topics.first()?.partitions.first()?;
     Some(PeerRequest::FetchSnapshot {
+        cluster_id: match req.cluster_id.as_deref() {
+            Some(id) => Some(parse_cluster_id(id)?),
+            None => None,
+        },
         from: node_from_wire(req.replica_id),
+        current_leader_epoch: p.current_leader_epoch,
         snapshot_id: (p.snapshot_id.end_offset, p.snapshot_id.epoch),
         position: p.position,
         max_bytes: req.max_bytes,

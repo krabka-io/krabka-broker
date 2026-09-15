@@ -165,17 +165,20 @@ pub(super) async fn dispatch_metadata_fetch(
     // the request stays byte-exact. A negative budget clamps to zero, as before.
     let max_size = ByteSize::from_bytes_i64(i64::from(req.max_bytes.max(0)));
     let slice = engine.metadata_fetch(fetch_offset, max_size).await?;
-    let leader_hint: i64 = engine
-        .quorum_state()
-        .await
-        .ok()
+    let quorum = engine.quorum_state().await.ok();
+    let leader_hint: i64 = quorum
+        .as_ref()
         .and_then(|qs| qs.leader_id)
         .and_then(|l| i64::try_from(l.0).ok())
         .unwrap_or(LEADER_HINT_UNKNOWN);
+    let leader_epoch = quorum
+        .as_ref()
+        .map_or(-1, |qs| i32::try_from(qs.leader_epoch).unwrap_or(i32::MAX));
 
     let resp = KrabkaMetadataFetchResponse {
         error_code: 0,
         leader_hint,
+        leader_epoch,
         log_start_offset: slice.log_start_offset,
         high_watermark: slice.high_watermark,
         quorum_high_watermark: slice.quorum_high_watermark,

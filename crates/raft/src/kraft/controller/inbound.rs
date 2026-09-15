@@ -4,19 +4,12 @@
 
 use krabka_ids::Offset;
 
-use super::{
-    Engine, checkpoint::load_checkpoint_by_id, checkpoint_dir,
-    replication::should_serve_fetch_records,
-};
+use super::{Engine, replication::should_serve_fetch_records};
 use crate::kraft::{
     action::Action,
-    event::{Event, LogEnd},
+    event::Event,
     transport::{Inbound, wire},
 };
-
-/// Krabka-internal "snapshot not available" signal in a `FetchSnapshot`
-/// response (voter↔voter).
-const SNAPSHOT_NOT_FOUND: i16 = 98;
 
 impl Engine {
     #[tracing::instrument(
@@ -138,52 +131,8 @@ impl Engine {
                 }
             }
             Inbound::FetchSnapshot { req, reply } => {
-                if let Some(wire::PeerRequest::FetchSnapshot {
-                    from,
-                    snapshot_id,
-                    position,
-                    max_bytes,
-                }) = wire::decode_fetch_snapshot(&req)
-                {
-                    // A voter catching up through KIP-630 is in contact with us
-                    // even though it sends no Fetch, so score it for
-                    // check-quorum before serving the chunk. Kafka does the same
-                    // in `handleFetchSnapshotRequest`; without it a leader whose
-                    // only reachable follower is mid-snapshot resigns under a
-                    // healthy quorum.
-                    self.on_event(Event::ReceiveFetchSnapshot { from });
-                    let (end_offset, epoch) = snapshot_id;
-                    let resp = match load_checkpoint_by_id(
-                        &checkpoint_dir(&self.data_dir),
-                        end_offset,
-                        epoch,
-                    ) {
-                        Some(bytes) => {
-                            // KIP-595 `FetchSnapshot` addresses a byte window of
-                            // the on-disk checkpoint. Both fields are slice
-                            // indices straight off the wire, so they clamp to
-                            // `usize` here rather than becoming quantities.
-                            let max = usize::try_from(max_bytes.max(0)).unwrap_or(0);
-                            let pos = usize::try_from(position.max(0)).unwrap_or(0);
-                            let chunk =
-                                crate::snapshot::SnapshotReader::byte_range(&bytes, pos, max);
-                            wire::PeerResponse::FetchSnapshot {
-                                snapshot_id,
-                                size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
-                                position,
-                                bytes: bytes::Bytes::copy_from_slice(chunk),
-                                error_code: 0,
-                            }
-                        }
-                        None => wire::PeerResponse::FetchSnapshot {
-                            snapshot_id,
-                            size: 0,
-                            position,
-                            bytes: bytes::Bytes::new(),
-                            error_code: SNAPSHOT_NOT_FOUND,
-                        },
-                    };
-                    let _ = reply.send(resp.encode());
+                if let Some(response) = self.answer_fetch_snapshot(&req) {
+                    let _ = reply.send(response);
                 }
             }
         }

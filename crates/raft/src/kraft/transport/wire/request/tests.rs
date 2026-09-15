@@ -299,7 +299,9 @@ fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
 #[test]
 fn fetch_snapshot_request_round_trips() {
     let req = PeerRequest::FetchSnapshot {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
         from: NodeId(2),
+        current_leader_epoch: 7,
         snapshot_id: (42, 3),
         position: 128,
         max_bytes: 4096,
@@ -308,11 +310,13 @@ fn fetch_snapshot_request_round_trips() {
 }
 
 #[test]
-fn encoded_fetch_snapshot_request_carries_empty_cluster_id() {
+fn encoded_fetch_snapshot_request_carries_cluster_id_and_current_leader_epoch() {
     use krabka_protocol::Decode;
 
     let req = PeerRequest::FetchSnapshot {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
         from: NodeId(2),
+        current_leader_epoch: 7,
         snapshot_id: (42, 3),
         position: 128,
         max_bytes: 4096,
@@ -323,13 +327,13 @@ fn encoded_fetch_snapshot_request_carries_empty_cluster_id() {
     let partition = &raw.topics[0].partitions[0];
     check!(
         (
-            raw.cluster_id.as_ref(),
+            raw.cluster_id.as_deref(),
             raw.replica_id,
             raw.max_bytes,
             partition.current_leader_epoch,
             partition.snapshot_id.end_offset,
             partition.snapshot_id.epoch,
             partition.position,
-        ) == (None, 2, 4096, 3, 42, 3, 128)
+        ) == (Some("AAAAAAAAAAAAAAAAAAAACQ"), 2, 4096, 7, 42, 3, 128)
     );
 }

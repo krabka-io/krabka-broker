@@ -1,5 +1,5 @@
-//! Kafka's request checks on an inbound `Vote`, `BeginQuorumEpoch` and
-//! `EndQuorumEpoch`: one table per API, each row a request and the whole
+//! Kafka's request checks on an inbound `Vote`, `BeginQuorumEpoch`,
+//! `EndQuorumEpoch` and `FetchSnapshot`: one table per API, each row a request and the whole
 //! decoded response it must get.
 
 use assert2::check;
@@ -10,6 +10,8 @@ use krabka_protocol::{
         begin_quorum_epoch_response::{self as bqe_resp, BeginQuorumEpochResponse},
         end_quorum_epoch_request::{self as eqe_req, EndQuorumEpochRequest},
         end_quorum_epoch_response::{self as eqe_resp, EndQuorumEpochResponse},
+        fetch_snapshot_request::{self as fs_req, FetchSnapshotRequest},
+        fetch_snapshot_response::{self as fs_resp, FetchSnapshotResponse},
         vote_request::{self as vote_req, VoteRequest},
         vote_response::{self as vote_resp, VoteResponse},
     },
@@ -19,7 +21,7 @@ use krabka_protocol::{
 use super::*;
 use crate::kraft::{
     controller::test_support::{build_engine_only, voter_set},
-    transport::wire::{QUORUM_EPOCH_VERSION, VOTE_VERSION},
+    transport::wire::{FETCH_SNAPSHOT_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION},
 };
 
 const METADATA_TOPIC: &str = "__cluster_metadata";
@@ -51,6 +53,10 @@ fn begin(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> Inbound {
 
 fn end(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> Inbound {
     Inbound::EndQuorumEpoch { req, reply }
+}
+
+fn fetch_snapshot(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> Inbound {
+    Inbound::FetchSnapshot { req, reply }
 }
 
 fn encode<M: Encode>(message: &M, version: i16) -> bytes::Bytes {
@@ -538,5 +544,217 @@ async fn preferred_candidates_follow_replication_progress() {
                 (NodeId(2), Uuid::nil()),
                 (NodeId(4), Uuid::nil()),
             ]
+    );
+}
+
+fn fetch_snapshot_request(
+    edit: impl FnOnce(&mut FetchSnapshotRequest, &mut fs_req::PartitionSnapshot),
+) -> FetchSnapshotRequest {
+    let mut partition = fs_req::PartitionSnapshot {
+        partition: 0,
+        current_leader_epoch: 1,
+        snapshot_id: fs_req::SnapshotId {
+            end_offset: 10,
+            epoch: 1,
+            ..Default::default()
+        },
+        position: 0,
+        ..Default::default()
+    };
+    let mut request = FetchSnapshotRequest {
+        replica_id: 2,
+        max_bytes: 4,
+        ..Default::default()
+    };
+    edit(&mut request, &mut partition);
+    if request.topics.is_empty() {
+        request.topics = vec![fs_req::TopicSnapshot {
+            name: METADATA_TOPIC.into(),
+            partitions: vec![partition],
+            ..Default::default()
+        }];
+    }
+    request
+}
+
+/// An answer that names `topic` and `index`, with the leader view of `leader`
+/// (a leader id and epoch) when it is `Some`, and node 1's endpoint.
+fn fetch_snapshot_answer(
+    (topic, index): (&str, i32),
+    error_code: i16,
+    leader: Option<(i32, i32)>,
+    chunk: Option<(i64, i64, &'static [u8])>,
+) -> FetchSnapshotResponse {
+    let mut partition = fs_resp::PartitionSnapshot {
+        index,
+        error_code,
+        ..Default::default()
+    };
+    if let Some((leader_id, leader_epoch)) = leader {
+        partition.current_leader = fs_resp::LeaderIdAndEpoch {
+            leader_id,
+            leader_epoch,
+            ..Default::default()
+        };
+    }
+    if let Some((size, position, bytes)) = chunk {
+        partition.snapshot_id = fs_resp::SnapshotId {
+            end_offset: 10,
+            epoch: 1,
+            ..Default::default()
+        };
+        partition.size = size;
+        partition.position = position;
+        partition.unaligned_records =
+            krabka_protocol::records::RecordsPayload::Raw(bytes::Bytes::from_static(bytes));
+    }
+    FetchSnapshotResponse {
+        topics: vec![fs_resp::TopicSnapshot {
+            name: topic.into(),
+            partitions: vec![partition],
+            ..Default::default()
+        }],
+        node_endpoints: vec![fs_resp::NodeEndpoint {
+            node_id: leader.map_or(1, |(leader_id, _)| leader_id),
+            host: "127.0.0.1".into(),
+            port: 9_093,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// Node 1, the only voter, leading epoch 1, with checkpoints (10, 1) and the
+/// bootstrap id (0, 0) on disk.
+fn single_voter_leader_with_checkpoints() -> (Engine, tempfile::TempDir) {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    engine.on_event(Event::ElectionTimeout);
+    assert2::assert!(
+        (
+            engine.core.role().is_leader(),
+            engine.core.quorum_state().leader_epoch
+        ) == (true, 1)
+    );
+    let checkpoints = checkpoint_dir(&engine.data_dir);
+    checkpoint::write_checkpoint(&checkpoints, 10, 1, b"0123456789").expect("checkpoint 10/1");
+    checkpoint::write_checkpoint(&checkpoints, 0, 0, b"bootstrap").expect("checkpoint 0/0");
+    (engine, dir)
+}
+
+#[tokio::test]
+async fn fetch_snapshot_runs_kafka_request_checks() {
+    let top_level = |error_code| FetchSnapshotResponse {
+        error_code,
+        ..Default::default()
+    };
+    let metadata = (METADATA_TOPIC, 0);
+    let leader = Some((1, 1));
+    let rows: Vec<(&str, FetchSnapshotRequest, FetchSnapshotResponse)> = vec![
+        (
+            "foreign cluster id",
+            fetch_snapshot_request(|r, _| r.cluster_id = Some(foreign_cluster_id())),
+            top_level(104),
+        ),
+        (
+            "two partitions",
+            fetch_snapshot_request(|r, p| {
+                r.topics = vec![fs_req::TopicSnapshot {
+                    name: METADATA_TOPIC.into(),
+                    partitions: vec![p.clone(), p.clone()],
+                    ..Default::default()
+                }];
+            }),
+            top_level(42),
+        ),
+        (
+            "another topic",
+            fetch_snapshot_request(|r, p| {
+                r.topics = vec![fs_req::TopicSnapshot {
+                    name: "other".into(),
+                    partitions: vec![p.clone()],
+                    ..Default::default()
+                }];
+            }),
+            fetch_snapshot_answer(("other", 0), 3, None, None),
+        ),
+        (
+            "partition 1",
+            fetch_snapshot_request(|_, p| p.partition = 1),
+            fetch_snapshot_answer((METADATA_TOPIC, 1), 3, None, None),
+        ),
+        (
+            "leader epoch below the local epoch",
+            fetch_snapshot_request(|_, p| p.current_leader_epoch = 0),
+            fetch_snapshot_answer(metadata, 74, leader, None),
+        ),
+        (
+            "leader epoch above the local epoch",
+            fetch_snapshot_request(|_, p| p.current_leader_epoch = 2),
+            fetch_snapshot_answer(metadata, 75, leader, None),
+        ),
+        (
+            "unknown snapshot id",
+            fetch_snapshot_request(|_, p| p.snapshot_id.end_offset = 11),
+            fetch_snapshot_answer(metadata, 98, leader, None),
+        ),
+        (
+            "bootstrap snapshot id",
+            fetch_snapshot_request(|_, p| {
+                p.snapshot_id.end_offset = 0;
+                p.snapshot_id.epoch = 0;
+            }),
+            fetch_snapshot_answer(metadata, 98, leader, None),
+        ),
+        (
+            "negative position",
+            fetch_snapshot_request(|_, p| p.position = -1),
+            fetch_snapshot_answer(metadata, 123, leader, None),
+        ),
+        (
+            "position at the size",
+            fetch_snapshot_request(|_, p| p.position = 10),
+            fetch_snapshot_answer(metadata, 123, leader, None),
+        ),
+        (
+            "last byte",
+            fetch_snapshot_request(|_, p| p.position = 9),
+            fetch_snapshot_answer(metadata, 0, leader, Some((10, 9, b"9"))),
+        ),
+        (
+            "first chunk",
+            fetch_snapshot_request(|_, _| {}),
+            fetch_snapshot_answer(metadata, 0, leader, Some((10, 0, b"0123"))),
+        ),
+    ];
+    for (label, request, expected) in rows {
+        let (mut engine, _dir) = single_voter_leader_with_checkpoints();
+        let body = deliver(
+            &mut engine,
+            fetch_snapshot,
+            encode(&request, FETCH_SNAPSHOT_VERSION),
+        )
+        .expect("an answer");
+        check!(body == encode(&expected, FETCH_SNAPSHOT_VERSION), "{label}");
+    }
+}
+
+/// A follower refuses `FetchSnapshot` at its own epoch and names the leader.
+#[tokio::test]
+async fn fetch_snapshot_to_a_follower_names_the_leader() {
+    let (mut engine, _dir) = follower_of_2_in_epoch_5();
+    let request = fetch_snapshot_request(|_, p| p.current_leader_epoch = 5);
+
+    let body = deliver(
+        &mut engine,
+        fetch_snapshot,
+        encode(&request, FETCH_SNAPSHOT_VERSION),
+    )
+    .expect("an answer");
+
+    check!(
+        body == encode(
+            &fetch_snapshot_answer((METADATA_TOPIC, 0), 6, Some((2, 5)), None),
+            FETCH_SNAPSHOT_VERSION
+        )
     );
 }

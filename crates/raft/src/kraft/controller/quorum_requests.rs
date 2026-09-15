@@ -1,8 +1,10 @@
-//! Kafka's request checks for an inbound `Vote`, `BeginQuorumEpoch` and
-//! `EndQuorumEpoch`, and the leader view every response carries.
+//! Kafka's request checks for an inbound `Vote`, `BeginQuorumEpoch`,
+//! `EndQuorumEpoch` and `FetchSnapshot`, and the leader view every response
+//! carries.
 //!
 //! The checks and their order are those of `KafkaRaftClient.handleVoteRequest`,
-//! `handleBeginQuorumEpochRequest` and `handleEndQuorumEpochRequest`:
+//! `handleBeginQuorumEpochRequest`, `handleEndQuorumEpochRequest` and
+//! `handleFetchSnapshotRequest`:
 //!
 //! 1. A `ClusterId` that names another cluster is a top-level
 //!    `INCONSISTENT_CLUSTER_ID`, with no partition.
@@ -17,17 +19,26 @@
 
 use bytes::Bytes;
 
-use super::Engine;
+use super::{Engine, checkpoint::load_checkpoint_by_id, checkpoint_dir};
 use crate::kraft::{
     event::{Event, LogEnd, SuccessorRank},
     transport::wire,
     types::{Epoch, NodeId},
 };
 
+const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
+const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 const INVALID_REQUEST: i16 = 42;
 const FENCED_LEADER_EPOCH: i16 = 74;
+const UNKNOWN_LEADER_EPOCH: i16 = 75;
+const SNAPSHOT_NOT_FOUND: i16 = 98;
 const INCONSISTENT_CLUSTER_ID: i16 = 104;
+const POSITION_OUT_OF_RANGE: i16 = 123;
 const INVALID_VOTER_KEY: i16 = 124;
+
+/// Kafka's `BOOTSTRAP_SNAPSHOT_ID`. The bootstrap checkpoint is not
+/// replicated.
+const BOOTSTRAP_SNAPSHOT_ID: (i64, i32) = (0, 0);
 
 /// The listener name a controller advertises its peer RPCs on. A voter
 /// endpoint with another name is used only when the voter has no such
@@ -80,6 +91,21 @@ impl Engine {
             Some(FENCED_LEADER_EPOCH)
         } else if remote_id < 0 {
             Some(INVALID_REQUEST)
+        } else {
+            None
+        }
+    }
+
+    /// Kafka's `validateLeaderOnlyRequest`, without the shutdown check: the
+    /// engine answers no request once it stops.
+    fn leader_only_request_error(&self, request_epoch: i32) -> Option<i16> {
+        let local_epoch = i64::from(self.core.quorum_state().leader_epoch);
+        if i64::from(request_epoch) < local_epoch {
+            Some(FENCED_LEADER_EPOCH)
+        } else if i64::from(request_epoch) > local_epoch {
+            Some(UNKNOWN_LEADER_EPOCH)
+        } else if !self.core.role().is_leader() {
+            Some(NOT_LEADER_OR_FOLLOWER)
         } else {
             None
         }
@@ -298,5 +324,103 @@ impl Engine {
             successor_rank,
         });
         respond(self, 0, 0)
+    }
+
+    /// Answers a `FetchSnapshot` request. `None` means the body did not
+    /// decode.
+    pub(super) fn answer_fetch_snapshot(&mut self, body: &[u8]) -> Option<Bytes> {
+        let request = wire::decode_fetch_snapshot_request(body)?;
+        let top_level = |engine: &Self, error_code: i16| {
+            Some(wire::encode_fetch_snapshot_answer(
+                error_code,
+                None,
+                &engine.quorum_leader(),
+            ))
+        };
+        let partition_error = |engine: &Self, error_code: i16| {
+            Some(wire::encode_fetch_snapshot_answer(
+                0,
+                Some(wire::FetchSnapshotPartition {
+                    topic: wire::METADATA_TOPIC.into(),
+                    index: wire::METADATA_PARTITION,
+                    error_code,
+                    current_leader: true,
+                    chunk: None,
+                }),
+                &engine.quorum_leader(),
+            ))
+        };
+        if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
+            return top_level(self, INCONSISTENT_CLUSTER_ID);
+        }
+        let [topic] = request.topics.as_slice() else {
+            return top_level(self, INVALID_REQUEST);
+        };
+        let [partition] = topic.partitions.as_slice() else {
+            return top_level(self, INVALID_REQUEST);
+        };
+        if topic.name != wire::METADATA_TOPIC || partition.partition != wire::METADATA_PARTITION {
+            return Some(wire::encode_fetch_snapshot_answer(
+                0,
+                Some(wire::FetchSnapshotPartition {
+                    topic: topic.name.clone(),
+                    index: partition.partition,
+                    error_code: UNKNOWN_TOPIC_OR_PARTITION,
+                    current_leader: false,
+                    chunk: None,
+                }),
+                &self.quorum_leader(),
+            ));
+        }
+        if let Some(error) = self.leader_only_request_error(partition.current_leader_epoch) {
+            return partition_error(self, error);
+        }
+        let snapshot_id = (
+            partition.snapshot_id.end_offset,
+            partition.snapshot_id.epoch,
+        );
+        let checkpoint = (snapshot_id != BOOTSTRAP_SNAPSHOT_ID)
+            .then(|| {
+                load_checkpoint_by_id(
+                    &checkpoint_dir(&self.data_dir),
+                    snapshot_id.0,
+                    snapshot_id.1,
+                )
+            })
+            .flatten();
+        let Some(bytes) = checkpoint else {
+            return partition_error(self, SNAPSHOT_NOT_FOUND);
+        };
+        let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+        if partition.position < 0 || partition.position >= size {
+            return partition_error(self, POSITION_OUT_OF_RANGE);
+        }
+        // A voter catching up through KIP-630 is in contact with the leader even
+        // though it sends no Fetch, so score it for check-quorum. Kafka does
+        // this once the request passed its checks.
+        if let Ok(from) = u64::try_from(request.replica_id) {
+            self.on_event(Event::ReceiveFetchSnapshot { from: NodeId(from) });
+        }
+        // Both fields are slice indices off the wire. The position is inside
+        // the checkpoint, and a negative `MaxBytes` reads nothing.
+        let max = usize::try_from(request.max_bytes.max(0)).unwrap_or(0);
+        let position = usize::try_from(partition.position).unwrap_or(0);
+        let chunk = crate::snapshot::SnapshotReader::byte_range(&bytes, position, max);
+        Some(wire::encode_fetch_snapshot_answer(
+            0,
+            Some(wire::FetchSnapshotPartition {
+                topic: wire::METADATA_TOPIC.into(),
+                index: wire::METADATA_PARTITION,
+                error_code: 0,
+                current_leader: true,
+                chunk: Some((
+                    snapshot_id,
+                    size,
+                    partition.position,
+                    Bytes::copy_from_slice(chunk),
+                )),
+            }),
+            &self.quorum_leader(),
+        ))
     }
 }
