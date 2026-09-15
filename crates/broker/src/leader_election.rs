@@ -27,12 +27,12 @@ pub(crate) mod test_support;
 pub(crate) use self::policy::{FailoverDecision, failover_one};
 pub(crate) use self::{
     driver::{LivenessTickState, run_liveness_tick},
-    operator::{
-        ElectError, ElectionType, select_new_leader_for_partition,
-        select_replacement_leader_for_shutdown,
-    },
+    operator::{ElectError, ElectionType, select_new_leader_for_partition},
     policy::FailoverPlan,
-    scan::{compute_offline_dir_failover_changes, compute_unclean_restart_changes},
+    scan::{
+        compute_failover_changes, compute_offline_dir_failover_changes,
+        compute_unclean_restart_changes,
+    },
 };
 
 #[cfg(test)]

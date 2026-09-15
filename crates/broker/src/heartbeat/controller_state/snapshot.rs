@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use super::{BrokerLivenessState, ControllerLivenessState};
+use super::{BrokerLivenessState, ControllerLivenessState, registry::BrokerEntry};
 
 impl ControllerLivenessState {
     /// Return the current liveness state for `broker_id`, or `None` if
@@ -18,20 +18,22 @@ impl ControllerLivenessState {
         map.get(&broker_id).map(|e| e.state)
     }
 
-    /// Return `true` if `broker_id` is currently `Alive` (has sent a
-    /// heartbeat within the timeout window). Returns `false` for unknown
-    /// brokers and for brokers whose heartbeat has expired.
+    /// Return `true` if `broker_id` is active: `Alive` (it sent a heartbeat
+    /// within the timeout window), unfenced, and not in controlled shutdown,
+    /// which is Kafka's `ClusterControlManager.isActive`. Returns `false` for
+    /// unknown brokers and for brokers whose heartbeat has expired.
     pub(crate) async fn is_alive(&self, broker_id: u64) -> bool {
         self.brokers
             .lock()
             .await
             .get(&broker_id)
-            .is_some_and(|entry| entry.state == BrokerLivenessState::Alive && !entry.fenced)
+            .is_some_and(BrokerEntry::is_active)
     }
 
     /// Apply the broker's fencing request. A broker can only unfence after it
     /// has caught up through its registration record. Returns the resulting
     /// fenced state.
+    #[cfg(test)]
     pub(crate) async fn apply_fencing(
         &self,
         broker_id: u64,
@@ -50,7 +52,7 @@ impl ControllerLivenessState {
         entry.fenced
     }
 
-    /// Snapshot the set of currently-`Alive` broker ids under a single
+    /// Snapshot the set of active broker ids under a single
     /// lock acquisition. This is equivalent to calling
     /// [`is_alive`](Self::is_alive) for every broker. But the cluster-wide
     /// maintenance loops for failover, rebalance, and metrics take the
@@ -61,7 +63,7 @@ impl ControllerLivenessState {
     pub(crate) async fn alive_snapshot(&self) -> HashSet<u64> {
         let map = self.brokers.lock().await;
         map.iter()
-            .filter(|(_, e)| e.state == BrokerLivenessState::Alive && !e.fenced)
+            .filter(|(_, entry)| entry.is_active())
             .map(|(&id, _)| id)
             .collect()
     }
