@@ -112,6 +112,12 @@ fn update_member_state(
             m.client_host = client.host.to_string();
             member_metadata_changed = true;
         }
+        // Kafka's `ShareGroupMember.Builder.maybeUpdateRackId`: a heartbeat that
+        // carries a rack id replaces the stored one, a rejoin included.
+        if req.rack_id.is_some() && m.rack_id != req.rack_id {
+            m.rack_id.clone_from(&req.rack_id);
+            member_metadata_changed = true;
+        }
         if let Some(ref names) = req.subscribed_topic_names {
             let set: HashSet<String> = names.iter().cloned().collect();
             if set != m.subscribed_topic_names {
@@ -426,6 +432,40 @@ mod tests {
                 super::super::response::error_resp(codes::UNKNOWN_MEMBER_ID, &config)
             };
             check!(resp == expected, "row {index}");
+        }
+    }
+
+    /// A heartbeat that carries a rack id replaces the stored one, a rejoin at
+    /// epoch 0 included, and the member metadata record carries the new rack.
+    /// A heartbeat without a rack id keeps it (`maybeUpdateRackId`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heartbeat_updates_the_rack_id() {
+        let (metadata, _id) = metadata_with_topic("t", 1);
+        let (coord, _log) = make_coordinator(metadata);
+        let handle = coord.get_or_create_share("g");
+        let request = |member_epoch, rack_id: Option<&str>| ShareGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch,
+            rack_id: rack_id.map(str::to_owned),
+            subscribed_topic_names: Some(vec!["t".into()]),
+            ..Default::default()
+        };
+        // (request epoch, request rack id, expected stored rack id)
+        let rows = [
+            (0, Some("rack-a"), Some("rack-a")),
+            (0, Some("rack-b"), Some("rack-b")),
+            (1, None, Some("rack-b")),
+            (1, Some("rack-c"), Some("rack-c")),
+        ];
+        for (index, (member_epoch, rack_id, expected)) in rows.into_iter().enumerate() {
+            let resp = heartbeat(&handle, request(member_epoch, rack_id)).await;
+            check!(resp.error_code == codes::NONE, "row {index}");
+            let seed = coord.cached_share_seed("g").expect("seed cached");
+            check!(
+                seed.members["m1"].rack_id.as_deref() == expected,
+                "row {index}"
+            );
         }
     }
 
