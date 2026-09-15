@@ -62,12 +62,17 @@ pub(crate) async fn run(
 /// This is the tick [`run`] drives, and the seam the expiry tests in
 /// [`crate::txn::coordinator::expiry`] drive instead of waiting on a timer.
 pub(in crate::txn) async fn sweep_once(
-    coord: &TxnCoordinator,
+    coord: &Arc<TxnCoordinator>,
     controller: &dyn MetadataSource,
     expiration: Time,
 ) {
     let image = controller.current_image();
-    coord.refresh_leader_partitions(&image).await;
+    // The sweep is a background task, so it waits for the loads it starts.
+    coord
+        .refresh_leader_partitions(&image)
+        .await
+        .finished()
+        .await;
     let now_ms = crate::txn::util::now_millis();
     let expired = coord
         .expire_transactional_ids(now_ms, expiration.millis_i64())

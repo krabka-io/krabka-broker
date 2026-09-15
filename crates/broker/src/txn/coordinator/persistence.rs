@@ -4,18 +4,16 @@
 //! byte-exact Kafka `TransactionLogKey` / `TransactionLogValue` record pair and
 //! then publishes it to the in-memory map. A second appends a null-valued
 //! record under that same key, which is how KIP-98 expires a transactional id.
-//! The third replays every locally-led `__transaction_state` partition on
-//! broker start to rebuild that map, tombstones included.
+//! The third replays one `__transaction_state` partition, tombstones
+//! included, for the load that follows an election.
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
-use krabka_metadata::MetadataImage;
 use krabka_protocol::records::{Record, RecordBatch};
 use tokio::sync::Mutex;
-use tracing::info;
 
 use super::{TxnCoordinator, pid_index::RecoveredTransactions};
 use crate::{
@@ -72,6 +70,7 @@ impl TxnCoordinator {
     ) -> Result<(), BrokerError> {
         let tid = entry.transactional_id.clone();
         let p = self.partition_for(&tid);
+        let generation = self.loaded_generation(p).await?;
         let part = self
             .partitions
             .get(bootstrap::TOPIC, p)
@@ -93,6 +92,11 @@ impl TxnCoordinator {
 
         part.produce_batch(batch).await?;
 
+        // Kafka's `appendTransactionToLog` callback: an append that ends in a
+        // newer coordinator term does not change the cache. The load of that
+        // term reads the record from the log.
+        let leaders = self.leader_partitions.read().await;
+        Self::require_generation(&leaders, p, generation)?;
         let _pid_install = self
             .pid_install
             .lock()
@@ -109,6 +113,7 @@ impl TxnCoordinator {
                 .insert(entry.next_producer_id, entry.transactional_id.clone());
         }
         self.state.insert(tid, Arc::new(Mutex::new(entry)));
+        drop(leaders);
         Ok(())
     }
 
@@ -146,6 +151,7 @@ impl TxnCoordinator {
     pub(crate) async fn tombstone(&self, entry: &TxnEntry) -> Result<(), BrokerError> {
         let tid = entry.transactional_id.as_str();
         let p = self.partition_for(tid);
+        let generation = self.loaded_generation(p).await?;
         let part = self
             .partitions
             .get(bootstrap::TOPIC, p)
@@ -162,132 +168,72 @@ impl TxnCoordinator {
 
         part.produce_batch(batch).await?;
 
+        let leaders = self.leader_partitions.read().await;
+        Self::require_generation(&leaders, p, generation)?;
         self.state.remove(tid);
         Self::evict_entry_pids(&self.pid_to_tid, entry);
+        drop(leaders);
         Ok(())
     }
+}
 
-    /// Replays every locally-led `__transaction_state` partition into the
-    /// in-memory state map. `Broker::start` calls it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BrokerError`] without publishing a partial recovery image if
-    /// a partition is missing, a read or decode fails, a record is misplaced,
-    /// an offset overflows, or two transactions claim one producer ID.
-    // cargo-mutants: orchestration only. It reads each locally-led
-    // `__transaction_state` partition off disk and feeds every record to
-    // `apply_recovered_record` / `RecoveredTransactions`, which carry the
-    // decisions and are mutation-tested in their own right; what is left here is
-    // the log walk itself, which has no in-process signal of its own.
-    #[cfg_attr(test, mutants::skip)]
-    #[tracing::instrument(name = "txn_coordinator_recover", level = "info", skip_all, err)]
-    pub(crate) async fn recover(&self, image: &MetadataImage) -> Result<(), BrokerError> {
-        self.recovery_valid.store(false, Ordering::Release);
-        self.install_leader_partitions(image).await;
-
-        let mut local_partitions: Vec<PartitionIndex> = self
-            .leader_partitions
-            .read()
-            .await
-            .iter()
-            .filter(|(_, leadership)| leadership.leads)
-            .map(|(partition, _)| *partition)
-            .collect();
-        local_partitions.sort_unstable_by_key(|partition| partition.get());
-
-        let recovery = (|| -> Result<RecoveredTransactions, BrokerError> {
-            let mut recovered = RecoveredTransactions::default();
-            for p in local_partitions {
-                let part = self.partitions.get(bootstrap::TOPIC, p).ok_or_else(|| {
-                    BrokerError::Txn(format!("__transaction_state-{p} not local during recovery"))
+/// Replays `__transaction_state`-`partition` from its log start offset to its
+/// log end offset.
+///
+/// `partition_for` maps a transactional id to its state partition. The replay
+/// is a pure fold over the log. It does not touch the coordinator, so a load
+/// can run it on the blocking pool.
+///
+/// # Errors
+///
+/// Returns [`BrokerError`] if a read or decode fails, a record is misplaced,
+/// an offset overflows, or two transactions claim one producer ID.
+// cargo-mutants: the log walk itself. `RecoveredTransactions` carries the
+// decisions and is mutation-tested on its own.
+#[cfg_attr(test, mutants::skip)]
+pub(super) fn replay_partition(
+    part: &crate::partition::Partition,
+    partition: PartitionIndex,
+    read_max: krabka_units::ByteSize,
+    partition_for: impl Fn(&str) -> PartitionIndex,
+) -> Result<RecoveredTransactions, BrokerError> {
+    let p = partition;
+    let mut recovered = RecoveredTransactions::default();
+    let mut offset = part.log_start_offset();
+    loop {
+        let out = part.read_log(offset, read_max)?;
+        if out.batches.is_empty() {
+            break;
+        }
+        for batch in &out.batches {
+            if batch.base_offset < offset.0 {
+                return Err(BrokerError::Txn(format!(
+                    "__transaction_state-{p} replay regressed from {} to {}",
+                    offset.0, batch.base_offset
+                )));
+            }
+            for rec in &batch.records {
+                let key_bytes = rec.key.as_ref().ok_or_else(|| {
+                    BrokerError::Txn(format!("__transaction_state-{p} record is missing its key"))
                 })?;
-
-                let mut offset = part.log_start_offset();
-                loop {
-                    let out = part.read_log(offset, self.recovery_read_max)?;
-                    if out.batches.is_empty() {
-                        break;
+                let tid = crate::txn::log_record::decode_key(key_bytes)?;
+                let partition_matches = partition_for(&tid) == p;
+                let Some(value_bytes) = rec.value.as_ref() else {
+                    if !partition_matches {
+                        return Err(BrokerError::Txn(format!(
+                            "transaction {tid} tombstone is in the wrong state partition"
+                        )));
                     }
-
-                    for batch in &out.batches {
-                        if batch.base_offset < offset.0 {
-                            return Err(BrokerError::Txn(format!(
-                                "__transaction_state-{p} replay regressed from {} to {}",
-                                offset.0, batch.base_offset
-                            )));
-                        }
-                        for rec in &batch.records {
-                            let key_bytes = rec.key.as_ref().ok_or_else(|| {
-                                BrokerError::Txn(format!(
-                                    "__transaction_state-{p} record is missing its key"
-                                ))
-                            })?;
-                            let tid = crate::txn::log_record::decode_key(key_bytes)?;
-                            let partition_matches = self.partition_for(&tid) == p;
-                            let Some(value_bytes) = rec.value.as_ref() else {
-                                if !partition_matches {
-                                    return Err(BrokerError::Txn(format!(
-                                        "transaction {tid} tombstone is in the wrong state partition"
-                                    )));
-                                }
-                                recovered.apply_tombstone(&tid);
-                                continue;
-                            };
-                            let entry = crate::txn::log_record::decode_value(value_bytes, tid)?;
-                            recovered.apply_value(entry, partition_matches)?;
-                        }
-                        offset = recovery_next_offset(batch.base_offset, batch.last_offset_delta)?;
-                    }
-                }
+                    recovered.apply_tombstone(&tid);
+                    continue;
+                };
+                let entry = crate::txn::log_record::decode_value(value_bytes, tid)?;
+                recovered.apply_value(entry, partition_matches)?;
             }
-            Ok(recovered)
-        })();
-
-        let recovered = match recovery {
-            Ok(recovered) => recovered,
-            Err(error) => {
-                self.leader_partitions.write().await.clear();
-                let _pid_install = self
-                    .pid_install
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                self.state.clear();
-                self.pid_to_tid.clear();
-                return Err(error);
-            }
-        };
-        let pid_install = self
-            .pid_install
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.state.clear();
-        self.pid_to_tid.clear();
-        let mut prepared = Vec::new();
-        for (tid, entry) in recovered.state {
-            if super::completion::completion_for(entry.state).is_some() {
-                prepared.push(tid.clone());
-            }
-            self.state.insert(tid, Arc::new(Mutex::new(entry)));
+            offset = recovery_next_offset(batch.base_offset, batch.last_offset_delta)?;
         }
-        for (pid, tid) in recovered.pid_to_tid {
-            self.pid_to_tid.insert(pid, tid);
-        }
-        self.recovery_valid.store(true, Ordering::Release);
-        drop(pid_install);
-        // Kafka's `TransactionStateManager` hands every loaded `Prepare*`
-        // transaction to the marker channel, which writes its markers and its
-        // `Complete*` record.
-        for tid in &prepared {
-            self.request_completion(tid);
-        }
-
-        info!(
-            tids_loaded = self.state.len(),
-            "TxnCoordinator recovery complete"
-        );
-        Ok(())
     }
+    Ok(recovered)
 }
 
 fn recovery_next_offset(base: i64, last_delta: i32) -> Result<Offset, BrokerError> {

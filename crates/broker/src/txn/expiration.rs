@@ -56,10 +56,15 @@ pub(crate) async fn run(
 
 /// Runs one sweep. It resolves `transaction.version`, refreshes the
 /// leader-partition view, then aborts any expired transactions.
-async fn sweep_once(coord: &TxnCoordinator, controller: &dyn MetadataSource) {
+async fn sweep_once(coord: &Arc<TxnCoordinator>, controller: &dyn MetadataSource) {
     let image = controller.current_image();
     let txnv = crate::txn::version::resolve_txn_version(&image);
-    coord.refresh_leader_partitions(&image).await;
+    // The sweep is a background task, so it waits for the loads it starts.
+    coord
+        .refresh_leader_partitions(&image)
+        .await
+        .finished()
+        .await;
     let now_ms = crate::txn::util::now_millis();
     let aborted = coord.sweep_expired(now_ms, txnv).await;
     if aborted.is_empty() {

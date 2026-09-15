@@ -48,7 +48,7 @@ impl TxnCoordinator {
     /// and a call that does not complete answers `NETWORK_EXCEPTION`, as
     /// Kafka's `AddPartitionsToTxnManager` reports them.
     pub(crate) async fn add_or_verify_partition(
-        &self,
+        self: &std::sync::Arc<Self>,
         check: PartitionCheck<'_>,
         txnv: TxnVersion,
     ) -> i16 {
@@ -56,7 +56,7 @@ impl TxnCoordinator {
             return self.add_or_verify_locally(check, txnv).await;
         };
         let image = transport.controller.current_image();
-        self.refresh_leader_partitions(&image).await;
+        drop(self.refresh_leader_partitions(&image).await);
         let coordinator_partition = self.partition_for(check.transactional_id);
         let Some(leader) = image
             .partition(bootstrap::TOPIC, coordinator_partition.get())
@@ -170,8 +170,8 @@ impl TxnCoordinator {
     /// Whether the partition is in the producer's transaction. Kafka's
     /// `TransactionCoordinator.handleVerifyPartitionsInTransaction`.
     pub(crate) async fn verify_partition_in_transaction(&self, check: &PartitionCheck<'_>) -> i16 {
-        if !self.is_coordinator_for(check.transactional_id).await {
-            return codes::NOT_COORDINATOR;
+        if let Some(code) = self.coordinator_error(check.transactional_id).await {
+            return code;
         }
         let Some(entry) = self.get(check.transactional_id) else {
             return codes::INVALID_PRODUCER_ID_MAPPING;
