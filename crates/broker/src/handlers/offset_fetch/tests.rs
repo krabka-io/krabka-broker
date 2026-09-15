@@ -752,3 +752,197 @@ async fn refused_topics_follow_the_answered_topics() {
     assert!(actual == groups_response(vec![known_response, zero_response]));
     broker_handle.shutdown().await;
 }
+
+/// Joins `member_id` to the KIP-848 consumer group `group` and returns its
+/// member epoch.
+async fn join_consumer_group(broker: &Broker, group: &str, member_id: &str) -> i32 {
+    use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
+
+    let handle = broker.group_coordinator.get_or_create_consumer(group);
+    let (reply, joined) = oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::Heartbeat {
+            request: ConsumerGroupHeartbeatRequest {
+                group_id: group.into(),
+                member_id: member_id.into(),
+                member_epoch: 0,
+                subscribed_topic_names: Some(vec!["orders".into()]),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+            client_id: "client".into(),
+            client_host: "host".into(),
+            reply,
+        })
+        .await
+        .expect("send Heartbeat");
+    let joined = joined.await.expect("Heartbeat reply");
+    assert!(joined.error_code == codes::NONE);
+    joined.member_epoch
+}
+
+/// Kafka's `OffsetMetadataManager.fetchOffsets` reads offsets without creating
+/// a group, and `ConsumerGroup.validateOffsetFetch` checks the v9 member id
+/// and epoch of a consumer group. A refused fetch is the group row with the
+/// error code and no topics (`OffsetFetchResponse.groupError`).
+#[tokio::test]
+async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
+    struct Row {
+        name: &'static str,
+        version: i16,
+        group_id: &'static str,
+        member_id: Option<&'static str>,
+        /// The epoch relative to the member's epoch, or an absolute -1.
+        member_epoch: EpochRef,
+        expected: OffsetFetchResponseGroup,
+        group_exists_after: bool,
+    }
+    #[derive(Clone, Copy)]
+    enum EpochRef {
+        Current,
+        Older,
+        NoEpoch,
+    }
+
+    let offsets_row = |partition: OffsetFetchResponsePartitions| {
+        vec![OffsetFetchResponseTopics {
+            name: "orders".into(),
+            partitions: vec![partition],
+            ..Default::default()
+        }]
+    };
+    let group_row = |group_id: &str, topics, error_code| OffsetFetchResponseGroup {
+        group_id: group_id.into(),
+        topics,
+        error_code,
+        ..Default::default()
+    };
+    let rows = [
+        Row {
+            name: "unknown group at v8",
+            version: 8,
+            group_id: "typo",
+            member_id: None,
+            member_epoch: EpochRef::NoEpoch,
+            expected: group_row("typo", offsets_row(no_offset_row(codes::NONE)), codes::NONE),
+            group_exists_after: false,
+        },
+        Row {
+            name: "unknown group at v9 with a member",
+            version: 9,
+            group_id: "typo",
+            member_id: Some("m1"),
+            member_epoch: EpochRef::Current,
+            expected: group_row("typo", offsets_row(no_offset_row(codes::NONE)), codes::NONE),
+            group_exists_after: false,
+        },
+        Row {
+            name: "consumer member with its epoch",
+            version: 9,
+            group_id: "grp",
+            member_id: Some("m1"),
+            member_epoch: EpochRef::Current,
+            expected: group_row("grp", offsets_row(seeded_row()), codes::NONE),
+            group_exists_after: true,
+        },
+        Row {
+            name: "consumer member with an older epoch",
+            version: 9,
+            group_id: "grp",
+            member_id: Some("m1"),
+            member_epoch: EpochRef::Older,
+            expected: group_row("grp", vec![], codes::STALE_MEMBER_EPOCH),
+            group_exists_after: true,
+        },
+        Row {
+            name: "unknown member of a consumer group",
+            version: 9,
+            group_id: "grp",
+            member_id: Some("ghost"),
+            member_epoch: EpochRef::Current,
+            expected: group_row("grp", vec![], codes::UNKNOWN_MEMBER_ID),
+            group_exists_after: true,
+        },
+        Row {
+            name: "no member id and epoch -1 (admin client)",
+            version: 9,
+            group_id: "grp",
+            member_id: None,
+            member_epoch: EpochRef::NoEpoch,
+            expected: group_row("grp", offsets_row(seeded_row()), codes::NONE),
+            group_exists_after: true,
+        },
+        Row {
+            name: "no member id with an epoch",
+            version: 9,
+            group_id: "grp",
+            member_id: None,
+            member_epoch: EpochRef::Current,
+            expected: group_row("grp", vec![], codes::UNKNOWN_MEMBER_ID),
+            group_exists_after: true,
+        },
+    ];
+
+    for row in rows {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let epoch = join_consumer_group(&broker, "grp", "m1").await;
+        seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
+
+        let request = OffsetFetchRequest {
+            groups: vec![OffsetFetchRequestGroup {
+                group_id: row.group_id.into(),
+                member_id: row.member_id.map(str::to_string),
+                member_epoch: match row.member_epoch {
+                    EpochRef::Current => epoch,
+                    EpochRef::Older => epoch - 1,
+                    EpochRef::NoEpoch => -1,
+                },
+                topics: Some(vec![OffsetFetchRequestTopics {
+                    name: "orders".into(),
+                    partition_indexes: vec![0],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let response = fetch(&broker, row.version, &request).await;
+
+        let expected = OffsetFetchResponse {
+            groups: vec![row.expected],
+            ..Default::default()
+        };
+        assert2::check!(response == expected, "{}", row.name);
+        assert2::check!(
+            broker.group_coordinator.find(row.group_id).is_some() == row.group_exists_after,
+            "{}",
+            row.name
+        );
+        broker_handle.shutdown().await;
+    }
+}
+
+/// The legacy single-group shape (v0-v7) creates no group for an unknown id.
+#[tokio::test]
+async fn legacy_offset_fetch_creates_no_group() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let request = OffsetFetchRequest {
+        group_id: "typo".into(),
+        topics: Some(vec![
+            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
+                name: "orders".into(),
+                partition_indexes: vec![0],
+                ..Default::default()
+            },
+        ]),
+        ..Default::default()
+    };
+    let response = fetch(&broker, 7, &request).await;
+    assert!(response.topics[0].partitions[0].committed_offset == -1);
+    assert!(broker.group_coordinator.find("typo").is_none());
+    broker_handle.shutdown().await;
+}

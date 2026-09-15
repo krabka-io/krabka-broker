@@ -190,7 +190,8 @@ fn commit_succeeds_after_transaction_data_is_retained_away() {
 
     log.append(&mut commit_marker(1000, 0)).unwrap();
 
-    check!(log.lso() == log.log_end_offset());
+    let log_end = log.log_end_offset();
+    check!(log.last_stable_offset(log_end) == log_end);
     check!(log.stamp_for_offset(Offset(0)) == None);
 }
 

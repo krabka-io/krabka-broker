@@ -5,8 +5,9 @@
 //! fence pre-check (`current_member_id_for_instance`). It covers every
 //! interleaving of join, which can be dynamic, static, or fenced, heartbeat,
 //! leave, rebalance completion, sync, and session-timeout expiry. It asserts
-//! the static-index coherence, single-owner, and static-never-expired
-//! invariants. See the design spec at
+//! the static-index coherence and single-owner invariants, and that a member,
+//! static or dynamic, expires if and only if it is past its session
+//! timeout. See the design spec at
 //! `docs/superpowers/specs/2026-06-14-krabka-classic-group-fencing-model-design.md`.
 //!
 //! # Module layout

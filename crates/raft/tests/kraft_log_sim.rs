@@ -17,7 +17,7 @@ use krabka_ids::{NodeId, Offset};
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 use krabka_raft::kraft::{
     KraftLog,
-    types::{Epoch, LogView},
+    types::{Epoch, LogOffsetMetadata, LogView},
 };
 use krabka_units::prelude::{ByteSize, gibibytes};
 use sim_harness::{cluster::Sim, node_log::SimNodeLog};
@@ -92,7 +92,7 @@ impl LogView for KraftBackedLog {
     fn last_epoch(&self) -> Epoch {
         LogView::last_epoch(&self.log)
     }
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64> {
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
         LogView::end_offset_for_epoch(&self.log, epoch)
     }
 }

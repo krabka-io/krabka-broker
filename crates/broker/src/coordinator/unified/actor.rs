@@ -61,7 +61,10 @@ pub use self::{
 };
 use crate::{
     coordinator::unified::{
-        GroupCoordinator, config::NextGenConfig, group::CoordinatorGroup, offsets_log::OffsetsLog,
+        GroupCoordinator,
+        config::NextGenConfig,
+        group::{ConsumerState, CoordinatorGroup},
+        offsets_log::OffsetsLog,
         reconciler::ReconcileInput,
     },
     time_util,
@@ -253,6 +256,9 @@ async fn run_actor(
     };
     loop {
         let deadline = classic_deadline(&group);
+        let rebalance_deadline = group
+            .as_consumer()
+            .and_then(ConsumerState::next_rebalance_deadline);
         let keep_running = tokio::select! {
             msg = rx.recv() => match msg {
                 None => false,
@@ -290,6 +296,18 @@ async fn run_actor(
                 } else {
                     false
                 }
+            }
+            () = opt_sleep(rebalance_deadline) => {
+                // KIP-848: a member's rebalance timeout fired. Run the sweep
+                // now instead of at the next session tick, so the partitions it
+                // did not revoke reach their new owner on time.
+                let services = ActorServices {
+                    config: &config,
+                    metadata: &*metadata,
+                    offsets_log: &*offsets_log,
+                    coordinator: &coordinator,
+                };
+                handle_actor_tick(&mut group, &mut parked, services).await
             }
             () = opt_sleep(deadline) => {
                 // Classic rebalance deadline fired: complete with whoever is here.

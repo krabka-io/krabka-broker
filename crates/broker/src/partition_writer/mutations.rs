@@ -24,11 +24,12 @@ pub(super) async fn handle_replicate(
     identity: (&str, PartitionIndex),
     log: &Arc<Mutex<Log>>,
     storage_status: (&Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
-    producer_state: &ProducerState,
+    state: (&ProducerState, &tokio::sync::Mutex<ReplicaState>),
     mut batch: krabka_protocol::records::RecordBatch,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
     append_notify: &Notify,
 ) {
+    let (producer_state, replica_state) = state;
     let offset = batch.base_offset;
     // Read before `batch` moves into the closure. A control batch is the only
     // shape `handle_replicate` ever receives that can change a producer's
@@ -39,6 +40,16 @@ pub(super) async fn handle_replicate(
         .is_control_batch()
         .then_some(krabka_log::ProducerId(batch.producer_id))
         .filter(|producer_id| producer_id.get() >= 0);
+    // A replicated transaction marker adds a complete transaction that holds
+    // the last stable offset until the high watermark passes the marker.
+    // Release the ones the high watermark already passed, so the set stays
+    // bounded on a follower that no reader fetches from. The high watermark is
+    // read here, on this task, through its async mutex, before the blocking
+    // closure takes the log lock.
+    let high_watermark = match control_producer {
+        Some(_) => Some(replica_state.lock().await.hw),
+        None => None,
+    };
     let log_for_blocking = Arc::clone(log);
     // Read the mirror entry inside this same closure, under the lock the
     // append already takes here through `run_log_mutation`, rather than by a
@@ -54,6 +65,9 @@ pub(super) async fn handle_replicate(
     let result = run_log_mutation(
         move || {
             let mut guard = lock_log(&log_for_blocking);
+            if let Some(high_watermark) = high_watermark {
+                guard.release_replicated_transactions(high_watermark);
+            }
             guard
                 .append_at(&mut batch, Offset(offset))
                 .map_err(crate::error::BrokerError::from)?;

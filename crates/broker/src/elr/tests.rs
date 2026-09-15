@@ -141,9 +141,12 @@ async fn wait_for_leader(broker: &Broker) {
     }
 }
 
+/// Broker 3 is fenced, and its process has stopped: its heartbeat session is
+/// over, so a new incarnation may take the id.
 async fn mark_broker_3_unavailable(broker: &Broker) {
     broker.liveness.record_heartbeat(3).await;
     broker.liveness.apply_fencing(3, true, true).await;
+    crate::test_support::end_heartbeat_session(broker, 3).await;
 }
 
 fn principal() -> Principal {
@@ -297,6 +300,9 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) -> BrokerReg
             ..Default::default()
         }],
         features,
+        log_dirs: vec![krabka_protocol::primitives::uuid::Uuid(
+            *uuid::Uuid::from_u128(3000).as_bytes(),
+        )],
         ..Default::default()
     };
     let principal = principal();
