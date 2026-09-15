@@ -89,7 +89,16 @@ pub(crate) async fn handle(
 
         let image = controller.current_image();
         // One snapshot of the brokers that may sit in an ISR: alive, unfenced
-        // and not in controlled shutdown.
+        // and not in controlled shutdown. The registry is seeded for this term
+        // first, so a request served right after a failover does not read
+        // the registry an earlier term left.
+        broker
+            .liveness
+            .seed_term(
+                controller.current_controller_epoch(),
+                crate::heartbeat::controller_state::replicated_fences(&image),
+            )
+            .await;
         let active = broker.liveness.alive_snapshot().await;
         let mut changes: Vec<MetadataRecord> = Vec::new();
         let mut resp_topics: Vec<RespTopicData> = Vec::new();
