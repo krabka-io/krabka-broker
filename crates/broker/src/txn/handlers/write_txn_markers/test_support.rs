@@ -9,7 +9,7 @@ use krabka_log::{Log, LogConfig};
 
 use crate::broker::{Broker, BrokerHandle};
 
-pub(super) fn open_partition(broker: &Broker, log_dir: &Path, topic: &str, partition: i32) {
+pub(crate) fn open_partition(broker: &Broker, log_dir: &Path, topic: &str, partition: i32) {
     let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let log = Log::open(&part_dir, LogConfig::default()).expect("open partition log");

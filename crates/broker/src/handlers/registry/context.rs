@@ -63,6 +63,15 @@ context_dispatches!(register_context_dispatches;
     (end_txn_adapter, EndTxn, end_txn_request, crate::txn::handlers::end_txn::handle),
     (txn_offset_commit_adapter, TxnOffsetCommit, txn_offset_commit_request, crate::txn::handlers::txn_offset_commit::handle),
     (describe_quorum_adapter, DescribeQuorum, describe_quorum_request, crate::handlers::describe_quorum::handle),
+    (allocate_producer_ids_adapter, AllocateProducerIds, allocate_producer_ids_request, crate::handlers::allocate_producer_ids::handle),
+    (add_offsets_to_txn_adapter, AddOffsetsToTxn, add_offsets_to_txn_request, crate::txn::handlers::add_offset_commits_to_txn::handle),
+    (write_txn_markers_adapter, WriteTxnMarkers, write_txn_markers_request, crate::txn::handlers::write_txn_markers::handle),
+    (fetch_snapshot_adapter, FetchSnapshot, fetch_snapshot_request, crate::handlers::fetch_snapshot::handle),
+    (initialize_share_group_state_adapter, InitializeShareGroupState, initialize_share_group_state_request, crate::share_coordinator::handlers::initialize::handle),
+    (read_share_group_state_adapter, ReadShareGroupState, read_share_group_state_request, crate::share_coordinator::handlers::read::handle),
+    (write_share_group_state_adapter, WriteShareGroupState, write_share_group_state_request, crate::share_coordinator::handlers::write::handle),
+    (delete_share_group_state_adapter, DeleteShareGroupState, delete_share_group_state_request, crate::share_coordinator::handlers::delete::handle),
+    (read_share_group_state_summary_adapter, ReadShareGroupStateSummary, read_share_group_state_summary_request, crate::share_coordinator::handlers::read_summary::handle),
 );
 
 sync_context_dispatches!(register_sync_context_dispatches;

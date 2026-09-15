@@ -568,18 +568,41 @@ async fn an_unparseable_client_host_address_is_an_invalid_request() {
     );
 }
 
-/// A forwarded `AllocateProducerIds` (67) is served and returns a block.
+/// A forwarded `AllocateProducerIds` (67) is authorized against the principal
+/// that the envelope names, and a principal with `ClusterAction` gets a block.
 ///
 /// 67 is in `ApiKeys.forwardable`, and a JVM broker forwards it to the
 /// controller to obtain the producer-ID block every producer on it needs
-/// before it can initialise. Its handler takes no session at all, so the
-/// shared invocation path has to dispatch a plain handler as well as the
-/// session-carrying kinds: answering `UnsupportedApi` fails the controller
-/// connection and the forwarding broker never gets a block.
+/// before it can initialise. `ControllerApis.handleAllocateProducerIdsRequest`
+/// checks `ClusterAction` for the request principal before the controller
+/// runs (#681). The outer gate holds for the plaintext `ANONYMOUS` peer, so
+/// only the embedded principal decides. `User:bob` goes first: its refusal
+/// must allocate nothing, so `User:alice` still gets the block that starts at
+/// 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_allocate_producer_ids_is_served_a_block() {
-    let (broker, _dir) = start_broker().await;
+async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {
+    let (broker, _dir) = start_broker_with(|config| {
+        // `BrokerConfig::validate` rejects `"ANONYMOUS"` in
+        // `BrokerConfig.super_users`, and the authorizer's own super-user set
+        // is what the outer `Envelope` gate reads.
+        config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
+            std::iter::once("ANONYMOUS".to_owned()).collect(),
+        ));
+    })
+    .await;
     broker.wait_until_brokers_registered(1).await;
+    broker
+        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
+            resource_type: ResourceType::Cluster,
+            resource_name: "kafka-cluster".into(),
+            pattern_type: PatternType::Literal,
+            principal: "User:alice".into(),
+            host: "*".into(),
+            operation: AclOperation::ClusterAction,
+            permission_type: PermissionType::Allow,
+        }))
+        .await
+        .expect("seed ClusterAction ACL");
 
     let image = broker.controller_image_for_test();
     let registered = image
@@ -606,36 +629,53 @@ async fn a_forwarded_allocate_producer_ids_is_served_a_block() {
     )
     .slice(4..);
 
-    let response = send_envelope(
-        broker.controller_addr(),
-        &envelope_for(request_data, Some(JVM_USER_ALICE)),
-    )
-    .await;
-
-    check!(response.error_code == 0);
-    assert!(let Some(response_data) = response.response_data);
-    assert!(let Some((header, mut body)) = response_data.split_at_checked(5));
-    check!(header == [0x5A, 0x5A, 0x12, 0x34, 0x00]);
-
-    let allocated = AllocateProducerIdsResponse::decode(
-        &mut body,
-        krabka_protocol::owned::allocate_producer_ids_response::MAX_VERSION,
-    )
-    .expect("decode the embedded AllocateProducerIdsResponse");
-    check!(
-        body.is_empty(),
-        "the embedded response consumed its own bytes"
-    );
-    check!(
-        allocated
-            == AllocateProducerIdsResponse {
+    let cases = [
+        (
+            "User:bob",
+            JVM_USER_BOB,
+            AllocateProducerIdsResponse {
+                throttle_time_ms: 0,
+                error_code: 31,
+                producer_id_start: 0,
+                producer_id_len: 0,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+        ),
+        (
+            "User:alice",
+            JVM_USER_ALICE,
+            AllocateProducerIdsResponse {
                 throttle_time_ms: 0,
                 error_code: 0,
                 producer_id_start: 0,
                 producer_id_len: 1_000,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
-    );
+            },
+        ),
+    ];
+    for (name, principal, expected) in cases {
+        let response = send_envelope(
+            broker.controller_addr(),
+            &envelope_for(request_data.clone(), Some(principal)),
+        )
+        .await;
+
+        check!(response.error_code == 0, "{name}");
+        assert!(let Some(response_data) = response.response_data);
+        assert!(let Some((header, mut body)) = response_data.split_at_checked(5));
+        check!(header == [0x5A, 0x5A, 0x12, 0x34, 0x00], "{name}");
+
+        let allocated = AllocateProducerIdsResponse::decode(
+            &mut body,
+            krabka_protocol::owned::allocate_producer_ids_response::MAX_VERSION,
+        )
+        .expect("decode the embedded AllocateProducerIdsResponse");
+        check!(
+            body.is_empty(),
+            "the embedded response consumed its own bytes"
+        );
+        check!(allocated == expected, "{name}");
+    }
 }
 
 /// Only a peer that holds `ClusterAction` may speak for another identity.

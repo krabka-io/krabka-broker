@@ -174,6 +174,60 @@ pub(crate) fn decode_response<T: Decode<'static>>(bytes: &Bytes, version: i16) -
     resp
 }
 
+/// An authorizer that reads the grants from the principal name.
+///
+/// The name is a `+`-separated list of `<ResourceType>:<AclOperation>` grants,
+/// in the `Debug` spelling, for example `Cluster:ClusterAction+Group:Read`. A
+/// grant allows the operation on every resource of that type. Every other
+/// request is denied, so the name `none` holds no grant.
+#[derive(Debug)]
+pub(crate) struct GrantsInPrincipalName;
+
+impl crate::authorizer::Authorizer for GrantsInPrincipalName {
+    fn authorize(
+        &self,
+        _source: &dyn crate::authorizer::AclSource,
+        request: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        let wanted = format!("{:?}:{:?}", request.resource_type, request.operation);
+        if request
+            .principal
+            .name
+            .split('+')
+            .any(|grant| grant == wanted)
+        {
+            crate::authorizer::AuthorizationResult::Allow
+        } else {
+            crate::authorizer::AuthorizationResult::Deny
+        }
+    }
+}
+
+/// Serve one request through the broker's dispatch registry, as the connection
+/// loop does for a [`crate::handlers::DispatchKind::Context`] entry.
+///
+/// It panics when `api_key` is not registered as a context dispatch. An
+/// authorization test that calls it therefore also fails when its api goes
+/// back to a dispatch kind that gets no principal.
+pub(crate) async fn dispatch_context(
+    broker: &crate::broker::Broker,
+    api_key: i16,
+    version: i16,
+    body: &[u8],
+    ctx: &RequestContext<'_>,
+) -> Bytes {
+    let entry = broker
+        .handlers()
+        .get(api_key)
+        .unwrap_or_else(|| panic!("api_key {api_key} is registered"));
+    let crate::handlers::DispatchKind::Context(handler) = entry.kind() else {
+        panic!("api_key {api_key} is a context dispatch, so its handler gets the principal");
+    };
+    handler(broker, version, 1, body, ctx)
+        .await
+        .unwrap_or_else(|error| panic!("api_key {api_key} handler: {error}"))
+}
+
 /// Start an in-process broker over a fresh temp dir. It applies `configure` to
 /// the [`BrokerConfig::for_tests`] baseline before start.
 ///

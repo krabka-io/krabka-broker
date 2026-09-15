@@ -34,27 +34,91 @@ mod materialize;
 mod offsets;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use self::{
     materialize::{MarkerAppend, append_marker_and_materialize},
     offsets::CommittedOffsets,
 };
-use crate::{broker::Broker, codes, error::BrokerError, txn::marker::MarkerType};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{RequestContext, cluster_action_denied, cluster_alter_denied},
+    txn::marker::MarkerType,
+};
 
-pub(crate) fn handle(
+/// Authorizes the request, then writes the markers.
+///
+/// Kafka's `KafkaApis.handleWriteTxnMarkersRequest` allows a principal that
+/// holds `Alter` or `ClusterAction` on the cluster. Any other principal gets
+/// `WriteTxnMarkersRequest.getErrorResponse` with
+/// `CLUSTER_AUTHORIZATION_FAILED`: that code on every requested partition,
+/// and no marker is written.
+pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
     _correlation_id: i32,
     req_bytes: &[u8],
-) -> BoxFuture<'static, Result<Bytes, BrokerError>> {
-    let req_bytes = req_bytes.to_vec();
+    ctx: &RequestContext<'_>,
+) -> Result<Bytes, BrokerError> {
+    let mut cur: &[u8] = req_bytes;
+    let req = WriteTxnMarkersRequest::decode(&mut cur, version)?;
+    let authorizer = broker.config.authorizer.as_ref();
+    let image = broker.controller.current_image();
+    let resp = if cluster_alter_denied(authorizer, &image, ctx)
+        && cluster_action_denied(authorizer, &image, ctx)
+    {
+        cluster_authorization_failed(&req)
+    } else {
+        serve(broker, req).await
+    };
+    let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
+    resp.encode(&mut buf, version)?;
+    Ok(buf.freeze())
+}
+
+/// The response Kafka's `WriteTxnMarkersRequest.getErrorResponse` builds for
+/// `CLUSTER_AUTHORIZATION_FAILED`: every requested partition of every marker
+/// carries the code.
+fn cluster_authorization_failed(req: &WriteTxnMarkersRequest) -> WriteTxnMarkersResponse {
+    WriteTxnMarkersResponse {
+        markers: req
+            .markers
+            .iter()
+            .map(|marker| WritableTxnMarkerResult {
+                producer_id: marker.producer_id,
+                topics: marker
+                    .topics
+                    .iter()
+                    .map(|topic| WritableTxnMarkerTopicResult {
+                        name: topic.name.clone(),
+                        partitions: topic
+                            .partition_indexes
+                            .iter()
+                            .map(|&partition_index| WritableTxnMarkerPartitionResult {
+                                partition_index,
+                                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+                                ..Default::default()
+                            })
+                            .collect(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+fn serve(
+    broker: &Broker,
+    req: WriteTxnMarkersRequest,
+) -> BoxFuture<'static, WriteTxnMarkersResponse> {
     let partitions = broker.partitions.clone();
     let group_coordinator = broker.group_coordinator.clone();
     Box::pin(async move {
-        let mut cur: &[u8] = &req_bytes;
-        let req = WriteTxnMarkersRequest::decode(&mut cur, version)?;
-
         let mut marker_results: Vec<WritableTxnMarkerResult> = Vec::new();
 
         for marker_entry in &req.markers {
@@ -133,13 +197,10 @@ pub(crate) fn handle(
             });
         }
 
-        let resp = WriteTxnMarkersResponse {
+        WriteTxnMarkersResponse {
             markers: marker_results,
             ..Default::default()
-        };
-        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-        resp.encode(&mut buf, version)?;
-        Ok(buf.freeze())
+        }
     })
 }
 
@@ -168,6 +229,20 @@ mod tests {
         version = VERSION
     );
 
+    /// Serves a request as a principal that the default `AllowAllAuthorizer`
+    /// allows.
+    async fn handle_allowed(
+        broker: &Broker,
+        version: i16,
+        correlation_id: i32,
+        body: &[u8],
+    ) -> Result<Bytes, BrokerError> {
+        let user = crate::test_support::principal("ANONYMOUS");
+        let address = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&user, &address, "write-txn-markers-test");
+        super::handle(broker, version, correlation_id, body, &ctx).await
+    }
+
     #[tokio::test]
     async fn handle_returns_marker_topic_and_partition_result_rows() {
         let (broker_handle, dir) = start_broker().await;
@@ -190,7 +265,7 @@ mod tests {
         };
         let req_bytes = encode_request(&req);
 
-        let bytes = super::handle(&broker, VERSION, 123, &req_bytes)
+        let bytes = handle_allowed(&broker, VERSION, 123, &req_bytes)
             .await
             .expect("handle");
         let resp = decode_response(&bytes);
@@ -278,7 +353,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let response = super::handle(&broker, VERSION, 1, &encode_request(&req))
+        let response = handle_allowed(&broker, VERSION, 1, &encode_request(&req))
             .await
             .expect("commit marker");
         let response = decode_response(&response);
@@ -398,7 +473,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let response = super::handle(&broker, VERSION, 1, &encode_request(&req))
+        let response = handle_allowed(&broker, VERSION, 1, &encode_request(&req))
             .await
             .expect("abort marker");
         let response = decode_response(&response);
@@ -517,7 +592,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let response = super::handle(&broker, VERSION, 1, &encode_request(&req))
+        let response = handle_allowed(&broker, VERSION, 1, &encode_request(&req))
             .await
             .expect("commit marker");
         assert!(

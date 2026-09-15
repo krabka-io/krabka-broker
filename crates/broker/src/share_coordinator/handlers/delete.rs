@@ -21,7 +21,35 @@ use crate::{
     broker::Broker, codes, error::BrokerError, share_coordinator::coordinator::ShareCoordinator,
 };
 
-pub(crate) fn handle(
+/// Checks `ClusterAction` on the cluster, then serves the request.
+///
+/// Kafka's `KafkaApis` answers a denied principal with
+/// `DeleteShareGroupStateResponse.toGlobalErrorResponse`: `CLUSTER_AUTHORIZATION_FAILED` on
+/// every requested partition, and the share coordinator does not run.
+pub(crate) async fn handle(
+    broker: &Broker,
+    version: i16,
+    correlation_id: i32,
+    req_bytes: &[u8],
+    ctx: &crate::handlers::RequestContext<'_>,
+) -> Result<Bytes, BrokerError> {
+    if super::cluster_action_denied(broker, ctx) {
+        let mut cur: &[u8] = req_bytes;
+        let req = DeleteShareGroupStateRequest::decode(&mut cur, version)?;
+        let resp = super::cluster_authorization_failed!(
+            req,
+            DeleteShareGroupStateResponse,
+            DeleteStateResult,
+            PartitionResult
+        );
+        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
+        resp.encode(&mut buf, version)?;
+        return Ok(buf.freeze());
+    }
+    serve(broker, version, correlation_id, req_bytes).await
+}
+
+fn serve(
     broker: &Broker,
     version: i16,
     _correlation_id: i32,
