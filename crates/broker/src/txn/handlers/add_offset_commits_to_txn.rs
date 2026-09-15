@@ -11,6 +11,7 @@
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
+use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -24,11 +25,54 @@ use crate::{
     codes,
     coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
     error::BrokerError,
+    handlers::{RequestContext, acl_denied, group_read_denied},
     txn::{
         state::{TopicPartition, TxnState},
         util::now_millis,
     },
 };
+
+pub(crate) async fn handle(
+    broker: &Broker,
+    version: i16,
+    _correlation_id: i32,
+    req_bytes: &[u8],
+    ctx: &RequestContext<'_>,
+) -> Result<Bytes, BrokerError> {
+    let mut cur: &[u8] = req_bytes;
+    let req = AddOffsetsToTxnRequest::decode(&mut cur, version)?;
+    if let Some(error_code) = authorization_error(broker, ctx, &req) {
+        return encode_err(version, error_code);
+    }
+    serve(broker, version, req).await
+}
+
+/// Kafka's `KafkaApis.handleAddOffsetsToTxnRequest` checks `Write` on the
+/// transactional id, then `Read` on the group, before the transaction
+/// coordinator sees the request. It returns the error code of the first
+/// denial, or `None` when both are allowed.
+fn authorization_error(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    req: &AddOffsetsToTxnRequest,
+) -> Option<i16> {
+    let authorizer = broker.config.authorizer.as_ref();
+    let image = broker.controller.current_image();
+    if acl_denied(
+        authorizer,
+        &image,
+        ctx,
+        ResourceType::TransactionalId,
+        &req.transactional_id,
+        AclOperation::Write,
+    ) {
+        Some(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
+    } else if group_read_denied(authorizer, &image, ctx, &req.group_id) {
+        Some(codes::GROUP_AUTHORIZATION_FAILED)
+    } else {
+        None
+    }
+}
 
 // cargo-mutants: the pid/epoch guard (`||`) is only reachable with a fully-seeded coordinator
 // (this broker must lead the tid's `__transaction_state` partition and hold a
@@ -37,19 +81,14 @@ use crate::{
 // test. Producer-fencing on `AddOffsetsToTxn` is covered by the live-broker /
 // differential suite.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn handle(
+fn serve(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
+    req: AddOffsetsToTxnRequest,
 ) -> BoxFuture<'static, Result<Bytes, BrokerError>> {
-    let req_bytes = req_bytes.to_vec();
     let coord = broker.txn_coordinator.clone();
     let controller = broker.controller.clone();
     Box::pin(async move {
-        let mut cur: &[u8] = &req_bytes;
-        let req = AddOffsetsToTxnRequest::decode(&mut cur, version)?;
-
         // Refresh leader-partition view from the current metadata image
         // before checking coordinator-ness, to avoid a race. Resolve the
         // finalized transaction.version from the same image read.
