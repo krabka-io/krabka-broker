@@ -166,3 +166,125 @@ async fn a_refused_deletion_never_reaches_the_metadata_quorum() {
     check!(ungated.error_code == codes::UNKNOWN_TOPIC_OR_PARTITION);
     check!(gated.error_code == codes::POLICY_VIOLATION);
 }
+
+/// Kafka's `ControllerApis.deleteTopics` answers `INVALID_REQUEST` for a v6
+/// row with no name and the zero id, a row with a name and a non-zero id, a
+/// duplicate name, a duplicate id, and a name whose id another row carries.
+/// Each such request deletes nothing, and each response row carries the name,
+/// the id and the message that Kafka puts on it.
+#[tokio::test]
+async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
+    const TOPIC: &str = "kept";
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(broker_handle.listen_addr().to_string())
+        .client_id("delete-topics-validation-test")
+        .build()
+        .await
+        .expect("client build");
+    let created = client
+        .send(
+            krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+                topics: vec![
+                    krabka_protocol::owned::create_topics_request::CreatableTopic {
+                        name: TOPIC.to_string(),
+                        num_partitions: 1,
+                        replication_factor: 1,
+                        ..Default::default()
+                    },
+                ],
+                timeout_ms: 5_000,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("CreateTopics");
+    assert!(created.topics[0].error_code == codes::NONE, "{created:?}");
+    broker_handle.wait_until_partition_present(TOPIC, 0).await;
+    let topic_id = WireUuid(
+        broker_handle
+            .controller_image_for_test()
+            .topic(TOPIC)
+            .expect("topic in the image")
+            .topic_id
+            .into_bytes(),
+    );
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+
+    let invalid = |name: Option<&str>, id, message: &str| DeletableTopicResult {
+        name: name.map(str::to_string),
+        topic_id: id,
+        error_code: codes::INVALID_REQUEST,
+        error_message: Some(message.to_string()),
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+    };
+    let both = krabka_protocol::owned::delete_topics_request::DeleteTopicState {
+        name: Some(TOPIC.into()),
+        topic_id,
+        ..Default::default()
+    };
+    let cases = [
+        (
+            "no name and the zero id",
+            vec![id_state(WireUuid::ZERO)],
+            vec![invalid(
+                None,
+                WireUuid::ZERO,
+                "Neither topic name nor id were specified.",
+            )],
+        ),
+        (
+            "a name and a non-zero id",
+            vec![both],
+            vec![invalid(
+                Some(TOPIC),
+                topic_id,
+                "You may not specify both topic name and topic id.",
+            )],
+        ),
+        (
+            "a duplicate name",
+            vec![named_state(TOPIC), named_state(TOPIC)],
+            vec![invalid(
+                Some(TOPIC),
+                WireUuid::ZERO,
+                "Duplicate topic name.",
+            )],
+        ),
+        (
+            "a duplicate id",
+            vec![id_state(topic_id), id_state(topic_id)],
+            vec![invalid(None, topic_id, "Duplicate topic id.")],
+        ),
+        (
+            "a name whose id another row carries",
+            vec![id_state(topic_id), named_state(TOPIC)],
+            vec![invalid(
+                Some(TOPIC),
+                topic_id,
+                "The provided topic name maps to an ID that was already supplied.",
+            )],
+        ),
+    ];
+
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, rows, responses) in cases {
+        let resp = drive(&broker, &request(rows), &p, &peer).await;
+        let still_there = broker.controller.current_image().topic(TOPIC).is_some();
+        actual.push((label, resp, still_there));
+        expected.push((
+            label,
+            DeleteTopicsResponse {
+                throttle_time_ms: 0,
+                responses,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            },
+            true,
+        ));
+    }
+    assert!(actual == expected);
+    broker_handle.shutdown().await;
+}

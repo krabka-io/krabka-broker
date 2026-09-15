@@ -74,7 +74,7 @@ use self::{
     audit::{audit_deleted_topics, deleted_topic_resources},
     authz::denied_topic_names,
     gate::{consumed_proposal_id, delete_topic_records},
-    request::resolve_topic_names,
+    request::{ValidatedTopics, resolve_topic_names},
     teardown::remove_local_partitions,
     tiering::{spawn_remote_cascades, tiered_partitions},
     wire::{delete_topic_result, delete_topics_response, refused_topic_result},
@@ -102,8 +102,31 @@ pub(crate) async fn handle(
     let req = DeleteTopicsRequest::decode(&mut cur, version)?;
 
     let image = controller.current_image();
-    // (resolved_name, requested_by_id, requested_topic_id)
-    let name_list = resolve_topic_names(&req, &image);
+    // Kafka's `ControllerApis.deleteTopics` answers INVALID_REQUEST for a row
+    // with no name and no id, a row with both, and a duplicate name or id.
+    // Those rows take no further part: no quota charge, no authorization, and
+    // no deletion.
+    let mut validated = resolve_topic_names(&req, &image);
+
+    // ── ACL preamble ────────────────────────────────────────
+    // Batch-authorize every topic name for `Delete`. Topics that come
+    // back `Deny` short-circuit the delete loop and emit
+    // TOPIC_AUTHORIZATION_FAILED on that topic row.
+    let denied_topics = denied_topic_names(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx.principal,
+        ctx.peer,
+        &validated.topics,
+    );
+    // A name whose topic id another row carries is INVALID_REQUEST too, but
+    // Kafka decides that only for a topic the principal may delete.
+    validated.reject_names_of_supplied_ids(&image, &denied_topics);
+    let ValidatedTopics {
+        topics: name_list,
+        invalid: invalid_rows,
+        ..
+    } = validated;
 
     // KIP-599: count partition mutations before running the delete logic.
     // Nonexistent topics (name_opt = None) contribute 0 partitions.
@@ -131,6 +154,7 @@ pub(crate) async fn handle(
             .map(|(name, _, topic_id)| {
                 delete_topic_result(name.clone(), *topic_id, codes::THROTTLING_QUOTA_EXCEEDED)
             })
+            .chain(invalid_rows)
             .collect();
         return crate::handlers::encode_response(
             &delete_topics_response(results, crate::quota::throttle_time_ms(quota.delay())),
@@ -138,19 +162,8 @@ pub(crate) async fn handle(
         );
     }
 
-    // ── ACL preamble ────────────────────────────────────────
-    // Batch-authorize every topic name for `Delete`. Topics that come
-    // back `Deny` short-circuit the delete loop and emit
-    // TOPIC_AUTHORIZATION_FAILED on that topic row.
-    let denied_topics = denied_topic_names(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx.principal,
-        ctx.peer,
-        &name_list,
-    );
-
-    let mut results: Vec<DeletableTopicResult> = Vec::with_capacity(name_list.len());
+    let mut results: Vec<DeletableTopicResult> =
+        Vec::with_capacity(name_list.len() + invalid_rows.len());
 
     for (name_opt, requested_by_id, req_topic_id) in name_list {
         let Some(name) = name_opt else {
@@ -298,6 +311,7 @@ pub(crate) async fn handle(
 
         results.push(delete_topic_result(Some(name), WireUuid::ZERO, error_code));
     }
+    results.extend(invalid_rows);
 
     // Audit: emit one AdminOperation record for the successfully-deleted topics.
     audit_deleted_topics(
