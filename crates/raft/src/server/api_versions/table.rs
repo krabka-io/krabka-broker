@@ -294,6 +294,7 @@ mod tests {
                 PeerRequest::EndQuorumEpoch {
                     leader_id: NodeId(1),
                     leader_epoch: 4,
+                    preferred_candidates: Vec::new(),
                 },
                 decodes_whole::<EndQuorumEpochRequest>,
             ),
@@ -312,7 +313,9 @@ mod tests {
                 "fetch snapshot",
                 api_key::FETCH_SNAPSHOT,
                 PeerRequest::FetchSnapshot {
+                    cluster_id: None,
                     from: NodeId(2),
+                    current_leader_epoch: 1,
                     snapshot_id: (10, 1),
                     position: 0,
                     max_bytes: 32,

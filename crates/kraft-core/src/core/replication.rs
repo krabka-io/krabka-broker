@@ -152,6 +152,32 @@ impl QuorumStateMachine {
         self.transition_to_resigned(now)
     }
 
+    /// The other current voters, most caught up first by the fetch offsets this
+    /// leader validated, with node id order among equals. A voter that has not
+    /// fetched in this term sorts last. Empty for a replica that does not lead.
+    pub(super) fn preferred_successors(&self) -> Vec<NodeId> {
+        let Role::Leader { replicas, .. } = &self.role else {
+            return Vec::new();
+        };
+        let mut voters: Vec<(i64, NodeId)> = self
+            .state
+            .voters
+            .ids()
+            .into_iter()
+            .filter(|id| *id != self.me)
+            .map(|id| {
+                (
+                    replicas
+                        .get(&id)
+                        .map_or(-1, |progress| progress.fetch_offset),
+                    id,
+                )
+            })
+            .collect();
+        voters.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+        voters.into_iter().map(|(_, id)| id).collect()
+    }
+
     /// Step down from the leadership of the current epoch.
     ///
     /// The epoch is not bumped: this replica gives up the leadership it holds
@@ -176,6 +202,7 @@ impl QuorumStateMachine {
     )]
     fn transition_to_resigned(&mut self, now: SimInstant) -> Vec<Action> {
         let epoch = self.state.leader_epoch;
+        let preferred_successors = self.preferred_successors();
         self.state.leader_id = None;
         let timer = if self.is_voter() {
             self.role = Role::Resigned;
@@ -195,7 +222,10 @@ impl QuorumStateMachine {
             }
         };
         vec![
-            Action::SendEndQuorumEpoch { epoch },
+            Action::SendEndQuorumEpoch {
+                epoch,
+                preferred_successors,
+            },
             Action::PersistQuorumState,
             Action::TransitionedTo(self.role.name()),
             timer,
