@@ -579,9 +579,9 @@ async fn an_unparseable_client_host_address_is_an_invalid_request() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {
     let (broker, _dir) = start_broker_with(|config| {
-        // `BrokerConfig::validate` rejects `"ANONYMOUS"` in
-        // `BrokerConfig.super_users`, and the authorizer's own super-user set
-        // is what the outer `Envelope` gate reads.
+        // The plaintext controller connection is `ANONYMOUS`. As a super user
+        // it passes the outer `Envelope` gate, so only the embedded principal
+        // decides.
         config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
             std::iter::once("ANONYMOUS".to_owned()).collect(),
         ));
