@@ -212,7 +212,25 @@ impl SharePersister {
     /// lazily. The creation is idempotent and accepts an existing topic. The
     /// leadership refresh picks up every partition that the replicator
     /// supervisor has already materialized locally.
+    ///
+    /// # Errors
+    ///
+    /// Every failure is `COORDINATOR_NOT_AVAILABLE`: no share coordinator can
+    /// serve the call yet, which is what Kafka's persister reports when it
+    /// cannot find the coordinator.
     async fn ensure_topic_and_refresh(
+        &self,
+        state_partition: PartitionIndex,
+    ) -> Result<(), BrokerError> {
+        self.find_state_partition(state_partition)
+            .await
+            .map_err(|error| BrokerError::SharePartitionState {
+                code: crate::codes::COORDINATOR_NOT_AVAILABLE,
+                message: error.to_string(),
+            })
+    }
+
+    async fn find_state_partition(
         &self,
         state_partition: PartitionIndex,
     ) -> Result<(), BrokerError> {
@@ -293,8 +311,10 @@ impl SharePersister {
         };
         let resp = self.send_to_leader_resp(state_partition, req).await?;
         // Map the per-partition result into a `SharePartitionState`. A
-        // non-zero error_code or an absent partition entry is treated as
-        // "no state" (the caller starts from an empty acquisition window).
+        // non-zero error_code is the coordinator refusing the read, and an
+        // absent partition entry is no answer at all. Both are errors: the
+        // share-partition leader must not start a partition from the reset
+        // strategy because it could not read the state.
         //
         // A `start_offset` of `UNINITIALIZED_START_OFFSET` is state, not the
         // absence of it: the group coordinator registered the partition and
@@ -308,10 +328,18 @@ impl SharePersister {
             .flat_map(|t| t.partitions)
             .find(|p| p.partition == partition);
         let Some(pr) = part_result else {
-            return Ok(None);
+            return Err(BrokerError::Share(format!(
+                "ReadShareGroupState for partition {partition}: leader answered for no such partition"
+            )));
         };
         if pr.error_code != 0 {
-            return Ok(None);
+            return Err(BrokerError::SharePartitionState {
+                code: pr.error_code,
+                message: format!(
+                    "ReadShareGroupState {group}:{topic_id}:{partition}: {}",
+                    pr.error_message.unwrap_or_default()
+                ),
+            });
         }
         Ok(Some(SharePartitionState {
             state_epoch: pr.state_epoch,
@@ -366,10 +394,9 @@ impl SharePersister {
                 .share_coordinator
                 .write(group, topic_id, partition, epochs, progress, batches)
                 .await
-                .map_err(|code| {
-                    BrokerError::Share(format!(
-                        "WriteShareGroupState {group}:{topic_id}:{partition} fenced (code {code})"
-                    ))
+                .map_err(|code| BrokerError::SharePartitionState {
+                    code,
+                    message: format!("WriteShareGroupState {group}:{topic_id}:{partition}"),
                 });
         }
 
@@ -413,18 +440,20 @@ impl SharePersister {
         let image = self.controller.current_image();
         let pr = image
             .partition(bootstrap::TOPIC, state_partition.get())
-            .ok_or_else(|| {
-                BrokerError::Share(format!(
+            .ok_or_else(|| BrokerError::SharePartitionState {
+                code: crate::codes::COORDINATOR_NOT_AVAILABLE,
+                message: format!(
                     "{}-{state_partition} not present in metadata image",
                     bootstrap::TOPIC
-                ))
+                ),
             })?;
         let leader = pr.leader;
-        let broker_info = image.broker(leader).ok_or_else(|| {
-            BrokerError::Share(format!(
-                "share-state leader node {leader} not in metadata image"
-            ))
-        })?;
+        let broker_info = image
+            .broker(leader)
+            .ok_or_else(|| BrokerError::SharePartitionState {
+                code: crate::codes::COORDINATOR_NOT_AVAILABLE,
+                message: format!("share-state leader node {leader} not in metadata image"),
+            })?;
         let (host, port) = broker_info
             .endpoints
             .iter()
@@ -558,9 +587,10 @@ fn check_partition_result<R: PartitionResults>(
         return Ok(());
     }
     let detail = error_message.unwrap_or_else(|| "no error message".to_string());
-    Err(BrokerError::Share(format!(
-        "{what} for partition {partition} refused by the leader (code {error_code}): {detail}"
-    )))
+    Err(BrokerError::SharePartitionState {
+        code: error_code,
+        message: format!("{what} for partition {partition} refused by the leader: {detail}"),
+    })
 }
 
 #[cfg(test)]

@@ -194,3 +194,80 @@ async fn lifecycle_metadata_survives_restart() {
         }
     }
 }
+
+/// `DeleteGroups` on a share group, as Kafka's
+/// `GroupCoordinatorService.deleteGroups` answers it. A group with a member
+/// gets `NON_EMPTY_GROUP` (68) and keeps its share state. After the member
+/// leaves, the delete succeeds, removes the share state of every initialized
+/// partition, and drops the group. A second delete gets `GROUP_ID_NOT_FOUND`
+/// (69).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
+    use krabka_protocol::owned::delete_groups_request::DeleteGroupsRequest;
+
+    let (broker, bootstrap, _d) = boot().await;
+    let client = connect(&bootstrap).await;
+    create_topic(&client, "t-delete", 2).await;
+    let tid = topic_id(&broker, "t-delete");
+
+    let mut join = heartbeat("g-delete", "", 0);
+    join.subscribed_topic_names = Some(vec!["t-delete".into()]);
+    let joined = client.send(join).await.unwrap();
+    assert!(
+        joined.error_code == 0,
+        "join failed: {:?}",
+        joined.error_code
+    );
+    let member_id = joined.member_id.clone().unwrap();
+    let initialized = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let mut hb = heartbeat("g-delete", &member_id, joined.member_epoch);
+            hb.subscribed_topic_names = Some(vec!["t-delete".into()]);
+            let _ = client.send(hb).await.unwrap();
+            let mut all = true;
+            for p in 0..2 {
+                all &= broker
+                    .share_state_summary_for_test("g-delete", tid, p)
+                    .await
+                    .is_some();
+            }
+            if all {
+                break;
+            }
+        }
+    })
+    .await;
+    assert!(initialized.is_ok(), "share state never initialized");
+
+    // (step, leave the group before the delete, expected error code, share
+    //  state present after the step)
+    let steps = [
+        ("delete with a member", false, 68_i16, true),
+        ("delete after the leave", true, 0, false),
+        ("delete again", false, 69, false),
+    ];
+    for (step, leave, expected, state_present) in steps {
+        if leave {
+            let left = client
+                .send(heartbeat("g-delete", &member_id, -1))
+                .await
+                .unwrap();
+            assert!(left.error_code == 0, "{step}: leave failed");
+        }
+        let resp = client
+            .send(DeleteGroupsRequest {
+                groups_names: vec!["g-delete".into()],
+                ..Default::default()
+            })
+            .await
+            .expect("DeleteGroups");
+        assert!(resp.results[0].error_code == expected, "{step}: {resp:?}");
+        for p in 0..2 {
+            let present = broker
+                .share_state_summary_for_test("g-delete", tid, p)
+                .await
+                .is_some();
+            assert!(present == state_present, "{step}: partition {p}");
+        }
+    }
+}
