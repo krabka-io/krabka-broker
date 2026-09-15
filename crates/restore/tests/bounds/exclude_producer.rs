@@ -65,9 +65,10 @@ async fn exclude_producer_id_never_drops_a_control_batch() {
 
     let (_target, target_dir) = run_restore(archive.path(), &["--exclude-producer-id", "77"]).await;
 
-    let log = reopen(&target_dir, "orders", 0);
+    let mut log = reopen(&target_dir, "orders", 0);
     check!(log.pending_transaction_start(ProducerId(77)) == None);
-    check!(log.lso() == log.log_end_offset());
+    let log_end = log.log_end_offset();
+    check!(log.last_stable_offset(log_end) == log_end);
     let read = log
         .read(Offset(0), LogConfig::default().segment_size)
         .expect("read back");

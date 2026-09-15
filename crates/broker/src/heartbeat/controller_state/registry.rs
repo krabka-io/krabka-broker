@@ -39,6 +39,14 @@ pub(super) struct BrokerEntry {
     pub(super) last_heartbeat: Instant,
     pub(super) state: BrokerLivenessState,
     pub(super) fenced: bool,
+    /// Whether `last_heartbeat` is contact from the broker, which Kafka's
+    /// `BrokerHeartbeatTracker` calls a session. A heartbeat opens one, and
+    /// so does an unfenced registration when this node becomes controller
+    /// (`ClusterControlManager.activate`). An entry this controller only
+    /// discovered in the image, or reset for a new incarnation, has none:
+    /// its clock runs so that a broker that never heartbeats still expires,
+    /// but it does not hold the broker id against a new registration.
+    pub(super) contact: bool,
 }
 
 /// Controller-side heartbeat registry.
@@ -56,6 +64,9 @@ pub(crate) struct ControllerLivenessState {
     /// these brokers and returns `should_shut_down=true` once every
     /// partition has been re-led.
     pub(super) wants_shutdown: Mutex<HashSet<u64>>,
+    /// Serializes `BrokerRegistration`: see
+    /// [`registration_turn`](Self::registration_turn).
+    pub(super) registrations: Mutex<()>,
 }
 
 impl ControllerLivenessState {
@@ -65,6 +76,7 @@ impl ControllerLivenessState {
             timeout: timeout.to_std(),
             clock: Clock::Real,
             brokers: Mutex::new(HashMap::new()),
+            registrations: Mutex::new(()),
             wants_shutdown: Mutex::new(HashSet::new()),
         }
     }
@@ -77,6 +89,7 @@ impl ControllerLivenessState {
             timeout,
             clock,
             brokers: Mutex::new(HashMap::new()),
+            registrations: Mutex::new(()),
             wants_shutdown: Mutex::new(HashSet::new()),
         }
     }

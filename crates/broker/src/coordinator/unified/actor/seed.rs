@@ -176,6 +176,13 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             .insert(mid, topic_partition_map(target.topic_partitions));
     }
     restore_classic_sync_state(state, image);
+    // Kafka arms the rebalance timeout of every loaded member that still has
+    // partitions to revoke (`GroupMetadataManager.onLoaded`).
+    let now = Instant::now();
+    let member_ids: Vec<String> = state.members.keys().cloned().collect();
+    for member_id in member_ids {
+        state.track_rebalance_timeout(&member_id, now);
+    }
     state.dirty = false;
 }
 

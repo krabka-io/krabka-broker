@@ -95,6 +95,7 @@ mod tests {
         let w = wal(dir.path());
         let (results, leo, _) = crate::partition_writer::run_produce_append_batch(
             w.log.clone(),
+            None,
             vec![sample_owned(2), sample_owned(3)],
         )
         .await
@@ -120,10 +121,13 @@ mod tests {
     async fn trim_advances_the_local_wal_start() {
         let dir = tempfile::tempdir().unwrap();
         let w = wal(dir.path());
-        let (_results, leo, _) =
-            crate::partition_writer::run_produce_append_batch(w.log.clone(), vec![sample_owned(3)])
-                .await
-                .unwrap();
+        let (_results, leo, _) = crate::partition_writer::run_produce_append_batch(
+            w.log.clone(),
+            None,
+            vec![sample_owned(3)],
+        )
+        .await
+        .unwrap();
         w.sync_durable(leo).await.unwrap();
 
         let start = w.trim_to_offset(Offset(2)).await.unwrap();
