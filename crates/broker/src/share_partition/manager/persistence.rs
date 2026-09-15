@@ -246,7 +246,7 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([25; 16]);
         let mut st = AcquisitionState::new(Offset(0));
         st.materialize(Offset(4), 100);
-        let _ = st.acquire("m1", 10, i32::MAX, Instant::now(), LOCK, 5);
+        let _ = st.acquire("m1", 10, Offset(i64::MAX), Instant::now(), LOCK, 5);
 
         let result = mgr.persist_if_dirty("g1", tid, 0, None, &mut st).await;
 
@@ -262,7 +262,7 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([26; 16]);
         let mut st = AcquisitionState::new(Offset(0));
         st.materialize(Offset(4), 100);
-        let _ = st.acquire("m1", 10, i32::MAX, Instant::now(), LOCK, 5);
+        let _ = st.acquire("m1", 10, Offset(i64::MAX), Instant::now(), LOCK, 5);
         let before = st.clone();
         // A cell that the cache does not hold: the write fails without fencing.
         let cell = Arc::new(Mutex::new(before.clone()));
