@@ -1,24 +1,31 @@
-//! The two request shapes of `AddPartitionsToTxn` and the whole-transaction
-//! `TransactionalId` ACL gate each of them runs.
+//! The two request shapes of `AddPartitionsToTxn` and the authorization each
+//! of them runs.
 //!
 //! v0-3 carries a single transaction inline on the request and answers with
-//! `results_by_topic_v3_and_below`; v4-5 carries a `transactions` array and
-//! answers with `results_by_transaction`. Below the ACL gate the work is
-//! identical, so both paths funnel into
+//! `results_by_topic_v3_and_below`. It comes from a client, which needs
+//! `Write` on the transactional id and on each topic. v4-5 carries a
+//! `transactions` array and answers with `results_by_transaction`. It comes
+//! from a broker, which [`super::handle`] has already checked for
+//! `ClusterAction`, and it runs no client check. Below the authorization
+//! the work is identical, so both paths funnel into
 //! [`process_one_txn`](super::registration::process_one_txn).
 
-use std::net::SocketAddr;
+use std::{collections::HashSet, net::SocketAddr};
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 use krabka_protocol::owned::{
     add_partitions_to_txn_request::AddPartitionsToTxnRequest,
     add_partitions_to_txn_response::{AddPartitionsToTxnResponse, AddPartitionsToTxnResult},
+    common::{
+        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+        add_partitions_to_txn_response::add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
+    },
 };
 use krabka_security::Principal;
 
 use super::{
-    authz::denied_topics,
+    authz::{TopicAuthorization, failed_partitions},
     registration::{TransactionRequest, process_one_txn},
     results::topic_error,
     wire::encode_response,
@@ -31,7 +38,7 @@ use crate::{
 };
 
 /// The request-independent collaborators both version paths need: the
-/// coordinator they drive, the metadata image the ACL checks read, the
+/// coordinator they drive, the metadata image the checks read, the
 /// negotiated transaction version, and the caller's identity.
 #[derive(Clone, Copy)]
 pub(super) struct HandlerDependencies<'a> {
@@ -41,6 +48,80 @@ pub(super) struct HandlerDependencies<'a> {
     pub(super) authorizer: &'a dyn Authorizer,
     pub(super) principal: &'a Principal,
     pub(super) peer: &'a SocketAddr,
+    /// The broker config, which names the internal topics a client can never
+    /// add.
+    pub(super) config: &'a crate::config::BrokerConfig,
+}
+
+/// One transaction of a request, in the form both version paths share.
+struct Transaction<'a> {
+    transactional_id: &'a str,
+    producer_id: i64,
+    producer_epoch: i16,
+    topics: &'a [AddPartitionsToTxnTopic],
+    verify_only: bool,
+}
+
+/// Runs the checks of Kafka's `KafkaApis.handleAddPartitionsToTxnRequest` for
+/// one transaction, then hands it to the coordinator.
+///
+/// A client (v0-3) needs `Write` on the transactional id, else every
+/// partition answers `TRANSACTIONAL_ID_AUTHORIZATION_FAILED`. Then every
+/// partition must be authorized and exist, else the whole transaction fails
+/// and nothing is added.
+async fn process_transaction(
+    dependencies: &HandlerDependencies<'_>,
+    client: bool,
+    txn: &Transaction<'_>,
+) -> Vec<AddPartitionsToTxnTopicResult> {
+    let &HandlerDependencies {
+        coord,
+        image,
+        txnv,
+        authorizer,
+        principal,
+        peer,
+        config,
+    } = dependencies;
+    let authorization = if client {
+        let tid_req = AuthorizationRequest {
+            principal,
+            host: peer,
+            resource_type: ResourceType::TransactionalId,
+            resource_name: txn.transactional_id,
+            operation: AclOperation::Write,
+        };
+        if authorizer.authorize(image, &tid_req) == AuthorizationResult::Deny {
+            return topic_error(txn.topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+        }
+        TopicAuthorization::Client {
+            authorizer,
+            principal,
+            peer,
+            config,
+        }
+    } else {
+        TopicAuthorization::Broker
+    };
+    if let Some(rows) = failed_partitions(image, authorization, txn.topics) {
+        return rows;
+    }
+    let authorized = HashSet::new();
+    let frozen = frozen_topics(image, txn.topics, &authorized);
+    process_one_txn(
+        coord,
+        TransactionRequest {
+            transactional_id: txn.transactional_id,
+            producer_id: krabka_log::ProducerId(txn.producer_id),
+            producer_epoch: txn.producer_epoch,
+            topics: txn.topics,
+            denied: &authorized,
+            frozen: &frozen,
+            txnv,
+            verify_only: txn.verify_only,
+        },
+    )
+    .await
 }
 
 // ── v4+ path ─────────────────────────────────────────────────────────────────
@@ -50,47 +131,22 @@ pub(super) async fn handle_v4(
     version: i16,
     req: &AddPartitionsToTxnRequest,
 ) -> Result<Bytes, BrokerError> {
-    let &HandlerDependencies {
-        coord,
-        image,
-        txnv,
-        authorizer,
-        principal,
-        peer,
-    } = dependencies;
     let mut results_by_transaction: Vec<AddPartitionsToTxnResult> =
         Vec::with_capacity(req.transactions.len());
 
     for txn in &req.transactions {
-        // ── ACL preamble: per-txn Write on TransactionalId ─────
-        let tid_req = AuthorizationRequest {
-            principal,
-            host: peer,
-            resource_type: ResourceType::TransactionalId,
-            resource_name: txn.transactional_id.as_str(),
-            operation: AclOperation::Write,
-        };
-        let topic_results = if authorizer.authorize(image, &tid_req) == AuthorizationResult::Deny {
-            topic_error(&txn.topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
-        } else {
-            // Per-topic Write check, then the per-topic freeze read.
-            let denied = denied_topics(authorizer, image, principal, peer, &txn.topics);
-            let frozen = frozen_topics(image, &txn.topics, &denied);
-            process_one_txn(
-                coord,
-                TransactionRequest {
-                    transactional_id: txn.transactional_id.as_str(),
-                    producer_id: krabka_log::ProducerId(txn.producer_id),
-                    producer_epoch: txn.producer_epoch,
-                    topics: &txn.topics,
-                    denied: &denied,
-                    frozen: &frozen,
-                    txnv,
-                    verify_only: txn.verify_only,
-                },
-            )
-            .await
-        };
+        let topic_results = process_transaction(
+            dependencies,
+            false,
+            &Transaction {
+                transactional_id: txn.transactional_id.as_str(),
+                producer_id: txn.producer_id,
+                producer_epoch: txn.producer_epoch,
+                topics: &txn.topics,
+                verify_only: txn.verify_only,
+            },
+        )
+        .await;
         results_by_transaction.push(AddPartitionsToTxnResult {
             transactional_id: txn.transactional_id.clone(),
             topic_results,
@@ -112,46 +168,19 @@ pub(super) async fn handle_v3(
     version: i16,
     req: &AddPartitionsToTxnRequest,
 ) -> Result<Bytes, BrokerError> {
-    let &HandlerDependencies {
-        coord,
-        image,
-        txnv,
-        authorizer,
-        principal,
-        peer,
-    } = dependencies;
-    // ── ACL preamble: Write on TransactionalId ────────────────
-    let tid_req = AuthorizationRequest {
-        principal,
-        host: peer,
-        resource_type: ResourceType::TransactionalId,
-        resource_name: req.v3_and_below_transactional_id.as_str(),
-        operation: AclOperation::Write,
-    };
-    let topic_results = if authorizer.authorize(image, &tid_req) == AuthorizationResult::Deny {
-        topic_error(
-            &req.v3_and_below_topics,
-            codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
-        )
-    } else {
-        let denied = denied_topics(authorizer, image, principal, peer, &req.v3_and_below_topics);
-        let frozen = frozen_topics(image, &req.v3_and_below_topics, &denied);
-        process_one_txn(
-            coord,
-            TransactionRequest {
-                transactional_id: req.v3_and_below_transactional_id.as_str(),
-                producer_id: krabka_log::ProducerId(req.v3_and_below_producer_id),
-                producer_epoch: req.v3_and_below_producer_epoch,
-                topics: &req.v3_and_below_topics,
-                denied: &denied,
-                frozen: &frozen,
-                txnv,
-                // v0-3 has no `verify_only` field (predates KIP-890); always add.
-                verify_only: false,
-            },
-        )
-        .await
-    };
+    let topic_results = process_transaction(
+        dependencies,
+        true,
+        &Transaction {
+            transactional_id: req.v3_and_below_transactional_id.as_str(),
+            producer_id: req.v3_and_below_producer_id,
+            producer_epoch: req.v3_and_below_producer_epoch,
+            topics: &req.v3_and_below_topics,
+            // v0-3 has no `verify_only` field (predates KIP-890); always add.
+            verify_only: false,
+        },
+    )
+    .await;
 
     let resp = AddPartitionsToTxnResponse {
         results_by_topic_v3_and_below: topic_results,
@@ -186,8 +215,11 @@ mod tests {
         crate::test_support::principal("ANONYMOUS")
     }
 
+    /// A v4+ request comes from a broker, so a principal without
+    /// `ClusterAction` gets Kafka's top-level `CLUSTER_AUTHORIZATION_FAILED`
+    /// and no transaction row.
     #[tokio::test]
-    async fn handle_v4_transactional_id_deny_returns_transaction_rows() {
+    async fn handle_v4_without_cluster_action_returns_the_top_level_error() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let principal = principal();
         let peer = peer();
@@ -218,18 +250,8 @@ mod tests {
 
         let expected = AddPartitionsToTxnResponse {
             throttle_time_ms: 0,
-            error_code: codes::NONE,
-            results_by_transaction: vec![AddPartitionsToTxnResult {
-                transactional_id: "tid-4".into(),
-                topic_results: vec![topic_result(
-                    "alpha",
-                    &[
-                        (1, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
-                        (2, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
-                    ],
-                )],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }],
+            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+            results_by_transaction: vec![],
             results_by_topic_v3_and_below: vec![],
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };

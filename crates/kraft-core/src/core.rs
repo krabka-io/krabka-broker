@@ -257,7 +257,7 @@ impl QuorumStateMachine {
                 leader_id,
                 leader_epoch,
                 diverging,
-            } => self.handle_fetch_response(leader_id, leader_epoch, diverging, now),
+            } => self.handle_fetch_response(log, leader_id, leader_epoch, diverging, now),
             Event::FetchTimeout => self.handle_fetch_timeout(log, now),
         }
     }

@@ -45,13 +45,71 @@ pub trait LogView {
     fn end_offset(&self) -> i64;
     /// Leader epoch of the last appended record. An empty log gives 0.
     fn last_epoch(&self) -> Epoch;
-    /// The end offset for `epoch`: the offset of the first record with a
-    /// strictly greater epoch, or `end_offset()` if there is no such record.
+    /// Kafka's `RaftLog.endOffsetForEpoch`: the largest epoch `<= epoch` that
+    /// this log holds, and the offset where that epoch ends.
     ///
-    /// The state machine uses this value to compute the diverging-epoch hint.
-    /// This method returns `None` if `epoch` is unknown, that is, greater than
-    /// the last epoch.
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> Option<i64>;
+    /// The end is the start offset of the first epoch newer than `epoch`, or
+    /// the log end when there is none. An `epoch` older than every epoch in
+    /// the log answers `epoch` itself with the start of the oldest one. An
+    /// `epoch` newer than every epoch in the log answers the log end and
+    /// [`last_epoch`](Self::last_epoch), which never equals `epoch`, so the
+    /// leader treats a fetch at that epoch as diverging.
+    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata;
+}
+
+impl LogOffsetMetadata {
+    /// [`LogView::end_offset_for_epoch`] over a log that records the leader
+    /// epoch of every record: `epochs[i]` is the epoch of offset `i`.
+    ///
+    /// The in-memory logs of the simulators and the unit tests use it, so
+    /// their divergence lookup follows the same rule as the on-disk log.
+    #[must_use]
+    pub fn end_of_epoch_in(epochs: &[Epoch], epoch: Epoch) -> Self {
+        let end = i64::try_from(epochs.len()).unwrap_or(i64::MAX);
+        let last_epoch = epochs.last().copied().unwrap_or(0);
+        if epoch > last_epoch {
+            return Self {
+                offset: end,
+                epoch: last_epoch,
+            };
+        }
+        let offset = epochs
+            .iter()
+            .position(|&record_epoch| record_epoch > epoch)
+            .map_or(end, |index| i64::try_from(index).unwrap_or(i64::MAX));
+        let found = epochs
+            .iter()
+            .copied()
+            .filter(|&record_epoch| record_epoch <= epoch)
+            .max()
+            .unwrap_or(epoch);
+        Self {
+            offset,
+            epoch: found,
+        }
+    }
+
+    /// Kafka's `RaftLog.truncateToEndOffset`: the offset a follower truncates
+    /// its `log` to when the leader answers a Fetch with `self` as the
+    /// diverging epoch.
+    ///
+    /// The leader's end offset for the epoch is only an upper bound. The
+    /// follower's own copy of that epoch can end earlier, and the records
+    /// after it then belong to an epoch the leader does not have. Truncating
+    /// to the leader's offset alone would keep them, and the next Fetch would
+    /// diverge at the same point again.
+    #[must_use]
+    pub fn follower_truncation_offset(self, log: &dyn LogView) -> i64 {
+        if self.epoch == 0 {
+            return self.offset.min(log.end_offset());
+        }
+        let local = log.end_offset_for_epoch(self.epoch);
+        if local.epoch == self.epoch {
+            local.offset.min(self.offset)
+        } else {
+            local.offset
+        }
+    }
 }
 
 /// The durable quorum state: the logical content of the `quorum-state` file.

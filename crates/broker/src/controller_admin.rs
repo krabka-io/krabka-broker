@@ -41,17 +41,20 @@ macro_rules! api_version {
 ///
 /// This table is that set minus the RPCs the controller listener already
 /// answers without a broker handler: `Fetch`, `ApiVersions`, the KIP-595
-/// quorum RPCs, `FetchSnapshot`, `DescribeCluster`, broker and controller
-/// registration, and the KIP-853 voter RPCs. What remains is the subset that
+/// quorum RPCs, `FetchSnapshot`, `DescribeCluster`, controller registration,
+/// and the KIP-853 voter RPCs. What remains is the subset that
 /// reuses a broker handler, which is what this router bridges to.
 ///
-/// `BrokerHeartbeat` is the one entry here that is not an Admin API, and it
-/// belongs for the same reason the Admin subset does: KIP-919 puts it on the
-/// controller listener, and only the broker crate holds what answering it
-/// takes -- the heartbeat registry that decides fencing, the KIP-112
-/// offline-dir failover, and the controlled-shutdown drain. Routing it here is
-/// what keeps a heartbeat sent to a controller-only node from being answered
-/// by a handler that does none of that.
+/// `BrokerRegistration` and `BrokerHeartbeat` are not Admin APIs, and they
+/// belong for the same reason the Admin subset does: KIP-919 puts them on the
+/// controller listener, and only the broker crate holds what answering them
+/// takes. Registration asks the heartbeat registry whether the previous
+/// incarnation still holds a session, and it withdraws the ISR and ELR seats of
+/// a broker that cannot prove a clean restart. The heartbeat drives the
+/// registry that decides fencing, the KIP-112 offline-dir failover, and the
+/// controlled-shutdown drain. Routing them here is what keeps a broker that
+/// registers or heartbeats to a controller-only node from being answered by a
+/// handler that does none of that.
 ///
 /// `Envelope` is the other entry that is not an Admin API, and it is the one
 /// whose payload is another API's request rather than a body a handler reads,
@@ -96,6 +99,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(alter_user_scram_credentials_request),
     api_version!(update_features_request),
     api_version!(envelope_request),
+    api_version!(broker_registration_request),
     api_version!(broker_heartbeat_request),
     api_version!(unregister_broker_request),
     api_version!(assign_replicas_to_dirs_request),
@@ -468,7 +472,7 @@ mod tests {
         check!(
             keys == maplit::btreeset! {
                 19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 57, 58,
-                63, 64, 73,
+                62, 63, 64, 73,
             }
         );
     }

@@ -36,3 +36,35 @@ pub(super) fn topic_result(name: &str, rows: &[(i32, i16)]) -> AddPartitionsToTx
         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
     }
 }
+
+/// Adds `topic` with `partitions` partitions, each led by this broker, to the
+/// metadata image, so the existence check of `AddPartitionsToTxn` finds it.
+pub(super) async fn seed_topic(broker: &crate::broker::Broker, topic: &str, partitions: i32) {
+    let mut records = vec![krabka_metadata::MetadataRecord::V1Topic(
+        krabka_metadata::TopicRecord {
+            name: topic.to_owned(),
+            topic_id: uuid::Uuid::new_v4(),
+            partitions,
+            replication_factor: 1,
+        },
+    )];
+    records.extend((0..partitions).map(|partition| {
+        krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+            topic: topic.to_owned(),
+            partition,
+            leader: broker.config.node_id,
+            replicas: vec![broker.config.node_id],
+            isr: vec![broker.config.node_id],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
+            adding_replicas: Vec::new(),
+            removing_replicas: Vec::new(),
+            directories: vec![uuid::Uuid::nil()],
+            partition_epoch: 0,
+        })
+    }));
+    broker
+        .controller
+        .submit_change(records)
+        .await
+        .unwrap_or_else(|error| panic!("seed topic {topic}: {error}"));
+}

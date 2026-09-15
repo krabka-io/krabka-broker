@@ -122,6 +122,52 @@ pub(crate) async fn finalize_elr_version_on(broker: &crate::Broker) {
     .expect("eligible.leader.replicas.version visible");
 }
 
+/// Initialize the share state of `(group, topic_id, partition)` at state
+/// epoch 1 with no start offset, as the group coordinator does when it
+/// assigns the partition to a member (Kafka's Initialize-first flow). The
+/// share coordinator refuses a read of a key with no state, so a handler test
+/// that fetches or acknowledges without a share group heartbeat calls this
+/// first.
+pub(crate) async fn initialize_share_state(
+    broker: &crate::broker::BrokerHandle,
+    group: &str,
+    topic_id: uuid::Uuid,
+    partition: i32,
+) {
+    broker
+        .broker_arc_for_test()
+        .group_coordinator
+        .share_persister()
+        .expect("share persister")
+        .initialize(
+            group,
+            topic_id,
+            partition,
+            1,
+            krabka_log::Offset(crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET),
+        )
+        .await
+        .expect("initialize the share state");
+}
+
+/// End the heartbeat session of `broker_id` on the controller `broker`, as if
+/// that broker stopped and its session expired.
+///
+/// It first waits for a liveness tick of the current controller term to
+/// finish. The first tick of a term seeds every registered broker with a
+/// session, so a session ended before that tick would be opened again.
+pub(crate) async fn end_heartbeat_session(broker: &crate::Broker, broker_id: u64) {
+    let ticks = broker.metrics.controller_fencing_publications_total.get();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while broker.metrics.controller_fencing_publications_total.get() <= ticks {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a liveness tick of this controller term finished");
+    broker.liveness.end_session(broker_id).await;
+}
+
 pub(crate) fn principal(name: &str) -> Principal {
     Principal {
         name: name.into(),

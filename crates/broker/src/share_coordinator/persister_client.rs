@@ -224,7 +224,25 @@ impl SharePersister {
     /// load of that partition ends. A load that is still running at the
     /// deadline is not an error: the local coordinator then answers
     /// `COORDINATOR_LOAD_IN_PROGRESS`, and the caller retries.
+    ///
+    /// # Errors
+    ///
+    /// Every failure is `COORDINATOR_NOT_AVAILABLE`: no share coordinator can
+    /// serve the call yet, which is what Kafka's persister reports when it
+    /// cannot find the coordinator.
     async fn ensure_topic_and_refresh(
+        &self,
+        state_partition: PartitionIndex,
+    ) -> Result<(), BrokerError> {
+        self.find_state_partition(state_partition)
+            .await
+            .map_err(|error| BrokerError::SharePartitionState {
+                code: crate::codes::COORDINATOR_NOT_AVAILABLE,
+                message: error.to_string(),
+            })
+    }
+
+    async fn find_state_partition(
         &self,
         state_partition: PartitionIndex,
     ) -> Result<(), BrokerError> {
@@ -277,9 +295,10 @@ impl SharePersister {
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Share`] when the coordinator answers a non-zero
-    /// error code (among them `INVALID_REQUEST` for a key with no state), or
-    /// [`BrokerError`] from the connect or send on the remote path.
+    /// Returns [`BrokerError::SharePartitionState`] when the coordinator
+    /// answers a non-zero error code (among them `INVALID_REQUEST` for a key
+    /// with no state), or [`BrokerError`] from the connect or send on the
+    /// remote path.
     // Consumed by `SharePartitionLeaderManager::get_or_load`, which the
     // ShareFetch/ShareAcknowledge handlers drive.
     pub(crate) async fn read_state(
@@ -544,18 +563,20 @@ impl SharePersister {
         let image = self.controller.current_image();
         let pr = image
             .partition(bootstrap::TOPIC, state_partition.get())
-            .ok_or_else(|| {
-                BrokerError::Share(format!(
+            .ok_or_else(|| BrokerError::SharePartitionState {
+                code: crate::codes::COORDINATOR_NOT_AVAILABLE,
+                message: format!(
                     "{}-{state_partition} not present in metadata image",
                     bootstrap::TOPIC
-                ))
+                ),
             })?;
         let leader = pr.leader;
-        let broker_info = image.broker(leader).ok_or_else(|| {
-            BrokerError::Share(format!(
-                "share-state leader node {leader} not in metadata image"
-            ))
-        })?;
+        let broker_info = image
+            .broker(leader)
+            .ok_or_else(|| BrokerError::SharePartitionState {
+                code: crate::codes::COORDINATOR_NOT_AVAILABLE,
+                message: format!("share-state leader node {leader} not in metadata image"),
+            })?;
         let (host, port) = broker_info
             .endpoints
             .iter()
@@ -666,11 +687,13 @@ impl_partition_results!(
 );
 
 /// The error for a share-state call on `partition` that the coordinator
-/// refused with `error_code`.
+/// refused with `error_code`. The share-partition leader maps the code as
+/// Kafka's `SharePartition.fetchPersisterError` does.
 fn refused(what: &str, partition: i32, error_code: i16, message: &str) -> BrokerError {
-    BrokerError::Share(format!(
-        "{what} for partition {partition} refused by the leader (code {error_code}): {message}"
-    ))
+    BrokerError::SharePartitionState {
+        code: error_code,
+        message: format!("{what} for partition {partition} refused by the leader: {message}"),
+    }
 }
 
 /// `Ok(())` only when the leader answered for `partition` with error code 0.
@@ -697,9 +720,10 @@ fn check_partition_result<R: PartitionResults>(
         return Ok(());
     }
     let detail = error_message.unwrap_or_else(|| "no error message".to_string());
-    Err(BrokerError::Share(format!(
-        "{what} for partition {partition} refused by the leader (code {error_code}): {detail}"
-    )))
+    Err(BrokerError::SharePartitionState {
+        code: error_code,
+        message: format!("{what} for partition {partition} refused by the leader: {detail}"),
+    })
 }
 
 #[cfg(test)]
@@ -746,6 +770,39 @@ mod tests {
         let error = check_partition_result(response(&[(0, 16)]), "Initialize", 0)
             .expect_err("a refused partition must not read as success");
         assert2::assert!(error.to_string().contains("16"));
+    }
+
+    /// A refused `Read`, `Write` or `ReadSummary` keeps the coordinator code,
+    /// so the share-partition leader can map it as Kafka's
+    /// `fetchPersisterError` does.
+    #[test]
+    fn a_refused_share_state_call_keeps_the_coordinator_code() {
+        let cases = [
+            ("ReadShareGroupState", crate::codes::INVALID_REQUEST),
+            ("ReadShareGroupState", crate::codes::FENCED_LEADER_EPOCH),
+            ("WriteShareGroupState", crate::codes::FENCED_STATE_EPOCH),
+            (
+                "ReadShareGroupStateSummary",
+                crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|&(what, code)| match refused(what, 3, code, "detail") {
+                BrokerError::SharePartitionState { code, message } => Some((code, message)),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<_> = cases
+            .iter()
+            .map(|&(what, code)| {
+                Some((
+                    code,
+                    format!("{what} for partition 3 refused by the leader: detail"),
+                ))
+            })
+            .collect();
+        assert2::assert!(actual == expected);
     }
 
     #[test]

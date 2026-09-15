@@ -256,10 +256,14 @@ mod tests {
 
         let acquired_group = "handle-share-acquired-mutant-group";
         let acquired_topic_id = uuid::Uuid::from_u128(0xACCD);
-        let acquired_cell = broker
-            .share_partition_leaders
-            .get_or_load(acquired_group, acquired_topic_id, 0)
-            .await;
+        // The share coordinator refuses a read of a key with no state, so the
+        // cell is cached directly. This part checks only the acquired count.
+        let acquired_cell = broker.share_partition_leaders.insert_for_test(
+            acquired_group,
+            acquired_topic_id,
+            0,
+            crate::share_partition::state::AcquisitionState::new(krabka_log::Offset(0)),
+        );
         assert2::assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(75),

@@ -19,13 +19,20 @@ use super::{
 use crate::{error::LogError, txn_index::AbortedTxn};
 
 impl Log {
-    /// Recompute the last-stable-offset from every open transaction.
+    /// Recompute the first unstable offset from every open transaction and
+    /// every complete transaction whose marker is not below the high
+    /// watermark yet.
     ///
-    /// The earliest open transaction holds the LSO at its first offset. With
-    /// none open, the LSO advances to the exact log end. Every append path and
-    /// recovery use this same selection.
+    /// The earliest of those transactions holds the offset at its first
+    /// offset. With none, the offset advances to the exact log end. Every
+    /// append path and recovery use this same selection.
     pub(super) fn refresh_lso(&mut self) -> Result<(), LogError> {
-        let starts: Vec<_> = self.pending.values().map(|offset| offset.0).collect();
+        let starts: Vec<_> = self
+            .pending
+            .values()
+            .chain(self.unreplicated.keys().next())
+            .map(|offset| offset.0)
+            .collect();
         let log_end = self.log_end_offset();
         self.lso = krabka_verified::first_unstable_offset(&starts, log_end.0)
             .map(Offset)
@@ -35,6 +42,42 @@ impl Log {
                 ))
             })?;
         Ok(())
+    }
+
+    /// The last stable offset that a reader sees at `high_watermark`.
+    ///
+    /// The call first releases every complete transaction whose marker offset
+    /// is below `high_watermark`, as Kafka's
+    /// `ProducerStateManager.onHighWatermarkUpdated` does. It then answers
+    /// `min(first unstable offset, high_watermark)`, which is Kafka's
+    /// `UnifiedLog.lastStableOffset`. A transaction whose marker the high
+    /// watermark has not passed still holds the answer at its first offset,
+    /// because a leader change can truncate that marker away.
+    ///
+    /// Call it with the partition's current high watermark. The high watermark
+    /// only moves forward, so a released transaction never has to come back.
+    pub fn last_stable_offset(&mut self, high_watermark: Offset) -> Offset {
+        self.release_replicated_transactions(high_watermark);
+        self.lso.min(high_watermark)
+    }
+
+    /// Release every complete transaction whose marker offset is below
+    /// `high_watermark`, and move the first unstable offset forward.
+    ///
+    /// The writer calls this before it appends a transaction marker, so the
+    /// set of complete transactions stays bounded on a partition that no
+    /// reader fetches from.
+    pub fn release_replicated_transactions(&mut self, high_watermark: Offset) {
+        let before = self.unreplicated.len();
+        self.unreplicated
+            .retain(|_, marker_offset| *marker_offset >= high_watermark);
+        if self.unreplicated.len() != before
+            && let Err(error) = self.refresh_lso()
+        {
+            // Releasing a transaction removes a start offset and cannot put a
+            // start beyond the log end. Keep the lower offset if it happens.
+            tracing::warn!(%error, "last stable offset refresh failed");
+        }
     }
 
     /// Apply one transaction end marker to the in-memory transaction state.
@@ -110,7 +153,9 @@ impl Log {
         // writes succeed. A caller can then retry a marker whose log append
         // succeeded but whose index update failed.
         if closes {
-            self.pending.remove(&producer_id);
+            if let Some(first_offset) = self.pending.remove(&producer_id) {
+                self.unreplicated.insert(first_offset, last_offset);
+            }
             self.pending_stamp_ranges.remove(&producer_id);
         }
         Ok(())
@@ -152,10 +197,11 @@ mod tests {
         log.append(&mut b1).unwrap();
         assert2::assert!(log.lso() == old_lso);
 
-        // Commit marker — LSO catches up.
+        // Commit marker: the LSO catches up once the high watermark passes it.
         let mut commit = commit_marker(1000, 0);
         log.append(&mut commit).unwrap();
-        assert2::assert!(log.lso() == log.log_end_offset());
+        let log_end = log.log_end_offset();
+        assert2::assert!(log.last_stable_offset(log_end) == log_end);
     }
 
     #[test]
@@ -314,13 +360,15 @@ mod tests {
         // Commit producer 1000. LSO must still be held back by 2000.
         let mut c1 = commit_marker(1000, 0);
         log.append(&mut c1).unwrap();
-        assert2::assert!(log.lso() == Offset(2));
+        let log_end = log.log_end_offset();
+        assert2::assert!(log.last_stable_offset(log_end) == Offset(2));
         assert2::assert!(log.lso() > lso_after_open);
 
         // Commit producer 2000. LSO advances to log_end_offset.
         let mut c2 = commit_marker(2000, 0);
         log.append(&mut c2).unwrap();
-        assert2::assert!(log.lso() == log.log_end_offset());
+        let log_end = log.log_end_offset();
+        assert2::assert!(log.last_stable_offset(log_end) == log_end);
     }
 
     #[test]
@@ -353,6 +401,95 @@ mod tests {
                 "case {case}"
             );
         }
+    }
+
+    /// Kafka keeps a complete transaction in the first unstable offset until
+    /// the high watermark passes its marker (`ProducerStateManager
+    /// .removeUnreplicatedTransactions` drops it only when
+    /// `lastOffset < highWatermark`), and reports
+    /// `min(first unstable offset, high watermark)`.
+    #[test]
+    fn a_complete_transaction_holds_the_lso_until_the_high_watermark_passes_its_marker() {
+        struct Case {
+            name: &'static str,
+            transaction: bool,
+            high_watermarks: &'static [i64],
+            want: Offset,
+        }
+        let cases = [
+            Case {
+                name: "high watermark inside the transaction",
+                transaction: true,
+                high_watermarks: &[12],
+                want: Offset(10),
+            },
+            Case {
+                name: "high watermark at the marker",
+                transaction: true,
+                high_watermarks: &[15],
+                want: Offset(10),
+            },
+            Case {
+                name: "high watermark past the marker",
+                transaction: true,
+                high_watermarks: &[16],
+                want: Offset(16),
+            },
+            Case {
+                name: "high watermark moves past the marker in steps",
+                transaction: true,
+                high_watermarks: &[12, 15, 16],
+                want: Offset(16),
+            },
+            Case {
+                name: "no transaction",
+                transaction: false,
+                high_watermarks: &[16],
+                want: Offset(16),
+            },
+        ];
+        for case in cases {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
+            if case.transaction {
+                log.append(&mut transactional_batch(
+                    1000,
+                    0,
+                    &["a", "b", "c", "d", "e"],
+                ))
+                .unwrap(); // offsets 10 to 14
+                log.append(&mut commit_marker(1000, 0)).unwrap(); // offset 15
+            } else {
+                log.append(&mut sample_batch(6)).unwrap(); // offsets 10 to 15
+            }
+            let mut got = Offset(-1);
+            for &high_watermark in case.high_watermarks {
+                got = log.last_stable_offset(Offset(high_watermark));
+            }
+            assert2::assert!(got == case.want, "case {}", case.name);
+        }
+    }
+
+    /// A reopened log replays the markers after its last producer snapshot,
+    /// so a complete transaction still holds the LSO until the high watermark
+    /// passes its marker, as Kafka's log recovery puts it in
+    /// `unreplicatedTxns`. A released transaction never holds it again.
+    #[test]
+    fn a_reopened_log_holds_a_complete_transaction_until_the_high_watermark_passes() {
+        let dir = tempdir().unwrap();
+        {
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
+            log.append(&mut transactional_batch(1000, 0, &["a", "b"]))
+                .unwrap(); // offsets 10 and 11
+            log.append(&mut abort_marker(1000, 0)).unwrap(); // offset 12
+        }
+        let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        assert2::assert!(
+            [12, 13, 11].map(|hw| reopened.last_stable_offset(Offset(hw)))
+                == [Offset(10), Offset(13), Offset(11)]
+        );
     }
 
     #[test]

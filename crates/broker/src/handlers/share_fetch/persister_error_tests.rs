@@ -1,0 +1,479 @@
+//! Handler tests for how `ShareFetch` and `ShareAcknowledge` answer when the
+//! share-state persister fails.
+//!
+//! Kafka's `SharePartition.maybeInitialize` fails the share partition when
+//! `ReadShareGroupState` fails, and `SharePartitionManager` removes it from
+//! its cache, so the next request reads again. A failed
+//! `WriteShareGroupState` rolls the acknowledgement back
+//! (`SharePartition.rollbackOrProcessStateUpdates`), and the client gets the
+//! error that `SharePartition.fetchPersisterError` maps. A fenced state epoch
+//! maps to `NOT_LEADER_OR_FOLLOWER` and drops the partition from the cache.
+
+use std::sync::Arc;
+
+use assert2::assert;
+use bytes::Bytes;
+use krabka_log::Offset;
+use krabka_metadata::{LeaderEpoch, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_protocol::{
+    owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_response::ProduceResponse,
+        share_acknowledge_request::{
+            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
+            ShareAcknowledgeRequest,
+        },
+        share_acknowledge_response::ShareAcknowledgeResponse,
+        share_fetch_request::{
+            AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
+            ShareFetchRequest,
+        },
+        share_fetch_response::{PartitionData, ShareFetchResponse},
+    },
+    primitives::uuid::Uuid as WireUuid,
+    records::{Record, RecordBatch, RecordsPayload},
+};
+
+use super::handle;
+use crate::{
+    authorizer::AllowAllAuthorizer,
+    broker::BrokerHandle,
+    codes,
+    test_support::{
+        decode_response, encode_request, initialize_share_state, peer, principal, request_context,
+        start_broker_with,
+    },
+};
+
+/// Produce v12 names the topic.
+const PRODUCE_VERSION: i16 = 12;
+
+/// The acknowledge type `Accept`.
+const ACCEPT: i8 = 1;
+
+/// The API that carries the acknowledgement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Api {
+    ShareAcknowledge,
+    /// An acknowledgement piggybacked on a `ShareFetch`.
+    ShareFetch,
+}
+
+async fn start() -> (BrokerHandle, tempfile::TempDir) {
+    start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        cfg.share_group.enable = true;
+    })
+    .await
+}
+
+async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(broker.listen_addr().to_string())
+        .client_id("share-persister-error-test")
+        .build()
+        .await
+        .expect("client build");
+    let response = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: name.to_string(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
+    broker.wait_until_partition_present(name, 0).await;
+    let image = broker.controller_image_for_test();
+    let topic = image.topic(name).expect("created topic in the image");
+    WireUuid(topic.topic_id.into_bytes())
+}
+
+/// Appends one batch of two records to partition 0 of `topic`.
+async fn produce_two_records(broker: &BrokerHandle, topic: &str) {
+    let request = ProduceRequest {
+        acks: -1,
+        timeout_ms: 5_000,
+        topic_data: vec![TopicProduceData {
+            name: topic.to_string(),
+            partition_data: vec![PartitionProduceData {
+                index: 0,
+                records: Some(RecordsPayload::V2(vec![RecordBatch {
+                    last_offset_delta: 1,
+                    records: (0..2)
+                        .map(|offset_delta| Record {
+                            offset_delta,
+                            value: Some(Bytes::from_static(b"v")),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let shared = broker.broker_arc_for_test();
+    let user = principal("producer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "producer-client");
+    let request_bytes = encode_request(&request, PRODUCE_VERSION);
+    let response_bytes = crate::handlers::produce::handle(
+        &shared,
+        PRODUCE_VERSION,
+        7,
+        &request_bytes,
+        request_bytes.clone(),
+        &ctx,
+    )
+    .await
+    .expect("handle produce");
+    let response: ProduceResponse = decode_response(&response_bytes, PRODUCE_VERSION);
+    assert!(
+        response.responses[0].partition_responses[0].error_code == codes::NONE,
+        "{response:?}"
+    );
+}
+
+/// Sends a `ShareFetch` for partition 0 of `topic_id`. With `accept`, the row
+/// accepts that offset range.
+async fn share_fetch(
+    broker: &BrokerHandle,
+    group: &str,
+    epoch: i32,
+    topic_id: WireUuid,
+    accept: Option<(i64, i64)>,
+) -> PartitionData {
+    let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
+    let request = ShareFetchRequest {
+        group_id: Some(group.into()),
+        member_id: Some("member".into()),
+        share_session_epoch: epoch,
+        max_wait_ms: 0,
+        max_bytes: 1 << 20,
+        max_records: 500,
+        batch_size: 500,
+        topics: vec![FetchTopic {
+            topic_id,
+            partitions: vec![FetchPartition {
+                partition_index: 0,
+                acknowledgement_batches: accept
+                    .map(|(first_offset, last_offset)| FetchAcknowledgeBatch {
+                        first_offset,
+                        last_offset,
+                        acknowledge_types: vec![ACCEPT],
+                        ..Default::default()
+                    })
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let shared = broker.broker_arc_for_test();
+    let user = principal("share-consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "share-client");
+    let request_bytes = encode_request(&request, version);
+    let response = handle(&shared, version, 7, &request_bytes, &ctx)
+        .await
+        .expect("handle share fetch");
+    let mut response: ShareFetchResponse = decode_response(&response, version);
+    response.responses.remove(0).partitions.remove(0)
+}
+
+/// Sends a `ShareAcknowledge` that accepts `[first, last]` on partition 0 of
+/// `topic_id`, and returns the partition error.
+async fn share_acknowledge(
+    broker: &BrokerHandle,
+    group: &str,
+    epoch: i32,
+    topic_id: WireUuid,
+    (first_offset, last_offset): (i64, i64),
+) -> i16 {
+    let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
+    let request = ShareAcknowledgeRequest {
+        group_id: Some(group.into()),
+        member_id: Some("member".into()),
+        share_session_epoch: epoch,
+        topics: vec![AcknowledgeTopic {
+            topic_id,
+            partitions: vec![AcknowledgePartition {
+                partition_index: 0,
+                acknowledgement_batches: vec![AcknowledgeBatch {
+                    first_offset,
+                    last_offset,
+                    acknowledge_types: vec![ACCEPT],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let shared = broker.broker_arc_for_test();
+    let user = principal("share-consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "share-client");
+    let request_bytes = encode_request(&request, version);
+    let response =
+        crate::handlers::share_acknowledge::handle(&shared, version, 7, &request_bytes, &ctx)
+            .await
+            .expect("handle share acknowledge");
+    let response: ShareAcknowledgeResponse = decode_response(&response, version);
+    response.responses[0].partitions[0].error_code
+}
+
+fn acquired(row: &PartitionData) -> Vec<(i64, i64)> {
+    row.acquired_records
+        .iter()
+        .map(|range| (range.first_offset, range.last_offset))
+        .collect()
+}
+
+fn topic_uuid(topic_id: WireUuid) -> uuid::Uuid {
+    uuid::Uuid::from_bytes(topic_id.0)
+}
+
+async fn initialize_state(broker: &BrokerHandle, group: &str, topic_id: WireUuid) {
+    initialize_share_state(broker, group, topic_uuid(topic_id), 0).await;
+}
+
+/// What a client and the partition cache show after an acknowledgement
+/// whose state write the coordinator fenced.
+#[derive(Debug, PartialEq, Eq)]
+struct FencedWrite {
+    /// The acknowledge error: the `ShareAcknowledge` partition error, or the
+    /// `ShareFetch` acknowledge error.
+    acknowledge_error: i16,
+    /// The `ShareFetch` partition error of the acknowledging request, or
+    /// `NONE` for a `ShareAcknowledge`.
+    fetch_error: i16,
+    /// Whether the broker still caches the share partition.
+    cached: bool,
+    /// The offsets that the next `ShareFetch` acquires.
+    next_acquired: Vec<(i64, i64)>,
+}
+
+/// The coordinator raises the state epoch while a member holds records, as a
+/// new registration of the share partition does. The acknowledgement then
+/// carries a stale epoch and the coordinator answers `FENCED_STATE_EPOCH`.
+///
+/// Kafka answers `NOT_LEADER_OR_FOLLOWER`, keeps the records unacknowledged,
+/// and drops the partition from the cache. The next fetch reads the state
+/// again and acquires the records again.
+#[tokio::test]
+async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition() {
+    let (broker, _dir) = start().await;
+    let shared = broker.broker_arc_for_test();
+
+    let mut actual = Vec::new();
+    for api in [Api::ShareAcknowledge, Api::ShareFetch] {
+        let name = format!("fenced-{api:?}");
+        let topic_id = create_topic(&broker, &name).await;
+        initialize_state(&broker, &name, topic_id).await;
+        let opened = share_fetch(&broker, &name, 0, topic_id, None).await;
+        assert!(opened.error_code == codes::NONE, "{opened:?}");
+        produce_two_records(&broker, &name).await;
+        let fetched = share_fetch(&broker, &name, 1, topic_id, None).await;
+        assert!(acquired(&fetched) == vec![(0, 1)], "{fetched:?}");
+
+        let state_epoch = shared
+            .share_partition_leaders
+            .peek_for_test(&name, topic_uuid(topic_id), 0)
+            .expect("the fetch cached the share partition")
+            .lock()
+            .await
+            .state_epoch;
+        shared
+            .share_coordinator
+            .initialize(&name, topic_uuid(topic_id), 0, state_epoch + 1, Offset(0))
+            .await
+            .expect("raise the state epoch");
+
+        let (acknowledge_error, fetch_error) = match api {
+            Api::ShareAcknowledge => (
+                share_acknowledge(&broker, &name, 2, topic_id, (0, 1)).await,
+                codes::NONE,
+            ),
+            Api::ShareFetch => {
+                let row = share_fetch(&broker, &name, 2, topic_id, Some((0, 1))).await;
+                (row.acknowledge_error_code, row.error_code)
+            }
+        };
+        let cached = shared
+            .share_partition_leaders
+            .peek_for_test(&name, topic_uuid(topic_id), 0)
+            .is_some();
+        let next = share_fetch(&broker, &name, 3, topic_id, None).await;
+
+        actual.push((
+            api,
+            FencedWrite {
+                acknowledge_error,
+                fetch_error,
+                cached,
+                next_acquired: acquired(&next),
+            },
+        ));
+    }
+
+    let expected = vec![
+        (
+            Api::ShareAcknowledge,
+            FencedWrite {
+                acknowledge_error: codes::NOT_LEADER_OR_FOLLOWER,
+                fetch_error: codes::NONE,
+                cached: false,
+                next_acquired: vec![(0, 1)],
+            },
+        ),
+        (
+            Api::ShareFetch,
+            FencedWrite {
+                acknowledge_error: codes::NOT_LEADER_OR_FOLLOWER,
+                fetch_error: codes::NOT_LEADER_OR_FOLLOWER,
+                cached: false,
+                next_acquired: vec![(0, 1)],
+            },
+        ),
+    ];
+    assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// Points every `__share_group_state` partition at a broker that is not
+/// registered, so no share coordinator can serve a state read.
+async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
+    let shared = broker.broker_arc_for_test();
+    let partitions = shared.share_coordinator.state_topic_num_partitions();
+    let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
+        name: crate::share_coordinator::bootstrap::TOPIC.to_string(),
+        topic_id: uuid::Uuid::new_v4(),
+        partitions,
+        replication_factor: 1,
+    })];
+    records.extend((0..partitions).map(|partition| {
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: crate::share_coordinator::bootstrap::TOPIC.to_string(),
+            partition,
+            leader: NodeId(99),
+            replicas: vec![NodeId(99)],
+            isr: vec![NodeId(99)],
+            leader_epoch: LeaderEpoch(0),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        })
+    }));
+    shared
+        .controller
+        .submit_change(records)
+        .await
+        .expect("seed the share-state topic");
+}
+
+/// A state read that no coordinator can serve fails the partition with
+/// `COORDINATOR_NOT_AVAILABLE`, which is what Kafka's `fetchPersisterError`
+/// gives for the coordinator errors. The broker caches nothing, so a later
+/// request reads again. The partition never starts from a guessed offset.
+#[tokio::test]
+async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
+    let (broker, _dir) = start().await;
+    state_topic_led_by_an_unknown_broker(&broker).await;
+    let topic_id = create_topic(&broker, "unreadable").await;
+    produce_two_records(&broker, "unreadable").await;
+    let shared = broker.broker_arc_for_test();
+
+    let fetch = share_fetch(&broker, "fetch-group", 0, topic_id, None).await;
+    let fetch_cached = shared
+        .share_partition_leaders
+        .peek_for_test("fetch-group", topic_uuid(topic_id), 0)
+        .is_some();
+    let _ = share_fetch(&broker, "acknowledge-group", 0, topic_id, None).await;
+    let acknowledge = share_acknowledge(&broker, "acknowledge-group", 1, topic_id, (0, 1)).await;
+    let acknowledge_cached = shared
+        .share_partition_leaders
+        .peek_for_test("acknowledge-group", topic_uuid(topic_id), 0)
+        .is_some();
+
+    assert!(
+        (
+            (fetch.error_code, acquired(&fetch), fetch_cached),
+            (acknowledge, acknowledge_cached)
+        ) == (
+            (codes::COORDINATOR_NOT_AVAILABLE, Vec::new(), false),
+            (codes::COORDINATOR_NOT_AVAILABLE, false)
+        )
+    );
+    broker.shutdown().await;
+}
+
+/// The share coordinator refuses a read of a key that the group coordinator
+/// has not initialized with `INVALID_REQUEST`, as Kafka's
+/// `ShareCoordinatorShard.maybeGetReadStateError` does. The persister reports
+/// that code as a share-state partition error, and Kafka's
+/// `fetchPersisterError` maps it to `UNKNOWN_SERVER_ERROR`. The partition does
+/// not start from `share.auto.offset.reset`, and the broker caches nothing.
+/// Once the group coordinator initializes the key, the next fetch reads it.
+#[tokio::test]
+async fn a_read_of_an_uninitialized_state_fails_until_the_state_is_initialized() {
+    const GROUP: &str = "uninitialized-group";
+    let (broker, _dir) = start().await;
+    let topic_id = create_topic(&broker, "uninitialized").await;
+    let shared = broker.broker_arc_for_test();
+    let persister = shared
+        .group_coordinator
+        .share_persister()
+        .cloned()
+        .expect("share persister");
+    let cached = || {
+        shared
+            .share_partition_leaders
+            .peek_for_test(GROUP, topic_uuid(topic_id), 0)
+            .is_some()
+    };
+
+    let read_code = match persister
+        .read_state(GROUP, topic_uuid(topic_id), 0, 0)
+        .await
+    {
+        Err(crate::error::BrokerError::SharePartitionState { code, .. }) => Some(code),
+        _ => None,
+    };
+    let refused = share_fetch(&broker, GROUP, 0, topic_id, None).await;
+    let refused_cached = cached();
+    initialize_state(&broker, GROUP, topic_id).await;
+    let opened = share_fetch(&broker, GROUP, 1, topic_id, None).await;
+    let opened_cached = cached();
+    produce_two_records(&broker, "uninitialized").await;
+    let fetched = share_fetch(&broker, GROUP, 2, topic_id, None).await;
+
+    assert!(
+        (
+            read_code,
+            (refused.error_code, refused_cached),
+            (opened.error_code, opened_cached),
+            (fetched.error_code, acquired(&fetched))
+        ) == (
+            Some(codes::INVALID_REQUEST),
+            (codes::UNKNOWN_SERVER_ERROR, false),
+            (codes::NONE, true),
+            (codes::NONE, vec![(0, 1)])
+        )
+    );
+    broker.shutdown().await;
+}
