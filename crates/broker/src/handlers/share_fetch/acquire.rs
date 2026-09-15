@@ -194,7 +194,7 @@ async fn acquire_pass(
         // watermark and the deferral marks below hold the waiting records
         // back one range at a time.
         let upper = if read_committed {
-            part.lso().min(hwm)
+            part.last_stable_offset(hwm)
         } else {
             hwm
         };
