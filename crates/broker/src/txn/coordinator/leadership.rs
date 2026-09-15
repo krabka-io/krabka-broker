@@ -9,11 +9,15 @@
 //! `removeTransactionsForTxnTopicPartition`). This module does the same: an
 //! image changes the leadership of a partition only when its leader epoch is
 //! higher than the epoch that the coordinator already holds.
+//!
+//! Leader epochs restart when the topic is deleted and created again, so each
+//! value also records the topic id of the image that set it.
 
 use std::collections::HashMap;
 
 use krabka_ids::PartitionIndex;
 use krabka_metadata::{LeaderEpoch, MetadataImage, NodeId};
+use uuid::Uuid;
 
 use crate::txn::bootstrap;
 
@@ -21,6 +25,8 @@ use crate::txn::bootstrap;
 /// leader epoch that the coordinator has seen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct StatePartitionLeadership {
+    /// The `__transaction_state` topic id of the image that set this value.
+    pub(super) topic_id: Uuid,
     /// The partition leader epoch of the image that set this value.
     pub(super) leader_epoch: LeaderEpoch,
     /// Whether this broker is the leader at `leader_epoch`.
@@ -33,13 +39,25 @@ pub(super) type StatePartitionLeaders = HashMap<PartitionIndex, StatePartitionLe
 /// Applies the `__transaction_state` leadership of `image` to `known`.
 ///
 /// A partition changes only when `image` gives it a leader epoch higher than
-/// the one in `known`. A partition that `image` does not hold keeps its value,
-/// because a stale image can come from before the topic was created.
+/// the one in `known`, or a different topic id (the topic was deleted and
+/// created again, and its epochs restarted).
+///
+/// When `image` does not hold the topic, the image is either older than the
+/// topic or newer than its deletion. `is_local` tells the two apart: the
+/// reconcile loop removes the local log of a deleted topic, so a partition
+/// whose log is gone loses its value, and a partition whose log is still open
+/// keeps it.
 pub(super) fn apply_image(
     known: &mut StatePartitionLeaders,
     node_id: NodeId,
     image: &MetadataImage,
+    is_local: impl Fn(PartitionIndex) -> bool,
 ) {
+    let Some(topic_id) = image.topic(bootstrap::TOPIC).map(|topic| topic.topic_id) else {
+        known.retain(|partition, _| is_local(*partition));
+        return;
+    };
+    known.retain(|_, leadership| leadership.topic_id == topic_id);
     for partition in image.partitions_of(bootstrap::TOPIC) {
         let index = PartitionIndex(partition.partition);
         let newer = known
@@ -49,6 +67,7 @@ pub(super) fn apply_image(
             known.insert(
                 index,
                 StatePartitionLeadership {
+                    topic_id,
                     leader_epoch: partition.leader_epoch,
                     leads: partition.leader == node_id,
                 },

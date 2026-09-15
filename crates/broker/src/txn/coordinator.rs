@@ -157,6 +157,11 @@ impl TxnCoordinator {
             &mut *self.leader_partitions.write().await,
             self.node_id,
             image,
+            |partition| {
+                self.partitions
+                    .get(crate::txn::bootstrap::TOPIC, partition)
+                    .is_some()
+            },
         );
     }
 
@@ -166,6 +171,7 @@ impl TxnCoordinator {
         self.leader_partitions.write().await.insert(
             partition,
             leadership::StatePartitionLeadership {
+                topic_id: uuid::Uuid::nil(),
                 leader_epoch: krabka_metadata::LeaderEpoch(0),
                 leads: true,
             },
@@ -256,13 +262,17 @@ mod tests {
         MetadataImage::new(uuid::Uuid::nil())
     }
 
-    fn image_with_leader(leader: krabka_metadata::NodeId, leader_epoch: i32) -> MetadataImage {
+    fn image_with_leader(
+        topic_id: u128,
+        leader: krabka_metadata::NodeId,
+        leader_epoch: i32,
+    ) -> MetadataImage {
         use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord};
 
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1Topic(TopicRecord {
             name: crate::txn::bootstrap::TOPIC.to_string(),
-            topic_id: uuid::Uuid::from_u128(1),
+            topic_id: uuid::Uuid::from_u128(topic_id),
             partitions: 1,
             replication_factor: 1,
         }));
@@ -290,47 +300,100 @@ mod tests {
         struct Step {
             name: &'static str,
             image: MetadataImage,
+            /// Whether the `__transaction_state-0` log is open on this broker.
+            local: bool,
             coordinates: bool,
         }
         let steps = [
             Step {
                 name: "an image before the topic exists",
                 image: image_without_state_topic(),
+                local: false,
                 coordinates: false,
             },
             Step {
                 name: "this broker is elected at epoch 0",
-                image: image_with_leader(THIS_BROKER, 0),
+                image: image_with_leader(1, THIS_BROKER, 0),
+                local: true,
                 coordinates: true,
             },
             Step {
                 name: "a stale image from before the topic existed",
                 image: image_without_state_topic(),
+                local: true,
                 coordinates: true,
             },
             Step {
                 name: "another broker is elected at epoch 1",
-                image: image_with_leader(OTHER_BROKER, 1),
+                image: image_with_leader(1, OTHER_BROKER, 1),
+                local: true,
                 coordinates: false,
             },
             Step {
                 name: "a stale image of epoch 0",
-                image: image_with_leader(THIS_BROKER, 0),
+                image: image_with_leader(1, THIS_BROKER, 0),
+                local: true,
                 coordinates: false,
             },
             Step {
                 name: "a stale image from before the topic existed, after a resignation",
                 image: image_without_state_topic(),
+                local: true,
                 coordinates: false,
             },
             Step {
                 name: "this broker is elected again at epoch 2",
-                image: image_with_leader(THIS_BROKER, 2),
+                image: image_with_leader(1, THIS_BROKER, 2),
+                local: true,
+                coordinates: true,
+            },
+            Step {
+                name: "the topic is deleted and its log is removed",
+                image: image_without_state_topic(),
+                local: false,
+                coordinates: false,
+            },
+            Step {
+                name: "another broker leads the created topic at epoch 0",
+                image: image_with_leader(2, OTHER_BROKER, 0),
+                local: true,
+                coordinates: false,
+            },
+            Step {
+                name: "the topic is created again and this broker leads it at epoch 0",
+                image: image_with_leader(3, THIS_BROKER, 0),
+                local: true,
                 coordinates: true,
             },
         ];
+        let directory = tempfile::tempdir().expect("tempdir");
+        let partition_dir =
+            crate::log_dir::partition_dir(directory.path(), crate::txn::bootstrap::TOPIC, 0);
+        std::fs::create_dir_all(&partition_dir).expect("create transaction-state directory");
+        let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
+            .expect("open transaction-state log");
+        let state_partition = crate::broker::spawn_partition(
+            crate::txn::bootstrap::TOPIC.to_string(),
+            PartitionIndex(0),
+            directory.path().to_path_buf(),
+            log,
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        );
         let coordinator = test_coordinator_with_partitions(1);
         for step in steps {
+            if step.local {
+                coordinator.partitions.insert(
+                    crate::txn::bootstrap::TOPIC.into(),
+                    PartitionIndex(0),
+                    Arc::clone(&state_partition),
+                );
+            } else {
+                coordinator
+                    .partitions
+                    .remove(crate::txn::bootstrap::TOPIC, PartitionIndex(0));
+            }
             coordinator.refresh_leader_partitions(&step.image).await;
             check!(
                 coordinator.is_coordinator_for("any-tid").await == step.coordinates,
