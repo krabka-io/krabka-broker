@@ -33,6 +33,11 @@ pub const API_KEY_SUBMIT_CHANGE: i16 = 1003;
 /// turns it back into [`crate::RaftError::UncommittedTail`].
 pub const SUBMIT_CHANGE_UNCOMMITTED_TAIL: i16 = 4;
 
+/// The `error_code` of a krabka-private response when the connection
+/// principal lacks `ClusterAction` on the cluster. It is Kafka's
+/// `CLUSTER_AUTHORIZATION_FAILED`.
+pub const PRIVATE_CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
+
 /// Observer metadata fetch.
 ///
 /// The body carries a `fetch_offset`, which is a `KraftLog` offset, and

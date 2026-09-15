@@ -293,6 +293,9 @@ fn encode_delegation_token_mutation_body(
 ///   carries only a code; the topic name is what the caller had in hand.
 /// - [`crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL`] → the leader refused a
 ///   compare-and-set until its tail commits ([`RaftError::UncommittedTail`]).
+/// - [`crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED`] → the leader denied
+///   `ClusterAction` to this node's principal
+///   ([`RaftError::ClusterAuthorizationFailed`]).
 /// - anything else → collapse to `NotLeader` (`CreateTopics` maps that to the
 ///   retryable `NOT_CONTROLLER`), preferring the response's `leader_hint` when
 ///   non-negative and falling back to the dialed `leader`.
@@ -311,6 +314,7 @@ fn translate_submit_change_response(
             krabka_metadata::MetadataError::TopicExists(String::new()),
         )),
         crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
+        crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED => Err(RaftError::ClusterAuthorizationFailed),
         _ => Err(RaftError::NotLeader {
             current_leader: (resp.leader_hint >= 0)
                 .then(|| NodeId(u64::try_from(resp.leader_hint).unwrap_or(leader.0))),
