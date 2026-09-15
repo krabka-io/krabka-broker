@@ -447,21 +447,14 @@ mod tests {
 
     #[tokio::test]
     async fn reset_mutates_only_requested_valid_partitions_and_retry_is_exact() {
-        let (broker_handle, dir) =
+        let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         create_topic(&broker_handle, &broker, "reset-topic", &ctx).await;
-        crate::share_coordinator::handlers::test_support::open_all_state_partitions(
-            &broker.partitions,
-            dir.path(),
-            broker.config.share_coordinator.state_topic_num_partitions,
-        );
-        broker
-            .share_coordinator
-            .lead_all_partitions_for_test()
+        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;
         let persister = broker
             .group_coordinator
