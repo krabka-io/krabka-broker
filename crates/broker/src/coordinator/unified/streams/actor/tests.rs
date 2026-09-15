@@ -159,45 +159,97 @@ async fn member_limit_rejects_only_new_members() {
     check!(existing.member_epoch == joined.member_epoch);
 }
 
+/// The member epoch rule of Kafka's `throwIfStreamsGroupMemberEpochIsInvalid`.
+/// Member `m1` is at epoch 3 with previous epoch 2: it joins at epoch 1, `m2`
+/// joins (group epoch 2), `m1` heartbeats at 1, `m3` joins (group epoch 3),
+/// and `m1` heartbeats at 2. With no metadata source every assignment is
+/// empty. Each row sends one heartbeat on a fresh group. An accepted row must
+/// answer exactly what a heartbeat at the member epoch answers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stale_epoch_is_rejected() {
-    let (coord, _log) = make_coordinator();
-    let handle = coord.get_or_create_streams("g");
-    let join = heartbeat(
-        &handle,
+async fn member_epoch_rule_matches_kafka() {
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds;
+
+    // A request that reports owned tasks reports all three lists, as the
+    // Streams client does; the standby and warmup lists are empty.
+    let request = |member_id: &str, member_epoch, active_tasks: Option<Vec<TaskIds>>| {
         StreamsGroupHeartbeatRequest {
             group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
+            member_id: member_id.into(),
+            member_epoch,
+            standby_tasks: active_tasks.as_ref().map(|_| vec![]),
+            warmup_tasks: active_tasks.as_ref().map(|_| vec![]),
+            active_tasks,
             ..Default::default()
-        },
-    )
-    .await;
-    assert!(join.member_epoch == 1);
-    // member_epoch below the server's view → STALE_MEMBER_EPOCH (the member
-    // is known at epoch 1, so re-sending epoch 0 is treated as a stale
-    // existing member, not a first-join).
-    let resp = heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: -2,
-            ..Default::default()
-        },
-    )
-    .await;
-    // -2 < 1 → stale. (member_epoch 0 from a *known* member is the
-    // first-join guard's `!contains_key` miss, so we use a clearly-stale
-    // value here.)
-    assert!(resp.error_code == codes::STALE_MEMBER_EPOCH);
+        }
+    };
+    let unassigned = Some(vec![TaskIds {
+        subtopology_id: "s".into(),
+        partitions: vec![0],
+        ..Default::default()
+    }]);
+    // (request epoch, owned active tasks, expected error code)
+    let rows = [
+        (0, None, codes::NONE),
+        (2, Some(vec![]), codes::NONE),
+        (2, unassigned, codes::FENCED_MEMBER_EPOCH),
+        (2, None, codes::FENCED_MEMBER_EPOCH),
+        (1, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
+        (3, None, codes::NONE),
+        (4, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
+    ];
+
+    for (index, (member_epoch, active_tasks, error_code)) in rows.into_iter().enumerate() {
+        let (coord, _log) = make_coordinator();
+        let handle = coord.get_or_create_streams("g");
+        check!(
+            heartbeat(&handle, request("m1", 0, None))
+                .await
+                .member_epoch
+                == 1
+        );
+        check!(
+            heartbeat(&handle, request("m2", 0, None))
+                .await
+                .member_epoch
+                == 2
+        );
+        check!(
+            heartbeat(&handle, request("m1", 1, None))
+                .await
+                .member_epoch
+                == 2
+        );
+        check!(
+            heartbeat(&handle, request("m3", 0, None))
+                .await
+                .member_epoch
+                == 3
+        );
+        check!(
+            heartbeat(&handle, request("m1", 2, None))
+                .await
+                .member_epoch
+                == 3
+        );
+
+        let resp = heartbeat(&handle, request("m1", member_epoch, active_tasks)).await;
+
+        let expected = if error_code == codes::NONE {
+            heartbeat(&handle, request("m1", 3, None)).await
+        } else {
+            super::response::error_resp(error_code, &StreamsGroupConfig::default())
+        };
+        check!(resp == expected, "row {index}");
+    }
 }
 
+/// Kafka's `streamsGroupLeave` answers `UNKNOWN_MEMBER_ID` to a member that
+/// the group does not have, and writes no record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn known_member_epoch_zero_is_stale_not_first_join() {
-    let (coord, _log) = make_coordinator();
+async fn leave_of_an_unknown_member_is_refused_and_writes_nothing() {
+    let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
-    let join = heartbeat(
+    let joined = heartbeat(
         &handle,
         StreamsGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -207,20 +259,27 @@ async fn known_member_epoch_zero_is_stale_not_first_join() {
         },
     )
     .await;
-    assert!(join.member_epoch == 1);
+    check!(joined.error_code == codes::NONE);
+    let before = log.batches().await;
 
     let resp = heartbeat(
         &handle,
         StreamsGroupHeartbeatRequest {
             group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
+            member_id: "m9".into(),
+            member_epoch: -1,
             ..Default::default()
         },
     )
     .await;
 
-    assert!(resp.error_code == codes::STALE_MEMBER_EPOCH);
+    check!(
+        resp == super::response::error_resp(
+            codes::UNKNOWN_MEMBER_ID,
+            &StreamsGroupConfig::default()
+        )
+    );
+    check!(log.batches().await == before);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -308,4 +367,72 @@ async fn leave_removes_member() {
         leave_batch.records.iter().any(|r| r.value.is_none()),
         "leave batch must contain at least one tombstone"
     );
+}
+
+/// A heartbeat applies the member fields that it carries, a rejoin at epoch 0
+/// included, and keeps the fields that it leaves out
+/// (`StreamsGroupMember.Builder.maybeUpdate*`). Each row sends one heartbeat
+/// and compares the persisted `(process_id, rack_id, rebalance_timeout_ms,
+/// user endpoint)` of the member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heartbeat_applies_member_metadata() {
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::endpoint::Endpoint;
+
+    let (coord, _log) = make_coordinator();
+    let handle = coord.get_or_create_streams("g");
+    let request =
+        |member_epoch, process: Option<&str>, rack: Option<&str>, timeout, port: Option<u16>| {
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch,
+                process_id: process.map(str::to_owned),
+                rack_id: rack.map(str::to_owned),
+                rebalance_timeout_ms: timeout,
+                user_endpoint: port.map(|port| Endpoint {
+                    host: "h".into(),
+                    port,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        };
+    let joined = heartbeat(&handle, request(0, Some("p1"), Some("r1"), 1_000, Some(1))).await;
+    check!(joined.error_code == codes::NONE);
+    let epoch = joined.member_epoch;
+    // (request, expected (process id, rack id, rebalance timeout, endpoint port))
+    let rows = [
+        (
+            request(0, Some("p2"), Some("r2"), 2_000, None),
+            ("p2", Some("r2"), 2_000, None),
+        ),
+        (
+            request(-2, None, None, -1, Some(7)),
+            ("p2", Some("r2"), 2_000, Some(7)),
+        ),
+        (
+            request(-2, Some("p3"), None, 3_000, None),
+            ("p3", Some("r2"), 3_000, Some(7)),
+        ),
+    ];
+    for (index, (mut req, (process, rack, timeout, port))) in rows.into_iter().enumerate() {
+        if req.member_epoch == -2 {
+            req.member_epoch = coord
+                .cached_streams_seed("g")
+                .and_then(|seed| seed.current_per_member.get("m1").map(|c| c.member_epoch))
+                .unwrap_or(epoch);
+        }
+        let resp = heartbeat(&handle, req).await;
+        check!(resp.error_code == codes::NONE, "row {index}");
+        let member = coord.cached_streams_seed("g").expect("seed cached").members["m1"].clone();
+        check!(
+            (
+                member.process_id.as_str(),
+                member.rack_id.as_deref(),
+                member.rebalance_timeout_ms,
+                member.user_endpoint.map(|endpoint| endpoint.port),
+            ) == (process, rack, timeout, port),
+            "row {index}"
+        );
+    }
 }
