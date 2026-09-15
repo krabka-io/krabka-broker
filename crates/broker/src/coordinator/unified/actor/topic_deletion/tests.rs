@@ -14,13 +14,19 @@ use crate::coordinator::unified::{
     persistence::{Key, parse_key},
 };
 
-fn entry(offset: i64) -> OffsetEntry {
+/// The id of the deleted `orders` topic.
+const OLD_ORDERS: uuid::Uuid = uuid::Uuid::from_u128(1);
+/// The id of the `orders` topic created again with the same name.
+const NEW_ORDERS: uuid::Uuid = uuid::Uuid::from_u128(2);
+
+fn entry(offset: i64, topic_id: Option<uuid::Uuid>) -> OffsetEntry {
     OffsetEntry {
         offset: Offset(offset),
         leader_epoch: -1,
         metadata: String::new(),
         commit_timestamp_ms: 0,
         expire_timestamp_ms: None,
+        topic_id,
     }
 }
 
@@ -51,10 +57,15 @@ struct Row {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
-    let all_committed = HashSet::from([key("orders", 0), key("orders", 1), key("payments", 0)]);
+    let all_committed = HashSet::from([
+        key("orders", 0),
+        key("orders", 1),
+        key("orders", 3),
+        key("payments", 0),
+    ]);
     let rows = [
         Row {
-            name: "one of two topics",
+            name: "one of two topics, and the offset of the new topic stays",
             deleted: vec!["orders"],
             fail_append: false,
             expected_reply: vec![key("orders", 0), key("orders", 1), key("orders", 2)],
@@ -63,7 +74,7 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
                 tombstone("orders", 1),
                 tombstone("orders", 2),
             ],
-            expected_committed: HashSet::from([key("payments", 0)]),
+            expected_committed: HashSet::from([key("orders", 3), key("payments", 0)]),
             expected_pending: HashSet::from([key("payments", 1)]),
         },
         Row {
@@ -92,9 +103,12 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
             "g",
             GroupKind::Classic(ClassicGroup::new("g")),
             HashMap::from([
-                (key("orders", 0), entry(10)),
-                (key("orders", 1), entry(11)),
-                (key("payments", 0), entry(20)),
+                // Replayed from the log, so no topic id.
+                (key("orders", 0), entry(10, None)),
+                (key("orders", 1), entry(11, Some(OLD_ORDERS))),
+                // Committed to the topic created again with the same name.
+                (key("orders", 3), entry(13, Some(NEW_ORDERS))),
+                (key("payments", 0), entry(20, None)),
             ]),
         );
         group.add_pending_txn_offsets(7, 100, [key("orders", 2)]);
@@ -108,7 +122,11 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
         handle
             .tx
             .send(GroupActorMessage::DeleteTopicOffsets {
-                topics: row.deleted.iter().map(ToString::to_string).collect(),
+                topics: row
+                    .deleted
+                    .iter()
+                    .map(|name| ((*name).to_string(), OLD_ORDERS))
+                    .collect(),
                 reply,
             })
             .await

@@ -17,7 +17,7 @@ use super::{
     messages::classic_leave_result,
     retention::handle_reap_message,
     seed::apply_seed,
-    topic_deletion::delete_topic_offsets,
+    topic_deletion::reply_delete_topic_offsets,
     views::{build_classic_view, build_describe, inspect_any},
 };
 use crate::{
@@ -175,9 +175,7 @@ pub(super) async fn handle_actor_message(
             true
         }
         GroupActorMessage::DeleteTopicOffsets { topics, reply } => {
-            let deleted = delete_topic_offsets(group, services.offsets_log, &topics).await;
-            let _ = reply.send(deleted);
-            true
+            reply_delete_topic_offsets(group, services.offsets_log, &topics, reply).await
         }
         GroupActorMessage::AddPendingTxnOffsets {
             producer_id,
@@ -189,10 +187,7 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
-        GroupActorMessage::TxnOffsetReservation(reservation) => {
-            reservation.apply(group);
-            true
-        }
+        GroupActorMessage::TxnOffsetReservation(reservation) => reservation.apply(group),
         GroupActorMessage::ResolveTxnOffsets {
             producer_id,
             resolved_through,
@@ -286,6 +281,7 @@ mod tests {
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 },
             )]
             .into(),

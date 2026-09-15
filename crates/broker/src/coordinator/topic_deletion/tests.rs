@@ -38,25 +38,49 @@ fn image(records: &[MetadataRecord]) -> MetadataImage {
 
 #[test]
 fn deleted_topics_compares_topic_ids() {
+    type Row = (&'static str, Vec<MetadataRecord>, Vec<(String, Uuid)>);
     let base = [topic("orders", 10), topic("payments", 20)];
-    let rows: [(&str, Vec<MetadataRecord>, Vec<String>); 4] = [
+    let orders = || vec![("orders".to_string(), Uuid::from_u128(10))];
+    let rows: [Row; 4] = [
         ("no change", vec![], vec![]),
         ("a new topic", vec![topic("refunds", 30)], vec![]),
-        (
-            "one topic deleted",
-            vec![delete("orders")],
-            vec!["orders".into()],
-        ),
+        ("one topic deleted", vec![delete("orders")], orders()),
         (
             "deleted and created again with the same name",
             vec![delete("orders"), topic("orders", 11)],
-            vec!["orders".into()],
+            orders(),
         ),
     ];
     for (name, changes, expected) in rows {
         let previous = image(&base);
         let next = image(&[base.as_slice(), changes.as_slice()].concat());
         check!(deleted_topics(&previous, &next) == expected, "{name}");
+    }
+}
+
+/// One image can delete a topic and move a `__consumer_offsets` partition to
+/// this broker. The load of that partition then applies the remembered
+/// deletion, unless the topic name exists again: replayed offsets carry no
+/// topic id, so they may belong to the new topic.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loaded_partition_applies_the_remembered_deletions() {
+    let rows: [(&str, Vec<MetadataRecord>, usize); 2] = [
+        ("the name is gone", vec![], 1),
+        ("the name exists again", vec![topic("orders", 11)], 0),
+    ];
+    for (name, current, expected_groups) in rows {
+        let (coordinator, _log) = make_coord_with_log();
+        super::remember_deletions(&coordinator, &[("orders".to_string(), Uuid::from_u128(10))]);
+        let group = CoordinatorGroup::seeded(
+            "g",
+            GroupKind::Classic(ClassicGroup::new("g")),
+            HashMap::from([(("orders".to_string(), 0), entry(1))]),
+        );
+        coordinator.seed_classic("g", Box::new(group));
+
+        let changed = super::after_partition_load(&coordinator, &image(&current), |_| true).await;
+
+        check!(changed.len() == expected_groups, "{name}");
     }
 }
 
@@ -67,6 +91,7 @@ fn entry(offset: i64) -> OffsetEntry {
         metadata: String::new(),
         commit_timestamp_ms: 0,
         expire_timestamp_ms: None,
+        topic_id: None,
     }
 }
 
@@ -88,7 +113,7 @@ async fn on_topics_deleted_tombstones_offsets_in_every_owned_group() {
     let changed = on_topics_deleted(
         &coordinator,
         |group_id| group_id != "not-owned",
-        &["orders".to_string()],
+        &[("orders".to_string(), Uuid::from_u128(10))],
     )
     .await;
 
@@ -201,18 +226,32 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
     let principal_admin = principal("admin");
     let peer_addr = peer();
     let ctx = request_context(&principal_admin, &peer_addr, "consumer");
-    let bytes = crate::handlers::offset_commit::handle(
-        &broker,
-        COMMIT_VERSION,
-        1,
-        &encode_request(&commit, COMMIT_VERSION),
-        &ctx,
-    )
-    .await
-    .expect("OffsetCommit");
-    let committed: OffsetCommitResponse = decode_response(&bytes, COMMIT_VERSION);
-    check!(committed.topics[0].partitions[0].error_code == codes::NONE);
+    let commit_offset = |offset: i64| {
+        let mut request = commit.clone();
+        request.topics[0].partitions[0].committed_offset = offset;
+        let broker = Arc::clone(&broker);
+        let ctx = &ctx;
+        async move {
+            let bytes = crate::handlers::offset_commit::handle(
+                &broker,
+                COMMIT_VERSION,
+                1,
+                &encode_request(&request, COMMIT_VERSION),
+                ctx,
+            )
+            .await
+            .expect("OffsetCommit");
+            let committed: OffsetCommitResponse = decode_response(&bytes, COMMIT_VERSION);
+            committed.topics[0].partitions[0].error_code
+        }
+    };
+    check!(commit_offset(42).await == codes::NONE);
     check!(fetched_offset(&broker).await == 42);
+    let old_id = handle
+        .controller_image_for_test()
+        .topic(TOPIC)
+        .expect("topic in the image")
+        .topic_id;
 
     let deleted = client
         .send(DeleteTopicsRequest {
@@ -251,5 +290,17 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
+    // An offset committed to the new topic survives a deletion of the old
+    // topic that reaches the group late: it carries the new topic id.
+    check!(commit_offset(7).await == codes::NONE);
+    let changed = super::on_topics_deleted(
+        &broker.group_coordinator,
+        |_| true,
+        &[(TOPIC.to_string(), old_id)],
+    )
+    .await;
+    check!(changed.is_empty());
+    check!(fetched_offset(&broker).await == 7);
     handle.shutdown().await;
 }
