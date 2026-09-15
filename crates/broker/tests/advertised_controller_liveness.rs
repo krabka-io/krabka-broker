@@ -249,7 +249,8 @@ async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<u64>) 
 }
 
 /// A broker booted from `BrokerConfig::for_tests` must keep its heartbeat
-/// session, as a Kafka broker does.
+/// session, as a Kafka broker does, and so must the same broker restarted on
+/// its log directory.
 ///
 /// `for_tests` asks for port 0 on the controller listener and names that same
 /// `127.0.0.1:0` as its own voter endpoint. The heartbeat client dials the
@@ -258,34 +259,56 @@ async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<u64>) 
 /// fences the broker and expires its session one `heartbeat_timeout` after
 /// start, and every single-broker test runs against a fenced broker.
 ///
-/// The test waits for three session timeouts and a liveness tick, so an
-/// expired session has been decided and published before it reads the state.
+/// The restart holds the first controller port, so the second start must bind
+/// another one. The port the first start published must not survive in the
+/// recovered metadata.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_for_tests_broker_keeps_its_heartbeat_session() {
     support::init_tracing();
 
     let dir = tempfile::tempdir().expect("log dir");
     let config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
-    let session = config.heartbeat_timeout.to_std();
-    let tick = config.liveness_tick_interval.to_std();
-    let broker = krabka_broker::Broker::start(config)
+    let broker = krabka_broker::Broker::start(config.clone())
         .await
         .expect("start broker");
-    let node = broker.node_id();
+    let first_port = broker.controller_addr();
+    let started = session_state(&broker, &config).await;
+    broker.shutdown().await;
 
-    tokio::time::sleep(session * 3 + tick).await;
+    let _held = std::net::TcpListener::bind(first_port).expect("hold the first controller port");
+    let mut rejoin = config.clone();
+    rejoin.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    let broker = krabka_broker::Broker::start(rejoin)
+        .await
+        .expect("restart broker");
+    let restarted = session_state(&broker, &config).await;
+    broker.shutdown().await;
 
+    assert!([started, restarted] == [(true, BTreeSet::new()), (true, BTreeSet::new())]);
+}
+
+/// Whether the controller holds `broker` alive, and the brokers its image
+/// marks fenced, once a session that never heartbeated would have expired.
+///
+/// It waits for three session timeouts and a liveness tick, and then for one
+/// more fencing publication, so an expired session has been decided and
+/// published before it reads the state.
+async fn session_state(
+    broker: &BrokerHandle,
+    config: &krabka_broker::BrokerConfig,
+) -> (bool, BTreeSet<u64>) {
+    tokio::time::sleep(
+        config.heartbeat_timeout.to_std() * 3 + config.liveness_tick_interval.to_std(),
+    )
+    .await;
     let published = broker.metrics().controller_fencing_publications_total.get();
     broker
         .wait_for_metrics("a fencing publication after the session window", |m| {
             m.controller_fencing_publications_total.get() > published
         })
         .await;
-    let state = (
-        broker.broker_alive_for_test(node).await,
+    (
+        broker.broker_alive_for_test(broker.node_id()).await,
         broker.fenced_broker_ids_for_test(),
-    );
-    assert!(state == (true, BTreeSet::new()));
-
-    broker.shutdown().await;
+    )
 }
