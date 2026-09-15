@@ -584,3 +584,44 @@ async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
     check!(coordinator.read("g", topic_id, 0).await == Ok(None));
 }
+
+/// A failed replay installs no partial state: the partition answers
+/// `NOT_COORDINATOR`, as Kafka's runtime answers for a `FAILED` shard, and the
+/// next refresh loads it again.
+#[tokio::test]
+async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
+    let dir = tempdir().unwrap();
+    let registry = Arc::new(PartitionRegistry::new());
+    let topic_id = uuid::Uuid::from_bytes([47; 16]);
+    let coordinator = Arc::new(ShareCoordinator::new(
+        krabka_audit::NodeId(1),
+        Arc::clone(&registry),
+        ShareCoordinatorConfig::default(),
+    ));
+    let state_partition = coordinator.state_partition_for("g", &topic_id, 0);
+    open_state_partition(&registry, dir.path(), state_partition.get());
+    let image = state_partition_image(state_partition.get(), 1, 0);
+
+    // The spawned load does not run before this task yields, so the failure
+    // below ends the term first.
+    let loads = coordinator.refresh_leader_partitions(&image).await;
+    let generation = coordinator.leader_partitions.read().await[&state_partition].generation;
+    coordinator
+        .install_load(
+            state_partition,
+            generation,
+            Err(BrokerError::Share("injected read error".into())),
+        )
+        .await;
+    loads.finished().await;
+    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Failed));
+    check!(coordinator.read_summary("g", topic_id, 0).await == Err(crate::codes::NOT_COORDINATOR));
+
+    coordinator
+        .refresh_leader_partitions(&image)
+        .await
+        .finished()
+        .await;
+    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
+    check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
+}

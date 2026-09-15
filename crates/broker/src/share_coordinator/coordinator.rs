@@ -99,6 +99,9 @@ pub(crate) enum LoadStatus {
     Loading,
     /// The replay ended. The partition serves requests.
     Active,
+    /// The replay failed. The partition answers `NOT_COORDINATOR`, and the
+    /// next refresh loads it again.
+    Failed,
 }
 
 /// One led `__share_group_state` partition.
@@ -203,8 +206,10 @@ impl ShareCoordinator {
                 let local = self.partitions.contains(bootstrap::TOPIC, partition);
                 let entry = led.get(&partition).copied();
                 let new_term = entry.is_none_or(|e| e.leader_epoch != leader_epoch);
-                let log_opened = entry.is_some_and(|e| e.status == LoadStatus::Pending) && local;
-                if !new_term && !log_opened {
+                let reload = entry
+                    .is_some_and(|e| matches!(e.status, LoadStatus::Pending | LoadStatus::Failed))
+                    && local;
+                if !new_term && !reload {
                     continue;
                 }
                 let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
@@ -246,14 +251,14 @@ impl ShareCoordinator {
     }
 
     /// Whether `desired` (led partition to leader epoch) differs from the led
-    /// partitions, or a pending partition now has its log open.
+    /// partitions, or a pending or failed partition can load now.
     async fn leadership_changes(&self, desired: &HashMap<PartitionIndex, i32>) -> bool {
         let led = self.leader_partitions.read().await;
         led.len() != desired.len()
             || desired.iter().any(|(partition, leader_epoch)| {
                 led.get(partition).is_none_or(|entry| {
                     entry.leader_epoch != *leader_epoch
-                        || (entry.status == LoadStatus::Pending
+                        || (matches!(entry.status, LoadStatus::Pending | LoadStatus::Failed)
                             && self.partitions.contains(bootstrap::TOPIC, *partition))
                 })
             })
@@ -282,7 +287,7 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// Returns `COORDINATOR_LOAD_IN_PROGRESS` while the partition loads, and
-    /// `NOT_COORDINATOR` when this broker does not lead it. These are the
+    /// `NOT_COORDINATOR` when this broker does not lead it or its load failed. These are the
     /// codes of Kafka's `CoordinatorRuntime.withActiveContextOrThrow`.
     pub(super) async fn active(
         &self,
@@ -294,7 +299,7 @@ impl ShareCoordinator {
             Some(LoadStatus::Pending | LoadStatus::Loading) => {
                 Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
             }
-            None => Err(crate::codes::NOT_COORDINATOR),
+            Some(LoadStatus::Failed) | None => Err(crate::codes::NOT_COORDINATOR),
         }
     }
 
