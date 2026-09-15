@@ -44,13 +44,14 @@ pub(super) async fn controller_registration(
     if !is_leader(engine) {
         return controller_registration_response(version, NOT_CONTROLLER, None);
     }
-    // Kafka's `MetadataVersion.isControllerRegistrationSupported`. An image
-    // with no finalized level runs at the latest level, as a bootstrap does.
+    // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the
+    // bootstrap records commit there is no finalized level, and Kafka's
+    // `metadataVersionOrThrow` refuses the registration as well: a record
+    // written now could precede a bootstrap level that does not support it.
     if engine
         .current_image()
         .finalized_metadata_version()
-        .unwrap_or(krabka_metadata::metadata_version::METADATA_VERSION_MAX)
-        < CONTROLLER_REGISTRATION_MIN_LEVEL
+        .is_none_or(|level| level < CONTROLLER_REGISTRATION_MIN_LEVEL)
     {
         return controller_registration_response(
             version,
@@ -267,7 +268,7 @@ mod tests {
             (
                 "a voter",
                 1,
-                15,
+                Some(15),
                 false,
                 ControllerRegistrationResponse::default(),
                 Some(expected_record(1)),
@@ -275,7 +276,7 @@ mod tests {
             (
                 "a controller that is not a voter",
                 7,
-                15,
+                Some(15),
                 false,
                 ControllerRegistrationResponse::default(),
                 Some(expected_record(7)),
@@ -283,26 +284,51 @@ mod tests {
             (
                 "zkMigrationReady is stored as false",
                 7,
-                25,
+                Some(25),
                 true,
                 ControllerRegistrationResponse::default(),
                 Some(expected_record(7)),
             ),
-            ("metadata.version 14", 7, 14, false, too_old.clone(), None),
-            ("metadata.version 14, a voter", 1, 14, false, too_old, None),
+            (
+                "metadata.version 14",
+                7,
+                Some(14),
+                false,
+                too_old.clone(),
+                None,
+            ),
+            (
+                "metadata.version 14, a voter",
+                1,
+                Some(14),
+                false,
+                too_old.clone(),
+                None,
+            ),
+            (
+                "no finalized metadata.version",
+                7,
+                None,
+                false,
+                too_old,
+                None,
+            ),
         ];
         for (label, controller_id, level, zk_migration_ready, expected, record) in rows {
             let (engine, _dir) = single_voter_engine();
             wait_for_leader(&engine).await;
-            engine
-                .submit_change(vec![MetadataRecord::V1FeatureLevel(
-                    krabka_metadata::FeatureLevelRecord {
-                        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-                        level,
-                    },
-                )])
-                .await
-                .expect("finalize metadata.version");
+            if let Some(level) = level {
+                engine
+                    .submit_change(vec![MetadataRecord::V1FeatureLevel(
+                        krabka_metadata::FeatureLevelRecord {
+                            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                .into(),
+                            level,
+                        },
+                    )])
+                    .await
+                    .expect("finalize metadata.version");
+            }
             let request = ControllerRegistrationRequest {
                 controller_id,
                 incarnation_id: krabka_protocol::primitives::uuid::Uuid(*incarnation.as_bytes()),

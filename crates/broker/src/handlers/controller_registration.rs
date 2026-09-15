@@ -51,12 +51,13 @@ pub(crate) async fn handle(
     if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
         return response(version, codes::NOT_CONTROLLER, None);
     }
-    // Kafka's `MetadataVersion.isControllerRegistrationSupported`. An image
-    // with no finalized level runs at the latest level, as a bootstrap does.
+    // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the
+    // bootstrap records commit there is no finalized level, and Kafka's
+    // `metadataVersionOrThrow` refuses the registration as well: a record
+    // written now could precede a bootstrap level that does not support it.
     if image
         .finalized_metadata_version()
-        .unwrap_or(krabka_metadata::metadata_version::METADATA_VERSION_MAX)
-        < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL
+        .is_none_or(|level| level < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL)
     {
         return response(
             version,
