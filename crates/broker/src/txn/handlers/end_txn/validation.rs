@@ -38,8 +38,8 @@ pub(super) async fn validate_end_txn(
     if authorizer.authorize(image, &authorization) == AuthorizationResult::Deny {
         return Err(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
     }
-    if !coordinator.is_coordinator_for(transactional_id).await {
-        return Err(codes::NOT_COORDINATOR);
+    if let Some(code) = coordinator.coordinator_error(transactional_id).await {
+        return Err(code);
     }
     let entry = coordinator
         .get(transactional_id)

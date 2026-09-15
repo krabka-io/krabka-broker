@@ -29,6 +29,9 @@ pub(super) async fn prepare_transaction(
     // reaper and the completion task take them in the same order.
     let _state_partition_write = coordinator.lock_state_partition_for(transactional_id).await;
     let mut state = entry.lock().await;
+    if let Some(code) = coordinator.coordinator_error(transactional_id).await {
+        return Err(code);
+    }
     if !coordinator.is_current_entry(transactional_id, entry) {
         // Another request persisted this transaction after validation read
         // it. Kafka answers a transition in progress the same way, and the
@@ -60,7 +63,7 @@ pub(super) async fn prepare_transaction(
             error = %error,
             "EndTxn: failed to persist PrepareCommit/PrepareAbort"
         );
-        return Err(codes::UNKNOWN_SERVER_ERROR);
+        return Err(coordinator.append_error_code(transactional_id).await);
     }
     // The append published a new handle. A caller that already waits on this
     // one sees the durable Prepare state too.
