@@ -93,6 +93,7 @@ pub(super) fn sasl_test_config() -> BrokerRaftHandshake {
         audit_log: Arc::new(OnceCell::new()),
         max_frame_bytes: 4096,
         authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+        principal_mapper: crate::SslPrincipalMapper::default(),
     }
 }
 

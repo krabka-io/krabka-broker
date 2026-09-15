@@ -41,6 +41,11 @@ pub enum BrokerError {
         version: i16,
     },
 
+    /// The log refused a client batch because of the producer's transaction
+    /// state on the partition (KIP-890).
+    #[error("transactional append refused: {0:?}")]
+    TransactionAppend(krabka_log::TransactionAppendRefusal),
+
     /// A produce request arrived at a partition whose writer actor has
     /// exited. This normally happens only at shutdown.
     #[error("partition writer for {topic}-{partition} died")]
@@ -290,16 +295,6 @@ pub enum BrokerError {
     /// mapping.
     #[error("GSSAPI is an enabled SASL mechanism but gssapi config is missing")]
     GssapiConfigMissing,
-
-    /// `super_users` lists `"ANONYMOUS"`, the principal every PLAINTEXT and
-    /// one-way-TLS connection carries.
-    #[error(
-        "super_users must not list \"ANONYMOUS\": it makes every unauthenticated client a \
-         super-user, and the delegation-token RPCs still answer \
-         DELEGATION_TOKEN_REQUEST_NOT_ALLOWED because they require a SASL- or \
-         mTLS-authenticated principal. List the SASL or mTLS principal that mints tokens instead"
-    )]
-    SuperUserAnonymous,
 
     /// TLS configuration error.
     #[error("tls: {0}")]

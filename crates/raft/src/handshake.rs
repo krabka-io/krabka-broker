@@ -5,6 +5,8 @@
 //! trait abstraction keeps `krabka-raft` free of any dependency on
 //! `krabka-broker` and `krabka-security`.
 
+use std::sync::Arc;
+
 use krabka_client_core::ClientDuplex;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -20,8 +22,43 @@ pub struct RaftConnection {
     /// Whether SCRAM authenticated with a delegation token rather than a
     /// regular credential.
     pub authenticated_via_token: bool,
-    /// Whether the principal may alter cluster membership.
-    pub cluster_alter_authorized: bool,
+    /// The cluster grants of the connection principal. The listener asks it
+    /// once for each request, as Kafka's `ControllerApis` does.
+    pub grants: Arc<dyn ClusterGrants>,
+}
+
+/// An operation on the `Cluster("kafka-cluster")` resource that a
+/// controller-listener api needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClusterOperation {
+    /// `CLUSTER_ACTION`: the raft, registration and krabka-private metadata
+    /// apis.
+    ClusterAction,
+    /// `ALTER`: `AddRaftVoter`, `RemoveRaftVoter` and `DescribeCluster`.
+    Alter,
+    /// `DESCRIBE`: `DescribeQuorum`.
+    Describe,
+}
+
+/// Decides whether the principal of one controller-listener connection holds
+/// an operation on the cluster resource.
+///
+/// The listener calls [`ClusterGrants::allows`] for every request, so an ACL
+/// change applies to the next request of an open connection.
+pub trait ClusterGrants: Send + Sync {
+    fn allows(&self, operation: ClusterOperation) -> bool;
+}
+
+/// The grants of a listener that installs no handshake: every operation is
+/// allowed. The broker always installs a handshake, so only a controller
+/// without a broker, such as a raft-only test, uses it.
+#[derive(Debug)]
+pub struct AllowAllGrants;
+
+impl ClusterGrants for AllowAllGrants {
+    fn allows(&self, _operation: ClusterOperation) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Error)]

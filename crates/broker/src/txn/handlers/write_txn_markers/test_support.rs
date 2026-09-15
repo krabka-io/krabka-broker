@@ -9,7 +9,14 @@ use krabka_log::{Log, LogConfig};
 
 use crate::broker::{Broker, BrokerHandle};
 
-pub(crate) fn open_partition(broker: &Broker, log_dir: &Path, topic: &str, partition: i32) {
+/// Open `topic-partition` under `log_dir` and register it with the broker.
+/// The partition starts with no local leader role; the caller installs one.
+pub(crate) fn open_partition(
+    broker: &Broker,
+    log_dir: &Path,
+    topic: &str,
+    partition: i32,
+) -> Arc<crate::partition::Partition> {
     let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
     std::fs::create_dir_all(&part_dir).expect("create partition dir");
     let log = Log::open(&part_dir, LogConfig::default()).expect("open partition log");
@@ -24,7 +31,8 @@ pub(crate) fn open_partition(broker: &Broker, log_dir: &Path, topic: &str, parti
     );
     broker
         .partitions
-        .insert(topic.into(), PartitionIndex(partition), part);
+        .insert(topic.into(), PartitionIndex(partition), Arc::clone(&part));
+    part
 }
 
 pub(super) async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {

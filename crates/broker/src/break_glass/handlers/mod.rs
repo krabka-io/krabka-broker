@@ -260,7 +260,6 @@ pub(crate) mod tests {
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
             throttle: crate::quota::ThrottleSlot::default(),
-            listener_authorized_cluster_action: false,
         }
     }
 

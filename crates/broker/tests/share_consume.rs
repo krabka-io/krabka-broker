@@ -51,5 +51,6 @@ const SHARE_SESSION_NOT_FOUND: i16 = 122;
 const ACCEPT: i8 = 1;
 const RELEASE: i8 = 2;
 const REJECT: i8 = 3;
+const RENEW: i8 = 4;
 
 const ONE_MB: i32 = 1 << 20;

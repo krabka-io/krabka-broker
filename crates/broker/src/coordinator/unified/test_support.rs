@@ -34,7 +34,7 @@ pub(crate) fn make_coord() -> Arc<GroupCoordinator> {
     make_coord_with_log().0
 }
 
-pub(super) fn make_coord_with_log() -> (
+pub(crate) fn make_coord_with_log() -> (
     Arc<GroupCoordinator>,
     Arc<crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog>,
 ) {

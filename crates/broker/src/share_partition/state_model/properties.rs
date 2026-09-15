@@ -153,10 +153,14 @@ impl Model for ShareModel {
                 let name = Self::member_name(member);
                 let now = self.now(state.clock);
                 let deferred = deferred_offsets(&state.sm);
-                let handed_out =
-                    state
-                        .sm
-                        .acquire(&name, max_records, i32::MAX, now, LOCK, self.max_attempts);
+                let handed_out = state.sm.acquire(
+                    &name,
+                    max_records,
+                    krabka_log::Offset(i64::MAX),
+                    now,
+                    LOCK,
+                    self.max_attempts,
+                );
                 for range in &handed_out {
                     for raw in range.first.0..=range.last.0 {
                         assert!(

@@ -29,38 +29,6 @@ pub(super) async fn kip853_admin_response(
     }
 }
 
-pub(super) fn kip853_authorization_failure(api_key: i16, version: i16) -> Result<Bytes, RaftError> {
-    use krabka_protocol::{Encode, owned};
-
-    let mut output = BytesMut::new();
-    let message = Some("Cluster authorization failed.".into());
-    match api_key {
-        API_KEY_ADD_RAFT_VOTER => owned::add_raft_voter_response::AddRaftVoterResponse {
-            error_code: 31,
-            error_message: message,
-            ..Default::default()
-        }
-        .encode(&mut output, version)?,
-        API_KEY_REMOVE_RAFT_VOTER => {
-            owned::remove_raft_voter_response::RemoveRaftVoterResponse {
-                error_code: 31,
-                error_message: message,
-                ..Default::default()
-            }
-            .encode(&mut output, version)?;
-        }
-        API_KEY_UPDATE_RAFT_VOTER => {
-            owned::update_raft_voter_response::UpdateRaftVoterResponse {
-                error_code: 31,
-                ..Default::default()
-            }
-            .encode(&mut output, version)?;
-        }
-        _ => unreachable!("authorization helper called for non-mutating API"),
-    }
-    Ok(output.freeze())
-}
-
 async fn describe_quorum_response(
     version: i16,
     body: &[u8],
@@ -177,56 +145,6 @@ mod tests {
     use crate::server::test_support::{
         activate_dynamic_membership, single_voter_engine, wait_for_leader,
     };
-
-    /// Every KIP-853 admin API refuses an unauthorized caller in its own
-    /// response type, carrying Kafka's `CLUSTER_AUTHORIZATION_FAILED`.
-    ///
-    /// Each arm builds a different response, so encoding one API's refusal
-    /// into another's shape produces bytes the client cannot decode.
-    #[test]
-    fn each_kip853_admin_api_refuses_in_its_own_response_shape() {
-        use krabka_protocol::owned::{
-            add_raft_voter_response::{self, AddRaftVoterResponse},
-            remove_raft_voter_response::{self, RemoveRaftVoterResponse},
-            update_raft_voter_response::{self, UpdateRaftVoterResponse},
-        };
-
-        const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
-
-        let bytes = kip853_authorization_failure(
-            API_KEY_ADD_RAFT_VOTER,
-            add_raft_voter_response::MAX_VERSION,
-        )
-        .expect("encode add refusal");
-        let mut cursor = &bytes[..];
-        let decoded =
-            AddRaftVoterResponse::decode(&mut cursor, add_raft_voter_response::MAX_VERSION)
-                .expect("decode add refusal");
-        check!(decoded.error_code == CLUSTER_AUTHORIZATION_FAILED);
-        check!(decoded.error_message.is_some(), "the refusal says why");
-
-        let bytes = kip853_authorization_failure(
-            API_KEY_REMOVE_RAFT_VOTER,
-            remove_raft_voter_response::MAX_VERSION,
-        )
-        .expect("encode remove refusal");
-        let mut cursor = &bytes[..];
-        let decoded =
-            RemoveRaftVoterResponse::decode(&mut cursor, remove_raft_voter_response::MAX_VERSION)
-                .expect("decode remove refusal");
-        check!(decoded.error_code == CLUSTER_AUTHORIZATION_FAILED);
-
-        let bytes = kip853_authorization_failure(
-            API_KEY_UPDATE_RAFT_VOTER,
-            update_raft_voter_response::MAX_VERSION,
-        )
-        .expect("encode update refusal");
-        let mut cursor = &bytes[..];
-        let decoded =
-            UpdateRaftVoterResponse::decode(&mut cursor, update_raft_voter_response::MAX_VERSION)
-                .expect("decode update refusal");
-        check!(decoded.error_code == CLUSTER_AUTHORIZATION_FAILED);
-    }
 
     /// `DescribeQuorum` answers for `__cluster_metadata` partition 0 and
     /// refuses everything else with a partition-level error.
