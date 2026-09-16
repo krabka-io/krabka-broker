@@ -957,7 +957,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::OutOfScope,
         module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
         tests: &[],
-        note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape; krabka decides that from the metadata image instead, so it keeps no such hash. The field is tagged and its default is 0, so the record krabka writes is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
+        note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape. The consumer and share groups of krabka decide that from the metadata image instead and write the hash as 0, which is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. The streams group keeps Kafka's hash, because KIP-1071 configures the topology again when it changes, and writes it in its group metadata record. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
     },
     KipAnnotation {
         key: "KIP-1142",

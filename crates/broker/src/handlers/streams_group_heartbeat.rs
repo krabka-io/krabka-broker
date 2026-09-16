@@ -26,7 +26,10 @@ use crate::{
     error::BrokerError, handlers::group_read_denied, time_util::now_ms,
 };
 
+mod creation;
 mod validation;
+
+pub(crate) use self::creation::StreamsInternalTopics;
 
 #[tracing::instrument(
     name = "handle_streams_group_heartbeat",
@@ -127,9 +130,16 @@ pub(crate) async fn handle(
                 version,
             );
         }
-        let resp = rx
-            .await
-            .unwrap_or_else(|_| error(codes::UNKNOWN_SERVER_ERROR));
+        let Ok(result) = rx.await else {
+            return crate::handlers::encode_response(&error(codes::UNKNOWN_SERVER_ERROR), version);
+        };
+        let mut resp = result.response;
+        // KafkaApis hands the internal topics that the coordinator asks for to
+        // the `CreateTopics` path, with the principal of the caller.
+        if !result.creatable_topics.is_empty() {
+            creation::create_internal_topics(broker, ctx, &mut resp, &result.creatable_topics)
+                .await?;
+        }
         crate::handlers::encode_response(&resp, version)
     }
 }
@@ -173,6 +183,149 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    /// Creates a one-partition topic on the test broker, so that a streams
+    /// topology can read it.
+    async fn create_source_topic(broker: &Broker, name: &str) {
+        use krabka_metadata::{LeaderEpoch, PartitionRecord, TopicRecord};
+
+        let node_id = krabka_audit::NodeId(broker.config.node_id.0);
+        broker
+            .controller
+            .submit_change(vec![
+                MetadataRecord::V1Topic(TopicRecord {
+                    name: name.into(),
+                    topic_id: uuid::Uuid::new_v4(),
+                    partitions: 1,
+                    replication_factor: 1,
+                }),
+                MetadataRecord::V1Partition(PartitionRecord {
+                    topic: name.into(),
+                    partition: 0,
+                    leader: node_id,
+                    replicas: vec![node_id],
+                    isr: vec![node_id],
+                    leader_epoch: LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 0,
+                }),
+            ])
+            .await
+            .expect("create the source topic");
+    }
+
+    /// Kafka creates the internal topics of a streams topology through
+    /// `CreateTopics` with the principal of the caller, so the controller
+    /// validates the configs and places the replicas, and it names a failed
+    /// creation in the `MISSING_INTERNAL_TOPICS` status. Each row joins one
+    /// member with a changelog topic on a one-broker cluster and compares the
+    /// created topic and the status detail.
+    #[tokio::test]
+    async fn handle_creates_the_internal_topics_through_create_topics() {
+        use krabka_protocol::owned::common::streams_group_heartbeat_request::{
+            key_value::KeyValue, topic_info::TopicInfo,
+        };
+
+        let version = streams_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = start_broker(true).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
+        let config = |name: &str, value: &str| KeyValue {
+            key: name.into(),
+            value: value.into(),
+            ..Default::default()
+        };
+        // (group id, the changelog topic of the topology, the expected
+        // (replication factor, configs) of the created topic or None, the
+        // expected end of the status detail)
+        create_source_topic(&broker, "in").await;
+        let rows = [
+            (
+                "rf-unset",
+                TopicInfo {
+                    name: "rf-unset-changelog".into(),
+                    topic_configs: vec![config("cleanup.policy", "compact")],
+                    ..Default::default()
+                },
+                Some((1, vec![("cleanup.policy", "compact")])),
+                &"Internal topics are missing: rf-unset-changelog".to_string(),
+            ),
+            (
+                "rf-too-high",
+                TopicInfo {
+                    name: "rf-too-high-changelog".into(),
+                    replication_factor: 3,
+                    ..Default::default()
+                },
+                None,
+                &"Internal topics are missing: rf-too-high-changelog; Creation failed: \
+                  rf-too-high-changelog (error code 38)."
+                    .to_string(),
+            ),
+            (
+                "bad-config",
+                TopicInfo {
+                    name: "bad-config-changelog".into(),
+                    topic_configs: vec![config("cleanup.policy", "bogus")],
+                    ..Default::default()
+                },
+                None,
+                &format!(
+                    "Internal topics are missing: bad-config-changelog; Creation failed: \
+                     bad-config-changelog ({}).",
+                    crate::config_keys::validate_topic_config_map(&maplit::btreemap! {
+                        "cleanup.policy".to_string() => "bogus".to_string()
+                    })
+                    .expect_err("an unknown cleanup policy is refused")
+                ),
+            ),
+        ];
+
+        for (group_id, changelog, created, detail) in rows {
+            let mut req = request(group_id);
+            let topology = req.topology.as_mut().expect("the join carries a topology");
+            topology.subtopologies[0].state_changelog_topics = vec![changelog.clone()];
+
+            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes);
+
+            assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}");
+            let status = resp.status.unwrap_or_default();
+            assert!(
+                status
+                    .iter()
+                    .map(|s| s.status_detail.clone())
+                    .collect::<Vec<_>>()
+                    == vec![detail.clone()],
+                "{group_id}: {status:?}"
+            );
+            let image = broker.controller.current_image();
+            let topic = image.topic(&changelog.name);
+            match created {
+                Some((replication_factor, configs)) => {
+                    let topic = topic.expect("the topic was created");
+                    assert!(topic.replication_factor == replication_factor, "{group_id}");
+                    let expected: std::collections::BTreeMap<String, String> = configs
+                        .into_iter()
+                        .map(|(name, value)| (name.to_string(), value.to_string()))
+                        .collect();
+                    assert!(
+                        image.topic_config(&changelog.name) == Some(&expected),
+                        "{group_id}"
+                    );
+                }
+                None => assert!(topic.is_none(), "{group_id}"),
+            }
+        }
+        broker_handle.shutdown().await;
     }
 
     /// Kafka creates a streams group only on a join, and answers

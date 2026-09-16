@@ -73,10 +73,10 @@ async fn describe_member_ids(handle: &StreamsGroupActorHandle) -> Vec<String> {
     ids
 }
 
-async fn heartbeat(
+async fn heartbeat_result(
     handle: &StreamsGroupActorHandle,
     req: StreamsGroupHeartbeatRequest,
-) -> StreamsGroupHeartbeatResponse {
+) -> StreamsHeartbeatResult {
     let (tx, rx) = oneshot::channel();
     handle
         .tx
@@ -89,6 +89,13 @@ async fn heartbeat(
         .await
         .unwrap();
     rx.await.unwrap()
+}
+
+async fn heartbeat(
+    handle: &StreamsGroupActorHandle,
+    req: StreamsGroupHeartbeatRequest,
+) -> StreamsGroupHeartbeatResponse {
+    heartbeat_result(handle, req).await.response
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -562,8 +569,6 @@ fn one_subtopology(
 /// compares the whole response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
-    use std::sync::atomic::AtomicUsize;
-
     use krabka_protocol::owned::common::streams_group_heartbeat_response::{
         status::Status, task_ids::TaskIds,
     };
@@ -576,15 +581,11 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         Image(Box<krabka_metadata::MetadataImage>),
         Rack(&'static str),
         Process(&'static str),
-        /// No change: the heartbeat itself retries the internal topics.
-        None,
     }
     struct Row {
         name: &'static str,
         initial: krabka_metadata::MetadataImage,
         stateful: bool,
-        /// `submit_change` fails this many times before it succeeds.
-        failed_submits: usize,
         change: Change,
         /// The owned active tasks of the heartbeat, when it reports them.
         owned_active: Option<Vec<i32>>,
@@ -598,7 +599,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             name: "the missing source topic is created",
             initial: image_of(None, &[]),
             stateful: false,
-            failed_submits: 0,
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: None,
             epoch: 2,
@@ -609,7 +609,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             name: "partitions are added to the source topic",
             initial: image_of(None, &[("in", 1, 1)]),
             stateful: false,
-            failed_submits: 0,
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: Some(vec![0]),
             epoch: 2,
@@ -620,7 +619,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             name: "the source topic is deleted",
             initial: image_of(None, &[("in", 1, 2)]),
             stateful: false,
-            failed_submits: 0,
             change: Change::Image(Box::new(image_of(None, &[]))),
             owned_active: Some(vec![]),
             epoch: 2,
@@ -635,7 +633,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             name: "the member sends a new rack id",
             initial: image_of(None, &[("in", 1, 1)]),
             stateful: false,
-            failed_submits: 0,
             change: Change::Rack("rack-b"),
             owned_active: Some(vec![0]),
             epoch: 2,
@@ -646,7 +643,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             name: "the member sends a new process id",
             initial: image_of(None, &[("in", 1, 1)]),
             stateful: false,
-            failed_submits: 0,
             change: Change::Process("process-b"),
             owned_active: Some(vec![0]),
             epoch: 2,
@@ -654,11 +650,13 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             status: Some(vec![]),
         },
         Row {
-            name: "the internal topic creation failed once",
+            name: "the internal topic is created",
             initial: image_of(None, &[("in", 1, 1)]),
             stateful: true,
-            failed_submits: 1,
-            change: Change::None,
+            change: Change::Image(Box::new(image_of(
+                None,
+                &[("in", 1, 1), ("store-changelog", 2, 1)],
+            ))),
             owned_active: Some(vec![]),
             epoch: 2,
             active: Some(vec![0]),
@@ -667,28 +665,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
     ];
 
     for row in rows {
-        let failures = Arc::new(AtomicUsize::new(row.failed_submits));
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(row.initial)
-                .commit_submits()
-                .on_submit({
-                    let failures = failures.clone();
-                    move |_| {
-                        if failures
-                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                                left.checked_sub(1)
-                            })
-                            .is_ok()
-                        {
-                            Err(krabka_raft::RaftError::LeaderUnknown)
-                        } else {
-                            Ok(krabka_raft::SubmitChangeResult::default())
-                        }
-                    }
-                })
-                .build(),
-        );
+        let source = Arc::new(FakeMetadataSource::builder().image(row.initial).build());
         let (coord, _log) = make_coordinator();
         coord.set_metadata_source(source.clone());
         let handle = coord.get_or_create_streams("g");
@@ -718,7 +695,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             }
             Change::Rack(rack) => (rack, "process-a"),
             Change::Process(process) => ("rack-a", process),
-            Change::None => ("rack-a", "process-a"),
         };
         let owned = row.owned_active.map(|partitions| {
             vec![
@@ -760,7 +736,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
         };
         check!(resp == expected, "{}", row.name);
-        check!(failures.load(Ordering::SeqCst) == 0, "{}", row.name);
     }
 }
 
@@ -819,25 +794,24 @@ async fn a_new_target_persists_the_target_of_every_member() {
     check!(targets == vec!["m1".to_string(), "m2".to_string()]);
 }
 
-/// A seeded group whose internal topics are missing creates them again on
+/// A seeded group whose internal topics are missing asks for them again on
 /// the next heartbeat, as Kafka configures the topology of a loaded group on
-/// its first heartbeat and sends the missing internal topics to the
-/// controller. The seed carries the metadata hash, so the hash alone does not
-/// trigger it.
+/// its first heartbeat and returns the internal topics to create. The seed
+/// carries the metadata hash, so the hash alone does not trigger it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_seeded_group_creates_its_missing_internal_topics_again() {
-    use krabka_protocol::owned::common::streams_group_heartbeat_response::task_ids::TaskIds;
+async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
+    use krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status;
 
-    use crate::test_support::FakeMetadataSource;
+    use crate::{
+        coordinator::unified::streams::topology::{InternalTopicSpec, status},
+        test_support::FakeMetadataSource,
+    };
 
-    let failing = Arc::new(
-        FakeMetadataSource::builder()
-            .image(image_of(None, &[("in", 1, 1)]))
-            .on_submit(|_| Err(krabka_raft::RaftError::LeaderUnknown))
-            .build(),
-    );
+    let image = || image_of(None, &[("in", 1, 1)]);
     let (before, _log) = make_coordinator();
-    before.set_metadata_source(failing);
+    before.set_metadata_source(Arc::new(
+        FakeMetadataSource::builder().image(image()).build(),
+    ));
     let joined = heartbeat(
         &before.get_or_create_streams("g"),
         StreamsGroupHeartbeatRequest {
@@ -855,16 +829,12 @@ async fn a_seeded_group_creates_its_missing_internal_topics_again() {
         .cached_streams_seed("g")
         .expect("the join cached a seed");
 
-    let source = Arc::new(
-        FakeMetadataSource::builder()
-            .image(image_of(None, &[("in", 1, 1)]))
-            .commit_submits()
-            .build(),
-    );
     let (after, _log) = make_coordinator();
-    after.set_metadata_source(source.clone());
+    after.set_metadata_source(Arc::new(
+        FakeMetadataSource::builder().image(image()).build(),
+    ));
     after.update_streams_cache("g", seed);
-    let resp = heartbeat(
+    let result = heartbeat_result(
         &after.get_or_create_streams("g"),
         StreamsGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -876,54 +846,54 @@ async fn a_seeded_group_creates_its_missing_internal_topics_again() {
     .await;
 
     check!(
-        source
-            .current_image()
-            .topic_partition_count("store-changelog")
-            == 1
+        result.creatable_topics
+            == vec![InternalTopicSpec {
+                name: "store-changelog".into(),
+                partitions: 1,
+                replication_factor: 0,
+                configs: std::collections::BTreeMap::new(),
+            }]
     );
     let expected = StreamsGroupHeartbeatResponse {
         member_id: "m1".into(),
-        status: Some(vec![]),
-        active_tasks: Some(vec![TaskIds {
-            subtopology_id: "0".into(),
-            partitions: vec![0],
+        status: Some(vec![Status {
+            status_code: status::MISSING_INTERNAL_TOPICS,
+            status_detail: "Internal topics are missing: store-changelog".into(),
             ..Default::default()
         }]),
-        standby_tasks: Some(vec![]),
-        warmup_tasks: Some(vec![]),
-        ..super::response::base_resp(codes::NONE, 2, &StreamsGroupConfig::default())
+        ..super::response::base_resp(codes::NONE, 1, &StreamsGroupConfig::default())
     };
-    check!(resp == expected);
+    check!(result.response == expected);
 }
 
 /// Kafka sizes the internal topics with `InternalTopicManager`: a repartition
 /// topic takes the partition count of its writer, and a copartition group
 /// coerces it to the partition count of the external topics. Each row joins
-/// one member with a two-subtopology topology on a one-broker cluster and
-/// compares the partition counts of the created topics and the whole
-/// response.
+/// one member with a two-subtopology topology and compares the internal topics
+/// that the heartbeat asks `CreateTopics` for, and the whole response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_join_sizes_the_internal_topics_as_kafka_does() {
     use krabka_protocol::owned::{
         common::{
             streams_group_heartbeat_request::topic_info::TopicInfo,
-            streams_group_heartbeat_response::task_ids::TaskIds,
+            streams_group_heartbeat_response::status::Status,
         },
         streams_group_heartbeat_request::{CopartitionGroup, Subtopology, Topology},
     };
 
-    use crate::test_support::FakeMetadataSource;
+    use crate::{
+        coordinator::unified::streams::topology::{InternalTopicSpec, status},
+        test_support::FakeMetadataSource,
+    };
 
     struct Row {
         name: &'static str,
         /// The partition counts of `orders` and `customers`.
         partitions: (i32, i32),
         copartitioned: bool,
-        /// The expected partition counts of `rp` and `store-changelog`, and
-        /// the expected task counts of subtopologies 0 and 1.
+        /// The expected partition counts of `rp` and `store-changelog`.
         rp: i32,
         changelog: i32,
-        tasks: (i32, i32),
     }
     let rows = [
         Row {
@@ -932,7 +902,6 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
             copartitioned: true,
             rp: 3,
             changelog: 3,
-            tasks: (6, 3),
         },
         Row {
             name: "rp takes the partition count of its writer",
@@ -940,7 +909,6 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
             copartitioned: false,
             rp: 4,
             changelog: 8,
-            tasks: (4, 8),
         },
     ];
 
@@ -954,11 +922,10 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
                         ("customers", 2, row.partitions.1),
                     ],
                 ))
-                .commit_submits()
                 .build(),
         );
         let (coord, _log) = make_coordinator();
-        coord.set_metadata_source(source.clone());
+        coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
         let topology = Topology {
             epoch: 1,
@@ -995,7 +962,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
             ..Default::default()
         };
 
-        let resp = heartbeat(
+        let result = heartbeat_result(
             &handle,
             StreamsGroupHeartbeatRequest {
                 group_id: "g".into(),
@@ -1008,29 +975,31 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
         )
         .await;
 
-        let image = source.current_image();
+        let spec = |name: &str, partitions| InternalTopicSpec {
+            name: name.into(),
+            partitions,
+            replication_factor: 0,
+            configs: std::collections::BTreeMap::new(),
+        };
         check!(
-            (
-                image.topic_partition_count("rp"),
-                image.topic_partition_count("store-changelog")
-            ) == (row.rp, row.changelog),
+            result.creatable_topics
+                == vec![spec("rp", row.rp), spec("store-changelog", row.changelog)],
             "{}",
             row.name
         );
-        let tasks = |subtopology: &str, count: i32| TaskIds {
-            subtopology_id: subtopology.into(),
-            partitions: (0..count).collect(),
-            ..Default::default()
-        };
         let expected = StreamsGroupHeartbeatResponse {
             member_id: "m1".into(),
-            status: Some(vec![]),
-            active_tasks: Some(vec![tasks("0", row.tasks.0), tasks("1", row.tasks.1)]),
+            status: Some(vec![Status {
+                status_code: status::MISSING_INTERNAL_TOPICS,
+                status_detail: "Internal topics are missing: rp, store-changelog".into(),
+                ..Default::default()
+            }]),
+            active_tasks: Some(vec![]),
             standby_tasks: Some(vec![]),
             warmup_tasks: Some(vec![]),
             ..super::response::base_resp(codes::NONE, 1, &StreamsGroupConfig::default())
         };
-        check!(resp == expected, "{}", row.name);
+        check!(result.response == expected, "{}", row.name);
     }
 }
 
