@@ -3,26 +3,28 @@
 //! Both entry points answer the same question from a different starting
 //! point: which `(producer_id, producer_epoch)` pair the coordinator hands
 //! back when a transactional id is re-initialised, and which pair it stages on
-//! the entry for a KIP-939 recovery. The epoch-bump, the rollover to a fresh
-//! producer id at `i16::MAX`, and the `transaction.version` split all live
-//! here so the coordinator flow reads as one sequence of state transitions.
+//! the entry for a KIP-939 recovery. Kafka rotates to a fresh producer id once
+//! the epoch is exhausted (`i16::MAX - 1` and above), at every transaction
+//! version, so the coordinator always keeps one epoch to fence the producer
+//! with.
 
 use crate::{error::BrokerError, txn::state::TxnEntry};
 
 pub(super) async fn next_init_producer_identity(
     entry: &TxnEntry,
-    txnv: crate::txn::version::TxnVersion,
     producer_ids: &crate::producer_id_manager::ProducerIdManager,
 ) -> Result<(krabka_log::ProducerId, i16), BrokerError> {
     let (pid, epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
-    if txnv.verified() {
-        crate::txn::handlers::end_txn::next_producer_identity(txnv, pid, epoch, producer_ids).await
-    } else {
-        match epoch.checked_add(1) {
-            Some(next_epoch) => Ok((pid, next_epoch)),
-            None => Ok(producer_ids.allocate().await?),
-        }
-    }
+    // `TransactionCoordinator.handleInitProducerId` rotates whenever
+    // `isEpochExhausted` holds, whatever the transaction version, so the
+    // rotation rule here is the verified one at every level.
+    crate::txn::handlers::end_txn::next_producer_identity(
+        crate::txn::version::TxnVersion::Verified,
+        pid,
+        epoch,
+        producer_ids,
+    )
+    .await
 }
 
 pub(super) async fn stage_recovery_identity(
@@ -60,62 +62,31 @@ mod tests {
     use super::*;
     use crate::txn::state::TxnState;
 
-    /// The `transaction.version` split. Below `TV_2` the coordinator bumps the
-    /// entry's own epoch and keeps the producer id; from `TV_2` it goes through
-    /// `next_producer_identity`, which rotates to a fresh producer id at the
-    /// `i16::MAX - 1` boundary rather than bumping into `i16::MAX`.
+    /// Kafka `prepareIncrementProducerEpoch` bumps the epoch, and
+    /// `prepareProducerIdRotation` rotates to a fresh producer id once the
+    /// epoch is exhausted. The rule does not depend on the transaction
+    /// version.
     #[tokio::test]
-    async fn the_transaction_version_decides_between_an_epoch_bump_and_a_rotation() {
+    async fn the_epoch_bumps_until_it_is_exhausted_and_then_the_producer_id_rotates() {
         let ids = crate::producer_id_manager::ProducerIdManager::new();
-        let mut entry = TxnEntry::new_empty("tid-init".into(), ProducerId(11), 3, i32::MAX, 0);
-        entry.state = TxnState::CompleteCommit;
-
-        for txnv in [
-            crate::txn::version::TxnVersion::Classic,
-            crate::txn::version::TxnVersion::Flexible,
-        ] {
+        // (entry epoch, the epoch handed back, whether the producer id rotates)
+        let cases = [
+            (3_i16, 4_i16, false),
+            (i16::MAX - 2, i16::MAX - 1, false),
+            (i16::MAX - 1, 0, true),
+            (i16::MAX, 0, true),
+        ];
+        for (entry_epoch, expected_epoch, rotates) in cases {
+            let mut entry =
+                TxnEntry::new_empty("tid-init".into(), ProducerId(11), entry_epoch, i32::MAX, 0);
+            entry.state = TxnState::CompleteCommit;
+            let (pid, epoch) = next_init_producer_identity(&entry, &ids).await.unwrap();
+            assert!(epoch == expected_epoch, "epoch at {entry_epoch}");
             assert!(
-                next_init_producer_identity(&entry, txnv, &ids)
-                    .await
-                    .unwrap()
-                    == (ProducerId(11), 4)
+                (pid != ProducerId(11)) == rotates,
+                "rotation at {entry_epoch}"
             );
         }
-        assert!(
-            next_init_producer_identity(&entry, crate::txn::version::TxnVersion::Verified, &ids)
-                .await
-                .unwrap()
-                == (ProducerId(11), 4)
-        );
-    }
-
-    /// At the epoch ceiling the two halves of the split part company: an
-    /// unverified transaction version has no epoch left to bump and falls back
-    /// to a freshly allocated producer id at epoch 0, and a verified one
-    /// rotates one step earlier, at `i16::MAX - 1`.
-    #[tokio::test]
-    async fn the_epoch_ceiling_rotates_to_a_fresh_producer_id_on_both_sides() {
-        let ids = crate::producer_id_manager::ProducerIdManager::new();
-        let mut entry =
-            TxnEntry::new_empty("tid-max".into(), ProducerId(11), i16::MAX, i32::MAX, 0);
-        entry.state = TxnState::CompleteCommit;
-
-        let (classic_pid, classic_epoch) =
-            next_init_producer_identity(&entry, crate::txn::version::TxnVersion::Classic, &ids)
-                .await
-                .unwrap();
-        assert!(classic_pid != ProducerId(11));
-        assert!(classic_epoch == 0);
-
-        let mut near_max =
-            TxnEntry::new_empty("tid-near".into(), ProducerId(11), i16::MAX - 1, i32::MAX, 0);
-        near_max.state = TxnState::CompleteCommit;
-        let (verified_pid, verified_epoch) =
-            next_init_producer_identity(&near_max, crate::txn::version::TxnVersion::Verified, &ids)
-                .await
-                .unwrap();
-        assert!(verified_pid != ProducerId(11));
-        assert!(verified_epoch == 0);
     }
 
     #[tokio::test]
