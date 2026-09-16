@@ -1674,3 +1674,174 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
         check!(members == vec!["m1".to_string()], "{name}");
     }
 }
+
+/// KIP-1071 static membership, as Kafka's
+/// `getOrMaybeCreateStaticStreamsGroupMember` and
+/// `streamsGroupStaticMemberGroupLeave` run it. Member `m1` holds instance id
+/// `i1` in a group with a one-partition topic. Each row sends its heartbeats
+/// and compares the whole last response and the members afterwards, as
+/// `(member id, member epoch, active tasks)`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_static_member_follows_kafka_static_membership() {
+    use crate::test_support::FakeMetadataSource;
+
+    let config = StreamsGroupConfig {
+        max_size: 2,
+        ..StreamsGroupConfig::default()
+    };
+    let join = |member_id: &str, instance_id: &str| StreamsGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        member_epoch: 0,
+        instance_id: Some(instance_id.into()),
+        rebalance_timeout_ms: 1_000,
+        active_tasks: Some(vec![]),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        topology: Some(one_subtopology(false)),
+        ..Default::default()
+    };
+    let beat = |member_id: &str, member_epoch, instance_id: &str| StreamsGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        member_epoch,
+        instance_id: Some(instance_id.into()),
+        ..Default::default()
+    };
+    let assigned = |member_id: &str, member_epoch| StreamsGroupHeartbeatResponse {
+        member_id: member_id.into(),
+        status: Some(vec![]),
+        active_tasks: Some(vec![
+            krabka_protocol::owned::common::streams_group_heartbeat_response::task_ids::TaskIds {
+                subtopology_id: "0".into(),
+                partitions: vec![0],
+                ..Default::default()
+            },
+        ]),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        ..super::response::base_resp(codes::NONE, member_epoch, &config)
+    };
+    let rows = [
+        (
+            "a static member leaves for a while and keeps its tasks",
+            vec![beat("m1", -2, "i1")],
+            StreamsGroupHeartbeatResponse {
+                member_id: "m1".into(),
+                member_epoch: -2,
+                status: Some(vec![]),
+                ..Default::default()
+            },
+            vec![("m1".to_string(), -2, vec![0])],
+        ),
+        (
+            "a new member replaces the released static member",
+            vec![beat("m1", -2, "i1"), join("m2", "i1")],
+            assigned("m2", 1),
+            vec![("m2".to_string(), 1, vec![0])],
+        ),
+        (
+            "a join with an instance id that a member still holds",
+            vec![join("m2", "i1")],
+            super::response::error_resp(
+                codes::UNRELEASED_INSTANCE_ID,
+                Some(
+                    "Static member m2 with instance id i1 cannot join the group because the \
+                     instance id is owned by m1 member."
+                        .into(),
+                ),
+            ),
+            vec![("m1".to_string(), 1, vec![0])],
+        ),
+        (
+            "a heartbeat with the instance id of another member",
+            vec![beat("m2", 5, "i1")],
+            super::response::error_resp(
+                codes::FENCED_INSTANCE_ID,
+                Some("Static member m2 with instance id i1 was fenced by member m1.".into()),
+            ),
+            vec![("m1".to_string(), 1, vec![0])],
+        ),
+        (
+            "a heartbeat with an unknown instance id",
+            vec![beat("m1", 1, "i9")],
+            super::response::error_resp(
+                codes::UNKNOWN_MEMBER_ID,
+                Some("Instance id i9 is unknown.".into()),
+            ),
+            vec![("m1".to_string(), 1, vec![0])],
+        ),
+        (
+            "a released static member does not count against a full group",
+            vec![join("m3", "i3"), beat("m1", -2, "i1"), join("m2", "i1")],
+            assigned("m2", 2),
+            vec![
+                ("m2".to_string(), 2, vec![0]),
+                ("m3".to_string(), 2, vec![]),
+            ],
+        ),
+        (
+            "a replacement takes over a member id that another member holds",
+            vec![join("m2", "i2"), beat("m1", -2, "i1"), join("m2", "i1")],
+            assigned("m2", 3),
+            vec![("m2".to_string(), 3, vec![0])],
+        ),
+        (
+            "a static member leaves for good",
+            vec![beat("m1", -1, "i1")],
+            StreamsGroupHeartbeatResponse {
+                member_id: "m1".into(),
+                member_epoch: -1,
+                status: Some(vec![]),
+                ..Default::default()
+            },
+            vec![],
+        ),
+    ];
+
+    for (name, beats, expected, members) in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &[("in", 1, 1)]))
+                .build(),
+        );
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            Arc::new(EmptyMetadata),
+            Arc::new(InMemoryOffsetsLog::default()),
+            config.clone(),
+        ));
+        coord.set_metadata_source(source);
+        let handle = coord.get_or_create_streams("g");
+        check!(
+            heartbeat(&handle, join("m1", "i1")).await == assigned("m1", 1),
+            "{name}"
+        );
+
+        let mut last = None;
+        for request in beats {
+            last = Some(heartbeat(&handle, request).await);
+        }
+
+        check!(last == Some(expected), "{name}");
+        let (tx, rx) = oneshot::channel();
+        handle
+            .tx
+            .send(StreamsGroupActorMessage::Describe { reply: tx })
+            .await
+            .unwrap();
+        let mut described: Vec<(String, i32, Vec<i32>)> = rx
+            .await
+            .unwrap()
+            .members
+            .into_iter()
+            .map(|member| {
+                let active = member.active.get("0").cloned().unwrap_or_default();
+                (member.member_id, member.member_epoch, active)
+            })
+            .collect();
+        described.sort();
+        check!(described == members, "{name}");
+    }
+}
