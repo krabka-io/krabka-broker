@@ -490,13 +490,13 @@ mod tests {
                 response.responses[0].partitions[1].error_code == codes::UNKNOWN_TOPIC_OR_PARTITION
             );
 
-            let state = persister
-                .read_state("g-reset", topic_id, 0)
+            let (state_epoch, _, start_offset, _) = persister
+                .read_summary("g-reset", topic_id, 0)
                 .await
                 .expect("read state")
                 .expect("state present");
-            assert!(state.state_epoch == expected_epoch);
-            assert!(state.start_offset == krabka_log::Offset(42));
+            assert!(state_epoch == expected_epoch);
+            assert!(start_offset == krabka_log::Offset(42));
         }
         let leader_epoch = broker
             .controller
@@ -543,7 +543,7 @@ mod tests {
         );
 
         let state = persister
-            .read_state("g-reset", topic_id, 9)
+            .read_summary("g-reset", topic_id, 9)
             .await
             .expect("read unrequested state");
         assert!(state.is_none());
