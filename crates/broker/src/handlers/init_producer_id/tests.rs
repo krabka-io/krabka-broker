@@ -244,7 +244,9 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     .expect("reject fenced recovery client");
     let fenced_end_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
         crate::test_support::decode_response(&fenced_end_response, end_version);
-    assert!(fenced_end_response.error_code == codes::INVALID_PRODUCER_EPOCH);
+    // Kafka `endTransaction` fences a stale identity with PRODUCER_FENCED at
+    // `EndTxn` v2 and above.
+    assert!(fenced_end_response.error_code == codes::PRODUCER_FENCED);
 
     let end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
         transactional_id: tids[2].to_string(),

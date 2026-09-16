@@ -14,10 +14,25 @@ const NO_PRODUCER_ID: i64 = -1;
 /// Kafka wire sentinel: "no producer epoch" (`RecordBatch.NO_PRODUCER_EPOCH`).
 const NO_PRODUCER_EPOCH: i16 = -1;
 
+/// Kafka `KafkaApis.handleEndTxnRequest`: a client below `EndTxn` v2 does not
+/// know `PRODUCER_FENCED`, so it gets `INVALID_PRODUCER_EPOCH`.
+fn wire_code(version: i16, error_code: i16) -> i16 {
+    if version < 2 && error_code == codes::PRODUCER_FENCED {
+        codes::INVALID_PRODUCER_EPOCH
+    } else {
+        error_code
+    }
+}
+
 pub(super) fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
     // On the error path the producer_id/epoch fields are not meaningful;
     // leave them at the "no producer" wire sentinels.
-    encode_response(version, error_code, NO_PRODUCER_ID, NO_PRODUCER_EPOCH)
+    encode_response(
+        version,
+        wire_code(version, error_code),
+        NO_PRODUCER_ID,
+        NO_PRODUCER_EPOCH,
+    )
 }
 
 /// Encode a successful `EndTxn` response. `producer_id` and `producer_epoch`
@@ -62,6 +77,27 @@ mod tests {
 
     fn decode_response(bytes: &Bytes, version: i16) -> EndTxnResponse {
         crate::test_support::decode_response(bytes, version)
+    }
+
+    #[test]
+    fn producer_fenced_is_invalid_producer_epoch_below_version_2() {
+        // (version, expected code on the wire)
+        let cases = [
+            (0, codes::INVALID_PRODUCER_EPOCH),
+            (1, codes::INVALID_PRODUCER_EPOCH),
+            (2, codes::PRODUCER_FENCED),
+            (5, codes::PRODUCER_FENCED),
+        ];
+        for (version, expected) in cases {
+            let bytes = encode_err(version, codes::PRODUCER_FENCED).expect("encode error");
+            assert!(
+                decode_response(&bytes, version).error_code == expected,
+                "v{version}"
+            );
+        }
+        // Another code is untouched.
+        let bytes = encode_err(0, codes::CONCURRENT_TRANSACTIONS).expect("encode error");
+        assert!(decode_response(&bytes, 0).error_code == codes::CONCURRENT_TRANSACTIONS);
     }
 
     #[test]

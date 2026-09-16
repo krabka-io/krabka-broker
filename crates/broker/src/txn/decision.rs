@@ -41,6 +41,23 @@ pub(crate) fn decide_phase1_transition(
     Ok((prepare, complete))
 }
 
+/// Applies the `Prepare{Commit,Abort}` transition that the `EndTxn` state
+/// table admitted, and returns the `(prepare, complete)` states.
+///
+/// The table of `handlers::end_txn::state_table` decides which states may
+/// prepare, because Kafka's table is wider than `Ongoing` at transaction
+/// version 2: an abort is accepted from `Empty`, `CompleteCommit` and
+/// `CompleteAbort` as well.
+pub(crate) fn apply_end_txn_prepare(entry: &mut TxnEntry, committed: bool) -> (TxnState, TxnState) {
+    let (prepare, complete) = if committed {
+        (TxnState::PrepareCommit, TxnState::CompleteCommit)
+    } else {
+        (TxnState::PrepareAbort, TxnState::CompleteAbort)
+    };
+    entry.state = prepare;
+    (prepare, complete)
+}
+
 /// Outcome of [`decide_end_txn_completion`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompletionDecision {
@@ -95,7 +112,17 @@ pub(crate) fn decide_end_txn_completion(
             response_epoch: entry.producer_epoch,
         },
         ReacquireDecision::RejectStaleIdentity => {
-            CompletionDecision::Reject(codes::INVALID_PRODUCER_EPOCH)
+            // Kafka's post-marker check splits the two: a producer id that is
+            // neither the one that prepared the transaction nor the one the
+            // completion rotates to is a lost mapping, and any other stale
+            // identity is a fenced producer.
+            let mapping_lost =
+                entry.producer_id != expected_pid && entry.producer_id != expected_completion_pid;
+            CompletionDecision::Reject(if mapping_lost {
+                codes::INVALID_PRODUCER_ID_MAPPING
+            } else {
+                codes::PRODUCER_FENCED
+            })
         }
         ReacquireDecision::RejectState => CompletionDecision::Reject(codes::INVALID_TXN_STATE),
     }
