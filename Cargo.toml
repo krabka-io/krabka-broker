@@ -56,7 +56,6 @@ futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 # KIP-664's ListTransactions filter accepts the full java.util.regex Pattern
 # grammar (including lookaround and backreferences).
-java_regex = "0.1"
 jsonpath-rust = "1.0"
 # Linux kTLS: offload TLS record encryption to the kernel so `sendfile(2)`
 # works THROUGH TLS (zero-copy fetch over encrypted connections). v6 tracks
