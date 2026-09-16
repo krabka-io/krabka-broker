@@ -208,6 +208,10 @@ fn begin_end_round_trip() {
     let end = PeerRequest::EndQuorumEpoch {
         leader_id: NodeId(1),
         leader_epoch: 4,
+        preferred_candidates: vec![
+            (NodeId(3), uuid::Uuid::from_u128(3)),
+            (NodeId(2), uuid::Uuid::from_u128(2)),
+        ],
     };
     assert2::assert!(decode_end(&end.encode()) == Some(end));
 }
@@ -232,6 +236,7 @@ fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
     let end = PeerRequest::EndQuorumEpoch {
         leader_id: NodeId(1),
         leader_epoch: 4,
+        preferred_candidates: vec![(NodeId(2), uuid::Uuid::from_u128(2))],
     };
     let mut end_cur = &end.encode()[..];
     let raw_end = EndQuorumEpochRequest::decode(&mut end_cur, QUORUM_EPOCH_VERSION)
@@ -240,6 +245,18 @@ fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
     assert2::assert!(raw_end.cluster_id.as_ref() == None);
     assert2::assert!(end_partition.leader_id == 1);
     assert2::assert!(end_partition.leader_epoch == 4);
+    assert2::assert!(
+        end_partition.preferred_candidates
+            == vec![
+                krabka_protocol::owned::end_quorum_epoch_request::ReplicaInfo {
+                    candidate_id: 2,
+                    candidate_directory_id: krabka_protocol::primitives::uuid::Uuid(
+                        *uuid::Uuid::from_u128(2).as_bytes()
+                    ),
+                    ..Default::default()
+                }
+            ]
+    );
 }
 
 #[test]
@@ -282,7 +299,9 @@ fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
 #[test]
 fn fetch_snapshot_request_round_trips() {
     let req = PeerRequest::FetchSnapshot {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
         from: NodeId(2),
+        current_leader_epoch: 7,
         snapshot_id: (42, 3),
         position: 128,
         max_bytes: 4096,
@@ -291,11 +310,13 @@ fn fetch_snapshot_request_round_trips() {
 }
 
 #[test]
-fn encoded_fetch_snapshot_request_carries_empty_cluster_id() {
+fn encoded_fetch_snapshot_request_carries_cluster_id_and_current_leader_epoch() {
     use krabka_protocol::Decode;
 
     let req = PeerRequest::FetchSnapshot {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
         from: NodeId(2),
+        current_leader_epoch: 7,
         snapshot_id: (42, 3),
         position: 128,
         max_bytes: 4096,
@@ -306,13 +327,13 @@ fn encoded_fetch_snapshot_request_carries_empty_cluster_id() {
     let partition = &raw.topics[0].partitions[0];
     check!(
         (
-            raw.cluster_id.as_ref(),
+            raw.cluster_id.as_deref(),
             raw.replica_id,
             raw.max_bytes,
             partition.current_leader_epoch,
             partition.snapshot_id.end_offset,
             partition.snapshot_id.epoch,
             partition.position,
-        ) == (None, 2, 4096, 3, 42, 3, 128)
+        ) == (Some("AAAAAAAAAAAAAAAAAAAACQ"), 2, 4096, 7, 42, 3, 128)
     );
 }
