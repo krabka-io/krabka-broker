@@ -26,6 +26,8 @@ use crate::{
     error::BrokerError, handlers::group_read_denied, time_util::now_ms,
 };
 
+mod validation;
+
 #[tracing::instrument(
     name = "handle_streams_group_heartbeat",
     level = "info",
@@ -47,6 +49,16 @@ pub(crate) async fn handle(
         let mut cur: &[u8] = req_bytes;
         let req = StreamsGroupHeartbeatRequest::decode(&mut cur, version)?;
 
+        // KafkaApis answers UNSUPPORTED_VERSION before the group ACL when the
+        // streams protocol is off: KIP-1071 gates it on a finalized
+        // streams.version >= 1 (early access, default-disabled), and krabka
+        // also on the `streams_group.enable` config kill-switch.
+        if !crate::features::feature_enabled(&image, crate::features::STREAMS_VERSION, 1)
+            || !streams_enabled
+        {
+            return crate::handlers::encode_response(&error(codes::UNSUPPORTED_VERSION), version);
+        }
+
         // ── ACL preamble ────────────────────────────────────────────
         // `Read` on `Group(group_id)`. On Deny → whole-response
         // `error_code = GROUP_AUTHORIZATION_FAILED (30)`. Topology/topic ACLs
@@ -63,18 +75,21 @@ pub(crate) async fn handle(
             );
         }
 
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-            return crate::handlers::encode_response(&error(error_code), version);
+        // Kafka's `GroupCoordinatorService` checks the request before it
+        // schedules the write on the coordinator, so a refused request changes
+        // no group and never gets NOT_COORDINATOR.
+        if let Some((error_code, message)) = validation::request_error(&req) {
+            return crate::handlers::encode_response(
+                &crate::coordinator::unified::streams::actor::response::error_resp(
+                    error_code,
+                    Some(message),
+                ),
+                version,
+            );
         }
 
-        // KIP-1071: the streams protocol is gated on a finalized
-        // streams.version >= 1 (early access, default-disabled) AND the
-        // `streams_group.enable` config kill-switch. Either off → reject so the
-        // client knows the broker does not serve this protocol.
-        if !crate::features::feature_enabled(&image, crate::features::STREAMS_VERSION, 1)
-            || !streams_enabled
-        {
-            return crate::handlers::encode_response(&error(codes::UNSUPPORTED_VERSION), version);
+        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+            return crate::handlers::encode_response(&error(error_code), version);
         }
 
         // KIP-1071 cold upgrade: a StreamsGroupHeartbeat for a drained classic group
@@ -138,13 +153,66 @@ mod tests {
     use krabka_protocol::owned::streams_group_heartbeat_response;
     use krabka_security::Principal;
 
+    /// A valid join of member `m1` with a one-subtopology topology.
     fn request(group_id: &str) -> StreamsGroupHeartbeatRequest {
+        use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
+
         StreamsGroupHeartbeatRequest {
             group_id: group_id.into(),
-            member_id: String::new(),
+            member_id: "m1".into(),
             member_epoch: 0,
+            rebalance_timeout_ms: 1_000,
+            active_tasks: Some(vec![]),
+            standby_tasks: Some(vec![]),
+            warmup_tasks: Some(vec![]),
+            topology: Some(Topology {
+                epoch: 1,
+                subtopologies: vec![Subtopology {
+                    subtopology_id: "0".into(),
+                    source_topics: vec!["in".into()],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
             ..Default::default()
         }
+    }
+
+    /// Kafka's `GroupCoordinatorService` refuses an invalid request before the
+    /// coordinator runs it, so the response carries only the error and the
+    /// group is not created.
+    #[tokio::test]
+    async fn handle_refuses_an_invalid_request_and_creates_no_group() {
+        let version = streams_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = start_broker(true).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
+        let req = StreamsGroupHeartbeatRequest {
+            member_id: String::new(),
+            ..request("invalid-join")
+        };
+
+        let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+            .await
+            .expect("handle");
+
+        assert!(
+            decode_response(&bytes)
+                == crate::coordinator::unified::streams::actor::response::error_resp(
+                    codes::INVALID_REQUEST,
+                    Some("MemberId can't be empty.".into()),
+                )
+        );
+        assert!(
+            broker
+                .group_coordinator
+                .find_streams("invalid-join")
+                .is_none()
+        );
+        broker_handle.shutdown().await;
     }
 
     fn encode_request(req: &StreamsGroupHeartbeatRequest) -> Bytes {

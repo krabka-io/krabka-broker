@@ -7,7 +7,7 @@
 //! when the group is dirty and then writes the resulting records as one batch,
 //! so a failed log write ends the actor.
 
-use std::{sync::Arc, time::Instant};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use krabka_protocol::owned::{
     streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
@@ -24,10 +24,11 @@ use super::{
 use crate::{
     codes,
     coordinator::unified::{
-        ClientIdentity, GroupCoordinator, first_join_member_id,
+        ClientIdentity, GroupCoordinator,
         offsets_log::OffsetsLog,
         streams::{
             config::StreamsGroupConfig,
+            persistence::StreamsGroupTopologyValue,
             state::{OwnedTasks, RoleTasks, StoredTopologyHandle},
             topology,
         },
@@ -84,10 +85,6 @@ pub(super) async fn handle_heartbeat(
     // reports endpoint information epoch 0.
     let group_existed = actor.state.group_epoch > 0;
 
-    if let Some(resp) = changelog_partition_count_error(req) {
-        return Ok(resp);
-    }
-
     // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
         return handle_leave(
@@ -104,9 +101,8 @@ pub(super) async fn handle_heartbeat(
 
     // ─── First-join path ─────────────────────────────────────────
     // KIP-1071 mirrors KIP-848: epoch 0 from an unknown member is a first
-    // join. The client may supply its own id; an empty id mints a server UUID.
-    // Epoch 0 from a known member is a rejoin and takes the existing-member
-    // path below.
+    // join, with the member id that the client generated. Epoch 0 from a
+    // known member is a rejoin and takes the existing-member path below.
     if req.member_epoch == 0 && !actor.state.members.contains_key(&req.member_id) {
         if actor.state.members.len() >= config.max_size {
             return Ok(error_resp(
@@ -120,17 +116,14 @@ pub(super) async fn handle_heartbeat(
         if let Some(resp) = topology_error(actor, req, metadata_source) {
             return Ok(resp);
         }
-        let new_member_id = first_join_member_id(&req.member_id);
+        let new_member_id = req.member_id.clone();
         let m = build_member(&new_member_id, req, client_id, client_host, now);
         actor.state.add_or_update_member(m);
-        // A topology on a join initializes the group topology, or replaces an
-        // older one. A join with an older topology keeps the group topology,
-        // and its responses carry `STALE_TOPOLOGY`.
-        if let Some(topo) = &req.topology
-            && actor
-                .topology
-                .as_ref()
-                .is_none_or(|group| topo.epoch > group.epoch)
+        // Kafka's `maybeUpdateTopology`: a join initializes the topology of a
+        // group that has none. A join with an older topology keeps the group
+        // topology, and its responses carry `STALE_TOPOLOGY`.
+        if actor.topology.is_none()
+            && let Some(topo) = &req.topology
         {
             accept_topology(actor, topo);
         }
@@ -199,14 +192,6 @@ pub(super) async fn handle_heartbeat(
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
-    // A newer topology replaces the group topology. A member with an older
-    // one gets `STALE_TOPOLOGY` in its own responses.
-    if let Some(topo) = &req.topology
-        && topo.epoch > actor.state.topology_epoch
-    {
-        accept_topology(actor, topo);
-        changed = true;
-    }
     refresh_topic_metadata(actor, config, metadata_source).await;
 
     if actor.state.dirty {
@@ -363,57 +348,87 @@ fn epoch_error_message(
     })
 }
 
-/// Kafka's `GroupCoordinatorService.throwIfInvalidTopology`, which runs on a
-/// joining heartbeat before the coordinator: a changelog topic must leave its
-/// partition count undefined, because the coordinator decides it.
-fn changelog_partition_count_error(
-    req: &StreamsGroupHeartbeatRequest,
-) -> Option<StreamsGroupHeartbeatResponse> {
-    if req.member_epoch != 0 {
-        return None;
-    }
-    let topic = req
-        .topology
-        .iter()
-        .flat_map(|topology| topology.subtopologies.iter())
-        .flat_map(|subtopology| subtopology.state_changelog_topics.iter())
-        .find(|topic| topic.partitions != 0)?;
-    Some(error_resp(
-        codes::STREAMS_INVALID_TOPOLOGY,
-        Some(format!(
-            "Changelog topic {} must have an undefined partition count, but it is set to {}.",
-            topic.name, topic.partitions
-        )),
-    ))
-}
-
-/// The error response for a topology that Kafka's `configureTopics` refuses
-/// against the current metadata image, or `None` when the topology can be
-/// configured.
+/// The error response for a heartbeat that Kafka refuses inside the
+/// coordinator because of its topology or its owned tasks, or `None`.
 ///
-/// The topology is the one that this heartbeat leaves the group with: the
-/// topology of the request when the group has none or an older one, else the
-/// topology of the group. Kafka configures the topology inside the heartbeat
-/// and answers the exception with its code and message, and it writes nothing.
+/// In Kafka's order:
+///
+/// 1. `maybeUpdateTopology`: a join whose topology differs from the group
+///    topology, at the same or a higher topology epoch, gets
+///    `INVALID_REQUEST`, because topology updates are not supported.
+/// 2. `configureTopics`: a topology that cannot be configured against the
+///    current metadata image gets Kafka's error. The topology is the group
+///    topology, or the topology of the join that initializes the group.
+/// 3. `throwIfRequestContainsInvalidTasks`: once the topology is ready, an
+///    owned task of an unknown subtopology or with a partition out of range
+///    gets `INVALID_REQUEST`.
+///
+/// Kafka writes nothing for such a heartbeat.
 fn topology_error(
     actor: &ActorState,
     req: &StreamsGroupHeartbeatRequest,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) -> Option<StreamsGroupHeartbeatResponse> {
+    let from_request = req.topology.as_ref().map(topology::to_stored_topology);
+    if let (Some(group), Some(requested)) = (actor.topology.as_ref(), from_request.as_ref())
+        && requested.epoch >= group.epoch
+        && !same_topology(group, requested)
+    {
+        return Some(error_resp(
+            codes::INVALID_REQUEST,
+            Some("Topology updates are not supported yet.".into()),
+        ));
+    }
     let source = metadata_source?;
-    let from_request = req
-        .topology
+    let topology = actor.topology.as_ref().or(from_request.as_ref())?;
+    let configured = match topology::configure_topics(topology, &source.current_image()) {
+        Ok(configured) => configured,
+        Err(error) => return Some(error_resp(error.error_code(), error.error_message())),
+    };
+    let subtopologies = configured
+        .subtopologies
         .as_ref()
-        .filter(|wire| {
-            actor
-                .topology
-                .as_ref()
-                .is_none_or(|group| wire.epoch > group.epoch)
+        .filter(|_| configured.is_ready())?;
+    [&req.active_tasks, &req.standby_tasks, &req.warmup_tasks]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find_map(|task| {
+            let Some(subtopology) = subtopologies.get(&task.subtopology_id) else {
+                return Some(format!(
+                    "Subtopology {} does not exist in the topology.",
+                    task.subtopology_id
+                ));
+            };
+            let number_of_tasks = subtopology.number_of_tasks;
+            task.partitions
+                .iter()
+                .find(|partition| **partition < 0 || **partition >= number_of_tasks)
+                .map(|partition| {
+                    format!(
+                        "Task {partition} for subtopology {} is invalid. Number of tasks for this \
+                         subtopology: {number_of_tasks}",
+                        task.subtopology_id
+                    )
+                })
         })
-        .map(topology::to_stored_topology);
-    let topology = from_request.as_ref().or(actor.topology.as_ref())?;
-    let error = topology::configure_topics(topology, &source.current_image()).err()?;
-    Some(error_resp(error.error_code(), error.error_message()))
+        .map(|message| error_resp(codes::INVALID_REQUEST, Some(message)))
+}
+
+/// Kafka's `StreamsTopology.equals`: the same epoch and the same subtopologies
+/// by id.
+fn same_topology(a: &StreamsGroupTopologyValue, b: &StreamsGroupTopologyValue) -> bool {
+    a.epoch == b.epoch && subtopologies_by_id(a) == subtopologies_by_id(b)
+}
+
+fn subtopologies_by_id(
+    topology: &StreamsGroupTopologyValue,
+) -> BTreeMap<&str, &crate::coordinator::unified::streams::persistence::StoredSubtopology> {
+    topology
+        .subtopologies
+        .iter()
+        .map(|subtopology| (subtopology.subtopology_id.as_str(), subtopology))
+        .collect()
 }
 
 /// Marks the group for a reconcile when a topic that the topology needs
