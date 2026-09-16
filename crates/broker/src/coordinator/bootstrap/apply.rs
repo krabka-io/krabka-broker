@@ -140,7 +140,7 @@ pub(super) fn apply_streams_record(
     match key {
         sp::StreamsGroupKey::GroupMetadata { group_id } => {
             let v = sp::StreamsGroupMetadataValue::decode(value_bytes)?;
-            coordinator.replay_streams_group_metadata(&group_id, v.epoch);
+            coordinator.replay_streams_group_metadata(&group_id, v);
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }

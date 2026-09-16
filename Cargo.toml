@@ -156,6 +156,7 @@ tracing = "0.1"
 tracing-core = "0.1"
 tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 # wincode + serde-wincode replace bincode for serde-derived wire shapes.
 # Keep these paired so `SerdeCompat` implements this wincode's traits.
