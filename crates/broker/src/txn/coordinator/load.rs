@@ -145,6 +145,25 @@ impl TxnCoordinator {
         )))
     }
 
+    /// Whether any `__transaction_state` partition of this broker is still
+    /// loading.
+    ///
+    /// Kafka's `listTransactionStates` answers
+    /// `COORDINATOR_LOAD_IN_PROGRESS` while `loadingPartitions` is not empty,
+    /// because the list it could build would be short of the transactions in
+    /// those partitions.
+    pub(crate) async fn any_partition_loading(&self) -> bool {
+        self.leader_partitions
+            .read()
+            .await
+            .values()
+            .any(|leadership| {
+                leadership.term.is_some_and(|term| {
+                    matches!(term.status, LoadStatus::Pending | LoadStatus::Loading)
+                })
+            })
+    }
+
     /// Waits up to `timeout` until the load of `partition` ends, and returns
     /// its load status then.
     pub(crate) async fn wait_for_load(

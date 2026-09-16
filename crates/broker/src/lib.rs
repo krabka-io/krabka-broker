@@ -230,6 +230,7 @@ mod producer_id_manager;
 mod producer_state;
 pub mod quota;
 pub mod raft_handshake;
+pub(crate) mod re2j;
 pub(crate) mod reassignment;
 pub(crate) mod remote_log_manager;
 pub(crate) mod remote_reader;

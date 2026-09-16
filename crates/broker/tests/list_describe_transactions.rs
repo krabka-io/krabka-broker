@@ -32,6 +32,28 @@ async fn boot_single() -> (BrokerHandle, String, TempDir) {
     (broker, bootstrap, dir)
 }
 
+/// `ListTransactions`, retried while the coordinator loads its state
+/// partitions. Kafka answers `COORDINATOR_LOAD_IN_PROGRESS` (14) until every
+/// partition it leads is loaded, and the admin client retries.
+async fn list_transactions(
+    client: &krabka_client_core::Client,
+    request: &ListTransactionsRequest,
+) -> ListTransactionsResponse {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = client
+            .send(request.clone())
+            .await
+            .expect("ListTransactions");
+        if response.error_code != 14 || std::time::Instant::now() >= deadline {
+            return response;
+        }
+        // intentional: the coordinator load has no awaiter reachable from a
+        // client; the answer is the signal.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn create_topic(bootstrap: &str, name: &str) {
     let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
@@ -159,10 +181,7 @@ async fn list_transactions_returns_ongoing_txn() {
         boot_with_ongoing_txn("my-tid", "t-list").await;
 
     let client = admin_client(&bootstrap).await;
-    let resp = client
-        .send(ListTransactionsRequest::default())
-        .await
-        .expect("ListTransactions");
+    let resp = list_transactions(&client, &ListTransactionsRequest::default()).await;
 
     let row = resp
         .transaction_states
@@ -199,13 +218,14 @@ async fn list_transactions_state_filter_excludes_non_matching() {
     let client = admin_client(&bootstrap).await;
     // Filter to "Empty" only — our txn is Ongoing, so the row should
     // be excluded.
-    let r = client
-        .send(ListTransactionsRequest {
+    let r = list_transactions(
+        &client,
+        &ListTransactionsRequest {
             state_filters: vec!["Empty".into()],
             ..Default::default()
-        })
-        .await
-        .expect("ListTransactions(state=Empty)");
+        },
+    )
+    .await;
     assert!(
         r == ListTransactionsResponse::default(),
         "Ongoing txn must not match an Empty state filter: {r:?}",
@@ -225,13 +245,14 @@ async fn list_transactions_reports_unknown_state_filters() {
     let (broker, bootstrap, _dir) = boot_single().await;
 
     let client = admin_client(&bootstrap).await;
-    let r = client
-        .send(ListTransactionsRequest {
+    let r = list_transactions(
+        &client,
+        &ListTransactionsRequest {
             state_filters: vec!["Ongoing".into(), "BogusState".into(), "Empty".into()],
             ..Default::default()
-        })
-        .await
-        .expect("ListTransactions");
+        },
+    )
+    .await;
     assert!(
         r == ListTransactionsResponse {
             unknown_state_filters: vec!["BogusState".to_string()],
