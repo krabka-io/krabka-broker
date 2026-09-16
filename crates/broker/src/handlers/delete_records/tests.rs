@@ -508,7 +508,9 @@ async fn an_internal_topic_refuses_a_trim() {
         ("orders", 4, codes::NONE, 4),
     ];
     for (topic, low_watermark, error_code, log_start) in cases {
-        broker_handle.wait_until_partition_present(topic, 0).await;
+        broker_handle
+            .wait_until_local_partition_leader(topic, 0, broker.config.node_id)
+            .await;
         let part = broker
             .partitions
             .get(topic, krabka_ids::PartitionIndex(0))
