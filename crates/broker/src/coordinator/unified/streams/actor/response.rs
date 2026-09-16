@@ -18,7 +18,7 @@ use crate::{
     codes,
     coordinator::unified::streams::{
         config::StreamsGroupConfig, persistence::StreamsGroupTopologyValue,
-        state::StreamsGroupState,
+        state::StreamsGroupState, topology::status as topo_status,
     },
 };
 
@@ -65,21 +65,36 @@ pub(super) fn build_assignment_resp(
         .members
         .get(member_id)
         .expect("member exists at build_assignment_resp");
-    let status = if state.status.is_empty() {
-        None
-    } else {
-        Some(
-            state
-                .status
-                .iter()
-                .map(|(code, detail)| Status {
-                    status_code: *code,
-                    status_detail: detail.clone(),
-                    ..Default::default()
-                })
-                .collect(),
-        )
+    // Kafka builds the list on every heartbeat, in this order, and sends it
+    // also when it is empty: the Streams client keeps the last list it saw
+    // when the list is null.
+    let status_entry = |status_code: i8, status_detail: String| Status {
+        status_code,
+        status_detail,
+        ..Default::default()
     };
+    let mut status = Vec::new();
+    if state.topology.is_some() && m.topology_epoch < state.topology_epoch {
+        status.push(status_entry(
+            topo_status::STALE_TOPOLOGY,
+            format!(
+                "The member's topology epoch {} is behind the group's topology epoch {}.",
+                m.topology_epoch, state.topology_epoch
+            ),
+        ));
+    }
+    if let Some((code, detail)) = &state.status {
+        status.push(status_entry(*code, detail.clone()));
+    }
+    if let Some(requester) = &state.shutdown_request_member_id {
+        status.push(status_entry(
+            topo_status::SHUTDOWN_APPLICATION,
+            format!(
+                "Streams group member {requester} encountered a fatal error and requested a \
+                 shutdown for the entire application."
+            ),
+        ));
+    }
     StreamsGroupHeartbeatResponse {
         error_code: codes::NONE,
         member_id: member_id.to_string(),
@@ -87,7 +102,7 @@ pub(super) fn build_assignment_resp(
         heartbeat_interval_ms: duration_ms(config.heartbeat_interval, 5_000),
         acceptable_recovery_lag: i32::try_from(config.acceptable_recovery_lag).unwrap_or(i32::MAX),
         task_offset_interval_ms: duration_ms(config.task_offset_interval, 30_000),
-        status,
+        status: Some(status),
         active_tasks: Some(map_to_task_ids(&m.active)),
         standby_tasks: Some(map_to_task_ids(&m.standby)),
         warmup_tasks: Some(map_to_task_ids(&m.warmup)),
