@@ -148,7 +148,6 @@ impl TxnCoordinator {
     pub(crate) async fn complete_prepared_transaction(
         &self,
         transactional_id: &str,
-        txnv: TxnVersion,
     ) -> CompletionAttempt {
         if !self.is_coordinator_for(transactional_id).await {
             return CompletionAttempt::NothingToComplete;
@@ -160,6 +159,11 @@ impl TxnCoordinator {
         let Some((marker, complete)) = completion_for(prepared.state) else {
             return CompletionAttempt::NothingToComplete;
         };
+        // Kafka completes a prepared transaction with the
+        // `transaction.version` it was prepared under
+        // (`TransactionLogValue.ClientTransactionVersion`), not with the level
+        // the cluster runs now.
+        let txnv = TxnVersion::from_level(prepared.client_transaction_version);
         if let Err(error) = self.dispatch_transaction_markers(&prepared, marker).await {
             warn!(
                 tid = transactional_id,
