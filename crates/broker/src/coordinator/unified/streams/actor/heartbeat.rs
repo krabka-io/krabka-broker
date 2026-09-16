@@ -78,6 +78,10 @@ pub(super) async fn handle_heartbeat(
     let now = Instant::now();
     let now_ms = chrono_now_ms();
 
+    if let Some(resp) = changelog_partition_count_error(req) {
+        return Ok(resp);
+    }
+
     // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
         return handle_leave(
@@ -100,6 +104,9 @@ pub(super) async fn handle_heartbeat(
     if req.member_epoch == 0 && !actor.state.members.contains_key(&req.member_id) {
         if actor.state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
+        }
+        if let Some(resp) = topology_error(actor, req, metadata_source) {
+            return Ok(resp);
         }
         let new_member_id = first_join_member_id(&req.member_id);
         let m = build_member(&new_member_id, req, client_id, client_host, now);
@@ -155,6 +162,9 @@ pub(super) async fn handle_heartbeat(
             Ok(epoch) => epoch,
             Err(error_code) => return Ok(error_resp(error_code, config)),
         };
+    if let Some(resp) = topology_error(actor, req, metadata_source) {
+        return Ok(resp);
+    }
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
@@ -211,6 +221,64 @@ pub(super) async fn handle_heartbeat(
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
     Ok(build_assignment_resp(&actor.state, &req.member_id, config))
+}
+
+/// Kafka's `GroupCoordinatorService.throwIfInvalidTopology`, which runs on a
+/// joining heartbeat before the coordinator: a changelog topic must leave its
+/// partition count undefined, because the coordinator decides it.
+fn changelog_partition_count_error(
+    req: &StreamsGroupHeartbeatRequest,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    if req.member_epoch != 0 {
+        return None;
+    }
+    let topic = req
+        .topology
+        .iter()
+        .flat_map(|topology| topology.subtopologies.iter())
+        .flat_map(|subtopology| subtopology.state_changelog_topics.iter())
+        .find(|topic| topic.partitions != 0)?;
+    Some(StreamsGroupHeartbeatResponse {
+        error_code: codes::STREAMS_INVALID_TOPOLOGY,
+        error_message: Some(format!(
+            "Changelog topic {} must have an undefined partition count, but it is set to {}.",
+            topic.name, topic.partitions
+        )),
+        ..Default::default()
+    })
+}
+
+/// The error response for a topology that Kafka's `configureTopics` refuses
+/// against the current metadata image, or `None` when the topology can be
+/// configured.
+///
+/// The topology is the one that this heartbeat leaves the group with: the
+/// topology of the request when the group has none or an older one, else the
+/// topology of the group. Kafka configures the topology inside the heartbeat
+/// and answers the exception with its code and message, and it writes nothing.
+fn topology_error(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    let source = metadata_source?;
+    let from_request = req
+        .topology
+        .as_ref()
+        .filter(|wire| {
+            actor
+                .topology
+                .as_ref()
+                .is_none_or(|group| wire.epoch > group.epoch)
+        })
+        .map(topology::to_stored_topology);
+    let topology = from_request.as_ref().or(actor.topology.as_ref())?;
+    let error = topology::configure_topics(topology, &source.current_image()).err()?;
+    Some(StreamsGroupHeartbeatResponse {
+        error_code: error.error_code(),
+        error_message: error.error_message(),
+        ..Default::default()
+    })
 }
 
 /// Marks the group for a reconcile when a topic that the topology needs
