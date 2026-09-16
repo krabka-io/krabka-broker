@@ -1,0 +1,102 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 206 0 206 97 *)
+
+let%span sstorage = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 207 18 207 19
+let%span sstorage'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 208 28 208 29
+let%span sstorage'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 221 18 221 19
+let%span sstorage'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 221 33 221 34
+let%span sstorage'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 223 26 223 27
+let%span sstorage'4 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 223 42 223 43
+let%span sstorage'5 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 223 58 223 59
+let%span sstorage'6 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 225 25 225 26
+let%span sstorage'7 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 225 40 225 41
+let%span sstorage'8 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 189 10 201 1
+let%span sstorage'9 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 202 10 202 69
+let%span sstorage'10 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 203 10 204 58
+
+use creusot.int.UInt8
+use creusot.prelude.Any
+
+type t_RemoteCacheAction = Reject | Noop | StoreFinished | StoreHidden | Remove
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_cache_action [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/storage.rs" 206 0 206 97]
+  (current': UInt8.t) (target: UInt8.t) (exact_retry: bool) (return (x: t_RemoteCacheAction)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- current' = ([%#sstorage] (0: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb5) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_17 <- target = ([%#sstorage'0] (4: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb3) | br1 -> {_17} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- Noop ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_20 <- current' = target ] s1 | s1 = any [ br0 -> {_20 = false} (! bb7) | br1 -> {_20} (! bb6) ] ]
+  | bb6 = any [ br0 -> {exact_retry = false} (! bb9) | br1 -> {exact_retry} (! bb8) ]
+  | bb8 = s0 [ s0 = [ &_ret <- Noop ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_25 <- current' = ([%#sstorage'1] (1: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb15) | br1 -> {_25} (! bb11) ] ]
+  | bb11 = s0
+    [ s0 = [ &_27 <- target = ([%#sstorage'2] (2: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb15) | br1 -> {_27} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- StoreFinished ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_29 <- current' = ([%#sstorage'3] (1: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb17) | br1 -> {_29} (! bb19) ] ]
+  | bb17 = s0
+    [ s0 = [ &_31 <- current' = ([%#sstorage'4] (2: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb23) | br1 -> {_31} (! bb19) ] ]
+  | bb19 = s0
+    [ s0 = [ &_33 <- target = ([%#sstorage'5] (3: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_33 = false} (! bb23) | br1 -> {_33} (! bb20) ] ]
+  | bb20 = s0 [ s0 = [ &_ret <- StoreHidden ] s1 | s1 = return {_ret} ]
+  | bb23 = s0
+    [ s0 = [ &_35 <- current' = ([%#sstorage'6] (3: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_35 = false} (! bb28) | br1 -> {_35} (! bb24) ] ]
+  | bb24 = s0
+    [ s0 = [ &_37 <- target = ([%#sstorage'7] (4: UInt8.t)) ] s1
+    | s1 = any [ br0 -> {_37 = false} (! bb28) | br1 -> {_37} (! bb25) ] ]
+  | bb25 = s0 [ s0 = [ &_ret <- Remove ] s1 | s1 = return {_ret} ]
+  | bb28 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RemoteCacheAction = Any.any_l ()
+  | & current': UInt8.t = current'
+  | & target: UInt8.t = target
+  | & exact_retry: bool = exact_retry
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _33: bool = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _37: bool = Any.any_l () ])
+  [ return (result: t_RemoteCacheAction) ->
+  {[@stop_split] [@expl:remote_cache_action ensures] ([@stop_split] [@expl:remote_cache_action ensures #0] [%#sstorage'8] result
+      = (if UInt8.t'int current' = 0 then
+        if UInt8.t'int target = 4 then Noop else Reject
+      else
+        if UInt8.t'int current' = UInt8.t'int target then
+          if exact_retry then Noop else Reject
+        else
+          if UInt8.t'int current' = 1 /\ UInt8.t'int target = 2 then
+            StoreFinished
+          else
+            if (UInt8.t'int current' = 1 \/ UInt8.t'int current' = 2) /\ UInt8.t'int target = 3 then
+              StoreHidden
+            else
+              if UInt8.t'int current' = 3 /\ UInt8.t'int target = 4 then Remove else Reject
+          
+        
+      
+      ))
+    /\ ([@stop_split] [@expl:remote_cache_action ensures #1] [%#sstorage'9] result = StoreFinished
+      -> UInt8.t'int target = 2)
+    /\ ([@stop_split] [@expl:remote_cache_action ensures #2] [%#sstorage'10] UInt8.t'int current' = 0
+    -> result = Reject \/ UInt8.t'int target = 4 /\ result = Noop)}
+    (! return {result}) ]

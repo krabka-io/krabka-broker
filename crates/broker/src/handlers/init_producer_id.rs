@@ -157,6 +157,11 @@ pub(crate) async fn handle(
             if req.keep_prepared_txn && (req.producer_id != -1 || req.producer_epoch != -1) {
                 return encode_err(version, codes::INVALID_REQUEST);
             }
+            // Kafka `KafkaApis.handleInitProducerIdRequest`: a request carries
+            // both halves of the producer identity or neither.
+            if (req.producer_id == -1) != (req.producer_epoch == -1) {
+                return encode_err(version, codes::INVALID_REQUEST);
+            }
             // Kafka validates the timeout before the coordinator lookup, so a
             // broker that does not coordinate the id answers the same code.
             let txn_timeout = match crate::txn::two_pc::resolve_txn_timeout(
@@ -238,7 +243,19 @@ pub(crate) async fn handle(
         }
     };
 
-    crate::handlers::encode_response(&resp, version)
+    crate::handlers::encode_response(&downgrade_producer_fenced(resp, version), version)
+}
+
+/// Kafka `KafkaApis.handleInitProducerIdRequest`: a client below version 4
+/// does not know `PRODUCER_FENCED`, so it gets `INVALID_PRODUCER_EPOCH`.
+fn downgrade_producer_fenced(
+    mut response: InitProducerIdResponse,
+    version: i16,
+) -> InitProducerIdResponse {
+    if version < 4 && response.error_code == codes::PRODUCER_FENCED {
+        response.error_code = codes::INVALID_PRODUCER_EPOCH;
+    }
+    response
 }
 
 fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
@@ -249,5 +266,5 @@ fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
         producer_epoch: -1,
         ..Default::default()
     };
-    crate::handlers::encode_response(&resp, version)
+    crate::handlers::encode_response(&downgrade_producer_fenced(resp, version), version)
 }

@@ -1,0 +1,17 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 10 27 10 32 *)
+
+(* <reconfiguration::VoterChangeKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_VoterChangeKind [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 10 27 10 32]
+  (self: t_VoterChangeKind) (return (x: t_VoterChangeKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterChangeKind = Any.any_l () | & self: t_VoterChangeKind = self ])
+  [ return (result: t_VoterChangeKind) -> (! return {result}) ]

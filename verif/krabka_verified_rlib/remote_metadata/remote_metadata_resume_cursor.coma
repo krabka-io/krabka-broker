@@ -1,0 +1,58 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 205 0 205 73 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sremote_metadata = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 206 19 206 21
+let%span sremote_metadata'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 209 26 209 27
+let%span sremote_metadata'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 209 4 209 28
+let%span sremote_metadata'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 198 12 201 5
+let%span sremote_metadata'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 203 10 203 69
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_metadata_resume_cursor [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 205 0 205 73]
+  (committed: Int64.t) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- Int64.lt committed ([%#sremote_metadata] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = checked_add [%#sremote_metadata'1] {committed} {[%#sremote_metadata'0] (1: Int64.t)}
+        (fun (_x: t_Option_i64) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l () | & committed: Int64.t = committed | & _6: bool = Any.any_l () ])
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:remote_metadata_resume_cursor ensures] ([@stop_split] [@expl:remote_metadata_resume_cursor ensures #0] [%#sremote_metadata'2] match result with
+        | Some cursor -> - 1 <= Int64.to_int committed
+        /\ Int64.to_int committed < Int64.to_int const_MAX /\ Int64.to_int cursor = Int64.to_int committed + 1
+        | None -> Int64.to_int committed < - 1 \/ Int64.to_int committed = Int64.to_int const_MAX
+        end)
+    /\ ([@stop_split] [@expl:remote_metadata_resume_cursor ensures #1] [%#sremote_metadata'3] forall cursor: Int64.t. result
+        = Some cursor -> 0 <= Int64.to_int cursor)}
+    (! return {result}) ]

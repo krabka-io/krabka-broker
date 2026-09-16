@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_exact_wal_batch_suffix": { "prover": "alt-ergo", "time": 0.011 }
+    }
+  }
+}

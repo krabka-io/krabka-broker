@@ -1,0 +1,39 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 29 27 29 32 *)
+
+(* <reconfiguration::VoterReconfigurationDecision as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.int.UInt16
+use creusot.prelude.Any
+
+type t_VoterReconfigurationPlan = {
+  next_voter_count: UInt64.t;
+  next_kraft_version: UInt16.t;
+  write_voters: bool;
+  write_kraft_version: bool;
+  preflight_only: bool }
+
+type t_VoterReconfigurationDecision =
+  | NotLeader
+  | InProgress
+  | EpochUncommitted
+  | EmptyCurrentVoterSet
+  | UnsupportedKraftVersion
+  | DuplicateVoter
+  | IncompatibleVoter
+  | VoterNotCaughtUp
+  | VoterNotFound
+  | DirectoryMismatch
+  | LastVoter
+  | InvalidVersionTransition
+  | Admit t_VoterReconfigurationPlan
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_VoterReconfigurationDecision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 29 27 29 32]
+  (self: t_VoterReconfigurationDecision) (return (x: t_VoterReconfigurationDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterReconfigurationDecision = Any.any_l () | & self: t_VoterReconfigurationDecision = self ])
+  [ return (result: t_VoterReconfigurationDecision) -> (! return {result}) ]

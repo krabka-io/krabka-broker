@@ -1,0 +1,24 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 19 27 19 32 *)
+
+(* <reconfiguration::VoterReconfigurationPlan as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.int.UInt16
+use creusot.prelude.Any
+
+type t_VoterReconfigurationPlan = {
+  next_voter_count: UInt64.t;
+  next_kraft_version: UInt16.t;
+  write_voters: bool;
+  write_kraft_version: bool;
+  preflight_only: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_VoterReconfigurationPlan [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 19 27 19 32]
+  (self: t_VoterReconfigurationPlan) (return (x: t_VoterReconfigurationPlan)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterReconfigurationPlan = Any.any_l () | & self: t_VoterReconfigurationPlan = self ])
+  [ return (result: t_VoterReconfigurationPlan) -> (! return {result}) ]

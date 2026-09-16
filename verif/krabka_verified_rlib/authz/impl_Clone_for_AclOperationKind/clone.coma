@@ -1,0 +1,29 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/authz.rs" 27 27 27 32 *)
+
+(* <authz::AclOperationKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_AclOperationKind =
+  | All
+  | Read
+  | Write
+  | Create
+  | Delete
+  | Alter
+  | Describe
+  | ClusterAction
+  | DescribeConfigs
+  | AlterConfigs
+  | IdempotentWrite
+  | TwoPhaseCommit
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_AclOperationKind [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/authz.rs" 27 27 27 32]
+  (self: t_AclOperationKind) (return (x: t_AclOperationKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AclOperationKind = Any.any_l () | & self: t_AclOperationKind = self ])
+  [ return (result: t_AclOperationKind) -> (! return {result}) ]

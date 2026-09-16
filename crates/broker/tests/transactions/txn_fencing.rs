@@ -90,10 +90,12 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
     let cases = [
         case("no identity supplied", None, 0),
         case("the live identity", Some((0, 0)), 0),
-        case("a stale epoch", Some((0, -1)), 90),
+        // Kafka refuses half an identity with INVALID_REQUEST, whatever the
+        // entry holds (`KafkaApis.handleInitProducerIdRequest`).
+        case("no epoch", Some((0, -1)), 42),
         case("an unreached epoch", Some((0, 1)), 90),
         case("another producer id", Some((1, 0)), 90),
-        case("another producer id at a stale epoch", Some((1, -1)), 90),
+        case("another producer id and no epoch", Some((1, -1)), 42),
     ];
 
     for (index, case) in cases.into_iter().enumerate() {
@@ -132,7 +134,7 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
         if expected != 0 {
             assert!(
                 (response.producer_id, response.producer_epoch) == (-1, -1),
-                "a fenced InitProducerId returns no identity: {response:?}"
+                "a refused InitProducerId returns no identity: {response:?}"
             );
         }
     }

@@ -1,0 +1,18 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/opa.rs" 27 27 27 32 *)
+
+(* <opa::OpaCacheExpiry as std::clone::Clone> *)
+
+use creusot.int.Int128
+use creusot.prelude.Any
+
+type t_OpaCacheExpiry = DoNotCache | CacheUntil Int128.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OpaCacheExpiry [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/opa.rs" 27 27 27 32]
+  (self: t_OpaCacheExpiry) (return (x: t_OpaCacheExpiry)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OpaCacheExpiry = Any.any_l () | & self: t_OpaCacheExpiry = self ])
+  [ return (result: t_OpaCacheExpiry) -> (! return {result}) ]
