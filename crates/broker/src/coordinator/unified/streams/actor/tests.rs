@@ -54,6 +54,25 @@ fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     (coord, log)
 }
 
+/// The member ids that the group holds, sorted.
+async fn describe_member_ids(handle: &StreamsGroupActorHandle) -> Vec<String> {
+    let (tx, rx) = oneshot::channel();
+    handle
+        .tx
+        .send(StreamsGroupActorMessage::Describe { reply: tx })
+        .await
+        .unwrap();
+    let mut ids: Vec<String> = rx
+        .await
+        .unwrap()
+        .members
+        .into_iter()
+        .map(|member| member.member_id)
+        .collect();
+    ids.sort();
+    ids
+}
+
 async fn heartbeat(
     handle: &StreamsGroupActorHandle,
     req: StreamsGroupHeartbeatRequest,
@@ -1575,8 +1594,19 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
             let m1 = heartbeat(&handle, request("m1", 1, Some(&[0]))).await;
             check!(m1 == accepted("m1", 2, None), "{name}");
         }
-        // Give a 50 ms rebalance timeout time to fire.
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // A row whose member never revokes within its rebalance timeout waits
+        // for the fence, which the actor runs at the deadline.
+        if rebalance_timeout_ms < 1_000 {
+            for _ in 0..100 {
+                if !describe_member_ids(&handle)
+                    .await
+                    .contains(&"m1".to_string())
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
 
         let owned_by_m1: &[i32] = if revokes { &[0] } else { &[0, 1] };
         let m1_epoch = if revokes { 2 } else { 1 };
