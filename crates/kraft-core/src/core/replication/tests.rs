@@ -624,7 +624,10 @@ fn check_quorum_expiry_resigns_the_leader() {
     assert2::assert!(
         actions
             == vec![
-                Action::SendEndQuorumEpoch { epoch: 1 },
+                Action::SendEndQuorumEpoch {
+                    epoch: 1,
+                    preferred_successors: vec![NodeId(2), NodeId(3)],
+                },
                 Action::PersistQuorumState,
                 Action::TransitionedTo("Resigned"),
                 Action::ResetTimer {
@@ -836,7 +839,10 @@ fn a_removed_leader_resigns_into_observer_discovery() {
     assert2::assert!(
         actions
             == vec![
-                Action::SendEndQuorumEpoch { epoch: 1 },
+                Action::SendEndQuorumEpoch {
+                    epoch: 1,
+                    preferred_successors: vec![NodeId(2), NodeId(3)],
+                },
                 Action::PersistQuorumState,
                 Action::TransitionedTo("Observer"),
                 Action::ResetTimer {
@@ -900,4 +906,31 @@ fn an_observer_whose_fetches_time_out_looks_for_the_current_leader() {
             }
     );
     assert2::assert!((m.quorum_state().leader_id, m.quorum_state().leader_epoch) == (None, 1));
+}
+
+/// A resigning leader ranks the other voters by the fetch offsets it
+/// validated. A divergent fetch moves no progress, so it cannot promote a
+/// lagging voter.
+#[test]
+fn a_resigning_leader_ranks_successors_by_validated_progress() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
+    let log = FakeLog {
+        end: 10,
+        last_epoch: 1,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    assert2::assert!(m.role().is_leader());
+    for (from, fetch_epoch, fetch_offset) in [(3, 1, 10), (2, 1, 4), (4, 7, 20)] {
+        m.on_event(
+            Event::ReceiveFetch {
+                from: NodeId(from),
+                fetch_epoch,
+                fetch_offset,
+            },
+            &log,
+            SimInstant(2100),
+        );
+    }
+
+    assert2::assert!(m.preferred_successors() == vec![NodeId(3), NodeId(2), NodeId(4)]);
 }
