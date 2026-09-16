@@ -46,6 +46,8 @@ fn only_a_prepare_state_has_a_completion() {
 fn prepared_entry(state: TxnState) -> TxnEntry {
     let mut entry = TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), 4, 60_000, 0);
     entry.state = state;
+    // Every append stamps the client's transaction version on the record.
+    entry.client_transaction_version = 2;
     entry.partitions.insert(TopicPartition {
         topic: DATA_TOPIC.to_owned(),
         partition: PartitionIndex(0),
@@ -73,6 +75,9 @@ fn completion_adopts_the_staged_identity_and_clears_the_transaction() {
             state: TxnState::CompleteCommit,
             prev_producer_id,
             last_update_ms: 77,
+            // The completion keeps the transaction version of the record it
+            // completes.
+            client_transaction_version: 2,
             ..TxnEntry::new_empty(TID.to_owned(), identity.0, identity.1, 60_000, 0)
         };
         check!(entry == expected, "{label}");
@@ -254,9 +259,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
     for case in cases {
         let (coordinator, _dir) =
             coordinator(case.entry.clone(), case.leader, case.with_data_partition).await;
-        let attempt = coordinator
-            .complete_prepared_transaction(TID, TxnVersion::Verified)
-            .await;
+        let attempt = coordinator.complete_prepared_transaction(TID).await;
         check!(attempt == case.attempt, "{}", case.name);
         let after = current(&coordinator).await;
         check!(

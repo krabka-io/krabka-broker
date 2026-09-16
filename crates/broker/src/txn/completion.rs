@@ -59,14 +59,13 @@ pub(crate) async fn complete_once(
     queued: BTreeSet<String>,
 ) -> BTreeSet<String> {
     let image = controller.current_image();
-    let txnv = crate::txn::version::resolve_txn_version(&image);
     // A load queues its own `Prepare*` transactions when it ends, so the task
     // does not wait for the loads it starts.
     drop(coordinator.refresh_leader_partitions(&image).await);
     let mut retry = BTreeSet::new();
     for transactional_id in queued {
         if coordinator
-            .complete_prepared_transaction(&transactional_id, txnv)
+            .complete_prepared_transaction(&transactional_id)
             .await
             == CompletionAttempt::Retry
         {

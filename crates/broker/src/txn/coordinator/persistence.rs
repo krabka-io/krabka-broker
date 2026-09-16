@@ -68,6 +68,16 @@ impl TxnCoordinator {
         entry: TxnEntry,
         txnv: crate::txn::version::TxnVersion,
     ) -> Result<(), BrokerError> {
+        let mut entry = entry;
+        // Kafka writes the client's transaction version with the record
+        // (`TransactionLogValue.ClientTransactionVersion`). It is `TV_2` for a
+        // client on the version-2 protocol, where completion bumps the epoch,
+        // and `TV_0` otherwise.
+        entry.client_transaction_version = if txnv.verified() {
+            crate::txn::version::TxnVersion::Verified.level()
+        } else {
+            0
+        };
         let tid = entry.transactional_id.clone();
         let p = self.partition_for(&tid);
         let generation = self.loaded_generation(p).await?;
@@ -79,7 +89,7 @@ impl TxnCoordinator {
 
         // Byte-exact Kafka TransactionLogKey(v0) + TransactionLogValue(v0/v1).
         let key = crate::txn::log_record::encode_key(&tid);
-        let value = crate::txn::log_record::encode_value(&entry, txnv.flexible_records());
+        let value = crate::txn::log_record::encode_value(&entry, txnv);
 
         let mut batch = RecordBatch::default();
         batch.records.push(Record {

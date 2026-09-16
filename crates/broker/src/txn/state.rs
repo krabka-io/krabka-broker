@@ -109,6 +109,10 @@ pub struct TxnEntry {
     pub has_failed_epoch_fence: bool,
     pub last_update_ms: i64,
     pub start_ms: i64,
+    /// `TransactionLogValue.ClientTransactionVersion`: the
+    /// `transaction.version` level the last record of this transaction was
+    /// written under. A reloaded `Prepare*` transaction completes with it.
+    pub client_transaction_version: i16,
 }
 
 impl TxnEntry {
@@ -144,6 +148,7 @@ impl TxnEntry {
             has_failed_epoch_fence: false,
             last_update_ms: now_ms,
             start_ms: -1,
+            client_transaction_version: 0,
         }
     }
 }

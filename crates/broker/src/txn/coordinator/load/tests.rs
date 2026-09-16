@@ -71,6 +71,8 @@ fn coordinator(node: NodeId, partitions: &Arc<PartitionRegistry>) -> Arc<TxnCoor
 fn prepared_entry() -> TxnEntry {
     let mut entry = TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), 4, 60_000, 0);
     entry.state = TxnState::PrepareCommit;
+    // Every append stamps the client's transaction version on the record.
+    entry.client_transaction_version = 2;
     entry.partitions.insert(TopicPartition {
         topic: "orders".to_owned(),
         partition: P0,
@@ -225,7 +227,7 @@ async fn a_failed_load_answers_not_coordinator() {
     let mut batch = krabka_protocol::records::RecordBatch::default();
     batch.records.push(krabka_protocol::records::Record {
         key: Some(crate::txn::log_record::encode_key(&misplaced).into()),
-        value: Some(crate::txn::log_record::encode_value(&entry, true).into()),
+        value: Some(crate::txn::log_record::encode_value(&entry, TxnVersion::Verified).into()),
         ..Default::default()
     });
     part.produce_batch(batch).await.expect("append");

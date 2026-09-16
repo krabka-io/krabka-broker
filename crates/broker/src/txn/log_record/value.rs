@@ -33,6 +33,7 @@ const TAG_PREV_PRODUCER_ID: u32 = 0;
 const TAG_NEXT_PRODUCER_ID: u32 = 1;
 const TAG_CLIENT_TXN_VERSION: u32 = 2;
 const TAG_NEXT_PRODUCER_EPOCH: u32 = 3;
+const TAG_LAST_PRODUCER_EPOCH: u32 = 4;
 
 /// Kafka's tagged-field default for the producer-id bookkeeping fields.
 const PRODUCER_ID_NONE: i64 = -1;
@@ -59,13 +60,13 @@ fn group_partitions(partitions: &HashSet<TopicPartition>) -> Vec<(&str, Vec<i32>
         .collect()
 }
 
-/// Encode the Kafka `TransactionLogValue`.
+/// Encode the Kafka `TransactionLogValue` at `txnv`.
 ///
-/// When `flexible` is true, the function selects v1, the flexible form, for
-/// `TV_1`, `TV_2`, and `TV_3`. When it is false, the function selects v0, the
-/// non-flexible form, for `TV_0`. The output is deterministic: the function
-/// groups and sorts the partitions before it encodes them.
-pub(crate) fn encode_value(entry: &TxnEntry, flexible: bool) -> Vec<u8> {
+/// `TV_1` and above select v1, the flexible form; `TV_0` selects v0, the
+/// non-flexible form. The output is deterministic: the function groups and
+/// sorts the partitions before it encodes them.
+pub(crate) fn encode_value(entry: &TxnEntry, txnv: crate::txn::version::TxnVersion) -> Vec<u8> {
+    let flexible = txnv.flexible_records();
     let version: i16 = i16::from(flexible);
     let mut buf = BytesMut::new();
 
@@ -75,9 +76,10 @@ pub(crate) fn encode_value(entry: &TxnEntry, flexible: bool) -> Vec<u8> {
     put_i32(&mut buf, entry.txn_timeout_ms);
     put_i8(&mut buf, entry.state.to_kafka_status());
 
-    // TransactionPartitions: nullable array; empty -> null.
+    // TransactionPartitions: `TransactionLog.serializeValue` writes null only
+    // for an `Empty` transaction, and an empty array in every other state.
     let groups = group_partitions(&entry.partitions);
-    if groups.is_empty() {
+    if entry.state == TxnState::Empty {
         put_nullable_array_len(&mut buf, None, flexible);
     } else {
         put_nullable_array_len(&mut buf, Some(groups.len()), flexible);
@@ -102,11 +104,16 @@ pub(crate) fn encode_value(entry: &TxnEntry, flexible: bool) -> Vec<u8> {
     put_i64(&mut buf, entry.last_update_ms);
     put_i64(&mut buf, entry.start_ms);
 
-    // Top-level tagged-field section (v1 only). Emit prev/next producer ids
-    // only when non-default; ClientTransactionVersion is always its default 0
-    // (TxnEntry has no such field) and so is always omitted.
+    // Top-level tagged-field section (v1 only). Each tag is written only when
+    // it is not its Kafka default.
     if flexible {
         let mut tagged = WriteTaggedFields::new();
+        if entry.client_transaction_version != 0 {
+            tagged.add(
+                TAG_CLIENT_TXN_VERSION,
+                i16_to_bytes(entry.client_transaction_version),
+            );
+        }
         if !entry.prev_producer_id.is_none() {
             tagged.add(
                 TAG_PREV_PRODUCER_ID,
@@ -123,6 +130,12 @@ pub(crate) fn encode_value(entry: &TxnEntry, flexible: bool) -> Vec<u8> {
             tagged.add(
                 TAG_NEXT_PRODUCER_EPOCH,
                 i16_to_bytes(entry.next_producer_epoch),
+            );
+        }
+        if entry.last_producer_epoch != -1 {
+            tagged.add(
+                TAG_LAST_PRODUCER_EPOCH,
+                i16_to_bytes(entry.last_producer_epoch),
             );
         }
         tagged.write(&mut buf, &UnknownTaggedFields::default());
@@ -198,6 +211,8 @@ pub(crate) fn decode_value(
     let mut prev_producer_id = PRODUCER_ID_NONE;
     let mut next_producer_id = PRODUCER_ID_NONE;
     let mut next_producer_epoch = -1;
+    let mut last_producer_epoch = -1;
+    let mut client_transaction_version = 0;
     if flexible {
         read_tagged_fields(&mut buf, |tag, payload| match tag {
             TAG_PREV_PRODUCER_ID => {
@@ -208,13 +223,16 @@ pub(crate) fn decode_value(
                 next_producer_id = get_i64(payload)?;
                 Ok(true)
             }
-            // ClientTransactionVersion: recognised but not stored on TxnEntry.
             TAG_CLIENT_TXN_VERSION => {
-                let _ = get_i16(payload)?;
+                client_transaction_version = get_i16(payload)?;
                 Ok(true)
             }
             TAG_NEXT_PRODUCER_EPOCH => {
                 next_producer_epoch = get_i16(payload)?;
+                Ok(true)
+            }
+            TAG_LAST_PRODUCER_EPOCH => {
+                last_producer_epoch = get_i16(payload)?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -238,12 +256,13 @@ pub(crate) fn decode_value(
         prev_producer_id: ProducerId(prev_producer_id),
         next_producer_id: ProducerId(next_producer_id),
         next_producer_epoch,
-        // KIP-360 fencing state is in-memory only: `TransactionLogValue` has
-        // no field for it, so a replayed entry starts with no failed fence.
-        last_producer_epoch: -1,
+        last_producer_epoch,
+        // Whether the fence that recorded the last epoch failed is in-memory
+        // only, as in Kafka, so a replayed entry starts with no failed fence.
         has_failed_epoch_fence: false,
         last_update_ms,
         start_ms,
+        client_transaction_version,
     })
 }
 
@@ -252,6 +271,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
+    use crate::txn::version::TxnVersion;
 
     /// Real captured v1 record (`TV_1`, Ongoing, 48 bytes).
     #[rustfmt::skip]
@@ -293,6 +313,9 @@ mod tests {
             has_failed_epoch_fence: false,
             last_update_ms: SAMPLE_TS,
             start_ms: SAMPLE_TS,
+            // The captured record carries no ClientTransactionVersion, which
+            // is the TV_0 a client below the version-2 protocol sends.
+            client_transaction_version: 0,
         }
     }
 
@@ -319,7 +342,7 @@ mod tests {
 
     #[test]
     fn sample_bytes_encode_byte_identical() {
-        let encoded = encode_value(&sample_entry(), true);
+        let encoded = encode_value(&sample_entry(), TxnVersion::Flexible);
         assert!(
             encoded == SAMPLE,
             "encode_value did not byte-match SAMPLE\n  expected: {:02x?}\n  actual:   {:02x?}",
@@ -357,9 +380,10 @@ mod tests {
             has_failed_epoch_fence: false,
             last_update_ms: 1_234_567,
             start_ms: 1_000_000,
+            client_transaction_version: 2,
         };
 
-        let first = encode_value(&entry, true);
+        let first = encode_value(&entry, TxnVersion::Verified);
         let decoded = decode_value(&first, "tid".into()).unwrap();
 
         check!(decoded.producer_id == 42);
@@ -374,7 +398,7 @@ mod tests {
         check!(decoded.partitions == entry.partitions);
 
         // Re-encode is byte-identical (determinism).
-        let second = encode_value(&decoded, true);
+        let second = encode_value(&decoded, TxnVersion::Verified);
         assert!(first == second);
     }
 
@@ -401,9 +425,10 @@ mod tests {
             has_failed_epoch_fence: false,
             last_update_ms: 111,
             start_ms: 222,
+            client_transaction_version: 0,
         };
 
-        let encoded = encode_value(&entry, false);
+        let encoded = encode_value(&entry, TxnVersion::Classic);
         // version header is `00 00`.
         assert!(encoded[0] == 0x00 && encoded[1] == 0x00);
 
@@ -443,13 +468,14 @@ mod tests {
                 has_failed_epoch_fence: false,
                 last_update_ms: 1,
                 start_ms: 1,
+                client_transaction_version: 1,
             }
         };
 
         let a = make(&[("b", 2), ("a", 1), ("b", 0), ("a", 3)]);
         let b = make(&[("a", 3), ("b", 0), ("a", 1), ("b", 2)]);
-        assert!(encode_value(&a, true) == encode_value(&b, true));
-        assert!(encode_value(&a, false) == encode_value(&b, false));
+        assert!(encode_value(&a, TxnVersion::Flexible) == encode_value(&b, TxnVersion::Flexible));
+        assert!(encode_value(&a, TxnVersion::Classic) == encode_value(&b, TxnVersion::Classic));
     }
 
     #[test]
@@ -476,16 +502,85 @@ mod tests {
         assert!(decode_value(&extra, "t".into()).is_err());
     }
 
+    /// `TransactionLog.serializeValue` writes a null partition array only for
+    /// an `Empty` transaction, and an empty array in every other state. Both
+    /// decode back to an empty set.
     #[test]
-    fn empty_partitions_round_trips_as_null_both_versions() {
-        // An entry with no partitions encodes the array as null and decodes
-        // back to an empty set, for both v0 and v1.
-        let e = TxnEntry::new_empty("tid".into(), ProducerId(5), 0, 30_000, 100);
-        for flexible in [false, true] {
-            let bytes = encode_value(&e, flexible);
-            let decoded = decode_value(&bytes, "tid".into()).expect("decode");
-            assert!(decoded.partitions.is_empty());
-            assert!(decoded.producer_id == 5);
+    fn a_null_partition_array_is_written_only_for_an_empty_transaction() {
+        let mut entry = TxnEntry::new_empty("tid".into(), ProducerId(5), 0, 30_000, 100);
+        for txnv in [TxnVersion::Classic, TxnVersion::Verified] {
+            let flexible = txnv.flexible_records();
+            // The array length sits right after the one-byte status.
+            let length_at = 2 + 8 + 2 + 4 + 1;
+            entry.state = TxnState::Empty;
+            let empty = encode_value(&entry, txnv);
+            let null_length: &[u8] = if flexible {
+                &[0x00]
+            } else {
+                &[0xff, 0xff, 0xff, 0xff]
+            };
+            assert!(
+                &empty[length_at..length_at + null_length.len()] == null_length,
+                "{txnv:?}"
+            );
+            assert!(
+                decode_value(&empty, "tid".into())
+                    .expect("decode")
+                    .partitions
+                    .is_empty()
+            );
+
+            entry.state = TxnState::CompleteCommit;
+            let completed = encode_value(&entry, txnv);
+            let empty_length: &[u8] = if flexible {
+                &[0x01]
+            } else {
+                &[0x00, 0x00, 0x00, 0x00]
+            };
+            assert!(
+                &completed[length_at..length_at + empty_length.len()] == empty_length,
+                "{txnv:?}"
+            );
+            assert!(
+                decode_value(&completed, "tid".into())
+                    .expect("decode")
+                    .partitions
+                    .is_empty()
+            );
         }
+    }
+
+    /// `TransactionLog.serializeValue` writes `LastProducerEpoch` (tag 4) and
+    /// `ClientTransactionVersion` (tag 2) at value version 1, and the decoder
+    /// reads them back.
+    #[test]
+    fn the_v1_tagged_fields_round_trip() {
+        let mut entry = TxnEntry::new_empty("tid".into(), ProducerId(5), 9, 30_000, 100);
+        entry.state = TxnState::CompleteCommit;
+        entry.last_producer_epoch = 8;
+        entry.client_transaction_version = 2;
+
+        for txnv in [
+            TxnVersion::Flexible,
+            TxnVersion::Verified,
+            TxnVersion::TwoPhase,
+        ] {
+            let decoded = decode_value(&encode_value(&entry, txnv), "tid".into()).expect("decode");
+            assert!(decoded.last_producer_epoch == 8, "{txnv:?}");
+            assert!(decoded.client_transaction_version == 2, "{txnv:?}");
+        }
+
+        // v0 has no tagged section, so both fields come back at their default.
+        let decoded =
+            decode_value(&encode_value(&entry, TxnVersion::Classic), "tid".into()).expect("decode");
+        assert!(decoded.last_producer_epoch == -1);
+        assert!(decoded.client_transaction_version == 0);
+
+        // A default last epoch is not written.
+        entry.last_producer_epoch = -1;
+        let without = encode_value(&entry, TxnVersion::Flexible);
+        entry.last_producer_epoch = 8;
+        let with = encode_value(&entry, TxnVersion::Flexible);
+        assert!(with.len() > without.len());
     }
 }
