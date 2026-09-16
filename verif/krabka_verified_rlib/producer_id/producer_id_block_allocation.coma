@@ -1,0 +1,150 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 62 0 69 38 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sproducer_id = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 73 32 73 33
+let%span sproducer_id'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 74 37 74 38
+let%span sproducer_id'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 79 15 79 16
+let%span sproducer_id'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 79 33 79 34
+let%span sproducer_id'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 82 39 82 59
+let%span sproducer_id'4 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 82 21 82 60
+let%span sproducer_id'5 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 30 10 60 1
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_ProducerIdBlockPlan = { first: Int64.t; len: Int32.t; next: Int64.t }
+
+type t_ProducerIdBlockAllocationDecision =
+  | BrokerNotRegistered
+  | StaleBrokerEpoch
+  | InvalidFrontier
+  | Exhausted
+  | Allocate t_ProducerIdBlockPlan
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let producer_id_block_allocation [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 62 0 69 38]
+  (broker_id_valid: bool) (broker_registered: bool) (requested_broker_epoch: Int64.t) (registered_broker_epoch: Int64.t)
+  (first'0: Int64.t) (block_len: Int32.t) (return (x: t_ProducerIdBlockAllocationDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {broker_id_valid = false} (! bb2) | br1 -> {broker_id_valid} (! bb1) ]
+  | bb1 = any [ br0 -> {broker_registered = false} (! bb2) | br1 -> {broker_registered} (! bb3) ]
+  | bb3 = s0
+    [ s0 = [ &_19 <- Int64.lt requested_broker_epoch ([%#sproducer_id] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb5) | br1 -> {_19} (! bb10) ] ]
+  | bb5 = s0
+    [ s0 = [ &_21 <- Int64.lt registered_broker_epoch ([%#sproducer_id'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb7) | br1 -> {_21} (! bb10) ] ]
+  | bb7 = s0
+    [ s0 = [ &_23 <- requested_broker_epoch <> registered_broker_epoch ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb9) | br1 -> {_23} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- StaleBrokerEpoch ] s1 | s1 = return {_ret} ]
+  | bb9 = s0
+    [ s0 = [ &_28 <- Int64.lt first'0 ([%#sproducer_id'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_28 = false} (! bb12) | br1 -> {_28} (! bb15) ] ]
+  | bb12 = s0
+    [ s0 = [ &_30 <- Int32.le block_len ([%#sproducer_id'2] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_30 = false} (! bb14) | br1 -> {_30} (! bb15) ] ]
+  | bb15 = s0 [ s0 = [ &_ret <- InvalidFrontier ] s1 | s1 = return {_ret} ]
+  | bb14 = s0
+    [ s0 = from_i64 [%#sproducer_id'3] {block_len} (fun (_x: Int64.t) -> [ &_37 <- _x ] s1)
+    | s1 = checked_add [%#sproducer_id'4] {first'0} {_37} (fun (_x: t_Option_i64) -> [ &_35 <- _x ] s2)
+    | s2 = any [ br0 -> {_35 = None} (! bb20) | br1 (x0: Int64.t) -> {_35 = Some x0} (! bb19) ] ]
+  | bb20 = s0 [ s0 = [ &_ret <- Exhausted ] s1 | s1 = return {_ret} ]
+  | bb19 = s0
+    [ s0 = elim_Some {_35} (fun (r0: Int64.t) -> [ &next'0 <- r0 ] s1)
+    | s1 = [ &_40 <- { first = first'0; len = block_len; next = next'0 } ] s2
+    | s2 = [ &_ret <- Allocate _40 ] s3
+    | s3 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- BrokerNotRegistered ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProducerIdBlockAllocationDecision = Any.any_l ()
+  | & broker_id_valid: bool = broker_id_valid
+  | & broker_registered: bool = broker_registered
+  | & requested_broker_epoch: Int64.t = requested_broker_epoch
+  | & registered_broker_epoch: Int64.t = registered_broker_epoch
+  | & first'0: Int64.t = first'0
+  | & block_len: Int32.t = block_len
+  | & _19: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _30: bool = Any.any_l ()
+  | & next'0: Int64.t = Any.any_l ()
+  | & _35: t_Option_i64 = Any.any_l ()
+  | & _37: Int64.t = Any.any_l ()
+  | & _40: t_ProducerIdBlockPlan = Any.any_l () ])
+  [ return (result: t_ProducerIdBlockAllocationDecision) ->
+  {[@stop_split] [@expl:producer_id_block_allocation ensures] [%#sproducer_id'5] match result with
+      | BrokerNotRegistered -> not broker_id_valid \/ not broker_registered
+      | StaleBrokerEpoch -> broker_id_valid
+      /\ broker_registered
+      /\ (Int64.to_int requested_broker_epoch < 0
+      \/ Int64.to_int registered_broker_epoch < 0
+      \/ Int64.to_int requested_broker_epoch <> Int64.to_int registered_broker_epoch)
+      | InvalidFrontier -> broker_id_valid
+      /\ broker_registered
+      /\ ge_log_Int (Int64.to_int requested_broker_epoch) 0
+      /\ Int64.to_int requested_broker_epoch = Int64.to_int registered_broker_epoch
+      /\ (Int64.to_int first'0 < 0 \/ Int32.to_int block_len <= 0)
+      | Exhausted -> broker_id_valid
+      /\ broker_registered
+      /\ ge_log_Int (Int64.to_int requested_broker_epoch) 0
+      /\ Int64.to_int requested_broker_epoch = Int64.to_int registered_broker_epoch
+      /\ ge_log_Int (Int64.to_int first'0) 0
+      /\ gt_log_Int (Int32.to_int block_len) 0
+      /\ gt_log_Int (Int64.to_int first'0 + Int32.to_int block_len) (Int64.to_int const_MAX)
+      | Allocate plan -> broker_id_valid
+      /\ broker_registered
+      /\ ge_log_Int (Int64.to_int requested_broker_epoch) 0
+      /\ Int64.to_int requested_broker_epoch = Int64.to_int registered_broker_epoch
+      /\ Int64.to_int plan.first = Int64.to_int first'0
+      /\ Int32.to_int plan.len = Int32.to_int block_len
+      /\ Int64.to_int plan.next = Int64.to_int first'0 + Int32.to_int block_len
+      /\ ge_log_Int (Int64.to_int plan.first) 0
+      /\ gt_log_Int (Int32.to_int plan.len) 0
+      /\ Int64.to_int plan.first < Int64.to_int plan.next /\ Int64.to_int plan.next <= Int64.to_int const_MAX
+      end}
+    (! return {result}) ]

@@ -1,0 +1,180 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 178 0 182 45 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span stransaction = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 186 21 186 22
+let%span stransaction'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 187 28 187 29
+let%span stransaction'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 188 31 188 33
+let%span stransaction'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 189 36 189 38
+let%span stransaction'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 190 39 190 41
+let%span stransaction'4 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 191 65 191 67
+let%span stransaction'5 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 117 10 123 43
+let%span stransaction'6 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 124 10 131 35
+let%span stransaction'7 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 132 10 140 35
+let%span stransaction'8 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 141 10 151 36
+let%span stransaction'9 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 152 10 163 20
+let%span stransaction'10 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 164 10 176 48
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type tup3_i64_i16_i32 = { f0: Int64.t; f1: Int16.t; f2: Int32.t }
+
+type tup3_i16_i32_bool = { f0'0: Int16.t; f1'0: Int32.t; f2'0: bool }
+
+type tup2_bool_bool = { f0'1: bool; f1'1: bool }
+
+type t_TransactionMarkerMaterializationDecision =
+  | RejectMalformed
+  | RejectProducerEpoch
+  | RejectCoordinatorEpoch
+  | Retry
+  | AppendWithoutOffsetPublication
+  | AppendAndPublishOffsets
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_marker_materialization_decision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 178 0 182 45]
+  (request: tup3_i64_i16_i32) (current': tup3_i16_i32_bool) (marker: tup2_bool_bool)
+  (return (x: t_TransactionMarkerMaterializationDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &producer_id <- request.f0 ] s1
+    | s1 = [ &producer_epoch <- request.f1 ] s2
+    | s2 = [ &coordinator_epoch <- request.f2 ] s3
+    | s3 = [ &current_producer_epoch <- current'.f0'0 ] s4
+    | s4 = [ &current_coordinator_epoch <- current'.f1'0 ] s5
+    | s5 = [ &has_pending_transaction <- current'.f2'0 ] s6
+    | s6 = [ &is_commit <- marker.f0'1 ] s7
+    | s7 = [ &is_offsets_partition <- marker.f1'1 ] s8
+    | s8 = [ &_58 <- Int64.lt producer_id ([%#stransaction] (0: Int64.t)) ] s9
+    | s9 = any [ br0 -> {_58 = false} (! bb2) | br1 -> {_58} (! bb13) ] ]
+  | bb2 = s0
+    [ s0 = [ &_60 <- Int16.lt producer_epoch ([%#stransaction'0] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_60 = false} (! bb4) | br1 -> {_60} (! bb13) ] ]
+  | bb4 = s0
+    [ s0 = [ &_62 <- Int32.lt coordinator_epoch ([%#stransaction'1] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_62 = false} (! bb6) | br1 -> {_62} (! bb13) ] ]
+  | bb6 = s0
+    [ s0 = [ &_64 <- Int16.lt current_producer_epoch ([%#stransaction'2] (-1: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_64 = false} (! bb8) | br1 -> {_64} (! bb13) ] ]
+  | bb8 = s0
+    [ s0 = [ &_66 <- Int32.lt current_coordinator_epoch ([%#stransaction'3] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_66 = false} (! bb10) | br1 -> {_66} (! bb13) ] ]
+  | bb10 = any [ br0 -> {has_pending_transaction = false} (! bb15) | br1 -> {has_pending_transaction} (! bb11) ]
+  | bb11 = s0
+    [ s0 = [ &_69 <- current_producer_epoch = ([%#stransaction'4] (-1: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_69 = false} (! bb15) | br1 -> {_69} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_71 <- Int16.lt producer_epoch current_producer_epoch ] s1
+    | s1 = any [ br0 -> {_71 = false} (! bb17) | br1 -> {_71} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- RejectProducerEpoch ] s1 | s1 = return {_ret} ]
+  | bb17 = s0
+    [ s0 = [ &_74 <- Int32.lt coordinator_epoch current_coordinator_epoch ] s1
+    | s1 = any [ br0 -> {_74 = false} (! bb19) | br1 -> {_74} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- RejectCoordinatorEpoch ] s1 | s1 = return {_ret} ]
+  | bb19 = any [ br0 -> {has_pending_transaction = false} (! bb20) | br1 -> {has_pending_transaction} (! bb25) ]
+  | bb20 = s0
+    [ s0 = [ &_78 <- producer_epoch = current_producer_epoch ] s1
+    | s1 = any [ br0 -> {_78 = false} (! bb25) | br1 -> {_78} (! bb21) ] ]
+  | bb21 = s0
+    [ s0 = [ &_81 <- coordinator_epoch = current_coordinator_epoch ] s1
+    | s1 = any [ br0 -> {_81 = false} (! bb25) | br1 -> {_81} (! bb22) ] ]
+  | bb22 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb25 = any [ br0 -> {has_pending_transaction = false} (! bb29) | br1 -> {has_pending_transaction} (! bb26) ]
+  | bb26 = any [ br0 -> {is_commit = false} (! bb29) | br1 -> {is_commit} (! bb27) ]
+  | bb27 = any [ br0 -> {is_offsets_partition = false} (! bb29) | br1 -> {is_offsets_partition} (! bb28) ]
+  | bb28 = s0 [ s0 = [ &_ret <- AppendAndPublishOffsets ] s1 | s1 = return {_ret} ]
+  | bb29 = s0 [ s0 = [ &_ret <- AppendWithoutOffsetPublication ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionMarkerMaterializationDecision = Any.any_l ()
+  | & request: tup3_i64_i16_i32 = request
+  | & current': tup3_i16_i32_bool = current'
+  | & marker: tup2_bool_bool = marker
+  | & producer_id: Int64.t = Any.any_l ()
+  | & producer_epoch: Int16.t = Any.any_l ()
+  | & coordinator_epoch: Int32.t = Any.any_l ()
+  | & current_producer_epoch: Int16.t = Any.any_l ()
+  | & current_coordinator_epoch: Int32.t = Any.any_l ()
+  | & has_pending_transaction: bool = Any.any_l ()
+  | & is_commit: bool = Any.any_l ()
+  | & is_offsets_partition: bool = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & _60: bool = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _64: bool = Any.any_l ()
+  | & _66: bool = Any.any_l ()
+  | & _69: bool = Any.any_l ()
+  | & _71: bool = Any.any_l ()
+  | & _74: bool = Any.any_l ()
+  | & _78: bool = Any.any_l ()
+  | & _81: bool = Any.any_l () ])
+  [ return (result: t_TransactionMarkerMaterializationDecision) ->
+  {[@stop_split] [@expl:transaction_marker_materialization_decision ensures] ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #0] [%#stransaction'5] (result
+        = RejectMalformed)
+      = (Int64.to_int request.f0 < 0
+      \/ Int16.to_int request.f1 < 0
+      \/ Int32.to_int request.f2 < - 1
+      \/ Int16.to_int current'.f0'0 < - 1
+      \/ Int32.to_int current'.f1'0 < - 1 \/ current'.f2'0 /\ Int16.to_int current'.f0'0 = - 1))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #1] [%#stransaction'6] (result
+        = RejectProducerEpoch)
+      = (ge_log_Int (Int64.to_int request.f0) 0
+      /\ ge_log_Int (Int16.to_int request.f1) 0
+      /\ ge_log_Int (Int32.to_int request.f2) (- 1)
+      /\ ge_log_Int (Int16.to_int current'.f0'0) (- 1)
+      /\ ge_log_Int (Int32.to_int current'.f1'0) (- 1)
+      /\ (not current'.f2'0 \/ ge_log_Int (Int16.to_int current'.f0'0) 0)
+      /\ Int16.to_int request.f1 < Int16.to_int current'.f0'0))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #2] [%#stransaction'7] (result
+        = RejectCoordinatorEpoch)
+      = (ge_log_Int (Int64.to_int request.f0) 0
+      /\ ge_log_Int (Int16.to_int request.f1) 0
+      /\ ge_log_Int (Int32.to_int request.f2) (- 1)
+      /\ ge_log_Int (Int16.to_int current'.f0'0) (- 1)
+      /\ ge_log_Int (Int32.to_int current'.f1'0) (- 1)
+      /\ (not current'.f2'0 \/ ge_log_Int (Int16.to_int current'.f0'0) 0)
+      /\ ge_log_Int (Int16.to_int request.f1) (Int16.to_int current'.f0'0)
+      /\ Int32.to_int request.f2 < Int32.to_int current'.f1'0))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #3] [%#stransaction'8] (result = Retry)
+      = (ge_log_Int (Int64.to_int request.f0) 0
+      /\ ge_log_Int (Int16.to_int request.f1) 0
+      /\ ge_log_Int (Int32.to_int request.f2) (- 1)
+      /\ ge_log_Int (Int16.to_int request.f1) (Int16.to_int current'.f0'0)
+      /\ ge_log_Int (Int32.to_int request.f2) (Int32.to_int current'.f1'0)
+      /\ ge_log_Int (Int16.to_int current'.f0'0) (- 1)
+      /\ ge_log_Int (Int32.to_int current'.f1'0) (- 1)
+      /\ not current'.f2'0
+      /\ Int16.to_int request.f1 = Int16.to_int current'.f0'0 /\ Int32.to_int request.f2 = Int32.to_int current'.f1'0))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #4] [%#stransaction'9] (result
+        = AppendAndPublishOffsets)
+      = (ge_log_Int (Int64.to_int request.f0) 0
+      /\ ge_log_Int (Int16.to_int request.f1) 0
+      /\ ge_log_Int (Int32.to_int request.f2) (- 1)
+      /\ ge_log_Int (Int16.to_int current'.f0'0) (- 1)
+      /\ ge_log_Int (Int32.to_int current'.f1'0) (- 1)
+      /\ (not current'.f2'0 \/ ge_log_Int (Int16.to_int current'.f0'0) 0)
+      /\ ge_log_Int (Int16.to_int request.f1) (Int16.to_int current'.f0'0)
+      /\ ge_log_Int (Int32.to_int request.f2) (Int32.to_int current'.f1'0)
+      /\ current'.f2'0 /\ marker.f0'1 /\ marker.f1'1))
+    /\ ([@stop_split] [@expl:transaction_marker_materialization_decision ensures #5] [%#stransaction'10] (result
+      = AppendWithoutOffsetPublication)
+    = (ge_log_Int (Int64.to_int request.f0) 0
+    /\ ge_log_Int (Int16.to_int request.f1) 0
+    /\ ge_log_Int (Int32.to_int request.f2) (- 1)
+    /\ ge_log_Int (Int16.to_int current'.f0'0) (- 1)
+    /\ ge_log_Int (Int32.to_int current'.f1'0) (- 1)
+    /\ (not current'.f2'0 \/ ge_log_Int (Int16.to_int current'.f0'0) 0)
+    /\ ge_log_Int (Int16.to_int request.f1) (Int16.to_int current'.f0'0)
+    /\ ge_log_Int (Int32.to_int request.f2) (Int32.to_int current'.f1'0)
+    /\ not (not current'.f2'0
+      /\ Int16.to_int request.f1 = Int16.to_int current'.f0'0 /\ Int32.to_int request.f2 = Int32.to_int current'.f1'0)
+    /\ not (current'.f2'0 /\ marker.f0'1 /\ marker.f1'1)))}
+    (! return {result}) ]

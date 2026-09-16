@@ -1,0 +1,19 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/opa.rs" 19 27 19 32 *)
+
+(* <opa::OpaCacheAdmission as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_OpaAuthorizationDecision = Allow | Deny
+
+type t_OpaCacheAdmission = Miss | Hit t_OpaAuthorizationDecision
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OpaCacheAdmission [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/opa.rs" 19 27 19 32]
+  (self: t_OpaCacheAdmission) (return (x: t_OpaCacheAdmission)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OpaCacheAdmission = Any.any_l () | & self: t_OpaCacheAdmission = self ])
+  [ return (result: t_OpaCacheAdmission) -> (! return {result}) ]

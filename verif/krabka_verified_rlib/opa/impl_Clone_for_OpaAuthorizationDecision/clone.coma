@@ -1,0 +1,17 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/opa.rs" 11 27 11 32 *)
+
+(* <opa::OpaAuthorizationDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_OpaAuthorizationDecision = Allow | Deny
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OpaAuthorizationDecision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/opa.rs" 11 27 11 32]
+  (self: t_OpaAuthorizationDecision) (return (x: t_OpaAuthorizationDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OpaAuthorizationDecision = Any.any_l () | & self: t_OpaAuthorizationDecision = self ])
+  [ return (result: t_OpaAuthorizationDecision) -> (! return {result}) ]

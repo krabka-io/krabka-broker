@@ -1,0 +1,68 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/wal.rs" 15 0 21 9 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span swal = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/wal.rs" 14 10 14 29
+let%span swal'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/wal.rs" 12 11 12 37
+let%span swal'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/wal.rs" 13 11 13 45
+
+use creusot.int.Int64
+use seq.Seq
+use int.Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant bases : Seq.seq Int64.t
+
+constant lasts : Seq.seq Int64.t
+
+constant index : int
+
+constant expected : int
+
+constant target : int
+
+predicate exact_wal_batch_suffix [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/wal.rs" 15 0 21 9] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (index: int) (expected: int) (target: int)
+
+goal vc_exact_wal_batch_suffix: ([%#swal'0] Seq.length bases = Seq.length lasts)
+  -> ([%#swal'1] 0 <= index /\ index <= Seq.length bases)
+  -> (if index = Seq.length bases then
+    true
+  else
+    if Int64.to_int (Seq.get bases index) = expected then
+      if Int64.le (Seq.get bases index) (Seq.get lasts index) then
+        if Int64.lt (Seq.get lasts index) const_MAX then
+          ([@stop_split] [@expl:exact_wal_batch_suffix requires] ([@stop_split] [@expl:exact_wal_batch_suffix requires #0] [%#swal'0] Seq.length bases
+              = Seq.length lasts)
+            /\ ([@stop_split] [@expl:exact_wal_batch_suffix requires #1] [%#swal'1] 0 <= index + 1
+            /\ index + 1 <= Seq.length bases))
+          /\ ([@expl:variant decreases] well_founded_relation_Int ([%#swal] Seq.length bases
+          - index) ([%#swal] Seq.length bases - (index + 1)))
+        else
+          true
+      
+      else
+        true
+    
+    else
+      true
+  
+  )
