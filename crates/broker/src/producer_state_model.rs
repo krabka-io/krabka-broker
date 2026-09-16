@@ -57,6 +57,7 @@ fn entry_of(s: &ProdState) -> Option<ProducerEntry> {
         base_offset: 0,
         last_timestamp: 0,
         last_activity_ms: 0,
+        earlier: crate::producer_state::NO_EARLIER_BATCHES,
     })
 }
 

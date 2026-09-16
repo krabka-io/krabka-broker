@@ -102,9 +102,23 @@ impl ProducerState {
         let handle = self.handle(topic, partition);
         let mut state = handle.lock().await;
         for entry in entries {
-            state
-                .entries
-                .insert(entry.producer_id, entry_from_snapshot(entry, now));
+            let mut mirrored = entry_from_snapshot(entry, now);
+            // The log keeps only the last batch. A marker that leaves the
+            // producer at its epoch and its last batch (transaction version 1)
+            // keeps the earlier batches too, as Kafka's retained batches do.
+            // The marker moves the log entry's timestamp to its own, but
+            // Kafka's `ProducerStateEntry.update` for a marker keeps the
+            // retained `BatchMetadata`, with the data batch's timestamp.
+            if let Some(tracked) = state.entries.get(&entry.producer_id)
+                && tracked.epoch == mirrored.epoch
+                && tracked.last_sequence == mirrored.last_sequence
+                && tracked.base_offset == mirrored.base_offset
+                && tracked.last_offset == mirrored.last_offset
+            {
+                mirrored.earlier = tracked.earlier;
+                mirrored.last_timestamp = tracked.last_timestamp;
+            }
+            state.entries.insert(entry.producer_id, mirrored);
         }
     }
 }
@@ -134,5 +148,7 @@ fn entry_from_snapshot(entry: krabka_log::ProducerSnapshotEntry, now_ms: i64) ->
         base_offset,
         last_timestamp: entry.timestamp,
         last_activity_ms: now_ms,
+        // The log snapshot holds one batch per producer.
+        earlier: super::NO_EARLIER_BATCHES,
     }
 }
