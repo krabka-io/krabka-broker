@@ -208,6 +208,8 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             m.standby = cur.standby;
             m.warmup = cur.warmup;
             m.active_pending_revocation = cur.active_pending_revocation;
+            // The member got this assignment before the load.
+            m.sent_tasks = [m.active.clone(), m.standby.clone(), m.warmup.clone()];
         }
     }
     for (mid, tv) in seed.target_per_member {
