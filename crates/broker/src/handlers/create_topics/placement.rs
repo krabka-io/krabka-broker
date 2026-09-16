@@ -87,6 +87,83 @@ fn manual_replicas(
     Ok(by_partition.into_values().collect())
 }
 
+/// The leader and the ISR a new partition starts with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InitialLeadership {
+    pub(crate) leader: krabka_raft::NodeId,
+    pub(crate) isr: Vec<krabka_raft::NodeId>,
+}
+
+/// The starting leadership of each partition an automatic placement made.
+///
+/// The placement picks no unavailable broker and never puts a witness first,
+/// so the whole replica list is the ISR and its first replica leads.
+pub(crate) fn automatic_leaderships(
+    assignments: &[Vec<krabka_raft::NodeId>],
+) -> Vec<InitialLeadership> {
+    assignments
+        .iter()
+        .map(|replicas| InitialLeadership {
+            leader: replicas[0],
+            isr: replicas.clone(),
+        })
+        .collect()
+}
+
+/// The starting leadership of each partition of a manual assignment.
+///
+/// Kafka's `ReplicationControlManager` builds the ISR of a manually assigned
+/// partition from the listed brokers that are active (registered, not fenced
+/// and not in controlled shutdown), in the listed order, and
+/// `buildPartitionRegistration` makes the first of them the leader. The
+/// replica list stays as the client sent it. `unavailable` is
+/// [`crate::handlers::offline_replicas::unavailable_brokers`].
+///
+/// A krabka witness replicates but never leads (see
+/// [`crate::site_placement`]), so the leader is the first active replica that
+/// is not in `witnesses`. An active witness stays in the ISR.
+///
+/// `first_partition` is the index of the first partition in `assignments`:
+/// 0 for `CreateTopics`, the current partition count for `CreatePartitions`.
+/// The error is the `INVALID_REPLICA_ASSIGNMENT` message for the first
+/// partition that has no active broker (Kafka's message), or no active broker
+/// that may lead.
+pub(crate) fn manual_leaderships(
+    assignments: &[Vec<krabka_raft::NodeId>],
+    unavailable: &std::collections::HashSet<u64>,
+    witnesses: &std::collections::HashSet<krabka_raft::NodeId>,
+    first_partition: i32,
+) -> Result<Vec<InitialLeadership>, String> {
+    let mut partition = first_partition;
+    let mut leaderships = Vec::with_capacity(assignments.len());
+    for replicas in assignments {
+        let isr = replicas
+            .iter()
+            .copied()
+            .filter(|replica| !unavailable.contains(&replica.0))
+            .collect::<Vec<_>>();
+        if isr.is_empty() {
+            return Err(format!(
+                "All brokers specified in the manual partition assignment for partition \
+                 {partition} are fenced or in controlled shutdown."
+            ));
+        }
+        let Some(leader) = isr
+            .iter()
+            .copied()
+            .find(|replica| !witnesses.contains(replica))
+        else {
+            return Err(format!(
+                "All active brokers specified in the manual partition assignment for partition \
+                 {partition} are witnesses, and a witness cannot lead."
+            ));
+        };
+        leaderships.push(InitialLeadership { leader, isr });
+        partition = partition.saturating_add(1);
+    }
+    Ok(leaderships)
+}
+
 /// The registered brokers as the site-aware placement sees them, in node-id
 /// order.
 ///
