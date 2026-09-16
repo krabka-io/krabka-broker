@@ -59,6 +59,9 @@ pub enum PeerRequest {
     EndQuorumEpoch {
         leader_id: NodeId,
         leader_epoch: Epoch,
+        /// The voters in order of replication progress, most caught up first,
+        /// each with its directory id: `PreferredCandidates` (KIP-853).
+        preferred_candidates: Vec<(NodeId, uuid::Uuid)>,
     },
     Fetch {
         from: NodeId,
@@ -67,7 +70,12 @@ pub enum PeerRequest {
         replica_directory_id: uuid::Uuid,
     },
     FetchSnapshot {
+        /// The sender's cluster id, which the leader checks.
+        cluster_id: Option<uuid::Uuid>,
         from: NodeId,
+        /// The epoch the sender believes the leader holds:
+        /// `CurrentLeaderEpoch`, which the leader checks against its own.
+        current_leader_epoch: i32,
         snapshot_id: (i64, i32),
         position: i64,
         max_bytes: i32,
@@ -155,6 +163,7 @@ impl PeerRequest {
             PeerRequest::EndQuorumEpoch {
                 leader_id,
                 leader_epoch,
+                ref preferred_candidates,
             } => {
                 let req = EndQuorumEpochRequest {
                     topics: vec![eqe_req::TopicData {
@@ -163,6 +172,16 @@ impl PeerRequest {
                             partition_index: METADATA_PARTITION,
                             leader_id: node_to_wire(leader_id),
                             leader_epoch: epoch_to_wire(leader_epoch),
+                            preferred_candidates: preferred_candidates
+                                .iter()
+                                .map(|&(candidate, directory_id)| eqe_req::ReplicaInfo {
+                                    candidate_id: node_to_wire(candidate),
+                                    candidate_directory_id: krabka_protocol::primitives::uuid::Uuid(
+                                        *directory_id.as_bytes(),
+                                    ),
+                                    ..Default::default()
+                                })
+                                .collect(),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -209,15 +228,18 @@ impl PeerRequest {
                 Some(encode_body(&req, FETCH_VERSION))
             }
             PeerRequest::FetchSnapshot {
+                cluster_id,
                 from,
+                current_leader_epoch,
                 snapshot_id,
                 position,
                 max_bytes,
             } => Some(encode_fetch_snapshot_request(
+                cluster_id,
                 from,
+                current_leader_epoch,
                 snapshot_id,
-                position,
-                max_bytes,
+                (position, max_bytes),
             )),
         }
     }
@@ -227,6 +249,46 @@ impl PeerRequest {
     pub fn decode(buf: &[u8]) -> Option<Self> {
         decode_vote(buf)
     }
+}
+
+/// Decodes a request body at `version`. The inbound handlers run Kafka's
+/// request checks on the result, so this does not refuse a field value: only a
+/// body that does not decode gives `None`. Kafka's
+/// `RequestContext.parseRequest` fails such a request, and the connection
+/// closes. Like that parser, this ignores bytes after the message.
+fn decode_request<T>(buf: &[u8], version: i16) -> Option<T>
+where
+    T: for<'de> Decode<'de>,
+{
+    let mut cur = buf;
+    T::decode(&mut cur, version).ok()
+}
+
+/// Decodes a `FetchSnapshot` request body (api 59) without checking its
+/// fields.
+#[must_use]
+pub fn decode_fetch_snapshot_request(buf: &[u8]) -> Option<FetchSnapshotRequest> {
+    decode_request(buf, FETCH_SNAPSHOT_VERSION)
+}
+
+/// Decodes a Vote request body (api 52) without checking its fields.
+#[must_use]
+pub fn decode_vote_request(buf: &[u8]) -> Option<VoteRequest> {
+    decode_request(buf, VOTE_VERSION)
+}
+
+/// Decodes a `BeginQuorumEpoch` request body (api 53) without checking its
+/// fields.
+#[must_use]
+pub fn decode_begin_quorum_epoch_request(buf: &[u8]) -> Option<BeginQuorumEpochRequest> {
+    decode_request(buf, QUORUM_EPOCH_VERSION)
+}
+
+/// Decodes an `EndQuorumEpoch` request body (api 54) without checking its
+/// fields.
+#[must_use]
+pub fn decode_end_quorum_epoch_request(buf: &[u8]) -> Option<EndQuorumEpochRequest> {
+    decode_request(buf, QUORUM_EPOCH_VERSION)
 }
 
 /// Decodes a Vote request body (api 52).
@@ -269,7 +331,8 @@ pub fn decode_vote(buf: &[u8]) -> Option<PeerRequest> {
     })
 }
 
-fn parse_cluster_id(value: &str) -> Option<uuid::Uuid> {
+/// Parses a request `ClusterId`: Kafka's base64 form, or the hyphenated form.
+pub(crate) fn parse_cluster_id(value: &str) -> Option<uuid::Uuid> {
     uuid::Uuid::parse_str(value).ok().or_else(|| {
         let bytes: [u8; 16] = URL_SAFE_NO_PAD.decode(value).ok()?.try_into().ok()?;
         Some(uuid::Uuid::from_bytes(bytes))
@@ -297,6 +360,16 @@ pub fn decode_end(buf: &[u8]) -> Option<PeerRequest> {
     Some(PeerRequest::EndQuorumEpoch {
         leader_id: node_from_wire(p.leader_id),
         leader_epoch: epoch_from_wire(p.leader_epoch),
+        preferred_candidates: p
+            .preferred_candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    node_from_wire(candidate.candidate_id),
+                    uuid::Uuid::from_bytes(candidate.candidate_directory_id.0),
+                )
+            })
+            .collect(),
     })
 }
 
@@ -316,22 +389,25 @@ pub fn decode_fetch(buf: &[u8]) -> Option<PeerRequest> {
     })
 }
 
-/// Encodes a `FetchSnapshot` request body (api 59).
+/// Encodes a `FetchSnapshot` request body (api 59), as Kafka's
+/// `RaftUtil.singletonFetchSnapshotRequest` builds it.
 fn encode_fetch_snapshot_request(
+    cluster_id: Option<uuid::Uuid>,
     from: NodeId,
+    current_leader_epoch: i32,
     snapshot_id: (i64, i32),
-    position: i64,
-    max_bytes: i32,
+    (position, max_bytes): (i64, i32),
 ) -> Bytes {
     let (end_offset, epoch) = snapshot_id;
     let req = FetchSnapshotRequest {
+        cluster_id: cluster_id.map(|id| URL_SAFE_NO_PAD.encode(id.as_bytes())),
         replica_id: node_to_wire(from),
         max_bytes,
         topics: vec![fs_req::TopicSnapshot {
             name: METADATA_TOPIC.to_string(),
             partitions: vec![fs_req::PartitionSnapshot {
                 partition: METADATA_PARTITION,
-                current_leader_epoch: epoch,
+                current_leader_epoch,
                 snapshot_id: fs_req::SnapshotId {
                     end_offset,
                     epoch,
@@ -354,7 +430,12 @@ pub fn decode_fetch_snapshot(buf: &[u8]) -> Option<PeerRequest> {
     let req = FetchSnapshotRequest::decode(&mut cur, FETCH_SNAPSHOT_VERSION).ok()?;
     let p = req.topics.first()?.partitions.first()?;
     Some(PeerRequest::FetchSnapshot {
+        cluster_id: match req.cluster_id.as_deref() {
+            Some(id) => Some(parse_cluster_id(id)?),
+            None => None,
+        },
         from: node_from_wire(req.replica_id),
+        current_leader_epoch: p.current_leader_epoch,
         snapshot_id: (p.snapshot_id.end_offset, p.snapshot_id.epoch),
         position: p.position,
         max_bytes: req.max_bytes,

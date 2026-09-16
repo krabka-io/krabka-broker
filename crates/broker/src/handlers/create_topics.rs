@@ -38,7 +38,10 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::placement::{round_robin_replicas, site_broker_views};
+pub(crate) use self::placement::{
+    InitialLeadership, automatic_leaderships, manual_leaderships, round_robin_replicas,
+    site_broker_views,
+};
 use self::{
     authorization::{cluster_create_denied, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
@@ -66,7 +69,7 @@ pub(crate) fn diskless_wal_placement_error(
     image: &krabka_metadata::MetadataImage,
     config: &crate::config::BrokerConfig,
     first_partition: i32,
-    assignments: &[Vec<krabka_raft::NodeId>],
+    leaderships: &[InitialLeadership],
 ) -> Option<String> {
     let mut brokers = image
         .brokers()
@@ -78,11 +81,11 @@ pub(crate) fn diskless_wal_placement_error(
     brokers.sort_by_key(|(node_id, _)| node_id.0);
 
     let required = config.diskless_wal_local_replica_count;
-    assignments
+    leaderships
         .iter()
         .enumerate()
-        .find_map(|(offset, assignment)| {
-            let leader = *assignment.first()?;
+        .find_map(|(offset, leadership)| {
+            let leader = leadership.leader;
             let available = crate::wal::quorum::placement::select_voters_from_sorted_racks(
                 &brokers, leader, required,
             )
@@ -238,15 +241,16 @@ pub(crate) async fn handle(
         // site and the witness role of each broker. `site_broker_views` sorts
         // by node id for determinism, and it covers the race in which the
         // self-registration record has not reached the local image yet.
-        let unavailable = if topic_req.assignments.is_empty() {
-            super::offline_replicas::unavailable_brokers(broker, &image).await
-        } else {
-            std::collections::HashSet::new()
-        };
+        // The automatic placement never picks an unavailable broker. A manual
+        // assignment may name one, because Kafka checks only that the broker
+        // is registered, and the ISR below leaves it out.
+        let unavailable = super::offline_replicas::unavailable_brokers(broker, &image).await;
+        let manual = !topic_req.assignments.is_empty();
+        let no_exclusion = std::collections::HashSet::new();
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
-            &unavailable,
+            if manual { &no_exclusion } else { &unavailable },
         );
 
         let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
@@ -269,9 +273,30 @@ pub(crate) async fn handle(
             continue;
         }
 
+        let leaderships = if manual {
+            match manual_leaderships(
+                &assignments,
+                &unavailable,
+                &config_keys::witness_node_ids(&image),
+                0,
+            ) {
+                Ok(leaderships) => leaderships,
+                Err(message) => {
+                    results.push(topic_error_result(
+                        name,
+                        codes::INVALID_REPLICA_ASSIGNMENT,
+                        Some(message),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            automatic_leaderships(&assignments)
+        };
+
         if diskless
             && let Some(reason) =
-                diskless_wal_placement_error(&image, &broker.config, 0, &assignments)
+                diskless_wal_placement_error(&image, &broker.config, 0, &leaderships)
         {
             results.push(topic_error_result(
                 name,
@@ -319,7 +344,13 @@ pub(crate) async fn handle(
             codes::NONE
         } else {
             // Build the batch: one TopicRecord + N PartitionRecords.
-            let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
+            let records = topic_records(
+                &topic_req,
+                topic_id,
+                &assignments,
+                &leaderships,
+                &config_overrides,
+            );
 
             match controller.submit_change(records).await {
                 Ok(_) => {
@@ -347,6 +378,7 @@ pub(crate) async fn handle(
                         },
                         &name,
                         &assignments,
+                        &leaderships,
                     )
                     .await;
                     codes::NONE
