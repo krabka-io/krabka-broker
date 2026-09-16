@@ -7,7 +7,7 @@
 //! when the group is dirty and then writes the resulting records as one batch,
 //! so a failed log write ends the actor.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use krabka_protocol::owned::{
     streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
@@ -28,15 +28,15 @@ use crate::{
         offsets_log::OffsetsLog,
         streams::{
             config::StreamsGroupConfig,
-            state::{OwnedTasks, StoredTopologyHandle},
+            state::{OwnedTasks, RoleTasks, StoredTopologyHandle},
             topology,
         },
     },
     metadata_source::MetadataSource,
 };
 
-/// Evict members silent past the session timeout, reconcile, and persist the
-/// resulting tombstones. Returns `Err` if the log write fails (the actor exits).
+/// Evict members silent past the session timeout, fence members past their
+/// rebalance timeout, reconcile, and persist the resulting tombstones. Returns `Err` if the log write fails (the actor exits).
 pub(super) async fn handle_session_tick(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
@@ -44,9 +44,12 @@ pub(super) async fn handle_session_tick(
     metadata_source: Option<&Arc<dyn MetadataSource>>,
     coordinator: &GroupCoordinator,
 ) -> Result<(), crate::error::BrokerError> {
-    let evicted = actor
-        .state
-        .evict_expired(Instant::now(), config.session_timeout);
+    let now = Instant::now();
+    let mut evicted = actor.state.evict_expired(now, config.session_timeout);
+    // A member that did not revoke its tasks within its rebalance timeout is
+    // fenced like a member whose session expired
+    // (`scheduleStreamsGroupRebalanceTimeout`).
+    evicted.extend(actor.state.fence_rebalance_timeouts(now));
     if evicted.is_empty() {
         return Ok(());
     }
@@ -135,13 +138,12 @@ pub(super) async fn handle_heartbeat(
         if req.shutdown_application {
             actor.state.request_shutdown(&new_member_id);
         }
-        actor.state.advance_member_epoch(&new_member_id);
-        let reported = req
-            .active_tasks
-            .as_ref()
-            .map(|active| task_ids_to_map(active))
-            .unwrap_or_default();
-        actor.state.reconcile_member(&new_member_id, &reported);
+        if actor
+            .state
+            .reconcile_member(&new_member_id, owned_role_tasks(req).as_ref())
+        {
+            actor.state.track_rebalance_timeout(&new_member_id, now);
+        }
         let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&new_member_id));
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
         return Ok(accepted_response(
@@ -180,19 +182,16 @@ pub(super) async fn handle_heartbeat(
                     warmup: warmup.as_ref(),
                 }
             });
-    let cur_epoch =
-        match actor
+    if let Err(error_code) =
+        actor
             .state
             .validate_heartbeat_epoch(&req.member_id, req.member_epoch, owned)
-        {
-            Ok(epoch) => epoch,
-            Err(error_code) => {
-                return Ok(error_resp(
-                    error_code,
-                    epoch_error_message(actor, req, error_code),
-                ));
-            }
-        };
+    {
+        return Ok(error_resp(
+            error_code,
+            epoch_error_message(actor, req, error_code),
+        ));
+    }
     let before = MemberBefore::of(&actor.state.members[&req.member_id]);
     if let Some(resp) = topology_error(actor, req, metadata_source) {
         return Ok(resp);
@@ -214,28 +213,13 @@ pub(super) async fn handle_heartbeat(
         reconcile(actor, config, metadata_source).await;
         changed = true;
     }
-    // If the member's target advanced past its current epoch, hand it over.
-    if actor.state.target.epoch > cur_epoch {
-        actor.state.advance_member_epoch(&req.member_id);
-        changed = true;
-    }
-    let reported = req.active_tasks.as_ref().map_or_else(
-        || {
-            let Some(member) = actor.state.members.get(&req.member_id) else {
-                return BTreeMap::new();
-            };
-            let mut reported = member.active.clone();
-            for (subtopology, partitions) in &member.active_pending_revocation {
-                reported
-                    .entry(subtopology.clone())
-                    .or_default()
-                    .extend(partitions.iter().copied());
-            }
-            reported
-        },
-        |active| task_ids_to_map(active),
-    );
-    if actor.state.reconcile_member(&req.member_id, &reported) {
+    // Kafka's `maybeReconcile`: move the member toward the target, and arm
+    // or cancel its rebalance timeout when its assignment changed.
+    if actor
+        .state
+        .reconcile_member(&req.member_id, owned_role_tasks(req).as_ref())
+    {
+        actor.state.track_rebalance_timeout(&req.member_id, now);
         changed = true;
     }
     if req.shutdown_application {
@@ -255,6 +239,19 @@ pub(super) async fn handle_heartbeat(
         &before,
         group_existed,
     ))
+}
+
+/// The owned tasks of a heartbeat, when it reports all three roles, as
+/// Kafka's `TasksTuple.fromHeartbeatRequest` builds them.
+fn owned_role_tasks(req: &StreamsGroupHeartbeatRequest) -> Option<RoleTasks> {
+    match (&req.active_tasks, &req.standby_tasks, &req.warmup_tasks) {
+        (Some(active), Some(standby), Some(warmup)) => Some(RoleTasks {
+            active: task_ids_to_map(active),
+            standby: task_ids_to_map(standby),
+            warmup: task_ids_to_map(warmup),
+        }),
+        _ => None,
+    }
 }
 
 /// The user endpoint of a member before a heartbeat changed it. A joining
