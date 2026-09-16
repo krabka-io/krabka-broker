@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse;
-use krabka_verified::transaction::InitProducerIdFencingDecision;
+use krabka_verified::transaction::InitProducerIdIdentityDecision;
 
 use super::identity::{next_init_producer_identity, stage_recovery_identity};
 use crate::{
@@ -254,15 +254,32 @@ pub(super) async fn handle_transactional(
             // The abort above already advanced the entry past the identity
             // this call named, so only a call that has changed nothing yet
             // revalidates here -- under the same lock as the epoch bump below.
-            if !aborted_ongoing && is_fenced(&e3, request_identity) {
-                return Ok(fenced_response());
+            if !aborted_ongoing {
+                if let Some(response) = retried_bump_response(&e3, request_identity) {
+                    return Ok(response);
+                }
+                if is_fenced(&e3, request_identity) {
+                    return Ok(fenced_response());
+                }
             }
+            let (previous_pid, previous_epoch) =
+                crate::txn::handlers::end_txn::client_producer_identity(&e3);
             let (new_pid, new_epoch) = if aborted_ongoing && txnv.verified() {
                 (e3.producer_id, e3.producer_epoch)
             } else {
-                next_init_producer_identity(&e3, txnv, &coord.producer_ids).await?
+                next_init_producer_identity(&e3, &coord.producer_ids).await?
             };
             *e3 = TxnEntry::new_empty(tid.to_string(), new_pid, new_epoch, txn_timeout, now_ms);
+            // Kafka's `prepareIncrementProducerEpoch` and
+            // `prepareProducerIdRotation` record the epoch the entry held, so
+            // a retry of this call is recognised. A caller that named no
+            // identity records no last epoch.
+            if request_identity.0 >= 0 {
+                e3.last_producer_epoch = previous_epoch;
+            }
+            if new_pid != previous_pid {
+                e3.prev_producer_id = previous_pid;
+            }
             let snap = e3.clone();
             drop(e3);
             coord.put(snap.clone(), txnv).await?;
@@ -277,20 +294,46 @@ pub(super) async fn handle_transactional(
     }
 }
 
-/// Whether `request_identity` is fenced against `entry`'s live identity.
+/// What `request_identity` may do to `entry` (KIP-360).
 ///
 /// The caller holds `entry`'s lock, and the mutation the verdict admits runs
 /// under that same guard.
-fn is_fenced(entry: &TxnEntry, request_identity: (i64, i16)) -> bool {
+fn identity_decision(
+    entry: &TxnEntry,
+    request_identity: (i64, i16),
+) -> InitProducerIdIdentityDecision {
     let (entry_pid, entry_epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
-    krabka_verified::transaction::init_producer_id_fencing_decision(
+    krabka_verified::transaction::init_producer_id_identity_decision(
         entry_pid.get(),
         entry_epoch,
         entry.last_producer_epoch,
-        entry.has_failed_epoch_fence,
+        entry.prev_producer_id.get(),
         request_identity.0,
         request_identity.1,
-    ) == InitProducerIdFencingDecision::Fenced
+    )
+}
+
+/// Whether `request_identity` is fenced against `entry`'s live identity.
+fn is_fenced(entry: &TxnEntry, request_identity: (i64, i16)) -> bool {
+    identity_decision(entry, request_identity) == InitProducerIdIdentityDecision::Fenced
+}
+
+/// Kafka `prepareIncrementProducerEpoch`: a retry of a bump that already
+/// happened answers the entry's identity and writes nothing.
+fn retried_bump_response(
+    entry: &TxnEntry,
+    request_identity: (i64, i16),
+) -> Option<InitProducerIdResponse> {
+    if identity_decision(entry, request_identity) != InitProducerIdIdentityDecision::Retry {
+        return None;
+    }
+    let (pid, epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
+    Some(InitProducerIdResponse {
+        error_code: codes::NONE,
+        producer_id: pid.get(),
+        producer_epoch: epoch,
+        ..Default::default()
+    })
 }
 
 /// Kafka `prepareInitProducerIdTransit` for an entry whose `Prepare*` record
@@ -550,10 +593,158 @@ mod tests {
         check!(response.producer_epoch == 0);
     }
 
+    /// KIP-360: a retry of an epoch bump whose response was lost gets the
+    /// epoch the coordinator already wrote, and bumps nothing. Kafka's
+    /// `prepareIncrementProducerEpoch` recognises it by the last epoch, which
+    /// every bump records.
+    #[tokio::test]
+    async fn a_retried_epoch_bump_answers_the_epoch_it_already_wrote() {
+        const TID: &str = "tid-retried-bump";
+
+        struct Step {
+            name: &'static str,
+            request: (i64, i16),
+            answer: (i16, i64, i16),
+            /// Whether the call appended a `__transaction_state` record.
+            appends: bool,
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let steps = [
+            Step {
+                name: "the live identity bumps the epoch",
+                request: (1000, 3),
+                answer: (codes::NONE, 1000, 4),
+                appends: true,
+            },
+            Step {
+                name: "the retry answers the bumped epoch and writes nothing",
+                request: (1000, 3),
+                answer: (codes::NONE, 1000, 4),
+                appends: false,
+            },
+            Step {
+                name: "the bumped epoch bumps again",
+                request: (1000, 4),
+                answer: (codes::NONE, 1000, 5),
+                appends: true,
+            },
+            Step {
+                name: "an older epoch is fenced",
+                request: (1000, 3),
+                answer: (codes::PRODUCER_FENCED, -1, -1),
+                appends: false,
+            },
+            Step {
+                name: "another producer id is fenced",
+                request: (1001, 5),
+                answer: (codes::PRODUCER_FENCED, -1, -1),
+                appends: false,
+            },
+            Step {
+                name: "a caller that names no identity bumps",
+                request: (-1, -1),
+                answer: (codes::NONE, 1000, 6),
+                appends: true,
+            },
+            Step {
+                name: "and records no last epoch, so the old epoch is fenced",
+                request: (1000, 5),
+                answer: (codes::PRODUCER_FENCED, -1, -1),
+                appends: false,
+            },
+        ];
+        let mut expected = Vec::new();
+        let mut actual = Vec::new();
+        for step in steps {
+            let before = part.log_end_offset().0;
+            let response = handle_transactional(
+                &coordinator,
+                TID,
+                TxnVersion::Verified,
+                60_000,
+                false,
+                false,
+                step.request,
+            )
+            .await
+            .expect("init responds");
+            expected.push((step.name, step.answer, step.appends));
+            actual.push((
+                step.name,
+                (
+                    response.error_code,
+                    response.producer_id,
+                    response.producer_epoch,
+                ),
+                part.log_end_offset().0 > before,
+            ));
+        }
+        assert!(actual == expected);
+    }
+
+    /// Kafka rotates the producer id once the epoch is exhausted, records the
+    /// rotated id as the previous one, and admits the old id at that exhausted
+    /// epoch as a retry (`isValidProducerId`).
+    #[tokio::test]
+    async fn a_rotation_at_the_exhausted_epoch_admits_the_old_identity_as_a_retry() {
+        const TID: &str = "tid-rotated";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        {
+            let handle = coordinator.get(TID).expect("the seeded entry");
+            let mut entry = handle.lock().await;
+            entry.producer_epoch = i16::MAX - 1;
+        }
+
+        let rotated = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, i16::MAX - 1),
+        )
+        .await
+        .expect("init responds");
+        check!(rotated.error_code == codes::NONE);
+        check!(rotated.producer_id != 1000);
+        check!(rotated.producer_epoch == 0);
+        let entry = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(entry.prev_producer_id == ProducerId(1000));
+        check!(entry.last_producer_epoch == i16::MAX - 1);
+
+        let retried = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, i16::MAX - 1),
+        )
+        .await
+        .expect("init responds");
+        check!(
+            (
+                retried.error_code,
+                retried.producer_id,
+                retried.producer_epoch
+            ) == (codes::NONE, rotated.producer_id, 0)
+        );
+    }
+
     /// Two `InitProducerId` v3 calls that name the same live identity race for
-    /// one transactional id. Exactly one may win: the identity check and the
-    /// epoch bump it admits run under one lock, so the loser wakes to the
-    /// epoch the winner already wrote and is fenced.
+    /// one transactional id. Exactly one bump lands: the identity check and
+    /// the epoch bump it admits run under one lock, so the loser wakes to the
+    /// epoch the winner already wrote.
+    ///
+    /// Kafka cannot tell that second call from the retry of a lost response,
+    /// so `prepareIncrementProducerEpoch` answers both with the same identity
+    /// and writes once (`expectedProducerEpoch == lastProducerEpoch`).
     ///
     /// With the check hoisted above the mutation, both calls read epoch 3,
     /// both bump, and the first caller's response is already stale when it
@@ -563,7 +754,7 @@ mod tests {
     /// on the entry lock with an explicit yield, so the interleaving is the
     /// same every run.
     #[tokio::test]
-    async fn overlapping_inits_for_one_identity_fence_the_loser() {
+    async fn overlapping_inits_for_one_identity_answer_one_bumped_identity() {
         const TID: &str = "tid-overlapping-init";
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -592,13 +783,16 @@ mod tests {
         }
         drop(guard);
 
-        let mut answered: Vec<i16> = Vec::new();
+        let mut answered = Vec::new();
         for call in calls {
             let response = call.await.expect("init task").expect("init responds");
-            answered.push(response.error_code);
+            answered.push((
+                response.error_code,
+                response.producer_id,
+                response.producer_epoch,
+            ));
         }
-        answered.sort_unstable();
-        check!(answered == vec![codes::NONE, codes::PRODUCER_FENCED]);
+        check!(answered == vec![(codes::NONE, 1000, 4), (codes::NONE, 1000, 4)]);
 
         // One bump landed, not two.
         let entry = coordinator.get(TID).expect("entry").lock().await.clone();
