@@ -191,20 +191,38 @@ mod tests {
             )
             .await
             .expect("initialize share state");
+        let share_image = crate::share_coordinator::coordinator::test_support::image_with_topic(
+            share_topic_id,
+            share_partition + 1,
+        );
         broker
             .share_coordinator
-            .write(
+            .read(
+                &share_image,
                 share_group,
                 share_topic_id,
                 share_partition,
-                (12, 2),
-                (krabka_log::Offset(95), 7),
-                vec![crate::share_coordinator::persistence::StateBatch {
-                    first_offset: krabka_log::Offset(95),
-                    last_offset: krabka_log::Offset(99),
-                    delivery_state: 0,
-                    delivery_count: 1,
-                }],
+                2,
+            )
+            .await
+            .expect("raise the stored leader epoch");
+        broker
+            .share_coordinator
+            .write(
+                &share_image,
+                share_group,
+                share_topic_id,
+                share_partition,
+                crate::share_coordinator::coordinator::test_support::share_write(
+                    (11, 2),
+                    (95, 7),
+                    vec![crate::share_coordinator::persistence::StateBatch {
+                        first_offset: krabka_log::Offset(95),
+                        last_offset: krabka_log::Offset(99),
+                        delivery_state: 0,
+                        delivery_count: 1,
+                    }],
+                ),
             )
             .await
             .expect("write share state summary");
@@ -212,7 +230,7 @@ mod tests {
             handle
                 .share_state_summary_for_test(share_group, share_topic_id, share_partition)
                 .await
-                == Some((12, 2, 95, 7))
+                == Some((11, 2, 95, 7))
         );
         check!(
             tokio::time::timeout(
@@ -238,11 +256,14 @@ mod tests {
 
         let acquired_group = "handle-share-acquired-mutant-group";
         let acquired_topic_id = uuid::Uuid::from_u128(0xACCD);
-        let acquired_cell = broker
-            .share_partition_leaders
-            .get_or_load(acquired_group, acquired_topic_id, 0)
-            .await
-            .expect("load the share partition");
+        // The share coordinator refuses a read of a key with no state, so the
+        // cell is cached directly. This part checks only the acquired count.
+        let acquired_cell = broker.share_partition_leaders.insert_for_test(
+            acquired_group,
+            acquired_topic_id,
+            0,
+            crate::share_partition::state::AcquisitionState::new(krabka_log::Offset(0)),
+        );
         assert2::assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(75),

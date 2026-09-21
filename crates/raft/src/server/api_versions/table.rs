@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn advertised_versions_are_the_versions_the_listener_decodes_with() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let body = super::super::api_versions_response_body(4, &image, None, 0);
+        let body = super::super::api_versions_response_body(4, &image, None);
         let response = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode response");
         assert!(response.api_keys == expected_entries());
     }

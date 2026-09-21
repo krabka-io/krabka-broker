@@ -155,4 +155,12 @@ mod tests {
             assert!(matches!(error, LogError::Corrupt(_)), "{contents:?}");
         }
     }
+
+    #[test]
+    fn surfaces_non_missing_io_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(name::log_start_offset_checkpoint_path(dir.path())).unwrap();
+        assert!(matches!(read(dir.path()), Err(LogError::Io(_))));
+        assert!(matches!(remove(dir.path()), Err(LogError::Io(_))));
+    }
 }

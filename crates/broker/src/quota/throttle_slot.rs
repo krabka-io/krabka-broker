@@ -27,6 +27,11 @@ pub(crate) struct ThrottleSlot {
     /// cannot live in an atomic directly; microseconds are finer than the
     /// millisecond resolution of the wire field the same window is reported in.
     micros: AtomicU64,
+    /// A quota charge the handler leaves for the dispatch loop, which resolves
+    /// it together with the request quota in one metrics call. Kafka's
+    /// `sendResponseMaybeThrottleWithControllerQuota` takes the larger of the
+    /// controller-mutation and request throttles as one decision.
+    deferred: std::sync::OnceLock<crate::metrics::QuotaCharge>,
 }
 
 impl ThrottleSlot {
@@ -39,6 +44,20 @@ impl ThrottleSlot {
     pub(crate) fn record(&self, window: Time) {
         let micros = u64::try_from(window.micros_i64()).unwrap_or(0);
         self.micros.fetch_max(micros, Ordering::Relaxed);
+    }
+
+    /// Leaves `charge` for the dispatch loop to resolve with the request quota,
+    /// and records its window. A request defers at most one charge; a second
+    /// one is ignored.
+    pub(crate) fn defer(&self, charge: crate::metrics::QuotaCharge) {
+        self.record(charge.delay);
+        // The first charge wins. No handler defers two.
+        let _ = self.deferred.set(charge);
+    }
+
+    /// The charge a handler deferred, if any.
+    pub(crate) fn deferred(&self) -> Option<crate::metrics::QuotaCharge> {
+        self.deferred.get().cloned()
     }
 
     /// Takes the recorded window and resets the slot to zero, so that a

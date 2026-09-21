@@ -27,7 +27,7 @@ pub(super) fn voter(
     }
 }
 
-fn controller_endpoint(host: &str, port: u16) -> krabka_metadata::VoterEndpoint {
+pub(super) fn controller_endpoint(host: &str, port: u16) -> krabka_metadata::VoterEndpoint {
     krabka_metadata::VoterEndpoint {
         name: "CONTROLLER".into(),
         host: host.into(),
@@ -89,4 +89,13 @@ pub(super) async fn activate_dynamic_membership(engine: &KraftController) {
     })
     .await
     .expect("dynamic membership activation");
+}
+
+pub(super) fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: name.to_string(),
+        topic_id: uuid::Uuid::new_v4(),
+        partitions: 1,
+        replication_factor: 1,
+    })
 }
