@@ -191,7 +191,8 @@ impl TxnCoordinator {
             .read()
             .await
             .iter()
-            .copied()
+            .filter(|(_, leadership)| leadership.leads)
+            .map(|(partition, _)| *partition)
             .collect();
         local_partitions.sort_unstable_by_key(|partition| partition.get());
 
