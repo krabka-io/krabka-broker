@@ -422,8 +422,11 @@ mod tests {
             assert2::assert!(index.entries().len() == 1);
             assert2::assert!(index.entries()[0].last_offset == Offset(4));
         }
-        let reopened = TxnIndex::open(path).unwrap();
+        let reopened = TxnIndex::open(path.clone()).unwrap();
         assert2::assert!(reopened.entries() == index.entries());
+
+        index.truncate_from(Offset(4)).unwrap();
+        assert2::assert!(index.entries().is_empty());
     }
 
     #[test]
