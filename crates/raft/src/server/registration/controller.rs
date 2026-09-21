@@ -17,7 +17,8 @@ use krabka_protocol::{
 
 use super::{
     INVALID_REGISTRATION, NOT_CONTROLLER, SUCCESS, UNSUPPORTED_VERSION, is_leader,
-    listeners::decode_controller_listeners, raft_error_code, response::controller_registration_response,
+    listeners::decode_controller_listeners, raft_error_code,
+    response::controller_registration_response,
 };
 use crate::{RaftError, kraft::KraftController};
 
