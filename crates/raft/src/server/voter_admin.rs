@@ -1,95 +1,76 @@
-//! The KIP-853 voter-reconfiguration handlers: `AddRaftVoter`,
-//! `RemoveRaftVoter` and `UpdateRaftVoter`, together with the request
-//! validation, the candidate probe and the translation of a reconfiguration
-//! outcome into a Kafka error code that all three share.
+//! The KIP-853 voter-reconfiguration handlers on the controller listener:
+//! `AddRaftVoter`, `RemoveRaftVoter` and `UpdateRaftVoter`.
 //!
-//! The numeric codes below are the ones
-//! `org.apache.kafka.common.protocol.Errors` assigns in the pinned
-//! `apache/kafka:4.3.1` image. KIP-853 adds exactly three of them —
-//! `INVALID_VOTER_KEY (125)`, `DUPLICATE_VOTER (126)` and
-//! `VOTER_NOT_FOUND (127)` — and none for a malformed voter update, so a
-//! rejected update is `INVALID_REQUEST (42)`, as
-//! `KafkaRaftClient.handleUpdateVoterRequest` answers.
-//!
-//! All three paths read an absent `cluster_id` the way
-//! `KafkaRaftClient.hasValidClusterId` does: a request that names no cluster
-//! is accepted, and only one that names a different cluster is refused.
+//! The request checks, their order and their codes are shared with the broker
+//! listener in [`crate::voter_requests`]. This module decodes the request, runs
+//! those checks, probes an `AddRaftVoter` candidate, applies the change and
+//! encodes the response.
 
 use bytes::{Bytes, BytesMut};
 
-use crate::{error::RaftError, kraft::KraftController};
+#[cfg(test)]
+use crate::voter_requests::valid_wire_listeners;
+use crate::{
+    error::RaftError,
+    kraft::KraftController,
+    voter_requests::{
+        Refusal, add_voter_refusal, candidate_kraft_version_refusal, candidate_unavailable_refusal,
+        reconfiguration_refusal, remove_voter_refusal, update_voter_current_leader,
+        update_voter_refusal,
+    },
+};
 
 #[cfg(test)]
 mod tests;
 
-fn reconfiguration_error_code(
-    result: Result<crate::reconfig::ReconfigOutcome, RaftError>,
-) -> (i16, Option<String>) {
-    use crate::reconfig::ReconfigOutcome;
-    match result {
-        Ok(ReconfigOutcome::Committed) => (0, None),
-        Ok(ReconfigOutcome::NotLeader { leader }) => (
-            6,
-            Some(leader.map_or_else(
-                || "not the raft leader".into(),
-                |leader| format!("not the raft leader; current leader is {leader}"),
-            )),
-        ),
-        Err(RaftError::ReconfigInProgress) => {
-            (7, Some("another reconfiguration is in progress".into()))
-        }
-        Err(RaftError::VoterNotCaughtUp { id, lag }) => {
-            (42, Some(format!("voter {id} not caught up (lag {lag})")))
-        }
-        Err(RaftError::DuplicateVoter(id)) => (126, Some(format!("voter {id} already exists"))),
-        Err(RaftError::VoterNotFound(id)) => (127, Some(format!("voter {id} was not found"))),
-        Err(RaftError::UnsupportedKraftVersion(_)) => (
-            35,
-            Some("dynamic voter changes require kraft.version 1".into()),
-        ),
-        // Kafka has no "invalid voter update" code, so a rejected change and a
-        // malformed one land on the same 42 that `UpdateVoterHandler` returns.
-        Err(RaftError::InvalidVoterUpdate(message) | RaftError::ReconfigRejected(message)) => {
-            (42, Some(message))
-        }
-        Err(error) => (-1, Some(error.to_string())),
-    }
-}
-
-fn valid_wire_listeners<'a>(listeners: impl IntoIterator<Item = (&'a str, &'a str, u16)>) -> bool {
-    let mut names = std::collections::BTreeSet::new();
-    let mut count = 0usize;
-    for (name, host, port) in listeners {
-        count += 1;
-        if name.is_empty() || host.is_empty() || port == 0 || !names.insert(name) {
-            return false;
-        }
-    }
-    count != 0
-}
-
+/// Asks the candidate for its `ApiVersions`, as `AddVoterHandler` does, and
+/// refuses it when it cannot answer or does not support the finalized
+/// `kraft.version`.
 async fn probe_voter_candidate(
-    listeners: &[krabka_protocol::owned::add_raft_voter_request::Listener],
+    request: &krabka_protocol::owned::add_raft_voter_request::AddRaftVoterRequest,
     finalized_version: u16,
     engine: &KraftController,
-) -> Result<(), (i16, String)> {
-    let endpoint = listeners
+) -> Result<(), Refusal> {
+    let endpoint = request
+        .listeners
         .iter()
         .find(|listener| listener.name.eq_ignore_ascii_case("CONTROLLER"))
-        .or_else(|| listeners.first())
+        .or_else(|| request.listeners.first())
         .expect("validated non-empty listeners");
     let address = format!("{}:{}", endpoint.host, endpoint.port);
     let supported = engine
         .probe_kraft_version(&address, finalized_version)
         .await
-        .map_err(|error| (7, format!("candidate ApiVersions probe failed: {error}")))?;
+        .map_err(|error| {
+            candidate_unavailable_refusal(
+                request.voter_id,
+                request.voter_directory_id,
+                &error.to_string(),
+            )
+        })?;
     if supported {
         Ok(())
     } else {
-        Err((
-            35,
-            format!("candidate does not support finalized kraft.version {finalized_version}"),
+        Err(candidate_kraft_version_refusal(
+            request.voter_id,
+            request.voter_directory_id,
+            finalized_version,
         ))
+    }
+}
+
+/// The voter a checked request names. The checks refused a negative id.
+fn requested_voter(
+    voter_id: i32,
+    voter_directory_id: krabka_protocol::primitives::uuid::Uuid,
+    endpoints: impl IntoIterator<Item = krabka_metadata::VoterEndpoint>,
+    kraft_version: krabka_metadata::KRaftVersionRange,
+) -> krabka_metadata::Voter {
+    krabka_metadata::Voter {
+        id: crate::NodeId(u64::try_from(voter_id).unwrap_or_default()),
+        directory_id: uuid::Uuid::from_bytes(voter_directory_id.0),
+        endpoints: endpoints.into_iter().collect(),
+        kraft_version,
     }
 }
 
@@ -106,48 +87,36 @@ pub(super) async fn add_raft_voter_response(
         },
     };
 
-    let mut input = body;
-    let request = AddRaftVoterRequest::decode(&mut input, version)?;
+    let request = AddRaftVoterRequest::decode(&mut &body[..], version)?;
     let image = engine.current_image();
-    let cluster_id = image.cluster_id().to_string();
-    let valid = request
-        .cluster_id
-        .as_deref()
-        .is_none_or(|request_cluster| request_cluster == cluster_id)
-        && request.voter_id >= 0
-        && request.voter_directory_id != krabka_protocol::primitives::uuid::Uuid::ZERO
-        && valid_wire_listeners(request.listeners.iter().map(|listener| {
-            (
-                listener.name.as_str(),
-                listener.host.as_str(),
-                listener.port,
-            )
-        }));
-    let probe = if valid && image.kraft_version() >= 1 {
-        probe_voter_candidate(&request.listeners, image.kraft_version(), engine).await
-    } else {
-        Ok(())
+    let quorum = engine.quorum_state().await?;
+    let refusal = match add_voter_refusal(&request, &image.cluster_id().to_string(), &quorum) {
+        Some(refusal) => Some(refusal),
+        None if image.kraft_version() >= 1 => {
+            probe_voter_candidate(&request, image.kraft_version(), engine)
+                .await
+                .err()
+        }
+        None => None,
     };
-    let (error_code, error_message) = if !valid {
-        (42, Some("invalid AddRaftVoter request".into()))
-    } else if let Err((code, message)) = probe {
-        (code, Some(message))
+    let (error_code, error_message) = if let Some(refusal) = refusal {
+        refusal
     } else {
-        let voter = krabka_metadata::Voter {
-            id: crate::NodeId(u64::try_from(request.voter_id).unwrap_or_default()),
-            directory_id: uuid::Uuid::from_bytes(request.voter_directory_id.0),
-            endpoints: request
+        let (voter_id, directory_id) = (request.voter_id, request.voter_directory_id);
+        let voter = requested_voter(
+            voter_id,
+            directory_id,
+            request
                 .listeners
                 .into_iter()
                 .map(|listener| krabka_metadata::VoterEndpoint {
                     name: listener.name,
                     host: listener.host,
                     port: listener.port,
-                })
-                .collect(),
-            kraft_version: krabka_metadata::KRaftVersionRange::default(),
-        };
-        reconfiguration_error_code(
+                }),
+            krabka_metadata::KRaftVersionRange::default(),
+        );
+        reconfiguration_refusal(
             engine
                 .reconfigure(crate::reconfig::VoterChange::Add(
                     crate::reconfig::AddVoter {
@@ -156,6 +125,8 @@ pub(super) async fn add_raft_voter_response(
                     },
                 ))
                 .await,
+            voter_id,
+            directory_id,
         )
     };
     let mut output = BytesMut::new();
@@ -181,42 +152,26 @@ pub(super) async fn remove_raft_voter_response(
         },
     };
 
-    let mut input = body;
-    let request = RemoveRaftVoterRequest::decode(&mut input, version)?;
+    let request = RemoveRaftVoterRequest::decode(&mut &body[..], version)?;
     let cluster_id = engine.current_image().cluster_id().to_string();
-    let validation_error = if request
-        .cluster_id
-        .as_deref()
-        .is_some_and(|request_cluster| request_cluster != cluster_id)
-    {
-        Some(format!(
-            "cluster_id {:?} does not match {cluster_id}",
-            request.cluster_id
-        ))
-    } else if request.voter_id < 0 {
-        Some(format!(
-            "voter_id must be non-negative, got {}",
-            request.voter_id
-        ))
-    } else if request.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO {
-        Some("voter_directory_id must be non-zero".into())
-    } else {
-        None
-    };
-    let (error_code, error_message) = if let Some(message) = validation_error {
-        (42, Some(message))
-    } else {
-        reconfiguration_error_code(
-            engine
-                .reconfigure(crate::reconfig::VoterChange::Remove(
-                    crate::reconfig::RemoveVoter {
-                        id: crate::NodeId(u64::try_from(request.voter_id).unwrap_or_default()),
-                        directory_id: uuid::Uuid::from_bytes(request.voter_directory_id.0),
-                    },
-                ))
-                .await,
-        )
-    };
+    let quorum = engine.quorum_state().await?;
+    let (error_code, error_message) =
+        if let Some(refusal) = remove_voter_refusal(&request, &cluster_id, &quorum) {
+            refusal
+        } else {
+            reconfiguration_refusal(
+                engine
+                    .reconfigure(crate::reconfig::VoterChange::Remove(
+                        crate::reconfig::RemoveVoter {
+                            id: crate::NodeId(u64::try_from(request.voter_id).unwrap_or_default()),
+                            directory_id: uuid::Uuid::from_bytes(request.voter_directory_id.0),
+                        },
+                    ))
+                    .await,
+                request.voter_id,
+                request.voter_directory_id,
+            )
+        };
     let mut output = BytesMut::new();
     RemoveRaftVoterResponse {
         error_code,
@@ -225,28 +180,6 @@ pub(super) async fn remove_raft_voter_response(
     }
     .encode(&mut output, version)?;
     Ok(output.freeze())
-}
-
-/// The error code for an `UpdateRaftVoter` request the leader will not act on,
-/// or `None` when the request is well formed.
-///
-/// `KafkaRaftClient.handleUpdateVoterRequest` checks the cluster id first, the
-/// leader epoch next, and the voter key, listeners and `kraft.version` range
-/// last. Each check has its own code, and none of them is voter-specific.
-///
-/// `cluster_id_valid` is false only for a request that names another cluster:
-/// `KafkaRaftClient.hasValidClusterId` answers true for a null cluster id, as
-/// the add and remove paths above already read it.
-fn update_rejection(cluster_id_valid: bool, epoch_delta: i64, rest_is_valid: bool) -> Option<i16> {
-    if !cluster_id_valid {
-        return Some(104);
-    }
-    match epoch_delta.signum() {
-        -1 => Some(74),
-        1 => Some(75),
-        _ if rest_is_valid => None,
-        _ => Some(42),
-    }
 }
 
 pub(super) async fn update_raft_voter_response(
@@ -262,62 +195,49 @@ pub(super) async fn update_raft_voter_response(
         },
     };
 
-    let mut input = body;
-    let request = UpdateRaftVoterRequest::decode(&mut input, version)?;
+    let request = UpdateRaftVoterRequest::decode(&mut &body[..], version)?;
     let cluster_id = engine.current_image().cluster_id().to_string();
     let quorum = engine.quorum_state().await?;
-    let min = u16::try_from(request.k_raft_version_feature.min_supported_version);
-    let max = u16::try_from(request.k_raft_version_feature.max_supported_version);
-    let valid_range = matches!((&min, &max), (Ok(min), Ok(max)) if min <= max);
-    let rejection = update_rejection(
-        request
-            .cluster_id
-            .as_deref()
-            .is_none_or(|request_cluster| request_cluster == cluster_id),
-        i64::from(request.current_leader_epoch) - i64::from(quorum.leader_epoch),
-        request.voter_id >= 0
-            && request.voter_directory_id != krabka_protocol::primitives::uuid::Uuid::ZERO
-            && valid_range
-            && valid_wire_listeners(request.listeners.iter().map(|listener| {
-                (
-                    listener.name.as_str(),
-                    listener.host.as_str(),
-                    listener.port,
-                )
-            })),
-    );
-    let error_code = if let Some(code) = rejection {
+    let error_code = if let Some(code) = update_voter_refusal(&request, &cluster_id, &quorum) {
         code
     } else {
-        let voter = krabka_metadata::Voter {
-            id: crate::NodeId(u64::try_from(request.voter_id).unwrap_or_default()),
-            directory_id: uuid::Uuid::from_bytes(request.voter_directory_id.0),
-            endpoints: request
+        let feature = &request.k_raft_version_feature;
+        let kraft_version = krabka_metadata::KRaftVersionRange {
+            min: u16::try_from(feature.min_supported_version).unwrap_or_default(),
+            max: u16::try_from(feature.max_supported_version).unwrap_or_default(),
+        };
+        let (voter_id, directory_id) = (request.voter_id, request.voter_directory_id);
+        let voter = requested_voter(
+            voter_id,
+            directory_id,
+            request
                 .listeners
                 .into_iter()
                 .map(|listener| krabka_metadata::VoterEndpoint {
                     name: listener.name,
                     host: listener.host,
                     port: listener.port,
-                })
-                .collect(),
-            kraft_version: krabka_metadata::KRaftVersionRange {
-                min: min.unwrap_or_default(),
-                max: max.unwrap_or_default(),
-            },
-        };
-        reconfiguration_error_code(
+                }),
+            kraft_version,
+        );
+        reconfiguration_refusal(
             engine
                 .reconfigure(crate::reconfig::VoterChange::Update(
                     crate::reconfig::UpdateVoter { voter },
                 ))
                 .await,
+            voter_id,
+            directory_id,
         )
         .0
     };
+    // Kafka's `RaftUtil.updateVoterResponse` fills the leader in every answer,
+    // so read the quorum again after the change.
+    let quorum = engine.quorum_state().await?;
     let mut output = BytesMut::new();
     UpdateRaftVoterResponse {
         error_code,
+        current_leader: update_voter_current_leader(&quorum),
         ..Default::default()
     }
     .encode(&mut output, version)?;

@@ -131,6 +131,19 @@ impl QuorumStateMachine {
             .is_none_or(|voter| self.state.kraft_version == 0 || voter.directory_id == directory_id)
     }
 
+    /// Voter `id` from the current voter set, or from the adjacent set of an
+    /// uncommitted KIP-853 change. A leader that only the adjacent set names is
+    /// still followed (see `handle_begin_quorum_epoch`), so its endpoints are
+    /// looked up the same way.
+    #[must_use]
+    pub fn current_or_adjacent_voter_entry(&self, id: NodeId) -> Option<&krabka_voters::Voter> {
+        self.state.voters.get(id).or_else(|| {
+            self.adjacent_voters
+                .as_ref()
+                .and_then(|voters| voters.get(id))
+        })
+    }
+
     pub(super) fn current_or_adjacent_voter(&self, id: NodeId) -> bool {
         self.state.voters.contains(id)
             || self
@@ -159,6 +172,7 @@ impl QuorumStateMachine {
             return Vec::new();
         }
         let epoch = self.state.leader_epoch;
+        let preferred_successors = self.preferred_successors();
         self.state.leader_id = None;
         let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
         self.role = Role::Observer {
@@ -166,7 +180,10 @@ impl QuorumStateMachine {
             fetch_deadline,
         };
         vec![
-            Action::SendEndQuorumEpoch { epoch },
+            Action::SendEndQuorumEpoch {
+                epoch,
+                preferred_successors,
+            },
             Action::PersistQuorumState,
             Action::TransitionedTo(self.role.name()),
         ]

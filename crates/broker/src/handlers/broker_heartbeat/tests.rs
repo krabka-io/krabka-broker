@@ -250,7 +250,7 @@ impl Cluster {
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = test_context(&principal, &peer).listener_authorized_for_cluster_action();
+        let ctx = test_context(&principal, &peer);
         let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
         let req = BrokerHeartbeatRequest {
             broker_id,

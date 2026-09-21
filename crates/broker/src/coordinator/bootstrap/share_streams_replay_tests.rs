@@ -139,7 +139,11 @@ async fn streams_group_records_replay_into_seed() {
             sp::encode_streams_key(&sp::StreamsGroupKey::GroupMetadata {
                 group_id: "stg".into(),
             }),
-            sp::StreamsGroupMetadataValue { epoch: 7 }.encode(),
+            sp::StreamsGroupMetadataValue {
+                epoch: 7,
+                metadata_hash: 0,
+            }
+            .encode(),
         ),
         (
             sp::encode_streams_key(&sp::StreamsGroupKey::MemberMetadata {
