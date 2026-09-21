@@ -39,6 +39,7 @@ impl ProtocolRequest for RawFetchRequest {
     const API_KEY: i16 = <FetchRequest as ProtocolRequest>::API_KEY;
     const MIN_VERSION: i16 = <FetchRequest as ProtocolRequest>::MIN_VERSION;
     const MAX_VERSION: i16 = <FetchRequest as ProtocolRequest>::MAX_VERSION;
+    const LATEST_STABLE_VERSION: i16 = <FetchRequest as ProtocolRequest>::LATEST_STABLE_VERSION;
     const FLEXIBLE_MIN: i16 = <FetchRequest as ProtocolRequest>::FLEXIBLE_MIN;
     type Response = RawFetchResponse;
 }
