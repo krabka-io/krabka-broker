@@ -69,27 +69,17 @@ async fn wait_for_leader(broker: &Broker) {
     }
 }
 
-/// The controller listener decides `ClusterAction` once, when it accepts the
-/// connection, and it admits a peer that carries no identity at all on a
-/// protocol that supplies none. The handler must honour that decision instead
-/// of re-judging the `ANONYMOUS` principal the router substitutes.
-///
-/// Getting this wrong is not a small matter of a rejected request: an
-/// authorizer with no `ClusterAction` ACL would refuse every heartbeat in the
-/// cluster, and the controller would fence every broker it never heard from.
+/// Every heartbeat is authorized against its own principal, on the
+/// controller listener too, as Kafka's
+/// `ControllerApis.handleBrokerHeartBeatRequest` does (#684). A principal
+/// without `ClusterAction` gets `CLUSTER_AUTHORIZATION_FAILED`, and one with
+/// it gets the heartbeat answer.
 #[tokio::test]
-async fn a_listener_that_already_authorized_the_peer_is_not_second_guessed() {
-    let deny_all = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-        std::collections::HashSet::new(),
-    ));
-    let (broker_handle, _dir) = start_broker(deny_all).await;
+async fn every_heartbeat_needs_cluster_action() {
+    let (broker_handle, _dir) =
+        start_broker(Arc::new(crate::test_support::GrantsInPrincipalName)).await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_leader(&broker).await;
-    let principal = krabka_security::Principal {
-        name: "ANONYMOUS".into(),
-        auth_method: krabka_security::AuthMethod::Anonymous,
-        groups: vec![],
-    };
     let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
     let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
     let broker_epoch = broker
@@ -99,27 +89,25 @@ async fn a_listener_that_already_authorized_the_peer_is_not_second_guessed() {
         .expect("broker registration should be applied");
     let req = request(broker_epoch, broker_epoch, vec![]);
 
-    // A listener that did not authorize the peer: the handler runs the gate,
-    // and this authorizer denies it.
-    let unauthorized = test_context(&principal, &peer);
-    let denied = decode_response(
-        &handle(&broker, version, 11, &req, &unauthorized)
-            .await
-            .expect("BrokerHeartbeat handler"),
-        version,
-    );
-    assert!(denied.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
-
-    // The controller listener, which authorized the connection already.
-    let authorized = test_context(&principal, &peer).listener_authorized_for_cluster_action();
-    let accepted = decode_response(
-        &handle(&broker, version, 12, &req, &authorized)
-            .await
-            .expect("BrokerHeartbeat handler"),
-        version,
-    );
-    assert!(accepted.error_code == codes::NONE, "{accepted:?}");
-    assert!(!accepted.is_fenced);
+    let cases = [
+        ("none", codes::CLUSTER_AUTHORIZATION_FAILED),
+        (
+            "Cluster:Alter+Cluster:Describe",
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+        ),
+        ("Cluster:ClusterAction", codes::NONE),
+    ];
+    for (name, error_code) in cases {
+        let principal = crate::test_support::principal(name);
+        let ctx = test_context(&principal, &peer);
+        let response = decode_response(
+            &handle(&broker, version, 11, &req, &ctx)
+                .await
+                .expect("BrokerHeartbeat handler"),
+            version,
+        );
+        assert!(response.error_code == error_code, "{name}: {response:?}");
+    }
 
     broker_handle.shutdown().await;
 }
@@ -262,7 +250,7 @@ impl Cluster {
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = test_context(&principal, &peer).listener_authorized_for_cluster_action();
+        let ctx = test_context(&principal, &peer);
         let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
         let req = BrokerHeartbeatRequest {
             broker_id,

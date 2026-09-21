@@ -166,7 +166,7 @@
         },
         "super_users": {
           "default": [],
-          "description": "Principals that bypass every ACL check, Kafka's `super.users`. The\nactive authorizer and the delegation-token `act-as` gate both read it.\nEmpty is the default and grants no bypass.",
+          "description": "Principals that bypass every ACL check, Kafka's `super.users`. The\nactive authorizer and the delegation-token `act-as` gate both read it.\nAn entry may use Kafka's `User:<name>` form. `User:ANONYMOUS` is\naccepted, as in Kafka. Empty is the default and grants no bypass.",
           "items": {
             "type": "string"
           },
@@ -3255,7 +3255,7 @@
       "description": "`[stretch]` section — the three-site stretch deployment this node\nbelongs to. Maps to `BrokerConfig::stretch`. Absent leaves the\n`BrokerConfig` default `None`, an ordinary non-stretched cluster."
     },
     "super_users": {
-      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`.\n\nSuper-user status does not substitute for authentication. The\ndelegation-token RPCs (`CreateDelegationToken`,\n`RenewDelegationToken`, `ExpireDelegationToken`) require a principal\nthat authenticated with SASL or mTLS, and answer\n`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or\none-way-TLS connection whatever this list holds. Listing\n`\"ANONYMOUS\"` is therefore rejected by `BrokerConfig::validate`: it\ncannot enable token issuance, and it would make every unauthenticated\nclient a super-user for all operations. Give the token-minting client\na SASL credential or a client certificate and list that principal\nhere.\n\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
+      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`.\n\nSuper-user status does not substitute for authentication. The\ndelegation-token RPCs (`CreateDelegationToken`,\n`RenewDelegationToken`, `ExpireDelegationToken`) require a principal\nthat authenticated with SASL or mTLS, and answer\n`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or\none-way-TLS connection whatever this list holds.\n\nAn entry may use Kafka's `User:<name>` form. As in Kafka,\n`User:ANONYMOUS` is accepted: it makes every unauthenticated client a\nsuper user, and a `PLAINTEXT` controller listener with a deny-capable\nauthorizer needs it.\n\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
       "items": {
         "type": "string"
       },

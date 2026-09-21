@@ -16,7 +16,7 @@ use krabka_protocol::ProtocolError;
 const I32_LEN: usize = 4;
 const SUBMIT_CHANGE_RESPONSE_FIXED_LEN: usize = 10;
 const METADATA_FETCH_REQUEST_LEN: usize = 12;
-const METADATA_FETCH_RESPONSE_FIXED_LEN: usize = 50;
+const METADATA_FETCH_RESPONSE_FIXED_LEN: usize = 54;
 /// `snapshot_id.end_offset` sentinel meaning "no snapshot": the observer's
 /// fetch offset is still inside the responder's retained log.
 const NO_SNAPSHOT: i64 = -1;
@@ -33,13 +33,19 @@ pub const API_KEY_SUBMIT_CHANGE: i16 = 1003;
 /// turns it back into [`crate::RaftError::UncommittedTail`].
 pub const SUBMIT_CHANGE_UNCOMMITTED_TAIL: i16 = 4;
 
+/// The `error_code` of a krabka-private response when the connection
+/// principal lacks `ClusterAction` on the cluster. It is Kafka's
+/// `CLUSTER_AUTHORIZATION_FAILED`.
+pub const PRIVATE_CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
+
 /// Observer metadata fetch.
 ///
 /// The body carries a `fetch_offset`, which is a `KraftLog` offset, and
 /// `max_bytes`. The response carries committed `__cluster_metadata` entries
 /// encoded as Kafka record batches, plus `log_start_offset`, `high_watermark`,
-/// `quorum_high_watermark`, a `leader_hint`, and the KIP-630 `snapshot_id`
-/// that replaces the records when the fetch offset has been pruned away.
+/// `quorum_high_watermark`, a `leader_hint`, the responder's `leader_epoch`,
+/// and the KIP-630 `snapshot_id` that replaces the records when the fetch
+/// offset has been pruned away.
 pub const API_KEY_METADATA_FETCH: i16 = 1004;
 
 /// Generation-bound delegation-token mutation forwarded to the leader.
@@ -171,6 +177,10 @@ pub struct KrabkaMetadataFetchResponse {
     pub error_code: i16,
     /// Leader id the responder believes is current. -1 means unknown.
     pub leader_hint: i64,
+    /// The responder's quorum epoch. An observer sends it as the
+    /// `CurrentLeaderEpoch` of a KIP-595 `FetchSnapshot`, which the leader
+    /// checks against its own epoch.
+    pub leader_epoch: i32,
     /// Lowest retained log offset on the responder.
     pub log_start_offset: i64,
     /// Highest committed and applied log offset on the responder. This bounds
@@ -208,6 +218,7 @@ impl KrabkaMetadataFetchResponse {
     pub fn encode_v0(&self, out: &mut Vec<u8>) -> Result<(), ProtocolError> {
         out.put_i16(self.error_code);
         out.put_i64(self.leader_hint);
+        out.put_i32(self.leader_epoch);
         out.put_i64(self.log_start_offset);
         out.put_i64(self.high_watermark);
         out.put_i64(self.quorum_high_watermark);
@@ -223,6 +234,7 @@ impl KrabkaMetadataFetchResponse {
         require_remaining(buf, METADATA_FETCH_RESPONSE_FIXED_LEN)?;
         let error_code = buf.get_i16();
         let leader_hint = buf.get_i64();
+        let leader_epoch = buf.get_i32();
         let log_start_offset = buf.get_i64();
         let high_watermark = buf.get_i64();
         let quorum_high_watermark = buf.get_i64();
@@ -232,6 +244,7 @@ impl KrabkaMetadataFetchResponse {
         Ok(Self {
             error_code,
             leader_hint,
+            leader_epoch,
             log_start_offset,
             high_watermark,
             quorum_high_watermark,
@@ -319,6 +332,7 @@ mod tests {
         let resp = KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 3,
+            leader_epoch: 4,
             log_start_offset: 1,
             high_watermark: 99,
             quorum_high_watermark: 512,
@@ -357,11 +371,12 @@ mod tests {
     #[test]
     fn metadata_fetch_response_decode_checks_fixed_and_payload_lengths() {
         let mut short_fixed: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
-        assert_unexpected_eof(KrabkaMetadataFetchResponse::decode_v0(&mut short_fixed), 41);
+        assert_unexpected_eof(KrabkaMetadataFetchResponse::decode_v0(&mut short_fixed), 45);
 
         let resp = KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: -1,
+            leader_epoch: 4,
             log_start_offset: 4,
             high_watermark: 4,
             quorum_high_watermark: 6,
@@ -377,6 +392,7 @@ mod tests {
         let mut short_payload = Vec::new();
         short_payload.extend_from_slice(&0_i16.to_be_bytes());
         short_payload.extend_from_slice(&1_i64.to_be_bytes());
+        short_payload.extend_from_slice(&5_i32.to_be_bytes());
         short_payload.extend_from_slice(&2_i64.to_be_bytes());
         short_payload.extend_from_slice(&3_i64.to_be_bytes());
         short_payload.extend_from_slice(&3_i64.to_be_bytes());
@@ -397,6 +413,7 @@ mod tests {
             let resp = KrabkaMetadataFetchResponse {
                 error_code: 0,
                 leader_hint: 1,
+                leader_epoch: 4,
                 log_start_offset: 4_096,
                 high_watermark: 5_000,
                 quorum_high_watermark: 5_000,

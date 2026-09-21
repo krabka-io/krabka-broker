@@ -31,7 +31,10 @@
 //! Replaying the fourth batch's exact producer id, epoch and sequence — the
 //! idempotent-retry path, which answers the already-assigned offset rather
 //! than appending — answered with the same real `log_start_offset`, so the
-//! dedup row carries it too.
+//! dedup row carries it too. The dedup row also carries the retained batch's
+//! timestamp in `log_append_time_ms`: `UnifiedLog.append` sets
+//! `logAppendTime` from `BatchMetadata.timestamp`, which is the batch max
+//! timestamp on a `CreateTime` topic.
 
 use assert2::{assert, check};
 use bytes::Bytes;
@@ -63,6 +66,10 @@ const TRIM_TO: i64 = 3;
 /// The idempotent producer id the retry case sends under. Any non-negative
 /// value works; the broker learns it from the first batch that carries it.
 const PRODUCER_ID: i64 = 777;
+
+/// The max timestamp of every batch this suite sends. A duplicate row answers
+/// with it in `log_append_time_ms`.
+const BATCH_MAX_TIMESTAMP: i64 = 12_345;
 
 /// An accepted produce reports the partition's real log start offset.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -118,7 +125,10 @@ async fn an_idempotent_retry_reports_the_trimmed_log_start_offset() {
     // below is the dedup path's and not a second append's.
     assert!(
         produce_as(&p.client, "orders", topic_id, PRODUCER_ID, 0).await
-            == accepted(APPENDED_BEFORE_TRIM, TRIM_TO)
+            == PartitionProduceResponse {
+                log_append_time_ms: BATCH_MAX_TIMESTAMP,
+                ..accepted(APPENDED_BEFORE_TRIM, TRIM_TO)
+            }
     );
     check!(p.broker.local_log_end_offset("orders", 0) == Some(APPENDED_BEFORE_TRIM + 1));
 
@@ -182,7 +192,7 @@ async fn produce_as(
 ) -> PartitionProduceResponse {
     let batch = RecordBatch {
         last_offset_delta: 0,
-        max_timestamp: 12_345,
+        max_timestamp: BATCH_MAX_TIMESTAMP,
         producer_id,
         producer_epoch: 0,
         base_sequence,

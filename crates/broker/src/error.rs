@@ -296,16 +296,6 @@ pub enum BrokerError {
     #[error("GSSAPI is an enabled SASL mechanism but gssapi config is missing")]
     GssapiConfigMissing,
 
-    /// `super_users` lists `"ANONYMOUS"`, the principal every PLAINTEXT and
-    /// one-way-TLS connection carries.
-    #[error(
-        "super_users must not list \"ANONYMOUS\": it makes every unauthenticated client a \
-         super-user, and the delegation-token RPCs still answer \
-         DELEGATION_TOKEN_REQUEST_NOT_ALLOWED because they require a SASL- or \
-         mTLS-authenticated principal. List the SASL or mTLS principal that mints tokens instead"
-    )]
-    SuperUserAnonymous,
-
     /// TLS configuration error.
     #[error("tls: {0}")]
     Tls(String),

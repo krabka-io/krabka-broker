@@ -169,6 +169,10 @@ pub(crate) fn start_dual_mech_broker_with_reauth(
         connections_max_reauth: max_reauth,
         ..BrokerConfig::default()
     };
+    // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
+    // heartbeats reach it. Every data listener here authenticates, so this
+    // super user reaches only the controller listener.
+    config.super_users.insert("ANONYMOUS".to_string());
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         config.super_users.clone(),
     ));
@@ -317,6 +321,10 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
         super_users: maplit::hashset! {super_user.clone()},
         ..BrokerConfig::default()
     };
+    // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
+    // heartbeats reach it. Every data listener here authenticates, so this
+    // super user reaches only the controller listener.
+    config.super_users.insert("ANONYMOUS".to_string());
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         config.super_users.clone(),
     ));

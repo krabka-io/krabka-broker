@@ -1,7 +1,8 @@
 //! `ReadShareGroupState` (`api_key=84`). The handler returns the durable
 //! delivery state for each `(group, topic, partition)`: the start offset and
 //! the state batches. A partition this broker does not lead returns
-//! per-partition `NOT_COORDINATOR`. An unknown-but-led key returns the initial
+//! per-partition `NOT_COORDINATOR`, and a partition that still loads returns
+//! `COORDINATOR_LOAD_IN_PROGRESS`. An unknown-but-led key returns the initial
 //! empty state (`start_offset = -1`, no batches) with `error_code = 0`.
 
 use std::sync::Arc;
@@ -20,7 +21,6 @@ use krabka_protocol::{
 
 use crate::{
     broker::Broker,
-    codes,
     error::BrokerError,
     share_coordinator::coordinator::{ShareCoordinator, UNINITIALIZED_START_OFFSET},
 };
@@ -80,43 +80,39 @@ async fn handle_request(
         let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
         let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
         for pd in topic.partitions {
-            let state_partition =
-                coordinator.state_partition_for(&group_id, &topic_id, pd.partition);
-            let result = if coordinator.is_leader(state_partition).await {
-                match coordinator.read(&group_id, topic_id, pd.partition).await {
-                    Some(st) => PartitionResult {
-                        partition: pd.partition,
-                        state_epoch: st.state_epoch,
-                        start_offset: st.start_offset.0,
-                        state_batches: st
-                            .state_batches
-                            .iter()
-                            .map(|b| StateBatch {
-                                first_offset: b.first_offset.0,
-                                last_offset: b.last_offset.0,
-                                delivery_state: b.delivery_state,
-                                delivery_count: b.delivery_count,
-                                ..Default::default()
-                            })
-                            .collect(),
-                        ..Default::default()
-                    },
-                    // Unknown key on a led partition: report the initial,
-                    // empty state with no error so the share-partition
-                    // leader starts from scratch.
-                    None => PartitionResult {
-                        partition: pd.partition,
-                        start_offset: UNINITIALIZED_START_OFFSET,
-                        ..Default::default()
-                    },
-                }
-            } else {
-                PartitionResult {
+            let result = match coordinator.read(&group_id, topic_id, pd.partition).await {
+                Ok(Some(st)) => PartitionResult {
                     partition: pd.partition,
-                    error_code: codes::NOT_COORDINATOR,
+                    state_epoch: st.state_epoch,
+                    start_offset: st.start_offset.0,
+                    state_batches: st
+                        .state_batches
+                        .iter()
+                        .map(|b| StateBatch {
+                            first_offset: b.first_offset.0,
+                            last_offset: b.last_offset.0,
+                            delivery_state: b.delivery_state,
+                            delivery_count: b.delivery_count,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+                // Unknown key on an active partition: report the initial,
+                // empty state with no error so the share-partition leader
+                // starts from scratch.
+                Ok(None) => PartitionResult {
+                    partition: pd.partition,
                     start_offset: UNINITIALIZED_START_OFFSET,
                     ..Default::default()
-                }
+                },
+                // Not the leader, or the state partition still loads.
+                Err(error_code) => PartitionResult {
+                    partition: pd.partition,
+                    error_code,
+                    start_offset: UNINITIALIZED_START_OFFSET,
+                    ..Default::default()
+                },
             };
             partitions.push(result);
         }
@@ -150,6 +146,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::codes;
 
     fn decode(bytes: &Bytes) -> ReadShareGroupStateResponse {
         let mut cur: &[u8] = bytes.as_ref();

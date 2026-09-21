@@ -6,17 +6,16 @@
 //! `Alter` on `Cluster("kafka-cluster")`. Deny → whole-response
 //! `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
 //!
-//! The outcome → error code mapping is shared with
-//! [`super::add_raft_voter`]. `UpdateVoter` never returns
-//! `VoterNotCaughtUp`. An unknown voter id comes back as
-//! `ReconfigRejected → INVALID_REQUEST`.
-//!
-//! Request validation follows `KafkaRaftClient.handleUpdateVoterRequest` in
-//! the pinned image: a cluster id that names another cluster is
-//! `INCONSISTENT_CLUSTER_ID (104)`, a leader epoch on either side of the
-//! quorum's is `FENCED_LEADER_EPOCH (74)` or `UNKNOWN_LEADER_EPOCH (75)`, and
-//! everything else malformed is `INVALID_REQUEST (42)`. Kafka assigns no
-//! separate "invalid voter update" code.
+//! After the ACL gate, the request runs the controller listener's own checks
+//! in `krabka_raft::voter_requests`, which follow
+//! `KafkaRaftClient.handleUpdateVoterRequest` and `UpdateVoterHandler`: a
+//! cluster id that names another cluster is `INCONSISTENT_CLUSTER_ID (104)`, a
+//! leader epoch on either side of the quorum's is `FENCED_LEADER_EPOCH (74)` or
+//! `UNKNOWN_LEADER_EPOCH (75)`, a node that is not the leader answers
+//! `NOT_LEADER_OR_FOLLOWER (6)`, and everything else malformed, including
+//! listeners without the leader's controller listener name, is
+//! `INVALID_REQUEST (42)`. Every answer after the ACL gate names the leader in
+//! `CurrentLeader`.
 //!
 //! A request that carries no cluster id at all passes the first check, because
 //! `KafkaRaftClient.hasValidClusterId` returns true for a null cluster id. The
@@ -31,14 +30,9 @@ use krabka_protocol::{
         update_raft_voter_response::UpdateRaftVoterResponse,
     },
 };
-use krabka_raft::reconfig::UpdateVoter;
+use krabka_raft::{reconfig::UpdateVoter, voter_requests};
 
-use crate::{
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    handlers::{add_raft_voter::outcome_to_code, cluster_alter_denied},
-};
+use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_denied};
 
 #[tracing::instrument(
     name = "handle_update_raft_voter",
@@ -72,73 +66,51 @@ pub(crate) async fn handle(
         return forwarded.map_err(BrokerError::from);
     }
 
-    let cluster_id = image.cluster_id().to_string();
-    let quorum = broker.controller.quorum_state();
-    if req
-        .cluster_id
-        .as_deref()
-        .is_some_and(|request_cluster| request_cluster != cluster_id)
+    // The request checks, their order and their codes are the controller
+    // listener's own (`krabka_raft::voter_requests`).
+    let Some(quorum) = broker.controller.quorum_snapshot() else {
+        return refuse(version, voter_requests::NOT_LEADER_OR_FOLLOWER);
+    };
+    let error_code = if let Some(code) =
+        voter_requests::update_voter_refusal(&req, &image.cluster_id().to_string(), &quorum)
     {
-        return refuse(version, codes::INCONSISTENT_CLUSTER_ID);
-    }
-
-    let current_epoch = i64::try_from(quorum.current_term).unwrap_or(i64::MAX);
-    let requested_epoch = i64::from(req.current_leader_epoch);
-    if requested_epoch < current_epoch {
-        return refuse(version, codes::FENCED_LEADER_EPOCH);
-    }
-    if requested_epoch > current_epoch {
-        return refuse(version, codes::UNKNOWN_LEADER_EPOCH);
-    }
-
-    if req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO
-        || req.listeners.is_empty()
-        || req.listeners.iter().any(|listener| {
-            listener.name.is_empty() || listener.host.is_empty() || listener.port == 0
-        })
-    {
-        return refuse(version, codes::INVALID_REQUEST);
-    }
-
-    let Ok(min_version) = u16::try_from(req.k_raft_version_feature.min_supported_version) else {
-        return refuse(version, codes::INVALID_REQUEST);
-    };
-    let Ok(max_version) = u16::try_from(req.k_raft_version_feature.max_supported_version) else {
-        return refuse(version, codes::INVALID_REQUEST);
-    };
-    if min_version > max_version {
-        return refuse(version, codes::INVALID_REQUEST);
-    }
-
-    let Ok(id) = u64::try_from(req.voter_id) else {
-        return refuse(version, codes::INVALID_REQUEST);
+        code
+    } else {
+        let feature = &req.k_raft_version_feature;
+        let kraft_version = krabka_metadata::KRaftVersionRange {
+            min: u16::try_from(feature.min_supported_version).unwrap_or_default(),
+            max: u16::try_from(feature.max_supported_version).unwrap_or_default(),
+        };
+        let (voter_id, directory_id) = (req.voter_id, req.voter_directory_id);
+        let voter = Voter {
+            id: krabka_raft::NodeId(u64::try_from(voter_id).unwrap_or_default()),
+            directory_id: uuid::Uuid::from_bytes(directory_id.0),
+            endpoints: req
+                .listeners
+                .into_iter()
+                .map(|l| VoterEndpoint {
+                    name: l.name,
+                    host: l.host,
+                    port: l.port,
+                })
+                .collect(),
+            kraft_version,
+        };
+        voter_requests::reconfiguration_refusal(
+            broker.controller.update_voter(UpdateVoter { voter }).await,
+            voter_id,
+            directory_id,
+        )
+        .0
     };
 
-    let voter = Voter {
-        id: krabka_raft::NodeId(id),
-        directory_id: uuid::Uuid::from_bytes(req.voter_directory_id.0),
-        endpoints: req
-            .listeners
-            .into_iter()
-            .map(|l| VoterEndpoint {
-                name: l.name,
-                host: l.host,
-                port: l.port,
-            })
-            .collect(),
-        kraft_version: krabka_metadata::KRaftVersionRange {
-            min: min_version,
-            max: max_version,
-        },
-    };
-
-    let (error_code, _msg) =
-        outcome_to_code(broker.controller.update_voter(UpdateVoter { voter }).await);
-
+    // Kafka's `RaftUtil.updateVoterResponse` names the leader in every answer.
+    let quorum = broker.controller.quorum_snapshot().unwrap_or(quorum);
     encode_resp(
         version,
         &UpdateRaftVoterResponse {
             error_code,
+            current_leader: voter_requests::update_voter_current_leader(&quorum),
             ..Default::default()
         },
     )
@@ -302,7 +274,7 @@ mod tests {
             req
         };
 
-        let cases: [(&str, Mutate, i16); 6] = [
+        let cases: [(&str, Mutate, i16); 7] = [
             (
                 "another cluster's id",
                 |req| req.cluster_id = Some("not-this-cluster".into()),
@@ -333,7 +305,13 @@ mod tests {
                 |req| req.k_raft_version_feature.min_supported_version = 2,
                 codes::INVALID_REQUEST,
             ),
+            (
+                "listeners without the leader's controller listener",
+                |req| req.listeners[0].name = "PLAINTEXT".into(),
+                codes::INVALID_REQUEST,
+            ),
         ];
+        let leader_id = i32::try_from(broker.config.node_id.0).expect("node id fits an i32");
 
         for (what, mutate, want) in cases {
             let mut req = well_formed();
@@ -344,6 +322,15 @@ mod tests {
                 .expect("handle");
             let resp = decode_response(&resp, version);
             assert!(resp.error_code == want, "{what}");
+            // Every refusal names the leader, as `RaftUtil.updateVoterResponse`
+            // fills it.
+            assert!(
+                (
+                    resp.current_leader.leader_id,
+                    resp.current_leader.leader_epoch,
+                ) == (leader_id, epoch),
+                "{what}"
+            );
         }
         broker_handle.shutdown().await;
     }

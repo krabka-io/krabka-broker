@@ -30,20 +30,16 @@ pub(crate) async fn handle(
     let req = BrokerRegistrationRequest::decode(&mut cur, version)?;
     let image = broker.controller.current_image();
 
-    // Skipped when the listener already authorized the connection for
-    // `ClusterAction`, which is how the controller listener works, exactly as
-    // `BrokerHeartbeat` does. See
-    // `RequestContext::listener_authorized_cluster_action`.
-    if !ctx.listener_authorized_cluster_action
-        && crate::handlers::acl_denied(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            ResourceType::Cluster,
-            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            AclOperation::ClusterAction,
-        )
-    {
+    // Every listener runs the `ClusterAction` gate, the controller listener
+    // included, as Kafka's `ControllerApis.handleBrokerRegistration` does.
+    if crate::handlers::acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        ResourceType::Cluster,
+        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        AclOperation::ClusterAction,
+    ) {
         return response(version, codes::CLUSTER_AUTHORIZATION_FAILED, -1);
     }
     if broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {

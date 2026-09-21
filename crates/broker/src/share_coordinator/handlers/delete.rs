@@ -76,15 +76,9 @@ async fn handle_request(
         let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
         let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
         for pd in topic.partitions {
-            let state_partition =
-                coordinator.state_partition_for(&group_id, &topic_id, pd.partition);
-            let error_code = if coordinator.is_leader(state_partition).await {
-                match coordinator.delete(&group_id, topic_id, pd.partition).await {
-                    Ok(()) => codes::NONE,
-                    Err(code) => code,
-                }
-            } else {
-                codes::NOT_COORDINATOR
+            let error_code = match coordinator.delete(&group_id, topic_id, pd.partition).await {
+                Ok(()) => codes::NONE,
+                Err(code) => code,
             };
             partitions.push(PartitionResult {
                 partition: pd.partition,
