@@ -239,8 +239,11 @@ impl Engine {
                 Action::SendBeginQuorumEpoch { epoch } => {
                     self.broadcast_begin_quorum_epoch(epoch);
                 }
-                Action::SendEndQuorumEpoch { epoch } => {
-                    self.broadcast_end_quorum_epoch(epoch);
+                Action::SendEndQuorumEpoch {
+                    epoch,
+                    preferred_successors,
+                } => {
+                    self.broadcast_end_quorum_epoch(epoch, &preferred_successors);
                 }
                 Action::SendFetch { leader_id } => {
                     self.send_fetch(leader_id);
@@ -262,7 +265,10 @@ impl Engine {
                 Action::SendBeginQuorumEpoch { epoch } => {
                     self.broadcast_begin_quorum_epoch(epoch);
                 }
-                Action::SendEndQuorumEpoch { epoch } => self.broadcast_end_quorum_epoch(epoch),
+                Action::SendEndQuorumEpoch {
+                    epoch,
+                    preferred_successors,
+                } => self.broadcast_end_quorum_epoch(epoch, &preferred_successors),
                 Action::SendFetch { leader_id } => {
                     self.send_fetch(leader_id);
                     self.fetch_misses = 0;

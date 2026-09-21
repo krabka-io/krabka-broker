@@ -161,6 +161,46 @@ fn peer() -> SocketAddr {
     "127.0.0.1:9092".parse().expect("peer address")
 }
 
+/// Register brokers 2 and 3 and make them active on the controller, so that
+/// `AlterPartition` accepts them in an ISR as Kafka's
+/// `ineligibleReplicasForIsr` does for a registered, unfenced broker.
+async fn activate_followers(broker: &Broker) {
+    let followers = [2_u64, 3];
+    broker
+        .controller
+        .submit_change(
+            followers
+                .iter()
+                .map(|&node| {
+                    MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                        node_id: NodeId(node),
+                        broker_epoch: 0,
+                        incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
+                        host: "127.0.0.1".into(),
+                        port: 9092 + u16::try_from(node).expect("a small node id"),
+                        rack: None,
+                        endpoints: vec![],
+                        log_dirs: vec![],
+                        features: std::collections::BTreeMap::new(),
+                    })
+                })
+                .collect(),
+        )
+        .await
+        .expect("register the followers");
+    for node in [1, 2, 3] {
+        broker.liveness.record_fenced_heartbeat(node).await;
+        broker
+            .liveness
+            .touch(
+                node,
+                crate::heartbeat::controller_state::BrokerControlState::Unfenced,
+                0,
+            )
+            .await;
+    }
+}
+
 /// Propose `new_isr` for partition 0 through the real `AlterPartition`
 /// handler, and assert the controller accepted it.
 async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
@@ -237,12 +277,12 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
 
 /// The expected partition row for an ISR of `isr` and the ELR of `eligible`.
 ///
-/// Only node 1 is registered, so nodes 2 and 3 are reported offline whatever
-/// the ISR says. Comparing the whole struct keeps the ELR assertion honest:
-/// the ELR columns cannot be read as having moved because some neighbouring
-/// field moved instead.
+/// Every node is registered and active ([`activate_followers`]), so none is
+/// reported offline. Comparing the whole struct keeps the ELR assertion
+/// honest: the ELR columns cannot be read as having moved because some
+/// neighbouring field moved instead.
 fn expected_row(isr: &[i32], eligible: &[i32]) -> DescribeTopicPartitionsResponsePartition {
-    row(isr, eligible, &[], &[2, 3])
+    row(isr, eligible, &[], &[])
 }
 
 /// [`expected_row`] with the last-known ELR and the offline set given too.
@@ -334,6 +374,7 @@ async fn an_isr_that_crosses_min_insync_replicas_moves_the_reported_elr() {
         .submit_change(seed_records())
         .await
         .expect("seed orders");
+    activate_followers(&broker).await;
 
     assert!(describe_partition(&broker).await == expected_row(&[1, 2, 3], &[]));
 
@@ -361,6 +402,7 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
         .submit_change(seed_records())
         .await
         .expect("seed orders");
+    activate_followers(&broker).await;
 
     alter_isr(&broker, &[1, 2]).await;
 
