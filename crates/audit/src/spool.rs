@@ -661,7 +661,9 @@ impl Spool {
     }
 }
 
+// cargo-mutants: I/O-only wrapper with no in-process signal (fsyncs directory entry).
 #[cfg(unix)]
+#[cfg_attr(test, mutants::skip)]
 fn sync_parent(path: &Path) -> Result<(), AuditError> {
     File::open(path.parent().unwrap_or_else(|| Path::new(".")))
         .map_err(io)?
@@ -669,7 +671,9 @@ fn sync_parent(path: &Path) -> Result<(), AuditError> {
         .map_err(io)
 }
 
+// cargo-mutants: I/O-only wrapper with no in-process signal (stats directory).
 #[cfg(not(unix))]
+#[cfg_attr(test, mutants::skip)]
 fn sync_parent(path: &Path) -> Result<(), AuditError> {
     // Windows exposes no directory handle to fsync, so the directory entry is
     // already durable by the time the file write returns. Stat the parent so a
@@ -1037,5 +1041,189 @@ mod tests {
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(spool.is_empty());
         check!(!dir.path().join(REPLAY_POISON_FILE).exists());
+    }
+
+    #[test]
+    fn commit_and_persist_pending_losses() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let losses = spool.pending_losses();
+        losses.add(5);
+        losses.persist().unwrap();
+        let batch = losses.snapshot().unwrap();
+        let wrong_batch = LossBatch {
+            generation: batch.generation + 1,
+            count: batch.count,
+        };
+        losses.commit(wrong_batch);
+        check!(losses.count() == 5);
+
+        losses.commit(batch);
+        check!(losses.count() == 0);
+
+        drop(losses);
+        drop(spool);
+        let reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(reopened.pending_losses().count() == 0);
+    }
+
+    #[test]
+    fn reconcile_requires_matching_class_and_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let losses = spool.pending_losses();
+        losses.add(4);
+        let generation = losses.snapshot().unwrap().generation;
+
+        let payload =
+            serde_json::to_vec(&serde_json::json!({ "loss_generation": generation })).unwrap();
+        let app_event = chained_record(0, &GENESIS_HEAD, &payload);
+        losses.reconcile(&[app_event]);
+        check!(losses.count() == 4);
+
+        let wrong_gen_marker = AuditRecord::records_lost_with_generation(4, generation + 1);
+        losses.reconcile(&[wrong_gen_marker]);
+        check!(losses.count() == 4);
+
+        let matching_marker = AuditRecord::records_lost_with_generation(4, generation);
+        losses.reconcile(&[matching_marker]);
+        check!(losses.count() == 0);
+    }
+
+    #[cfg(unix)]
+    fn is_root() -> bool {
+        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+            for line in status.lines() {
+                if let Some(rest) = line.strip_prefix("Uid:") {
+                    let fields: Vec<&str> = rest.split_whitespace().collect();
+                    if let Some(euid) = fields.get(1) {
+                        return *euid == "0";
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_or_create_u64_propagates_non_not_found_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("forbidden");
+        std::fs::write(&path, [0u8; 8]).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if is_root() || std::fs::File::open(&path).is_ok() {
+            return;
+        }
+        let result = read_or_create_u64(&path, "tmp");
+        check!(matches!(result, Err(AuditError::Io(_))));
+    }
+
+    #[test]
+    fn abort_replay_clears_poison_and_clear_poison_handles_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = chained_record(0, &GENESIS_HEAD, b"data");
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        spool.append(&record).unwrap();
+
+        check!(spool.clear_replay_poison().is_ok());
+
+        spool.begin_replay(&record).unwrap();
+        check!(dir.path().join(REPLAY_POISON_FILE).exists());
+
+        spool.abort_replay().unwrap();
+        check!(!dir.path().join(REPLAY_POISON_FILE).exists());
+    }
+
+    #[test]
+    fn reconcile_replay_poison_detects_torn_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let poison_path = dir.path().join(REPLAY_POISON_FILE);
+        let mut corrupted = Vec::new();
+        corrupted.extend_from_slice(&0u64.to_be_bytes());
+        corrupted.extend_from_slice(&100u32.to_be_bytes());
+        corrupted.extend_from_slice(b"abcd");
+        std::fs::write(&poison_path, &corrupted).unwrap();
+
+        let replay_offset_path = dir.path().join(REPLAY_OFFSET_FILE);
+        std::fs::write(&replay_offset_path, 100u64.to_be_bytes()).unwrap();
+
+        let res = Spool::open(dir.path(), ROOMY_CAP);
+        check!(matches!(res, Err(AuditError::Poisoned(_))));
+    }
+
+    #[test]
+    fn replayed_spool_is_truncated_on_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = chained_record(0, &GENESIS_HEAD, b"hello");
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        spool.append(&record).unwrap();
+        spool.commit_replay(&record).unwrap();
+        drop(spool);
+
+        let reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(reopened.size() == ByteSize::ZERO);
+        check!(
+            std::fs::metadata(dir.path().join(SPOOL_FILE))
+                .unwrap()
+                .len()
+                == 0
+        );
+    }
+
+    #[test]
+    fn unread_records_rejects_replay_offset_past_valid_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = chained_record(0, &GENESIS_HEAD, b"valid");
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        spool.append(&record).unwrap();
+        let valid_len = spool.size().bytes_u64();
+        drop(spool);
+
+        let replay_offset_path = dir.path().join(REPLAY_OFFSET_FILE);
+        std::fs::write(&replay_offset_path, (valid_len + 100).to_be_bytes()).unwrap();
+
+        let res = Spool::open(dir.path(), ROOMY_CAP);
+        check!(matches!(res, Err(AuditError::Io(_))));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn clear_replay_poison_propagates_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let record = chained_record(0, &GENESIS_HEAD, b"data");
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        spool.append(&record).unwrap();
+        spool.begin_replay(&record).unwrap();
+
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        if is_root() || std::fs::write(dir.path().join("probe"), b"probe").is_ok() {
+            let _ = std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_file(dir.path().join("probe"));
+            return;
+        }
+        let res = spool.clear_replay_poison();
+        let _ = std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755));
+        check!(matches!(res, Err(AuditError::Io(_))));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn reconcile_replay_poison_propagates_read_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let poison_path = dir.path().join(REPLAY_POISON_FILE);
+        std::fs::write(&poison_path, [0u8; 16]).unwrap();
+        std::fs::set_permissions(&poison_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if is_root() || std::fs::File::open(&poison_path).is_ok() {
+            let _ = std::fs::set_permissions(&poison_path, std::fs::Permissions::from_mode(0o644));
+            return;
+        }
+
+        let res = Spool::open(dir.path(), ROOMY_CAP);
+        let _ = std::fs::set_permissions(&poison_path, std::fs::Permissions::from_mode(0o644));
+        check!(matches!(res, Err(AuditError::Io(_))));
     }
 }

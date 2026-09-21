@@ -7,17 +7,9 @@ use krabka_client_producer::{Producer, ProducerRecord};
 async fn lists_groups_and_committed_offsets() {
     let dir = tempfile::TempDir::new().unwrap();
     // `ListGroups` goes to every broker of the metadata, as Kafka's
-    // `KafkaAdminClient.listGroups` does. The broker registers
-    // `listen_addr.port()` before it binds the data plane, so a `for_tests`
-    // config publishes port 0 and the client cannot dial it. Bind the data
-    // listener first and hand it over, which is what
-    // `Broker::start_with_listeners` is for.
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let data_addr = data_listener.local_addr().unwrap();
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    let broker = Broker::start_with_listeners(config, None, Some(data_listener))
+    // `KafkaAdminClient.listGroups` does, so it depends on the broker
+    // advertising a real, dialable port for itself.
+    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
         .unwrap();
     let bootstrap = broker.listen_addr().to_string();

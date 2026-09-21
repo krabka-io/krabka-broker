@@ -88,4 +88,13 @@ mod tests {
             }
         ));
     }
+
+    #[tokio::test]
+    async fn null_peer_sender_rejects_candidate_probing_and_has_empty_discovery() {
+        let res = NullPeerSender
+            .probe_kraft_version("127.0.0.1:9093", 1)
+            .await;
+        assert2::assert!(matches!(res, Err(RaftError::ChangeRejected(_))));
+        assert2::assert!(NullPeerSender.discovery_peers().is_empty());
+    }
 }

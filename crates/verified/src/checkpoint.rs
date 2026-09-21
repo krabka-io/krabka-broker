@@ -84,6 +84,7 @@ mod tests {
         assert2::check!(latest_checkpoint_index(&[]) == None);
         assert2::check!(latest_checkpoint_index(&[(10, 2)]) == Some(0));
         assert2::check!(latest_checkpoint_index(&[(10, 2), (10, 9), (11, 1)]) == Some(2));
+        assert2::check!(latest_checkpoint_index(&[(10, 5), (10, 2)]) == Some(0));
         assert2::check!(latest_checkpoint_index(&[(11, 1), (11, 1), (10, 99)]) == Some(0));
     }
 
