@@ -166,13 +166,16 @@ mod tests {
     #[test]
     fn truncate_from_end_removes_entries_at_or_after_end_offset() {
         let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path).unwrap();
+        let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
         c.append(LeaderEpoch(1), Offset(0)).unwrap();
         c.append(LeaderEpoch(7), Offset(4)).unwrap();
         c.truncate_from_end(Offset(4)).unwrap();
         assert2::assert!(c.latest_epoch() == Some(LeaderEpoch(1)));
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(7), Offset(4)) == Offset(-1));
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(1), Offset(4)) == Offset(4));
+        // Persisted: a reopen sees only epoch 1.
+        let reopened = LeaderEpochCheckpoint::open(path).unwrap();
+        assert2::assert!(reopened.latest_epoch() == Some(LeaderEpoch(1)));
     }
 
     #[test]

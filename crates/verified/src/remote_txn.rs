@@ -59,6 +59,7 @@ mod tests {
         for (entry_start, entry_last, query_from, query_to, expected) in [
             (10, 14, 0, 9, Disjoint),
             (10, 14, 0, 10, Overlap),
+            (10, 10, 10, 10, Overlap),
             (10, 14, 14, 100, Overlap),
             (10, 14, 15, 100, Disjoint),
             (14, 10, 0, 100, Invalid),

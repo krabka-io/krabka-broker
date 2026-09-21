@@ -146,6 +146,26 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         "a well-formed request reaches the quorum, got {}",
         decoded.error_code
     );
+
+    // voter_id == 0 is valid (non-negative) and must not be rejected with INVALID_REQUEST
+    let request = RemoveRaftVoterRequest {
+        cluster_id: None,
+        voter_id: 0,
+        voter_directory_id: real_directory,
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode request");
+    let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(
+        decoded.error_code != INVALID_REQUEST,
+        "voter_id 0 reaches the quorum, got {}",
+        decoded.error_code
+    );
 }
 
 /// `AddRaftVoter` refuses a candidate it cannot place: an unusable
@@ -178,13 +198,7 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
     };
     let directory = krabka_protocol::primitives::uuid::Uuid([9u8; 16]);
 
-    // (what it is, voter id, directory id, listeners)
-    let cases: Vec<(
-        &str,
-        i32,
-        krabka_protocol::primitives::uuid::Uuid,
-        Vec<Listener>,
-    )> = vec![
+    let cases = [
         ("a negative voter id", -1, directory, vec![good_listener()]),
         (
             "a zero directory id",
@@ -231,6 +245,68 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         check!(decoded.error_code == INVALID_REQUEST, "{what}");
         check!(decoded.error_message.is_some(), "{what}: says why");
     }
+
+    // Foreign cluster_id is refused with INCONSISTENT_CLUSTER_ID (104)
+    let request = AddRaftVoterRequest {
+        cluster_id: Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode");
+    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(decoded.error_code == 104);
+
+    // Matching cluster_id is accepted (does not return INVALID_REQUEST)
+    let request = AddRaftVoterRequest {
+        cluster_id: Some(engine.current_image().cluster_id().to_string()),
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode");
+    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(decoded.error_code != INVALID_REQUEST);
+
+    // At kraft.version >= 1, AddRaftVoter probes the candidate listeners.
+    // Unreachable candidate fails probe with code 7.
+    crate::server::test_support::activate_dynamic_membership(&engine).await;
+    let request = AddRaftVoterRequest {
+        cluster_id: None,
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode");
+    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(
+        decoded.error_code == 7,
+        "ApiVersions probe failed on unreachable candidate"
+    );
+    check!(
+        decoded
+            .error_message
+            .as_deref()
+            .is_some_and(|m| m.contains("API_VERSIONS returned an error"))
+    );
 }
 
 /// `UpdateRaftVoter` additionally requires the caller to be at the leader's
@@ -373,4 +449,32 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
                 ..Default::default()
             }
     );
+
+    // A negative voter id is rejected as INVALID_REQUEST
+    let mut bad_voter = update(Some(cluster_id.clone()), epoch, range(0, 1));
+    bad_voter.voter_id = -1;
+    check!(code_for(bad_voter).await == INVALID_REQUEST);
+
+    // A zero directory id is rejected as INVALID_REQUEST
+    let mut zero_dir = update(Some(cluster_id.clone()), epoch, range(0, 1));
+    zero_dir.voter_directory_id = krabka_protocol::primitives::uuid::Uuid::ZERO;
+    check!(code_for(zero_dir).await == INVALID_REQUEST);
+
+    // A voter id of 0 is valid and not rejected as INVALID_REQUEST
+    let mut zero_voter = update(Some(cluster_id.clone()), epoch, range(0, 1));
+    zero_voter.voter_id = 0;
+    check!(code_for(zero_voter).await != INVALID_REQUEST);
+}
+
+#[test]
+fn add_voter_ack_when_committed_rules() {
+    // Version 0 always waits for commitment regardless of request flag
+    assert2::assert!(add_voter_ack_when_committed(0, false));
+    assert2::assert!(add_voter_ack_when_committed(0, true));
+
+    // Version >= 1 respects the request flag
+    assert2::assert!(!add_voter_ack_when_committed(1, false));
+    assert2::assert!(add_voter_ack_when_committed(1, true));
+    assert2::assert!(!add_voter_ack_when_committed(2, false));
+    assert2::assert!(add_voter_ack_when_committed(2, true));
 }

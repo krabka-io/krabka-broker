@@ -189,3 +189,167 @@ impl QuorumStateMachine {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+    use crate::{
+        core::test_support::{FakeLog, machine, voters, win_election},
+        event::Event,
+    };
+
+    #[test]
+    fn kraft_version_and_commit_voter_set() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        m.set_kraft_version(2);
+        check!(m.quorum_state().kraft_version == 2);
+
+        m.adjacent_voters = Some(voters(&[NodeId(1)]));
+        m.commit_voter_set();
+        check!(m.adjacent_voters.is_none());
+    }
+
+    #[test]
+    fn same_voter_and_key_matching() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        let k1 = ReplicaKey {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::from_u128(100),
+        };
+        let k2 = ReplicaKey {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::from_u128(200),
+        };
+        let k3 = ReplicaKey {
+            id: NodeId(2),
+            directory_id: uuid::Uuid::from_u128(100),
+        };
+
+        // kraft_version == 0: compares only id
+        m.set_kraft_version(0);
+        check!(m.same_voter(k1, k2));
+        check!(!m.same_voter(k1, k3));
+
+        // kraft_version > 0: compares both id and directory_id
+        m.set_kraft_version(1);
+        check!(!m.same_voter(k1, k2));
+        check!(m.same_voter(k1, k1));
+        check!(!m.same_voter(k1, k3));
+    }
+
+    #[test]
+    fn current_or_adjacent_voter_queries() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        m.adjacent_voters = Some(voters(&[NodeId(3)]));
+
+        check!(m.current_or_adjacent_voter(NodeId(1)));
+        check!(m.current_or_adjacent_voter(NodeId(2)));
+        check!(m.current_or_adjacent_voter(NodeId(3)));
+        check!(!m.current_or_adjacent_voter(NodeId(4)));
+
+        check!(m.current_or_adjacent_voter_entry(NodeId(1)).is_some());
+        check!(m.current_or_adjacent_voter_entry(NodeId(3)).is_some());
+        check!(m.current_or_adjacent_voter_entry(NodeId(4)).is_none());
+    }
+
+    #[test]
+    fn finish_local_leader_removal_guards_and_transitions() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        // 1. If still voter, returns empty
+        check!(m.finish_local_leader_removal(SimInstant(10)).is_empty());
+
+        // 2. Win election to become leader
+        win_election(&mut m, &log, &[NodeId(2)], SimInstant(20));
+        check!(m.role().is_leader());
+
+        // Still a voter: returns empty
+        check!(m.finish_local_leader_removal(SimInstant(30)).is_empty());
+
+        // 3. Apply a voter set that excludes self (NodeId 1 is now non-voter)
+        m.apply_voter_set(voters(&[NodeId(2), NodeId(3)]), SimInstant(40));
+        check!(!m.is_voter());
+        check!(m.role().is_leader());
+
+        // Now finish_local_leader_removal succeeds: transitions to Observer, sends EndQuorumEpoch
+        let actions = m.finish_local_leader_removal(SimInstant(50));
+        check!(matches!(m.role(), Role::Observer { .. }));
+        check!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::SendEndQuorumEpoch { .. }))
+        );
+        check!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::PersistQuorumState))
+        );
+    }
+
+    #[test]
+    fn apply_voter_set_role_transitions_and_adjacent_tracking() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        check!(m.adjacent_voters.is_none());
+
+        // Applying SAME voter set does not set adjacent_voters
+        m.apply_voter_set(voters(&[NodeId(1), NodeId(2)]), SimInstant(10));
+        check!(m.adjacent_voters.is_none());
+
+        // Applying DIFFERENT voter set sets adjacent_voters to previous set
+        m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(3)]), SimInstant(20));
+        check!(m.adjacent_voters.is_some());
+        check!(
+            m.adjacent_voters
+                .as_ref()
+                .unwrap()
+                .ids()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                == vec![NodeId(1), NodeId(2)]
+        );
+
+        // Transition from voter to observer: (was_voter: true, is_voter: false)
+        let mut m2 = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        m2.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(matches!(m2.role(), Role::Follower { .. }));
+        let actions = m2.apply_voter_set(voters(&[NodeId(2), NodeId(3)]), SimInstant(30));
+        check!(matches!(m2.role(), Role::Observer { .. }));
+        check!(actions.iter().any(|a| matches!(
+            a,
+            Action::SendFetch {
+                leader_id: NodeId(2)
+            }
+        )));
+
+        // Transition from observer to voter: (was_voter: false, is_voter: true)
+        let mut m3 = machine(NodeId(1), &[NodeId(2), NodeId(3)]);
+        check!(matches!(m3.role(), Role::Observer { .. }));
+        let actions =
+            m3.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(3)]), SimInstant(40));
+        check!(matches!(m3.role(), Role::Unattached { .. }));
+        check!(actions.iter().any(|a| matches!(
+            a,
+            Action::ResetTimer {
+                kind: TimerKind::Election,
+                ..
+            }
+        )));
+    }
+}
