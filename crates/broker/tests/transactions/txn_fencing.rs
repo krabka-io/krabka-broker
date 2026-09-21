@@ -8,23 +8,33 @@
 
 use assert2::assert;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
-use krabka_client_producer::Producer;
+use krabka_client_producer::{Producer, ProducerError};
 
-use crate::txn_harness::{boot_single, create_topic, init_transaction, rec};
+use crate::txn_harness::{boot_single, create_topic, init_transaction, rec, send_ok};
 
-/// Kafka's `INVALID_PRODUCER_EPOCH`, which a partition leader answers to a
-/// `Produce` from a fenced producer.
-const INVALID_PRODUCER_EPOCH: i16 = 47;
-
-/// Producer B with the same `transactional_id` fences Producer A. Producer A's
-/// `Transaction::commit` must fail with `INVALID_PRODUCER_EPOCH` (47).
+/// Producer B with the same `transactional_id` fences Producer A. Every
+/// `Transaction::commit` producer A attempts from then on must fail with
+/// `ProducerError::FencedProducer`, whether the coordinator has just told it
+/// so or told it earlier.
 ///
-/// The commit flushes the pending record first, as Kafka's
-/// `KafkaProducer.commitTransaction` does. The partition leader answers that
-/// `Produce` with `INVALID_PRODUCER_EPOCH`, and Kafka's
-/// `TransactionManager.maybeTransitionToErrorState` keeps that code out of its
-/// fatal set. The transaction therefore ends on the produce error, and no
-/// `EndTxn` reaches the coordinator.
+/// Kafka's `KafkaProducer.commitTransaction` javadoc names two different
+/// fenced outcomes: `ProducerFencedException`, "another producer with the
+/// same transactional.id is active", and the separate
+/// `InvalidProducerEpochException`, "the producer has attempted to produce
+/// with an old epoch to the partition leader". Only the second comes from a
+/// `Produce` the commit's own flush sends. Producer A's record here is
+/// acknowledged before producer B fences it, so the commit below flushes
+/// nothing and takes the first path: `TransactionManager.beginCommit` calls
+/// `maybeFailWithError`, finds no error recorded yet, and sends `EndTxn`.
+/// `TransactionManager$EndTxnHandler.handleResponse` maps both codes the
+/// coordinator can answer an `EndTxn` with for this case, `PRODUCER_FENCED`
+/// (90) and the legacy `INVALID_PRODUCER_EPOCH` (47), to a fatal
+/// `ProducerFencedException` (`fatalError(Errors.PRODUCER_FENCED.exception())`),
+/// never to the produce-only exception.
+///
+/// A second commit attempt on the same guard finds that fatal error already
+/// recorded. `maybeFailWithError` raises it again immediately, with no
+/// second `EndTxn`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fenced_producer_cannot_commit() {
     let (broker, bootstrap, _dir) = boot_single().await;
@@ -38,7 +48,9 @@ async fn fenced_producer_cannot_commit() {
         .unwrap();
     producer_a.init_transactions().await.unwrap();
     let txn_a = producer_a.begin_transaction().await.unwrap();
-    drop(producer_a.send(rec("tf", "first")).await);
+    // Acknowledged, not just sent: the commit below must have nothing left to
+    // flush, so it detects the fencing through EndTxn and nothing else.
+    send_ok(&producer_a, rec("tf", "first")).await;
 
     // Producer B initializes with the same transactional_id — bumps epoch,
     // fences A.
@@ -50,17 +62,27 @@ async fn fenced_producer_cannot_commit() {
         .unwrap();
     producer_b.init_transactions().await.unwrap();
 
-    // Producer A's commit must fail with FencedProducer.
+    // Still-live path: the first commit after the fencing learns of it from
+    // the coordinator's own EndTxn answer.
     let err = txn_a
         .commit()
         .await
         .expect_err("commit should fail after fencing");
     assert!(
-        matches!(
-            err.source,
-            krabka_client_producer::ProducerError::Server(INVALID_PRODUCER_EPOCH)
-        ),
-        "expected INVALID_PRODUCER_EPOCH, got: {err:?}"
+        matches!(err.source, ProducerError::FencedProducer),
+        "expected FencedProducer, got: {err:?}"
+    );
+
+    // Already-fenced path: a retry on the same guard fails on the recorded
+    // fatal state, with no further EndTxn.
+    let err = err
+        .transaction
+        .commit()
+        .await
+        .expect_err("a retried commit on a fenced producer must still fail");
+    assert!(
+        matches!(err.source, ProducerError::FencedProducer),
+        "expected FencedProducer on the retried commit, got: {err:?}"
     );
 
     broker.shutdown().await;
