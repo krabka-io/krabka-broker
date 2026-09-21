@@ -24,6 +24,7 @@ use tracing::{error, info};
 mod api_versions;
 mod authorization;
 mod describe_cluster;
+mod describe_quorum;
 mod dispatch;
 mod framing;
 mod kip853;
