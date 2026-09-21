@@ -348,3 +348,25 @@ fn removed_voter_response_retallies_retained_grants() {
         }
     )));
 }
+
+#[test]
+fn prospective_ignores_grant_from_different_epoch() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 5,
+        last_epoch: 1,
+    };
+    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
+    assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
+    let actions = m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: 5,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2001),
+    );
+    assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
+    assert2::assert!(actions.is_empty());
+}

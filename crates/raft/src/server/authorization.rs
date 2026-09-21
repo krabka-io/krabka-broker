@@ -233,7 +233,7 @@ fn fetch_refusal(
                         ..Default::default()
                     })
                     .collect(),
-                ..Default::default()
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             })
             .collect()
     } else {

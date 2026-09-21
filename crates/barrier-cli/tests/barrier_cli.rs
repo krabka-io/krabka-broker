@@ -78,7 +78,7 @@ async fn create_topic(bootstrap: &str, partitions: i32) {
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
             }],
-            krabka_units::secs(10),
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )
         .await
         .expect("create topic");

@@ -556,6 +556,22 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_below_returns_none_for_out_of_bounds() {
+        let (mut log, _dir) = open_tmp();
+        for _ in 0..5 {
+            log.append(&mut batch(0, 1, b"x"), 0).unwrap();
+        }
+        log.advance_hwm(log.log_end_offset());
+        log.prune_to(Offset(3)).unwrap();
+
+        assert2::assert!(log.timestamp_below(Offset(3)) == None);
+        assert2::assert!(log.timestamp_below(Offset(2)) == None);
+        assert2::assert!(log.timestamp_below(Offset(10)) == None);
+        assert2::assert!(log.timestamp_below(Offset(4)).is_some());
+        assert2::assert!(log.timestamp_below(Offset(5)).is_some());
+    }
+
+    #[test]
     fn prune_inside_the_active_segment_survives_a_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         {

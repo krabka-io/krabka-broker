@@ -23,12 +23,14 @@ pub fn stretch_profile() -> StretchProfile {
 
 /// Put broker `index` in its site: the rack that names it, the profile every
 /// node of the cluster shares, `min.insync.replicas=2` (the only value a
-/// stretch profile accepts at rf=3 over three sites), and the witness role for
-/// the node in the witness site.
+/// stretch profile accepts at rf=3 over three sites), the topic-creation
+/// default replication factor of 3 that the profile also checks, and the
+/// witness role for the node in the witness site.
 pub fn apply_stretch_config(index: usize, cfg: &mut BrokerConfig) {
     cfg.rack = Some(SITES[index].to_string());
     cfg.stretch = Some(stretch_profile());
     cfg.default_min_insync_replicas = 2;
+    cfg.default_replication_factor = 3;
     if SITES[index] == SITE_C {
         cfg.roles.push(NodeRole::Witness);
     }

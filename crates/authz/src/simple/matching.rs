@@ -81,7 +81,7 @@ mod tests {
         AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
     };
 
-    use super::matches_operation;
+    use super::{matches_operation, matches_resource};
     use crate::{
         AuthorizationResult, Authorizer, SimpleAclAuthorizer,
         simple::test_support::{
@@ -389,5 +389,44 @@ mod tests {
                 )
             ) == AuthorizationResult::Allow
         );
+    }
+
+    #[test]
+    fn matches_resource_filters_by_type_name_and_pattern() {
+        let entry = topic_acl(
+            PermissionType::Allow,
+            AclOperation::Read,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "orders",
+        );
+        assert2::assert!(matches_resource(&entry, ResourceType::Topic, "orders"));
+        assert2::assert!(!matches_resource(&entry, ResourceType::Topic, "payments"));
+        assert2::assert!(!matches_resource(&entry, ResourceType::Group, "orders"));
+
+        let prefix_entry = topic_acl(
+            PermissionType::Allow,
+            AclOperation::Read,
+            "User:alice",
+            "*",
+            PatternType::Prefixed,
+            "prefix_",
+        );
+        assert2::assert!(matches_resource(
+            &prefix_entry,
+            ResourceType::Topic,
+            "prefix_test"
+        ));
+        assert2::assert!(!matches_resource(
+            &prefix_entry,
+            ResourceType::Topic,
+            "other_test"
+        ));
+        assert2::assert!(!matches_resource(
+            &prefix_entry,
+            ResourceType::Group,
+            "prefix_test"
+        ));
     }
 }

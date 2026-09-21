@@ -45,7 +45,7 @@ pub fn consume_request_quota(
         },
         |_| {},
         |rate_pct| {
-            let rate_micros_per_sec = positive_f64_to_u64(rate_pct * 10_000.0);
+            let rate_micros_per_sec = request_percentage_token_rate(rate_pct);
             (rate_micros_per_sec != 0).then_some(rate_micros_per_sec)
         },
         |overage_micros, _, rate_micros_per_sec| {
@@ -56,6 +56,12 @@ pub fn consume_request_quota(
         },
         maximum_delay,
     )
+}
+
+/// The token rate of a `request_percentage` bucket: microseconds of handler
+/// time per second, so `100.0` is 1 000 000.
+pub(super) fn request_percentage_token_rate(rate_pct: f64) -> u64 {
+    positive_f64_to_u64(rate_pct * 10_000.0)
 }
 
 #[cfg(test)]

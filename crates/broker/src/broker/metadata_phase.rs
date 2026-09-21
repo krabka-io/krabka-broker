@@ -290,6 +290,47 @@ async fn wait_for_metadata_leader(
     Ok(())
 }
 
+/// Binds the controller listener before the quorum starts when the config asks
+/// for an OS-assigned port, and publishes the port it got.
+///
+/// This node's own voter endpoint is where every heartbeat, `AssignReplicasToDirs`
+/// and raft peer reaches its controller listener. A `:0` endpoint names nothing
+/// that a client can dial. So the bound address replaces the configured one in
+/// `controller_listen_addr` and in this node's `controller_quorum_voters`
+/// entry, before the initial voter set and every client that reads it are
+/// built. The live listener is handed on to the controller, so no other
+/// process can take the port in between.
+///
+/// A caller-supplied listener, a concrete port, and a node without the
+/// controller role keep their config as it is.
+async fn bind_ephemeral_controller_listener(
+    config: &mut BrokerConfig,
+    prebound: Option<TcpListener>,
+) -> Result<Option<TcpListener>, BrokerError> {
+    if prebound.is_some() || !config.is_controller() || config.controller_listen_addr.port() != 0 {
+        return Ok(prebound);
+    }
+    let listener = TcpListener::bind(config.controller_listen_addr).await?;
+    publish_bound_controller_addr(config, listener.local_addr()?);
+    Ok(Some(listener))
+}
+
+/// Writes `bound` into `controller_listen_addr` and into this node's own voter
+/// entry when that entry asks for port 0. The entry keeps its host. Entries of
+/// other nodes, and an entry with a concrete port, stay as configured.
+fn publish_bound_controller_addr(config: &mut BrokerConfig, bound: std::net::SocketAddr) {
+    config.controller_listen_addr = bound;
+    let node_id = config.node_id;
+    for (voter, endpoint) in &mut config.controller_quorum_voters {
+        if *voter != node_id {
+            continue;
+        }
+        if let Some((host, 0)) = crate::host_port::parse_host_port(endpoint) {
+            *endpoint = format!("{host}:{}", bound.port());
+        }
+    }
+}
+
 pub(super) async fn start_metadata_phase(
     config: &mut BrokerConfig,
     controller_listener: Option<TcpListener>,
@@ -304,6 +345,8 @@ pub(super) async fn start_metadata_phase(
     ),
     BrokerError,
 > {
+    let controller_listener =
+        bind_ephemeral_controller_listener(config, controller_listener).await?;
     let transport = prepare_raft_transport(config, tls_dynamic, inter_broker_client);
     let audit_cell = Arc::clone(&transport.audit_cell);
     let mut bootstrap_records = crate::bootstrap::load_bootstrap_records(&config.log_dir)?;
@@ -329,4 +372,62 @@ pub(super) async fn start_metadata_phase(
     register_broker(config, &*controller.0).await?;
     spawn_deferred_controller_registration(config, &controller.0);
     Ok((controller.0, controller.1, audit_cell))
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_raft::NodeId;
+
+    use super::*;
+
+    #[test]
+    fn the_bound_port_replaces_only_this_nodes_port_zero_endpoint() {
+        let bound: std::net::SocketAddr = "127.0.0.1:40123".parse().expect("static");
+        let cases = [
+            (
+                "own ip endpoint",
+                vec![(1, "127.0.0.1:0"), (2, "127.0.0.1:0")],
+                vec![(1, "127.0.0.1:40123"), (2, "127.0.0.1:0")],
+            ),
+            (
+                "own host name keeps its host",
+                vec![(1, "localhost:0")],
+                vec![(1, "localhost:40123")],
+            ),
+            (
+                "own bracketed ipv6 keeps its host",
+                vec![(1, "[::1]:0")],
+                vec![(1, "[::1]:40123")],
+            ),
+            (
+                "own concrete port stays",
+                vec![(1, "127.0.0.1:9093")],
+                vec![(1, "127.0.0.1:9093")],
+            ),
+            ("no own entry", vec![(2, "peer:0")], vec![(2, "peer:0")]),
+        ];
+        for (name, configured, published) in cases {
+            let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
+            config.node_id = NodeId(1);
+            config.controller_quorum_voters = configured
+                .iter()
+                .map(|&(id, endpoint)| (NodeId(id), endpoint.to_owned()))
+                .collect();
+
+            publish_bound_controller_addr(&mut config, bound);
+
+            let want: Vec<(NodeId, String)> = published
+                .iter()
+                .map(|&(id, endpoint)| (NodeId(id), endpoint.to_owned()))
+                .collect();
+            assert!(
+                (
+                    config.controller_listen_addr,
+                    config.controller_quorum_voters
+                ) == (bound, want),
+                "{name}"
+            );
+        }
+    }
 }

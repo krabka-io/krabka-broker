@@ -226,6 +226,14 @@ mod tests {
                 2,
                 ProducerDecision::OutOfOrder,
             ),
+            (
+                "same epoch, same base sequence but different delta",
+                Some(last),
+                2,
+                4,
+                3,
+                ProducerDecision::OutOfOrder,
+            ),
         ];
         for (label, last, epoch, base_sequence, delta, expected) in cases {
             assert!(

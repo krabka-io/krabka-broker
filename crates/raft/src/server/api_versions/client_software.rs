@@ -1,8 +1,9 @@
 //! The KIP-511 `client_software_name` and `client_software_version` check that
 //! `ApiVersions` v3 and above applies to a handshake.
 //!
-//! It lives beside the handler rather than inside it because the request
-//! dispatcher runs the same check before it labels a rejected handshake.
+//! The broker listener and both controller-listener paths (before and after
+//! SASL authentication) run the same check. So it lives here, and the broker
+//! re-exports it.
 
 /// KIP-511 client-information validity check. Matches the JVM
 /// `ApiVersionsRequest.isValid` regex
@@ -19,7 +20,7 @@
 /// name in use stays within ASCII, so full UTF-8 char-class semantics are not
 /// needed.
 #[must_use]
-pub(crate) fn is_valid_client_info(s: &str) -> bool {
+pub fn is_valid_client_info(s: &str) -> bool {
     let bytes = s.as_bytes();
     let is_alnum = |b: u8| b.is_ascii_alphanumeric();
     let is_interior = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'.';

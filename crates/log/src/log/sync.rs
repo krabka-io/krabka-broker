@@ -14,7 +14,7 @@ use super::Log;
 use crate::{error::LogError, segment::Segment};
 
 #[cfg(test)]
-mod sync_observer {
+pub(crate) mod sync_observer {
     use std::cell::RefCell;
     #[cfg(unix)]
     use std::path::PathBuf;
@@ -35,7 +35,7 @@ mod sync_observer {
         DIR_SYNCS.take()
     }
 
-    pub(super) fn take_segment_flushes() -> Vec<Offset> {
+    pub(crate) fn take_segment_flushes() -> Vec<Offset> {
         SEGMENT_FLUSHES.take()
     }
 

@@ -252,6 +252,13 @@ fn cases(known: i16) -> Vec<Case> {
 async fn partition_row_error_follows_topic_id() {
     let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
     let known = create_topic(&broker, "share-resolution").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        "resolution-group",
+        uuid::Uuid::from_bytes(known.0),
+        0,
+    )
+    .await;
 
     let (actual, expected) = drive(&broker, known, &cases(codes::NONE)).await;
 
@@ -266,6 +273,13 @@ async fn partition_row_error_follows_topic_id() {
 async fn unresolved_id_answers_before_topic_authorization() {
     let (broker, _dir) = start(Arc::new(DenyTopicRead)).await;
     let known = create_topic(&broker, "share-resolution").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        "resolution-group",
+        uuid::Uuid::from_bytes(known.0),
+        0,
+    )
+    .await;
 
     let (actual, expected) = drive(&broker, known, &cases(codes::TOPIC_AUTHORIZATION_FAILED)).await;
 

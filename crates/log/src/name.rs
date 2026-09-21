@@ -164,6 +164,7 @@ mod tests {
             .to_str()
             .expect("file name is utf-8");
         assert!(parse_partition_dir(name) == Some(("foo".to_string(), 7)));
+        assert!(parse_partition_dir("foo-0") == Some(("foo".to_string(), 0)));
     }
 
     #[test]
