@@ -139,6 +139,8 @@ impl RuntimeArgs {
             max_produce_group,
             partition_writer_queue_depth,
             default_min_insync_replicas,
+            num_partitions,
+            default_replication_factor,
             offsets_topic_num_partitions,
             offsets_topic_replication_factor,
             transaction_state_num_partitions,
